@@ -138,40 +138,13 @@ class ClaudeNativeRecordTests(unittest.TestCase):
         self.assertEqual(token_usage["outputTokens"], 30)
         self.assertEqual(token_usage["completeness"], "partial")
 
-    def test_native_rate_limit_fractions_become_percent_windows(self):
-        evidence = self.evidence()
-        evidence.observe({"type": "rate_limit_event", "rate_limit_info": CLAUDE_NATIVE["rateLimitWarning"]["rate_limit_info"]})
-        # The pre-existing bounded observation shape stays exactly as it was.
-        self.assertEqual(evidence.rate_limits["five_hour"],
-                         {"status": "allowed_warning", "resetsAt": 1790467200, "utilization": 0.42})
-        quota = usage.normalize_quota(evidence.quota_candidate())
-        expected = CLAUDE_NATIVE["expectedQuota"]
-        self.assertEqual(quota["source"], expected["source"])
-        self.assertEqual(quota["scope"]["provider"], expected["provider"])
-        self.assertEqual([{key: window[key] for key in ("name", "usedPercent", "resetsAt")} for window in quota["windows"]],
-                         expected["windows"])
-
-    def test_a_rejection_keeps_its_reached_window_without_inventing_a_percentage(self):
+    def test_a_rejection_keeps_its_native_limit_and_reset(self):
         evidence = self.evidence()
         with self.assertRaises(QuotaRejected) as caught:
             evidence.observe({"type": "rate_limit_event",
                               "rate_limit_info": CLAUDE_NATIVE["rateLimitRejected"]["rate_limit_info"]})
         self.assertEqual(caught.exception.rate_limit_type, "five_hour")
         self.assertEqual(caught.exception.resets_at, 1790467200)
-        quota = usage.normalize_quota(evidence.quota_candidate())
-        expected = CLAUDE_NATIVE["expectedRejectedQuota"]
-        self.assertEqual(quota["reachedType"], expected["reachedType"])
-        self.assertEqual([{key: window[key] for key in ("name", "usedPercent", "resetsAt")} for window in quota["windows"]],
-                         expected["windows"])
-
-    def test_a_window_beyond_its_cap_is_not_clamped(self):
-        evidence = self.evidence()
-        with self.assertRaises(QuotaRejected):
-            evidence.observe({"type": "rate_limit_event", "rate_limit_info": {
-                "status": "rejected", "rateLimitType": "five_hour", "utilization": 1.5}})
-        quota = usage.normalize_quota(evidence.quota_candidate())
-        self.assertEqual(quota.get("windows"), [])
-        self.assertEqual(quota["reachedType"], "five_hour")
 
 
 class ClaudeAdapterObservationTests(unittest.TestCase):
@@ -214,7 +187,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
         return self.adapter.collect(handle, context)
 
-    def test_a_completed_turn_publishes_the_execution_summary_and_quota(self):
+    def test_a_completed_turn_publishes_the_execution_summary(self):
         outcome = self.execute("usage-ok")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         expected = CLAUDE_NATIVE["expected"]
@@ -226,15 +199,10 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(token_usage["reasoningOutputTokens"], expected["reasoningOutputTokens"])
         self.assertEqual(token_usage["scope"], "attempt")
         self.assertEqual(token_usage["completeness"], "complete")
-        quota = outcome.result["quota"]
-        self.assertEqual([window["name"] for window in quota["windows"]], ["five_hour", "seven_day"])
-        self.assertEqual(quota["windows"][0]["usedPercent"], 42)
-        self.assertEqual(quota["windows"][1]["usedPercent"], 90)
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], expected["lastAssistantText"])
         self.assertEqual(message["source"], "claude/stream-json-root-assistant-message")
         self.assertFalse(message["truncated"])
-        # The pinned Claude-native quotaFailure shape is untouched by this change.
         self.assertNotIn("quotaFailure", outcome.result)
 
     def test_a_missing_result_usage_falls_back_to_the_bound_assistant_records(self):
@@ -248,14 +216,11 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(token_usage["outputTokens"], expected["outputTokens"])
         self.assertEqual(token_usage["nativeRecords"], expected["records"])
         self.assertEqual(token_usage["completeness"], "partial")
-        # The rolling quota observation is unaffected by the partial usage fallback.
-        self.assertEqual(outcome.result["quota"]["source"], CLAUDE_NATIVE["expectedQuota"]["source"])
-        self.assertEqual(outcome.result["quota"]["windows"][0]["usedPercent"], 42)
 
-    def test_a_quota_rejection_retains_usage_quota_and_the_last_root_message(self):
+    def test_a_quota_rejection_retains_usage_and_the_last_root_message(self):
         outcome = self.execute("usage-quota")
         self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.result["code"], "quota-rejected")
+        self.assertEqual(outcome.result["code"], "harness-error")
         # The retained observation is the one native assistant message before the wall.
         token_usage = outcome.result["tokenUsage"]
         self.assertEqual(token_usage["source"], CLAUDE_NATIVE["expected"]["assistantSource"])
@@ -264,20 +229,20 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(token_usage["outputTokens"], 200)
         self.assertEqual(token_usage["nativeRecords"], 1)
         self.assertEqual(token_usage["completeness"], "partial")
-        quota = outcome.result["quota"]
-        self.assertEqual(quota["reachedType"], "five_hour")
-        self.assertEqual([window["usedPercent"] for window in quota["windows"]], [50])
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], "Read the fixture file first.")
-        self.assertEqual(outcome.result["quotaFailure"],
-                         {"rateLimitType": "five_hour", "resetsAt": 1790467200})
+        failure = outcome.result["quotaFailure"]
+        self.assertEqual(failure["code"], "quota-exceeded")
+        self.assertEqual(failure["nativeCode"], "five_hour")
+        self.assertEqual(failure["rejectionPhase"], "during-model")
+        self.assertIsNotNone(failure["resetsAt"])
         self.assertNotIn("turn", outcome.result)
 
     def test_no_native_usage_reports_unknown_not_zero(self):
         outcome = self.execute("usage-none")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertIsNone(outcome.result["tokenUsage"])
-        self.assertIsNone(outcome.result["quota"])
+        self.assertNotIn("quota", outcome.result)
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], "No native usage was reported.")
 
@@ -503,7 +468,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(token_usage["reasoningOutputTokens"], expected["reasoningOutputTokens"])
         self.assertEqual(token_usage["nativeRecords"], expected["records"])
         self.assertEqual(token_usage["completeness"], "complete")
-        self.assertIsNone(outcome.result["quota"])
+        self.assertNotIn("quota", outcome.result)
         self.assertIsNone(outcome.result["quotaFailure"])
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], expected["lastAssistantText"])
@@ -549,6 +514,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(failure["nativeCode"], ZCODE_NATIVE["quotaFailureTurn"]["expectedCode"])
         self.assertEqual(failure["code"], ZCODE_NATIVE["quotaFailureTurn"]["expectedClass"])
         self.assertEqual(failure["source"], "zcode/session-turn-failed")
+        self.assertEqual(failure["rejectionPhase"], "during-model")
         self.assertIsNotNone(outcome.result["tokenUsage"])
         self.assertEqual(outcome.result["lastAssistantMessage"]["text"],
                          ZCODE_NATIVE["expectedMessages"]["lastAssistantText"])
@@ -566,7 +532,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         _, outcome = self.execute("usage-empty")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertIsNone(outcome.result["tokenUsage"])
-        self.assertIsNone(outcome.result["quota"])
+        self.assertNotIn("quota", outcome.result)
         self.assertIsNone(outcome.result["quotaFailure"])
         self.assertIsNone(outcome.result["lastAssistantMessage"])
 

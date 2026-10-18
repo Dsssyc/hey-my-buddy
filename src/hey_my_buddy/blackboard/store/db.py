@@ -530,7 +530,7 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     -- Only an explicit full turn carries the Host's one-line note.
     access_note         TEXT,
     expected_seconds    INTEGER NOT NULL CHECK (expected_seconds > 0),
-    state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed','interrupted')),
+    state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed','interrupted','rejected')),
     disposition         TEXT CHECK (disposition IN ('completed','assistance','attention','waiting')),
     outcome_json        TEXT,
     outcome_truncated_json TEXT,
@@ -940,29 +940,23 @@ CREATE INDEX IF NOT EXISTS workflow_suggestions_run_idx ON workflow_suggestions(
 
 WORKFLOW_SCHEMA = "\n".join(WORKFLOW_TABLES)
 
-HARNESS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS quota_current (
+PROVIDER_COOLING_DDL = """
+CREATE TABLE IF NOT EXISTS provider_cooling (
     harness TEXT NOT NULL,
     provider TEXT NOT NULL,
-    limit_id TEXT NOT NULL,
-    blocked INTEGER NOT NULL CHECK (blocked IN (0,1)),
-    code TEXT,
-    source TEXT NOT NULL,
-    observed_at TEXT NOT NULL,
-    last_observed_at TEXT NOT NULL,
-    resets_at TEXT,
-    native_account_id TEXT,
-    retry_manual_at TEXT,
-    retry_consumed_at TEXT,
-    retry_consumed_by TEXT,
-    PRIMARY KEY (harness, provider, limit_id),
-    CHECK ((blocked=1 AND code IS NOT NULL AND code IN ('HARNESS_BALANCE_ZERO','HARNESS_QUOTA_EXHAUSTED'))
-           OR (blocked=0 AND code IS NULL))
+    consecutive_rejections INTEGER NOT NULL
+        CHECK (typeof(consecutive_rejections)='integer' AND consecutive_rejections>0),
+    cooling_until TEXT CHECK (cooling_until IS NULL OR
+        (cooling_until GLOB '????-??-??T??:??:??.???Z' AND
+         strftime('%Y-%m-%dT%H:%M:%fZ', cooling_until) IS cooling_until)),
+    last_rejected_at TEXT NOT NULL CHECK (
+        last_rejected_at GLOB '????-??-??T??:??:??.???Z' AND
+        strftime('%Y-%m-%dT%H:%M:%fZ', last_rejected_at) IS last_rejected_at),
+    PRIMARY KEY (harness, provider)
 );
-CREATE TABLE IF NOT EXISTS harness_quota_observations (
-    harness TEXT PRIMARY KEY,
-    quota_json TEXT NOT NULL
-);
+"""
+
+HARNESS_SCHEMA = PROVIDER_COOLING_DDL + """
 CREATE TABLE IF NOT EXISTS harness_account_reads (
     harness TEXT PRIMARY KEY,
     checked_at TEXT NOT NULL

@@ -202,30 +202,34 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertIsNone(boundary["reason"])
         self.assertEqual(boundary["routerTrials"][0]["outcome"], "answered")
 
-    def test_recorded_quota_reset_is_a_known_retry_time_without_a_new_fuse(self):
-        from hey_my_buddy.blackboard.routing.quota_routing import record
+    def test_provider_cooling_deadline_is_a_known_retry_time_without_a_new_fuse(self):
+        from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
         self.add_buddy(C, model="charlie")
         self.add_buddy("dsh:fixture:delta:max", model="delta")
         with self.board_.store.db.write() as db:
-            for model, minute in (("alpha", 20), ("bravo", 25)):
-                record(db, "dsh", {"provider": "fixture", "scope": {"limitId": model},
-                    "observedAt": T0, "ordinaryUsageAllowed": False, "reachedType": "quota-exceeded",
-                    "resetsAt": f"2026-01-01T00:{minute}:00.000Z"}, now=T0)
+            db.execute("UPDATE buddies SET provider='workers' WHERE model IN ('charlie','delta')")
+            record_rejection(db, "dsh", "fixture", {"code": "quota-exceeded",
+                "nativeCode": "fixture-denied", "source": "synthetic/router",
+                "observedAt": T0, "resetsAt": "2026-01-01T00:20:00.000Z",
+                "rejectionPhase": "before-model"}, now=T0)
         with patch("hey_my_buddy.blackboard.routing.quota_routing.utc_now", return_value=T0):
             request = self.request()
         boundary = self.boundary(request["decisionId"])
-        self.assertEqual(boundary["retryAt"], "2026-01-01T00:20:00Z")
+        self.assertEqual(boundary["retryAt"], "2026-01-01T00:20:00.000Z")
         self.assertEqual([item["retryAt"] for item in boundary["routerTrials"]],
-                         ["2026-01-01T00:20:00Z", "2026-01-01T00:25:00Z"])
+                         ["2026-01-01T00:20:00.000Z", "2026-01-01T00:20:00.000Z"])
         self.assertEqual(self.tasks(), [])
 
     def test_queued_dispatch_preflight_failure_keeps_its_own_outcome_and_recovery(self):
-        from hey_my_buddy.blackboard.routing.quota_routing import record
+        from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE buddies SET provider='other-router' WHERE buddy_id=?", (B,))
         request = self.request()
         with self.board_.store.db.write() as db:
-            record(db, "dsh", {"provider": "fixture", "scope": {"limitId": "alpha"},
-                "observedAt": T0, "ordinaryUsageAllowed": False, "reachedType": "quota-exceeded",
-                "resetsAt": "2026-01-01T00:20:00.000Z"}, now=T0)
+            record_rejection(db, "dsh", "fixture", {"code": "quota-exceeded",
+                "nativeCode": "fixture-denied", "source": "synthetic/router",
+                "observedAt": T0, "resetsAt": "2026-01-01T00:20:00.000Z",
+                "rejectionPhase": "before-model"}, now=T0)
         with patch("hey_my_buddy.blackboard.routing.quota_routing.utc_now", return_value=T0):
             first = self.claim("preflight", task_id=request["runId"])
         self.assertIsNone(first["claim"])
@@ -237,7 +241,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(trial["phase"], "preflight")
         self.assertEqual(trial["outcome"], "no_answer")
         self.assertEqual(trial["code"], "router-quota-exhausted")
-        self.assertEqual(trial["retryAt"], "2026-01-01T00:20:00Z")
+        self.assertEqual(trial["retryAt"], "2026-01-01T00:20:00.000Z")
         self.assertTrue(trial["shutdownConfirmed"])
         self.assertIsNone(trial["usage"])
 
@@ -622,7 +626,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                              (True, "workflow-routing-fenced"))
 
     def test_candidate_gates_use_one_code_with_precise_bound_facts(self):
-        from hey_my_buddy.blackboard.routing.quota_routing import record
+        from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
         view = self.routed()
         candidate = view["routing"]["routingBoundary"]["candidates"][1]
         cases = (
@@ -644,8 +648,10 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                     if statement:
                         db.execute(statement, values)
                     if bound == "quota-exhausted":
-                        record(db, "dsh", {"provider": "fixture", "scope": {"limitId": "bravo"},
-                               "balanceZero": True, "observedAt": self.clock.value, "source": "native"}, now=self.clock.value)
+                        record_rejection(db, "dsh", "fixture", {"code": "quota-exceeded",
+                            "nativeCode": "fixture-denied", "source": "synthetic/candidate",
+                            "observedAt": self.clock.value, "resetsAt": None,
+                            "rejectionPhase": "before-model"}, now=self.clock.value)
                     self.assertEqual(_candidate_problem(db, candidate, request, None, self.clock.value),
                                      {"code": "router-out-of-bounds", "bound": bound})
                     db.execute("ROLLBACK TO candidate_gate")

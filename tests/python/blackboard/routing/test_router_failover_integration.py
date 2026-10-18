@@ -323,15 +323,6 @@ class FailoverTests(RouterDispatchTestCase):
             db.execute("UPDATE decision_requests SET input_json=? WHERE decision_id=?", (canonical_json(doc), request["decisionId"]))
         self.assert_boundary(request, first, self.failure(first))
 
-    def test_final_atomic_quota_claim_refusal_never_records_answer_or_switches(self):
-        request, first = self.start()
-        with patch("hey_my_buddy.blackboard.routing.quota_routing.claim", return_value=None):
-            result = self.report(first, self.answer(first))
-        self.assertEqual(result["decision"]["outcome"], "changed")
-        self.assertEqual(result["decision"]["status"], "needs-host")
-        self.assertEqual(self.outcomes(), [])
-        self.assertEqual(len(self.tasks()), 1)
-
     def test_result_request_and_outcome_replay_do_not_repeat_tasks_or_history(self):
         request, first = self.start()
         output = self.failure(first)
@@ -524,31 +515,22 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(self.outcomes(), [])
         self.assertEqual(len(self.tasks()), 1)
 
-    def test_actual_quota_retry_claim_race_is_changed_at_final_adoption(self):
+    def test_provider_cooling_added_after_dispatch_blocks_final_adoption(self):
         from hey_my_buddy.blackboard.routing import quota_routing
         request, first = self.start()
-        quota = {"provider": "fixture", "scope": {"limitId": "bravo"}, "balanceZero": True,
-                 "observedAt": "2025-12-31T22:00:00.000Z", "source": "native"}
         with self.board_.store.db.write() as db:
-            quota_routing.record(db, "dsh", quota, now=T0)
-        original = self.board_.store.decisions._finish
-
-        def competing_claim(db, row, **kwargs):
-            if kwargs["status"] == "completed":
-                claimed = quota_routing.claim(db, kwargs["selected"], decision_id="other-decision", now=T0)
-                self.assertIsNotNone(claimed)
-                self.assertTrue(claimed[0]["claimed"])
-            return original(db, row, **kwargs)
-
-        with patch.object(self.board_.store.decisions, "_finish", side_effect=competing_claim):
-            result = self.report(first, self.answer(first))
-        self.assertEqual(result["decision"]["outcome"], "changed")
-        self.assertEqual(self.decision_row(request["decisionId"])["reason"]["code"], "router-out-of-bounds")
+            quota_routing.record_rejection(db, "dsh", "fixture", {
+                "code": "quota-exceeded", "nativeCode": "fixture-denied",
+                "source": "synthetic/final-adoption", "observedAt": T0,
+                "resetsAt": None, "rejectionPhase": "before-model"}, now=T0)
+        result = self.report(first, self.answer(first))
+        self.assertEqual(result["decision"]["outcome"], "rerouted")
+        self.assertEqual(self.decision_row(request["decisionId"])["reason"],
+                         {"code": "all-candidates-cooling", "params": {"retryAt": "2026-01-01T00:30:00.000Z"}})
         self.assertEqual(self.outcomes(), [])
         self.assertEqual(len(self.tasks()), 1)
         with self.board_.store.db.read() as db:
-            record = quota_routing.routing_facts(db, "dsh", now=T0)[0]
-            self.assertEqual(record["retry"]["consumedBy"], "other-decision")
+            self.assertIsNotNone(quota_routing.cooling(db, {"harness": "dsh", "provider": "fixture"}, now=T0))
 
 
     def busy_attempt(self, db, number, *, provider="busy", model="busy", buddy_id=None):

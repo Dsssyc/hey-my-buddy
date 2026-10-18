@@ -1,122 +1,27 @@
-"""Execution attribution and freshness of native usage and quota evidence."""
-from datetime import datetime, timezone
-import json
-
-from ..store.db import canonical_json, utc_now
-from ...protocol.reasons import reason
-
-QUOTA_EXHAUSTION_REASONS = {
-    'HARNESS_BALANCE_ZERO': 'HARNESS_BALANCE_ZERO',
-    'HARNESS_QUOTA_EXHAUSTED': 'HARNESS_QUOTA_EXHAUSTED',
-}
+"""Frozen execution attribution of token usage and structured quota failures."""
+from ..store.db import canonical_json
 
 
-def _time(value):
-    if not isinstance(value, str):
-        return None
-    try:
-        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return stamp.astimezone(timezone.utc) if stamp.tzinfo else None
-    except ValueError:
-        return None
-
-
-def latest_quota(connection, harness):
-    """The latest normalized observation reported by this harness."""
-    row = connection.execute('SELECT quota_json FROM harness_quota_observations WHERE harness=?', (harness,)).fetchone()
-    return json.loads(row[0]) if row else None
-
-
-def record_quota(connection, harness, quota, *, now=None):
-    from ..routing.quota_routing import record
-    if not isinstance(quota, dict) or _time(quota.get('observedAt')) is None:
-        return
-    record(connection, harness, quota, now=now)
-    previous = latest_quota(connection, harness)
-    if previous is not None and _time(previous['observedAt']) >= _time(quota['observedAt']):
-        return
-    connection.execute('INSERT INTO harness_quota_observations(harness,quota_json) '
-                       'VALUES(?,?) ON CONFLICT(harness) DO UPDATE SET quota_json=excluded.quota_json',
-                       (harness, canonical_json(quota)))
-
-
-def persist(connection, attempt, result):
+def persist(connection, attempt, result, *, status, shutdown_confirmed, now):
     """Called once inside the result transaction, after actor and replay checks."""
-    if not isinstance(result, dict) or not any(result.get(key) is not None for key in ("tokenUsage", "quota", "quotaFailure")):
-        return
-    from ...protocol.usage import normalize_token_usage, normalize_quota, normalize_quota_failure
-    usage = normalize_token_usage(result.get("tokenUsage"))
+    from ...protocol.usage import normalize_token_usage
+    from ...protocol.harness_names import HARNESS_NAMES
+    from ..routing.quota_routing import clear_on_success, record_rejection
+
+    usage = normalize_token_usage(result.get("tokenUsage")) if isinstance(result, dict) else None
     connection.execute("UPDATE attempts SET token_usage_json=? WHERE attempt_id=?",
                        (canonical_json(usage) if usage is not None else None, attempt["attempt_id"]))
-    quota = normalize_quota(result.get("quota"))
-    failure = normalize_quota_failure(result.get("quotaFailure"))
-    if quota is None and failure is not None and failure["code"] == "quota-exceeded":
-        quota = normalize_quota({"source": failure["source"], "observedAt": failure.get("observedAt"),
-                                 "reachedType": failure["nativeCode"], "ordinaryUsageAllowed": False,
-                                 'resetsAt': failure.get('resetsAt'), "windows": []})
-    harness = attempt['model_harness'] or attempt['adapter']
-    from ...protocol.harness_names import HARNESS_NAMES
-    if quota is None or harness not in HARNESS_NAMES:
+    harness = attempt["model_harness"] or attempt["adapter"]
+    if harness not in HARNESS_NAMES:
         return
-    # Attribute to the frozen execution; a later model selection cannot relabel it.
-    observed = {**quota, "attemptId": attempt["attempt_id"], "provider": (quota.get("scope") or {}).get("provider") or attempt["model_provider"]}
-    record_quota(connection, harness, observed)
+    failure = failure_view(result)
+    if failure is not None and failure["code"] == "quota-exceeded":
+        record_rejection(connection, harness, attempt["model_provider"], failure, now=now)
+    elif status == "ok" and shutdown_confirmed:
+        clear_on_success(connection, harness, attempt["model_provider"], started_at=attempt["started_at"])
 
 
-def quota_view(value, *, now=None):
-    if not isinstance(value, dict):
-        return None
-    present = _time(now or utc_now())
-    observed = _time(value.get("observedAt"))
-    stale = observed is None or present is None or not 0 <= (present - observed).total_seconds() <= 3600
-    windows = []
-    for window in value.get("windows", []):
-        reset = _time(window.get("resetsAt"))
-        windows.append({**window, "stale": stale or window.get("invalidReset") is True or
-                        ("resetsAt" in window and reset is None) or bool(reset and present and reset <= present)})
-    return {**value, "windows": windows, "stale": stale or bool(windows and all(w["stale"] for w in windows))}
-
-
-def exhausted(connection, buddy, *, now=None):
-    from ..routing.quota_routing import exhausted as routing_exhausted
-    return routing_exhausted(connection, buddy, now=now)
-
-def warnings(connection, buddy, *, now=None):
-    from ...protocol.harness_names import HARNESS_NAMES
-    if not buddy or buddy.get("harness") not in HARNESS_NAMES:
-        return []
-    quota = quota_view(latest_quota(connection, buddy["harness"]), now=now)
-    explicit = exhausted(connection, buddy, now=now)
-    if explicit is not None:
-        return [{**{key: value for key, value in explicit.items() if key != "code"},
-                 "reason": reason(QUOTA_EXHAUSTION_REASONS[explicit["code"]]),
-                 "harness": buddy["harness"], "provider": buddy["provider"]}]
-    if not quota or quota["stale"] or quota.get("provider") not in (None, buddy.get("provider")):
-        return []
-    from ...protocol.usage import classify_quota_code
-    if quota.get("reachedType") and classify_quota_code(quota["reachedType"]) == "rate-limited":
-        return [{"reason": reason("HARNESS_RATE_LIMIT_REPORTED"), "harness": buddy["harness"],
-                 "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
-                 "reachedType": quota.get("reachedType")}]
-    if quota.get("reachedType") or quota.get("ordinaryUsageAllowed") is False:
-        return [{"reason": reason("HARNESS_QUOTA_LIMIT_REPORTED"), "harness": buddy["harness"],
-                 "provider": quota.get("provider"), "source": quota.get("source"), "observedAt": quota.get("observedAt"),
-                 "reachedType": quota.get("reachedType")}]
-    return [{"reason": reason("HARNESS_QUOTA_NEAR_LIMIT"), "harness": buddy["harness"],
-             "provider": quota.get("provider"), "source": quota.get("source"),
-             "observedAt": quota.get("observedAt"), "window": window}
-            for window in quota["windows"] if not window["stale"]
-            and isinstance(window.get("usedPercent"), (int, float)) and window["usedPercent"] >= 90]
-
-
-def failure_view(result, *, harness=None):
-    """Only structured native quota failures affect the visible classification."""
-    if not isinstance(result, dict):
-        return None
-    from ...protocol.usage import normalize_quota_failure
-    failure = normalize_quota_failure(result.get("quotaFailure"))
-    if failure is not None:
-        return failure
-    if result.get("code") == "quota-rejected":
-        return {"code": "quota-exceeded", "nativeCode": "quota-rejected", "source": (harness or "harness") + "/native-quota"}
-    return None
+def failure_view(result):
+    """The common harness result already normalized this structured fact."""
+    failure = result.get("quotaFailure") if isinstance(result, dict) else None
+    return failure if isinstance(failure, dict) and failure.get("code") in ("quota-exceeded", "rate-limited") else None

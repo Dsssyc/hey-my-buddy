@@ -1,17 +1,15 @@
 {
   "ANCESTOR_TERMINAL": [],
   "CONFLICT": [],
-  "HARNESS_BALANCE_ZERO": [],
-  "HARNESS_QUOTA_EXHAUSTED": [],
-  "HARNESS_QUOTA_LIMIT_REPORTED": [],
-  "HARNESS_QUOTA_NEAR_LIMIT": [],
-  "HARNESS_RATE_LIMIT_REPORTED": [],
   "ILLEGAL_TRANSITION": [],
   "REVISION_CONFLICT": [],
   "SHUTDOWN_UNCONFIRMED": [],
   "UPGRADE_IN_PROGRESS": [],
   "account.login-required": [],
   "account.not-checked": [],
+  "all-candidates-cooling": [
+    "retryAt"
+  ],
   "answer-empty": [],
   "answer-invalid-json": [],
   "answer-not-json": [],
@@ -125,12 +123,12 @@
   "history.reason-unavailable": [
     "recordId"
   ],
-  "interrupted-before-delivery": [],
   "inquiry-answer-empty": [],
   "inquiry-no-live-agent": [],
   "inquiry-observe-only": [],
   "inquiry-queued-at-attempt-end": [],
   "inquiry-root-turn-ended": [],
+  "interrupted-before-delivery": [],
   "journal-attempt-mismatch": [],
   "journal-attempt-unbound": [],
   "journal-question-unknown": [],
@@ -171,12 +169,12 @@
   "micro-task-cancelled": [],
   "micro-task-not-found": [],
   "micro-task-not-owned": [],
+  "model-cursor-shape-unreadable": [],
+  "model-list-shape-unreadable": [],
   "native-authority-required": [
     "kind"
   ],
   "native-metadata-wait-expired": [],
-  "model-cursor-shape-unreadable": [],
-  "model-list-shape-unreadable": [],
   "no-legal-candidate": [],
   "not-enabled": [],
   "readonly-budget-exhausted": [],
@@ -194,13 +192,13 @@
   ],
   "router-incomplete": [],
   "router-input-changed": [],
-  "router-input-unknown": [],
   "router-input-too-large": [
     "bytes",
     "limit",
     "collection",
     "count"
   ],
+  "router-input-unknown": [],
   "router-list-exhausted": [],
   "router-no-answer": [],
   "router-no-tool-unsupported": [

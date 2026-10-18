@@ -5,14 +5,14 @@ and the full evaluation/routing/harness projection every poll. This
 module builds the projection the console actually polls:
 
 * the evaluation core (``EvaluationStore.console_core``) — configuration,
-  routed buddies with quota facts, policy and model-service capacity;
+  routed buddies with provider cooling, policy and model-service capacity;
 * harness health and routing health, as before;
 * ``tasks`` reduced to ``pendingCount`` — the full-board count of micro task
   roots awaiting their Host, with the exact dedup semantics the top bar used.
 
 Each projection also reports the earliest
-time at which one of its own fields can flip (quota retry and
-reset windows, router skip windows), so a read cache can serve it unchanged
+time at which one of its own fields can flip (provider cooling and
+router skip windows), so a read cache can serve it unchanged
 without freezing state that must expire.
 """
 from __future__ import annotations

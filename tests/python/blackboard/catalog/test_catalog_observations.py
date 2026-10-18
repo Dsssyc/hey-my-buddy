@@ -321,6 +321,18 @@ class CatalogObservationTests(BoardTestCase):
         self.assertEqual([p['model'] for p in active['buddies']], ['c'])
         self.assertFalse(active['buddies'][0]['enabled'])
 
+    def test_buddy_list_projects_persisted_provider_cooling(self):
+        self.record(catalog())
+        before = catalog_store.buddies(self.e, {'includeUnavailable': True})['buddies'][0]
+        self.assertIsNone(before['providerCooling'])
+        self.assertNotIn('quotaExhausted', before)
+        self.assertNotIn('quotaRetry', before)
+        with self.e.db.write() as db:
+            db.execute('INSERT INTO provider_cooling(harness,provider,consecutive_rejections,cooling_until,last_rejected_at) '
+                       'VALUES(?,?,?,?,?)', ('dsh', 'fixture', 3, None, self.clock.value))
+        after = catalog_store.buddies(self.e, {'includeUnavailable': True})['buddies'][0]
+        self.assertEqual(after['providerCooling'], {'provider': 'fixture', 'coolingUntil': None, 'consecutiveRejections': 3})
+
     def test_history_search_filters_before_paging_and_treats_wildcards_literally(self):
         self.record(catalog(models=('a', 'b', 'c')))
         self.record(catalog(models=()))

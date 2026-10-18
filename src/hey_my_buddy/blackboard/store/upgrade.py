@@ -8,7 +8,7 @@ import re
 import sqlite3
 
 from .db import (COMMAND_DELETION_COLUMN, CORE_SCHEMA, HOST_CONCLUSION_INDEX, HOST_CONCLUSION_TABLE,
-                 MACRO_TASK_DELETIONS_DDL, WORKFLOW_REQUESTS_DDL,
+                 MACRO_TASK_DELETIONS_DDL, PROVIDER_COOLING_DDL, WORKFLOW_REQUESTS_DDL, WORKFLOW_TURNS_DDL,
                  EVALUATION_TABLES, WORKFLOW_TABLES, canonical_json)
 from ...errors import BoardError
 from ...protocol.reasons import REGISTERED_REASON_PARAMETERS, reason as make_reason
@@ -66,11 +66,10 @@ _READONLY_CODES = {
     'readonly-tools-unrestricted': 'harness.readonly-tools-unrestricted',
     'readonly-resource-missing': 'harness.readonly-resource-missing',
 }
-_WARNING_CODES = {
-    'HARNESS_RATE_LIMIT_REPORTED': 'HARNESS_RATE_LIMIT_REPORTED',
-    'HARNESS_QUOTA_LIMIT_REPORTED': 'HARNESS_QUOTA_LIMIT_REPORTED',
-    'HARNESS_QUOTA_NEAR_LIMIT': 'HARNESS_QUOTA_NEAR_LIMIT',
-}
+_DISCARDED_CATALOG_WARNINGS = frozenset((
+    'HARNESS_RATE_LIMIT_REPORTED', 'HARNESS_QUOTA_LIMIT_REPORTED',
+    'HARNESS_QUOTA_NEAR_LIMIT',
+))
 _ACCOUNT_CODES = {'ACCOUNT_LOGIN_REQUIRED': 'account.login-required',
                   'ACCOUNT_NOT_CHECKED': 'account.not-checked'}
 _FIXED_CATALOG_WARNINGS = {
@@ -299,9 +298,9 @@ def _catalog_payload(value: dict) -> dict:
             warning['reason'] = make_reason('catalog.native-warning')
             warning['content'] = old
         else:
-            if code not in _WARNING_CODES:
+            if code not in _DISCARDED_CATALOG_WARNINGS:
                 raise BoardError('UPGRADE_INVALID_BOARD', 'Stored catalog warning has unknown code')
-            warning['reason'] = make_reason(_WARNING_CODES[code])
+            continue
         warnings.append(warning)
     value['warnings'] = warnings
     return value
@@ -835,6 +834,7 @@ def _upgrade_router_snapshot(value, *, record_id: str):
         result['preferences'] = _upgrade_preference_notes(result['preferences'])
     if 'routingBasis' in result:
         basis = dict(result['routingBasis'])
+        basis.pop('quotaRetryBuddyIds', None)
         if 'excludedBuddies' in basis:
             basis['excludedBuddies'] = _upgrade_preference_notes(basis['excludedBuddies'])
         result['routingBasis'] = basis
@@ -954,7 +954,7 @@ def _decision_reason(connection: sqlite3.Connection, row: sqlite3.Row,
                     'is unavailable': 'unavailable', 'excluded by the user': 'excluded',
                     'missing a required task capability': 'capability-missing',
                     'outside current pins, task constraints, or quota limits': 'constraints-or-quota',
-                    'selected quota retry was consumed': 'quota-retry-consumed',
+                    'selected quota retry was consumed': 'constraints-or-quota',
                 }
                 bound = next((value for phrase, value in bounds.items() if phrase in old), None)
                 return ({'code': 'router-out-of-bounds', 'params': {'bound': bound}} if bound else
@@ -1216,6 +1216,17 @@ def _upgrade_inquiry_waiting(connection: sqlite3.Connection) -> None:
                                (canonical_json(payload), row['seq']))
 
 
+def _rebuild_workflow_turns(connection: sqlite3.Connection) -> None:
+    # The old table already has access_note after _upgrade_notes. Build the new
+    # CHECK without renaming the referenced table, so lead_turn_id keeps its FK.
+    connection.execute(WORKFLOW_TURNS_DDL.replace('workflow_turns (', 'workflow_turns_upgrade ('))
+    connection.execute('INSERT INTO workflow_turns_upgrade SELECT * FROM workflow_turns')
+    connection.execute('DROP TABLE workflow_turns')
+    connection.execute('ALTER TABLE workflow_turns_upgrade RENAME TO workflow_turns')
+    connection.execute('CREATE INDEX workflow_turns_run_idx ON workflow_turns(run_id, turn_index)')
+    connection.execute('CREATE INDEX workflow_turns_attempt_idx ON workflow_turns(attempt_id)')
+
+
 def upgrade_schema_24_to_25(state: Path) -> None:
     """Convert a stopped schema-24 board after its exact rollback backup exists."""
     with closing(sqlite3.connect(Path(state) / 'board.sqlite3')) as connection:
@@ -1230,12 +1241,17 @@ def upgrade_schema_24_to_25(state: Path) -> None:
                 raise BoardError('UNSUPPORTED_SCHEMA', 'The pending upgrade accepts schema 24 and writes schema 25')
             connection.execute(MACRO_TASK_DELETIONS_DDL)
             connection.execute('ALTER TABLE commands ADD COLUMN ' + COMMAND_DELETION_COLUMN)
+            connection.execute("DELETE FROM commands WHERE kind='quota.redetect'")
+            connection.execute('DROP TABLE quota_current')
+            connection.execute('DROP TABLE harness_quota_observations')
+            connection.execute(PROVIDER_COOLING_DDL)
             _upgrade_catalog_and_health(connection)
             _upgrade_decisions(connection)
             connection.execute('DROP INDEX events_router_outcome_idx')
             _upgrade_workflow_requests(connection)
             _upgrade_routing_copies(connection)
             _upgrade_notes(connection)
+            _rebuild_workflow_turns(connection)
             _upgrade_host_conclusions(connection)
             _upgrade_messages(connection)
             _upgrade_inquiry_waiting(connection)

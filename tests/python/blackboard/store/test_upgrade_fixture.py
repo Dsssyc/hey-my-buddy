@@ -468,6 +468,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         retained_meta = dict(old.execute("SELECT key,value FROM meta WHERE key!='schema_version'"))
         stock = {row[0]: [dict(item) for item in old.execute(f'SELECT * FROM {row[0]} ORDER BY rowid')]
                  for row in old.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+        stock.pop('quota_current')
+        stock.pop('harness_quota_observations')
+        stock['provider_cooling'] = []
+        stock['commands'] = [row for row in stock['commands'] if row['kind'] != 'quota.redetect']
         for row in stock['commands']:
             row['deletion_id'] = None
         for row in stock['meta']:
@@ -578,6 +582,72 @@ class UpgradeFixtureTests(unittest.TestCase):
                 'PRAGMA foreign_key_list(workflow_fixes)')}
             self.assertEqual(fix_fks, {('run_id', 'workflow_runs', 'run_id'),
                                        ('fixed_run_id', 'workflow_runs', 'run_id')})
+
+    def test_quota_stock_is_discarded_and_cooling_constraints_match_fresh_board(self):
+        fixture, old = self.restored('quota-stock')
+        observed = '2026-01-01T00:00:00.000Z'
+        for limit_id, blocked, code, resets_at, manual, consumed in (
+            ('primary', 1, 'HARNESS_QUOTA_EXHAUSTED', None, observed, observed),
+            ('secondary', 1, 'HARNESS_BALANCE_ZERO', '2026-01-02T00:00:00.000Z', None, None),
+            ('available', 0, None, None, None, None),
+        ):
+            old.execute('INSERT INTO quota_current(harness,provider,limit_id,blocked,code,source,'
+                        'observed_at,last_observed_at,resets_at,retry_manual_at,retry_consumed_at,retry_consumed_by)'
+                        ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                        ('codex', 'openai', limit_id, blocked, code, 'native', observed, observed,
+                         resets_at, manual, consumed, 'decision-1' if consumed else None))
+        old.execute('INSERT INTO harness_quota_observations(harness,quota_json) VALUES(?,?)'
+                    ' ON CONFLICT(harness) DO UPDATE SET quota_json=excluded.quota_json',
+                    ('codex', canonical_json({'observedAt': observed, 'resetsAt': observed})))
+        raw_results = [tuple(row) for row in old.execute('SELECT attempt_id,result_json FROM attempts ORDER BY attempt_id')]
+        old.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(old.execute('SELECT COUNT(*) FROM provider_cooling').fetchone()[0], 0)
+        self.assertEqual([tuple(row) for row in old.execute('SELECT attempt_id,result_json FROM attempts ORDER BY attempt_id')],
+                         raw_results)
+        self.assertEqual(old.execute('PRAGMA foreign_key_check').fetchall(), [])
+        fresh = Database(self.root / 'fresh-cooling')
+        fresh.initialize()
+        self.addCleanup(fresh.close)
+        with fresh.connect() as baseline:
+            for connection in (old, baseline):
+                connection.execute('INSERT INTO provider_cooling VALUES(?,?,?,?,?)',
+                                   ('codex', 'openai', 1, None, observed))
+                with self.assertRaises(sqlite3.IntegrityError):
+                    connection.execute('INSERT INTO provider_cooling VALUES(?,?,?,?,?)',
+                                       ('codex', 'openai', 2, observed, observed))
+                for count, until, rejected_at in ((0, None, observed), (1.5, None, observed),
+                                                  (1, '2026-01-01T00:00:00+01:00', observed),
+                                                  (1, None, 'not-a-utc-time'),
+                                                  (1, '2026-13-01T00:00:00.000Z', observed),
+                                                  (1, None, '2026-13-01T00:00:00.000Z')):
+                    with self.subTest(count=count, until=until, rejected_at=rejected_at):
+                        with self.assertRaises(sqlite3.IntegrityError):
+                            connection.execute('INSERT INTO provider_cooling VALUES(?,?,?,?,?)',
+                                               ('claude', 'anthropic', count, until, rejected_at))
+                self.assertEqual(connection.execute('SELECT COUNT(*) FROM provider_cooling').fetchone()[0], 1)
+
+    def test_turn_rebuild_preserves_rows_and_references_and_accepts_rejected(self):
+        fixture, connection = self.restored('rejected-turn')
+        original = [tuple(row) for row in connection.execute(
+            'SELECT turn_id,run_id,attempt_id,turn_index,state,input_json FROM workflow_turns ORDER BY turn_id')]
+        lead_run = original[0][1]
+        owned_run = next(run_id for run_id, in connection.execute('SELECT run_id FROM workflow_runs')
+                         if run_id != lead_run)
+        connection.execute('INSERT INTO workflow_lead_tasks(owned_run_id,lead_run_id,lead_turn_id,created_at)'
+                           ' VALUES(?,?,?,?)', (owned_run, lead_run, original[0][0], '2026-01-01T00:00:00.000Z'))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT turn_id,run_id,attempt_id,turn_index,state,input_json FROM workflow_turns ORDER BY turn_id')],
+                         original)
+        self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+        self.assertEqual(connection.execute('SELECT lead_turn_id FROM workflow_lead_tasks WHERE owned_run_id=?',
+                                            (owned_run,)).fetchone()[0], original[0][0])
+        turn_id = original[0][0]
+        connection.execute("UPDATE workflow_turns SET state='rejected' WHERE turn_id=?", (turn_id,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            connection.execute("UPDATE workflow_turns SET state='unknown' WHERE turn_id=?", (turn_id,))
             fix_indexes = [row['name'] for row in upgraded.execute('PRAGMA index_list(workflow_fixes)')]
             self.assertIn(('fixed_run_id', 'created_at'), [tuple(row['name'] for row in upgraded.execute(
                 f'PRAGMA index_info({name})')) for name in fix_indexes])
@@ -1245,6 +1315,48 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
         self.assertEqual(backup.database_snapshot(connection, exact=True), before)
 
+    def test_quota_catalog_warnings_are_removed_from_both_current_copies(self):
+        fixture, connection = self.restored('old-quota-warnings')
+        warnings = [{'code': code, 'message': code} for code in (
+            'HARNESS_RATE_LIMIT_REPORTED', 'HARNESS_QUOTA_LIMIT_REPORTED',
+            'HARNESS_QUOTA_NEAR_LIMIT')]
+        warnings.append({'message': 'native detail'})
+        for observation_id, raw in connection.execute(
+                'SELECT observation_id,response_json FROM catalog_observations WHERE response_json IS NOT NULL').fetchall():
+            response = json.loads(raw)
+            response['catalog']['warnings'] = warnings
+            connection.execute('UPDATE catalog_observations SET response_json=? WHERE observation_id=?',
+                               (canonical_json(response), observation_id))
+        for discovery_id, raw in connection.execute('SELECT discovery_id,payload_json FROM evaluation_catalog').fetchall():
+            payload = json.loads(raw)
+            payload['warnings'] = warnings
+            connection.execute('UPDATE evaluation_catalog SET payload_json=? WHERE discovery_id=?',
+                               (canonical_json(payload), discovery_id))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        for raw, in connection.execute('SELECT response_json FROM catalog_observations WHERE response_json IS NOT NULL'):
+            converted = json.loads(raw)['catalog']['warnings']
+            self.assertEqual(converted, [{'reason': {'code': 'catalog.native-warning', 'params': {}},
+                                          'content': 'native detail'}])
+        for raw, in connection.execute('SELECT payload_json FROM evaluation_catalog'):
+            converted = json.loads(raw)['warnings']
+            self.assertEqual(converted, [{'reason': {'code': 'catalog.native-warning', 'params': {}},
+                                          'content': 'native detail'}])
+
+    def test_unknown_catalog_warning_still_refuses_upgrade(self):
+        fixture, connection = self.restored('unknown-quota-warning')
+        discovery_id, raw = connection.execute('SELECT discovery_id,payload_json FROM evaluation_catalog LIMIT 1').fetchone()
+        payload = json.loads(raw)
+        payload['warnings'] = [{'code': 'HARNESS_UNKNOWN_WARNING', 'message': 'unknown'}]
+        connection.execute('UPDATE evaluation_catalog SET payload_json=? WHERE discovery_id=?',
+                           (canonical_json(payload), discovery_id))
+        connection.commit()
+        before = backup.database_snapshot(connection, exact=True)
+        with self.assertRaises(BoardError) as caught:
+            upgrade_schema_24_to_25(fixture['state'])
+        self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+        self.assertEqual(backup.database_snapshot(connection, exact=True), before)
+
     def test_upgraded_and_fresh_buddies_enforce_reason_content_constraints(self):
         fixture, upgraded = self.restored('buddy-reason-constraints')
         upgrade_schema_24_to_25(fixture['state'])
@@ -1634,6 +1746,49 @@ class UpgradeFixtureTests(unittest.TestCase):
         event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind='decision.completed'"
                                               " ORDER BY seq DESC LIMIT 1").fetchone()[0])
         self.assertEqual(event, {'decisionId': decision_id, 'status': 'completed'})
+
+    def test_quota_retry_routing_snapshot_reason_and_receipt_are_retired(self):
+        fixture, connection = self.restored('quota-retry-history')
+        decision_id = connection.execute('SELECT decision_id FROM evaluation_decisions LIMIT 1').fetchone()[0]
+        self.old_router_attempt(fixture, connection, decision_id)
+        row = connection.execute('SELECT requested_json FROM decision_requests WHERE decision_id=?',
+                                 (decision_id,)).fetchone()
+        requested = json.loads(row[0])
+        requested['routingBasis']['quotaRetryBuddyIds'] = ['old-buddy']
+        connection.execute('UPDATE decision_requests SET requested_json=? WHERE decision_id=?',
+                           (canonical_json(requested), decision_id))
+        snapshot = json.loads(connection.execute('SELECT snapshot_json FROM router_requests WHERE decision_id=?',
+                                                 (decision_id,)).fetchone()[0])
+        snapshot['routingBasis'] = {'candidateCount': 1, 'quotaRetryBuddyIds': ['old-buddy']}
+        snapshot['baseInput']['routingBasis'] = {'candidateCount': 1, 'quotaRetryBuddyIds': ['old-buddy']}
+        connection.execute('UPDATE router_requests SET snapshot_json=? WHERE decision_id=?',
+                           (canonical_json(snapshot), decision_id))
+        connection.execute("UPDATE evaluation_decisions SET status='needs-host',buddy_id=NULL,"
+                           "reason='the selected quota retry was consumed',error='router-out-of-bounds'"
+                           ' WHERE decision_id=?', (decision_id,))
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at)'
+                           ' VALUES(?,?,?,?,?)', ('old-redetect', 'quota.redetect', 'old-redetect-hash',
+                                                  '{"oldRetry":true}', '2026-01-01T00:00:00.000Z'))
+        connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json,created_at)'
+                           ' VALUES(?,?,?,?,?)', ('other-receipt', 'workflow.cancel', 'other-hash',
+                                                  '{"cancelled":true}', '2026-01-01T00:00:00.000Z'))
+        connection.commit()
+        upgrade_schema_24_to_25(fixture['state'])
+        requested = json.loads(connection.execute('SELECT requested_json FROM decision_requests WHERE decision_id=?',
+                                                  (decision_id,)).fetchone()[0])
+        snapshot = json.loads(connection.execute('SELECT snapshot_json FROM router_requests WHERE decision_id=?',
+                                                 (decision_id,)).fetchone()[0])
+        for basis in (requested['routingBasis'], snapshot['routingBasis'], snapshot['baseInput']['routingBasis']):
+            self.assertNotIn('quotaRetryBuddyIds', basis)
+        self.assertEqual(snapshot['routingBasis'], {'candidateCount': 1})
+        self.assertEqual(snapshot['baseInput']['routingBasis'], {'candidateCount': 1})
+        row = connection.execute('SELECT reason_code,reason_params_json FROM evaluation_decisions WHERE decision_id=?',
+                                 (decision_id,)).fetchone()
+        self.assertEqual((row['reason_code'], json.loads(row['reason_params_json'])),
+                         ('router-out-of-bounds', {'bound': 'constraints-or-quota'}))
+        self.assertIsNone(connection.execute("SELECT 1 FROM commands WHERE kind='quota.redetect'").fetchone())
+        self.assertEqual(connection.execute("SELECT response_json FROM commands WHERE command_id='other-receipt'").fetchone()[0],
+                         '{"cancelled":true}')
 
     def test_decision_upgrade_uses_history_only_for_known_board_prose(self):
         fixture, connection = self.restored('decision-history')

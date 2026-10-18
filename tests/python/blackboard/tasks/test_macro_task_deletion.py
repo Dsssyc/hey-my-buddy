@@ -632,7 +632,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM macro_task_deletions").fetchone()[0], 0)
 
-    def test_remaining_owned_fk_rows_and_quota_link_are_removed_atomically(self):
+    def test_remaining_owned_fk_rows_are_removed_and_provider_cooling_is_retained(self):
         board = self.board()
         run = self.closed(board, "owned-facts", macro_task="Owned facts")
         other = self.closed(board, "other-facts", macro_task="Other facts", project="other-facts")
@@ -672,10 +672,9 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,"
                        "updated_at) VALUES(?,?,?,?,?,?)",
                        ("owned-decision", run["runId"], 1, "resolved", now, now))
-            db.execute("INSERT INTO quota_current(harness,provider,limit_id,blocked,source,observed_at,"
-                       "last_observed_at,retry_consumed_at,retry_consumed_by) VALUES(?,?,?,?,?,?,?,?,?)",
-                       ("codex", "fixture", "owned-limit", 0, "fixture", now, now, now,
-                        "owned-decision"))
+            db.execute("INSERT INTO provider_cooling(harness,provider,consecutive_rejections,"
+                       "cooling_until,last_rejected_at) VALUES(?,?,?,?,?)",
+                       ("codex", "fixture", 2, now, now))
             db.execute("INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,subject,"
                        "created_at) VALUES(?,?,?,?,?,?,?)",
                        ("owned-content-command", run["runId"], "workflow.fixture", "hash",
@@ -712,9 +711,9 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             stop = db.execute("SELECT response_json,deletion_id FROM commands"
                               " WHERE command_id='owned-stop-command'").fetchone()
             self.assertEqual(tuple(stop), ("{}", result["deletionId"]))
-            quota = db.execute("SELECT retry_consumed_at,retry_consumed_by FROM quota_current"
-                               " WHERE limit_id='owned-limit'").fetchone()
-            self.assertEqual(tuple(quota), (now, None))
+            cooling = db.execute("SELECT consecutive_rejections,cooling_until,last_rejected_at"
+                                 " FROM provider_cooling WHERE harness='codex' AND provider='fixture'").fetchone()
+            self.assertEqual(tuple(cooling), (2, now, now))
             self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?",
                                             (other["runId"],)).fetchone())
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])

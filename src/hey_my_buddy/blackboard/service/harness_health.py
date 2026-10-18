@@ -59,10 +59,9 @@ def read_health(connection, harness):
     if row is None:
         record = {'harness': harness, 'status': 'unknown', 'available': False, 'revision': 0,
                 'manualPath': None, 'reason': _not_checked()}
-        return {**record, 'account': account, 'systemSandbox': eligibility['systemSandbox'],
+        return {**record, 'providers': [], 'account': account, 'systemSandbox': eligibility['systemSandbox'],
                 'readOnlyStructured': eligibility}
-    from ..evaluation.native_observations import quota_view, latest_quota
-    from ..routing.quota_routing import routing_facts
+    from ..routing.quota_routing import providers
     record = json.loads(row['record_json'])
     record.pop('reviewVerification', None)
     billing = record.get('billingByProvider') or {}
@@ -78,8 +77,7 @@ def read_health(connection, harness):
                                                 "dsh/deepseek-api-key", catalog["updated_at"])
                        for entry in entries if entry.get("harness") == harness and isinstance(entry.get("provider"), str)}
     status = row['status']
-    record = {**record, "billingByProvider": billing, "quota": quota_view(latest_quota(connection, harness)),
-            "quotaRouting": routing_facts(connection, harness), 'harness': harness,
+    record = {**record, "billingByProvider": billing, "providers": providers(connection, harness), 'harness': harness,
             'available': status == 'ready', 'status': status, 'account': account, 'revision': row['revision'], 'manualPath': row['manual_path'],
             'checkedAt': row['checked_at'], 'expiresAt': row['expires_at'], 'scanAfter': row['scan_after']}
     return {**record, 'systemSandbox': eligibility['systemSandbox'], 'readOnlyStructured': eligibility}
@@ -318,7 +316,7 @@ class HarnessHealth:
                                   wait=False)
 
     def _catalog_scan_due(self, name, now):
-        from ..evaluation.native_observations import _time
+        from ..routing.quota_routing import _time
         with self.board.db.read() as db:
             row = db.execute('SELECT scan_after FROM harness_health WHERE harness=?', (name,)).fetchone()
         if row is None:
@@ -340,7 +338,7 @@ class HarnessHealth:
         a harness with no observation at all has nothing stale to re-read.
         """
         from ..catalog.catalog import CATALOG_SHELF_SECONDS, catalog_read_at
-        from ..evaluation.native_observations import _time
+        from ..routing.quota_routing import _time
         with self.board.db.read() as db:
             read_at = catalog_read_at(db, name)
             if read_at is None:
@@ -358,7 +356,7 @@ class HarnessHealth:
             return
         if self._closed or (self.board.directory / 'upgrade.json').exists():
             return
-        from ..evaluation.native_observations import _time
+        from ..routing.quota_routing import _time
         with self.board.db.write() as db:
             row = db.execute("SELECT checked_at FROM harness_account_reads WHERE harness='codex'").fetchone()
             now = utc_now()
@@ -368,10 +366,10 @@ class HarnessHealth:
             db.execute('INSERT INTO harness_account_reads(harness,checked_at) VALUES(?,?) '
                        'ON CONFLICT(harness) DO UPDATE SET checked_at=excluded.checked_at', ('codex', now))
         from ...buddy.harnesses.codex.protocol import CodexProtocolError
-        billing = quota = failure = None
+        billing = failure = None
         try:
             from ...buddy.harnesses.codex.account_probe import read
-            billing, quota, error = read(health['command'], self.environment())
+            billing, error = read(health['command'], self.environment())
         except (BoardError, CodexProtocolError, OSError, ValueError, RuntimeError) as caught:
             error = caught
         if error is not None:
@@ -397,9 +395,6 @@ class HarnessHealth:
                     'harness': 'codex', 'reason': failure['reason'], 'revision': health['revision'],
                     'currentRevision': row['revision'], 'accountReadFailure': failure})
             if row['revision'] == health['revision']:
-                if quota is not None:
-                    from ..evaluation.native_observations import record_quota
-                    record_quota(db, 'codex', quota)
                 record = json.loads(row['record_json'])
                 previous_failure = record.pop('accountReadFailure', None)
                 recovered_stop = previous_failure is not None and (previous_failure.get('reason') or {}).get('code') == 'harness.shutdown-unverified'
@@ -424,7 +419,7 @@ class HarnessHealth:
                     restore_retained_availability(db, 'codex')
                 if account_observed:
                     self.board._append_event(db, 'harness.account_observed', payload={'harness': 'codex',
-                        'observedAt': observed_at, 'billing': record['billingByProvider'], 'quotaRecorded': quota is not None})
+                        'observedAt': observed_at, 'billing': record['billingByProvider']})
             head = self.board._head_of(db)
         self.board._notify(head)
 

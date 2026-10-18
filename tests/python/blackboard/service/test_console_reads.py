@@ -77,10 +77,10 @@ class BoundaryTests(BoardTestCase):
         after = parse_boundary("2026-10-07T12:00:00Z")
         projection = {
             "buddies": [
-                {"quotaRetry": {"eligibleAt": "2026-10-07T12:30:00Z"}},
-                {"quotaExhausted": {"resetsAt": "2027-01-01T00:00:00Z"}},
+                {"providerCooling": {"provider": "openai", "coolingUntil": "2026-10-07T12:30:00Z", "consecutiveRejections": 2}},
             ],
-            "harnesses": [{"quota": {"observedAt": "2026-10-07T11:30:00Z"}, "scanAfter": "2026-10-07T12:02:00Z"}],
+            "harnesses": [{"providers": [{"provider": "openai", "coolingUntil": "2026-10-07T12:30:00Z", "consecutiveRejections": 2}],
+                           "scanAfter": "2026-10-07T12:02:00Z"}],
             "routingHealth": {"routers": [{"skipUntil": "2026-10-07T12:05:00Z"}]},
             "past": {"expiresAt": "2026-10-07T11:00:00Z"},
         }
@@ -90,11 +90,10 @@ class BoundaryTests(BoardTestCase):
         self.assertEqual(deadline, parse_boundary("2026-10-07T12:02:00Z"))
         del projection["harnesses"][0]["scanAfter"]
         without_scan = collect_deadline(projection, after=after)
-        # The observation ages stale one hour later; the skip window ends first
-        # once no scan boundary exists.
         self.assertEqual(without_scan, parse_boundary("2026-10-07T12:05:00Z"))
-        stale_only = collect_deadline({"quota": {"observedAt": "2026-10-07T11:30:00Z"}}, after=after)
-        self.assertEqual(stale_only, parse_boundary("2026-10-07T12:30:00Z"))
+        cooling_only = collect_deadline({"providers": [{"coolingUntil": "2026-10-07T12:30:00Z"}]}, after=after)
+        self.assertEqual(cooling_only, parse_boundary("2026-10-07T12:30:00Z"))
+        self.assertEqual(collect_deadline({"quotaFailure": {"resetsAt": "2026-10-07T12:01:00Z"}}, after=after), float("inf"))
         self.assertEqual(collect_deadline({"x": 1}, after=after), float("inf"))
 
 

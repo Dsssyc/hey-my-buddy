@@ -207,7 +207,7 @@ class SingleRouterRequestTests(BoardTestCase):
                 _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-harness-unavailable")
             self.assertEqual(facts, {"cause": {"code": "harness.not-found", "params": {"operation": "probe"}}})
-            with patch("hey_my_buddy.blackboard.evaluation.native_observations.exhausted", return_value={"nativeCode": "quota"}):
+            with patch("hey_my_buddy.blackboard.routing.quota_routing.cooling", return_value={"coolingUntil": "2026-01-01T00:30:00.000Z"}):
                 _, code, _ = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-quota-exhausted")
             with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured", False):

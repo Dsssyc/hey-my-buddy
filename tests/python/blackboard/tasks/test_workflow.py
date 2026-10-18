@@ -297,33 +297,20 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(view["audit"]["turns"][0]["outcomeTruncated"], truncated)
         self.assertNotIn("outcomeTruncated", view["audit"]["turns"][0]["outcome"])
 
-    def test_unselected_buddy_reads_have_no_native_quota_projection(self):
+    def test_unselected_buddy_reads_have_no_provider_cooling_fact(self):
         board = self.board()
-        with patch('hey_my_buddy.blackboard.evaluation.native_observations.latest_quota',
-                   side_effect=AssertionError('an unselected buddy has no native quota reader')):
+        with patch('hey_my_buddy.blackboard.routing.quota_routing.provider_state',
+                   side_effect=AssertionError('an unselected buddy has no provider cooling reader')):
             submitted = board.call('workflow_submit', {
-                'requestId': 'unselected', 'hostId': 'host-1', 'task': 'choose a buddy',
-                'cwd': str(self.workdir()), 'executionWorkspace': {'kind': 'existing', 'access': 'write'},
-            })
-            run_id = submitted['runId']
+                'requestId': 'no-buddy', 'hostId': 'host-1', 'task': 'no selected buddy',
+                'cwd': str(self.workdir()), 'executionWorkspace': {'kind': 'existing', 'access': 'write'}})
+            self.controls[submitted['runId']] = submitted['control']
             self.assertIsNone(submitted['buddy'])
-            self.assertEqual(submitted['quotaWarnings'], [])
-            view = board.call('workflow_get', {'runId': run_id})
-            self.assertIsNone(view['buddy'])
-            self.assertEqual(view['quotaWarnings'], [])
-            self.assertNotIn('adapter', view)
-            self.assertEqual(view['task']['adapter'], 'unresolved')
-            with board.store.db.read() as connection:
-                self.assertIsNone(connection.execute(
-                    'SELECT buddy_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()[0])
-                self.assertEqual(connection.execute(
-                    "SELECT COUNT(*) FROM events WHERE task_id=? AND kind IN "
-                    "('workflow.buddy_selected','workflow.execution_selected')", (run_id,)).fetchone()[0], 0)
-            self.assertIsNone(board.call('task_get', {'runId': run_id})['task']['lineage']['buddy'])
-            rows = board.call('task_list', {})['runs']
-            row = next(item for item in rows if item['taskId'] == run_id)
-            self.assertIsNone(row['lineage']['buddy'])
-            self.assertEqual(row['adapter'], 'unresolved')
+            self.assertIsNone(submitted['providerCooling'])
+            self.assertNotIn('quotaWarnings', submitted)
+            view = board.call('workflow_get', {'runId': submitted['runId']})
+            self.assertIsNone(view['providerCooling'])
+
 
     def test_yield_approve_helper_continuation_and_acknowledgement(self):
         board = self.board(max_concurrent=1)

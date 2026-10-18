@@ -25,10 +25,9 @@ class UpgradeServiceTests(BoardTestCase):
             "systemSandbox": True, "sameAttemptContinuation": True,
         }), Database(state).read() as connection:
             resolution = router.current_router(connection, now="2026-01-01T00:00:00.000Z")
-        self.assertIsNone(resolution.buddy_id)
-        self.assertEqual(resolution.problem["code"], "router-all-unavailable")
-        self.assertEqual([item["code"] for item in resolution.inspections],
-                         ["router-quota-exhausted", "router-disabled"])
+        self.assertEqual(resolution.buddy_id, fixture["routerBuddyIds"][0])
+        self.assertIsNone(resolution.problem)
+        self.assertEqual([item["code"] for item in resolution.inspections], [None])
         self.assertEqual(resolution.facts["routingMode"], "review")
         self.assertEqual(resolution.facts["routingBudget"], "deep")
         self.assertEqual(resolution.facts["routerRetryIntervalSeconds"], 47)

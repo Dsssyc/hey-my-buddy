@@ -1,254 +1,97 @@
-"""Quota warnings use retained native observations with explicit freshness and scope."""
+"""Native attempt facts update token usage and provider cooling on a private board."""
 import json
 
+from hey_my_buddy.blackboard.evaluation.native_observations import failure_view, persist
+from hey_my_buddy.blackboard.routing.quota_routing import cooling, provider_state
 from hey_my_buddy.blackboard.service.harness_health import read_health
-from hey_my_buddy.blackboard.evaluation.native_observations import exhausted, latest_quota, quota_view, record_quota, warnings
-from support import BoardTestCase
+from support import BoardTestCase, FakeClock
 from blackboard.tasks.test_workflow import WorkflowTestCase, NONCE
 
 
-class QuotaVisibilityTests(BoardTestCase):
-    def test_optional_quota_read_is_bounded_and_restores_the_execution_deadline(self):
-        import time
-        from types import SimpleNamespace
-        from hey_my_buddy.buddy.harnesses.codex.native_run import _observe_quota
-        from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
-        connection = SimpleNamespace(deadline=time.monotonic() + 1000)
-        previous = connection.deadline
-        def read(_method, _params):
-            self.assertLessEqual(connection.deadline - time.monotonic(), 2)
-            raise CodexProtocolError("deadline", "fixture metadata read stalled")
-        connection.call = read
-        retained = {"source": "earlier-native-observation"}
-        self.assertEqual(_observe_quota(connection, SimpleNamespace(quota_candidate=retained)), retained)
-        self.assertEqual(connection.deadline, previous)
+T0 = "2026-09-29T10:00:00.000Z"
 
-    def test_canonical_quota_keeps_its_native_scope_through_every_import(self):
-        from hey_my_buddy.protocol.usage import normalize_quota
-        raw = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "provider": "openai",
-               "nativeAccountId": "fixture-account", "limitId": "fixture-limit", "planType": "fixture-plan",
-               "windows": [{"name": "five-hour", "usedPercent": 94, "resetsAt": "2026-09-29T12:00:00Z"}]}
-        once = normalize_quota(raw)
-        self.assertEqual(normalize_quota(once), once)
+
+def denial(*, observed_at=T0, resets_at=None, phase="before-model"):
+    return {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded",
+            "source": "fixture/native-rejection", "observedAt": observed_at,
+            "resetsAt": resets_at, "rejectionPhase": phase}
+
+
+class NativeCoolingTests(BoardTestCase):
+    def test_only_structured_failure_is_projected(self):
+        failure = denial()
+        self.assertEqual(failure_view({"quotaFailure": failure}), failure)
+        self.assertIsNone(failure_view({"code": "quota-rejected"}))
+        self.assertIsNone(failure_view({"quotaFailure": {"rateLimitType": "five_hour", "resetsAt": 1790467200}}))
+        self.assertIsNone(failure_view({"error": "quota exhausted"}))
+
+    def test_denial_records_provider_cooling_without_usage_or_native_window(self):
         board = self.board()
+        attempt = {"attempt_id": "fixture-denial", "adapter": "codex",
+                   "model_harness": "codex", "model_provider": "openai",
+                   "started_at": "2026-09-29T09:59:00.000Z"}
         with board.store.db.write() as db:
-            record_quota(db, "codex", once, now=once["observedAt"])
-            self.assertEqual(latest_quota(db, "codex"), once)
-            row = db.execute("SELECT native_account_id FROM quota_current WHERE harness='codex'").fetchone()
-            self.assertEqual(row["native_account_id"], "fixture-account")
+            persist(db, attempt, {"quotaFailure": denial()}, status="failed",
+                    shutdown_confirmed=True, now=T0)
+            self.assertEqual(provider_state(db, "codex", "openai"), {
+                "provider": "openai", "coolingUntil": "2026-09-29T10:30:00.000Z",
+                "consecutiveRejections": 1})
+            self.assertEqual(cooling(db, {"harness": "codex", "provider": "openai"},
+                                     now=T0)["provider"], "openai")
+            self.assertIsNone(cooling(db, {"harness": "codex", "provider": "another"}, now=T0))
+            self.assertEqual(read_health(db, "codex")["providers"], [
+                {"provider": "openai", "coolingUntil": "2026-09-29T10:30:00.000Z",
+                 "consecutiveRejections": 1}])
 
-
-    def test_missing_cache_cannot_be_relabelled_as_an_inclusive_input_total(self):
-        from hey_my_buddy.protocol.usage import normalize_token_usage
-        usage = normalize_token_usage({"inputTokens": 100, "outputTokens": 10,
-                                       "inputBasis": "excludes-cached", "source": "native-fixture"})
-        self.assertIsNone(usage["inputTokens"])
-        self.assertEqual(usage["outputTokens"], 10)
-
-    def test_only_recent_matching_native_windows_warn_and_unknown_stays_unknown(self):
+    def test_late_success_does_not_erase_newer_denial(self):
         board = self.board()
-        self.assertIsNone(quota_view(None))
-        observed = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "provider": "openai",
-                    "windows": [{"name": "five-hour", "usedPercent": 97, "resetsAt": "2026-09-29T12:00:00Z"}]}
+        attempt = {"attempt_id": "fixture", "adapter": "codex",
+                   "model_harness": "codex", "model_provider": "openai",
+                   "started_at": "2026-09-29T09:59:00.000Z"}
         with board.store.db.write() as db:
-            record_quota(db, "codex", observed, now=observed["observedAt"])
-            self.assertEqual(len(warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")), 1)
-            self.assertEqual(warnings(db, {"harness": "codex", "provider": "different"}, now="2026-09-29T10:01:00Z"), [])
-            self.assertEqual(warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z"), [])
-        unknown = quota_view({**observed, "windows": [{"name": "five-hour", "usedPercent": None, "resetsAt": None}]}, now="2026-09-29T10:01:00Z")
-        self.assertIsNone(unknown["windows"][0]["usedPercent"])
-
-    def test_health_refresh_fields_cannot_overwrite_the_separate_quota_observation(self):
-        board = self.board()
-        quota = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "windows": []}
-        with board.store.db.write() as db:
-            record_quota(db, "codex", quota, now=quota["observedAt"])
-            db.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'",
-                       (json.dumps({"quota": {"source": "stale-embedded-copy"}, "version": "new"}),))
-            self.assertEqual(read_health(db, "codex")["quota"]["source"], "native-fixture")
-            self.assertEqual(read_health(db, "codex")["version"], "new")
-
-    def test_subsecond_newer_observation_replaces_a_whole_second_timestamp(self):
-        board = self.board()
-        with board.store.db.write() as db:
-            record_quota(db, 'codex', {'source': 'native-fixture', 'provider': 'openai',
-                                      'observedAt': '2026-09-29T10:00:00Z', 'windows': []})
-            record_quota(db, 'codex', {'source': 'native-fixture', 'provider': 'openai',
-                                      'observedAt': '2026-09-29T10:00:00.001Z', 'windows': []})
-            self.assertEqual(latest_quota(db, 'codex')['observedAt'], '2026-09-29T10:00:00.001Z')
-
-    def test_a_recent_native_quota_failure_warns_without_a_fabricated_window(self):
-        from hey_my_buddy.blackboard.evaluation.native_observations import persist
-        board = self.board()
-        attempt = {"attempt_id": "fixture", "adapter": "codex", "model_harness": "codex", "model_provider": "openai"}
-        with board.store.db.write() as db:
-            persist(db, attempt, {"quotaFailure": {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded", "source": "codex/turn-error",
-                                                  "observedAt": "2026-09-29T10:00:00Z"}})
-            observed = read_health(db, "codex")["quota"]
-            self.assertEqual(observed["windows"], [])
-            warning = warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T10:01:00Z")
-            self.assertEqual(warning[0]["reason"], {"code": "HARNESS_QUOTA_EXHAUSTED", "params": {}})
-            self.assertEqual(warnings(db, {"harness": "codex", "provider": "openai"}, now="2026-09-29T12:01:00Z")[0]['reason']['code'], 'HARNESS_QUOTA_EXHAUSTED')
-
-    def test_claude_normalized_rejection_without_quota_persists_and_keeps_its_native_limit_type(self):
-        from unittest.mock import patch
-        from hey_my_buddy.buddy.harnesses.claude import native_run
-        from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected
-        from hey_my_buddy.buddy.harnesses.run_contract import (
-            FEEDBACK_CONTINUE, PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
-        )
-        from hey_my_buddy.blackboard.evaluation.native_observations import failure_view, persist
-        from hey_my_buddy.protocol.usage import classify_quota_code
-        board = self.board()
-        observed_at = "2026-09-29T10:00:00Z"
-        request = RunRequest(identity=RunIdentity(task_id="task", attempt_id="attempt", generation=1,
-                                                 invocation_id="invocation"),
-                             harness="claude", buddy=RunBuddy(provider="fixture-api",
-                                                                               model="fixture-model", effort="low"),
-                             cwd=str(self.directory), input_text="fixture", tool_scope="none",
-                             output_schema={"type": "object"}, budget=RunBudget(timeout_seconds=5),
-                             private_state=PrivateStatePaths(invocation_root=str(self.directory / "run"),
-                                                             native_root=str(self.directory / "native")))
-        with patch.object(native_run, "_prepare", side_effect=QuotaRejected("five_hour", None)), \
-             patch.object(native_run, "utc_now", return_value=observed_at):
-            run = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE,
-                                 services=None, cancelled=lambda: False)
-        # Test the normalized failure package; the existing native Worker
-        # receipt still carries its separate rateLimitType/resetsAt fields.
-        result = {"code": run.end.reason_code, "quotaFailure": run.native_failure.value}
-        self.assertNotIn("quota", result)
-        self.assertEqual(classify_quota_code("five_hour"), "unknown")
-        with board.store.db.write() as db:
-            persist(db, {"attempt_id": "attempt", "adapter": "claude", "model_harness": "claude",
-                         "model_provider": "fixture-api"}, result)
-            observed = read_health(db, "claude")["quota"]
-            self.assertEqual(observed["reachedType"], "five_hour")
-            self.assertIs(observed["ordinaryUsageAllowed"], False)
-            self.assertEqual(observed["windows"], [])
-            self.assertNotIn("resetsAt", observed)
-            self.assertEqual(warnings(db, {"harness": "claude", "provider": "fixture-api"},
-                                      now=observed_at)[0]["reason"]["code"], "HARNESS_QUOTA_EXHAUSTED")
-        self.assertEqual(failure_view(result, harness="claude"), run.native_failure.value)
-        self.assertEqual(failure_view(result, harness="claude")["nativeCode"], "five_hour")
-
-    def test_native_login_identity_is_a_fact_without_reopening_exhaustion(self):
-        from support import FakeClock
-        clock = FakeClock("2026-09-29T10:00:00Z")
-        board = self.board(clock=clock)
-        config = {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"}
-        base = {"source": "native-fixture", "provider": "openai", "windows": []}
-        with board.store.db.write() as db:
-            record_quota(db, "codex", {**base, "observedAt": clock(), "reachedType": "usage_limit_reached",
-                         "resetsAt": "2026-09-29T11:00:00Z", "scope": {"nativeAccountId": "first-login"}}, now=clock())
-            clock.advance(60)
-            unknown = {**base, "observedAt": clock(), "scope": {"nativeAccountId": "second-login"}}
-            record_quota(db, "codex", unknown, now=clock())
-            self.assertIsNotNone(exhausted(db, config, now=clock()))
-            self.assertEqual(latest_quota(db, "codex"), unknown)
-            row = db.execute("SELECT * FROM quota_current WHERE harness='codex'").fetchone()
-            self.assertEqual(row["native_account_id"], "first-login")
-            self.assertEqual(row["observed_at"], "2026-09-29T10:00:00Z")
-            self.assertEqual(row["last_observed_at"], clock())
-            record_quota(db, "codex", {**base, "observedAt": "2026-09-29T09:59:00Z",
-                         "ordinaryUsageAllowed": True, "scope": {"nativeAccountId": "first-login"}}, now=clock())
-            self.assertIsNotNone(exhausted(db, config, now=clock()))
-            self.assertEqual(latest_quota(db, "codex"), unknown)
-            clock.advance(3540)
-            self.assertIsNone(exhausted(db, config, now=clock()), "The recorded reset ends the old exhaustion")
-            clock.advance(1)
-            record_quota(db, "codex", {**base, "observedAt": clock(), "reachedType": "usage_limit_reached",
-                         "scope": {"nativeAccountId": "second-login"}}, now=clock())
-            clock.advance(60)
-            record_quota(db, "codex", {**base, "observedAt": clock(),
-                         "scope": {"nativeAccountId": "third-login"}}, now=clock())
-            self.assertIsNotNone(exhausted(db, config, now=clock()))
-            clock.advance(1)
-            record_quota(db, "codex", {**base, "observedAt": clock(), "ordinaryUsageAllowed": True,
-                         "scope": {"nativeAccountId": "third-login"}}, now=clock())
-            self.assertIsNone(exhausted(db, config, now=clock()), "A newer available observation ends exhaustion")
-
-    def test_available_state_has_no_exhaustion_code_and_rejects_contradictory_storage(self):
-        import sqlite3
-        from hey_my_buddy.blackboard.routing.quota_routing import routing_facts
-        board = self.board()
-        base = {"source": "native-fixture", "provider": "openai", "windows": []}
-        with board.store.db.write() as db:
-            record_quota(db, "codex", {**base, "observedAt": "2026-09-29T10:00:00Z",
-                         "reachedType": "usage_limit_reached", "scope": {"nativeAccountId": "first-login"}})
-            blocked = routing_facts(db, "codex")[0]
-            self.assertTrue(blocked["blocked"])
-            self.assertFalse(blocked["available"])
-            self.assertEqual(blocked["code"], "HARNESS_QUOTA_EXHAUSTED")
-            with self.assertRaises(sqlite3.IntegrityError):
-                db.execute("UPDATE quota_current SET code=NULL WHERE harness='codex'")
-            record_quota(db, "codex", {**base, "observedAt": "2026-09-29T10:01:00Z",
-                         "ordinaryUsageAllowed": True, "scope": {"nativeAccountId": "second-login"}})
-            available = routing_facts(db, "codex")[0]
-            self.assertFalse(available["blocked"])
-            self.assertTrue(available["available"])
-            self.assertIsNone(available["code"])
-            self.assertEqual(available["nativeAccountId"], "second-login")
-            with self.assertRaises(sqlite3.IntegrityError):
-                db.execute("UPDATE quota_current SET code='HARNESS_QUOTA_EXHAUSTED' WHERE harness='codex'")
-
-    def test_temporary_rate_limit_warns_without_creating_exhaustion(self):
-        board = self.board()
-        observed = {"source": "native-fixture", "observedAt": "2026-09-29T10:00:00Z", "provider": "openai",
-                    "reachedType": "rate_limit_reached", "ordinaryUsageAllowed": False, "windows": []}
-        config = {"harness": "codex", "provider": "openai", "model": "fixture-model"}
-        with board.store.db.write() as db:
-            record_quota(db, "codex", observed, now=observed["observedAt"])
-            self.assertIsNone(exhausted(db, config, now=observed["observedAt"]))
-            self.assertEqual(warnings(db, config, now=observed["observedAt"])[0]["reason"]["code"], "HARNESS_RATE_LIMIT_REPORTED")
+            persist(db, attempt, {"quotaFailure": denial()}, status="failed",
+                    shutdown_confirmed=True, now=T0)
+            persist(db, attempt, {}, status="ok", shutdown_confirmed=True,
+                    now="2026-09-29T10:01:00.000Z")
+            self.assertIsNotNone(provider_state(db, "codex", "openai"))
+            persist(db, {**attempt, "started_at": "2026-09-29T10:02:00.000Z"}, {},
+                    status="ok", shutdown_confirmed=True, now="2026-09-29T10:03:00.000Z")
+            self.assertIsNone(provider_state(db, "codex", "openai"))
 
 
 class NativeReceiptTests(WorkflowTestCase):
-    """Native fixture counters cross the actual receipt and read-model boundary."""
+    """Token counters cross the actual execution receipt and read-model boundary."""
 
-    def test_dsh_and_codex_receipts_persist_once_and_submit_warns_from_native_quota(self):
-        from copy import deepcopy
-        from types import SimpleNamespace
-        from support import FakeClock
-        from hey_my_buddy.buddy.harnesses.codex.protocol import quota_candidate_from_response
+    def test_native_token_receipt_persists_once(self):
         from hey_my_buddy.protocol.usage import normalize_token_usage
-        from protocol.test_usage import dsh_usage_record, codex_usage_record, CODEX_NATIVE
-        clock = FakeClock("2026-09-29T10:00:00Z")
+        from protocol.test_usage import dsh_usage_record
+        clock = FakeClock(T0)
         board = self.board(clock=clock)
-        self.executors["codex"] = SimpleNamespace(native_resume=True, native_resume_permission_change=True, validate_turn_provenance=lambda record: None)
-        quota_record = deepcopy(CODEX_NATIVE["rateLimitsRead"])
-        quota_record["rateLimitsByLimitId"]["codex"]["primary"]["usedPercent"] = 95
-        quota = quota_candidate_from_response(quota_record, observed_at=clock())
-        for harness, raw_usage in (("dsh", dsh_usage_record()), ("codex", codex_usage_record())):
-            with self.subTest(harness=harness):
-                config = {} if harness == "dsh" else {"harness": harness, "provider": "openai", "model": "fixture-model", "effort": "low"}
-                submitted = self.submit(board, request_id=harness, cwd=str(self.workdir(harness)), **config)
-                worker = "worker-" + harness
-                pass  # Admission is owned by the service.
-                claim = self.claim(board, worker_id=worker, claim_request_id=harness, run_id=submitted["runId"])
-                captured = {}
-                def native_result(result):
-                    result.update(tokenUsage=raw_usage, quota=quota if harness == "codex" else None)
-                    captured.update(result)
-                self.finish_turn(board, claim, worker_id=worker, result_mutator=native_result)
-                attempt = claim["claim"]["attempt"]
-                with board.store.db.read() as db:
-                    count = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-                board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'result': captured, 'shutdownConfirmed': True, 'exitCode': 0})
-                view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
-                expected = normalize_token_usage(raw_usage)
-                self.assertEqual(view["currentTurn"]["tokenUsage"], expected)
-                self.assertEqual(view["task"]["tokenUsage"], expected)
-                self.assertEqual(view["audit"]["turns"][0]["tokenUsage"], expected)
-                with board.store.db.read() as db:
-                    self.assertEqual(db.execute("SELECT COUNT(*) FROM events").fetchone()[0], count)
-                    stored = db.execute("SELECT token_usage_json FROM attempts WHERE attempt_id=?", (attempt["attemptId"],)).fetchone()[0]
-                    self.assertEqual(json.loads(stored), expected)
-        next_run = self.submit(board, request_id="native-warning", cwd=str(self.workdir("next")), **config)
-        self.assertEqual(next_run["quotaWarnings"][0]["reason"]["code"], "HARNESS_QUOTA_NEAR_LIMIT")
-        self.assertEqual(next_run["quotaWarnings"][0]["window"]["usedPercent"], 95)
-        # A delayed old result cannot replace a more recent harness observation.
-        from hey_my_buddy.blackboard.evaluation.native_observations import persist
-        with board.store.db.write() as db:
-            row = db.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt["attemptId"],)).fetchone()
-            persist(db, row, {"quota": {**quota, "observedAt": "2026-09-29T09:00:00Z", "windows": []}})
-            self.assertEqual(read_health(db, "codex")["quota"]["observedAt"], clock())
+        submitted = self.submit(board, request_id="native-usage", cwd=str(self.workdir("native-usage")))
+        claim = self.claim(board, worker_id="worker-native", claim_request_id="native-usage",
+                           run_id=submitted["runId"])
+        captured = {}
+        usage = dsh_usage_record()
+
+        def native_result(result):
+            result["tokenUsage"] = usage
+            captured.update(result)
+
+        self.finish_turn(board, claim, worker_id="worker-native", result_mutator=native_result)
+        attempt = claim["claim"]["attempt"]
+        with board.store.db.read() as db:
+            event_count = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        board.call("execution_result", {"attemptId": attempt["attemptId"],
+                                     "generation": attempt["generation"], "nonce": NONCE,
+                                     "status": "ok", "result": captured,
+                                     "shutdownConfirmed": True, "exitCode": 0})
+        view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        expected = normalize_token_usage(usage)
+        self.assertEqual(view["currentTurn"]["tokenUsage"], expected)
+        self.assertEqual(view["task"]["tokenUsage"], expected)
+        self.assertEqual(view["audit"]["turns"][0]["tokenUsage"], expected)
+        with board.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events").fetchone()[0], event_count)
+            stored = db.execute("SELECT token_usage_json FROM attempts WHERE attempt_id=?",
+                                (attempt["attemptId"],)).fetchone()[0]
+            self.assertEqual(json.loads(stored), expected)

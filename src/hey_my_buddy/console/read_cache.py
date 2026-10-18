@@ -19,8 +19,8 @@ shortcut:
   marker components (a callable ``extra_marker``, such as the console's
   session-set fingerprint) follow the same double-read rule.
 * Fields derived from the current time do not force per-poll recomputation.
-  Instead the projection's own absolute boundaries (retry and
-  reset windows, quota staleness, router skip windows) become a deadline: once
+  Instead the projection's own absolute boundaries (provider cooling and
+  router skip windows) become a deadline: once
   the clock passes it, the marker counts as changed. Boundary collection
   deliberately over-reports — a boundary that only affects display still
   invalidates — because a missed state flip cannot be repaired downstream.
@@ -55,14 +55,7 @@ from typing import Any, Callable
 #: additionally borrows the harness scan: once it passes, the next periodic read
 #: regenerates and kicks the rate-limited scan again instead of letting an idle
 #: console starve the 180-second cadence.
-BOUNDARY_KEYS = frozenset({"expiresAt", "eligibleAt", "manualAt", "resetsAt", "skipUntil", "retryAt", "scanAfter"})
-
-#: Observation stamps whose projection flips when the record ages past the
-#: native quota freshness window (``quota_view`` treats it as stale after one
-#: hour). Old stamps fall in the past and are filtered; recent ones bound the
-#: cache until their staleness boundary.
-STALENESS_AFTER_SECONDS = 3600
-STALENESS_KEYS = frozenset({"observedAt"})
+BOUNDARY_KEYS = frozenset({"expiresAt", "coolingUntil", "skipUntil", "retryAt", "scanAfter"})
 
 #: Safety net for any now-derived field the boundary walk fails to enumerate.
 #: An idle board recomputes each cached read at most once per hour.
@@ -106,14 +99,9 @@ def collect_deadline(projection: Any, *, after: float) -> float:
         nonlocal earliest
         if isinstance(node, dict):
             for key, value in node.items():
-                if key in BOUNDARY_KEYS or key in STALENESS_KEYS:
+                if key in BOUNDARY_KEYS:
                     moment = parse_boundary(value)
                     if moment is not None:
-                        if key in STALENESS_KEYS:
-                            # A quota observation ages stale one hour after it was
-                            # taken, so its boundary can still be ahead even when
-                            # the stamp itself already lies in the past.
-                            moment += STALENESS_AFTER_SECONDS
                         if moment > after:
                             earliest = min(earliest, moment)
                 else:

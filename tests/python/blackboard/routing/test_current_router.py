@@ -170,18 +170,20 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertNotIn("reason", resolution.inspections[0])
         self.assertEqual(resolution.inspections[1]["code"], "router-no-tool-unsupported")
 
-    def test_quota_exhausted_item_is_skipped_from_recorded_observations(self):
+    def test_cooling_provider_is_skipped_until_its_deadline(self):
         self.add_buddy(A, model="alpha")
         self.add_buddy(B, provider="other")
-        from hey_my_buddy.blackboard.evaluation.native_observations import record_quota
+        from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
         with self.board_.store.db.write() as db:
-            record_quota(db, "dsh", {"provider": "fixture", "observedAt": T0, "balanceZero": True,
-                                     "source": "test"}, now=T0)
+            record_rejection(db, "dsh", "fixture", {"code": "quota-exceeded",
+                "nativeCode": "fixture-denied", "source": "synthetic/test",
+                "observedAt": T0, "resetsAt": None, "rejectionPhase": "before-model"}, now=T0)
         self.set_settings(ids=[A, B])
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
         self.assertEqual(resolution.buddy_id, B)
         self.assertEqual(resolution.inspections[0]["code"], "router-quota-exhausted")
+        self.assertEqual(resolution.inspections[0]["retryAt"], "2026-01-01T00:30:00.000Z")
 
     def test_review_mode_requires_the_local_review_mechanism(self):
         self.add_buddy(A, harness="zcode")

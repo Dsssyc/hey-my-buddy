@@ -296,7 +296,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
         "terminationReason": full.get("terminationReason"),
         "interruptionEvidence": result.get("interruptionEvidence"),
         "tokenUsage": full.get("tokenUsage"),
-        "quotaFailure": failure_view(result, harness=full.get("adapter")),
+        "quotaFailure": failure_view(result),
         "turn": None
         if turn is None
         else {

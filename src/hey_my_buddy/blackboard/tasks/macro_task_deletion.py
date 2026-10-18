@@ -477,8 +477,6 @@ def _delete_rows(store, connection, scope, deletion):
     clause,args = _in('command_id',commands)
     connection.execute(f"UPDATE commands SET task_id=NULL,attempt_id=NULL,response_json='{{}}',deletion_id=? WHERE {clause}",
                        [deletion['deletion_id'],*args])
-    clause,args = _in('retry_consumed_by',d)
-    connection.execute(f'UPDATE quota_current SET retry_consumed_by=NULL WHERE {clause}',args)
     def remove(table, *conditions):
         clauses,args = [],[]
         for column,values in conditions:

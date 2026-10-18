@@ -67,16 +67,10 @@ def _cached_available(connection, harness):
 
 
 def _quota_recovery(connection, buddy, now):
-    """Only recorded reset times are recovery facts; never invent a quota fuse."""
-    from .quota_routing import blocking_records
-    records = blocking_records(connection, buddy, now=now)
-    if not records:
-        return False, None
-    resets = [record["item"].get("resetsAt") for record in records]
-    parsed = [router_history._parse(value) for value in resets]
-    if not all(parsed):
-        return True, None
-    return True, resets[max(range(len(resets)), key=lambda index: parsed[index])]
+    """Provider cooling ends at its recorded deadline."""
+    from .quota_routing import cooling
+    state = cooling(connection, buddy, now=now)
+    return (True, state["coolingUntil"]) if state is not None else (False, None)
 
 
 def _preflight_no_answer(connection, item, event, state, now):
@@ -342,8 +336,8 @@ def _candidate_problem(connection, candidate, request, run, now):
         return problem("not-pinned")
     if not _cached_available(connection, candidate["harness"]):
         return problem("harness-unavailable")
-    from ..evaluation.native_observations import exhausted
-    if exhausted(connection, published, now=now) is not None:
+    from .quota_routing import cooling
+    if cooling(connection, published, now=now) is not None:
         return problem("quota-exhausted")
     return None
 

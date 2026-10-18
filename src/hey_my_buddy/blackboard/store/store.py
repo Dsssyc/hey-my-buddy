@@ -560,7 +560,7 @@ class BoardStore:
         if attempt is not None:
             from ..evaluation.native_observations import failure_view
             recorded = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
-            view["quotaFailure"] = failure_view(recorded.get("result"), harness=attempt["adapter"])
+            view["quotaFailure"] = failure_view(recorded.get("result"))
             release = connection.execute(
                 "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='attempt.released'",
                 (task["task_id"], attempt["attempt_id"]),
@@ -2282,7 +2282,8 @@ class BoardStore:
                 ),
             )
             from ..evaluation.native_observations import persist
-            persist(connection, attempt, result)
+            persist(connection, attempt, result, status=status,
+                    shutdown_confirmed=shutdown_confirmed, now=now)
             self._transition_task(connection, task, task_state)
             connection.execute(
                 "UPDATE tasks SET active_attempt_id=NULL, queue_reason=NULL WHERE task_id=?",

@@ -725,7 +725,7 @@ class WorkflowCoordinator:
         active_request = self._request_view(active, connection=connection, now=projection_now) if active is not None else None
         micro_task = json.loads(run_row["micro_task_json"])
         state = run_row["state"]
-        from ..evaluation.native_observations import warnings
+        from ..routing.quota_routing import cooling
         view = {
             "runId": run_row["run_id"],
             "taskId": run_row["run_id"],
@@ -755,7 +755,7 @@ class WorkflowCoordinator:
                                  "createdAt": row["created_at"], "state": row["state"]}
                                 for row in owned[:MAX_CHILD_VIEW]],
             "buddyRevision": run_row["buddy_revision"],
-            "quotaWarnings": warnings(connection, self._buddy(run_row), now=self.now()),
+            "providerCooling": cooling(connection, self._buddy(run_row), now=projection_now),
             "routing": self._routing_view(connection, run_row, now=projection_now),
             "currentTurn": self._turn_view(turns[0]) if turns else None,
             "turns": [self._turn_view(row, compact=True) for row in turns],
@@ -5992,7 +5992,7 @@ class WorkflowCoordinator:
                 (run_row["run_id"],),
             ).fetchone()
             turn_count = connection.execute(
-                "SELECT COUNT(*) AS count FROM workflow_turns WHERE run_id=?", (run_row["run_id"],)
+                "SELECT COUNT(*) AS count FROM workflow_turns WHERE run_id=? AND state!='rejected'", (run_row["run_id"],)
             ).fetchone()["count"]
             if int(turn_count) > 0 and continuation is None:
                 return "awaiting-host"
@@ -6255,7 +6255,7 @@ class WorkflowCoordinator:
             )
         turn_count = int(
             connection.execute(
-                "SELECT COUNT(*) AS count FROM workflow_turns WHERE run_id=?", (run_row["run_id"],)
+                "SELECT COUNT(*) AS count FROM workflow_turns WHERE run_id=? AND state!='rejected'", (run_row["run_id"],)
             ).fetchone()["count"]
         )
         continuation = connection.execute(
@@ -6269,13 +6269,15 @@ class WorkflowCoordinator:
                 runId=run_row["run_id"],
             )
         previous = connection.execute(
-            "SELECT * FROM workflow_turns WHERE run_id=? ORDER BY turn_index DESC LIMIT 1",
+            "SELECT * FROM workflow_turns WHERE run_id=? AND state!='rejected' ORDER BY turn_index DESC LIMIT 1",
             (run_row["run_id"],),
         ).fetchone()
-        turn_index = turn_count + 1
-        resume_mode = "initial" if turn_index == 1 else "reconstructed-new-session"
+        turn_index = connection.execute(
+            "SELECT COALESCE(MAX(turn_index),0)+1 FROM workflow_turns WHERE run_id=?", (run_row["run_id"],)
+        ).fetchone()[0]
+        resume_mode = "initial" if turn_count == 0 else "reconstructed-new-session"
         manifest = json.loads(run_row["workspace_manifest_json"]) if run_row["workspace_manifest_json"] else {}
-        execution_workspace = self._turn_workspace(connection, run_row, manifest, continuation, turn_index)
+        execution_workspace = self._turn_workspace(connection, run_row, manifest, continuation, turn_count)
         buddy = self._buddy(run_row)
         native = self._previous_codex_checkpoint(connection, previous)
         previous_session = previous["session_id"] if previous is not None else None
@@ -6448,7 +6450,7 @@ class WorkflowCoordinator:
         checkpoint = validated_checkpoint(payload, json.loads(previous["input_json"]))
         return (payload, checkpoint) if checkpoint is not None else None
 
-    def _turn_workspace(self, connection, run_row, manifest: dict, continuation, turn_index: int) -> dict:
+    def _turn_workspace(self, connection, run_row, manifest: dict, continuation, turn_count: int) -> dict:
         """The resolved input workspace of one turn.
 
         Turn one uses the prepared manifest. A continuation uses the manifest this
@@ -6456,7 +6458,7 @@ class WorkflowCoordinator:
         include list = what that seal captured), so a continuation never resumes on
         the original dirty baseline and the turn input is never an unresolved intent.
         """
-        if turn_index <= 1 or continuation is None or not continuation["workspace_manifest_json"]:
+        if turn_count == 0 or continuation is None or not continuation["workspace_manifest_json"]:
             return manifest
         return json.loads(continuation["workspace_manifest_json"])
 
@@ -7044,6 +7046,20 @@ class WorkflowCoordinator:
                 and result.get("modelStarted") is False
                 and payload.get("shutdownConfirmed") is True)
 
+    def _quota_reroutable(self, connection, run, turn, attempt, payload):
+        failure = self.result_payload(payload).get("quotaFailure")
+        routing = json.loads(turn["input_json"])["context"]["routing"]
+        if (not failure or failure["code"] != "quota-exceeded" or failure.get("rejectionPhase") != "before-model"
+                or not attempt["shutdown_confirmed"] or attempt["cancel_requested_at"] is not None
+                or run["state"] != "executing" or run["buddy_locked"]
+                or run["current_turn_id"] != turn["turn_id"] or run["current_attempt_id"] != attempt["attempt_id"]
+                or routing["decisionId"] is None or routing["decisionId"] != run["current_routing_id"]
+                or routing["buddyRevision"] != run["buddy_revision"]):
+            return False
+        route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?",
+                                   (routing["decisionId"],)).fetchone()
+        return route["state"] == "resolved" and route["owner_generation"] == run["owner_generation"]
+
     def settle_turn(
         self, connection, *, task, attempt, payload: dict | None, task_state: str, now: str,
         seal_stash: dict | None = None,
@@ -7125,6 +7141,31 @@ class WorkflowCoordinator:
                                          attempt_id=attempt["attempt_id"], revision=run_row["revision"] + 1,
                                          payload=facts)
                 return {"accepted": False, "disposition": None, "state": "executing", "autoContinued": True,
+                        "sharedStash": self._shared_refs_summary(shared_refs)}
+            if task_state == "failed" and self._quota_reroutable(connection, run_row, turn_row, attempt, payload):
+                continuation = connection.execute(
+                    "SELECT continuation_id FROM workflow_continuations WHERE turn_id=? AND state='consumed'",
+                    (turn_row["turn_id"],),
+                ).fetchone()
+                connection.execute("UPDATE workflow_turns SET state='rejected',updated_at=? WHERE turn_id=?",
+                                   (now, turn_row["turn_id"]))
+                if continuation is not None:
+                    connection.execute(
+                        "UPDATE workflow_continuations SET state='queued',attempt_id=NULL,turn_id=NULL,consumed_at=NULL"
+                        " WHERE continuation_id=?", (continuation["continuation_id"],))
+                self.board._transition_task(connection, task, "queued")
+                connection.execute(
+                    "UPDATE workflow_runs SET updated_at=?,revision=revision+1 WHERE run_id=?", (now, run_row["run_id"]))
+                previous_decision_id = run_row["current_routing_id"]
+                self._start_routing(connection, run_row["run_id"], now)
+                refreshed = self._run_row(connection, run_row["run_id"])
+                facts = {"turnId": turn_row["turn_id"], "reason": "quota-exceeded",
+                         "previousDecisionId": previous_decision_id, "decisionId": refreshed["current_routing_id"],
+                         "continuationId": continuation["continuation_id"] if continuation is not None else None,
+                         "autoContinued": True}
+                self.board._append_event(connection, "workflow.auto_continued", task_id=run_row["run_id"],
+                                         attempt_id=attempt["attempt_id"], revision=refreshed["revision"], payload=facts)
+                return {"accepted": False, "disposition": None, "state": refreshed["state"], "autoContinued": True,
                         "sharedStash": self._shared_refs_summary(shared_refs)}
             if terminal is not None:
                 connection.execute(

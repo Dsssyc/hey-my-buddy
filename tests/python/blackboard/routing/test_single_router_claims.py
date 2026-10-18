@@ -109,7 +109,7 @@ class SingleRouterClaimTests(DecisionTestCase):
                 board.close()
                 self._stack.remove(board)
 
-    def test_unhealthy_router_and_exhausted_router_cannot_claim_or_consume_retry(self):
+    def test_unhealthy_router_and_cooling_router_cannot_claim(self):
         for unavailable in ('health', 'quota'):
             with self.subTest(unavailable=unavailable):
                 board = self.case_board()
@@ -121,8 +121,8 @@ class SingleRouterClaimTests(DecisionTestCase):
                         connection.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
                     self.assert_unclaimed(board, request, 'router-harness-unavailable', frozen)
                 else:
-                    with patch('hey_my_buddy.blackboard.evaluation.native_observations.exhausted', return_value={'nativeCode': 'quota'}), \
-                            patch('hey_my_buddy.blackboard.routing.quota_routing.claim', side_effect=AssertionError('Router must not use a Worker retry')):
+                    with patch('hey_my_buddy.blackboard.routing.quota_routing.cooling',
+                               return_value={'coolingUntil': '2026-01-01T00:30:00.000Z'}):
                         self.assert_unclaimed(board, request, 'router-quota-exhausted', frozen)
                 board.close()
                 self._stack.remove(board)

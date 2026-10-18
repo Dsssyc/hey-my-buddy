@@ -178,58 +178,43 @@ class DecisionCoordinator:
 
     @staticmethod
     def _select_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False) -> list[sqlite3.Row]:
-        """Legal candidates without any quota retry: the read-only projection.
-
-        Pin/exclude is enforced here in Python and never delegated to the model;
-        ``prefer`` stays a soft ordering hint that only enters the bounded input.
-        """
-        rows, _retried = DecisionCoordinator._scan_candidates(
+        rows, _cooling = DecisionCoordinator._scan_candidates(
             connection, required_capabilities, constraints=constraints, coding_only=coding_only)
         return rows
 
     @staticmethod
-    def _scan_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False, decision_id: str | None = None, consume_retries: bool = False, now: str | None = None) -> tuple[list[sqlite3.Row], list[str]]:
-        """Legal candidates, plus the single-use quota retry windows a decision may use.
-
-        Pin/exclude is enforced here in Python and never delegated to the model;
-        ``prefer`` stays a soft ordering hint that only enters the bounded input.
-        Without ``decision_id`` this is a pure read: exhausted buddies stay
-        excluded and nothing is claimed. Inside a decision's write transaction a
-        no-reset exhaustion whose retry window is open is admitted exactly once —
-        the claim is durable in that same transaction, so a concurrent decision
-        re-reads the marker and stays excluded. With ``consume_retries`` unset the
-        same admission rule is evaluated without claiming anything, which is the
-        publish-time bounds re-check: a window this decision already consumed
-        keeps its selection legal.
-        """
+    def _scan_candidates(connection: sqlite3.Connection, required_capabilities: list[str], *, constraints: dict | None = None, coding_only: bool = False, now: str | None = None) -> tuple[list[sqlite3.Row], list[dict]]:
+        """Freeze eligible candidates and the otherwise eligible buddies cooling down."""
         clauses, values = DecisionCoordinator._candidate_bounds(
             required_capabilities=required_capabilities, constraints=constraints, coding_only=coding_only)
-        clauses.append("COALESCE(f.mode,'')!='exclude'")
-        clauses.append("(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')")
-        values.append(MAX_DECISION_BUDDIES + 1)
-        from ..evaluation.native_observations import exhausted
-        from .quota_routing import claim
-        selected: list[sqlite3.Row] = []
-        retried: list[str] = []
+        clauses.extend(["COALESCE(f.mode,'')!='exclude'",
+                        "(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')"])
+        from .quota_routing import cooling
+        from ..service.harness_health import read_health
+        selected, cooling_buddies = [], []
         health_available = {}
         for row in connection.execute(
-            "SELECT p.* FROM buddies p LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id "
-            "WHERE " + " AND ".join(clauses) + " ORDER BY p.rowid LIMIT ?", values):
-            from ..service.harness_health import read_health
+            "SELECT p.*,f.note AS preference_note FROM buddies p"
+            " LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE "
+            + " AND ".join(clauses) + " ORDER BY p.rowid", values):
             if row['harness'] not in health_available:
                 health_available[row['harness']] = read_health(connection, row['harness'])['available']
             if not health_available[row['harness']]:
                 continue
-            if exhausted(connection, row, now=now) is None:
+            state = cooling(connection, row, now=now)
+            if state is None:
                 selected.append(row)
-            elif decision_id is not None and claim(
-                    connection, row, decision_id=decision_id, consume=consume_retries, now=now) is not None:
-                # A buddy admitted through a retry window is retried whether it
-                # claimed the window itself or shares the record this decision
-                # already claimed: both entered only because the window opened.
-                selected.append(row)
-                retried.append(row["buddy_id"])
-        return selected, retried
+            else:
+                cooling_buddies.append({"buddyId": row["buddy_id"],
+                    **{key: row[key] for key in schemas.BUDDY_FIELDS},
+                    "note": row["preference_note"], "coolingUntil": state["coolingUntil"]})
+        return selected, cooling_buddies
+
+    @staticmethod
+    def _no_candidates_reason(cooling_buddies):
+        if cooling_buddies:
+            return make_reason("all-candidates-cooling", retryAt=min(item["coolingUntil"] for item in cooling_buddies))
+        return make_reason("no-legal-candidate")
 
     def _excluded_buddies(self, connection: sqlite3.Connection, *, required_capabilities: list[str], constraints: dict | None = None) -> tuple[list[dict], int]:
         """The user-excluded buddies inside these hard bounds, frozen now.
@@ -266,7 +251,7 @@ class DecisionCoordinator:
         ]
         return entries, total
 
-    def _freeze_routing_basis(self, connection: sqlite3.Connection, *, candidates: list[sqlite3.Row], required_capabilities: list[str], constraints: dict | None = None, quota_retry: list[str] | None = None) -> dict:
+    def _freeze_routing_basis(self, connection: sqlite3.Connection, *, candidates: list[sqlite3.Row], required_capabilities: list[str], constraints: dict | None = None, cooling_buddies: list[dict]) -> dict:
         """Submission-time routing facts: the frozen candidate count and exclusions.
 
         The basis is recorded once with the request and never recomputed, so a
@@ -276,10 +261,8 @@ class DecisionCoordinator:
         """
         excluded, excluded_count = self._excluded_buddies(
             connection, required_capabilities=required_capabilities, constraints=constraints)
-        basis = {"candidateCount": len(candidates), "excludedCount": excluded_count, "excludedBuddies": excluded}
-        if quota_retry:
-            basis["quotaRetryBuddyIds"] = quota_retry
-        return basis
+        return {"candidateCount": len(candidates), "excludedCount": excluded_count, "excludedBuddies": excluded,
+                "coolingCount": len(cooling_buddies), "coolingBuddies": cooling_buddies[:MAX_FROZEN_EXCLUSIONS]}
 
     # -- bounded model input -------------------------------------------------
     def _buddy_input(self, row: sqlite3.Row) -> dict:
@@ -430,16 +413,14 @@ class DecisionCoordinator:
             now = self._now()
             # The legal candidate set is frozen before any Router resolution: a
             # sole legal candidate is selected by the program with no Router
-            # call, so that path cannot depend on Router availability. Candidate
-            # inspection leaves retries open until a selection is adopted.
-            candidates, quota_retry = self._scan_candidates(
+            # call, so that path cannot depend on Router availability.
+            candidates, cooling_buddies = self._scan_candidates(
                 connection, request.get("requiredCapabilities", []),
-                constraints=request.get("constraints"), coding_only=True,
-                decision_id=decision_id, consume_retries=False, now=now)
+                constraints=request.get("constraints"), coding_only=True, now=now)
             request["routingBasis"] = self._freeze_routing_basis(
                 connection, candidates=candidates,
                 required_capabilities=request.get("requiredCapabilities", []),
-                constraints=request.get("constraints"), quota_retry=quota_retry)
+                constraints=request.get("constraints"), cooling_buddies=cooling_buddies)
             status = "queued"
             # New decisions are always selection requests; there is no internal
             # maintenance request path left on the blackboard.
@@ -459,7 +440,7 @@ class DecisionCoordinator:
                 status, reason = "completed", make_reason("single-candidate")
             elif not candidates:
                 request.update(facts)
-                status, reason = "needs-host", make_reason("no-legal-candidate")
+                status, reason = "needs-host", self._no_candidates_reason(cooling_buddies)
             else:
                 # Admission freezes the complete common packet — candidates,
                 # preferences, program facts, every Router identity
@@ -476,34 +457,6 @@ class DecisionCoordinator:
                                                  facts["budget"]["timeoutSeconds"])
                     facts["budget"] = {**facts["budget"], "timeoutSeconds": request["routerBudgetSeconds"]}
                     request["budget"] = dict(facts["budget"])
-                # The admission scan's limit protects model routing. For an
-                # oversized Host packet only, retain the entire legal slice,
-                # without changing admission or consuming any quota retry.
-                if len(candidates) > MAX_DECISION_BUDDIES:
-                    clauses, values = self._candidate_bounds(
-                        required_capabilities=request.get("requiredCapabilities", []),
-                        constraints=request.get("constraints"), coding_only=True)
-                    clauses.extend(["COALESCE(f.mode,'')!='exclude'",
-                                    "(NOT EXISTS(SELECT 1 FROM evaluation_preferences WHERE mode='pin') OR f.mode='pin')"])
-                    from ..evaluation.native_observations import exhausted
-                    from .quota_routing import claim
-                    from ..service.harness_health import read_health
-                    complete_candidates, complete_retries = [], []
-                    for item in connection.execute(
-                        "SELECT p.* FROM buddies p LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE "
-                        + " AND ".join(clauses) + " ORDER BY p.rowid", values):
-                        if not read_health(connection, item["harness"])["available"]:
-                            continue
-                        if exhausted(connection, item, now=now) is not None:
-                            if claim(connection, item, decision_id=decision_id, consume=False, now=now) is None:
-                                continue
-                            complete_retries.append(item["buddy_id"])
-                        complete_candidates.append(item)
-                    candidates = complete_candidates
-                    request["routingBasis"] = self._freeze_routing_basis(
-                        connection, candidates=candidates,
-                        required_capabilities=request.get("requiredCapabilities", []),
-                        constraints=request.get("constraints"), quota_retry=complete_retries)
                 base_input, problem = self._select_input(
                     connection, request_id=request_id, buddy_row=None,
                     task_text=task_text, candidates=candidates,
@@ -1176,12 +1129,12 @@ class DecisionCoordinator:
         """
         request = json.loads(row["requested_json"])
         request["selectionRetry"] = True
-        candidates, quota_retry = self._scan_candidates(
+        candidates, cooling_buddies = self._scan_candidates(
             connection, request.get("requiredCapabilities", []), constraints=request.get("constraints"),
-            coding_only=True, decision_id=row["decision_id"], now=now)
+            coding_only=True, now=now)
         request["routingBasis"] = self._freeze_routing_basis(
             connection, candidates=candidates, required_capabilities=request.get("requiredCapabilities", []),
-            constraints=request.get("constraints"), quota_retry=quota_retry)
+            constraints=request.get("constraints"), cooling_buddies=cooling_buddies)
         self._append_event(connection, "decision.selection_rerouted", row["decision_id"], {})
         if len(candidates) <= 1:
             connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
@@ -1196,8 +1149,9 @@ class DecisionCoordinator:
                 self._adopt_sole_candidate(connection, self._row(connection, row["decision_id"]),
                                            candidate=candidates[0], request=request, now=now)
             else:
+                no_candidates = self._no_candidates_reason(cooling_buddies) if cooling_buddies else reason
                 self._finish(connection, row, status="needs-host", now=now,
-                             reason=reason, output={"code": reason["code"]})
+                             reason=no_candidates, output={"code": no_candidates["code"]})
             return
         resolution = router.current_router(connection, now=now)
         request.update(resolution.facts)
@@ -1345,7 +1299,7 @@ class DecisionCoordinator:
                     "output": {**output, "decision": decision, "policyCheck": None}, "evidence": decision["evidence"]}
         # Recheck hard bounds only. Cached harness health/Router qualification
         # can change during a valid native call; they govern the next request,
-        # not adoption of this answer. Keep the original quota retry inspection.
+        # not adoption of this answer. Provider cooling is rechecked at publication.
         clauses, values = self._candidate_bounds(
             required_capabilities=request.get("requiredCapabilities") or [],
             constraints=request.get("constraints"), coding_only=True)
@@ -1357,11 +1311,9 @@ class DecisionCoordinator:
             "SELECT p.* FROM buddies p LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE "
             + " AND ".join(clauses), [*values, buddy_id]).fetchone()
         selected = next(dict(item) for item in buddies if item["buddyId"] == buddy_id)
-        from ..evaluation.native_observations import exhausted
-        from .quota_routing import claim
+        from .quota_routing import cooling
         if (candidate is None or any(candidate[key] != selected[key] for key in schemas.BUDDY_FIELDS)
-                or (exhausted(connection, candidate, now=now) is not None
-                    and claim(connection, candidate, decision_id=row["decision_id"], consume=False, now=now) is None)):
+                or cooling(connection, candidate, now=now) is not None):
             current = connection.execute("SELECT p.*,f.mode AS preference_mode FROM buddies p"
                                          " LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE p.buddy_id=?",
                                          (buddy_id,)).fetchone()
@@ -1402,13 +1354,10 @@ class DecisionCoordinator:
                 or current["decision_generation"] != row["decision_generation"]):
             return
         if status == "completed" and buddy_id and selected:
-            from .quota_routing import claim
-            # Candidate inspection must not spend an unchosen provider's retry.
-            # Selection and this single-use claim share the write transaction;
-            # another selector either sees exhaustion or rechecks its bounds.
-            if claim(connection, selected, decision_id=row["decision_id"], now=now) is None:
+            from .quota_routing import cooling
+            if cooling(connection, selected, now=now) is not None:
                 status, buddy_id, selected = "needs-host", None, None
-                reason = make_reason("router-out-of-bounds", bound="quota-retry-consumed")
+                reason = make_reason("router-out-of-bounds", bound="constraints-or-quota")
                 note = None
                 output = {**(output or {}), "code": reason["code"]}
         if status not in DECISION_STATUSES:
@@ -1577,7 +1526,7 @@ class DecisionCoordinator:
                 elif state["inSkipWindow"]:
                     eligible, code = False, "router-skip-window"
                 else:
-                    buddy, code, _facts = router.buddy_problem(connection, buddy_id, mode)
+                    buddy, code, _facts = router.buddy_problem(connection, buddy_id, mode, now=now)
                     eligible = buddy is not None
                 last_error = next((entry for entry in reversed(window) if entry["outcome"] == "no_answer"), None)
                 routers.append({

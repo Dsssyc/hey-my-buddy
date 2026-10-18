@@ -33,7 +33,6 @@ class EvaluationStore:
     def console_core(self) -> dict:
         """One coherent view of buddies, policy, configuration and selection history."""
         with self.board.db.read() as connection:
-            now = self._now()
             from ..routing import router
             configuration_error = None
             try:
@@ -60,13 +59,10 @@ class EvaluationStore:
                 )
             ]
             from ...protocol.billing import for_provider
-            from ..routing.quota_routing import buddy_retry
+            from ..routing.quota_routing import provider_state
             for buddy in buddies:
                 buddy["billing"] = for_provider(connection, buddy["harness"], buddy["provider"])
-                from .native_observations import exhausted
-                buddy['quotaExhausted'] = exhausted(connection, buddy, now=now) is not None
-                if buddy['quotaExhausted']:
-                    buddy['quotaRetry'] = buddy_retry(connection, buddy, now=now)
+                buddy['providerCooling'] = provider_state(connection, buddy['harness'], buddy['provider'])
             buddy_ids = [buddy["buddyId"] for buddy in buddies]
             policy = user_policy.policy_view(connection, buddy_ids)
             decisions = [

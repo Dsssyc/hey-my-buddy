@@ -34,9 +34,10 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         elif kind == "quota":
             from hey_my_buddy.blackboard.routing import quota_routing
             with self.board_.store.db.write() as db:
-                quota_routing.record(db, "dsh", {"provider": "fixture", "scope": {"limitId": "bravo"},
-                                    "balanceZero": True, "observedAt": self.clock.value, "source": "native"},
-                                    now=self.clock.value)
+                quota_routing.record_rejection(db, "dsh", "fixture-b", {
+                    "code": "quota-exceeded", "nativeCode": "fixture-denied",
+                    "source": "synthetic/selection", "observedAt": self.clock.value,
+                    "resetsAt": None, "rejectionPhase": "before-model"}, now=self.clock.value)
         else:
             with self.board_.store.db.write() as db:
                 if kind == "capability":
@@ -46,6 +47,9 @@ class SelectionPublicationTests(RouterDispatchTestCase):
                     db.execute(f"UPDATE buddies SET {field}=0 WHERE buddy_id=?", (buddy,))
 
     def assert_retry(self, kind, reason):
+        if kind == "quota":
+            with self.board_.store.db.write() as db:
+                db.execute("UPDATE buddies SET provider='fixture-b' WHERE buddy_id=?", (B,))
         request, first = self.start(three=True, micro_task=True)
         old_dispatch = self.dispatch_of(first["task"]["taskId"])
         original_snapshot = self.snapshot_of(request["decisionId"])
@@ -81,7 +85,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
     def test_capability_loss_reroutes_once(self):
         self.assert_retry("capability", "missing a required task capability")
 
-    def test_quota_loss_reroutes_without_adopting_exhausted_buddy(self):
+    def test_cooling_provider_reroutes_without_adopting_its_buddy(self):
         self.assert_retry("quota", "quota limits")
 
     def test_invalid_selection_with_unconfirmed_outer_stop_does_not_reroute(self):

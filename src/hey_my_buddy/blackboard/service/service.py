@@ -593,7 +593,7 @@ class BoardService(_BaseResource):
                 previous = self.store._receipt(db, command_id, 'quota.redetect', request, 'quota-control')
                 if previous is not None:
                     return {**previous, 'duplicate': True}
-                response = {'quota': redetect(db, name, provider, now=self.store.now()), 'duplicate': False}
+                response = {**redetect(db, name, provider), 'duplicate': False}
                 self.store._append_event(db, 'harness.quota_redetect', payload=response)
                 self.store._store_receipt(db, command_id, 'quota.redetect', request, response, subject='quota-control')
                 head = self.store._head_of(db)

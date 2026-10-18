@@ -218,7 +218,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "leadOwnership",
                 "ownedMicroTasks",
                 "hostConclusion",
-                "quotaWarnings",
+                "providerCooling",
                 "quotaFailure",
                 "macroTaskId",
                 "title",

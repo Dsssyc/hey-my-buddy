@@ -139,10 +139,10 @@ def _identity(row) -> dict | None:
     return {key: row[key] for key in BUDDY_FIELDS}
 
 
-def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[dict | None, str | None, dict]:
+def buddy_problem(connection, buddy_id: str | None, routing_mode: str, *, now=None) -> tuple[dict | None, str | None, dict]:
     """Cached eligibility of one listed buddy: no probing, model calls or settings mutation.
 
-    Enabled, availability, harness health, native quota and the mode mechanism are
+    Enabled, availability, harness health, provider cooling and the mode mechanism are
     checked from cached records only; the caller owns the settings read, so a frozen
     snapshot can keep checking its own list without re-reading shared settings.
     """
@@ -167,9 +167,10 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str) -> tuple[
     health = read_health(connection, row["harness"])
     if not health["available"]:
         return unavailable("router-harness-unavailable", **({"cause": health["reason"]} if health.get("reason") else {}))
-    from ..evaluation.native_observations import exhausted
-    if exhausted(connection, dict(row)) is not None:
-        return unavailable("router-quota-exhausted")
+    from .quota_routing import cooling
+    cooldown = cooling(connection, row, now=now)
+    if cooldown is not None:
+        return unavailable("router-quota-exhausted", retryAt=cooldown["coolingUntil"])
     check = None
     try:
         with bound([health]):
@@ -328,7 +329,7 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     identities, mode, budget and interval are used unchanged and later
     changes to the shared settings are neither read nor adopted. ``now`` defaults
     to the board clock; eligibility reuses cached harness
-    health, the local mode mechanism and native quota records, and never ranks by
+    health, the local mode mechanism and provider cooling, and never ranks by
     Worker preference.
     """
     from .router_history import router_state
@@ -363,11 +364,11 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
                                 "consecutiveNoAnswers": state["consecutiveNoAnswers"],
                                 "retryInProgress": state["retryInProgress"], "selected": False})
             continue
-        buddy, code, problem_facts = buddy_problem(connection, buddy_id, mode)
+        buddy, code, problem_facts = buddy_problem(connection, buddy_id, mode, now=now)
         if buddy is None:
             inspections.append({"index": index, "buddyId": buddy_id, "identity": identity,
-                                "eligible": False, "code": code, **problem_facts,
-                                "skipUntil": state["skipUntil"], "retryAt": state["retryAt"],
+                                "eligible": False, "code": code,
+                                "skipUntil": state["skipUntil"], "retryAt": state["retryAt"], **problem_facts,
                                 "consecutiveNoAnswers": state["consecutiveNoAnswers"],
                                 "retryInProgress": state["retryInProgress"], "selected": False})
             continue
