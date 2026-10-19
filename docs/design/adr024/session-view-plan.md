@@ -70,7 +70,7 @@ Codex 已有接入点是 `buddy/harnesses/codex/protocol.py:103-124` 的通知�
 
 ## 五、控制台展示
 
-入口在每个执行回合的“查看会话 / View session”和时间轴的执行片段。`apps/console/src/task-detail/TurnPane.tsx:20-23,100-123` 已按 span.attemptId 取回合，尚不读会话；应直接携带该 attemptId，失败或未接受的执行也能查看，不能默认跳最新执行。时间轴已有 `timeline/TaskWork.tsx:33,149` 的 `onOpen(runId,key)`，详情在 `task-detail/TaskDetail.tsx:79-95` 按片段选择步骤，沿用这条导航，增加打开会话的选择状态，不另建时间轴数据。刷新、前进后退和从会话返回原执行片段要保留选择与焦点。
+入口在每个执行回合的“查看会话 / View session”和时间轴的执行片段。（2026-10-19：C 实现成弹窗，开发者试用后改为详情下方的“概述 / 会话”标签页，见 ADR-024 第 7 条的补记；下面关于入口与导航的写法按标签页理解。）`apps/console/src/task-detail/TurnPane.tsx:20-23,100-123` 已按 span.attemptId 取回合，尚不读会话；应直接携带该 attemptId，失败或未接受的执行也能查看，不能默认跳最新执行。时间轴已有 `timeline/TaskWork.tsx:33,149` 的 `onOpen(runId,key)`，详情在 `task-detail/TaskDetail.tsx:79-95` 按片段选择步骤，沿用这条导航，增加打开会话的选择状态，不另建时间轴数据。刷新、前进后退和从会话返回原执行片段要保留选择与焦点。
 
 当前控制台已用 React 19、Tailwind 4、Radix 和 Lucide（`apps/console/package.json:16-41`），Vite 已接 Tailwind、构建到包内 assets（`vite.config.ts:1-14`），`src/index.css:2-4` 导入 Tailwind、动画与项目 tokens。AI Elements 组件尚未在 src 中，也不在依赖表里；已有 ui 基础不等于会话组件已经接入。按 ADR-024 第 6 条先试用 AI Elements 的 message、reasoning、tool、code block、terminal、plan 等实际需要的展示组件，复用已有 tokens/ui，实施 C 项时固定源码来源、许可证和依赖锁，不加聊天输入或模型运行时。
 
