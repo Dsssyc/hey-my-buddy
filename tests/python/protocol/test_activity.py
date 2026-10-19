@@ -391,6 +391,7 @@ class ExecutionActivityForwarding(BoardTestCase):
             directory=directory,
             runtime={},
             environment=private_environment(self.directory),
+            session_record_path=None,
         )
         implementation = get_adapter("command")
         implementation.prepare(context)

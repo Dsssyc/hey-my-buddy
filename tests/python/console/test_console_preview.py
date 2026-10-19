@@ -140,6 +140,13 @@ class SessionPreviewTests(unittest.TestCase):
         self.assertEqual(latest["after"], len(preview.session_line(preview.SESSION_HEADER))
                          + sum(len(preview.session_line(event)) for event in events))
 
+    def test_zero_cursor_can_poll_after_an_initial_empty_file(self):
+        status, page = self.get(preview.SESSION_LONG, '?after=0&limit=2')
+        self.assertEqual(status, 200)
+        self.assertEqual(page['events'], preview.session_events(preview.SESSION_LONG)[:2])
+        status, page = self.get(preview.SESSION_LONG, '?before=0')
+        self.assertEqual((status, page['events'], page['after']), (200, [], 0))
+
     def test_running_session_appends_on_later_after_polls(self):
         pair = preview.SESSION_RUNNING
         status, initial = self.get(pair)

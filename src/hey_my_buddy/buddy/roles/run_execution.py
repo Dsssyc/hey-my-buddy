@@ -152,6 +152,8 @@ def _base_result(result) -> dict:
             payload["failureKind"] = "transport"
     if result.native_failure is not None:
         payload["quotaFailure"] = result.native_failure.value
+    if result.session_record_failure is not None:
+        payload["sessionRecordFailure"] = result.session_record_failure.to_payload()
     _merge_native_evidence(result, payload)
     return payload
 
@@ -430,6 +432,7 @@ def worker_request(control: dict, module):
         buddy=RunBuddy(**{key: control["spec"][key]
                                           for key in ("provider", "model", "effort")}),
         cwd=control["cwd"],
+        session_record_path=control["sessionRecordPath"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
         input_text=prompt, tool_scope=scope, worker_permission=permission,
@@ -468,6 +471,7 @@ def fast_request(control: dict, module):
         buddy=RunBuddy(**{key: control["spec"][key]
                                           for key in ("provider", "model", "effort")}),
         cwd=control["cwd"],
+        session_record_path=control["sessionRecordPath"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
         input_text=base_prompt, tool_scope="none",
@@ -487,6 +491,7 @@ def review_request(control: dict, module):
                              generation=control["generation"], invocation_id=control["invocationId"]),
         harness=control["harness"], buddy=RunBuddy(**control["spec"]),
         cwd=control["cwd"],
+        session_record_path=control["sessionRecordPath"],
         private_state=PrivateStatePaths(invocation_root=control["privateRoot"],
                                         native_root=control["nativeRoot"]),
         input_text=values["prompt"], output_schema=values["outputSchema"], tool_scope="read",
@@ -575,6 +580,7 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
     control = {
         "operation": "fast", "harness": name, "privateRoot": str(invocation),
         "directory": str(invocation), "nativeRoot": str(invocation / "native"),
+        "sessionRecordPath": context.session_record_path,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "cwd": str(cwd.resolve()),
         "timeoutSeconds": request.timeout_seconds,
@@ -602,6 +608,7 @@ def start_review(name: str, context: ExecutionContext, request) -> InlineRunHand
         "operation": "review", "harness": name, "privateRoot": str(private),
         "directory": str(context.directory),
         "nativeRoot": str(ensure_private_dir(context_root(context, name) / "review-native")),
+        "sessionRecordPath": context.session_record_path,
         "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
@@ -656,6 +663,7 @@ class WorkerRunExecutor:
             "operation": "worker", "harness": self.name,
             "directory": str(context.directory.resolve()),
             "privateRoot": str(context_root(context, self.name)), "nativeRoot": str(root),
+            "sessionRecordPath": context.session_record_path,
             "cwd": str(Path(turn_io.workspace_cwd(context)).resolve()), "timeoutSeconds": context.timeout_seconds,
             "inputFile": str(context.turn_input_file()), "outputFile": str(context.turn_output_file()),
             "taskFile": str(context.task_file()),

@@ -140,7 +140,6 @@ export default {
   "session.codex-internal-reasoning-omitted": "Codex 内部推理（原生只提供推理摘要）。",
   "macro-task-deletion": "随所属宏任务删除。",
   "session-record-write-failed": "会话记录写入失败。",
-  "session-records-retained": "会话记录随所属宏任务保留。",
   "session.deleted": "会话已删除。",
   "session.invalid-record": "会话记录损坏。",
   "session.not-integrated": "此 harness 尚未接入会话视图。",

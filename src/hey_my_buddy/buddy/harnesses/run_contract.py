@@ -207,6 +207,21 @@ class WorkerPermission(InternalModel):
     enforcement: Literal["enforced", "convention"]
 
 
+class SessionRecordFailureParams(InternalModel):
+    """Bounded diagnostic facts of a failed display-record operation."""
+
+    category: Text(128)
+    message: RawText(8192)
+    truncated: bool = False
+
+
+class SessionRecordFailure(InternalModel):
+    """A standard reason; display failure never changes native execution facts."""
+
+    code: Literal["session-record-write-failed"]
+    params: SessionRecordFailureParams
+
+
 class RunRequest(InternalModel):
     """One harness run request: values only, no role authority of any kind."""
 
@@ -217,6 +232,8 @@ class RunRequest(InternalModel):
     buddy: RunBuddy
     cwd: AbsolutePath
     private_state: PrivateStatePaths
+    session_record_path: Optional[AbsolutePath] = None
+    session_record_failure: Optional[SessionRecordFailure] = None
     input_text: NonEmptyInputText
     tool_scope: ToolScope
     #: None for runs without a micro task Worker permission choice.
@@ -626,6 +643,7 @@ class RunResult(InternalModel):
     native_failure: NativeFailurePackage = None
     native_error: NativeErrorRecord = None
     last_assistant_message: LastAssistantMessagePackage = None
+    session_record_failure: Optional[SessionRecordFailure] = None
     continuation: Optional[ContinuationFacts] = None
     stop_evidence: StopEvidence = Field(default_factory=StopEvidence)
     evidence_refs: JsonTuple(EvidenceRef, max_items=MAX_EVIDENCE_REFS) = ()

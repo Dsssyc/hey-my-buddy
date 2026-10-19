@@ -285,6 +285,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
             task_id=run_id,
             attempt_id=attempt_id,
             generation=index,
+            session_record_path=str(self.directory / "sessions" / "micro-tasks" / run_id / (attempt_id + ".jsonl")),
             spec={**self.FIXTURE_BUDDY, "task": "do work", "cwd": manifest["path"], "expectedSeconds": 60},
             directory=attempt,
             runtime={"identity": "test"},

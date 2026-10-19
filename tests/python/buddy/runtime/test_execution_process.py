@@ -46,7 +46,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertEqual((state / "attempts/task-3/attempt-3/spawn.marker").is_file(), True)
             self.assertEqual(json.loads((handle.execution_directory / "execution-start.json").read_text()),
                              {"claim": claim, "stateDir": str(state), "nonce": "n" * 64,
-                              "jobName": None})
+                              "jobName": None, "sessionRecordPath": None})
 
     def test_marker_failure_keeps_created_handle_for_service_recovery(self):
         with tempfile.TemporaryDirectory() as directory:

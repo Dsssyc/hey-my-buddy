@@ -57,7 +57,8 @@ def execution_directory(claim: dict, state_dir: Path) -> Path:
                         claim["attempt"]["attemptId"])
 
 
-def launch_execution(claim: dict, state_dir: Path, nonce: str):
+def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
+                     session_record_path: Path | str | None = None):
     """Persist intent and startup before spawning an owned new-session process."""
     state_dir = Path(state_dir)
     attempt = claim["attempt"]
@@ -73,7 +74,8 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str):
         fsync_json(evidence / "spawn.intent", binding)
         startup = directory / STARTUP
         fsync_json(startup, {"claim": claim, "stateDir": str(state_dir), "nonce": nonce,
-                             "jobName": job_name})
+                             "jobName": job_name,
+                             "sessionRecordPath": str(session_record_path) if session_record_path else None})
         environment = dict(os.environ)
         for key in ("HMB_AGENT_CREDENTIAL_FILE", "HMB_AGENT_CREDENTIAL_FD"):
             environment.pop(key, None)

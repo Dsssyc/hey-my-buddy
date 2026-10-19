@@ -37,6 +37,7 @@ class ExecutionContext:
     #: Attempt-scoped credential handed to the coding child. It is written to a private
     #: file (never into the model-visible turn input) and exported by path.
     agent_credential: str | None = None
+    session_record_path: str | None = None
 
     @property
     def cwd(self) -> str:

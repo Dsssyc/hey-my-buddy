@@ -30,8 +30,7 @@ Safety boundary:
   Reads use one fixed page with a synthetic event head and
   ``nextCursor`` is always null. Reads stay identical until a synthetic deletion,
   which advances that instance's cursor and removes the target from later reads.
-* Session content is an in-memory ACP-shaped fixture. Its byte offsets mimic
-  session.jsonl; reads never open a session file or inspect a harness home.
+* Session content is an in-memory ACP-shaped fixture. Its byte offsets mimic grouped JSONL; reads never open a session file or inspect a harness home.
 
 Usage::
 
@@ -228,7 +227,6 @@ STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND":
                   "SESSION_NOT_INTEGRATED": 501, "SESSION_NOT_RECORDED": 404,
                   "SESSION_DELETED": 410, "SESSION_INVALID_RECORD": 422, "SESSION_UNREADABLE": 500}
 
-SESSION_HEADER = {"protocol": "acp", "protocolVersion": 1, "projectionVersion": 1}
 SESSION_LONG = ("preview-run-a1", "att-a1-2")
 SESSION_RUNNING = ("preview-run-a3", "att-a3-1")
 SESSION_ROUTER = ("preview-run-a1-router", "att-router-a1")
@@ -1247,6 +1245,9 @@ def fixture_run(run_id: str, state: PreviewState | None = None) -> dict:
     return FIXTURES["runs"][run_id]
 
 
+SESSION_HEADER = {"protocol": "acp", "protocolVersion": 1, "projectionVersion": 1}
+
+
 def session_event(attempt_id: str, session_update: str, **fields: Any) -> dict:
     return {"sessionId": attempt_id, "update": {"sessionUpdate": session_update, **fields}}
 
@@ -1338,6 +1339,11 @@ def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewSt
     for event in events:
         boundaries.append(boundaries[-1] + len(session_line(event)))
     cursor = params.get("before", params.get("after"))
+    if cursor == 0:
+        if "before" in params:
+            return {"state": "running" if pair == SESSION_RUNNING else "ended", "omitted": [],
+                    "events": [], "before": 0, "after": 0, "hasEarlier": False, "stopped": None}
+        cursor = start
     if cursor is not None and cursor not in boundaries:
         raise PreviewError("INVALID_ARGUMENT", "Session offset is outside the event area or not a line boundary")
     if pair == SESSION_RUNNING and "after" in params:
@@ -1361,7 +1367,7 @@ def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewSt
                if pair in (SESSION_LONG, SESSION_ROUTER) else [])
     return {"state": "running" if pair == SESSION_RUNNING else "ended", "omitted": omitted,
             "events": events[first:last], "before": boundaries[first], "after": boundaries[last],
-            "hasEarlier": first > 0}
+            "hasEarlier": first > 0, "stopped": None}
 
 
 def session_read(task_id: str, attempt_id: str, params: dict[str, int], state: PreviewState) -> dict:

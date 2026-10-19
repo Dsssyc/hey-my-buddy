@@ -23,6 +23,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from buddy.harnesses.session_record_support import notifications
 from unittest import mock
 
 from hey_my_buddy.blackboard.routing.router import answer_schema
@@ -32,6 +33,7 @@ from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
 from buddy.harnesses.live_contract import HarnessRunLive
 from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 from hey_my_buddy.buddy.harnesses.codex import native_run
+from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
 from hey_my_buddy.buddy.harnesses.registry import worker_permission, worker_format
@@ -145,6 +147,7 @@ class SeamCase(unittest.TestCase):
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id=turn_id, input_sha256=input_sha256),
             harness="codex",
+            session_record_path=str(self.base / f"session-{marker}.jsonl"),
             buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(
@@ -159,18 +162,8 @@ class SeamCase(unittest.TestCase):
         return RunServices(live=live)
 
     def session_updates(self, result):
-        from hey_my_buddy.private_dirs import attempt_root
-        from hey_my_buddy.protocol.session_content import SessionFormat, SessionNotification
-
-        path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
-                            result.identity.task_id, result.identity.attempt_id) / 'session.jsonl'
-        lines = [json.loads(line) for line in path.read_bytes().splitlines()]
-        self.assertEqual(sum(line.get('protocol') == 'acp' for line in lines), 1)
-        SessionFormat.from_payload(lines[0])
-        for line in lines[1:]:
-            SessionNotification.from_payload(line)
-            self.assertEqual(line['sessionId'], result.identity.attempt_id)
-        return [line['update'] for line in lines[1:]]
+        path = self.base / ("session-" + result.identity.attempt_id.removeprefix("attempt-") + ".jsonl")
+        return [line['update'] for line in notifications(path)]
 
     def assert_discovered_provider_runs(self, scope, schema):
         from hey_my_buddy.buddy.harnesses.codex import account_probe
@@ -879,6 +872,75 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_escaping_native_failure_carries_recorded_session_failure(self):
+        native_error = RuntimeError("fatal native result failure")
+        with mock.patch.object(native_run.CodexSessionProjector, "observe_notification",
+                               side_effect=KeyError("display failure")), \
+             mock.patch.object(native_run, "_build_result", side_effect=native_error):
+            with self.assertRaises(RuntimeError) as raised:
+                self.worker_run("usage")
+        self.assertIs(raised.exception, native_error)
+        self.assertEqual(native_error.session_record_failure.params.category, "KeyError")
+        self.assertEqual(native_error.session_record_failure.params.message, "'display failure'")
+
+    def test_session_projection_exceptions_preserve_result_usage_checkpoint_and_stop(self):
+        for method in ("__init__", "record_input", "observe_root", "observe_notification", "flush", "close"):
+            with self.subTest(method=method):
+                with mock.patch.object(native_run.CodexSessionProjector, method,
+                                       side_effect=KeyError("display projection")):
+                    result = self.worker_run("usage")
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertEqual(result.session_record_failure.params.category, "KeyError")
+                self.assertEqual(result.stop_evidence.native.group_state, "gone")
+                self.assertEqual(json.loads(result.value.raw)["outcome"]["disposition"], "completed")
+                self.assertGreater(result.usage.value["inputTokens"], 0)
+                checkpoint = native_run._read_evidence_ref(result, "native-checkpoint")
+                self.assertEqual(checkpoint["nativeTurnStatus"], "completed")
+                self.assertIsNotNone(result.last_assistant_message)
+
+    def test_explicit_session_failure_disables_followup_run_without_path_cache(self):
+        self.set_case("usage")
+        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA, prompt="fixture micro task task")
+        with mock.patch.object(native_run.CodexSessionProjector, "record_input", side_effect=KeyError("first")):
+            first = run(request, observer=lambda _: FEEDBACK_CONTINUE,
+                        services=self.worker_services(), cancelled=lambda: False)
+        continued = request.model_copy(update={
+            "session_record_failure": first.session_record_failure,
+            "identity": request.identity.model_copy(update={"invocation_id": "continued"}),
+            "private_state": request.private_state.model_copy(update={"invocation_root": str(self.base / "continued")}),
+        })
+        with mock.patch.object(native_run, "CodexSessionProjector") as projector:
+            second = run(continued, observer=lambda _: FEEDBACK_CONTINUE,
+                         services=self.worker_services(), cancelled=lambda: False)
+        projector.assert_not_called()
+        self.assertEqual(second.end.status, "ok", second.end.message)
+        self.assertEqual(second.session_record_failure, first.session_record_failure)
+        fresh = request.model_copy(update={
+            "identity": request.identity.model_copy(update={"invocation_id": "independent"}),
+            "private_state": request.private_state.model_copy(update={"invocation_root": str(self.base / "independent")}),
+        })
+        with mock.patch.object(native_run.CodexSessionProjector, "record_input", side_effect=ValueError("new")):
+            independent = run(fresh, observer=lambda _: FEEDBACK_CONTINUE,
+                              services=self.worker_services(), cancelled=lambda: False)
+        self.assertEqual(independent.end.status, "ok", independent.end.message)
+        self.assertEqual(independent.session_record_failure.params.category, "ValueError")
+
+    def test_no_record_path_skips_projection_and_keeps_result_usage_checkpoint_and_stop(self):
+        self.set_case('usage')
+        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA,
+                               prompt='fixture micro task task').model_copy(update={'session_record_path': None})
+        with mock.patch.object(native_run, 'CodexSessionProjector') as projector:
+            result = run(request, observer=lambda _: FEEDBACK_CONTINUE,
+                         services=self.worker_services(), cancelled=lambda: False)
+        projector.assert_not_called()
+        self.assertEqual(result.end.status, 'ok', result.end.message)
+        self.assertEqual(json.loads(result.value.raw)['outcome']['disposition'], 'completed')
+        self.assertGreater(result.usage.value['inputTokens'], 0)
+        self.assertIsNone(result.session_record_failure)
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+        checkpoint = native_run._read_evidence_ref(result, 'native-checkpoint')
+        self.assertEqual(checkpoint['nativeTurnStatus'], 'completed')
+
     def test_revised_completed_content_and_empty_native_id_do_not_change_the_native_outcome(self):
         result = self.worker_run('session-rewrite')
         self.assertEqual(result.end.status, 'ok', result.end.message)
@@ -890,73 +952,61 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(revised[-1]['content']['text'], 'different completed wording')
         self.assertTrue(all(row.get('toolCallId') != '' for row in updates))
 
-    def test_record_append_and_close_failures_keep_native_result_usage_checkpoint_and_stop_evidence(self):
-        from hey_my_buddy.buddy.harnesses.session_record import SessionRecord, SessionRecordWriteError
-        from hey_my_buddy.protocol.session_content import SessionNotification
+    def test_write_failure_preserves_native_result_usage_checkpoint_and_stop_evidence(self):
+        write = SessionRecord._write
 
-        write, close = SessionRecord._write, SessionRecord.close
+        def fail_agent(fd, line):
+            if b'"sessionUpdate":"agent_message_chunk"' in line:
+                raise OSError('database or disk is full')
+            write(fd, line)
 
-        def failed_write(record, value):
-            if isinstance(value, SessionNotification) and value.update.session_update == 'agent_message_chunk':
-                raise OSError('controlled record write failure')
-            return write(record, value)
+        with mock.patch.object(SessionRecord, '_write', side_effect=fail_agent):
+            result = self.worker_run('usage')
+        self.assertEqual(result.end.status, 'ok', result.end.message)
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
+        self.assertEqual(result.session_record_failure.params.message, 'database or disk is full')
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+        self.assertEqual(json.loads(result.value.raw)['outcome']['disposition'], 'completed')
+        self.assertGreater(result.usage.value['inputTokens'], 0)
+        checkpoint = native_run._read_evidence_ref(result, 'native-checkpoint')
+        self.assertEqual(checkpoint['nativeTurnStatus'], 'completed')
+        self.assertIsNotNone(checkpoint['lastAssistantMessage'])
+        self.assertIsNotNone(result.last_assistant_message)
 
-        def failed_close(record):
-            close(record)
-            raise SessionRecordWriteError() from OSError('controlled record close failure')
-
-        for method, failing in (('_write', failed_write), ('close', failed_close)):
-            with self.subTest(method=method), mock.patch.object(SessionRecord, method, failing):
-                result = self.worker_run('usage')
-            self.assertEqual(result.end.status, 'error')
-            self.assertEqual(result.end.reason_code, 'session-record-write-failed')
-            self.assertEqual(result.stop_evidence.native.group_state, 'gone')
-            self.assertEqual(json.loads(result.value.raw)['outcome']['disposition'], 'completed')
-            self.assertGreater(result.usage.value['inputTokens'], 0)
-            checkpoint = native_run._read_evidence_ref(result, 'native-checkpoint')
-            self.assertEqual(checkpoint['nativeTurnStatus'], 'completed')
-            self.assertIsNotNone(checkpoint['lastAssistantMessage'])
-            self.assertIsNotNone(result.last_assistant_message)
-
-    def test_record_open_failure_still_builds_a_result_with_actual_stop_evidence(self):
+    def test_record_open_failure_preserves_actual_result_and_stop_evidence(self):
         with mock.patch('hey_my_buddy.buddy.harnesses.session_record.open_regular_fd',
                         side_effect=OSError('controlled record open failure')):
             result = self.worker_run('ok')
-        self.assertEqual(result.end.status, 'error')
-        self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+        self.assertEqual(result.end.status, 'ok', result.end.message)
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
 
-    def test_late_projection_write_failure_keeps_interrupt_and_checkpoint_evidence(self):
-        from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
-        from hey_my_buddy.protocol.session_content import SessionNotification
-
+    def test_late_write_failure_keeps_interrupt_and_checkpoint_evidence(self):
         write = SessionRecord._write
 
-        def failed_write(record, value):
-            if isinstance(value, SessionNotification) and value.update.session_update == 'agent_message_chunk':
+        def fail_agent(fd, line):
+            if b'"sessionUpdate":"agent_message_chunk"' in line:
                 raise OSError('controlled late record write failure')
-            return write(record, value)
+            write(fd, line)
 
         cancelled = self.cancel_after_native_start()
         self.set_case('session-interrupt')
         request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='interrupt input')
-        with mock.patch.object(SessionRecord, '_write', failed_write):
+        with mock.patch.object(SessionRecord, '_write', side_effect=fail_agent):
             result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=self.worker_services(), cancelled=cancelled)
-        self.assertEqual(result.end.status, 'error')
-        self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+        self.assertEqual(result.end.status, 'cancelled')
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
         self.assertEqual(result.stop_evidence.interrupt.basis, 'native-turn-interrupt-ack')
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         checkpoint = native_run._read_evidence_ref(result, 'native-checkpoint')
         self.assertEqual(checkpoint['nativeTurnStatus'], 'interrupted')
 
     def test_startup_retry_leaves_no_record_and_the_same_attempt_can_start(self):
-        from hey_my_buddy.private_dirs import attempt_root
 
         self.set_case('ok')
         request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='retry input')
-        path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
-                            request.identity.task_id, request.identity.attempt_id) / 'session.jsonl'
+        path = Path(request.session_record_path)
         with mock.patch.object(native_run, '_spawn_app_server', side_effect=CodexProtocolError(
                 'harness-unavailable', 'the selected executable moved before spawn')):
             failed = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
@@ -967,21 +1017,18 @@ class WorkerSeamTests(CodexSeamCase):
         retried = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                       services=self.worker_services(), cancelled=lambda: False)
         self.assertEqual(retried.end.status, 'ok', retried.end.message)
-        lines = [json.loads(line) for line in path.read_text().splitlines()]
-        self.assertEqual(sum(line.get('protocol') == 'acp' for line in lines), 1)
-        self.assertEqual([line['update']['content']['text'] for line in lines[1:]
+        lines = notifications(path)
+        self.assertEqual([line['update']['content']['text'] for line in lines
                           if line['update']['sessionUpdate'] == 'user_message_chunk'], ['retry input'])
 
     def test_session_stream_is_visible_before_completion_and_survives_disconnect(self):
-        from hey_my_buddy.private_dirs import attempt_root
-        from hey_my_buddy.protocol.session_content import SessionFormat, SessionNotification
+        from hey_my_buddy.protocol.session_content import SessionNotification
 
         for case in ('session-stream', 'session-stream-disconnect'):
             with self.subTest(case=case):
                 self.set_case(case)
                 request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='actual sent input')
-                path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
-                                    request.identity.task_id, request.identity.attempt_id) / 'session.jsonl'
+                path = Path(request.session_record_path)
                 release = Path(os.environ['HMB_CODEX_FIXTURE_STATE']).with_suffix('.release')
                 release.unlink(missing_ok=True)
                 visible = []
@@ -990,7 +1037,7 @@ class WorkerSeamTests(CodexSeamCase):
                 def observe_pump(connection):
                     pump(connection)
                     if path.exists():
-                        lines = [json.loads(line) for line in path.read_text().splitlines()]
+                        lines = notifications(path)
                         if any(line.get('update', {}).get('content', {}).get('text') == '运行中𝄞' for line in lines):
                             visible.append(True)
                             release.touch()
@@ -1001,33 +1048,29 @@ class WorkerSeamTests(CodexSeamCase):
                 self.assertTrue(visible, 'the native fixture waits for a flushed running message')
                 self.assertEqual(result.end.status, 'ok' if case == 'session-stream' else 'error')
                 self.assertEqual(result.stop_evidence.native.group_state, 'gone')
-                lines = [json.loads(line) for line in path.read_text().splitlines()]
-                SessionFormat.from_payload(lines[0])
-                for line in lines[1:]:
+                lines = notifications(path)
+                for line in lines:
                     SessionNotification.from_payload(line)
                     self.assertEqual(line['sessionId'], request.identity.attempt_id)
-                updates = [line['update'] for line in lines[1:]]
+                updates = [line['update'] for line in lines]
                 self.assertEqual([row['content']['text'] for row in updates if row['sessionUpdate'] == 'user_message_chunk'],
                                  ['actual sent input'])
                 chunks = [row['content']['text'] for row in updates if row.get('_meta', {}).get('nativeItemId') == 'stream']
                 self.assertEqual(''.join(chunks), '运行中𝄞，结束' if case == 'session-stream' else '运行中𝄞')
 
     def test_rejected_native_turn_retains_the_input_actually_sent(self):
-        from hey_my_buddy.private_dirs import attempt_root
 
         self.set_case('unlisted-model')
         request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='rejected input')
         result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=self.worker_services(), cancelled=lambda: False)
         self.assertEqual(result.end.status, 'error')
-        path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
-                            request.identity.task_id, request.identity.attempt_id) / 'session.jsonl'
-        lines = [json.loads(line) for line in path.read_text().splitlines()]
-        self.assertEqual(len(lines), 2)
-        self.assertEqual(lines[1]['update']['content']['text'], 'rejected input')
+        path = Path(request.session_record_path)
+        lines = notifications(path)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]['update']['content']['text'], 'rejected input')
 
     def test_content_received_during_interrupt_is_flushed_with_stop_evidence_unchanged(self):
-        from hey_my_buddy.private_dirs import attempt_root
 
         cancelled = self.cancel_after_native_start()
         self.set_case('session-interrupt')
@@ -1037,9 +1080,8 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, 'cancelled')
         self.assertEqual(result.stop_evidence.interrupt.basis, 'native-turn-interrupt-ack')
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
-        path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
-                            request.identity.task_id, request.identity.attempt_id) / 'session.jsonl'
-        lines = [json.loads(line) for line in path.read_text().splitlines()]
+        path = Path(request.session_record_path)
+        lines = notifications(path)
         self.assertEqual(lines[-1]['update']['content']['text'], 'received during interrupt')
 
     def cancel_after_native_start(self):
@@ -1081,6 +1123,7 @@ class WorkerSeamTests(CodexSeamCase):
                 request = request.model_copy(update={"identity": request.identity.model_copy(
                     update={"input_sha256": run_execution.input_hash(turn_input)})})
                 control = {"operation": "worker", "harness": "codex", "privateRoot": str(root),
+                           "sessionRecordPath": request.session_record_path,
                            "inputFile": str(input_file), "outputFile": str(root / "turn-output.json")}
                 control.update(timeoutSeconds=30)
                 handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
@@ -2108,6 +2151,7 @@ class CatalogTrustTests(CodexSeamCase):
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id="turn-check", input_sha256=input_hash(turn_input)),
             harness="codex",
+            session_record_path=str(self.base / f"session-{marker}.jsonl"),
             buddy=RunBuddy(provider="openai", model="fixture-model", effort="medium"),
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(

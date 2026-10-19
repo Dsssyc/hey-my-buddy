@@ -48,6 +48,7 @@ class RouterContractTests(unittest.TestCase):
                 'operation': 'review', 'harness': 'dsh', 'taskId': 'task',
                 'attemptId': 'attempt', 'generation': 1, 'invocationId': 'invocation',
                 'privateRoot': str(root), 'nativeRoot': str(root / 'native'),
+                'sessionRecordPath': None,
                 'executionLiveFile': str(root / 'execution-live.json'),
                 'cwd': str(root), 'timeoutSeconds': 10, 'canCorrect': False,
                 'spec': {'provider': 'fixture', 'model': 'fixture', 'effort': 'off'},

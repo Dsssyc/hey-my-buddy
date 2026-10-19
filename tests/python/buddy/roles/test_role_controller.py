@@ -86,6 +86,7 @@ def run_request(root: Path) -> RunRequest:
         harness="zcode",
         buddy=RunBuddy(provider="provider", model="model", effort="off"),
         cwd=str(root),
+        session_record_path=str(root / "session.jsonl"),
         private_state=PrivateStatePaths(invocation_root=str(root / "invocation"),
                                         native_root=str(root / "native")),
         input_text="one bounded input",
@@ -389,7 +390,8 @@ class RouterCallPointTests(unittest.TestCase):
         values = dict(task_id="task-router", attempt_id="attempt-router", generation=1,
                       spec={"cwd": str(self.root), "task": "choose", "routerBudgetSeconds": 60},
                       directory=self.root / "attempt",
-                      environment={"HMB_STATE_DIR": str(self.root / "state")}, runtime={})
+                      environment={"HMB_STATE_DIR": str(self.root / "state")}, runtime={},
+                      session_record_path=str(self.root / "session.jsonl"))
         values.update(kwargs)
         return ExecutionContext(**values)
 

@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude.session_content import ClaudeSessionProjector
-from hey_my_buddy.buddy.harnesses.session_record import SessionRecord, SessionRecordWriteError
-from hey_my_buddy.private_dirs import attempt_root
+from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+from buddy.harnesses.session_record_support import notifications
 from buddy.harnesses.claude.test_native_run import NativeRunCase, READ_SCHEMA
 
 
@@ -166,15 +166,37 @@ class ProjectorTests(unittest.TestCase):
 
 
 class RunRecordTests(NativeRunCase):
+    def test_projector_exceptions_preserve_completed_native_facts(self):
+        for method in ("__init__", "start_prompt", "record_input", "observe_frame", "close"):
+            with self.subTest(method=method):
+                request = self.request()
+                with mock.patch.object(ClaudeSessionProjector, method, side_effect=KeyError("display projection")):
+                    result = self.execute(request)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertEqual(result.session_record_failure.params.category, "KeyError")
+                self.assertIsNotNone(result.value)
+                self.assertIsNotNone(result.tool_evidence)
+                self.assertIsNotNone(result.last_assistant_message)
+                self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
+    def test_no_record_path_skips_projection_and_keeps_result_and_stop(self):
+        request = self.request().model_copy(update={"session_record_path": None})
+        with mock.patch("hey_my_buddy.buddy.harnesses.claude.native_run.ClaudeSessionProjector") as projector:
+            result = self.execute(request)
+        projector.assert_not_called()
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNotNone(result.value)
+        self.assertIsNotNone(result.last_assistant_message)
+        self.assertIsNone(result.session_record_failure)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def path(self, request):
-        return attempt_root(Path(os.environ["HMB_STATE_DIR"]), "claude",
-                            request.identity.task_id, request.identity.attempt_id) / "session.jsonl"
+        return Path(request.session_record_path)
 
     def events(self, request):
-        lines = [json.loads(line) for line in self.path(request).read_text().splitlines()]
-        self.assertEqual(lines[0], {"protocol": "acp", "protocolVersion": 1, "projectionVersion": 1})
-        self.assertTrue(all(line["sessionId"] == request.identity.attempt_id for line in lines[1:]))
-        return [line["update"] for line in lines[1:]]
+        lines = notifications(self.path(request))
+        self.assertTrue(all(line["sessionId"] == request.identity.attempt_id for line in lines))
+        return [line["update"] for line in lines]
 
     def test_worker_and_router_share_the_stream_projection(self):
         for scope, schema in (("write", None), ("read", READ_SCHEMA)):
@@ -194,13 +216,14 @@ class RunRecordTests(NativeRunCase):
     def test_same_attempt_run_appends_with_a_distinct_native_session_segment(self):
         request = self.request()
         first = self.execute(request)
-        before = self.path(request).read_bytes()
+        before = notifications(self.path(request))
         next_run = self.request()
         next_run = next_run.model_copy(update={"identity": next_run.identity.model_copy(update={
-            "task_id": request.identity.task_id, "attempt_id": request.identity.attempt_id})})
+            "task_id": request.identity.task_id, "attempt_id": request.identity.attempt_id}),
+            "session_record_path": request.session_record_path})
         second = self.execute(next_run)
         self.assertEqual((first.end.status, second.end.status), ("ok", "ok"))
-        self.assertTrue(self.path(request).read_bytes().startswith(before))
+        self.assertEqual(notifications(self.path(request))[:len(before)], before)
         prompts = [e for e in self.events(request) if e["sessionUpdate"] == "user_message_chunk"]
         self.assertEqual(len(prompts), 2)
         self.assertNotEqual(prompts[0]["_meta"]["contentSegment"], prompts[1]["_meta"]["contentSegment"])
@@ -216,33 +239,35 @@ class RunRecordTests(NativeRunCase):
 
     def test_write_failure_keeps_observed_frame_identity_and_actual_stop_evidence(self):
         request = self.request()
-        with mock.patch.object(SessionRecord, "append", side_effect=SessionRecordWriteError()):
+        with mock.patch.object(SessionRecord, "_open", side_effect=OSError("controlled write failure")):
             result = self.execute(request)
-        self.assertEqual((result.end.status, result.end.reason_code), ("error", "session-record-write-failed"))
+        self.assertEqual(result.end.status, "ok")
+        self.assertEqual(result.session_record_failure.code, "session-record-write-failed")
         self.assertEqual(result.identity, request.identity)
         self.assertTrue(result.model_started)
         self.assertIsNotNone(result.native_identity.session_id)
         self.assertIsNotNone(result.last_assistant_message)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
-    def test_flush_and_close_errors_are_run_failures_with_complete_results(self):
-        for method, error in (("_write", OSError("private source path")),
-                              ("close", SessionRecordWriteError())):
+    def test_open_and_close_errors_are_facts_with_complete_results(self):
+        for method, error in (("_open", OSError("private source path")),
+                              ("close", OSError("close failed"))):
             with self.subTest(method=method):
                 request = self.request()
                 original_close = SessionRecord.close
                 if method == "close":
                     def close(record):
                         original_close(record)
-                        raise error
+                        record._failed(error)
                     patch = mock.patch.object(SessionRecord, "close", close)
                 else:
                     patch = mock.patch.object(SessionRecord, method, side_effect=error)
                 with patch:
                     result = self.execute(request)
-                self.assertEqual((result.end.status, result.end.reason_code), ("error", "session-record-write-failed"))
+                self.assertEqual(result.end.status, "ok")
+                self.assertEqual(result.session_record_failure.code, "session-record-write-failed")
                 self.assertEqual(result.stop_evidence.native.group_state, "gone")
-                self.assertNotIn("private source path", result.end.message)
+                self.assertEqual(result.session_record_failure.params.message, str(error))
                 if method == "close":
                     self.assertIsNotNone(result.value)
                     self.assertIsNotNone(result.tool_evidence)

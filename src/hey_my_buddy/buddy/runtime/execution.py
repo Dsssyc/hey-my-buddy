@@ -225,11 +225,12 @@ class _ExecutionLive:
 
 class Execution:
     def __init__(self, claim: dict, state_dir: Path, nonce: str, *,
-                 client=None, log=None):
+                 session_record_path: str | None = None, client=None, log=None):
         from ...protocol.rpc_config import configure_server, configure_client
         configure_server(state_dir)
         configure_client(state_dir)
         self.claim, self.state_dir, self.nonce = claim, Path(state_dir), nonce
+        self.session_record_path = session_record_path
         self.client = client or BoardClient(self.state_dir, autostart=False)
         self._log = log or (lambda message: None)
         self.control = _ExecutionControl(self)
@@ -520,6 +521,7 @@ class Execution:
             # and exported by path, never into the model-visible turn input.
             turn=claim.get("turn") if isinstance(claim.get("turn"), dict) else None,
             agent_credential=claim.get("agentCredential") or None,
+            session_record_path=self.session_record_path,
         )
         implementation = role_seam.worker_executor(spec["adapter"])
         control = holder['preflightControl']
@@ -796,6 +798,7 @@ def main():
     from ..roles.turn_io import guard_private_path
     material = decode_strict_json(guard_private_path(Path(args.startup)).read_bytes())
     execution = Execution(material["claim"], Path(material["stateDir"]), material["nonce"],
+                          session_record_path=material["sessionRecordPath"],
                           log=lambda message: print(message, flush=True))
     def interrupted(_signal, _frame):
         execution.request_stop("unknown", None, force=True)

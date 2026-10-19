@@ -83,6 +83,7 @@ class CandidatePrepareTests(BoardTestCase):
                   "provider": "fixture-provider", "model": "fixture-model", "effort": "low"},
             directory=self.directory / "turns" / attempt_id, runtime={},
             environment=dict(self.environment), agent_credential=DUMMY_CREDENTIAL,
+            session_record_path=str(self.directory / "turns" / attempt_id / "session.jsonl"),
             turn={"turnId": "turn-1", "input": identity})
 
     def prepare(self, executor: WorkerRunExecutor, context: ExecutionContext) -> None:

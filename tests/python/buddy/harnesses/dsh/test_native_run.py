@@ -110,6 +110,7 @@ class NativeRunCase(unittest.TestCase):
             identity=RunIdentity(task_id="task", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}",
                                  generation=1, invocation_id=uuid.uuid4().hex),
             harness="dsh",
+            session_record_path=str(self.base / f"session-{uuid.uuid4().hex}.jsonl"),
             buddy=RunBuddy(provider="fake", model="m1", effort="high"),
             cwd=str(self.base / "cwd"),
             private_state=PrivateStatePaths(
@@ -156,6 +157,7 @@ class NativeRunCase(unittest.TestCase):
                                  generation=1, invocation_id=uuid.uuid4().hex,
                                  turn_id=identity["turnId"], input_sha256=input_hash(turn_input)),
             harness="dsh",
+            session_record_path=str(self.base / f"session-{uuid.uuid4().hex}.jsonl"),
             buddy=RunBuddy(provider="fake", model="m1", effort="high"),
             cwd=str(self.base / "cwd"),
             private_state=PrivateStatePaths(invocation_root=str(invocation),
@@ -791,7 +793,7 @@ class MountTests(NativeRunCase):
     @staticmethod
     def variant_of(request: RunRequest, **overrides) -> RunRequest:
         fields = {name: getattr(request, name) for name in
-                  ("identity", "harness", "buddy", "cwd", "private_state", "input_text",
+                  ("identity", "harness", "buddy", "cwd", "private_state", "session_record_path", "input_text",
                    "tool_scope", "worker_permission", "output_schema", "budget", "session_services")}
         fields.update(overrides)
         return RunRequest(**fields)

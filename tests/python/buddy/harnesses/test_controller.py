@@ -215,7 +215,7 @@ class PartialLogOpenTests(unittest.TestCase):
         context = base.ExecutionContext(task_id="private-task", attempt_id="private-attempt", generation=1,
                                         spec={"argv": [sys.executable, "-c", "pass"], "task": "fixture",
                                               "cwd": str(self.root), "expectedSeconds": 1},
-                                        directory=self.root, runtime={}, environment=dict(os.environ))
+                                        directory=self.root, runtime={}, environment=dict(os.environ), session_record_path=None)
         with partial_log_open_failure() as state, \
              mock.patch.object(command, "owned_popen", wraps=command.owned_popen) as spawn:
             with self.assertRaises(OSError) as caught:
@@ -647,7 +647,8 @@ def _review_handle(root, outer=True):
                            shutdown_confirmed=lambda: outer, role_run_identity=request.identity,
                            role_run_original_identity=request.identity, role_run_active_identity=request.identity,
                            wrap_up_started=False,
-                           role_run_control={"operation": "review", "harness": request.harness})
+                           role_run_control={"operation": "review", "harness": request.harness,
+                                             "sessionRecordPath": request.session_record_path})
 
 
 class RouterCollectCoercionTests(unittest.TestCase):

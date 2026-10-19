@@ -94,26 +94,17 @@ def _record(connection, target):
 
 
 def _collect(connection, target):
+    from .macro_tasks import MEMBERS_SQL
+
     kind, identifier = _target(target)
-    if kind == 'macro-task':
-        if connection.execute('SELECT 1 FROM macro_tasks WHERE macro_task_id=?', (identifier,)).fetchone() is None:
-            raise BoardError('NOT_FOUND', 'Unknown macro task', macroTaskId=target)
-        seed = 'SELECT run_id FROM workflow_runs WHERE macro_task_id=?'
-        seed_id = identifier
-    else:
-        root = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (identifier[4:],)).fetchone()
-        if (root is None or root['macro_task_id'] is not None or connection.execute(
-                'SELECT 1 FROM workflow_children WHERE child_task_id=?',(identifier[4:],)).fetchone() is not None
-                or connection.execute('SELECT 1 FROM workflow_lead_tasks WHERE owned_run_id=?',
-                                      (identifier[4:],)).fetchone() is not None):
-            raise BoardError('NOT_FOUND', 'Unknown run group', macroTaskId=target)
-        seed, seed_id = 'SELECT run_id FROM workflow_runs WHERE run_id=?', identifier[4:]
-    runs = {row[0] for row in connection.execute(f'''
-        WITH RECURSIVE members(run_id) AS (
-            {seed}
-            UNION SELECT c.child_task_id FROM workflow_children c JOIN members m ON c.parent_run_id=m.run_id
-            UNION SELECT l.owned_run_id FROM workflow_lead_tasks l JOIN members m ON l.lead_run_id=m.run_id
-        ) SELECT run_id FROM members''', (seed_id,))}
+    if kind == 'macro-task' and connection.execute(
+            'SELECT 1 FROM macro_tasks WHERE macro_task_id=?', (identifier,)).fetchone() is None:
+        raise BoardError('NOT_FOUND', 'Unknown macro task', macroTaskId=target)
+    members = connection.execute(
+        f'SELECT task_id,micro_task_run_id FROM ({MEMBERS_SQL}) WHERE group_id=?', (target,)).fetchall()
+    if not members and kind == 'micro-task-tree':
+        raise BoardError('NOT_FOUND', 'Unknown run group', macroTaskId=target)
+    runs = {row['micro_task_run_id'] for row in members if row['micro_task_run_id'] is not None}
     run_rows = _rows(connection, 'workflow_runs', 'run_id', runs)
     assert len(run_rows) == len(runs), 'Owned child has no workflow run'
     if kind == 'macro-task':
@@ -356,10 +347,10 @@ def _delete_workspaces(store, scope):
     return delete_workspaces(store, scope.manifests, scope.artifacts)
 
 
-def _remove_owned_tree(path):
+def _remove_owned_tree(path, *, object_kind='private-root'):
     if (private_dirs.linked_component(path) is not None
             or path.exists() and not path.is_dir()):
-        return [{'objectKind':'private-root', 'path':str(path), 'reason':reason('macro-task-deletion.owner-unproven')}]
+        return [{'objectKind':object_kind, 'path':str(path), 'reason':reason('macro-task-deletion.owner-unproven')}]
     private_dirs.remove_tree(path)
     return []
 
@@ -394,6 +385,10 @@ def _delete_private_roots(store, scope):
             skipped.extend(_remove_owned_tree(store.directory / 'harnesses' / harness / hashlib.sha256(task_id.encode()).hexdigest()))
         skipped.extend(_remove_owned_tree(store.directory / 'attempts' / task_id))
     return skipped
+
+
+def _delete_session_group(store, target):
+    return _remove_owned_tree(private_dirs.session_group_root(store.directory, target), object_kind='session-records')
 
 
 def _delete_cli_files(store, scope):
@@ -578,7 +573,9 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     deletion = _record(connection,target)
         skipped = []
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
-                                ('private-root',_delete_private_roots),('cli-file',_delete_cli_files)):
+                                ('private-root',_delete_private_roots),
+                                ('session-records',lambda store, scope: _delete_session_group(store, target)),
+                                ('cli-file',_delete_cli_files)):
             try:
                 skipped.extend(operation(store,scope))
             except (BoardError,OSError) as error:

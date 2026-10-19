@@ -94,7 +94,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
     def test_deferred_signal_is_replayed_after_private_startup_is_read(self):
         from hey_my_buddy.protocol.execution import fsync_json
         startup = self.execution.directory / "execution-start.json"
-        fsync_json(startup, {"claim": CLAIM, "stateDir": str(self.state), "nonce": "n" * 64})
+        fsync_json(startup, {"claim": CLAIM, "stateDir": str(self.state), "nonce": "n" * 64, "sessionRecordPath": None})
         seen = []
 
         def run(execution):
@@ -127,7 +127,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         from hey_my_buddy.protocol.execution import fsync_json
         startup = self.execution.directory / "execution-start.json"
         fsync_json(startup, {"claim": CLAIM, "stateDir": str(self.state), "nonce": "n" * 64,
-                             "jobName": None})
+                             "jobName": None, "sessionRecordPath": None})
         self.assertFalse((self.state / "attempts/task-1/attempt-1/spawn.marker").exists())
         identity = {"bootId": "linux:00000000-0000-4000-8000-000000000001",
                     "pid": 301, "startedAt": 105, "processGroupId": 301, "jobName": None}

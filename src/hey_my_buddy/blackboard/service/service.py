@@ -18,7 +18,8 @@ import re
 
 from ...install import runtime
 from ...protocol import schemas
-from ..tasks import micro_task, workflow as workflow_module
+from ..tasks import macro_tasks, micro_task, workflow as workflow_module
+from ...private_dirs import session_record_path
 from ...buddy.harnesses.registry import capability_report
 from ...protocol.contracts import CONTRACT_VERSION
 from ..store.db import SCHEMA_VERSION, utc_now
@@ -873,7 +874,20 @@ class BoardService(_BaseResource):
                 for name in sorted(names & {'dsh', 'zcode', 'codex', 'claude'}):
                     self.harnesses.refresh(name, preflight=True)
             self.store.workflow.prepare_continuation_workspace({"taskId": task_id} if task_id else {})
-            return self.store.admit_execution(nonce, task_id=task_id)
+            response = self.store.admit_execution(nonce, task_id=task_id)
+            claim = response.get("claim")
+            if claim is not None:
+                record_path = None
+                if claim["task"]["spec"]["adapter"] != "command":
+                    with self.store.db.read() as connection:
+                        member = connection.execute(
+                            f"SELECT group_id FROM ({macro_tasks.MEMBERS_SQL}) WHERE task_id=?",
+                            (claim["task"]["taskId"],)).fetchone()
+                    if member is not None:
+                        record_path = str(session_record_path(
+                            self.store.directory, member["group_id"], claim["attempt"]["attemptId"]))
+                claim["sessionRecordPath"] = record_path
+            return response
 
     def execution_progress(self, request_json: str) -> str:
         def handler(params: dict) -> dict:

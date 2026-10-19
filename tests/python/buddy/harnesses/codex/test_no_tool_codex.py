@@ -57,7 +57,8 @@ class NoToolCodexTests(unittest.TestCase):
                            HMB_CODEX_FIXTURE_CASE=case, HMB_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
         context = ExecutionContext("router-task", "router-attempt", 7,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
-                                    "cwd": str(self.cwd), "routerBudgetSeconds": timeout}, directory, {}, environment)
+                                    "cwd": str(self.cwd), "routerBudgetSeconds": timeout}, directory, {}, environment,
+                                   session_record_path=str(directory / "session.jsonl"))
         request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, timeout_seconds=timeout)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)
@@ -127,7 +128,8 @@ class NoToolCodexTests(unittest.TestCase):
                            HMB_CODEX_FIXTURE_STATE=str(directory / "trace.json"))
         context = ExecutionContext("task", "attempt", 1,
                                    {"provider": "openai", "model": "fixture-model", "effort": "low",
-                                    "cwd": str(self.cwd), "routerBudgetSeconds": 3}, directory, {}, environment)
+                                    "cwd": str(self.cwd), "routerBudgetSeconds": 3}, directory, {}, environment,
+                                   session_record_path=str(directory / "session.jsonl"))
         request = NoToolStructuredRequest(str(self.cwd), "Pick a buddy", SCHEMA, 3)
         handle = start_router_preparation(FastPreparation("codex",  request, context, self.cwd))
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.1), handle.wait(15)) if not handle.finished else None)

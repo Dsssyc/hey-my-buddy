@@ -38,6 +38,8 @@ fixtures can pass None and still collect the native final activity.
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import dataclasses
 import hashlib
 import os
@@ -87,6 +89,7 @@ from ..run_contract import (
     RunFeedback,
     RunRequest,
     RunResult,
+    SessionRecordFailure,
     RunValue,
     StopEvidence,
     StopLayer,
@@ -116,7 +119,7 @@ from .protocol import (
 )
 from .tool_evidence import ReadOnlyToolEvidence
 from ..runtime_selection import environment_for
-from ..session_record import SessionRecord, SessionRecordWriteError, SESSION_RECORD_WRITE_FAILED
+from ..session_record import SessionRecord
 from .session_content import ClaudeSessionProjector
 
 _SETTINGS_FILE = "settings.json"
@@ -448,7 +451,6 @@ class _TurnCollector:
         self.inquiry_tool_failures_dropped = 0
         self._native_handle: ProcessHandle | None = None
         self.session = session
-        self.session_error: SessionRecordWriteError | None = None
 
     def install(self, connection: Connection, handle: ProcessHandle | None = None) -> None:
         self._connection = connection
@@ -511,7 +513,7 @@ class _TurnCollector:
         connection.send({"type": "user", "message": {"role": "user",
                        "content": [{"type": "text", "text": input_text}]}})
         if self.session is not None:
-            self.session.start_prompt(session_id, input_text)
+            self.session.record.project(self.session.start_prompt, session_id, input_text)
         self.evidence = TurnEvidence(session_id, cwd, provider=self.provider)
         connection.on_message = self.observe
 
@@ -545,10 +547,7 @@ class _TurnCollector:
         # its tool facts, and the evidence observation follows the same rule.
         self.tools.observe_frame(frame)
         if self.session is not None:
-            try:
-                self.session.observe_frame(frame)
-            except SessionRecordWriteError as error:
-                self.session_error = error
+            self.session.record.project(self.session.observe_frame, frame)
         if self.evidence is not None:
             initialized = self.evidence.init_observed
             activity = self.evidence.observe(frame)
@@ -584,8 +583,6 @@ class _TurnCollector:
         if self.tools.tool_calls != self._last_tool_calls:
             self._last_tool_calls = self.tools.tool_calls
             self._notify(settled=False, raw=None)
-        if self.session_error is not None:
-            raise self.session_error
 
     def _observe_inquiry_tool(self, frame: dict) -> None:
         """Accept only a completed tool result tied to this native root call."""
@@ -749,7 +746,7 @@ def _send_pending_inquiries(collector: _TurnCollector, connection: Connection, s
                                            "source": "claude/stream-json-user",
                                            "eventSeq": collector.evidence.event_seq})
         if collector.session is not None:
-            collector.session.record_input(message)
+            collector.session.record.project(collector.session.record_input, message)
         if bridge.error:
             raise ClaudeProtocolError("inquiry-journal-unavailable", bridge.error)
 
@@ -1115,150 +1112,145 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     inquiry_bridge: InquiryBridge | None = None
     native_result: dict | None = None
     cancel = CancelFlag(cancelled)
-    session = ClaudeSessionProjector(SessionRecord(Path(environment_for()["HMB_STATE_DIR"]), "claude",
-        request.identity.task_id, request.identity.attempt_id))
-    record_error: SessionRecordWriteError | None = None
+    session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
+                                    failure=request.session_record_failure.to_payload()
+                                    if request.session_record_failure is not None else None)
+                      if request.session_record_path is not None else None)
+    with (session_record.protect() if session_record is not None else nullcontext()):
+        session = (session_record.project(ClaudeSessionProjector, session_record)
+                   if session_record is not None else None)
 
-    def request_interrupt() -> None:
-        # A fresh short control budget permits a native interrupt after the
-        # failure; the peer's own acknowledgement reply is kept as the fact —
-        # whether the CLI answered never changes the stop facts.
-        if collector is not None:
-            collector._quiet = True
-        acknowledged = False
-        if spawn is not None:
-            acknowledged = _interrupt(spawn.connection)
-        state.interrupt_requested = True
-        state.interrupt_acknowledged = acknowledged
+        def request_interrupt() -> None:
+            # A fresh short control budget permits a native interrupt after the
+            # failure; the peer's own acknowledgement reply is kept as the fact —
+            # whether the CLI answered never changes the stop facts.
+            if collector is not None:
+                collector._quiet = True
+            acknowledged = False
+            if spawn is not None:
+                acknowledged = _interrupt(spawn.connection)
+            state.interrupt_requested = True
+            state.interrupt_acknowledged = acknowledged
 
-    try:
-        inquiry = services.inquiry if services is not None else None
-        preparation = _prepare(request, inquiry)
-        live = services.live if services is not None else None
-        if inquiry is not None:
-            configuration = inquiry.configuration
-            inquiry_bridge = InquiryBridge(
-                identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],
-                attention_path=configuration.get("attentionPath"), live=live,
-                error_factory=ClaudeProtocolError,
-                event_metadata=lambda message: {"kind": str(message.get("kind") or "event")},
-                delivery_mode="realtime")
-            inquiry_bridge.start()
-        collector = _TurnCollector(
-            request,
-            ActivityPublisher(live.publish_activity if live else None),
-            observer,
-            # The delivery identification is armed by this run's own command
-            # line carrying the native schema, never by the caller's role or
-            # the tool scope: a run without the flag exempts nothing.
-            native_schema_delivery="--json-schema" in preparation.args,
-            expected_permission_mode=_flag_value(preparation.args, "--permission-mode")
-            if request.worker_permission is not None else None,
-            inquiry=inquiry, bridge=inquiry_bridge, session=session)
-        spawn = _spawn_native(command=preparation.command, args=preparation.args, cwd=request.cwd,
-                              environment=preparation.environment,
-                              invocation_root=preparation.invocation_root, deadline=preparation.deadline,
-                              cancel=cancel, owned=owned_spawn)
-        collector.install(spawn.connection, spawn.handle)
-        catalog = _initialize(spawn)
-        state.catalog = catalog
-        state.provider = catalog["providers"][0]["provider"]
-        collector.provider = state.provider
-        state.catalog_checked = _check_catalog(request, catalog)
-        _send_and_settle(collector, spawn, preparation, request)
-        state.drained = True
-        state.terminal_ok = _check_terminal(collector.evidence, preparation.session_id)
-        native_result = collector.evidence.result
-        state.status = "ok" if state.terminal_ok else "unknown"
-        state.reason = None if state.terminal_ok else "native-terminal-unread"
-        # The delivery verification freezes here, before the settled facts
-        # reach the role: candidates that did not prove themselves against the
-        # final structured value return to the count now, so a budget stop at
-        # settlement sees exactly the classification the finished package will
-        # publish. Failure paths never settle, and their packages count every
-        # candidate; the settled callback is the one place the role's last
-        # count and the package must not diverge.
-        if state.terminal_ok:
-            state.verified_delivery = collector.tools.settle_delivery(
-                native_result.get("structured_output"), {"sessionId": preparation.session_id})
+        try:
+            inquiry = services.inquiry if services is not None else None
+            preparation = _prepare(request, inquiry)
+            live = services.live if services is not None else None
+            if inquiry is not None:
+                configuration = inquiry.configuration
+                inquiry_bridge = InquiryBridge(
+                    identity=configuration["identity"], journal_path=configuration["inquiryJournalPath"],
+                    attention_path=configuration.get("attentionPath"), live=live,
+                    error_factory=ClaudeProtocolError,
+                    event_metadata=lambda message: {"kind": str(message.get("kind") or "event")},
+                    delivery_mode="realtime")
+                inquiry_bridge.start()
+            collector = _TurnCollector(
+                request,
+                ActivityPublisher(live.publish_activity if live else None),
+                observer,
+                # The delivery identification is armed by this run's own command
+                # line carrying the native schema, never by the caller's role or
+                # the tool scope: a run without the flag exempts nothing.
+                native_schema_delivery="--json-schema" in preparation.args,
+                expected_permission_mode=_flag_value(preparation.args, "--permission-mode")
+                if request.worker_permission is not None else None,
+                inquiry=inquiry, bridge=inquiry_bridge, session=session)
+            spawn = _spawn_native(command=preparation.command, args=preparation.args, cwd=request.cwd,
+                                  environment=preparation.environment,
+                                  invocation_root=preparation.invocation_root, deadline=preparation.deadline,
+                                  cancel=cancel, owned=owned_spawn)
+            collector.install(spawn.connection, spawn.handle)
+            catalog = _initialize(spawn)
+            state.catalog = catalog
+            state.provider = catalog["providers"][0]["provider"]
+            collector.provider = state.provider
+            state.catalog_checked = _check_catalog(request, catalog)
+            _send_and_settle(collector, spawn, preparation, request)
+            state.drained = True
+            state.terminal_ok = _check_terminal(collector.evidence, preparation.session_id)
+            native_result = collector.evidence.result
+            state.status = "ok" if state.terminal_ok else "unknown"
+            state.reason = None if state.terminal_ok else "native-terminal-unread"
+            # The delivery verification freezes here, before the settled facts
+            # reach the role: candidates that did not prove themselves against the
+            # final structured value return to the count now, so a budget stop at
+            # settlement sees exactly the classification the finished package will
+            # publish. Failure paths never settle, and their packages count every
+            # candidate; the settled callback is the one place the role's last
+            # count and the package must not diverge.
+            if state.terminal_ok:
+                state.verified_delivery = collector.tools.settle_delivery(
+                    native_result.get("structured_output"), {"sessionId": preparation.session_id})
+                if inquiry_bridge is not None:
+                    inquiry_bridge.close()
+                    state.inquiry_report = inquiry_bridge.report()
+                collector.settled_notify(native_result)
+        except ObserverInterrupt:
+            state.status = "cancelled"
+            state.reason = "observer-interrupt"
+            request_interrupt()
+        except QuotaRejected as error:
+            # Quota exhaustion is infrastructure unavailability: no retry, no outcome.
+            state.status = "error"
+            state.reason = "harness-error"
+            state.error_text = QUOTA_REJECTED_ERROR
+            state.quota_failure = {"code": "quota-exceeded", "nativeCode": error.rate_limit_type,
+                                   "source": error.source, "observedAt": utc_now(),
+                                   "resetsAt": error.resets_at,
+                                   "rejectionPhase": collector.evidence.rejection_phase() if collector is not None
+                                   and collector.evidence is not None else "unknown"}
+            request_interrupt()
+        except (ClaudeProtocolError, VersionShutdownError) as error:
+            state.status = "cancelled" if error.code == "user-cancel" else "error"
+            state.reason = error.code
+            state.error_text = str(error)
+            # A result can report a structured rejection before the stream fails
+            # during the drain. Its activity history is then incomplete, but the
+            # rejection itself remains a native fact.
+            if state.status == "error":
+                state.quota_failure = _incomplete_result_quota_failure(collector, preparation)
+            if error.code in ("user-cancel", "deadline"):
+                request_interrupt()
+        except ClaudeUnavailable as error:
+            state.status = "error"
+            state.reason = "claude-unavailable"
+            state.error_text = str(error)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+            state.status = "error"
+            state.reason = "invalid-native-result"
+            state.error_text = "the native execution returned invalid or incomplete data"
+            state.quota_failure = _incomplete_result_quota_failure(collector, preparation)
+        finally:
             if inquiry_bridge is not None:
                 inquiry_bridge.close()
                 state.inquiry_report = inquiry_bridge.report()
-            collector.settled_notify(native_result)
-    except SessionRecordWriteError as error:
-        record_error = error
-        state.status = "error"
-    except ObserverInterrupt:
-        state.status = "cancelled"
-        state.reason = "observer-interrupt"
-        request_interrupt()
-    except QuotaRejected as error:
-        # Quota exhaustion is infrastructure unavailability: no retry, no outcome.
-        state.status = "error"
-        state.reason = "harness-error"
-        state.error_text = QUOTA_REJECTED_ERROR
-        state.quota_failure = {"code": "quota-exceeded", "nativeCode": error.rate_limit_type,
-                               "source": error.source, "observedAt": utc_now(),
-                               "resetsAt": error.resets_at,
-                               "rejectionPhase": collector.evidence.rejection_phase() if collector is not None
-                               and collector.evidence is not None else "unknown"}
-        request_interrupt()
-    except (ClaudeProtocolError, VersionShutdownError) as error:
-        state.status = "cancelled" if error.code == "user-cancel" else "error"
-        state.reason = error.code
-        state.error_text = str(error)
-        # A result can report a structured rejection before the stream fails
-        # during the drain. Its activity history is then incomplete, but the
-        # rejection itself remains a native fact.
-        if state.status == "error":
-            state.quota_failure = _incomplete_result_quota_failure(collector, preparation)
-        if error.code in ("user-cancel", "deadline"):
-            request_interrupt()
-    except ClaudeUnavailable as error:
-        state.status = "error"
-        state.reason = "claude-unavailable"
-        state.error_text = str(error)
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
-        state.status = "error"
-        state.reason = "invalid-native-result"
-        state.error_text = "the native execution returned invalid or incomplete data"
-        state.quota_failure = _incomplete_result_quota_failure(collector, preparation)
-    finally:
-        if inquiry_bridge is not None:
-            inquiry_bridge.close()
-            state.inquiry_report = inquiry_bridge.report()
-        if collector is not None and collector.evidence is not None:
-            # ADR-018 items 22/23 and the retained root assistant text: raw
-            # native observations for every path, including a quota rejection,
-            # a deadline or a process failure. A value the native stream never
-            # reported stays null instead of being estimated.
-            state.token_usage = collector.evidence.token_usage()
-            state.last_assistant_message = collector.evidence.last_assistant_message()
-        if spawn is not None:
-            state.shutdown, state.exit_code = _stop_native(spawn, preparation.deadline)
-            expected_stop = collector is not None and collector.root_stop_requested
-            if state.status in ("ok", "unknown") and (not state.shutdown or (state.exit_code != 0 and not expected_stop)):
-                state.status = "error"
-                state.reason = "native-shutdown-failed"
-                state.error_text = ("the Claude native process did not exit with confirmed "
-                                    "process-group shutdown")
-        if cancel.is_set() and state.status != "ok":
-            state.status = "cancelled"
-            state.reason = "user-cancel"
-            state.error_text = "the owned Claude execution was cancelled"
-    # Display failure never bypasses native facts, stop collection or the
-    # result builder, including a failure closing an otherwise complete run.
-    if collector is not None and collector.session_error is not None:
-        record_error = collector.session_error
-    try:
-        session.close()
-    except SessionRecordWriteError as error:
-        record_error = error
-    if record_error is not None:
-        state.status, state.reason = "error", SESSION_RECORD_WRITE_FAILED
-        state.error_text = str(record_error)
-    return _build_result(request, state=state, collector=collector, spawn=spawn,
-                         owned_spawn=owned_spawn, preparation=preparation, native_result=native_result)
+            if collector is not None and collector.evidence is not None:
+                # ADR-018 items 22/23 and the retained root assistant text: raw
+                # native observations for every path, including a quota rejection,
+                # a deadline or a process failure. A value the native stream never
+                # reported stays null instead of being estimated.
+                state.token_usage = collector.evidence.token_usage()
+                state.last_assistant_message = collector.evidence.last_assistant_message()
+            if spawn is not None:
+                state.shutdown, state.exit_code = _stop_native(spawn, preparation.deadline)
+                expected_stop = collector is not None and collector.root_stop_requested
+                if state.status in ("ok", "unknown") and (not state.shutdown or (state.exit_code != 0 and not expected_stop)):
+                    state.status = "error"
+                    state.reason = "native-shutdown-failed"
+                    state.error_text = ("the Claude native process did not exit with confirmed "
+                                        "process-group shutdown")
+            if cancel.is_set() and state.status != "ok":
+                state.status = "cancelled"
+                state.reason = "user-cancel"
+                state.error_text = "the owned Claude execution was cancelled"
+        if session is not None:
+            session.record.project(session.close)
+        return _build_result(request, state=state, collector=collector, spawn=spawn,
+                             owned_spawn=owned_spawn, preparation=preparation, native_result=native_result).model_copy(
+                                 update={"session_record_failure": SessionRecordFailure(**session_record.failure)
+                                         if session_record is not None and session_record.failure is not None
+                                         else request.session_record_failure})
 
 
 # -- the initialize-only discovery ------------------------------------------------

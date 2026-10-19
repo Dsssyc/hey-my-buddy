@@ -302,7 +302,7 @@ def run(args):
     context = ExecutionContext(task_id=identity["taskId"], attempt_id=identity["attemptId"],
         generation=1, spec={**report["buddy"], "harness": args.harness,
                                "cwd": str(frozen), "routerBudgetSeconds": limits["timeoutSeconds"]},
-        directory=root / "attempt", runtime={}, environment=environment)
+        directory=root / "attempt", runtime={}, environment=environment, session_record_path=None)
     private_json(root / "request.json", redact({"identity": identity, "buddy": report["buddy"],
                                                "request": report["request"]}, secrets))
     try:

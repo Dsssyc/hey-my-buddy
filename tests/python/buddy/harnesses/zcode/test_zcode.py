@@ -56,6 +56,7 @@ class ZcodeFixtureCase(unittest.TestCase):
                     "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
                     "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=attempt_id, generation=index,
+                                session_record_path=str(self.root / f"session-{attempt_id}.jsonl"),
                                 spec={"cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "fixture-api", "model": "fixture-model", "effort": effort},

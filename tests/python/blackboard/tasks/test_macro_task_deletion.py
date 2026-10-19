@@ -346,14 +346,51 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        " VALUES(?,?,?,?)", (lead_owned["runId"], helper["runId"], "lead-tree-turn", now))
             db.execute("INSERT INTO workflow_fixes(run_id,fixed_run_id,created_at) VALUES(?,?,?)",
                        (grandchild["runId"], root["runId"], now))
+        # A historical Router execution belongs to the nested owned run it routed.
+        from hey_my_buddy.blackboard.routing import router_sequence
+        router_id = 'tree-router-task'
+        with board.store.db.write() as db:
+            spec = json.dumps({'adapter': 'decision', 'cwd': str(self.workdir('tree-router')), 'task': 'route'})
+            db.execute("INSERT INTO tasks(task_id,request_id,spec_json,spec_canonical_json,input_fingerprint,"
+                       "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
+                       " VALUES(?,?,?,?,?,2,'decision',?,30,'cancelled',1,?,?)",
+                       (router_id, 'tree-router-request', spec, spec, 'router-fixture',
+                        str(self.workdir('tree-router')), now, now))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at)"
+                       " VALUES('tree-decision','completed','route',?)", (now,))
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,task_id,created_at,updated_at)"
+                       " VALUES('tree-decision','tree-routing','select','router-fixture',?,?,?)", (router_id, now, now))
+            router_sequence.freeze_request(db, 'tree-decision',
+                                           snapshot={'facts': {}, 'baseInput': {}, 'inspections': []}, now=now)
+            router_sequence.reserve_dispatch(db, decision_id='tree-decision', task_id=router_id, router_index=0,
+                                             buddy={'buddyId': 'fixture', 'harness': 'dsh', 'provider': 'fixture',
+                                                    'model': 'router', 'effort': 'max'}, document={}, now=now)
+            db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
+                       " VALUES('tree-decision',?,1,'resolved',?,?)", (lead_owned['runId'], now, now))
         target = "run:" + root["runId"]
+        from hey_my_buddy.private_dirs import session_record_path
+        with board.store.db.read() as db:
+            members = db.execute(f'SELECT task_id,group_id FROM ({macro_tasks.MEMBERS_SQL})').fetchall()
+        by_task = {row['task_id']: row['group_id'] for row in members}
+        self.assertEqual(by_task[router_id], target)
+        records = []
+        for run in (root, helper, lead_owned, grandchild, {'runId': router_id, 'requestId': 'router-record'}):
+            self.assertEqual(by_task[run['runId']], target)
+            record = session_record_path(board.directory, by_task[run['runId']], run['requestId'])
+            record.parent.mkdir(parents=True, exist_ok=True)
+            record.write_bytes(b'private session')
+            records.append(record)
+        self.assertNotIn('run:' + lead_owned['runId'],
+                         {row['macroTaskId'] for row in board.call('macro_task_list', {})['macroTasks']})
         self.assertEqual(macro_task_deletion.preview(board.store, target)["microTaskCount"], 4)
         with self.without_physical_io()[0]:
             self.assertEqual(macro_task_deletion.delete(board.store, target, 4)["state"], "deleted")
+        self.assertTrue(all(not record.exists() for record in records))
         with board.store.db.read() as db:
             for run in (root, helper, lead_owned, grandchild):
                 self.assertIsNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
             self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (other["runId"],)).fetchone())
+            self.assertIsNone(db.execute('SELECT 1 FROM tasks WHERE task_id=?', (router_id,)).fetchone())
             for table in ("workflow_children", "workflow_lead_tasks", "workflow_fixes"):
                 self.assertEqual(db.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0], 0)
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])

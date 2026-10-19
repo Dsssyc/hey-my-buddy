@@ -57,6 +57,26 @@ class LeadOwnedTests(WorkflowTestCase):
         self.finish_turn(board, claim, worker_id=worker, **extra)
         return board.call("workflow_get", {"runId": child["runId"]}), claim["claim"]
 
+    def test_standalone_lead_and_owned_execution_share_one_console_and_record_group(self):
+        from hey_my_buddy.blackboard.tasks.session_content import identity
+        from hey_my_buddy.private_dirs import session_record_path
+
+        board = self.board()
+        lead, lead_claim = self.lead(board)
+        owned = self.owned(board, lead_claim)
+        _view, owned_claim = self.finish_owned(board, owned)
+        group = 'run:' + lead['runId']
+        for claim in (lead_claim, owned_claim):
+            task_id, attempt_id = claim['task']['taskId'], claim['attempt']['attemptId']
+            self.assertEqual(identity(board.store, task_id, attempt_id)['group_id'], group)
+            self.assertEqual(claim['sessionRecordPath'],
+                             str(session_record_path(board.directory, group, attempt_id)))
+        groups = board.call('macro_task_list', {})['macroTasks']
+        self.assertEqual([row['macroTaskId'] for row in groups], [group])
+        rows = board.call('macro_task_timeline', {'macroTaskId': group})['rows']
+        self.assertEqual({row['runId'] for row in rows}, {lead['runId'], owned['runId']})
+        self.assertFalse(session_record_path(board.directory, 'run:' + owned['runId'], 'unused').parent.exists())
+
     def test_submit_records_run_turn_macro_and_source_in_one_admission(self):
         board = self.board()
         lead, claim = self.lead(board, macroTask={"title": "Grouped work"})

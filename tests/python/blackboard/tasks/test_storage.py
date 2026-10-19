@@ -14,21 +14,22 @@ from support import BoardTestCase
 class StorageTests(BoardTestCase):
     def test_session_record_inventory_is_disjoint_protected_and_does_not_follow_links(self):
         board = self.board()
-        first = private_dirs.attempt_root(board.directory, 'codex', 'orphan', 'first') / 'session.jsonl'
-        second = private_dirs.attempt_root(board.directory, 'codex', 'orphan', 'second') / 'session.jsonl'
+        first = private_dirs.session_record_path(board.directory, 'run:orphan', 'first')
+        second = private_dirs.session_record_path(board.directory, 'run:orphan', 'second')
         for record, data in ((first, b'first record'), (second, b'second record')):
             private_dirs.ensure_private_dir(record.parent)
             record.write_bytes(data)
-        other = first.parent / 'receipt.json'
+        other = private_dirs.attempt_root(board.directory, 'codex', 'orphan', 'first') / 'receipt.json'
+        private_dirs.ensure_private_dir(other.parent)
         other.write_bytes(b'receipt')
         outside = self.directory / 'outside-session'
         outside.write_bytes(b'private outside content')
-        linked = private_dirs.attempt_root(board.directory, 'codex', 'orphan', 'linked') / 'session.jsonl'
+        linked = private_dirs.session_record_path(board.directory, 'run:linked', 'linked')
         private_dirs.ensure_private_dir(linked.parent)
         linked.symlink_to(outside)
         original = storage.tree_info
         def growing(path, **kwargs):
-            if path == first:
+            if path == first.parent:
                 with first.open('ab') as stream:
                     stream.write(b' appended while inspecting')
             return original(path, **kwargs)
@@ -38,17 +39,16 @@ class StorageTests(BoardTestCase):
         records = [row for row in report['candidates'] if row['category'] == 'session-records']
         parent = next(row for row in report['candidates'] if row['category'] == 'harnesses')
         category = next(row for row in report['categories'] if row['id'] == 'session-records')
-        self.assertEqual({row['attemptId'] for row in records}, {'first', 'second'})
+        self.assertEqual({row['groupId'] for row in records}, {'run:orphan', 'run:linked'})
         self.assertEqual(category['bytes'], first.stat().st_size + second.stat().st_size)
         self.assertEqual(parent['bytes'], other.stat().st_size)
         self.assertEqual(category['reclaimableBytes'], 0)
         self.assertTrue(all(row['reasons'] == ['macro-task-deletion'] and not row['eligible'] for row in records))
-        self.assertFalse(parent['eligible'])
         self.assertEqual(outside.read_bytes(), b'private outside content')
         private_dirs.remove_tree(private_dirs.micro_task_root(board.directory, 'codex', 'orphan'))
         with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)):
-            self.assertFalse(any(row['category'] == 'session-records'
-                                 for row in storage.inspect(board.store)['candidates']))
+            self.assertTrue(any(row['category'] == 'session-records'
+                                for row in storage.inspect(board.store)['candidates']))
 
     def _age_runtime_entry(self, path):
         expired = storage.time.time() - storage.GRACE_SECONDS - 60

@@ -13,6 +13,16 @@ from support import BoardTestCase
 
 
 class PrivateDirectoryTests(BoardTestCase):
+    def test_session_paths_follow_group_identity_and_reject_escaping_components(self):
+        self.assertEqual(private_dirs.session_record_path(self.directory, 'macro', 'attempt'),
+                         self.directory / 'sessions/macro-tasks/macro/attempt.jsonl')
+        self.assertEqual(private_dirs.session_record_path(self.directory, 'run:micro', 'attempt'),
+                         self.directory / 'sessions/micro-tasks/micro/attempt.jsonl')
+        for group, attempt in (('../escape', 'attempt'), ('run:../escape', 'attempt'),
+                               ('macro', '../attempt'), ('run:', 'attempt')):
+            with self.subTest(group=group, attempt=attempt), self.assertRaises(BoardError):
+                private_dirs.session_record_path(self.directory, group, attempt)
+
     def test_remove_tree_deletes_links_even_when_the_exact_link_is_kept(self):
         outside = private_dirs.ensure_private_dir(self.directory / 'outside-kept-links')
         sentinel = outside / 'sentinel'
@@ -22,23 +32,23 @@ class PrivateDirectoryTests(BoardTestCase):
         for kind, target, directory_link in targets:
             with self.subTest(kind=kind):
                 root = private_dirs.ensure_private_dir(self.directory / ('private-link-' + kind))
-                link = root / 'session.jsonl'
+                link = root / 'evidence.json'
                 link.symlink_to(target, target_is_directory=directory_link)
                 self.assertTrue(private_dirs.remove_tree(root, keep=frozenset({link})))
                 self.assertFalse(root.exists())
                 self.assertFalse(link.is_symlink())
                 self.assertEqual(sentinel.read_text(), 'retained outside target')
 
-    def test_remove_tree_keeps_the_exact_session_file_without_retaining_same_named_directories(self):
+    def test_remove_tree_keeps_the_exact_file_without_retaining_same_named_directories(self):
         root = private_dirs.ensure_private_dir(self.directory / 'private-records')
         recorded = private_dirs.ensure_private_dir(root / 'attempts' / 'recorded')
-        session = recorded / 'session.jsonl'
-        session.write_text('retained session\n')
+        session = recorded / 'evidence.json'
+        session.write_text('retained evidence\n')
         (recorded / 'settings.json').write_text('remove configuration')
-        same_name = private_dirs.ensure_private_dir(root / 'attempts' / 'directory' / 'session.jsonl')
-        (same_name / 'unrelated.txt').write_text('a directory is not a session record')
+        same_name = private_dirs.ensure_private_dir(root / 'attempts' / 'directory' / 'evidence.json')
+        (same_name / 'unrelated.txt').write_text('a directory is not an evidence file')
         self.assertFalse(private_dirs.remove_tree(root, keep=frozenset({session})))
-        self.assertEqual(session.read_text(), 'retained session\n')
+        self.assertEqual(session.read_text(), 'retained evidence\n')
         self.assertEqual(list(recorded.iterdir()), [session])
         self.assertEqual(list((root / 'attempts').iterdir()), [recorded])
         self.assertFalse(same_name.exists())

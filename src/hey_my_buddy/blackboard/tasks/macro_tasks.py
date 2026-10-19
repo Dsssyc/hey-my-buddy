@@ -42,15 +42,31 @@ _CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,512}$")
 LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter"})
 TIMELINE_PARAMETERS = frozenset({"macroTaskId", "limit", "query", "filter"})
 
-#: Every task of a micro task tree with its group key. A helper inherits
-#: its root's macro task, a routing decision belongs to the run it routed, and a root
-#: without a macro task forms its own ``run:<rootRunId>`` group. Plain execution
-#: records (no micro-task root) belong to no group.
+#: Group ownership follows helpers and Lead-owned runs to their outermost owner.
+RUN_GROUPS_SQL = """
+WITH RECURSIVE parents(run_id, parent_run_id) AS (
+    SELECT child_task_id, parent_run_id FROM workflow_children
+    UNION SELECT owned_run_id, lead_run_id FROM workflow_lead_tasks
+),
+lineage(run_id, ancestor_id) AS (
+    SELECT run_id, run_id FROM workflow_runs
+    UNION
+    SELECT lineage.run_id, parents.parent_run_id
+      FROM lineage JOIN parents ON parents.run_id = lineage.ancestor_id
+)
+SELECT lineage.run_id,
+       COALESCE(ancestor.macro_task_id, 'run:' || ancestor.run_id) AS group_id
+  FROM lineage
+  JOIN workflow_runs ancestor ON ancestor.run_id = lineage.ancestor_id
+ WHERE NOT EXISTS (SELECT 1 FROM parents WHERE parents.run_id = lineage.ancestor_id)
+"""
+
+#: Every grouped execution, including helper and Router tasks. Plain execution
+#: records without a micro task root belong to no group.
 MEMBERS_SQL = f"""
-SELECT h.*,
-       COALESCE(root_group.macro_task_id, 'run:' || h.root_run_id) AS group_id
+SELECT h.*, ownership.group_id
   FROM ({micro_task.TASK_HISTORY_SQL}) AS h
-  JOIN workflow_runs root_group ON root_group.run_id = h.root_run_id
+  JOIN ({RUN_GROUPS_SQL}) ownership ON ownership.run_id = h.root_run_id
 """
 
 #: Disjoint micro task states, in the display priority 待决定 > 进行中 > 待验收 > 已结束.
@@ -163,7 +179,8 @@ def record_activity(connection, task_id: str | None, seq: int, at: str) -> None:
         "WITH RECURSIVE owners(run_id) AS ("
         " SELECT run_id FROM workflow_runs WHERE run_id=?"
         " UNION SELECT r.run_id FROM workflow_routes r JOIN decision_requests d USING(decision_id) WHERE d.task_id=?"
-        " UNION SELECT c.parent_run_id FROM workflow_children c JOIN owners o ON c.child_task_id=o.run_id)"
+        " UNION SELECT c.parent_run_id FROM workflow_children c JOIN owners o ON c.child_task_id=o.run_id"
+        " UNION SELECT l.lead_run_id FROM workflow_lead_tasks l JOIN owners o ON l.owned_run_id=o.run_id)"
         " UPDATE workflow_runs SET activity_seq=?,activity_at=? WHERE run_id IN (SELECT run_id FROM owners)",
         (task_id, task_id, seq, at),
     )
@@ -319,11 +336,11 @@ def macro_task_list(store, params: dict) -> dict:
     groups_sql = f"""
 WITH members AS MATERIALIZED (
     SELECT base.*, {selected_match} AS matching
-      FROM (SELECT {narrow}, COALESCE(root.macro_task_id, 'run:' || h.root_run_id) AS group_id,
+      FROM (SELECT {narrow}, ownership.group_id,
                    h.base_matching
               FROM (SELECT h.*, CASE WHEN {base_match} THEN 1 ELSE 0 END AS base_matching
                       FROM ({memo.THIN_HISTORY_SQL}) h) h
-              JOIN workflow_runs root ON root.run_id=h.root_run_id) base
+              JOIN ({RUN_GROUPS_SQL}) ownership ON ownership.run_id=h.root_run_id) base
 ),
 matched AS (
     SELECT group_id, MAX(base_matching) AS all_match, MAX(matching) AS selected_match,

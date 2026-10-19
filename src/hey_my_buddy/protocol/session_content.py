@@ -1,4 +1,4 @@
-"""The ACP v1 subset written to an attempt's session.jsonl.
+"""The ACP v1 subset written to an attempt's grouped JSONL session record.
 
 These are display facts, independent of activity, settlement and stop evidence.
 Decode JSON with the shared strict decoder before validating at a read boundary.

@@ -202,7 +202,8 @@ class ExecutionScheduler:
             failure = None
             with self._lock:
                 try:
-                    handle = launch_execution(claim, self.store.directory, nonce)
+                    handle = launch_execution(claim, self.store.directory, nonce,
+                                              session_record_path=claim["sessionRecordPath"])
                 except Exception as error:
                     failure = error
                     handle = getattr(error, "execution_handle", None)

@@ -38,6 +38,7 @@ class CodexContinuationTests(WorkflowTestCase):
             patch_env.start()
             self.addCleanup(patch_env.stop)
             context = ExecutionContext(task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
+                                       session_record_path=str(self.directory / f"session-{attempt['attemptId']}.jsonl"),
                                        generation=attempt["generation"], spec=claim["task"]["spec"],
                                        directory=self.directory / attempt["attemptId"], runtime={},
                                        environment=environment, turn=claim["turn"])

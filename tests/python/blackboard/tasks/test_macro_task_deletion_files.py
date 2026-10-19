@@ -29,8 +29,6 @@ class DeletionFileTests(BoardTestCase):
                                'attempt_id':'attempt-'+name} for name in ('claude','zcode','dsh')]
         paths = []
         for name in ('codex','claude','zcode','dsh'):
-            paths.append(self.file(private_dirs.attempt_root(board.directory, name, 'owned', 'attempt-' + name)
-                                   / 'session.jsonl', {'display': True}))
             for root in (private_dirs.micro_task_root(board.directory,name,'owned'),
                          board.directory / 'harnesses' / name / hashlib.sha256(b'owned').hexdigest()):
                 paths.append(self.file(root / 'native' / 'payload',{'private':True}))
@@ -85,6 +83,37 @@ from blackboard.tasks import test_workflow as workflow_fixtures
 
 class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
     closed = engine_fixtures.MacroTaskDeletionTests.closed
+
+    def test_session_group_removal_is_idempotent_for_macro_and_independent_micro(self):
+        for macro in (True, False):
+            with self.subTest(macro=macro):
+                board = self.board()
+                run = self.closed(board, 'session-delete-' + str(macro),
+                                  **({'macro_task': 'Session deletion'} if macro else {}))
+                target = run.get('macroTaskId') or 'run:' + run['runId']
+                record = private_dirs.session_record_path(board.directory, target, 'attempt')
+                record.parent.mkdir(parents=True)
+                record.write_bytes(b'private session')
+                with patch.object(deletion, '_delete_workspaces', return_value=[]):
+                    result = deletion.delete(board.store, target, 1)
+                self.assertEqual(result['state'], 'deleted')
+                self.assertFalse(record.parent.exists())
+                self.assertTrue(deletion.delete(board.store, target, 1)['duplicate'])
+
+    def test_session_group_link_is_reported_without_following_target(self):
+        board = self.board()
+        run = self.closed(board, 'linked-session-group', macro_task='Linked session group')
+        group = private_dirs.session_group_root(board.directory, run['macroTaskId'])
+        outside = self.directory / 'unrelated-session-content'
+        outside.mkdir()
+        (outside / 'valuable').write_text('untouched')
+        group.parent.mkdir(parents=True)
+        group.symlink_to(outside, target_is_directory=True)
+        with patch.object(deletion, '_delete_workspaces', return_value=[]):
+            result = deletion.delete(board.store, run['macroTaskId'], 1)
+        self.assertEqual(result['state'], 'deleted')
+        self.assertEqual(result['skipped'][0]['objectKind'], 'session-records')
+        self.assertEqual((outside / 'valuable').read_text(), 'untouched')
 
     def test_private_root_partial_removal_retries_from_real_files(self):
         board = self.board()

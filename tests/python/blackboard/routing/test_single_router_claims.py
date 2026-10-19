@@ -272,7 +272,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         context = ExecutionContext(task_id=request['runId'], attempt_id=claim['attempt']['attemptId'],
             generation=claim['attempt']['generation'], spec=claim['task']['spec'],
             directory=board.directory / 'adapter-unit', runtime={},
-            environment={**os.environ, 'HMB_STATE_DIR': str(board.directory)}, decision_input=claim['decisionInput'])
+            environment={**os.environ, 'HMB_STATE_DIR': str(board.directory)}, decision_input=claim['decisionInput'], session_record_path=None)
         native = DecisionAdapter()
         self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
         self.assertTrue(native.available()[0])
@@ -295,7 +295,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         document = self.decision(board, request['decisionId'])['input']
         context = ExecutionContext(task_id='task', attempt_id='attempt', generation=1,
             spec={'adapter': 'decision'}, directory=board.directory / 'blocked-adapter', runtime={},
-            environment={'HMB_STATE_DIR': str(board.directory)}, decision_input=document)
+            environment={'HMB_STATE_DIR': str(board.directory)}, decision_input=document, session_record_path=None)
         with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
             'eligible': False, 'reason': {'code': 'harness.readonly-worker-carrier-unimplemented',
                                           'params': {'harness': 'dsh'}}}):

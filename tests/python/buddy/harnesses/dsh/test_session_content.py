@@ -7,7 +7,8 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.dsh import native_run
 from hey_my_buddy.buddy.harnesses.dsh.session_content import DshSessionProjector
-from hey_my_buddy.buddy.harnesses.session_record import SessionRecord, SessionRecordWriteError
+from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+from buddy.harnesses.session_record_support import notifications, updates
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
 from hey_my_buddy.buddy.roles.run_observers import worker_observer
 from buddy.harnesses.dsh.test_native_run import NativeRunCase
@@ -135,6 +136,30 @@ class ProjectorTests(unittest.TestCase):
 
 
 class SessionRunTests(NativeRunCase):
+    def test_projector_exceptions_preserve_completed_native_facts(self):
+        self.extra_agent_args = ["--prompt-mode", "final"]
+        for method in ("__init__", "start_prompt", "observe_notification", "close"):
+            with self.subTest(method=method):
+                with mock.patch.object(DshSessionProjector, method, side_effect=KeyError("display projection")):
+                    result = native_run.run(self.fast_request("prompt"), observer=lambda _: FEEDBACK_CONTINUE,
+                                            services=None, cancelled=lambda: False)
+                self.assertEqual(result.end.status, "ok", result.end.message)
+                self.assertEqual(result.session_record_failure.params.category, "KeyError")
+                self.assertIsNotNone(result.value)
+                self.assertTrue(result.evidence_refs)
+                self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
+    def test_no_record_path_skips_projection_and_keeps_result_and_stop(self):
+        request = self.fast_request('router input').model_copy(update={'session_record_path': None})
+        with mock.patch.object(native_run, 'DshSessionProjector') as projector:
+            result = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE,
+                                    services=None, cancelled=lambda: False)
+        projector.assert_not_called()
+        self.assertEqual(result.end.status, 'ok', result.end.message)
+        self.assertIsNotNone(result.value)
+        self.assertIsNone(result.session_record_failure)
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+
     def setUp(self):
         super().setUp()
         patcher = mock.patch.dict(os.environ, {'HMB_STATE_DIR': str(self.base / 'state')})
@@ -142,10 +167,10 @@ class SessionRunTests(NativeRunCase):
         self.addCleanup(patcher.stop)
 
     def record(self, request):
-        return SessionRecord(self.base / 'state', 'dsh', request.identity.task_id, request.identity.attempt_id)
+        return SessionRecord(request.session_record_path, request.identity.attempt_id)
 
     def events(self, request):
-        return [json.loads(line)['update'] for line in self.record(request).path.read_text().splitlines()[1:]]
+        return updates(self.record(request).path)
 
     def test_router_records_only_its_root_and_same_attempt_runs_append(self):
         self.extra_agent_args = ['--prompt-mode', 'final', '--emit-foreign-chunk']
@@ -153,17 +178,16 @@ class SessionRunTests(NativeRunCase):
         result = native_run.run(request, observer=lambda _f: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, 'ok', result.end.message)
         path = self.record(request).path
-        before = path.read_bytes()
-        self.assertIn('router input', before.decode())
-        self.assertNotIn('foreign', before.decode())
+        before = notifications(path)
+        self.assertIn('router input', json.dumps(before))
+        self.assertNotIn('foreign', json.dumps(before))
         second = request.model_copy(update={'private_state': request.private_state.model_copy(update={
             'invocation_root': str(self.base / 'second-invocation')})})
         result = native_run.run(second, observer=lambda _f: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, 'ok', result.end.message)
-        after = path.read_bytes()
-        self.assertTrue(after.startswith(before))
+        after = notifications(path)
+        self.assertEqual(after[:len(before)], before)
         self.assertGreater(len(after), len(before))
-        self.assertEqual(after.count(b'"projectionVersion"'), 1)
         events = self.events(request)
         self.assertEqual([event['sessionUpdate'] for event in events],
                          ['user_message_chunk', 'agent_message_chunk'] * 2)
@@ -197,12 +221,14 @@ class SessionRunTests(NativeRunCase):
         append = SessionRecord.append
         def fail_late(record, update):
             if getattr(update, 'tool_call_id', None) == 'call_late_1':
-                raise SessionRecordWriteError()
+                record._failed(OSError('late record write failed'))
+                return
             return append(record, update)
         with mock.patch.object(SessionRecord, 'append', fail_late):
             result = native_run.run(self.fast_request('prompt'), observer=lambda _f: FEEDBACK_CONTINUE,
                                     services=None, cancelled=lambda: False)
-        self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+        self.assertEqual(result.end.status, 'ok')
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         self.assertIsNotNone(result.value)
         self.assertTrue(result.evidence_refs)
@@ -220,7 +246,7 @@ class SessionRunTests(NativeRunCase):
         self.extra_agent_args += ['--session-record', 'resume', '--replay-history']
         result = native_run.run(second, observer=worker_observer, services=bound.services, cancelled=lambda: False)
         self.assertEqual(result.end.status, 'ok', result.end.message)
-        content = self.record(second).path.read_text()
+        content = json.dumps(notifications(self.record(second).path))
         self.assertNotIn("the previous turn's message", content)
         self.assertNotIn('call_old_1', content)
         self.assertIn('hey_my_buddy_finish_turn', content)
@@ -260,9 +286,10 @@ class SessionRunTests(NativeRunCase):
     def test_write_failure_still_builds_the_run_and_stop_result(self):
         self.extra_agent_args = ['--prompt-mode', 'final']
         request = self.fast_request('prompt')
-        with mock.patch.object(SessionRecord, 'append', side_effect=SessionRecordWriteError()):
+        with mock.patch.object(SessionRecord, '_open', side_effect=OSError('controlled write failure')):
             result = native_run.run(request, observer=lambda _f: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
-        self.assertEqual((result.end.status, result.end.reason_code), ('error', 'session-record-write-failed'))
+        self.assertEqual(result.end.status, 'ok')
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
         self.assertTrue(result.model_started)
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         self.assertIsNotNone(result.native_identity.session_id)
@@ -273,11 +300,12 @@ class SessionRunTests(NativeRunCase):
         close = SessionRecord.close
         def fail_close(record):
             close(record)
-            raise SessionRecordWriteError()
+            record._failed(OSError('controlled close failure'))
         with mock.patch.object(SessionRecord, 'close', fail_close):
             result = native_run.run(self.fast_request('prompt'), observer=lambda _f: FEEDBACK_CONTINUE,
                                     services=None, cancelled=lambda: False)
-        self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+        self.assertEqual(result.end.status, 'ok')
+        self.assertEqual(result.session_record_failure.code, 'session-record-write-failed')
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         self.assertIsNotNone(result.value)
 

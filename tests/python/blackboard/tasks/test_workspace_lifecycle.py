@@ -387,6 +387,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             spec={**BUDDY, "cwd": second_manifest["path"], "task": "second turn", "expectedSeconds": 30},
             directory=self.directory / "cleared-refs-turn", runtime={},
             environment={"HMB_STATE_DIR": str(self.directory)}, turn=second_claim["claim"]["turn"],
+            session_record_path=None,
         )
         turn_io.verify_workspace(context)
         self.assertEqual(context.effective_workspace, second_manifest)
@@ -2277,6 +2278,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             spec={**BUDDY, "cwd": original["path"], "task": "private identity seam", "expectedSeconds": 30},
             directory=self.directory / "native-seam", runtime={},
             environment={"HMB_STATE_DIR": str(self.directory)}, turn=claimed["claim"]["turn"],
+            session_record_path=None,
         )
         # These role functions verify the retained input without a coordinator context.
         turn_io.verify_workspace(context)
