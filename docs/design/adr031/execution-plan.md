@@ -54,7 +54,7 @@ M2 验收时带给 M3 的几件（服务的问题看不到、两种事件、`exe
 
 ## 落在这块底座上的待办
 
-- **Codex CLI 与 Claude Code CLI 的 Worker 接收问询**（[Router 三个面与 Lead 执行计划](../router-planes-and-lead-plan.md)的 31–32）：问询经执行与黑板之间的通道走，M2 之后另做，先证原生的路径。已完成（2026-10-16）：Codex CLI 经 `turn/steer` 送达、app-server 的客户端工具答复，Claude Code CLI 经流式输入送达、会话 MCP 答复，见[验收记录](../../acceptance/adr031/in-turn-inquiry.md)。
+- **Codex CLI 与 Claude Code CLI 的 Worker 接收问询**（[Router 三个面与 Lead 执行计划](../adr021/router-planes-and-lead-plan.md)的 31–32）：问询经执行与黑板之间的通道走，M2 之后另做，先证原生的路径。已完成（2026-10-16）：Codex CLI 经 `turn/steer` 送达、app-server 的客户端工具答复，Claude Code CLI 经流式输入送达、会话 MCP 答复，见[验收记录](../../acceptance/adr031/in-turn-inquiry.md)。
 - **命令回答的有界保存与心跳事件的膨胀**（同一计划 36–37）：续租已经删掉，剩下的周期性事件见 [M2 的说明](service-scheduling-notes.md)的“周期事件与检查”一节；有界保存随后单做。
 
 ## 没有验证的

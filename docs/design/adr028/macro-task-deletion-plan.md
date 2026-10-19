@@ -1,6 +1,6 @@
 # 宏任务删除：执行计划（第 2 版）
 
-2026-10-17，按 Host 与独立模型对第 1 版的审查意见修订；源码基点仍为 `20406ee6`，schema 24、软件 0.45.1、`CONTRACT_VERSION=0.45.0`。本次只写计划，未实现、演练或安装。依据为 [ADR-028](../../decisions/028-macro-task-deletion.md)、[AGENTS.md](../../../AGENTS.md) Invariants、[第 4 步批次二](../step4-remaining-plan.md)；开发者本日新决定以本轮 Host 输入为准：L7 之前不保留结果事实，先打删除标记、再删物理内容、最后事务删记录。下文“拟”表示实施方案；源码路径从 `src/hey_my_buddy/` 起算。
+2026-10-17，按 Host 与独立模型对第 1 版的审查意见修订；源码基点仍为 `20406ee6`，schema 24、软件 0.45.1、`CONTRACT_VERSION=0.45.0`。本次只写计划，未实现、演练或安装。依据为 [ADR-028](../../decisions/028-macro-task-deletion.md)、[AGENTS.md](../../../AGENTS.md) Invariants、[第 4 步批次二](../adr029/step4-remaining-plan.md)；开发者本日新决定以本轮 Host 输入为准：L7 之前不保留结果事实，先打删除标记、再删物理内容、最后事务删记录。下文“拟”表示实施方案；源码路径从 `src/hey_my_buddy/` 起算。
 
 ## 1. 删除集合与表
 

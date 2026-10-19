@@ -311,7 +311,7 @@ Buddy 页的目录照新稿重做成一个视图：按 harness 分节，账户�
 
 ## 目录的交互修改与遗漏核对（2026-10-12）
 
-开发者看过上一批的真实页面之后指出的交互问题，连同一次对上一批重做有没有遗漏的核对：开合与颜色的过渡、节头的两个手势、选中不被悬停盖掉、控制带在窄宽度下的折行、英文界面里的中文，后来又加上把实心三角换成细线的折角。一个微任务做完，四个回合，Claude Code 的 Worker（claude-sonnet-5-5 / high），在已安装的 0.29.0 上运行。核对的结果在 [console-frontend-catalogue-audit.md](../console-frontend-catalogue-audit.md)。
+开发者看过上一批的真实页面之后指出的交互问题，连同一次对上一批重做有没有遗漏的核对：开合与颜色的过渡、节头的两个手势、选中不被悬停盖掉、控制带在窄宽度下的折行、英文界面里的中文，后来又加上把实心三角换成细线的折角。一个微任务做完，四个回合，Claude Code 的 Worker（claude-sonnet-5-5 / high），在已安装的 0.29.0 上运行。核对的结果在 [console-frontend-catalogue-audit.md](console-frontend-catalogue-audit.md)。
 
 ### 核对
 

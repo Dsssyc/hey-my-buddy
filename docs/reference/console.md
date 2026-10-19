@@ -90,7 +90,7 @@ Execution and routing fragments carry per-attempt `tokenUsage`; the console disp
 
 ## B-stage presentation (0.23.0)
 
-Explanation copy follows the numbered [227-item audit](../acceptance/console-copy-b.md): actionable errors, destructive confirmation and short factual status remain; routing data flow and secondary details live in `?` help. Micro task records have no recurring read-only or workflow disclaimer. Cancellation displays its recorded actor and `note`, including “在控制台停止” for a console actor and an unknown-initiator label when attribution is absent; it never infers an actor from a termination code or source Host attribution.
+Explanation copy follows the numbered [227-item audit](../acceptance/adr029/console-copy-b.md): actionable errors, destructive confirmation and short factual status remain; routing data flow and secondary details live in `?` help. Micro task records have no recurring read-only or workflow disclaimer. Cancellation displays its recorded actor and `note`, including “在控制台停止” for a console actor and an unknown-initiator label when attribution is absent; it never infers an actor from a termination code or source Host attribution.
 
 Buddy configuration displays native billing and local `readOnlyStructured`/`systemSandbox` facts. Paid review certificates, the verification picker and reverify action are removed. Native checks remain explicitly authorized development probes; this panel starts none.
 

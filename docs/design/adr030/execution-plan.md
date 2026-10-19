@@ -8,7 +8,7 @@
 
 - **独立账户。** 命令六个：`account-status`、`account-set`、`account-login`、`account-cancel`、`account-logout`、`account-remove`。黑板一侧是 `blackboard/catalog/` 下的 `accounts.py`（385 行：来源的选择、把账户冻结到一次执行、凭据是否仍是当时的那一份、账户目录与执行环境）、`account_operations.py`（279 行：账户操作与它的预留记录）、`account_keystore.py`（160 行：钥匙串）；buddy 一侧是 `buddy/harnesses/` 下的 `account_native.py`（234 行：私有主目录、写密钥、登录进程）与 `account_integrations.py`（61 行）。它没有自己的表，四类记录放在 `meta` 里：`account-selection:<adapter>`、`account-credential:[…]`、`account-mutation:[…]`、`attempt-account:<attemptId>`。引用它的有服务入口、健康检查、模型目录、微任务的流程、额度路由、原生观察、执行的准备与 Worker 运行时；提到账户的测试文件 75 个，专门的 5 个。控制台里是“管理账户”的对话框与它的数据层。
 - **隔离。** Claude Code：`--setting-sources ""`、`--strict-mcp-config` 加一份空的 `--mcp-config`、`--safe-mode`，沙盒与权限经 `--settings` 传，另有 `--permission-mode`、`--permission-prompt-tool`、`--tools`；Router 的调用带 `--no-session-persistence`。Codex：子进程的 `CODEX_HOME` 与 `HOME` 指向私有目录，登录文件链接进去（`codex/home.py`，135 行）；沙盒与审批经 app-server 的 `sandbox`、`approvalPolicy` 传。ZCode：两个供应方文件的环境变量指向快照，`ZCODE_HOME` 与数据、存储、会话库的路径指向私有的存放处。DSH：`DSH_HOME` 与 `HOME` 指向私有目录，权限经 `DSH_PERMISSION_MODE` 传。
-- **供应方与登录方式的限制。** [拒绝清单](../harness-refusal-inventory.md) D 类 16 处（Claude Code 8、Codex 4、ZCode 4），另有混在别的条件里的几处。
+- **供应方与登录方式的限制。** [拒绝清单](harness-refusal-inventory.md) D 类 16 处（Claude Code 8、Codex 4、ZCode 4），另有混在别的条件里的几处。
 - **过严的检查。** 清单 F 类 17 处（固定的原生形状）、G 类 5 处（“未经证实”）、一个条件混着两件事的约 26 处、与边界重复应当合并的 14 处。
 - **提示词。** 在 `buddy/roles/schema_worker.py` 与 `buddy/roles/worker_services.py` 两处拼装，都把 `turn_io.py` 的 `ASSISTANCE_HINTS` 放在任务文字之前；Router 的调用在 `router.py` 与 `router_input.py`。随运行时发布的资源登记在 `packaging/runtime-assets.json`。
 - **第 10 条已经成立。** 源码里对外的网络请求只有读取公开的模型资料一处（`blackboard/evaluation/model_facts.py`），没有向厂商查询额度或余额的调用。这一条不需要批次。
@@ -68,7 +68,7 @@
 
 ### 批次 4：过严的检查改成事实
 
-已于 2026-10-12 验收并合入整合分支，版本 0.31.0，已于同日安装（[安装记录](../../acceptance/installs/0.31.0.md)）；[验收记录](../../acceptance/adr030/batch4-host-review.md)。与下面写的不同的地方：做到各片时 Host 对照下游改了几处的处置，整批合入之后请的第二个审查者又查出几处放得太宽，都记在[拒绝清单](../harness-refusal-inventory.md)末尾的两节里。最后用的规则是一条：读不懂的是事实；读懂了并且与请求的不符，是拒绝；下游的判定依赖的那一项必须读得出来才算数。
+已于 2026-10-12 验收并合入整合分支，版本 0.31.0，已于同日安装（[安装记录](../../acceptance/installs/0.31.0.md)）；[验收记录](../../acceptance/adr030/batch4-host-review.md)。与下面写的不同的地方：做到各片时 Host 对照下游改了几处的处置，整批合入之后请的第二个审查者又查出几处放得太宽，都记在[拒绝清单](harness-refusal-inventory.md)末尾的两节里。最后用的规则是一条：读不懂的是事实；读懂了并且与请求的不符，是拒绝；下游的判定依赖的那一项必须读得出来才算数。
 
 - **范围。** F 类 17 处与 G 类 5 处不再拒绝，改为记进回合的证据；混着两件事的约 26 处按清单拆开，各按各的办；与边界重复的 14 处并到边界。收尾结果的两个摘要数组超限时，保留做完的工作，截到上限并记下“被截断”这个事实，不把整个回合判为失败。Router 的快速模式用了工具、审阅模式写了东西，由服务事后按工具事件判定这次调用不算数（ADR-030 第 9 条）。
 - **测试。** 每一处由拒绝变成事实的，都有一条测试证明回合继续并且事实被记下；仍然拒绝的七类各有测试守着。

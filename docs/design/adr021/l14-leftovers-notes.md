@@ -44,7 +44,7 @@
 
 `apps/console/src/policy.ts`：3 处，将注释中的执行能力 token 与原生 harness 说明写成 `execution:<harness>`、executable harness 与 harness；实际能力 token 和代码不变。
 
-保留“委派”8 处，均在“委派方”“原始委派方”“全部委派方”“未记录委派方”等表述中，表示由谁委派，分布于 Tasks.tsx（3 处）、TaskDetails.tsx（2 处）、MacroTaskList.tsx（2 处）与 console-data.ts（1 处）；非测试源码已无“工作目标”与名词“委派”。除上述演示数据旧名外，未发现需改写的英文界面 objective、goal、名词 delegation 或 profile；历史设计文件名 `objective-browser-0.15.1.md` 保留，像素布局的 adapter 仍表示连接层，执行记录的 adapter 字段保留。
+保留“委派”8 处，均在“委派方”“原始委派方”“全部委派方”“未记录委派方”等表述中，表示由谁委派，分布于 Tasks.tsx（3 处）、TaskDetails.tsx（2 处）、MacroTaskList.tsx（2 处）与 console-data.ts（1 处）；非测试源码已无“工作目标”与名词“委派”。除上述演示数据旧名外，未发现需改写的英文界面 objective、goal、名词 delegation 或 profile；历史设计文件名 `0.15.1.md` 保留，像素布局的 adapter 仍表示连接层，执行记录的 adapter 字段保留。
 
 将 macro-task-fixtures.ts 的参考路径改为 `docs/reference/macro-tasks.md`；preview-contract.test.ts 的三处注释改指 `tests/python/cli/test_host_preview.py`。这些路径修正另计，不纳入 115 处术语数。钉住新显示文字、演示标题与可访问名称的前端断言已同步更新。
 

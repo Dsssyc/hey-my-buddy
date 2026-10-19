@@ -8,13 +8,13 @@
 
 Codex 的执行计划经 Host 审阅后，开发者同日再定五件事：黑板一侧增加 `catalog/`；两侧共用的基础模块留在根包下，不进 `protocol/`；确认 C-Two 的一个进程可以同时注册自己的服务并连接别的服务，Worker 运行时接收服务请求的方式据此定为自己注册端点；执行计划内的原生核对与冒烟一并授权，不逐次询问；尽可能并行。开发者随后明确：并行不取消 Host 的验收，每一步完成后必须停下等验收。第 9 条"已写明的差异按计划进行、超出的先停下"一处是 Host 对开发者意思的转述，已告知开发者，未收到异议。DSH 的 ACP 模式与 C-Two 临时端点两项可行性核对于同日完成并经 Host 验收，第 11、13 条按核对结果改写。第零步（代码目录）于 2026-10-04 完成并经 Host 验收，见[验收记录](../acceptance/adr025/step0-host-review.md)。第一步（公共的启动与收集、角色调用点、内部格式）与 DSH 的 ACP 客户端于 2026-10-05 经 Host 验收，见[验收记录](../acceptance/adr025/step1-host-review.md)；此时四个 harness 仍走原来的载体，新格式还没有使用方。顺序随之调整：第二步先单独做 ZCode，由它验证这套格式，走通后再并行接入其余三个 harness。第二步（ZCode）于 2026-10-06 经 Host 验收，见[验收记录](../acceptance/adr025/step2-host-review.md)：ZCode 的 Worker 回合与快速路由已经过登记的运行模块，旧入口已删除；真实模型只验证过一次无工具运行。第三步（Codex 与 Claude Code）与第四步（DSH 改用 ACP，删除 Node 集成）于 2026-10-07 经 Host 验收，见[验收记录](../acceptance/adr025/step3-4-host-review.md)：四个 harness 都经登记的运行模块运行，旧的 Node 运行器、插件与 YAML 桥已经删除；Claude Code 的回合只用模拟的 CLI 验证过，已安装的 CLI 上只做过一次不调用模型的发现。验收留下的清理事项排在第五步开头，先于实时通道的改动完成，由 Host 在第五步验收时一并核对。第五步（实时通道换成 C-Two）与这批清理于 2026-10-07 经 Host 验收，见[验收记录](../acceptance/adr025/step5-host-review.md)：两套问询套接字与活动信息的文件转报已经删除，服务经持有执行的 Worker 运行时转达；契约版本因新增两个内部操作变为 0.29.0，schema 不变。
 
-五步至此都已验收，并于 2026-10-11 随 0.29.0 安装。与本文的目标相比还有两处没有做到：两侧之间互相引用的地方没有像第 12 条说的那样逐步消除，现在是 56 处，比第零步登记时还多 2 处；换通道之后 Codex 与 Claude Code 没有用真实的 CLI 运行过，全部核对只在 macOS 上做过。第五步验收留下的测试缺口与清理事项已于 2026-10-09 随 DSH 的原生续接一并处理并验收（[验收记录](../acceptance/dsh-native-resume-host-review.md)）。 2026-10-12：运行模块里隔离设置、私有主目录与供应方限制的部分已被 [ADR-030](030-harness-layer-scope.md) 取代，一个 harness 一个运行模块的结构不变；实现之前源码仍是原样。
+五步至此都已验收，并于 2026-10-11 随 0.29.0 安装。与本文的目标相比还有两处没有做到：两侧之间互相引用的地方没有像第 12 条说的那样逐步消除，现在是 56 处，比第零步登记时还多 2 处；换通道之后 Codex 与 Claude Code 没有用真实的 CLI 运行过，全部核对只在 macOS 上做过。第五步验收留下的测试缺口与清理事项已于 2026-10-09 随 DSH 的原生续接一并处理并验收（[验收记录](../acceptance/dsh-native-resume/host-review.md)）。 2026-10-12：运行模块里隔离设置、私有主目录与供应方限制的部分已被 [ADR-030](030-harness-layer-scope.md) 取代，一个 harness 一个运行模块的结构不变；实现之前源码仍是原样。
 
 ## 背景
 
 ADR-021 第二阶段为 DSH 与 ZCode 的审阅运行各新造了一条 Router 专用的运行通道，22 小时未能通过原生检查（经过见 ADR-021 的"考虑过的方案"）。开发者随后指出更根本的原因：代码里没有"让一个 harness 运行一次"的公共实现，新增一种用法时，顺着现有形状走就是每个 harness 再加一个入口。
 
-Host 把四个 harness 现有的运行路径各盘点了一遍，四份清单都带行号并经 Host 抽查：[Codex](../design/harness-run-inventory-codex.md)、[Claude Code](../design/harness-run-inventory-claude.md)、[ZCode](../design/harness-run-inventory-zcode.md)、[DSH](../design/harness-run-inventory-dsh.md)。清单依据的是第二阶段合入之前的源码。
+Host 把四个 harness 现有的运行路径各盘点了一遍，四份清单都带行号并经 Host 抽查：[Codex](../design/harness-run-inventory/codex.md)、[Claude Code](../design/harness-run-inventory/claude.md)、[ZCode](../design/harness-run-inventory/zcode.md)、[DSH](../design/harness-run-inventory/dsh.md)。清单依据的是第二阶段合入之前的源码。
 
 ### 现在的形状
 
