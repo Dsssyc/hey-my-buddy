@@ -149,6 +149,7 @@ export default {
   "timeout": "操作超时。",
   "workflow-routing-fenced": "本次路由的拥有权已失效。",
   "workspace-cleanup-started": "工作区清理已开始。",
+  "workspace-error": "工作区错误。",
   "workspace-ownership-lost": "工作区拥有权已失效。",
   "workspace-scope-violation": "工作区有超出授权范围的改动：{{paths}}；冲突 {{conflictIds}}。",
   "workspace.continuation-prepare-failed": "续接 {{continuationId}} 的工作区准备失败，需要 Host 处理。",

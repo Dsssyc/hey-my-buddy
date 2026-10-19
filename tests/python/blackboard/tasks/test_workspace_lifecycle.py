@@ -308,38 +308,122 @@ class LifecycleTestCase(RealWorkspaceTestCase):
             })
         self.assertEqual(raised.exception.code, "CONFLICT")
 
-    def test_retained_output_without_path_summary_uses_fixed_git_objects(self):
+    def test_thousand_file_rename_seals_patches_accepts_and_reclaims(self):
+        self.rename_lifecycle()
+
+    def test_receipt_larger_than_rpc_limit_seals_accepts_and_reclaims(self):
+        self.rename_lifecycle(long_paths=True)
+
+    def test_historical_truncated_seal_accepts_and_reclaims_without_rewriting(self):
+        self.rename_lifecycle(historical=True)
+
+    def rename_lifecycle(self, *, long_paths=False, historical=False):
+        file_count = 3000 if long_paths else 1000
+        prefix = Path(*(["x" * 220] * 3)) if long_paths else Path()
+        (self.repo / prefix).mkdir(parents=True, exist_ok=True)
+
+        def name(kind, number):
+            return prefix / f"{kind}-{number:04d}.txt"
+
+        for number in range(file_count):
+            (self.repo / name("old", number)).write_text(f"file {number}\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "rename input")
+        original = self.git("rev-parse", "HEAD").strip()
         board = self.board()
-        self.register(board)
-        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
-            board, request_id="old-path-summary"
+        submitted = board.call("workflow_submit", {
+            **BUDDY, "requestId": "thousand-renames", "hostId": "host-1", "task": "rename files",
+            "cwd": str(self.repo), "submissionToken": "t" * 32,
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
+        })
+        run_id = submitted["runId"]
+        self.controls[run_id] = submitted["control"]
+        claimed = self.claim(board, run_id)
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        checkout = Path(manifest["path"])
+        for number in range(file_count):
+            (checkout / name("old", number)).rename(checkout / name("new", number))
+        sealed = workspace_module.seal(self.directory, manifest, run_id,
+                                       claimed["claim"]["attempt"]["attemptId"])
+        expected = sorted(str(name(kind, number)).replace(os.sep, "/")
+                          for kind in ("new", "old") for number in range(file_count))
+        self.assertEqual(sealed["changedPaths"], expected)
+        self.assertEqual(sealed["snapshot"]["version"], 1)
+        self.assertNotIn("changedEntries", sealed["snapshot"])
+        self.assertNotIn("changedEntriesTruncated", sealed["snapshot"])
+        historical_bytes = {}
+        if historical:
+            changes = workspace_module._tree_changes(checkout, manifest["inputTree"], sealed["tree"])
+            sealed["snapshot"].pop("version")
+            sealed["snapshot"]["changedEntries"] = {
+                path: [changes[path]["mode"], changes[path]["oid"]] if changes[path] is not None else None
+                for path in expected[:512]}
+            sealed["snapshot"]["changedEntriesTruncated"] = True
+            sealed["snapshotSha256"] = workspace_module._sha(workspace_module._json(sealed["snapshot"]))
+            for record_name in ("pending.json", "output.json"):
+                record_path = Path(sealed["diffPath"]).with_name(record_name)
+                record_path.write_bytes(workspace_module._json(sealed))
+                historical_bytes[record_path] = record_path.read_bytes()
+        # Exercise both the sealed first-turn patch and the whole-task Git diff.
+        for base in (manifest["inputCommit"], original):
+            cumulative = workspace_module.cumulative_patch(manifest, sealed, base)
+            self.assertEqual(cumulative["changedPaths"], expected)
+            self.assertEqual(Path(cumulative["path"]).read_bytes(), Path(sealed["diffPath"]).read_bytes())
+        sealed["cumulativePatch"] = cumulative
+        report = workspace_module.integration_verify(
+            sealed, original_input=manifest, final_input=manifest, path=str(self.repo), ref="HEAD",
+            strategy="patch", before_commit=original,
         )
+        self.assertFalse(report["verified"])
+        self.assertEqual(len(report["differingPaths"]), file_count)
+        self.assertEqual(len(report["missingPaths"]), file_count)
+        self.assertEqual(len(report["unrecordedPaths"]), 2 * file_count)
+        receipt_sizes = []
+        execute_result = board.service.execution_result
+
+        def record_receipt_size(frame):
+            receipt_sizes.append(Path(json.loads(frame)["receipt"]["path"]).stat().st_size)
+            return execute_result(frame)
+
+        with mock.patch.object(board.service, "execution_result", side_effect=record_receipt_size) as called:
+            self.finish_turn(board, claimed, sealed)
+        wire = called.call_args.args[0]
+        self.assertLess(len(wire.encode()), 2048)
+        if long_paths:
+            self.assertGreater(receipt_sizes[0], 8 * 1024 * 1024)
+        with board.store.db.read() as connection:
+            stored_result = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                       (claimed["claim"]["attempt"]["attemptId"],)).fetchone()[0])
+        self.assertEqual(stored_result["result"]["workspaceSeal"], sealed)
+        view = self.view(board, run_id)
+        artifact = next(row for row in view["artifacts"] if row["kind"] == "output")
         target = self.target_with_artifact(artifact)
-        # Model a retained 0.7 output whose optional summary was never published.
-        with board.store.db.write() as connection:
-            row = connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?",
-                                     (artifact["artifactId"],)).fetchone()
-            retained = json.loads(row["manifest_json"])
-            retained["snapshot"].pop("changedEntries")
-            retained["snapshot"].pop("changedEntriesTruncated")
-            retained["snapshotSha256"] = workspace_module._sha(workspace_module._json(retained["snapshot"]))
-            connection.execute("UPDATE workflow_artifacts SET manifest_json=?,manifest_sha256=? WHERE artifact_id=?",
-                               (canonical_json(retained), retained["snapshotSha256"], artifact["artifactId"]))
-        recorded = self.accept(board, view, artifact, target=target, keepCheckout=True)
-        self.assertEqual(recorded["integration"]["verification"]["matchingPaths"], ["tracked.txt"])
-        self.assertEqual(recorded["state"], "accepted")
-        (checkout / "tracked.txt").write_text("unsealed edit\n")
-        inspected = workspace_module.cleanup_inspect(self.directory, manifest, sealed=retained, retained=[manifest])
-        self.assertIn("unsealed-changes", inspected["reasons"])
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, self.view(board, submitted["runId"]))
-        self.assertEqual(raised.exception.code, "NOT_READY")
-        self.assertIn("unsealed-changes", raised.exception.details["reasons"])
+        accepted = self.accept(board, view, artifact, target=target, keepCheckout=True)
+        self.assertEqual(accepted["state"], "accepted")
+        verification = accepted["integration"]["verification"]
+        self.assertEqual(verification["matchingPaths"], [path[:500] for path in expected[:32]])
+        self.assertEqual(verification["matchingPathsCount"], len(expected))
+        self.assertTrue(verification["matchingPathsTruncated"])
+        self.assertEqual(artifact["changedPathsCount"], len(expected))
+        self.assertEqual(artifact["changedPaths"], [path[:500] for path in expected[:32]])
+        self.assertLess(len(canonical_json(accepted).encode()), 8 * 1024 * 1024)
+        with board.store.db.read() as connection:
+            stored = connection.execute("SELECT verification_json FROM workflow_integrations WHERE integration_id=?",
+                                        (accepted["integration"]["integrationId"],)).fetchone()[0]
+        self.assertEqual(json.loads(stored)["matchingPaths"], expected)
         self.assertTrue(checkout.exists())
-        # Returning the site to the sealed state makes the same workspace eligible.
-        (checkout / "tracked.txt").write_text("sealed output\n")
-        applied = self.reclaim(board, self.view(board, submitted["runId"]))
-        self.assertTrue(applied["removed"])
+        for number in range(file_count):
+            (checkout / name("new", number)).write_text("unsealed\n")
+        cleanup = workspace_module.cleanup_inspect(self.directory, manifest, sealed=sealed)
+        self.assertFalse(cleanup["eligible"])
+        self.assertEqual(cleanup["unsealedPaths"], sorted(str(name("new", number)).replace(os.sep, "/")
+                                                       for number in range(file_count)))
+        for number in range(file_count):
+            (checkout / name("new", number)).write_text(f"file {number}\n")
+        self.assertTrue(self.reclaim(board, self.view(board, run_id))["removed"])
+        self.assertFalse(checkout.exists())
+        for path, original_bytes in historical_bytes.items():
+            self.assertEqual(path.read_bytes(), original_bytes)
 
     def test_spoofed_source_objects_cannot_verify(self):
         board = self.board()
@@ -353,10 +437,6 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                 {**seal, "commit": "0" * 40}, original_input=manifest, final_input=manifest,
                 path=str(target["path"]), ref="HEAD", strategy="patch", before_commit=target["before"],
             )
-        with mock.patch.object(workspace_module, "OUTPUT_ENTRY_LIMIT", 0):
-            with self.assertRaises(BoardError) as oversized:
-                self.accept(board, self.view(board, submitted["runId"]), artifact, target=target)
-        self.assertEqual(oversized.exception.code, "WORKSPACE_UNSUPPORTED")
 
     def test_cleared_workspace_refs_allow_turns_and_acceptance_but_block_cleanup(self):
         board = self.board()
@@ -657,6 +737,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         if import_failure:
             self.assertEqual(receipt['resultMeta']['terminationReason'], 'completed')
             self.assertIn('microTaskError', recorded)
+        with board.store.db.read() as connection:
+            recorded = json.loads(connection.execute('SELECT result_json FROM attempts WHERE attempt_id=?',
+                                   (attempt['attemptId'],)).fetchone()['result_json'])['result']
         return board, run_id, attempt, checkout, failed_root, refs, native, recorded
 
     def assert_failed_evidence_survives_continuation(self, *, import_failure=False):

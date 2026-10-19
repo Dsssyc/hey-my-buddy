@@ -134,10 +134,14 @@ _OUTPUT_ARTIFACT = (
     "verified",
     "final",
     "changedPaths",
+    "changedPathsCount",
+    "changedPathsTruncated",
     "action",
 )
 _CHILD_BRIEF = ("taskId", "role", "state", "integrator", "requestId")
-_CONFLICT_BRIEF = ("conflictId", "state", "observedFingerprint", "blockingPaths", "conflictingPaths", "action", "artifactId")
+_CONFLICT_BRIEF = ("conflictId", "state", "observedFingerprint", "blockingPaths", "blockingPathsCount",
+                   "blockingPathsTruncated", "conflictingPaths", "conflictingPathsCount",
+                   "conflictingPathsTruncated", "action", "artifactId")
 _PLAN_BRIEF = ("planId", "state", "eligible", "reasons", "path", "kind", "expiresAt", "appliedAt")
 
 
@@ -152,7 +156,9 @@ def _integration_brief(row: Any) -> dict:
     if isinstance(verification, dict) and verification:
         # The verification record can be large; its outcome fields are enough to act on.
         brief["verification"] = _pick(
-            verification, ("state", "status", "verified", "ok", "method", "note", "errors", "mismatches", "hostPaths")
+            verification, ("state", "status", "verified", "ok", "method", "note", "errors", "mismatches",
+                           "matchingPathsCount", "differingPathsCount", "missingPathsCount",
+                           "adjustmentsCount", "hostPathsCount", "unrecordedPathsCount", "hostPaths")
         ) or {"recorded": True}
     return brief
 

@@ -66,7 +66,7 @@ export default {
   termination: {
     "wrap-up": "Host wrap-up finished", "grace-expired": "Stopped when the wrap-up grace ran out", "forced-stop": "Forced stop",
     "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "Router budget used up", "harness-error": "Harness error",
-    "transport-error": "Transport failure", completed: "Completed normally", wrapUpLead: "Lead wrap-up finished",
+    "transport-error": "Transport failure", "workspace-error": "Workspace error", completed: "Completed normally", wrapUpLead: "Lead wrap-up finished",
   },
   quota: { "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },
   seal: {

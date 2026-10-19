@@ -14,7 +14,7 @@ from unittest import mock
 from hey_my_buddy.buddy.runtime import execution as entry
 from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.protocol.execution import read_execution_receipt
+from hey_my_buddy.protocol.execution import read_execution_receipt, receipt_reference
 
 
 CLAIM = {"task": {"taskId": "task-1", "spec": {"adapter": "command"}},
@@ -64,6 +64,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
         write_receipt(self.execution.directory, receipt)
+        reference = receipt_reference(self.execution.directory)
         calls = []
 
         class Client:
@@ -78,7 +79,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertTrue(accepted)
         self.assertEqual([name for name, _ in calls], ["hint", "result", "hint", "result"])
         self.assertEqual(calls[1][1], calls[3][1])
-        self.assertEqual(calls[1][1], ("attempt-1", 1, "n" * 64, receipt["report"]))
+        self.assertEqual(calls[1][1], ("attempt-1", 1, "n" * 64, reference))
         self.assertFalse((self.execution.directory / "result-receipt.json").exists())
         self.assertTrue((self.execution.directory / "result-delivery.json").exists())
 

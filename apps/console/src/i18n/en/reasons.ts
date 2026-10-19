@@ -151,6 +151,7 @@ export default {
   "timeout": "The operation timed out.",
   "workflow-routing-fenced": "Ownership of this route was fenced.",
   "workspace-cleanup-started": "Workspace cleanup started.",
+  "workspace-error": "Workspace error.",
   "workspace-ownership-lost": "Workspace ownership was lost.",
   "workspace-scope-violation": "The workspace has changes outside its authorized scope: {{paths}}; conflicts {{conflictIds}}.",
   "workspace.continuation-prepare-failed": "Workspace preparation failed for continuation {{continuationId}}; Host attention is needed.",

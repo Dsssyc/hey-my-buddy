@@ -181,6 +181,7 @@ class WrapUpStopTests(WorkflowTestCase):
         self.assertEqual(set(TERMINATION_REASONS), {
             "completed", "wrap-up", "grace-expired", "forced-stop", "console-stop",
             "service-stop", "unknown-stop", "deadline", "harness-error", "transport-error", "interrupted",
+            "workspace-error",
         })
         board = self.board()
         self.register(board)
@@ -290,7 +291,7 @@ class WrapUpStopTests(WorkflowTestCase):
         board = self.board()
         self.register(board)
         for reason, status in (("completed", "ok"), ("harness-error", "failed"),
-                               ("transport-error", "failed")):
+                               ("transport-error", "failed"), ("workspace-error", "failed")):
             with self.subTest(reason=reason):
                 run = self.submit(board, request_id=reason, kind="worktree", cwd=str(self.workdir(reason)))
                 claim = self.claim(board, claim_request_id=reason + "-claim", run_id=run["runId"])

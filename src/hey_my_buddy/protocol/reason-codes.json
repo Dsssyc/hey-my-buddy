@@ -239,6 +239,7 @@
   "timeout": [],
   "workflow-routing-fenced": [],
   "workspace-cleanup-started": [],
+  "workspace-error": [],
   "workspace-ownership-lost": [],
   "workspace-scope-violation": [
     "conflictIds",

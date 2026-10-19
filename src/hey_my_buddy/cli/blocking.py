@@ -284,7 +284,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
                 "manifestSha256": seal.get("manifestSha256"),
                 "commit": seal.get("commit"),
                 "diffPath": seal.get("diffPath"),
-                "cumulativePatch": ({**seal["cumulativePatch"], "changedPaths": (seal["cumulativePatch"].get("changedPaths") or [])[:32], "changedPathsTruncated": len(seal["cumulativePatch"].get("changedPaths") or []) > 32} if isinstance(seal.get("cumulativePatch"), dict) else None),
+                "cumulativePatch": seal.get("cumulativePatch"),
             }
         )
     from ..blackboard.evaluation.native_observations import failure_view

@@ -51,7 +51,7 @@ PREFLIGHT_MAX_RETRY_SECONDS = 180.0
     TERMINATION_COMPLETED, TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED,
     TERMINATION_FORCED_STOP, TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP,
     TERMINATION_UNKNOWN_STOP, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
-    TERMINATION_TRANSPORT_ERROR, TERMINATION_INTERRUPTED,
+    TERMINATION_TRANSPORT_ERROR, TERMINATION_INTERRUPTED, TERMINATION_WORKSPACE_ERROR,
 ) = TERMINATION_REASONS
 
 
@@ -85,6 +85,10 @@ def classify_termination(outcome, *, timed_out, cancel_requested,
         return role_seam.stop_termination_reason(shutdown_confirmed=outcome.shutdown_confirmed,
             stop_initiator=stop_initiator, grace_expired=result.get("graceExpired", grace_expired),
             wrap_up_delivered=result.get("wrapUpDelivered", False))
+    # The turn seal runs only after a completed native turn. Partial sealing and
+    # cumulative patch capture can also fail while preserving an earlier failure.
+    if isinstance(outcome.result, dict) and outcome.result.get("workspaceSealError") is not None:
+        return TERMINATION_WORKSPACE_ERROR
     if is_transport_failure(getattr(outcome, "result", None)):
         return TERMINATION_TRANSPORT_ERROR
     return TERMINATION_HARNESS_ERROR
@@ -638,8 +642,6 @@ class Execution:
             outcome.error = f"the Router budget of {timeout_seconds}s was reached before the adapter finished"
             if isinstance(outcome.result, dict):
                 outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
-        from .partial_outputs import enrich
-        enrich(context, outcome)
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.
@@ -650,6 +652,9 @@ class Execution:
             stop_initiator=handle.stop_initiator,
             grace_expired=handle.grace_expired,
         )
+        from .partial_outputs import enrich
+        if enrich(context, outcome) and termination_reason == TERMINATION_COMPLETED:
+            termination_reason = TERMINATION_WORKSPACE_ERROR
         if termination_reason in (TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED, TERMINATION_FORCED_STOP,
                                   TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP):
             outcome.status = "cancelled"

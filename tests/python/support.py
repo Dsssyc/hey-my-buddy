@@ -6,16 +6,18 @@ including a replacement daemon that the CLI may have started after a restart.
 """
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 PYTHON_ROOT = (Path(__file__).resolve().parents[2] / "src")
@@ -24,6 +26,9 @@ if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
+from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference  # noqa: E402
+from hey_my_buddy.private_dirs import attempt_root  # noqa: E402
+from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402
 from hey_my_buddy.console.server import Console  # noqa: E402
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator  # noqa: E402
 from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore  # noqa: E402
@@ -249,6 +254,68 @@ def private_state_dir(prefix: str = "hey-my-buddy-test-"):
         shutil.rmtree(directory)
 
 
+def publish_result_receipt(state_dir: Path, params: dict, *, cleanup: dict | None = None) -> dict:
+    """Turn a model-free inline test report into the one production RPC shape."""
+    state_dir = Path(state_dir)
+    attempt_id = params["attemptId"]
+    with closing(sqlite3.connect((state_dir / DB_FILE).resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute("SELECT task_id, adapter, model_harness, created_at FROM attempts WHERE attempt_id = ?",
+                         (attempt_id,)).fetchone()
+    if row is None:
+        raise AssertionError(f"Fixture result has no claimed attempt: {attempt_id}")
+    adapter = row["model_harness"] if row["adapter"] == "decision" else row["adapter"]
+    directory = attempt_root(state_dir, adapter, row["task_id"], attempt_id)
+    path = directory / RECEIPT
+    if cleanup is not None:
+        cleanup["path"] = path
+        cleanup["previous"] = path.read_bytes() if path.exists() else None
+        cleanup["created_dirs"] = [part for part in (directory, directory.parent, directory.parent.parent)
+                                   if not part.exists()]
+    report = {key: value for key, value in params.items()
+              if key not in ("attemptId", "generation", "nonce")}
+    fsync_json(path, {"taskId": row["task_id"], "attemptId": attempt_id,
+                                        "generation": params["generation"], "report": report,
+                                        "createdAt": row["created_at"]})
+    return {"attemptId": attempt_id, "generation": params["generation"], "nonce": params["nonce"],
+            "receipt": receipt_reference(directory)}
+
+
+def _ack_fixture_receipt(cleanup: dict) -> None:
+    """Match the execution's acknowledged receipt cleanup within the test state."""
+    path = cleanup["path"]
+    previous = cleanup["previous"]
+    if previous is None:
+        path.unlink()
+    else:
+        path.write_bytes(previous)
+    for directory in cleanup["created_dirs"]:
+        try:
+            directory.rmdir()
+        except OSError as error:
+            if error.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+                raise
+
+
+class FixtureBoardClient(BoardClient):
+    """Publish a model-free execution receipt for the in-process fixture."""
+
+    def __init__(self, board: "InProcessBoard", **options):
+        super().__init__(board.directory, call=board.call, **options)
+        self._board = board
+
+    def submit_result(self, attempt_id: str, generation: int, nonce: str, report: dict) -> dict:
+        if set(report) == {"path", "sha256"}:
+            return super().submit_result(attempt_id, generation, nonce, report)
+        cleanup = {}
+        wire = publish_result_receipt(self._board.directory, {"attemptId": attempt_id,
+                                                              "generation": generation,
+                                                              "nonce": nonce, **report}, cleanup=cleanup)
+        response = super().submit_result(attempt_id, generation, nonce, wire["receipt"])
+        _ack_fixture_receipt(cleanup)
+        return response
+
+
 class InProcessBoard:
     """The real store and the real resource implementations, in one process.
 
@@ -318,6 +385,12 @@ class InProcessBoard:
 
     def call(self, operation: str, params: dict) -> dict:
         service = self.wait_service if operation.startswith("events_wait") or operation == "wait_capacity" else self.service
+        if operation == "execution_result" and "receipt" not in params:
+            cleanup = {}
+            params = publish_result_receipt(self.directory, params, cleanup=cleanup)
+            response = dispatch_local(service, operation, params)
+            _ack_fixture_receipt(cleanup)
+            return response
         return dispatch_local(service, operation, params)
 
     def console_call(self, operation: str, params: dict) -> dict:
@@ -327,7 +400,7 @@ class InProcessBoard:
         return self.call(operation, {**params, "consoleAuthority": session})
 
     def client(self, **kwargs) -> BoardClient:
-        return BoardClient(self.directory, call=self.call, **kwargs)
+        return FixtureBoardClient(self, **kwargs)
 
     def submit_execution(self, **params) -> dict:
         """Seed an execution through the service's store, outside the Host API."""
