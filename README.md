@@ -42,7 +42,7 @@ Once the developer decides the release channel and the exact version, the instal
 
 ```sh
 # After the release channel and version are decided; not available today
-uvx hey-my-buddy@0.46.0 install
+uvx hey-my-buddy@0.47.0 install
 ```
 
 The package name's availability and whether it is published on PyPI are still the developer's decisions, and this candidate has not been published there. Until a release exists, build the wheel from the frozen source and install from its absolute path:

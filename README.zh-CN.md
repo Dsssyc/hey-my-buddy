@@ -42,7 +42,7 @@ hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并�
 
 ```sh
 # 发布渠道与版本确定之后使用；目前不可用
-uvx hey-my-buddy@0.46.0 install
+uvx hey-my-buddy@0.47.0 install
 ```
 
 包名是否可用、是否发布到 PyPI 仍待开发者决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
