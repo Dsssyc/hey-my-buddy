@@ -126,6 +126,7 @@ class FakeAgent:
         self.stop_reason_unread = args.stop_reason_unread
         self.hang_prompt = args.hang_prompt
         self.park_prompt = args.park_prompt
+        self.session_updates_fixture = args.session_updates_fixture
         self.emit_tool_update = args.emit_tool_update
         self.bare_final = args.bare_final
         self.session_record = args.session_record
@@ -537,6 +538,13 @@ class FakeAgent:
             self.notify_client("session/update", {"sessionId": session_id, "update": update})
         self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
 
+    def emit_session_fixture(self, session_id: str) -> None:
+        """Explicit synthetic ACP display samples, separate from native rollouts."""
+        if self.session_updates_fixture:
+            fixture = json.loads(Path(self.session_updates_fixture).read_text())
+            for update in fixture["updates"]:
+                self.notify_client("session/update", {"sessionId": session_id, "update": update})
+
     def run_final_prompt(self, message: dict) -> None:
         """The final-message carrier: usage snapshot, unknown fact, then the answer."""
         request_id = message["id"]
@@ -544,6 +552,7 @@ class FakeAgent:
         session_id = params.get("sessionId")
         self.last_session_id = session_id
         self.write_session_record(session_id, self.prompt_text(params))
+        self.emit_session_fixture(session_id)
         if self.emit_foreign_chunk:
             # A message chunk framed under a session this run never opened.
             self.notify_client("session/update", {"sessionId": "foreign-root-1",
@@ -597,6 +606,7 @@ class FakeAgent:
         frame_id = self.framed_session(session_id)
         self.last_session_id = session_id
         self.write_session_record(session_id, self.prompt_text(params))
+        self.emit_session_fixture(frame_id)
         # The same unknown-kind probes the final-message carrier emits; the
         # micro task carrier counts them from the same update pump.
         for index in range(self.spam_unknown_kinds):
@@ -1066,6 +1076,7 @@ def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
                         help="park the prompt until a session/cancel arrives, then stop cancelled")
     parser.add_argument("--park-prompt", action="store_true",
                         help="park the prompt forever; only the owned group stop ends it")
+    parser.add_argument("--session-updates-fixture", help="synthetic ACP display notification fixture")
     parser.add_argument("--emit-tool-update", action="store_true",
                         help="emit one completed tool_call/update pair before the answer")
     parser.add_argument("--bare-final", action="store_true",

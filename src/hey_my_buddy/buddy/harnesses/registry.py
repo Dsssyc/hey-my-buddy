@@ -20,6 +20,7 @@ from .codex import native_run as codex_run
 from .claude import native_run as claude_run
 from .dsh import native_run as dsh_run
 from .codex.session_content import CodexSessionProjector
+from .dsh.session_content import DshSessionProjector
 from .codex.session_omitted import OMITTED as CODEX_SESSION_OMITTED
 from .claude.session_omitted import OMITTED as CLAUDE_SESSION_OMITTED
 from .dsh.session_omitted import OMITTED as DSH_SESSION_OMITTED
@@ -27,7 +28,7 @@ from .zcode.session_omitted import OMITTED as ZCODE_SESSION_OMITTED
 
 BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdapter, ClaudeAdapter)
 
-SESSION_PROJECTORS = {'codex': CodexSessionProjector}
+SESSION_PROJECTORS = {'codex': CodexSessionProjector, 'dsh': DshSessionProjector}
 SESSION_OMITTED = {
     'codex': CODEX_SESSION_OMITTED, 'claude': CLAUDE_SESSION_OMITTED,
     'dsh': DSH_SESSION_OMITTED, 'zcode': ZCODE_SESSION_OMITTED,

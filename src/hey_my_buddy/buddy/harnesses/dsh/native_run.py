@@ -77,7 +77,9 @@ from ..run_contract import (
     fold_unknown_events,
     unknown_event_name,
 )
-from ..runtime_selection import command_for
+from ..runtime_selection import command_for, environment_for
+from ..session_record import SessionRecord, SessionRecordWriteError, SESSION_RECORD_WRITE_FAILED
+from .session_content import DshSessionProjector
 from .acp import AcpClient
 from .acp.client import PermissionPolicy
 from .acp.connection import (
@@ -971,6 +973,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                           "attemptId": request.identity.attempt_id,
                           "generation": request.identity.generation})
     activity = DshActivity()
+    session = DshSessionProjector(SessionRecord(Path(environment_for()["HMB_STATE_DIR"]), "dsh",
+                                               request.identity.task_id, request.identity.attempt_id))
+    record_error: SessionRecordWriteError | None = None
     # The cooperative inquiry bridge lives in this process because only it holds
     # the native connection; it queues questions for the root's own checkpoint
     # tool and journals delivered/answered state after the verified receipt.
@@ -1011,9 +1016,21 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         return feedback
 
     def fold(message: object) -> bool:
+        nonlocal record_error
         state.event_count += 1
+        write_failed = False
+        if record_error is None:
+            try:
+                session.observe_notification(message)
+            except SessionRecordWriteError as error:
+                record_error = error
+                write_failed = True
+        # Keep the native facts and role observation even when this frame could
+        # not be recorded; the record failure is settled after stop collection.
         changed = _fold_update(message, state, facts=facts, tools=tools, activity=activity,
                                evidence=evidence, inquiry_bridge=inquiry_bridge)
+        if write_failed:
+            raise record_error
         if pump is not None and pump.overflow:
             raise NativeError("invalid-protocol", "the native update queue overflowed; frames were dropped")
         return changed
@@ -1076,7 +1093,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                             deadline=deadline, cancel=cancel, state=state, tools=tools,
                             activity=activity, sessions=sessions, evidence=evidence,
                             inquiry_bridge=inquiry_bridge, sessions_root=sessions_root,
-                            fold=fold, notify=notify,
+                            fold=fold, notify=notify, session=session,
                             denied=denied_count, send_cancel=send_cancel)
             if state.status != "unknown":
                 state.status = "ok"
@@ -1085,9 +1102,13 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             raw_answer, correction_count = _final_message_rounds(
                 client=client, pump=pump, request=request, deadline=deadline, cancel=cancel,
                 state=state, facts=facts, tools=tools, activity=activity, sessions=sessions,
-                fold=fold, notify=notify, denied=denied_count, send_cancel=send_cancel)
+                fold=fold, notify=notify, denied=denied_count, send_cancel=send_cancel, session=session)
             if state.status != "unknown":
                 state.status = "ok"
+    except SessionRecordWriteError as error:
+        record_error = error
+        state.status = "error"
+        send_cancel(sessions[-1] if sessions else None)
     except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
@@ -1113,6 +1134,13 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             inquiry_bridge.close()
             state.inquiry = inquiry_bridge.report()
             state.attention = inquiry_bridge.attention_report()
+    try:
+        session.close()
+    except SessionRecordWriteError as error:
+        record_error = error
+    if record_error is not None:
+        state.status, state.reason = "error", SESSION_RECORD_WRITE_FAILED
+        state.error_text = str(record_error)
     if sessions:
         if state.record_baseline is not None:
             record = resumed_session_record_facts(sessions_root, state.record_baseline)
@@ -1206,13 +1234,15 @@ def _resume_session(*, client: AcpClient, request: RunRequest, servers: list,
 def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, input_text: str,
                         deadline: float, cancel: CancelFlag, state: _RunState,
                         fold, notify, activity: DshActivity, denied: Callable[[], int],
-                        send_cancel) -> dict:
+                        send_cancel, session: DshSessionProjector) -> dict:
     """The one prompt/observe site: send once, fold updates, honor stop feedback.
 
     The prompt runs on its own thread because the ACP response only arrives at
     the turn's end; the run loop owns every update, the cancel flag, the overall
     deadline and the role's feedback while it streams.
     """
+    session.start_prompt(session_id, input_text,
+                         f"{session_id}/{time.monotonic_ns()}")
     state.root_model_activity = False
     activity.note_prompt()
     result: dict = {}
@@ -1301,7 +1331,8 @@ def _close_session(client: AcpClient, session_id: str, *, deadline: float) -> No
 def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest,
                           deadline: float, cancel: CancelFlag, state: _RunState,
                           facts: _RunFacts, tools: DshToolFacts, activity: DshActivity,
-                          sessions: list, fold, notify, denied, send_cancel) -> tuple[str | None, int]:
+                          sessions: list, fold, notify, denied, send_cancel,
+                          session: DshSessionProjector) -> tuple[str | None, int]:
     """The final-message carrier: one fresh root session per executed correction.
 
     The scope only decides the native tool settings; the value carrier follows
@@ -1324,6 +1355,7 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
 
         def chunk_fold(message: object) -> bool:
             nonlocal raw_bytes
+            changed = fold(message)
             params = message.get("params") if isinstance(message, dict) else None
             # Only this round's own session/new root contributes the final
             # text: a foreign or earlier round's chunk is isolated as an
@@ -1332,7 +1364,7 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
                 update = params.get("update")
                 if isinstance(update, dict) and update.get("sessionUpdate") == "agent_message_chunk":
                     facts.note_unknown("foreign-root-text")
-                return fold(message)
+                return changed
             update = params.get("update") if isinstance(params, dict) else None
             if isinstance(update, dict) and update.get("sessionUpdate") == "agent_message_chunk":
                 for text in text_blocks(update.get("content")):
@@ -1341,12 +1373,12 @@ def _final_message_rounds(*, client: AcpClient, pump: _Pump, request: RunRequest
                         raise NativeError("answer-too-large", "no bounded native answer")
                     raw_bytes += len(encoded)
                     raw_parts.append(text)
-            return fold(message)
+            return changed
 
         value = _prompt_and_observe(client=client, pump=pump, session_id=session_id,
                                     input_text=input_text, deadline=deadline, cancel=cancel,
                                     state=state, fold=chunk_fold, notify=notify, activity=activity,
-                                    denied=denied, send_cancel=send_cancel)
+                                    denied=denied, send_cancel=send_cancel, session=session)
         failure = _settle_stop_reason(state, value.get("stopReason"))
         if state.status == "unknown":
             # The turn's end could not be read: the session still closes and the
@@ -1373,7 +1405,7 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
                     state: _RunState, tools: DshToolFacts, activity: DshActivity,
                     sessions: list, evidence: RootTurnEvidence,
                     inquiry_bridge: InquiryBridge | None, sessions_root: Path,
-                    fold, notify,
+                    fold, notify, session: DshSessionProjector,
                     denied, send_cancel) -> None:
     """The micro task completion-tool carrier: one root turn, one verified receipt.
 
@@ -1432,7 +1464,7 @@ def _micro_task_round(*, client: AcpClient, pump: _Pump, request: RunRequest,
     value = _prompt_and_observe(client=client, pump=pump, session_id=session_id,
                                 input_text=request.input_text, deadline=deadline, cancel=cancel,
                                 state=state, fold=micro_task_fold, notify=notify, activity=activity,
-                                denied=denied, send_cancel=send_cancel)
+                                denied=denied, send_cancel=send_cancel, session=session)
     if value.get("stopReason") == "cancelled":
         # A cancelled turn owes no finish receipt; the reason, not a missing
         # tool, is what the turn's end means.
@@ -1525,7 +1557,7 @@ def _drain_late(pump: _Pump | None, state: _RunState, fold, notify) -> bool:
     for message in pump.drain():
         try:
             changed = fold(message)
-        except NativeError:
+        except (NativeError, SessionRecordWriteError):
             complete = False
             continue
         except BoardError:
