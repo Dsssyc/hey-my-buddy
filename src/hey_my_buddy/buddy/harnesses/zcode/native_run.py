@@ -102,6 +102,9 @@ from .protocol import (
     native_turn_failure,
 )
 from .tool_evidence import ZcodeToolFacts
+from .session_content import ZcodeSessionProjector
+from ..session_record import SessionRecord, SessionRecordWriteError, SESSION_RECORD_WRITE_FAILED
+from ..runtime_selection import environment_for
 
 _END_FACTS_FILE = "run-end-facts.json"
 _NATIVE_STDERR_FILE = "native.stderr.log"
@@ -687,6 +690,7 @@ class _RunState:
     runtime_preferences: dict | None = None
     last_assistant_message: dict | None = None
     drain_error: tuple[str, str] | None = None
+    session_error: SessionRecordWriteError | None = None
 
     def note_drain_error(self, error: NativeError) -> None:
         if self.drain_error is None:
@@ -722,7 +726,6 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     """
     from ..discovery import native_environment
     root = ensure_private_dir(native_root)
-    from ..runtime_selection import environment_for
     incoming = dict(environment_for())
     command = cli_command(incoming)
     environment = native_environment(incoming, command=command)
@@ -782,9 +785,18 @@ def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
     return halt_owned_group(spawn.process, spawn.handle, deadline)
 
 
+def _project_session(session: ZcodeSessionProjector, state: _RunState, message: dict) -> None:
+    if state.session_error is not None:
+        return
+    try:
+        session.observe_notification(message)
+    except SessionRecordWriteError as error:
+        state.session_error = error
+
+
 def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Classifier,
            protocol, facts: _RunFacts, state: _RunState,
-           notify: Callable[..., RunFeedback]) -> bool:
+           notify: Callable[..., RunFeedback], session: ZcodeSessionProjector) -> bool:
     """Keep every stopped stream frame, even after an earlier failure.
 
     The order of every frame is the run's own: projection first, then
@@ -810,7 +822,7 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
             failed(NativeError("invalid-protocol", "the native stream ended without EOF"))
             return False
         if message is None:
-            return complete
+            return complete and state.session_error is None
         if isinstance(message, NativeError):
             failed(message)
             continue
@@ -818,6 +830,7 @@ def _drain(connection: NativeConnection, tools: ZcodeToolFacts, classifier: _Cla
             # Projection precedes rejection, and a failed frame never prevents
             # the following frames from being projected too.
             tools.observe(message)
+            _project_session(session, state, message)
             changed = classifier.observe(message)
             if changed:
                 # The retained fact goes to the role before any protocol
@@ -892,7 +905,7 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
                       spec: dict, input_id: str, input_text: str,
                       previous: str | None, mode: str, require_interactive: bool,
                       settled: Callable[[], bool], classifier: "_Classifier",
-                      state: _RunState, on_configured: Callable[[str, dict], None] | None = None,
+                      state: _RunState, session: ZcodeSessionProjector, on_configured: Callable[[str, dict], None] | None = None,
                       before_send: Callable[[str], None] | None = None,
                       after_admit: Callable[[str], None] | None = None) -> tuple[str, dict]:
     """The one configure/subscribe/send/settlement site of every root session.
@@ -920,6 +933,7 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     classifier.admitted = True
     if before_send is not None:
         before_send(session_id)
+    session.start_prompt(session_id, input_id, input_text, request.identity.invocation_id)
     state.model_started = True
     accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
                                                 "content": input_text})
@@ -1107,6 +1121,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
     tools = ZcodeToolFacts({"harness": "zcode", "taskId": request.identity.task_id,
                             "attemptId": request.identity.attempt_id,
                             "generation": request.identity.generation})
+    session = ZcodeSessionProjector(SessionRecord(Path(environment_for()["HMB_STATE_DIR"]), "zcode",
+                                                request.identity.task_id, request.identity.attempt_id))
     outcome = _CarrierOutcome()
     spawn: _Spawn | None = None
     owned_spawn: list = []
@@ -1144,6 +1160,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
         if feedback_due[0]:
             feedback_due[0] = False
             notify()
+        if state.session_error is not None:
+            raise state.session_error
 
     def unknown_sink(label: str) -> None:
         facts.note_unknown(label)
@@ -1164,12 +1182,14 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             _final_message_rounds(connection=connection, request=request, spawn=spawn,
                                   workspace=workspace, no_tool=no_tool, facts=facts,
                                   classifier=classifier, state=state, tools=tools,
-                                  notify=notify, outcome=outcome)
+                                  notify=notify, outcome=outcome, session=session)
         else:
             _micro_task_turn(connection=connection, request=request, services=services, spawn=spawn,
                            workspace=workspace, invocation_root=invocation_root, native_root=native_root,
                            facts=facts, classifier=classifier, state=state, tools=tools,
-                           notify=notify, outcome=outcome)
+                           notify=notify, outcome=outcome, session=session)
+    except SessionRecordWriteError:
+        state.status = "error"
     except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
@@ -1205,7 +1225,14 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
     finally:
         drained = _stop_collection(spawn=spawn, deadline=deadline, cancel=cancel, state=state,
                                    tools=tools, classifier=classifier, facts=facts, notify=notify,
-                                   completion_carrier=completion_carrier, outcome=outcome)
+                                   completion_carrier=completion_carrier, outcome=outcome, session=session)
+    try:
+        session.close()
+    except SessionRecordWriteError as error:
+        state.session_error = error
+    if state.session_error is not None:
+        state.status, state.reason = "error", SESSION_RECORD_WRITE_FAILED
+        state.error_text = str(state.session_error)
     if state.quota_failure is not None:
         usage = outcome.attempt_usage.raw_usage() if outcome.attempt_usage is not None else None
         has_output = bool(usage and any(type(usage.get(key)) is int and usage[key] > 0
@@ -1253,7 +1280,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
 def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, spawn: _Spawn,
                           workspace: dict, no_tool: bool, facts: _RunFacts, classifier: _Classifier,
                           state: _RunState, tools: ZcodeToolFacts,
-                          notify: Callable[..., RunFeedback], outcome: _CarrierOutcome) -> None:
+                          notify: Callable[..., RunFeedback], outcome: _CarrierOutcome,
+                          session: ZcodeSessionProjector) -> None:
     """The final-message carrier: fresh root sessions on the one process and
     total deadline, one per executed observer correction.
 
@@ -1268,6 +1296,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
             # whatever this chain decides, and the retained facts reach
             # the role before any driver-side protocol check runs.
             tools.observe(message)
+            _project_session(session, state, message)
             changed = classifier.observe(message)
             if changed:
                 notify()
@@ -1316,7 +1345,7 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
             input_id=input_id, input_text=input_text,
             previous=None, mode="initial", require_interactive=False,
             settled=lambda: bool(outcome.last_protocol is not None and outcome.last_protocol.settled),
-            classifier=classifier, state=state,
+            classifier=classifier, state=state, session=session,
             on_configured=note_configured,
             before_send=lambda opened: bind_protocol(opened))
         outcome.attempt_usage.capture_final(connection)
@@ -1345,7 +1374,7 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
                    spawn: _Spawn, workspace: dict, invocation_root: Path, native_root: Path,
                    facts: _RunFacts, classifier: _Classifier, state: _RunState,
                    tools: ZcodeToolFacts, notify: Callable[..., RunFeedback],
-                   outcome: _CarrierOutcome) -> None:
+                   outcome: _CarrierOutcome, session: ZcodeSessionProjector) -> None:
     """The micro task completion-tool turn: the same lifecycle sites, with a
     mounted session service, a continuation and live observers."""
     mount = services.mount
@@ -1404,6 +1433,7 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         # finish time; their evidence is the receipt.
         tools.observe(message)
         outcome.evidence.observe(message, ordinal)
+        _project_session(session, state, message)
         if outcome.evidence.turn_id is not None:
             # The trusted root identity comes only from this verified
             # canonical turn start, never from the observed events;
@@ -1457,7 +1487,7 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         input_id=mount.input_id, input_text=request.input_text,
         previous=previous, mode=mode, require_interactive=True,
         settled=lambda: bool(outcome.evidence is not None and outcome.evidence.settled_ordinal),
-        classifier=classifier, state=state, on_configured=note_configured,
+        classifier=classifier, state=state, session=session, on_configured=note_configured,
         before_send=bind_worker_session, after_admit=after_admit)
     # The settlement read is also bounded and optional; the root turn is
     # already settled, so nothing here may change its result.
@@ -1492,7 +1522,8 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
 def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFlag,
                      state: _RunState, tools: ZcodeToolFacts, classifier: _Classifier,
                      facts: _RunFacts, notify: Callable[..., RunFeedback],
-                     completion_carrier: bool, outcome: _CarrierOutcome) -> bool | None:
+                     completion_carrier: bool, outcome: _CarrierOutcome,
+                     session: ZcodeSessionProjector) -> bool | None:
     """The stop phase: retained observations, bridge close, the conservative
     group stop and the EOF drain, in their established order."""
     if outcome.attempt_usage is not None:
@@ -1531,10 +1562,10 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
             # marks the stream incomplete here.
             if not completion_carrier and outcome.last_protocol is not None:
                 drained = _drain(spawn.connection, tools, classifier, outcome.last_protocol, facts,
-                                 state, notify)
+                                 state, notify, session)
             elif completion_carrier and outcome.evidence is not None:
                 drained = _drain(spawn.connection, tools, classifier, outcome.evidence, facts,
-                                 state, notify)
+                                 state, notify, session)
         try:
             spawn.process.stdout.close()
         except OSError:

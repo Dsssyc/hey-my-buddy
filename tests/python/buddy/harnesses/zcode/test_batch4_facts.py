@@ -193,7 +193,7 @@ class BoundaryAndDrainTests(unittest.TestCase):
         state = native_run._RunState(status="ok")
         seen = []
         complete = native_run._drain(connection, mock.Mock(), native_run._Classifier(facts),
-            mock.Mock(), facts, state, lambda: seen.append(dict(facts.unknown_counts)))
+            mock.Mock(), facts, state, lambda: seen.append(dict(facts.unknown_counts)), mock.Mock())
         return complete, facts, state, seen
 
     def test_late_interaction_continues_drain_and_reaches_observer(self):

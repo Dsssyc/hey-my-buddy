@@ -153,7 +153,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         board, browser, route, _, _, _, _ = self.fixture(record=False)
         error = self.get(browser, route, status=404, code='SESSION_NOT_RECORDED')
         self.assertEqual(error['error']['details']['reason']['code'], 'session.not-recorded')
-        for harness in ('claude', 'zcode'):
+        for harness in ('claude',):
             with self.subTest(harness=harness):
                 with board.store.db.write() as connection:
                     connection.execute('UPDATE attempts SET adapter=?', (harness,))
@@ -168,6 +168,21 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(page['state'], 'running')
         cursor = page['after']
         appended = self.event('session-attempt', 'DSH 追加')
+        with path.open('ab') as stream:
+            stream.write(line(appended))
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE attempts SET execution_state='finished'")
+        ended = self.get(browser, route + f'?after={cursor}')
+        self.assertEqual((ended['events'], ended['state']), ([appended], 'ended'))
+        path.unlink()
+        self.get(browser, route, status=404, code='SESSION_NOT_RECORDED')
+
+    def test_zcode_reads_its_attempt_record_and_missing_history_is_not_recorded(self):
+        board, browser, route, path, events, _, _ = self.fixture(count=2, harness='zcode')
+        page = self.get(browser, route)
+        self.assertEqual((page['events'], page['omitted'], page['state']), (events, [], 'running'))
+        cursor = page['after']
+        appended = self.event('session-attempt', 'ZCode 追加')
         with path.open('ab') as stream:
             stream.write(line(appended))
         with board.store.db.write() as connection:

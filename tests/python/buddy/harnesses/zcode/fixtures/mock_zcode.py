@@ -488,6 +488,11 @@ def handle_message(message):
             selection["options"]["reasoningLevel"] = params["thoughtLevel"]
         result = snapshot()
     elif method == "session/subscribe":
+        if case == "session-content-resume":
+            # Replayed old content before the admitted input must stay out of
+            # the display record, even when the restored session id matches.
+            event("message.upserted", {"message": {"info": {"role": "assistant"}, "parts": [
+                {"type": "text", "partId": "old-part", "text": "previous turn secret"}]}}, turn="old-turn")
         result = {"sessionId": session_id, "events": [], "eventSeq": 0}
     elif method == "session/send":
         prompt_input_id = params["inputId"]
@@ -499,6 +504,28 @@ def handle_message(message):
         if case == "hang":
             time.sleep(120)
         event("turn.started", {"inputId": "wrong-input" if case == "wrong-input" else params["inputId"]})
+        if case in ("session-content", "session-content-resume"):
+            # Synthetic stream exercise, using the versioned 0.16.9 message
+            # parts. This does not claim a captured native plan event.
+            sample = json.loads(Path(__file__).with_name("native-usage-zcode.json").read_text())
+            for item in sample["finalMessages"]["messages"]:
+                if item["info"]["role"] != "assistant":
+                    continue
+                event("message.upserted", {"message": {
+                    "info": {**item["info"], "sessionId": session_id},
+                    "parts": [{**part, "sessionId": session_id} for part in item["parts"]]}})
+            event("tool.updated", {"kind": "scheduled", "toolCallId": "display-read", "toolName": "Read",
+                                   "arguments": {"file_path": "/workspace/file.py"}})
+            result = {"kind": "result", "toolCallId": "display-read",
+                      "result": {"success": True, "content": "file 中文"}}
+            event("tool.updated", result)
+            event("tool.updated", result)  # Native terminal replay.
+            event("part.upserted", {"part": {"type": "plan", "partId": "display-plan", "entries": [
+                {"content": "finish fixture", "status": "completed", "priority": "high"}]}})
+            event("part.upserted", {"part": {"type": "text", "partId": "foreign-part", "text": "foreign secret"}},
+                  root="foreign-session", turn="foreign-turn")
+            event("part.upserted", {"part": {"type": "text", "partId": "child-part", "text": "child secret",
+                                             "source": "sub-agent"}})
         if case in ("turn-failed-quota", "turn-failed-quota-after-output", "turn-failed-quiet"):
             # The exported native turn.failed shape: error.type plus, for the
             # quota case, error.code and the strict attribution object. The raw
