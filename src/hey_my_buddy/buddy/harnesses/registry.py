@@ -19,8 +19,27 @@ from .zcode import native_run as zcode_run
 from .codex import native_run as codex_run
 from .claude import native_run as claude_run
 from .dsh import native_run as dsh_run
+from .codex.session_content import CodexSessionProjector
+from .codex.session_omitted import OMITTED as CODEX_SESSION_OMITTED
+from .claude.session_omitted import OMITTED as CLAUDE_SESSION_OMITTED
+from .dsh.session_omitted import OMITTED as DSH_SESSION_OMITTED
+from .zcode.session_omitted import OMITTED as ZCODE_SESSION_OMITTED
 
 BUILT_IN = (DshAdapter, CommandAdapter, DecisionAdapter, ZcodeAdapter, CodexAdapter, ClaudeAdapter)
+
+SESSION_PROJECTORS = {'codex': CodexSessionProjector}
+SESSION_OMITTED = {
+    'codex': CODEX_SESSION_OMITTED, 'claude': CLAUDE_SESSION_OMITTED,
+    'dsh': DSH_SESSION_OMITTED, 'zcode': ZCODE_SESSION_OMITTED,
+}
+
+
+def session_projector(harness: str):
+    return SESSION_PROJECTORS.get(harness)
+
+
+def session_omitted(harness: str) -> tuple[dict, ...]:
+    return SESSION_OMITTED[harness]
 
 #: The extracted harness run modules, registered by the ADR-025 step that
 #: extracts each harness (steps two to four). Registration is the only way into

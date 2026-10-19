@@ -29,6 +29,8 @@ class DeletionFileTests(BoardTestCase):
                                'attempt_id':'attempt-'+name} for name in ('claude','zcode','dsh')]
         paths = []
         for name in ('codex','claude','zcode','dsh'):
+            paths.append(self.file(private_dirs.attempt_root(board.directory, name, 'owned', 'attempt-' + name)
+                                   / 'session.jsonl', {'display': True}))
             for root in (private_dirs.micro_task_root(board.directory,name,'owned'),
                          board.directory / 'harnesses' / name / hashlib.sha256(b'owned').hexdigest()):
                 paths.append(self.file(root / 'native' / 'payload',{'private':True}))

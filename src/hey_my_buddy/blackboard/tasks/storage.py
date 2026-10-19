@@ -26,7 +26,7 @@ _INSTALL_LOCK = re.compile(r'\.(' + _RUNTIME_ID + r')\.install\.lock')
 _BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
 
 
-def tree_info(path: Path) -> tuple[int, str, bool]:
+def tree_info(path: Path, *, excluded: frozenset[Path] = frozenset()) -> tuple[int, str, bool]:
     """Size and mutation fingerprint without traversing any reparse point."""
     size = 0
     digest = hashlib.sha256()
@@ -47,7 +47,7 @@ def tree_info(path: Path) -> tuple[int, str, bool]:
     collect(path)
     for item in sorted(paths):
         stat = item.lstat()
-        if not private_dirs.linked(item) and item.is_file():
+        if item not in excluded and not private_dirs.linked(item) and item.is_file():
             size += stat.st_size
         digest.update(f'{item.relative_to(path)}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_mode}\n'.encode())
     return size, digest.hexdigest(), safe
@@ -429,22 +429,25 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     rows = []
     orphaned, commands, known = process_inventory(state)
     now = time.time()
-    def add(category, path, reasons, **metadata):
+    def add(category, path, reasons, *, excluded=frozenset(), **metadata):
         linked = private_dirs.linked_component(path)
         if linked is not None:
             size, fingerprint, safe = 0, '', False
         else:
-            size, fingerprint, safe = tree_info(path)
+            size, fingerprint, safe = tree_info(path, excluded=excluded)
         if not safe:
             reasons = [*reasons, 'linked-path']
         if linked is None and not path.exists():
             return
-        rows.append({'id': hashlib.sha256(str(path).encode()).hexdigest()[:24], 'category': category,
-                     'path': str(path), 'bytes': size, 'eligible': not reasons, 'reasons': sorted(set(reasons)),
-                     'fingerprint': fingerprint, **metadata})
+        row = {'id': hashlib.sha256(str(path).encode()).hexdigest()[:24], 'category': category,
+               'path': str(path), 'bytes': size, 'eligible': not reasons, 'reasons': sorted(set(reasons)),
+               'fingerprint': fingerprint, **metadata}
+        rows.append(row)
+        return row
     # Snapshot board facts first. Filesystem walks and Git inspection must never
     # hold an authoritative database transaction open.
     native_owners = {}
+    private_task_ids = {}
     workspace_inputs = []
     with store.db.read() as connection:
         for run in connection.execute('SELECT * FROM workflow_runs'):
@@ -455,6 +458,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             for micro_task_id in micro_task_ids:
                 digest = hashlib.sha256(micro_task_id.encode()).hexdigest()
                 native_owners[digest] = (run['run_id'], reasons)
+                private_task_ids[digest] = micro_task_id
             manifest = json.loads(run['workspace_manifest_json'] or '{}')
             if not manifest:
                 continue
@@ -487,7 +491,22 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             if micro_tasks.exists():
                 for path in sorted(micro_tasks.iterdir()):
                     run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
-                    add('harnesses', path, reasons, runId=run_id, adapter=adapter)
+                    records = []
+                    attempts = path / 'attempts'
+                    if private_dirs.linked_component(attempts) is None and attempts.is_dir():
+                        for attempt in sorted(attempts.iterdir()):
+                            record = attempt / 'session.jsonl'
+                            if private_dirs.linked_component(record) is None and record.is_file():
+                                records.append((attempt.name, record))
+                    if records:
+                        reasons = [*reasons, 'session-records-retained']
+                    parent = add('harnesses', path, reasons, excluded=frozenset(record for _, record in records),
+                                 runId=run_id, adapter=adapter)
+                    if parent is None:
+                        continue
+                    for attempt_id, record in records:
+                        add('session-records', record, ['macro-task-deletion'], runId=run_id,
+                            taskId=private_task_ids.get(path.name), attemptId=attempt_id, adapter=adapter)
             if adapter != 'zcode':
                 for path in sorted(adapter_root.iterdir()):
                     if path.name != 'micro-tasks':
@@ -637,7 +656,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 add('durable', path, ['durable-record'])
                 continue
     categories = []
-    for key in ('harnesses', 'zcode', 'workspaces', 'runtimes', 'backup', 'durable'):
+    for key in ('harnesses', 'session-records', 'zcode', 'workspaces', 'runtimes', 'backup', 'durable'):
         members = [r for r in rows if r['category'] == key]
         total_bytes = tree_info(state / 'workspaces')[0] if key == 'workspaces' else sum(r['bytes'] for r in members)
         categories.append({'id': key, 'bytes': total_bytes,

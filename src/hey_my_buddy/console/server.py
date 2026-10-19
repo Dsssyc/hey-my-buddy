@@ -34,7 +34,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from ..errors import BoardError
 from .console_sessions import BrowserSession, ConsoleSessions, ENTRY_SECONDS, COOKIE_SECONDS, READ_OPERATIONS
 from .read_cache import ReadCache, encoding_unacceptable, select_encoding
-from . import reads
+from . import reads, session_content
 from ..blackboard.service.service import call_operation
 
 MAX_BODY_BYTES = 1024 * 1024
@@ -119,6 +119,11 @@ STATUS_BY_CODE = {
     "STATE_INTEGRITY": 500,
     "METHOD_NOT_FOUND": 404,
     "NOT_FOUND": 404,
+    "SESSION_NOT_INTEGRATED": 501,
+    "SESSION_NOT_RECORDED": 404,
+    "SESSION_DELETED": 410,
+    "SESSION_INVALID_RECORD": 422,
+    "SESSION_UNREADABLE": 500,
     "UNAUTHORIZED": 401,
     "FORBIDDEN": 403,
     "CONFLICT": 409,
@@ -763,6 +768,9 @@ class Console:
                         "macro_task_timeline", {"macroTaskId": identifier}, MACRO_TASK_TIMELINE_PARAMETERS
                     )
                 if relative.startswith("/api/tasks/"):
+                    session = re.fullmatch(r"/api/tasks/([A-Za-z0-9._:-]{1,128})/attempts/([A-Za-z0-9._:-]{1,128})/session", relative)
+                    if session is not None:
+                        return self._session_content(*session.groups())
                     return self._task(relative[len("/api/tasks/"):])
                 if relative.startswith("/api/"):
                     return self._error(404, "NOT_FOUND", "Not found")
@@ -859,6 +867,16 @@ class Console:
                 except Exception:  # noqa: BLE001 - no traceback crosses the boundary
                     return self._error(500, "INTERNAL_ERROR", "The work macro tasks could not be read")
                 self._send_read(outcome, coding)
+
+            def _session_content(self, task_id: str, attempt_id: str) -> None:
+                try:
+                    params = session_content.parse_query(urlsplit(self.path).query)
+                    view = session_content.read(console.store, task_id, attempt_id, params)
+                except BoardError as error:
+                    return self._board_error(error)
+                except Exception:  # noqa: BLE001 - no private paths cross the boundary
+                    return self._error(500, "INTERNAL_ERROR", "The session record could not be read")
+                self._json(200, view)
 
             def _task(self, run_id: str) -> None:
                 if not re.match(r"^[A-Za-z0-9._:-]{1,128}$", run_id):

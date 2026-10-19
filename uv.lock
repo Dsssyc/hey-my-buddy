@@ -47,7 +47,7 @@ wheels = [
 
 [[package]]
 name = "hey-my-buddy"
-version = "0.46.0"
+version = "0.47.0"
 source = { editable = "." }
 dependencies = [
     { name = "c-two" },

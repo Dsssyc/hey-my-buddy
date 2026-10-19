@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from hey_my_buddy import private_dirs
 from hey_my_buddy.buddy.harnesses.base import Adapter
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.codex import native_run
@@ -43,8 +44,12 @@ class DeleteSessionTests(unittest.TestCase):
         return [json.loads(line) for line in self.trace.read_text().splitlines()]
 
     def test_adapter_uses_controller_and_deletes_each_exact_identity_once(self):
+        record = private_dirs.attempt_root(self.root / 'state', 'codex', 'owned-task', 'owned-attempt') / 'session.jsonl'
+        private_dirs.ensure_private_dir(record.parent)
+        record.write_bytes(b'private display record\n')
         self.assertEqual(CodexAdapter().delete_sessions(["owned", "gone", "owned", "gone"]),
                          {"owned": "deleted", "gone": "already-gone"})
+        self.assertEqual(record.read_bytes(), b'private display record\n')
         frames = self.requests()
         self.assertEqual([item["method"] for item in frames],
                          ["initialize", "initialized", "thread/delete", "thread/delete"])
