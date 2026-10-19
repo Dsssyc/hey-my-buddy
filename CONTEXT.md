@@ -107,6 +107,14 @@ _Avoid_: family, 模型家族 (a model family is commonly a series of several mo
 Whoever serves models to a harness: a model's own vendor or another party. In a buddy's identity it is the name the harness gives that source.
 _Avoid_: 供应方, 服务商
 
+**订阅 / subscription**:
+A way of paying for model use: a plan bought from a vendor for a period, whose terms and limits bound how it may be used, whether the harness signs in with an account or with a key the plan issued.
+_Avoid_: 订阅登录 / subscription sign-in (the sign-in method does not decide the plan), 第一方登录 / first-party login (a vendor's own API key is first-party too)
+
+**按量 / metered**:
+A way of paying for model use: each request billed by usage to the owner of the key, under the terms of the provider that issued it.
+_Avoid_: BYOK, API 密钥 / API key (as a way of paying: a key can belong to a subscription)
+
 **冷却 / cooling**:
 The time a provider of one harness sits out automatic routing after it refused work for quota. It grows with consecutive refusals, ends by itself or when the user clears it, and a later success ends the sequence. It belongs to the provider in that harness, not to a model or a buddy, and never changes the user's enablement or preferences.
 _Avoid_: 额度耗尽 / exhausted (for the provider's state; a refusal that interrupts a turn is still reported as quota used up), quota window
