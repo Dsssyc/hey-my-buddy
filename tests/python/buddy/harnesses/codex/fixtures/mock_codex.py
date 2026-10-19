@@ -8,7 +8,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from protocol_items import item_frames
+from protocol_items import item_frames, session_frames
 
 
 def send(value):
@@ -339,6 +339,21 @@ def main():
                         state['threads'][thread_id].setdefault('clientReplies', []).append(reply)
                         write_state(state)
             send_usage(case, thread_id, turn_id, turn_index)
+            if case in ("session-stream", "session-stream-disconnect"):
+                for method, fields in session_frames(params['input'][0]['text']):
+                    send({"method": method, "params": {"threadId": thread_id, "turnId": turn_id, **fields}})
+                # The controller test releases this only after it reads a
+                # flushed message while no completed item has been sent.
+                release = state_path().with_suffix('.release')
+                deadline = time.monotonic() + 5
+                while not release.exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                if not release.exists():
+                    raise RuntimeError('session stream was not visible before completion')
+                if case == 'session-stream-disconnect':
+                    return
+                send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
+                      "item": {"id": "stream", "type": "agentMessage", "phase": "commentary", "text": "运行中𝄞，结束"}}})
             if case.startswith("protocol-"):
                 for method, protocol_item in item_frames(case.removeprefix("protocol-")):
                     send({"method": method, "params": {"threadId": thread_id, "turnId": turn_id,
@@ -353,7 +368,7 @@ def main():
                 state["threads"][thread_id]["turns"].append(turn)
                 write_state(state)
                 continue
-            if case in ("hang", "interrupt-settled", "interrupt-foreign") or (case == "wrap-up" and turn_index == 0):
+            if case in ("hang", "interrupt-settled", "interrupt-foreign", "session-interrupt") or (case == "wrap-up" and turn_index == 0):
                 # These scenarios record an explicit start fact, and only
                 # after the turn/start response and the turn/started notification
                 # were actually emitted: a thread merely existing never counts as a
@@ -369,6 +384,9 @@ def main():
                     if request.get("method") != "turn/interrupt":
                         raise RuntimeError("expected the native turn interrupt")
                     send({"id": request["id"], "result": {}})
+                    if case == 'session-interrupt':
+                        send({"method": "item/agentMessage/delta", "params": {"threadId": thread_id,
+                              "turnId": turn_id, "itemId": "late", "delta": "received during interrupt"}})
                     terminal_id = "foreign-turn" if case == "interrupt-foreign" else turn_id
                     turn = {"id": terminal_id, "status": "interrupted", "items": []}
                     send({"method": "turn/completed", "params": {"threadId": thread_id, "turn": turn}})

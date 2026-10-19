@@ -151,7 +151,7 @@ class NativeQuotaFailureTests(unittest.TestCase):
                 evidence.completed = {"status": "failed", "error": {"codexErrorInfo": native}}
                 evidence.event_seq = 1
                 evidence.started = True
-                chain = SimpleNamespace(projector=None, bind=Mock())
+                chain = SimpleNamespace(projector=None, session=None, bind=Mock())
                 with patch.object(native_run, "_admit_turn", return_value={"turn": {"id": "turn"}}), \
                      patch.object(native_run, "TurnEvidence", return_value=evidence), \
                      patch.object(native_run, "_checkpoint", return_value=None), \

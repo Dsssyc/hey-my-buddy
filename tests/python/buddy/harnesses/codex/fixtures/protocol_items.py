@@ -35,3 +35,19 @@ def item_frames(name):
     if carrier == "typed":
         return [("item/started", item), ("item/completed", item)]
     return [("rawResponseItem/completed", item)]
+
+
+def session_frames(input_text):
+    """Synthetic streaming timing fixture, not additional real CLI observations.
+
+    Only PROTOCOL_ITEMS above establishes the recorded 0.162.1 samples.
+    Reasoning indices and command output delta fields below remain unverified
+    against a real CLI; these exercise the projector's explicit field mapping.
+    """
+    return [
+        ("item/started", {"item": {"id": "input", "type": "userMessage", "content": [{"type": "text", "text": input_text}]}}),
+        ("item/completed", {"item": {"id": "input", "type": "userMessage", "content": [{"type": "text", "text": input_text}]}}),
+        ("item/started", {"item": {"id": "stream", "type": "agentMessage", "text": "", "phase": "commentary"}}),
+        ("item/agentMessage/delta", {"itemId": "stream", "delta": "运行中"}),
+        ("item/agentMessage/delta", {"itemId": "stream", "delta": "𝄞"}),
+    ]

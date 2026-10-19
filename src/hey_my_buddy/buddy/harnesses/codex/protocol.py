@@ -123,11 +123,13 @@ class Connection:
         else:
             self.on_notification(message)
 
-    def call(self, method: str, params: dict) -> dict:
+    def call(self, method: str, params: dict, *, on_sent=None) -> dict:
         request_id = self.next_id
         self.next_id += 1
         self.pending_ids.add(request_id)
         self.send({"id": request_id, "method": method, "params": params})
+        if on_sent is not None:
+            on_sent()
         while request_id not in self.responses:
             self.pump()
         response = self.responses.pop(request_id)

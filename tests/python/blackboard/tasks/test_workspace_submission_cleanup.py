@@ -49,6 +49,60 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             self.assertIsNone(connection.execute('SELECT task_id FROM tasks WHERE request_id=?', (request,)).fetchone())
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM workspace_reservations WHERE path=?', (str(self.allocation(request) / 'checkout'),)).fetchone()[0], 0)
 
+    def test_reclaim_keeps_each_session_and_failure_evidence_without_successful_private_state(self):
+        from hey_my_buddy import private_dirs
+        from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+        from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
+
+        board = self.board()
+        submitted = self.submit(board, cwd=str(self.repo), kind='worktree')
+        run_id = submitted['runId']
+        first = self.claim(board, run_id=run_id)
+        failed_id = first['claim']['attempt']['attemptId']
+        self.finish_turn(board, first, runner_status='failed', exit_code=1)
+        failed_view = board.call('workflow_get', {'runId': run_id})
+        self.continue_run(board, failed_view)
+        second = self.claim(board, run_id=run_id, nonce='q' * 16)
+        attempt = second['claim']['attempt']
+        success_id = attempt['attemptId']
+        manifest = second['claim']['turn']['input']['executionWorkspace']
+        seal = workspace.seal(self.directory, manifest, run_id, success_id)
+        board.call('execution_result', {'attemptId': success_id, 'generation': attempt['generation'],
+            'nonce': 'q' * 16, 'status': 'ok', 'terminationReason': 'completed', 'shutdownConfirmed': True,
+            'exitCode': 0, 'result': {'status': 'ok', 'turn': self.turn_record(second),
+                'processState': {'shutdownConfirmed': True}, 'workspaceSeal': seal}})
+        delivered = board.call('workflow_get', {'runId': run_id})
+        records = {}
+        for adapter in ('codex', 'dsh', 'zcode', 'claude'):
+            for attempt_id in (failed_id, success_id):
+                record = SessionRecord(board.directory, adapter, run_id, attempt_id)
+                record.append(MessageChunk(session_update='agent_message_chunk', content=TextContent(text=attempt_id)))
+                record.close()
+                records[(adapter, attempt_id)] = record.path.read_bytes()
+                root = record.path.parent
+                (root / 'agent-credential.json').write_text('credential fixture')
+                (root / 'unknown-events.json').write_text('failure evidence fixture')
+                if attempt_id == success_id:
+                    (root / 'config.toml').write_text('native configuration fixture')
+            native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, adapter, run_id))
+            (native / 'session.json').write_text('native binding fixture')
+            unknown = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown'))
+            (unknown / 'session.jsonl').write_text('not a known attempt')
+        accepted = self.accept_run(board, delivered, keepCheckout=True)
+        reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
+        self.assertTrue(reclaimed['removed'])
+        for adapter in ('codex', 'dsh', 'zcode', 'claude'):
+            for attempt_id in (failed_id, success_id):
+                root = private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id)
+                self.assertEqual((root / 'session.jsonl').read_bytes(), records[(adapter, attempt_id)])
+                self.assertFalse((root / 'agent-credential.json').exists())
+                if attempt_id == success_id:
+                    self.assertEqual(sorted(path.name for path in root.iterdir()), ['session.jsonl'])
+                else:
+                    self.assertEqual((root / 'unknown-events.json').read_text(), 'failure evidence fixture')
+            self.assertFalse(private_dirs.native_root(board.directory, adapter, run_id).exists())
+            self.assertFalse(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown').exists())
+
     def test_public_integration_during_failed_admission_retains_new_target(self):
         board = self.board()
         delivered = self.submit(board, request_id='integration-source', cwd=str(self.repo))

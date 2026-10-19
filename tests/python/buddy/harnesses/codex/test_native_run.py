@@ -854,6 +854,98 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_startup_retry_leaves_no_record_and_the_same_attempt_can_start(self):
+        from hey_my_buddy.private_dirs import attempt_root
+
+        self.set_case('ok')
+        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='retry input')
+        path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
+                            request.identity.task_id, request.identity.attempt_id) / 'session.jsonl'
+        with mock.patch.object(native_run, '_spawn_app_server', side_effect=CodexProtocolError(
+                'harness-unavailable', 'the selected executable moved before spawn')):
+            failed = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=self.worker_services(), cancelled=lambda: False)
+        self.assertEqual(failed.end.reason_code, 'harness-unavailable')
+        self.assertFalse(failed.model_started)
+        self.assertFalse(path.exists(), 'a failed startup must not create the session record')
+        retried = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                      services=self.worker_services(), cancelled=lambda: False)
+        self.assertEqual(retried.end.status, 'ok', retried.end.message)
+        lines = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual(sum(line.get('protocol') == 'acp' for line in lines), 1)
+        self.assertEqual([line['update']['content']['text'] for line in lines[1:]
+                          if line['update']['sessionUpdate'] == 'user_message_chunk'], ['retry input'])
+
+    def test_session_stream_is_visible_before_completion_and_survives_disconnect(self):
+        from hey_my_buddy.private_dirs import attempt_root
+        from hey_my_buddy.protocol.session_content import SessionFormat, SessionNotification
+
+        for case in ('session-stream', 'session-stream-disconnect'):
+            with self.subTest(case=case):
+                self.set_case(case)
+                request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='actual sent input')
+                path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
+                                    request.identity.task_id, request.identity.attempt_id) / 'session.jsonl'
+                release = Path(os.environ['HMB_CODEX_FIXTURE_STATE']).with_suffix('.release')
+                release.unlink(missing_ok=True)
+                visible = []
+                pump = native_run.Connection.pump
+
+                def observe_pump(connection):
+                    pump(connection)
+                    if path.exists():
+                        lines = [json.loads(line) for line in path.read_text().splitlines()]
+                        if any(line.get('update', {}).get('content', {}).get('text') == '运行中𝄞' for line in lines):
+                            visible.append(True)
+                            release.touch()
+
+                with mock.patch.object(native_run.Connection, 'pump', observe_pump):
+                    result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                                 services=self.worker_services(), cancelled=lambda: False)
+                self.assertTrue(visible, 'the native fixture waits for a flushed running message')
+                self.assertEqual(result.end.status, 'ok' if case == 'session-stream' else 'error')
+                self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+                lines = [json.loads(line) for line in path.read_text().splitlines()]
+                SessionFormat.from_payload(lines[0])
+                for line in lines[1:]:
+                    SessionNotification.from_payload(line)
+                    self.assertEqual(line['sessionId'], request.identity.attempt_id)
+                updates = [line['update'] for line in lines[1:]]
+                self.assertEqual([row['content']['text'] for row in updates if row['sessionUpdate'] == 'user_message_chunk'],
+                                 ['actual sent input'])
+                chunks = [row['content']['text'] for row in updates if row.get('_meta', {}).get('nativeItemId') == 'stream']
+                self.assertEqual(''.join(chunks), '运行中𝄞，结束' if case == 'session-stream' else '运行中𝄞')
+
+    def test_rejected_native_turn_retains_the_input_actually_sent(self):
+        from hey_my_buddy.private_dirs import attempt_root
+
+        self.set_case('unlisted-model')
+        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='rejected input')
+        result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=self.worker_services(), cancelled=lambda: False)
+        self.assertEqual(result.end.status, 'error')
+        path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
+                            request.identity.task_id, request.identity.attempt_id) / 'session.jsonl'
+        lines = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual(len(lines), 2)
+        self.assertEqual(lines[1]['update']['content']['text'], 'rejected input')
+
+    def test_content_received_during_interrupt_is_flushed_with_stop_evidence_unchanged(self):
+        from hey_my_buddy.private_dirs import attempt_root
+
+        cancelled = self.cancel_after_native_start()
+        self.set_case('session-interrupt')
+        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='interrupt input')
+        result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=self.worker_services(), cancelled=cancelled)
+        self.assertEqual(result.end.status, 'cancelled')
+        self.assertEqual(result.stop_evidence.interrupt.basis, 'native-turn-interrupt-ack')
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+        path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
+                            request.identity.task_id, request.identity.attempt_id) / 'session.jsonl'
+        lines = [json.loads(line) for line in path.read_text().splitlines()]
+        self.assertEqual(lines[-1]['update']['content']['text'], 'received during interrupt')
+
     def cancel_after_native_start(self):
         admitted = threading.Event()
         observe = native_run.TurnEvidence.observe

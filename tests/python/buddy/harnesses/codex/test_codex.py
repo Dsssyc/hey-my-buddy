@@ -459,10 +459,20 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertNotIn("turn", outcome.result)
 
     def test_host_wrap_up_resumes_same_native_session_for_structured_summary(self):
+        from hey_my_buddy.private_dirs import attempt_root
+        from hey_my_buddy.protocol.session_content import SessionFormat, SessionNotification
+
         context = self.context("wrap-up", timeout=None)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         started = self.wait_native_turn_start()
+        session_path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
+                                    context.task_id, context.attempt_id) / 'session.jsonl'
+        record_deadline = time.monotonic() + 5
+        while not session_path.exists() and time.monotonic() < record_deadline:
+            time.sleep(0.01)
+        first_record = session_path.read_bytes()
+        self.assertTrue(first_record.endswith(b'\n'))
         controller.worker_stop(self.adapter, handle, stop_initiator="host",
                                grace_deadline=time.monotonic() + 10)
         self.assertIsNotNone(handle.wait(15), "Codex fixture summary controller did not exit")
@@ -485,6 +495,20 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual([(item["id"], item["status"]) for item in native_turns],
                          [(started["turnId"], "interrupted"), ("native-turn-2", "completed")])
         self.assertEqual(len(state["threads"][started["threadId"]]["resumeRequests"]), 1)
+        final_record = session_path.read_bytes()
+        self.assertTrue(final_record.startswith(first_record), 'the original turn must stay intact')
+        lines = [json.loads(line) for line in final_record.splitlines()]
+        self.assertEqual(sum(line.get('protocol') == 'acp' for line in lines), 1)
+        SessionFormat.from_payload(lines[0])
+        for line in lines[1:]:
+            SessionNotification.from_payload(line)
+            self.assertEqual(line['sessionId'], context.attempt_id)
+        inputs = [line['update']['content']['text'] for line in lines[1:]
+                  if line['update']['sessionUpdate'] == 'user_message_chunk']
+        self.assertEqual(len(inputs), 2, 'the original and wrap-up runs share one attempt record')
+        self.assertNotEqual(inputs[0], inputs[1])
+        self.assertEqual(json.loads(lines[-1]['update']['content']['text'])['outcome']['summary'],
+                         'Stopped partial work summary')
 
     def test_read_only_refuses_a_conflicting_policy_receipt(self):
         result, _context = self.review('readonly-policy-mismatch', index=41)

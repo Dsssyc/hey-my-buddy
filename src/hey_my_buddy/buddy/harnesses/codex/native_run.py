@@ -122,6 +122,8 @@ from .tool_evidence import (
     TYPED_TOOL_OUTPUTS,
     CodexToolEventProjector,
 )
+from .session_content import CodexSessionProjector
+from ..session_record import SessionRecord
 
 _NATIVE_STDERR_FILE = "native.stderr.log"
 #: The checkpoint's retained root assistant message bound, in serialized bytes.
@@ -878,6 +880,7 @@ class _EventChain:
         self.carrier: Callable[[dict], Any] | None = None
         self.pending: list[dict] = []
         self.truncated = False
+        self.session: CodexSessionProjector | None = None
 
     def observe_facts(self, message: dict) -> None:
         """Project and classify one frame without the carrier stage."""
@@ -888,6 +891,8 @@ class _EventChain:
 
     def observe(self, message: dict) -> None:
         self.observe_facts(message)
+        if self.session is not None:
+            self.session.observe_notification(message)
         if self.carrier is None:
             if len(self.pending) >= _BOUND_NOTIFICATIONS:
                 self.truncated = True
@@ -916,11 +921,13 @@ class _NativeInquiry:
     """The current root turn owns inquiry delivery and client-tool answers."""
 
     def __init__(self, connection: Connection, evidence: TurnEvidence, thread_id: str,
-                 turn_id: str, services: ClientInquiryServices, bridge: InquiryBridge):
+                 turn_id: str, services: ClientInquiryServices, bridge: InquiryBridge,
+                 session: CodexSessionProjector | None = None):
         self.connection, self.evidence = connection, evidence
         self.thread_id, self.turn_id = thread_id, turn_id
         self.services, self.bridge = services, bridge
         self._polling = False
+        self.session = session
 
     def poll(self) -> None:
         if self._polling or self.evidence.completed is not None:
@@ -940,7 +947,9 @@ class _NativeInquiry:
                 try:
                     response = self.connection.call("turn/steer", {
                         "threadId": self.thread_id, "expectedTurnId": self.turn_id,
-                        "input": [{"type": "text", "text": prompt}]})
+                        "input": [{"type": "text", "text": prompt}]}, **(
+                        {"on_sent": lambda: self.session.record_input(prompt, (self.thread_id, self.turn_id))}
+                        if self.session is not None else {}))
                 except CodexProtocolError as error:
                     if error.code == "native-rpc-error" and self.evidence.completed is not None:
                         break  # The turn settled while the native input was in flight.
@@ -1074,7 +1083,8 @@ def _capture_frame(capture: dict, message: dict) -> None:
 
 
 def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
-                input_text: str, mode: str, state: _RunState) -> dict:
+                input_text: str, mode: str, state: _RunState,
+                chain: _EventChain | None = None) -> dict:
     """The one turn admission site: send this round's input and schema."""
     params: dict = {"threadId": thread_id, "cwd": request.cwd, "model": request.buddy.model,
                     "effort": request.buddy.effort, "approvalPolicy": "never",
@@ -1087,7 +1097,16 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
     if mode == "worker":
         state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
-    return connection.call("turn/start", params)
+    def record_input() -> None:
+        # Startup retries run under the same attempt. Open its single record
+        # only after a turn has actually been sent, including wrap-up turns.
+        if chain.session is None:
+            from ..runtime_selection import environment_for
+            chain.session = CodexSessionProjector(SessionRecord(
+                Path(environment_for()["HMB_STATE_DIR"]), "codex", request.identity.task_id, request.identity.attempt_id))
+        chain.session.record_input(input_text)
+
+    return connection.call("turn/start", params, **({"on_sent": record_input} if chain is not None else {}))
 
 
 def _checkpoint(request: RunRequest, evidence: TurnEvidence) -> dict:
@@ -1189,13 +1208,13 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         state.interrupt_requested = True
         state.interrupt_basis = state.interrupt_basis or "observer-request"
         if connection is not None and state.thread_id and state.turn_id:
-            _interrupt(connection, state)
+            _interrupt(connection, state, chain.session)
     except (CodexProtocolError, VersionShutdownError) as error:
         state.status = "cancelled" if error.code == "user-cancel" else "error"
         state.reason, state.error_text = error.code, str(error)
         if connection is not None and state.thread_id and state.turn_id \
                 and error.code in ("user-cancel", "deadline"):
-            _interrupt(connection, state)
+            _interrupt(connection, state, chain.session)
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         state.status, state.reason = "error", "invalid-native-result"
         state.error_text = "Codex returned invalid or incomplete native data"
@@ -1206,7 +1225,11 @@ def _run(request: RunRequest, services: RunServices, mode: str,
         # A preparation failure also reaches the stop collection: nothing was
         # ever spawned, and that known fact — not an unknown — is what the
         # result must carry.
-        _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
+        try:
+            _stop_collection(request, prep, state, spawn, owned_spawn, mode, cancel)
+        finally:
+            if chain.session is not None:
+                chain.session.close()
     _collect_quota_failure(state, stream_truncated=chain.truncated)
     return _build_result(request, prep, state, mode, projector, facts, activity)
 
@@ -1246,6 +1269,8 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
     def dispatch_feedback() -> None:
         # Runs after every pump step, the waits inside ``call`` included: the
         # refusal answer is already on the wire when the role's stop lands.
+        if chain.session is not None and connection.messages.empty():
+            chain.session.flush()
         if facts.dirty:
             facts.dirty = False
             tool_calls = chain.projector.tool_calls if chain.projector is not None else 0
@@ -1279,7 +1304,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
                  inquiry_poller: list[_NativeInquiry] | None = None) -> None:
     """The micro task turn: one admission, settlement, usage, checkpoint."""
     state.model_started = True
-    response = _admit_turn(connection, request, thread_id, request.input_text, "worker", state)
+    response = _admit_turn(connection, request, thread_id, request.input_text, "worker", state, chain)
     turn = response.get("turn")
     turn_id = turn.get("id") if isinstance(turn, dict) else None
     if not isinstance(turn_id, str) or not turn_id:
@@ -1288,6 +1313,8 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     if chain.projector is not None:
         # The trusted root identity comes only from this native turn receipt.
         chain.projector.observe_root(thread_id, turn_id)
+    if chain.session is not None:
+        chain.session.observe_root(thread_id, turn_id, request.input_text, turn.get("items") or [])
     evidence = TurnEvidence(thread_id, turn_id)
     state.turn_evidence = evidence
     items = turn.get("items")
@@ -1297,7 +1324,7 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
     native_inquiry = None
     if inquiry_bridge is not None and inquiry_services is not None:
         native_inquiry = _NativeInquiry(connection, evidence, thread_id, turn_id,
-                                        inquiry_services, inquiry_bridge)
+                                        inquiry_services, inquiry_bridge, chain.session)
         inquiry_bridge.activate(thread_id)
         if inquiry_poller is not None:
             inquiry_poller.append(native_inquiry)
@@ -1366,7 +1393,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         fast_state = {"started": False, "completed": None, "final": None}
         chain.unbind()
         state.model_started = True
-        response = _admit_turn(connection, request, thread_id, input_text, mode, state)
+        response = _admit_turn(connection, request, thread_id, input_text, mode, state, chain)
         turn = response.get("turn")
         turn_id = turn.get("id") if isinstance(turn, dict) else None
         if mode == "fast":
@@ -1378,6 +1405,9 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
         if chain.projector is not None:
             # The trusted root identity comes only from this native turn receipt.
             chain.projector.observe_root(thread_id, turn_id)
+        if chain.session is not None:
+            items = turn.get("items")
+            chain.session.observe_root(thread_id, turn_id, input_text, items if isinstance(items, list) else [])
         if mode == "fast":
             items = turn.get("items")
             if items is not None and not isinstance(items, list):
@@ -1502,15 +1532,22 @@ def _drain_to_eof(connection: Connection, chain: _EventChain,
             _take_feedback(feedback, mode, settled=False)
 
 
-def _interrupt(connection: Connection, state: _RunState) -> None:
+def _interrupt(connection: Connection, state: _RunState, session: CodexSessionProjector | None = None) -> None:
     """A fresh short control budget permits a native interrupt after the deadline."""
+    late_content = []
+
+    def observe_terminal(message: dict) -> None:
+        if session is not None:
+            late_content.append(message)
+        if state.turn_evidence is not None:
+            state.turn_evidence.observe(message)
+
     try:
         # The interrupted root's terminal notification is separate from the
         # interrupt RPC receipt. Keep its exact thread/turn correlation after
         # the role observer has stopped receiving events.
         evidence = state.turn_evidence
-        connection.on_notification = (lambda message: evidence.observe(message)
-                                      if evidence is not None else None)
+        connection.on_notification = observe_terminal
         connection.after_pump = None
         connection.cancelled = CancelFlag(lambda: False)
         connection.deadline = time.monotonic() + 2
@@ -1535,6 +1572,12 @@ def _interrupt(connection: Connection, state: _RunState) -> None:
             state.checkpoint["nativeTurnStatus"] = (evidence.completed or {}).get("status", "incomplete")
             state.checkpoint["eventSeq"] = evidence.event_seq
             state.event_count = evidence.event_seq
+        # Project after the interrupt's transport-error boundary: a display
+        # write error propagates, it cannot turn into an unconfirmed interrupt.
+        if session is not None:
+            for message in late_content:
+                session.observe_notification(message)
+            session.flush()
 
 
 # -- phase 5: stop collection -------------------------------------------------------

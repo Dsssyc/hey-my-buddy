@@ -5729,6 +5729,9 @@ class WorkflowCoordinator:
                 private_micro_tasks.extend(task['task_id'] for task in self._routing_tasks(connection, micro_task_id))
             failed_attempts = {micro_task_id: self._failed_attempt_ids(connection, micro_task_id)
                                for micro_task_id in dict.fromkeys(private_micro_tasks)}
+            session_attempts = {micro_task_id: tuple(row['attempt_id'] for row in connection.execute(
+                'SELECT attempt_id FROM attempts WHERE task_id=?', (micro_task_id,)))
+                for micro_task_id in failed_attempts}
         with self._cleanup_allocation_lock(self.board.directory, allocation):
             with self.db.read() as connection:
                 reject_deleting_run(connection, target_id)
@@ -5806,7 +5809,9 @@ class WorkflowCoordinator:
                 private_dirs.remove_tree(
                     private_dirs.micro_task_root(self.board.directory, adapter, micro_task_id),
                     keep=frozenset(private_dirs.attempt_root(self.board.directory, adapter, micro_task_id, attempt_id)
-                                   for attempt_id in attempt_ids))
+                                   for attempt_id in attempt_ids) | frozenset(
+                        private_dirs.attempt_root(self.board.directory, adapter, micro_task_id, attempt_id) / 'session.jsonl'
+                        for attempt_id in session_attempts[micro_task_id]))
         with self.db.write() as connection:
             run_row = self._run_row(connection, run_id)
             plan = connection.execute(

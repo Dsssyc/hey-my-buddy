@@ -119,7 +119,7 @@ class CodexToolEventProjector:
         params = message.get("params")
         if method == "turn/completed" and isinstance(params, dict):
             turn = params.get("turn") or {}
-            identity = self._identity({**params, "turnId": params.get("turnId") or turn.get("id")})
+            identity = native_identity({**params, "turnId": params.get("turnId") or turn.get("id")})
             if identity in self.roots:
                 self.evidence.close_root(identity)
             return
@@ -178,7 +178,7 @@ class CodexToolEventProjector:
 
     def _output(self, params, item: dict, kind: str) -> None:
         call_id = item.get("call_id") or item.get("id")
-        identity = self._identity(params)
+        identity = native_identity(params)
         correlated = None
         if identity and isinstance(call_id, str) and call_id:
             correlated = self._started.get((canonical_json(identity), call_id))
@@ -187,7 +187,7 @@ class CodexToolEventProjector:
                       native_type=correlated[1] if correlated else None, call_id=call_id)
 
     def _observe(self, params, *, phase: str, tool_name, call_id, native_type=None) -> None:
-        identity = self._identity(params)
+        identity = native_identity(params)
         fact = {"nativeIdentity": identity or {}, "callId": call_id,
                 "toolName": tool_name, "phase": phase, **({"type": native_type} if native_type else {})}
         if (identity is None or "sessionId" not in identity or "turnId" not in identity
@@ -206,33 +206,31 @@ class CodexToolEventProjector:
             self._started[(canonical_json(identity), call_id)] = (tool_name, native_type)
 
     def _incomplete(self, params, *, tool_name, phase) -> None:
-        self.evidence.observe_incomplete(HARNESS, {"nativeIdentity": self._identity(params) or {},
+        self.evidence.observe_incomplete(HARNESS, {"nativeIdentity": native_identity(params) or {},
                                                    "callId": None, "toolName": tool_name, "phase": phase})
 
-    @staticmethod
-    def _identity(params) -> dict | None:
-        """The frame's real session/turn pair, or ``None`` when both are absent.
+def native_identity(params) -> dict | None:
+    """The frame's real session/turn pair, or ``None`` when both are absent.
 
-        A frame missing either identity cannot be bound to this attempt's root
-        turns and stays incomplete; identities are never fabricated.
-        """
-        if not isinstance(params, dict):
-            return None
-        identity = {}
-        session = params.get("threadId")
-        if isinstance(session, str) and session:
-            identity["sessionId"] = session
-        turn = params.get("turnId")
-        if not isinstance(turn, str) or not turn:
-            native_turn = params.get("turn")
-            turn = native_turn.get("id") if isinstance(native_turn, dict) else None
-        if isinstance(turn, str) and turn:
-            identity["turnId"] = turn
-        return identity or None
-
+    A frame missing either identity cannot be bound to this attempt's root
+    turns and stays incomplete; identities are never fabricated.
+    """
+    if not isinstance(params, dict):
+        return None
+    identity = {}
+    session = params.get("threadId")
+    if isinstance(session, str) and session:
+        identity["sessionId"] = session
+    turn = params.get("turnId")
+    if not isinstance(turn, str) or not turn:
+        native_turn = params.get("turn")
+        turn = native_turn.get("id") if isinstance(native_turn, dict) else None
+    if isinstance(turn, str) and turn:
+        identity["turnId"] = turn
+    return identity or None
 
 __all__ = [
-    "HARNESS", "CodexToolEventProjector", "NAMED_RAW_CALLS", "NON_TOOL_ITEMS",
+    "HARNESS", "CodexToolEventProjector", "native_identity", "NAMED_RAW_CALLS", "NON_TOOL_ITEMS",
     "RAW_ITEM_KINDS", "RAW_NON_TOOL_ITEMS", "RAW_TOOL_OUTPUTS", "RAW_TOOL_STARTS",
     "THREAD_ITEM_KINDS", "TYPED_TOOL_ITEMS", "TYPED_TOOL_OUTPUTS",
 ]

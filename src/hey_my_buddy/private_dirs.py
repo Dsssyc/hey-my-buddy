@@ -140,7 +140,7 @@ def ensure_private_dir(path: Path) -> Path:
 
 
 def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
-    """Remove one real tree, retaining exact subtrees without traversing links."""
+    """Remove one real tree, retaining exact files or subtrees and their parents."""
     path = _absolute(path)
     keep = frozenset(_absolute(item) for item in keep)
     _guard_parents(path.parent)
