@@ -15,6 +15,9 @@
   },
   "dependencies": {
     "@lobehub/icons-static-svg": "1.95.1",
+    "@shikijs/langs": "3.22.0",
+    "@shikijs/themes": "3.22.0",
+    "ansi-to-react": "6.2.6",
     "class-variance-authority": "0.7.1",
     "cn": "0.4.0",
     "i18next": "26.4.3",
@@ -22,7 +25,10 @@
     "radix-ui": "1.7.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "react-i18next": "17.0.16"
+    "react-i18next": "17.0.16",
+    "shiki": "3.22.0",
+    "streamdown": "2.7.0",
+    "zod": "4.3.6"
   },
   "devDependencies": {
     "@playwright/test": "1.64.0",

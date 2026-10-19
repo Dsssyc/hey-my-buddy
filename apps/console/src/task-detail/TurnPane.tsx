@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
+import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { StateMark } from "@/components/ui/state-mark";
 import { CopyableIdentifier } from "../components/CopyableIdentifier";
@@ -144,6 +145,7 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
       {expected !== null && <span className="tabular-nums text-ink3">{t("turn.expected", { time: formatDuration(expected * 1000) })}</span>}
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>
+    {ctx.openSession && <div className="px-6 pb-3"><Button data-session-entry={attemptId} variant="outline" size="sm" onClick={() => ctx.openSession!(ctx.view.task.runId, attemptId)}>{t("sessionView.open")}</Button></div>}
     <Band role="Worker" identity={quad(buddy) ?? <span className="font-sans text-ink3">{t("unrecorded")}</span>}
       end={!turn?.routing ? <span className="text-ink3">{t("origin.unrecorded")}</span>
         : <Origin basis={basisOf(ctx, attemptId, turn.routing.decisionId)}>{

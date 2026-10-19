@@ -1,5 +1,6 @@
 export default {
   title: "设置", theme: "主题", language: "语言", light: "浅色", dark: "深色", system: "跟随系统", browser: "跟随浏览器", chinese: "中文", english: "English",
+  dataFlow: { title: "会话数据", detail: "会话可能包含命令输入输出等敏感内容，仅在本机控制台显示，不进入备份或导出，随所属宏任务删除。" },
   access: {
     title: "访问", allowAuthorized: "只允许已授权的浏览器",
     description: "开启后，新的浏览器要用 hey-my-buddy console 给出的链接授权，才能打开控制台。这台电脑有别的账户，或者端口被转发给别的机器时开启。",

@@ -280,4 +280,5 @@ export type Context = {
   nowMs: number;
   /** Opens another micro task's detail. */
   open: (runId: string) => void;
+  openSession?: (taskId: string, attemptId: string) => void;
 };

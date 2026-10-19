@@ -1,7 +1,7 @@
 import { cn } from "cn";
 import { Button } from "./components/ui/button";
 import { Collapsible, CollapsibleContent } from "./components/ui/collapsible";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { ConsoleApi } from "./api";
@@ -22,6 +22,7 @@ import { TaskDetail } from "./task-detail/TaskDetail";
 import { createTaskDetailClient } from "./task-detail/client";
 import { TASKS_ROOT, tasksHash, tasksLocation } from "./task-detail/location";
 import type { TasksLocation } from "./task-detail/location";
+import type { SessionPosition } from "./session-view/types";
 import { useMacroTaskList } from "./use-macro-task-list";
 import { useMacroTaskTimeline } from "./use-macro-task-timeline";
 import { stopScope, stopStatus, useMacroTaskStop } from "./macro-task-stop";
@@ -32,6 +33,8 @@ import { displayTitle } from "./macro-task-display";
 import { MacroTaskDeleteDialog } from "./MacroTaskDeleteDialog";
 
 import { useViewPreference } from "./view-preferences";
+
+const SessionDialog = lazy(() => import("./session-view/SessionDialog"));
 
 function ConnectionStrip({ error, verifiedAtMs, retry }: { error: string; verifiedAtMs: number | null; retry: () => void }) {
   const { t } = useTranslation("tasks");
@@ -93,7 +96,11 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
   const [origin, setOrigin] = useState<string | null>(null);
   function go(next: TasksLocation, how: "push" | "replace", from: string | null = null) {
     const hash = tasksHash(next);
-    if (window.location.hash !== hash) (how === "push" ? window.history.pushState : window.history.replaceState).call(window.history, null, "", hash);
+    const opener = document.activeElement;
+    const originKey = opener?.getAttribute("data-session-origin") ?? null;
+    const scroll = originKey ? document.querySelector<HTMLElement>('[data-slot="timeline-tracks"]') : opener?.closest<HTMLElement>('[data-slot="scroll-area-viewport"]');
+    const state = next.session && !location.session ? { sessionReturn: { attemptId: next.session.attemptId, origin: originKey, detail: next.runId !== null, top: scroll?.scrollTop ?? 0, left: scroll?.scrollLeft ?? 0 } } : how === "replace" ? window.history.state : null;
+    if (window.location.hash !== hash) (how === "push" ? window.history.pushState : window.history.replaceState).call(window.history, state, "", hash);
     setOrigin(from);
     setLocation(next);
     onAddress?.(hash);
@@ -126,7 +133,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   go: (next: TasksLocation, how: "push" | "replace", from?: string | null) => void;
   listNavigation: () => ReactNode; listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
 }) {
-  const { t } = useTranslation(["tasks", "shell", "macroHeader"]);
+  const { t } = useTranslation(["tasks", "shell", "macroHeader", "taskDetail"]);
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
   const [query, setQuery] = useState("");
   const selected = location.macroTaskId;
@@ -247,10 +254,12 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
       timeline={timeline.timeline} timelineLoading={timeline.loading && !timeline.timeline}
       nowMs={timeline.displayObservedAt ? Date.parse(timeline.displayObservedAt) : null}
       step={location.step} origin={origin} active={active}
-      onStep={step => { go({ macroTaskId: selected, runId, step }, "replace", origin); }}
+      onStep={step => { go({ ...location, macroTaskId: selected, runId, step }, "replace", origin); }}
+      onOpenSession={(taskId, attemptId) => go({ ...location, session: { taskId, attemptId } }, "push", origin)}
       onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
     headerActions={stopControl} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     buddies={snapshot.buddies} onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}
+    onSession={(taskId, attemptId) => go({ ...location, session: { taskId, attemptId } }, "push", origin)}
     onRetry={() => void timeline.retry()}
     onBackToList={() => { setShowNarrowList(true); if (listCollapsed) onExpandList(); }} /> : null;
 
@@ -267,6 +276,10 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         </div>
       </>}
   </aside>;
+  const sessionSpan = timeline.timeline?.spans.find(span => (span.kind === "execution" || span.kind === "routing") && span.attemptId === location.session?.attemptId);
+  const sessionLabel = sessionSpan?.kind === "routing" ? t("taskDetail:step.routing")
+    : sessionSpan?.turnIndex ? t("taskDetail:step.turn", { n: sessionSpan.turnIndex }) : t("taskDetail:sessionView.execution");
+  const sessionReturn = window.history.state?.sessionReturn as { attemptId: string; origin: string | null; detail: boolean; top: number; left: number } | undefined;
   return <>
     <div className="flex h-full min-h-0 flex-col">
       {deletionNotice && <div ref={noticeRef} tabIndex={-1} data-slot="macro-delete-result" className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-4 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-6">
@@ -290,5 +303,22 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
       open={active && selected === deleteTarget.macroTaskId} returnFocus={menuButtonRef}
       api={api} snapshot={snapshot} authority={authority} writesAvailable={writesAvailable && !connectionError}
       onClose={() => setDeleteTarget(null)} onDeleted={(id, skipped) => deleted(id, skipped, deleteTarget)}/>}
+    {active && location.session && <Suspense fallback={<p className="sr-only" role="status">{t("taskDetail:sessionView.loading")}</p>}><SessionDialog
+      key={`${location.session.taskId}:${location.session.attemptId}`} client={api}
+      taskId={location.session.taskId} attemptId={location.session.attemptId} label={sessionLabel}
+      harness={(sessionSpan?.kind === "routing" ? sessionSpan.routing?.routerBuddy?.harness : sessionSpan?.buddy?.harness) ?? t("taskDetail:unrecorded")} active={active}
+      position={window.history.state?.sessionPosition?.[tasksHash(location)] as SessionPosition | undefined}
+      onPosition={position => { window.history.replaceState({ ...window.history.state, sessionPosition: { ...window.history.state?.sessionPosition, [tasksHash(location)]: position } }, ""); }}
+      onReturnFocus={() => {
+        if (!sessionReturn) return false;
+        const target = sessionReturn.detail ? document.querySelector<HTMLElement>(`[data-session-entry="${CSS.escape(sessionReturn.attemptId)}"]`)
+          : sessionReturn.origin ? document.querySelector<SVGElement>(`[data-slot="timeline-tracks"] [data-key="${CSS.escape(sessionReturn.origin)}"]`) : null;
+        const scroll = target?.closest<HTMLElement>(sessionReturn.detail ? '[data-slot="scroll-area-viewport"]' : '[data-slot="timeline-tracks"]');
+        if (scroll) { scroll.scrollTop = sessionReturn.top; scroll.scrollLeft = sessionReturn.left; }
+        target?.focus({ preventScroll: true });
+        return !!target;
+      }}
+      onClose={() => { const { session: _session, ...next } = location; go(next, "push", origin); }}
+    /></Suspense>}
   </>;
 }

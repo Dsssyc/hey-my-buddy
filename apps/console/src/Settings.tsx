@@ -34,6 +34,7 @@ export function Settings({ api, csrfToken, connectionError = "", writesAvailable
       </Section>
       <ReminderSection api={api} csrfToken={csrfToken} settings={reminders} refresh={refresh} unavailable={!!connectionError || !writesAvailable} />
       <AccessSection api={api} csrfToken={csrfToken} access={access} refresh={refresh} unavailable={!!connectionError || !writesAvailable} />
+      <Section title={t("dataFlow.title")}><p className="max-w-prose leading-relaxed text-ink2">{t("dataFlow.detail")}</p></Section>
       <VersionSection api={api} active={active} />
       <StorageSection api={api} csrfToken={csrfToken} connectionError={connectionError} />
     </div>

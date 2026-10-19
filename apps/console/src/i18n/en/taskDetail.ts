@@ -29,6 +29,18 @@ export default {
     partial: "Only the part that was reported", partialRecord: "Partial record", unrecorded: "Usage not recorded",
     scope: "This execution only; cache is counted in the input", inputBesideCache: "Input {{n}} (cache {{cached}} counted apart)", scopeApart: "This execution only; cache is not in the input",
   },
+  sessionView: {
+    collapseCode: "Collapse code", highlightFailed: "Code highlighting could not be loaded", code: "Code", expandCode: "Expand code",
+    open: "View session", title: "Session", execution: "Execution", back: "Back", content: "Session content", loading: "Reading session…",
+    earlier: "Load earlier content", loadingEarlier: "Reading earlier content…", start: "Start of session", empty: "This execution has no session content yet", newContent: "New content",
+    omitted: "Not provided: {{content}}", separator: "; ", user: "Input", assistant: "Response", reasoning: "Reasoning", plan: "Plan", marker: "Type marker · {{type}}",
+    copy: "Copy full text", copied: "Copied", copyFailed: "Copy failed", input: "Tool input", output: "Tool output", result: "Tool result",
+    state: { running: "Running", ended: "Ended" },
+    errors: { SESSION_NOT_INTEGRATED: "Session view is not implemented for this harness.", SESSION_NOT_RECORDED: "Session was not recorded for this execution.", SESSION_DELETED: "This execution’s session was deleted.", SESSION_INVALID_RECORD: "The session record is damaged and cannot be displayed.", SESSION_UNREADABLE: "The session could not be read. Try again." },
+    planStatus: { pending: "Pending", in_progress: "In progress", completed: "Completed" }, priority: { high: "High", medium: "Medium", low: "Low" },
+    toolStatus: { pending: "Pending", in_progress: "Running", completed: "Completed", failed: "Failed" },
+    kind: { read: "Read", edit: "Edit", delete: "Delete", move: "Move", search: "Search", execute: "Execute", think: "Think", fetch: "Fetch", switch_mode: "Switch mode", other: "Other" },
+  },
   session: {
     name: "Session", unrecorded: "not recorded", resumed: "resumed", fresh: "new session",
     storageUnknown: "Storage location not recorded", visibilityUnknown: "Visibility not recorded",

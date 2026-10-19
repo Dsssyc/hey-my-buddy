@@ -3,8 +3,8 @@ import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, set
 import { settingsFixture } from "./settings-fixtures";
 
 const words = {
-  "zh-CN": { sections: ["主题", "语言", "提醒", "访问", "版本", "存储"], theme: "主题", dark: "深色", language: "语言", english: "English", input: "静默提醒阈值（分钟）", description: "一次执行这么久没有任何进展，会标为可能卡住。", check: "检查占用", reclaim: "回收…", details: "详细信息", current: "撤销当前浏览器", cancel: "取消" },
-  "en-US": { sections: ["Theme", "Language", "Reminders", "Access", "Version", "Storage"], theme: "Theme", dark: "Dark", language: "Language", english: "English", input: "Silence reminder threshold (minutes)", description: "An execution without progress for this long is marked as possibly stuck.", check: "Check usage", reclaim: "Reclaim…", details: "Details", current: "Revoke current browser", cancel: "Cancel" },
+  "zh-CN": { sections: ["主题", "语言", "提醒", "访问", "会话数据", "版本", "存储"], theme: "主题", dark: "深色", language: "语言", english: "English", input: "静默提醒阈值（分钟）", description: "一次执行这么久没有任何进展，会标为可能卡住。", check: "检查占用", reclaim: "回收…", details: "详细信息", current: "撤销当前浏览器", cancel: "取消" },
+  "en-US": { sections: ["Theme", "Language", "Reminders", "Access", "Session data", "Version", "Storage"], theme: "Theme", dark: "Dark", language: "Language", english: "English", input: "Silence reminder threshold (minutes)", description: "An execution without progress for this long is marked as possibly stuck.", check: "Check usage", reclaim: "Reclaim…", details: "Details", current: "Revoke current browser", cancel: "Cancel" },
 };
 for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 800, 390]) for (const theme of ["light", "dark"] as const) {
   test.describe(`settings ${locale} ${width}px ${theme}`, () => {

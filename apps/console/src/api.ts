@@ -329,6 +329,8 @@ function validTimelineSpans(spans: unknown): boolean {
   return Array.isArray(spans) && spans.every(span => {
     const entry = span as TimelineSpan | null;
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+    const router = entry.routing?.routerBuddy;
+    if (router != null && ["harness", "provider", "model", "effort"].some(key => typeof router[key as keyof typeof router] !== "string")) return false;
     if (entry.kind !== "execution") {
       return entry.expectedSeconds === null && entry.reminders === null && entry.inquiries === null;
     }
@@ -684,6 +686,11 @@ export function createApi(prefix: string, fetcher: typeof fetch = fetch) {
     async task(runId: string, signal?: AbortSignal) {
       const { data, verifiedAtMs } = await conditionalRead(`/tasks/${encodeURIComponent(runId)}`, signal);
       return verifiedRead(data, verifiedAtMs);
+    },
+    /** Session bodies are never cached; their byte cursors belong to one attempt. */
+    async session(taskId: string, attemptId: string, params: { before?: number; after?: number; limit?: number }, signal: AbortSignal): Promise<unknown> {
+      const query = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]));
+      return request(`/tasks/${encodeURIComponent(taskId)}/attempts/${encodeURIComponent(attemptId)}/session?${query}`, { signal });
     },
     /** Read-only work macro task list for any logged-in session; no lease or model call. */
     async macroTasks(params: MacroTaskQuery, signal?: AbortSignal): Promise<MacroTaskPage> {

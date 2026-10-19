@@ -2,6 +2,7 @@ import type zh from "../zh/settings";
 
 export default {
   title: "Settings", theme: "Theme", language: "Language", light: "Light", dark: "Dark", system: "System", browser: "Browser", chinese: "中文", english: "English",
+  dataFlow: { title: "Session data", detail: "Sessions may contain sensitive command input and output. They are shown only in the local console, excluded from backups and exports, and deleted with their macro task." },
   access: {
     title: "Access", allowAuthorized: "Allow only authorized browsers",
     description: "When enabled, new browsers need the link from hey-my-buddy console to access the console. Enable this when the computer has other accounts or the port is forwarded to another machine.",

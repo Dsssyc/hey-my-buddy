@@ -30,6 +30,8 @@ Safety boundary:
   Reads use one fixed page with a synthetic event head and
   ``nextCursor`` is always null. Reads stay identical until a synthetic deletion,
   which advances that instance's cursor and removes the target from later reads.
+* Session content is an in-memory ACP-shaped fixture. Its byte offsets mimic
+  session.jsonl; reads never open a session file or inspect a harness home.
 
 Usage::
 
@@ -62,6 +64,12 @@ Absent or unknown values stay explicitly null.
 
 The asset directory is Host-supplied; the repository's current bundle lives at
 ``src/hey_my_buddy/console/assets``.
+
+Session view fixtures (GET /api/tasks/<taskId>/attempts/<attemptId>/session):
+``preview-run-a1/att-a1-2`` is an ended Codex session with more than 100
+events; ``preview-run-a3/att-a3-1`` is a running Claude session that gains
+events on later ``after`` polls; ``preview-run-a1-router/att-router-a1`` is a
+Router decision session. Error pairs are listed in SESSION_ERRORS below.
 """
 from __future__ import annotations
 
@@ -216,7 +224,26 @@ READ_OPERATIONS = ("workflow_get", "message_list", "selection_get", "selection_l
 STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND": 404, "FORBIDDEN": 403,
                   "CONSOLE_READ_ONLY": 403, "UNSUPPORTED": 501, "SERVICE_UNAVAILABLE": 503,
                   "INTERNAL_ERROR": 500, "MESSAGE_TOO_LARGE": 413,
-                  "REVISION_CONFLICT": 409, "MACRO_TASK_NOT_SETTLED": 409}
+                  "REVISION_CONFLICT": 409, "MACRO_TASK_NOT_SETTLED": 409,
+                  "SESSION_NOT_INTEGRATED": 501, "SESSION_NOT_RECORDED": 404,
+                  "SESSION_DELETED": 410, "SESSION_INVALID_RECORD": 422, "SESSION_UNREADABLE": 500}
+
+SESSION_HEADER = {"protocol": "acp", "protocolVersion": 1, "projectionVersion": 1}
+SESSION_LONG = ("preview-run-a1", "att-a1-2")
+SESSION_RUNNING = ("preview-run-a3", "att-a3-1")
+SESSION_ROUTER = ("preview-run-a1-router", "att-router-a1")
+SESSION_ERRORS = {
+    ("preview-run-a2", "att-a2-1"): (501, "SESSION_NOT_INTEGRATED", "session.not-integrated",
+                                       "Session projection is not integrated for this harness"),
+    ("preview-run-b3", "att-b3-1"): (404, "SESSION_NOT_RECORDED", "session.not-recorded",
+                                       "This attempt has no session record"),
+    ("preview-run-d1", "att-d1-1"): (410, "SESSION_DELETED", "session.deleted",
+                                       "The session record was deleted"),
+    ("preview-run-b7", "att-b7-1"): (422, "SESSION_INVALID_RECORD", "session.invalid-record",
+                                        "The session record is invalid"),
+    ("preview-run-a1", "att-a1-1"): (500, "SESSION_UNREADABLE", "session.unreadable",
+                                       "The session record could not be read"),
+}
 
 ASSET_TYPES = {
     ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -1205,6 +1232,8 @@ class PreviewState:
         self.removed_runs: set[str] = set()
         self.cleared_providers: set[tuple[str, str]] = set()
         self.clear_receipts: dict[str, dict] = {}
+        self.session_after_polls = 0
+        self.session_appends: list[dict] = []
         self.lock = threading.RLock()
 
     @property
@@ -1216,6 +1245,140 @@ def fixture_run(run_id: str, state: PreviewState | None = None) -> dict:
     if run_id not in FIXTURES["runs"] or state is not None and run_id in state.removed_runs:
         raise PreviewError("NOT_FOUND", "Unknown runId")
     return FIXTURES["runs"][run_id]
+
+
+def session_event(attempt_id: str, session_update: str, **fields: Any) -> dict:
+    return {"sessionId": attempt_id, "update": {"sessionUpdate": session_update, **fields}}
+
+
+def session_text(text: str) -> dict:
+    return {"type": "text", "text": text}
+
+
+def session_events(pair: tuple[str, str]) -> list[dict]:
+    """Invented content with ACP v1 fields, tied to existing preview attempts."""
+    attempt_id = pair[1]
+    if pair == SESSION_LONG:
+        events = [session_event(attempt_id, "user_message_chunk",
+                                content=session_text("请检查合成预览的会话分页和完整工具输出。"))]
+        events += [session_event(attempt_id, "agent_message_chunk",
+                                 content=session_text(f"第 {index:03d} 条合成进度：核对消息、游标和滚动位置。"),
+                                 _meta={"nativeItemId": f"message-{index}", "contentSegment": "main"})
+                   for index in range(118)]
+        events += [
+            session_event(attempt_id, "agent_thought_chunk",
+                          content=session_text("Codex 提供的推理摘要片段；内部未提供的推理不在记录中。"),
+                          _meta={"nativeItemId": "reasoning-1", "contentSegment": "summary-0",
+                                 "reasoning": "summary"}),
+            session_event(attempt_id, "tool_call", toolCallId="tool-long", title="检查合成源码与测试",
+                          kind="execute", status="in_progress", rawInput={"command": "synthetic-preview-check"},
+                          content=[{"type": "content", "content": session_text("开始输出\n")}],
+                          _meta={"nativeItemId": "tool-long", "contentSegment": "stdout"}),
+            session_event(attempt_id, "tool_call_update", toolCallId="tool-long", status="in_progress",
+                          content=[{"type": "content", "content": session_text("增量 1：读取完成\n")}],
+                          _meta={"nativeItemId": "tool-long", "contentSegment": "stdout"}),
+            session_event(attempt_id, "tool_call_update", toolCallId="tool-long", status="completed",
+                          rawOutput={"exitCode": 0},
+                          content=[{"type": "content", "content": session_text("增量 2：" + "完整输出行。" * 2400)}],
+                          _meta={"nativeItemId": "tool-long", "contentSegment": "stdout"}),
+            session_event(attempt_id, "tool_call_update", toolCallId="tool-long", status="completed",
+                          content=[{"type": "content", "content": session_text("最终完整快照：增量 1 与增量 2 已合并。\n" + "完整快照输出行。\n" * 2400 + "FULL_OUTPUT_END")}],
+                          _meta={"nativeItemId": "tool-long", "contentSegment": "stdout", "replace": True}),
+            session_event(attempt_id, "plan", entries=[
+                {"content": "核对会话分页", "status": "completed", "priority": "high"},
+                {"content": "检查完整输出", "status": "in_progress", "priority": "medium"}]),
+            session_event(attempt_id, "agent_message_chunk",
+                          content=session_text("原生未知类型标记：synthetic/previewMarker"),
+                          _meta={"nativeItemId": "marker-1", "contentSegment": "marker",
+                                 "nativeType": "synthetic/previewMarker", "marker": True}),
+            session_event(attempt_id, "agent_message_chunk",
+                          content=session_text("最终答复：合成预览会话已结束。")),
+        ]
+        return events
+    if pair == SESSION_RUNNING:
+        return [session_event(attempt_id, "user_message_chunk", content=session_text("运行中的合成回合。")),
+                session_event(attempt_id, "agent_message_chunk", content=session_text("开始核对当前结果。\n\n" + "运行中上下文，保留阅读位置。\n\n" * 50))]
+    if pair == SESSION_ROUTER:
+        return [session_event(attempt_id, "user_message_chunk",
+                              content=session_text("为合成任务选择执行 buddy。")),
+                session_event(attempt_id, "agent_thought_chunk",
+                              content=session_text("比较已给出的候选约束与可用性。"),
+                              _meta={"nativeItemId": "router-reasoning", "contentSegment": "summary",
+                                     "reasoning": "summary"}),
+                session_event(attempt_id, "agent_message_chunk",
+                              content=session_text("选择 DeepSeek Flash。"))]
+    return []
+
+
+def session_line(value: dict) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def session_query(query: str) -> dict[str, int]:
+    values = urllib.parse.parse_qs(query, keep_blank_values=True)
+    if any(key not in ("before", "after", "limit") or len(items) != 1 for key, items in values.items()):
+        raise PreviewError("INVALID_ARGUMENT", "Unknown or duplicate session parameter")
+    params = {}
+    for key, items in values.items():
+        if re.fullmatch(r"[0-9]+", items[0]) is None:
+            raise PreviewError("INVALID_ARGUMENT", "Session parameters must be decimal integers")
+        params[key] = int(items[0])
+    if "before" in params and "after" in params:
+        raise PreviewError("INVALID_ARGUMENT", "before and after are mutually exclusive")
+    if not 1 <= params.get("limit", 100) <= 256:
+        raise PreviewError("INVALID_ARGUMENT", "limit must be between 1 and 256")
+    return params
+
+
+def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewState) -> dict:
+    """Page by JSONL byte boundaries, with bounded future appends for the running fixture."""
+    events = session_events(pair) + (state.session_appends if pair == SESSION_RUNNING else [])
+    start = len(session_line(SESSION_HEADER))
+    boundaries = [start]
+    for event in events:
+        boundaries.append(boundaries[-1] + len(session_line(event)))
+    cursor = params.get("before", params.get("after"))
+    if cursor is not None and cursor not in boundaries:
+        raise PreviewError("INVALID_ARGUMENT", "Session offset is outside the event area or not a line boundary")
+    if pair == SESSION_RUNNING and "after" in params:
+        state.session_after_polls += 1
+        if state.session_after_polls % 2 == 0:
+            index = len(state.session_appends) + 1
+            added = session_event(pair[1], "agent_message_chunk",
+                                  content=session_text(f"运行中追加 {index}：合成输出继续到达。"),
+                                  _meta={"nativeItemId": "running-message", "contentSegment": "main"})
+            state.session_appends.append(added)
+            events.append(added)
+            boundaries.append(boundaries[-1] + len(session_line(added)))
+    limit = params.get("limit", 100)
+    if "after" in params:
+        first = boundaries.index(cursor)
+        last = min(len(events), first + limit)
+    else:
+        last = boundaries.index(cursor) if cursor is not None else len(events)
+        first = max(0, last - limit)
+    omitted = ([reason("session.codex-internal-reasoning-omitted")]
+               if pair in (SESSION_LONG, SESSION_ROUTER) else [])
+    return {"state": "running" if pair == SESSION_RUNNING else "ended", "omitted": omitted,
+            "events": events[first:last], "before": boundaries[first], "after": boundaries[last],
+            "hasEarlier": first > 0}
+
+
+def session_read(task_id: str, attempt_id: str, params: dict[str, int], state: PreviewState) -> dict:
+    entry = FIXTURES["runs"].get(task_id)
+    if entry is None or attempt_id not in {item["attemptId"] for item in entry["attempts"]}:
+        raise PreviewError("NOT_FOUND", "Not found")
+    pair = (task_id, attempt_id)
+    if task_id in state.removed_runs:
+        raise PreviewError("SESSION_DELETED", "The session record was deleted",
+                           reason=reason("session.deleted"))
+    if pair in SESSION_ERRORS:
+        _status, code, reason_code, message = SESSION_ERRORS[pair]
+        raise PreviewError(code, message, reason=reason(reason_code))
+    if pair not in (SESSION_LONG, SESSION_RUNNING, SESSION_ROUTER):
+        raise PreviewError("SESSION_NOT_RECORDED", "This attempt has no session record",
+                           reason=reason("session.not-recorded"))
+    return session_page(pair, params, state)
 
 
 def deletion_scope(group: str) -> dict:
@@ -2210,6 +2373,9 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/macro-tasks/{MACRO_A}/timeline",
         f"GET  {base}/api/macro-tasks/{urllib.parse.quote(STANDALONE_GROUP, safe='')}/timeline",
         f"GET  {base}/api/tasks/preview-run-a1",
+        f"GET  {base}/api/tasks/{SESSION_LONG[0]}/attempts/{SESSION_LONG[1]}/session",
+        f"GET  {base}/api/tasks/{SESSION_RUNNING[0]}/attempts/{SESSION_RUNNING[1]}/session",
+        f"GET  {base}/api/tasks/{SESSION_ROUTER[0]}/attempts/{SESSION_ROUTER[1]}/session",
         f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · message_list · selection_get · selection_list · "
         f"buddy_list · macro_task_deletion_preview · macro_task_delete "
@@ -2319,6 +2485,13 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 return self._json(200, macro_task_page(params, self.server.state))
             if path == "/api/runtime-version":
                 return self._json(200, runtime_version_report())
+            session_match = re.fullmatch(r"/api/tasks/([A-Za-z0-9._:-]{1,128})/attempts/"
+                                         r"([A-Za-z0-9._:-]{1,128})/session", path)
+            if session_match:
+                params = session_query(query)
+                with self.server.state.lock:
+                    page = session_read(*session_match.groups(), params, self.server.state)
+                return self._json(200, page)
             if path.startswith("/api/macro-tasks/") and path.endswith("/timeline"):
                 identifier = path[len("/api/macro-tasks/"):-len("/timeline")]
                 if not MACRO_TASK_ID.match(identifier) or identifier not in FIXTURES["groups"] or identifier in self.server.state.deleted:
@@ -3196,6 +3369,12 @@ def print_banner(server: PreviewHTTPServer, assets: Path) -> None:
         summary = macro_task_summary(group, set(FIXTURES["groups"][group]))
         members = summary["counts"]["roots"] + summary["counts"]["helpers"]
         print(f"  {group}  state={summary['state']} members={members} project={summary['project']['label']}")
+    print("session fixtures (taskId / attemptId):")
+    for label, pair in (("ended, >100 events", SESSION_LONG), ("running, later after polls append", SESSION_RUNNING),
+                        ("Router decision", SESSION_ROUTER)):
+        print(f"  {pair[0]} / {pair[1]}  {label}")
+    for pair, (_status, code, _reason, _message) in SESSION_ERRORS.items():
+        print(f"  {pair[0]} / {pair[1]}  {code}")
     print("deletion and cooldown clearing change synthetic memory only; other writes are refused; Ctrl-C stops the preview.")
 
 

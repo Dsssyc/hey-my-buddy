@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import { TASKS_ROOT, tasksHash, tasksLocation } from "./location";
 
 describe("the address of the tasks page", () => {
+  it("keeps an exact session attempt beside its original detail step or timeline", () => {
+    for (const location of [
+      { macroTaskId: "macro", runId: "run", step: 7, session: { taskId: "run", attemptId: "failed-attempt" } },
+      { macroTaskId: "macro", runId: null, step: null, session: { taskId: "router/task", attemptId: "attempt 1" } },
+    ]) expect(tasksLocation(tasksHash(location))).toEqual(location);
+  });
   it("names a macro task, one of its micro tasks and a step of it, each part encoded", () => {
     expect(tasksHash(TASKS_ROOT)).toBe("#tasks");
     expect(tasksHash({ macroTaskId: "macro-1", runId: null, step: null })).toBe("#tasks/macro-1");

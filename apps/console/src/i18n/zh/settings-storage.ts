@@ -13,8 +13,8 @@ export default {
   confirmTitle: "清理可回收数据", confirmDetail: "将逐项复核并跳过变化项目；看板、记录和上次升级之前的看板不会删除。",
   confirmChecked: "计划检查时间：{{time}}", confirmTotal: "合计：{{bytes}}", confirmRow: "{{category}}：{{bytes}}",
   confirmExpired: "计划已过期；请关闭并重新检查", cancel: "取消", confirm: "确认清理",
-  categories: { harnesses: "Harness 私有会话", zcode: "ZCode 旧私有主目录", workspaces: "受管检出", runtimes: "运行时", backup: "备份", durable: "看板与记录" },
-  reasons: {
+  categories: { "session-records": "会话记录", harnesses: "Harness 私有会话", zcode: "ZCode 旧私有主目录", workspaces: "受管检出", runtimes: "运行时", backup: "备份", durable: "看板与记录" },
+  reasons: { "session-records-retained": "会话记录随所属宏任务保留", "macro-task-deletion": "随所属宏任务删除",
     "allocation-unproven": "检出分配未证实", "conclusion-time-unproven": "结束时间未证实", "fixed-reference-changed": "固定引用已变化",
     "legacy-layout-unmigrated": "旧版目录尚未升级", "retention-grace": "保留宽限期未满", "runtime-format-unsupported": "运行时格式不受支持",
     "runtime-installation-active": "运行时正在安装", "runtime-lock-unproven": "运行时锁状态未证实", "unsealed-changes": "有未封存的改动",

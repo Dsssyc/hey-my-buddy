@@ -384,7 +384,7 @@ describe("the settings page", () => {
     await user.click(await screen.findByRole("link", { name: "设置" }));
     const themes = screen.getByRole("radiogroup", { name: "主题" });
     const settings = screen.getByRole("heading", { name: "主题" }).closest("[data-slot=settings-page]")!;
-    expect(settings.querySelectorAll("[data-slot=settings-section]")).toHaveLength(6);
+    expect(settings.querySelectorAll("[data-slot=settings-section]")).toHaveLength(7);
     expect(screen.getByRole("region", { name: "存储" }).getAttribute("data-slot")).toBe("settings-section");
     expect(within(themes).getAllByRole("radio").map(radio => radio.textContent))
       .toEqual(["浅色", "深色", "跟随系统"]);

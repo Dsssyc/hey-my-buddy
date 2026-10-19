@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
 import { reasonText } from "../i18n/reason";
 import { formatDuration } from "../i18n/format";
 import { BasisFold } from "./facts";
@@ -37,6 +38,7 @@ export function RoutingPane({ step, ctx }: { step: Step; ctx: Context }) {
       <span className="font-mono tabular-nums">{step.at !== null ? <Moment at={step.at} /> : unrecorded} – {span.endAt ? <Moment at={span.endAt} /> : null}</span>
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>
+    {ctx.openSession && span.attemptId && <div className="px-6 pb-3"><Button data-session-entry={span.attemptId} variant="outline" size="sm" onClick={() => ctx.openSession!(span.decisionTaskId!, span.attemptId!)}>{t("sessionView.open")}</Button></div>}
     <Band role="Router" identity={notCalled ? undefined : quad(entry?.routerBuddy) ?? <span className="font-sans text-ink3">{unrecorded}</span>}
       end={notCalled ? t("routing.notCalled") : mode ? t(`routing.mode.${mode}`) : unrecorded}
       second={<span className="inline-flex flex-wrap gap-x-3.5">

@@ -127,6 +127,7 @@ export type TimelineSpan = {
   /** Optional projection for historic spans without routing facts. */
   routing?: {
     routingMode?: RoutingMode | null;
+    routerBuddy?: TimelineBuddy | null;
     selectedBuddy?: TimelineBuddy | null;
     reason?: Reason | null;
     note?: string | null;

@@ -36,6 +36,7 @@ type Props = {
   onStep: (step: number) => void;
   onBack: () => void;
   onOpenRun: (runId: string, macroTaskId?: string) => void;
+  onOpenSession?: (taskId: string, attemptId: string) => void;
 };
 
 function pane(step: Step, ctx: Context) {
@@ -63,7 +64,7 @@ function elapsedEnd(view: TaskView, workflow: Workflow | null, nowMs: number): n
  * chosen step has to say. It reads through the client it is given, hands the
  * address back to its owner, and writes nothing.
  */
-export function TaskDetail({ client, runId, timeline: recordedTimeline, timelineLoading, nowMs, step, origin, active, onStep, onBack, onOpenRun }: Props) {
+export function TaskDetail({ client, runId, timeline: recordedTimeline, timelineLoading, nowMs, step, origin, active, onStep, onBack, onOpenRun, onOpenSession }: Props) {
   const { t } = useTranslation("taskDetail");
   const now = nowMs ?? Date.now();
   const stripRef = useRef<HTMLDivElement>(null);
@@ -136,7 +137,7 @@ export function TaskDetail({ client, runId, timeline: recordedTimeline, timeline
     </div></>);
   }
   const ctx: Context | null = workflow ? {
-    view, workflow, audit: read.audit, routing: read.routing, bases: read.bases, inquiries: read.inquiries, asked, timeline, row, highlightedInquiry: origin?.startsWith("inquiry:") ? origin.slice(8) : null, nowMs: now, open: onOpenRun,
+    view, workflow, audit: read.audit, routing: read.routing, bases: read.bases, inquiries: read.inquiries, asked, timeline, row, highlightedInquiry: origin?.startsWith("inquiry:") ? origin.slice(8) : null, nowMs: now, open: onOpenRun, openSession: onOpenSession,
   } : null;
   const current = steps !== null && chosen !== null ? steps.steps[chosen] ?? null : null;
   return bare(<>

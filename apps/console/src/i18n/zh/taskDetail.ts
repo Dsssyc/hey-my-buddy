@@ -28,6 +28,18 @@ export default {
     partial: "只含已报告的部分", partialRecord: "部分记录", unrecorded: "用量未记录",
     scope: "单次执行；缓存已计入输入", inputBesideCache: "输入 {{n}}（缓存 {{cached}} 另计）", scopeApart: "单次执行；缓存不在输入之内",
   },
+  sessionView: {
+    collapseCode: "收起代码", highlightFailed: "代码高亮加载失败", code: "代码", expandCode: "展开代码",
+    open: "查看会话", title: "会话", execution: "执行回合", back: "返回", content: "会话内容", loading: "正在读取会话…",
+    earlier: "加载更早内容", loadingEarlier: "正在读取更早内容…", start: "已到开头", empty: "此执行尚无会话内容", newContent: "有新内容",
+    omitted: "不提供：{{content}}", separator: "；", user: "输入", assistant: "回复", reasoning: "推理", plan: "计划", marker: "类型标记 · {{type}}",
+    copy: "复制全文", copied: "已复制", copyFailed: "复制失败", input: "工具输入", output: "工具输出", result: "工具结果",
+    state: { running: "运行中", ended: "已结束" },
+    errors: { SESSION_NOT_INTEGRATED: "此 harness 尚未接入会话视图。", SESSION_NOT_RECORDED: "未记录此执行的会话。", SESSION_DELETED: "此执行的会话已删除。", SESSION_INVALID_RECORD: "会话记录已损坏，无法显示。", SESSION_UNREADABLE: "读取会话失败，请重试。" },
+    planStatus: { pending: "待开始", in_progress: "进行中", completed: "已完成" }, priority: { high: "高", medium: "中", low: "低" },
+    toolStatus: { pending: "待开始", in_progress: "运行中", completed: "已完成", failed: "失败" },
+    kind: { read: "读取", edit: "编辑", delete: "删除", move: "移动", search: "搜索", execute: "执行", think: "推理", fetch: "获取", switch_mode: "切换模式", other: "其他" },
+  },
   session: {
     name: "会话", unrecorded: "未记录", resumed: "恢复", fresh: "新会话",
     storageUnknown: "存储位置未记录", visibilityUnknown: "是否可见未记录",

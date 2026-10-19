@@ -13,8 +13,8 @@ export default {
   confirmTitle: "Reclaim unused data", confirmDetail: "Each item is checked again and changed items are skipped. The blackboard, records and the pre-upgrade blackboard will be kept.",
   confirmChecked: "Plan checked at: {{time}}", confirmTotal: "Total: {{bytes}}", confirmRow: "{{category}}: {{bytes}}",
   confirmExpired: "The plan expired; close this dialog and check again", cancel: "Cancel", confirm: "Confirm reclamation",
-  categories: { harnesses: "Private harness sessions", zcode: "Legacy private ZCode homes", workspaces: "Managed checkouts", runtimes: "Runtimes", backup: "Backups", durable: "Blackboard and records" },
-  reasons: {
+  categories: { "session-records": "Session records", harnesses: "Private harness sessions", zcode: "Legacy private ZCode homes", workspaces: "Managed checkouts", runtimes: "Runtimes", backup: "Backups", durable: "Blackboard and records" },
+  reasons: { "session-records-retained": "Sessions retained with their macro task", "macro-task-deletion": "Retained until its macro task is deleted",
     "allocation-unproven": "Checkout allocation not proven", "conclusion-time-unproven": "Conclusion time not proven", "fixed-reference-changed": "Fixed reference changed",
     "legacy-layout-unmigrated": "Legacy layout has not been upgraded", "retention-grace": "Retention grace period has not elapsed", "runtime-format-unsupported": "Unsupported runtime format",
     "runtime-installation-active": "Runtime installation in progress", "runtime-lock-unproven": "Runtime lock state not proven", "unsealed-changes": "Unsealed changes",

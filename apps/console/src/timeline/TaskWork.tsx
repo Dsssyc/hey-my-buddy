@@ -31,6 +31,7 @@ export type TaskWorkProps = {
   openedRunId: string | null; detail: (runId: string) => ReactNode;
   headerActions?: ReactNode; listToggle?: ReactNode; buddies?: readonly FriendlyBuddy[] | null;
   onOpen: (runId: string, key?: string) => void; onClose: () => void;
+  onSession?: (taskId: string, attemptId: string) => void;
   onRetry: () => void; onBackToList: () => void;
 };
 
@@ -46,7 +47,7 @@ const LEAD_PX = 60;
  * in a strip along its top, fills the rest.
  */
 export function TaskWork(props: TaskWorkProps) {
-  const { t } = useTranslation("tasks");
+  const { t } = useTranslation(["tasks", "taskDetail"]);
   const { timeline, openedRunId, displayObservedAt } = props;
   const lastPointerAt = useRef<number | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
@@ -310,7 +311,7 @@ export function TaskWork(props: TaskWorkProps) {
             </div>
           </div>
           : <div role="region" aria-label={t("laneRegion")} className="flex min-h-0 min-w-0 flex-1 flex-col">{lanesView}</div>}
-        {!open && <div data-slot="timeline-status" role="status" className="flex h-9 shrink-0 items-center gap-2 overflow-hidden border-t bg-card px-4 text-xs text-ink2 sm:px-6"><span className="truncate">{readout}{incomplete ? ` · ${t("uncompressed")}` : ""}</span></div>}
+        {!open && <div data-slot="timeline-status" className="flex min-h-9 shrink-0 items-center gap-2 border-t bg-card px-4 text-xs text-ink2 sm:px-6"><span role="status" className="min-w-0 flex-1 truncate">{readout}{incomplete ? ` · ${t("uncompressed")}` : ""}</span>{!marker && !pointerLine && props.onSession && activeSpan?.attemptId && (activeSpan.kind === "execution" || activeSpan.kind === "routing") && <Button data-session-origin={`span:${activeSpan.spanId}`} onFocus={() => select(activeSpan.runId, `span:${activeSpan.spanId}`)} variant="ghost" size="sm" onClick={() => props.onSession!(activeSpan.kind === "routing" ? activeSpan.decisionTaskId! : activeSpan.runId, activeSpan.attemptId!)}>{t("taskDetail:sessionView.open")}</Button>}</div>}
       </>}
   </section>;
 }

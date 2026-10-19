@@ -15,7 +15,7 @@ import zhConsole from "./zh/console";
 const pages = {
   settings: import.meta.glob<string>(["../Settings.tsx", "../settings/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
   buddies: import.meta.glob<string>(["../App.tsx", "../BuddyConfig.tsx", "../buddies/*.{ts,tsx}", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
-  taskDetail: import.meta.glob<string>(["../task-detail/*.{ts,tsx}", "../macro-task-display.ts", "../usage-totals.ts", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
+  taskDetail: import.meta.glob<string>(["../MacroTasks.tsx", "../task-detail/*.{ts,tsx}", "../session-view/*.{ts,tsx}", "../macro-task-display.ts", "../usage-totals.ts", "../components/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
   shared: import.meta.glob<string>(["../**/*.{ts,tsx}", "!../i18n/**/*.{ts,tsx}"], { query: "?raw", import: "default", eager: true }),
 };
 const support = /(?:\.(?:test|testing|fixtures)|-fixtures)\.tsx?$/;
