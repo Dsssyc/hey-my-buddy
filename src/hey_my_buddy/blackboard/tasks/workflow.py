@@ -5810,8 +5810,10 @@ class WorkflowCoordinator:
                     private_dirs.micro_task_root(self.board.directory, adapter, micro_task_id),
                     keep=frozenset(private_dirs.attempt_root(self.board.directory, adapter, micro_task_id, attempt_id)
                                    for attempt_id in attempt_ids) | frozenset(
-                        private_dirs.attempt_root(self.board.directory, adapter, micro_task_id, attempt_id) / 'session.jsonl'
-                        for attempt_id in session_attempts[micro_task_id]))
+                        record for attempt_id in session_attempts[micro_task_id]
+                        if private_dirs.linked_component(record := private_dirs.attempt_root(
+                            self.board.directory, adapter, micro_task_id, attempt_id) / 'session.jsonl') is None
+                        and record.is_file()))
         with self.db.write() as connection:
             run_row = self._run_row(connection, run_id)
             plan = connection.execute(

@@ -7,7 +7,7 @@ or native storage is read by this projector.
 from __future__ import annotations
 
 from ....protocol.session_content import (
-    ImageContent, MessageChunk, NativeMeta, ResourceLink, TextContent,
+    MessageChunk, NativeMeta, TextContent,
     ToolCall, ToolCallUpdate, ToolContent,
 )
 from ....protocol.tool_evidence import normalize_tool_event
@@ -30,6 +30,7 @@ class CodexSessionProjector:
         self.pending_update: tuple | None = None
         self.awaiting_root = False
         self.unbound: list[dict] = []
+        self.late: list[dict] = []
 
     def observe_root(self, thread_id: str, turn_id: str, input_text: str, items: list) -> None:
         self.flush()
@@ -72,11 +73,12 @@ class CodexSessionProjector:
         root = (identity["sessionId"], identity["turnId"])
         if method in ("item/started", "item/updated", "item/completed"):
             item = params.get("item")
-            if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("type"), str):
+            if (isinstance(item, dict) and isinstance(item.get("id"), str) and item["id"]
+                    and isinstance(item.get("type"), str)):
                 self._item(root, method, item, identity)
         elif method in ("item/agentMessage/delta", "item/reasoning/summaryTextDelta", "item/reasoning/textDelta"):
             item_id, delta = params.get("itemId"), params.get("delta")
-            if not isinstance(item_id, str) or not isinstance(delta, str):
+            if not isinstance(item_id, str) or not item_id or not isinstance(delta, str):
                 return
             thought = method != "item/agentMessage/delta"
             segment = "summary" if method == "item/reasoning/summaryTextDelta" else "text"
@@ -96,20 +98,22 @@ class CodexSessionProjector:
             if key in self.tools:
                 self._changed_content((*key, "diff", 0), params["diff"], "tool", key[-1])
             else:
-                self._changed_content((*root, "turn-diff", "marker", 0), "[turn/diff/updated]\n" + params["diff"],
-                                      "agent_message_chunk", NativeMeta(native_type="turn/diff/updated", marker=True))
+                item_id = "turn/diff/updated:" + root[1]
+                self._changed_content((*root, item_id, "diff", 0), "[turn/diff/updated]\n" + params["diff"],
+                                      "agent_message_chunk", {"native_item_id": item_id,
+                                      "native_type": "turn/diff/updated", "marker": True})
         elif method == "turn/completed":
             for item in params.get("turn", {}).get("items", []):
-                if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("type"), str):
-                    self._item(root, "item/completed", item, identity)
+                self.observe_notification({"method": "item/completed", "params": {
+                    "threadId": root[0], "turnId": root[1], "item": item}})
             self.flush()
         else:
             self.flush()
 
     @staticmethod
-    def _meta(item: dict, **extra) -> NativeMeta:
-        return NativeMeta(native_item_id=item["id"], native_type=item.get("type"),
-                          phase=item.get("phase"), **extra)
+    def _meta(item: dict, **extra) -> dict:
+        return {"native_item_id": item["id"], "native_type": item.get("type"),
+                "phase": item.get("phase") if isinstance(item.get("phase"), str) else None, **extra}
 
     def _item(self, root: tuple, method: str, item: dict, identity: dict) -> None:
         key = (*root, item["id"])
@@ -133,18 +137,7 @@ class CodexSessionProjector:
                     if not sent_echo:
                         self._snapshot(block_key, block["text"], "user_message_chunk", self._meta(item))
                 elif block_key not in self.blocks:
-                    self.flush()
-                    if block.get("type") == "image" and isinstance(block.get("url"), str):
-                        uri = block["url"]
-                        if uri.startswith("data:") and ";base64," in uri:
-                            mime, data = uri[5:].split(";base64,", 1)
-                            content = ImageContent(data=data, mime_type=mime)
-                        else:
-                            content = ResourceLink(uri=uri, name="image")
-                        self.record.append(MessageChunk(session_update="user_message_chunk", content=content,
-                                                        meta=self._meta(item)))
-                    else:
-                        self._marker((*key, "input", index), item, block.get("type", "unknown"))
+                    self._marker((*key, "input", index), item, block.get("type", "unknown"))
                     self.blocks.add(block_key)
         elif kind == "agentMessage":
             if isinstance(item.get("text"), str):
@@ -195,8 +188,8 @@ class CodexSessionProjector:
         if item.get("exitCode") is not None and item["exitCode"] != 0:
             status = "failed"
         raw_input = {name: details[name] for name in ("command", "cwd", "commandActions", "server", "tool", "arguments",
-                                                "query", "path", "durationMs") if name in details}
-        raw_output = {name: details[name] for name in ("aggregatedOutput", "output", "result", "error", "exitCode", "changes")
+                                                "query", "path") if name in details}
+        raw_output = {name: details[name] for name in ("aggregatedOutput", "output", "result", "error", "exitCode", "changes", "durationMs")
                       if name in details}
         payload = {"title": details.get("command") or details.get("tool") or kind, "kind": event["category"],
                    **({"status": status} if status is not None else {}),
@@ -230,17 +223,18 @@ class CodexSessionProjector:
             return
         self.flush()
         self.snapshots[key] = text
-        self._write_content(kind, meta, text)
+        self._write_content(key, kind, meta, text, replace=True)
 
     def _snapshot(self, key: tuple, text: str, kind: str, meta) -> None:
         if self.pending_key != key:
             self.flush()
         previous = self.text.get(key, "")
-        if previous.startswith(text):
-            return
         if not text.startswith(previous):
-            raise ValueError("Codex completed content differs from its streamed prefix")
-        self._delta(key, text[len(previous):], kind, meta)
+            self.flush()
+            self.text[key] = text
+            self._write_content(key, kind, meta, text, replace=True)
+        else:
+            self._delta(key, text[len(previous):], kind, meta)
 
     def _delta(self, key: tuple, text: str, kind: str, meta) -> None:
         if self.pending_key != key:
@@ -255,18 +249,29 @@ class CodexSessionProjector:
         if self.pending_key is None:
             return
         kind, meta = self.pending_update
-        self._write_content(kind, meta, "".join(self.pending))
+        self._write_content(self.pending_key, kind, meta, "".join(self.pending))
         self.pending_key, self.pending_update, self.pending = None, None, []
 
-    def _write_content(self, kind: str, meta, value: str) -> None:
+    def _write_content(self, key: tuple, kind: str, meta, value: str, *, replace: bool = False) -> None:
         text = TextContent(text=value)
+        segment = "/".join(str(part) for part in (key[1], *key[3:]))
+        fields = ({"native_item_id": meta, "native_type": self.items[key[:3]]["type"]}
+                  if kind == "tool" else meta)
+        metadata = NativeMeta(**fields, content_segment=segment, replace=True if replace else None)
         if kind == "tool":
-            self.record.append(ToolCallUpdate(tool_call_id=meta, content=[ToolContent(content=text)]))
+            self.record.append(ToolCallUpdate(tool_call_id=meta, content=[ToolContent(content=text)], meta=metadata))
         else:
-            self.record.append(MessageChunk(session_update=kind, content=text, meta=meta))
+            self.record.append(MessageChunk(session_update=kind, content=text, meta=metadata))
 
-    def close(self) -> None:
+    def defer_notification(self, message: dict) -> None:
+        self.late.append(message)
+
+    def close(self, *, flush: bool = True) -> None:
         try:
-            self.flush()
+            if flush:
+                for message in self.late:
+                    self.observe_notification(message)
+                self.late.clear()
+                self.flush()
         finally:
             self.record.close()

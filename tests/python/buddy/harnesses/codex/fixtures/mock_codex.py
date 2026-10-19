@@ -339,6 +339,13 @@ def main():
                         state['threads'][thread_id].setdefault('clientReplies', []).append(reply)
                         write_state(state)
             send_usage(case, thread_id, turn_id, turn_index)
+            if case == 'session-rewrite':
+                send({'method': 'item/agentMessage/delta', 'params': {'threadId': thread_id, 'turnId': turn_id,
+                      'itemId': 'revised', 'delta': 'streamed wording'}})
+                send({'method': 'item/completed', 'params': {'threadId': thread_id, 'turnId': turn_id,
+                      'item': {'id': 'revised', 'type': 'agentMessage', 'text': 'different completed wording'}}})
+                send({'method': 'item/started', 'params': {'threadId': thread_id, 'turnId': turn_id,
+                      'item': {'id': '', 'type': 'commandExecution', 'command': 'empty native id'}}})
             if case in ("session-stream", "session-stream-disconnect"):
                 for method, fields in session_frames(params['input'][0]['text']):
                     send({"method": method, "params": {"threadId": thread_id, "turnId": turn_id, **fields}})

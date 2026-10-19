@@ -3,6 +3,14 @@
 These are display facts, independent of activity, settlement and stop evidence.
 Decode JSON with the shared strict decoder before validating at a read boundary.
 Content and tool bodies deliberately have no size or retention limit.
+
+projectionVersion 1 appends message and tool text within each
+``(_meta.nativeItemId, _meta.contentSegment)`` key. Segments include the
+native turn identity so successive turns of an attempt remain distinct.
+``_meta.replace: true`` creates or replaces the block at that key with this
+complete snapshot (diffs, revised markers or a non-extending completed item).
+Tool ``content`` therefore appends here, deliberately differing from ACP v1's
+whole-content replacement; only the explicit metadata requests replacement.
 """
 from __future__ import annotations
 
@@ -23,7 +31,9 @@ SESSION_FORMAT = SessionFormat(protocol="acp", protocol_version=1, projection_ve
 
 
 class NativeMeta(InternalModel):
-    native_item_id: str | None = None
+    native_item_id: str = Field(min_length=1)
+    content_segment: str = Field(min_length=1)
+    replace: bool | None = None
     native_type: str | None = None
     phase: str | None = None
     marker: bool | None = None
@@ -36,42 +46,19 @@ class TextContent(InternalModel):
     text: str
 
 
-class ImageContent(InternalModel):
-    type: Literal["image"] = "image"
-    data: str
-    mime_type: str
-
-
-class ResourceLink(InternalModel):
-    type: Literal["resource_link"] = "resource_link"
-    uri: str
-    name: str
-
-
-ContentBlock = Annotated[TextContent | ImageContent | ResourceLink, Field(discriminator="type")]
-
-
 class MessageChunk(InternalModel):
     session_update: Literal["user_message_chunk", "agent_message_chunk", "agent_thought_chunk"]
-    content: ContentBlock
+    content: TextContent
     meta: NativeMeta | None = Field(default=None, alias="_meta")
 
 
 class ToolContent(InternalModel):
     type: Literal["content"] = "content"
-    content: ContentBlock
-
-
-class ToolDiff(InternalModel):
-    type: Literal["diff"] = "diff"
-    path: str
-    old_text: str | None = None
-    new_text: str
+    content: TextContent
 
 
 class ToolLocation(InternalModel):
     path: str
-    line: int | None = None
 
 
 ToolKind = Literal["read", "edit", "delete", "move", "search", "execute", "think", "fetch", "switch_mode", "other"]
@@ -86,8 +73,9 @@ class ToolCallUpdate(InternalModel):
     status: ToolStatus | None = None
     raw_input: JsonValue = None
     raw_output: JsonValue = None
-    content: list[Annotated[ToolContent | ToolDiff, Field(discriminator="type")]] | None = None
+    content: list[ToolContent] | None = None
     locations: list[ToolLocation] | None = None
+    meta: NativeMeta | None = Field(default=None, alias="_meta")
 
 
 class ToolCall(ToolCallUpdate):

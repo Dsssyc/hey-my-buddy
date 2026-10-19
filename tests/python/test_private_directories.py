@@ -13,6 +13,36 @@ from support import BoardTestCase
 
 
 class PrivateDirectoryTests(BoardTestCase):
+    def test_remove_tree_deletes_links_even_when_the_exact_link_is_kept(self):
+        outside = private_dirs.ensure_private_dir(self.directory / 'outside-kept-links')
+        sentinel = outside / 'sentinel'
+        sentinel.write_text('retained outside target')
+        targets = (('file', sentinel, False), ('directory', outside, True),
+                   ('dangling', outside / 'missing', False))
+        for kind, target, directory_link in targets:
+            with self.subTest(kind=kind):
+                root = private_dirs.ensure_private_dir(self.directory / ('private-link-' + kind))
+                link = root / 'session.jsonl'
+                link.symlink_to(target, target_is_directory=directory_link)
+                self.assertTrue(private_dirs.remove_tree(root, keep=frozenset({link})))
+                self.assertFalse(root.exists())
+                self.assertFalse(link.is_symlink())
+                self.assertEqual(sentinel.read_text(), 'retained outside target')
+
+    def test_remove_tree_keeps_the_exact_session_file_without_retaining_same_named_directories(self):
+        root = private_dirs.ensure_private_dir(self.directory / 'private-records')
+        recorded = private_dirs.ensure_private_dir(root / 'attempts' / 'recorded')
+        session = recorded / 'session.jsonl'
+        session.write_text('retained session\n')
+        (recorded / 'settings.json').write_text('remove configuration')
+        same_name = private_dirs.ensure_private_dir(root / 'attempts' / 'directory' / 'session.jsonl')
+        (same_name / 'unrelated.txt').write_text('a directory is not a session record')
+        self.assertFalse(private_dirs.remove_tree(root, keep=frozenset({session})))
+        self.assertEqual(session.read_text(), 'retained session\n')
+        self.assertEqual(list(recorded.iterdir()), [session])
+        self.assertEqual(list((root / 'attempts').iterdir()), [recorded])
+        self.assertFalse(same_name.exists())
+
     def test_remove_tree_retains_exact_evidence_subtree_and_existing_link_guards(self):
         root = private_dirs.ensure_private_dir(self.directory / 'private')
         failed = private_dirs.ensure_private_dir(root / 'attempts' / 'failed')

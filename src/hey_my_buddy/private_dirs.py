@@ -156,13 +156,13 @@ def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
             children = [Path(entry.path) for entry in entries]
         retained = False
         for child in children:
-            if child in keep:
-                retained = True
-            elif linked(child):
+            if linked(child):
                 if child.is_junction():
                     child.rmdir()
                 else:
                     child.unlink()
+            elif child in keep:
+                retained = True
             elif child.is_dir():
                 retained = not descend(child) or retained
             else:

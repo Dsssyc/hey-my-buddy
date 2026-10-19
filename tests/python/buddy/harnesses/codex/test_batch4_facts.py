@@ -298,7 +298,7 @@ class NativeFactsTests(unittest.TestCase):
                 connection.messages.put({"id": 1, "result": result})
                 connection.send = lambda _message: None
                 state = native_run._RunState(thread_id="thread", turn_id="turn")
-                native_run._interrupt(connection, state)
+                native_run._interrupt(connection, state, mock.Mock())
                 self.assertTrue(state.interrupt_requested)
                 self.assertEqual(state.interrupt_basis, basis)
 

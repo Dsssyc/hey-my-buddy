@@ -158,6 +158,20 @@ class SeamCase(unittest.TestCase):
     def worker_services(self, live=None) -> RunServices:
         return RunServices(live=live)
 
+    def session_updates(self, result):
+        from hey_my_buddy.private_dirs import attempt_root
+        from hey_my_buddy.protocol.session_content import SessionFormat, SessionNotification
+
+        path = attempt_root(Path(self.environment['HMB_STATE_DIR']), 'codex',
+                            result.identity.task_id, result.identity.attempt_id) / 'session.jsonl'
+        lines = [json.loads(line) for line in path.read_bytes().splitlines()]
+        self.assertEqual(sum(line.get('protocol') == 'acp' for line in lines), 1)
+        SessionFormat.from_payload(lines[0])
+        for line in lines[1:]:
+            SessionNotification.from_payload(line)
+            self.assertEqual(line['sessionId'], result.identity.attempt_id)
+        return [line['update'] for line in lines[1:]]
+
     def assert_discovered_provider_runs(self, scope, schema):
         from hey_my_buddy.buddy.harnesses.codex import account_probe
         for configured, expected in ((None, 'openai'), ('fixture-provider', 'fixture-provider')):
@@ -359,6 +373,12 @@ class FastSeamTests(SeamCase):
         self.assertEqual([turn["input"][0]["text"] for turn in trace["turns"]],
                          ["Pick a buddy",
                           "Pick a buddy\n\nFormat correction: answer-invalid-json" + CORRECTION_SUFFIX])
+        updates = self.session_updates(result)
+        self.assertEqual([row['content']['text'] for row in updates if row['sessionUpdate'] == 'user_message_chunk'],
+                         [turn['input'][0]['text'] for turn in trace['turns']])
+        answers = [row for row in updates if row['sessionUpdate'] == 'agent_message_chunk']
+        self.assertEqual(answers[-1]['content']['text'], result.value.raw)
+        self.assertEqual(len({row['_meta']['contentSegment'] for row in answers}), 2)
 
     def test_tool_facts_stop_the_run_through_the_observer_feedback(self):
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
@@ -777,6 +797,11 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.value.correction_count, 1)
         self.assertEqual(rule.correction_count, 1)
         self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 2)
+        updates = self.session_updates(result)
+        self.assertEqual(len([row for row in updates if row['sessionUpdate'] == 'user_message_chunk']), 2)
+        answers = [row for row in updates if row['sessionUpdate'] == 'agent_message_chunk']
+        self.assertEqual(answers[-1]['content']['text'], result.value.raw)
+        self.assertEqual(len({row['_meta']['contentSegment'] for row in answers}), 2)
         outside = ReviewCorrection(REVIEW_SCHEMA, "Select from the frozen packet")
         result = self.review_run("readonly-outside", observer=outside.observer)
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -854,6 +879,77 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_revised_completed_content_and_empty_native_id_do_not_change_the_native_outcome(self):
+        result = self.worker_run('session-rewrite')
+        self.assertEqual(result.end.status, 'ok', result.end.message)
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+        self.assertEqual(json.loads(result.value.raw)['outcome']['disposition'], 'completed')
+        updates = self.session_updates(result)
+        revised = [row for row in updates if row.get('_meta', {}).get('nativeItemId') == 'revised']
+        self.assertTrue(revised[-1]['_meta']['replace'])
+        self.assertEqual(revised[-1]['content']['text'], 'different completed wording')
+        self.assertTrue(all(row.get('toolCallId') != '' for row in updates))
+
+    def test_record_append_and_close_failures_keep_native_result_usage_checkpoint_and_stop_evidence(self):
+        from hey_my_buddy.buddy.harnesses.session_record import SessionRecord, SessionRecordWriteError
+        from hey_my_buddy.protocol.session_content import SessionNotification
+
+        write, close = SessionRecord._write, SessionRecord.close
+
+        def failed_write(record, value):
+            if isinstance(value, SessionNotification) and value.update.session_update == 'agent_message_chunk':
+                raise OSError('controlled record write failure')
+            return write(record, value)
+
+        def failed_close(record):
+            close(record)
+            raise SessionRecordWriteError() from OSError('controlled record close failure')
+
+        for method, failing in (('_write', failed_write), ('close', failed_close)):
+            with self.subTest(method=method), mock.patch.object(SessionRecord, method, failing):
+                result = self.worker_run('usage')
+            self.assertEqual(result.end.status, 'error')
+            self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+            self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+            self.assertEqual(json.loads(result.value.raw)['outcome']['disposition'], 'completed')
+            self.assertGreater(result.usage.value['inputTokens'], 0)
+            checkpoint = native_run._read_evidence_ref(result, 'native-checkpoint')
+            self.assertEqual(checkpoint['nativeTurnStatus'], 'completed')
+            self.assertIsNotNone(checkpoint['lastAssistantMessage'])
+            self.assertIsNotNone(result.last_assistant_message)
+
+    def test_record_open_failure_still_builds_a_result_with_actual_stop_evidence(self):
+        with mock.patch('hey_my_buddy.buddy.harnesses.session_record.open_regular_fd',
+                        side_effect=OSError('controlled record open failure')):
+            result = self.worker_run('ok')
+        self.assertEqual(result.end.status, 'error')
+        self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+
+    def test_late_projection_write_failure_keeps_interrupt_and_checkpoint_evidence(self):
+        from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+        from hey_my_buddy.protocol.session_content import SessionNotification
+
+        write = SessionRecord._write
+
+        def failed_write(record, value):
+            if isinstance(value, SessionNotification) and value.update.session_update == 'agent_message_chunk':
+                raise OSError('controlled late record write failure')
+            return write(record, value)
+
+        cancelled = self.cancel_after_native_start()
+        self.set_case('session-interrupt')
+        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='interrupt input')
+        with mock.patch.object(SessionRecord, '_write', failed_write):
+            result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                         services=self.worker_services(), cancelled=cancelled)
+        self.assertEqual(result.end.status, 'error')
+        self.assertEqual(result.end.reason_code, 'session-record-write-failed')
+        self.assertEqual(result.stop_evidence.interrupt.basis, 'native-turn-interrupt-ack')
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+        checkpoint = native_run._read_evidence_ref(result, 'native-checkpoint')
+        self.assertEqual(checkpoint['nativeTurnStatus'], 'interrupted')
+
     def test_startup_retry_leaves_no_record_and_the_same_attempt_can_start(self):
         from hey_my_buddy.private_dirs import attempt_root
 
@@ -1038,7 +1134,8 @@ class WorkerSeamTests(CodexSeamCase):
                 connection.call.side_effect = CodexProtocolError("native-rpc-error", "turn rejected")
                 state = native_run._RunState()
                 with self.assertRaises(CodexProtocolError):
-                    native_run._admit_turn(connection, request, "thread", "Work", "worker", state)
+                    native_run._admit_turn(connection, request, "thread", "Work", "worker", state,
+                                          mock.Mock(session=mock.Mock()))
                 policy = self.expected_worker_policy(level)[1]
                 self.assertEqual(state.worker_policy, policy)
                 sent = connection.call.call_args.args[1]

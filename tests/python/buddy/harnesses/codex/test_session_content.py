@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.buddy.harnesses.codex.session_content import CodexSessionProjector
-from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+from hey_my_buddy.buddy.harnesses.session_record import SessionRecord, SessionRecordWriteError
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import decode_strict_json
 from hey_my_buddy.private_dirs import attempt_root
@@ -42,6 +42,45 @@ class SessionProjectionTests(unittest.TestCase):
             SessionNotification.from_payload(line)
             self.assertEqual(line["sessionId"], "attempt")
         return [line["update"] for line in lines[1:]]
+
+    @staticmethod
+    def displayed_blocks(updates):
+        """Consume the documented projection format without native knowledge."""
+        blocks = {}
+        for update in updates:
+            content = update.get('content')
+            if not content or '_meta' not in update:
+                continue
+            text = content['text'] if isinstance(content, dict) else ''.join(part['content']['text'] for part in content)
+            meta = update['_meta']
+            key = (meta['nativeItemId'], meta['contentSegment'])
+            blocks[key] = text if meta.get('replace') else blocks.get(key, '') + text
+        return blocks
+
+    def test_record_is_not_opened_until_the_first_write(self):
+        record = SessionRecord(self.state, 'codex', 'other-task', 'unstarted')
+        record.close()
+        self.assertFalse(record.path.parent.exists())
+
+    def test_nonextending_completed_text_replaces_the_streamed_block_even_when_shorter(self):
+        for item_id, completed in (('revised', 'different'), ('shorter', 'old'), ('empty', '')):
+            self.frame('item/agentMessage/delta', itemId=item_id, delta='old streamed text')
+            self.projector.flush()
+            self.item('item/completed', item_id=item_id, text=completed)
+            self.item('item/completed', item_id=item_id, text=completed)
+            rows = [row for row in self.updates()[1:] if row['_meta']['nativeItemId'] == item_id]
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(rows[-1]['_meta']['replace'])
+            self.assertEqual(rows[0]['_meta']['contentSegment'], rows[1]['_meta']['contentSegment'])
+            self.assertEqual(list(self.displayed_blocks(rows).values()), [completed])
+
+    def test_empty_native_item_ids_are_rejected_at_the_projection_entry(self):
+        self.item('item/started', 'commandExecution', '', command='must not normalize')
+        self.item('item/completed', 'agentMessage', '', text='must not display')
+        self.frame('item/agentMessage/delta', itemId='', delta='must not display')
+        self.frame('turn/completed', turn={'id': 'turn', 'items': [
+            {'id': '', 'type': 'commandExecution', 'command': 'must not normalize'}]})
+        self.assertEqual(len(self.updates()), 1)
 
     def test_fixed_attempt_path_header_private_permissions_and_no_fsync(self):
         self.assertEqual(self.record.path, attempt_root(self.state, "codex", "task", "attempt") / "session.jsonl")
@@ -86,8 +125,7 @@ class SessionProjectionTests(unittest.TestCase):
 
         self.projector.record_input('second turn')
         facts = _RunFacts()
-        chain = _EventChain(facts, _Classifier(facts), None, overflow_raises=False)
-        chain.session = self.projector
+        chain = _EventChain(facts, _Classifier(facts), None, self.projector, overflow_raises=False)
         for index in range(300):
             chain.observe({'method': 'item/agentMessage/delta', 'params': {
                 'threadId': 'thread', 'turnId': 'second', 'itemId': 'early', 'delta': '字'}})
@@ -115,16 +153,16 @@ class SessionProjectionTests(unittest.TestCase):
         self.projector.flush()
         self.assertEqual([row['content']['text'] for row in self.updates()], ['sent input', 'Host inquiry'])
 
-    def test_image_blocks_preserve_data_or_uri_without_opening_local_files(self):
+    def test_nontext_blocks_are_type_markers_without_reading_or_parsing_images(self):
         self.item("item/completed", "userMessage", "images", content=[
             {"type": "image", "url": "data:image/png;base64,aGVsbG8="},
             {"type": "image", "url": "https://fixture.invalid/image.png"},
             {"type": "localImage", "path": "/fixture/never-read.png"}])
         self.projector.flush()
         rows = self.updates()[1:]
-        self.assertEqual(rows[0]["content"], {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"})
-        self.assertEqual(rows[1]["content"]["uri"], "https://fixture.invalid/image.png")
-        self.assertEqual(rows[2]["content"]["text"], "[localImage]")
+        self.assertEqual([row['content']['text'] for row in rows], ['[image]', '[image]', '[localImage]'])
+        self.assertTrue(all(row['_meta']['nativeItemId'] == 'images' for row in rows))
+        self.assertNotIn('base64', json.dumps(rows))
 
     def test_reasoning_summary_and_text_parts_deduplicate_independently(self):
         self.item("item/started", "reasoning", "reason", summary=[], content=[])
@@ -193,8 +231,9 @@ class SessionProjectionTests(unittest.TestCase):
         self.item('item/started', 'plan', 'plan', text='first proposal')
         self.item('item/updated', 'plan', 'plan', text='revised proposal')
         self.item('item/completed', 'plan', 'plan', text='revised proposal')
-        self.assertEqual([row['content']['text'] for row in self.updates()[1:]],
-                         ['[plan]\nfirst proposal', '[plan]\nrevised proposal'])
+        rows = self.updates()[1:]
+        self.assertTrue(all(row['_meta']['replace'] for row in rows))
+        self.assertEqual(list(self.displayed_blocks(rows).values()), ['[plan]\nrevised proposal'])
 
     def test_command_output_deltas_and_completed_cumulative_output_render_once(self):
         self.item("item/started", "commandExecution", "command", command="pwd", cwd="/fixture", status="inProgress")
@@ -207,7 +246,8 @@ class SessionProjectionTests(unittest.TestCase):
         rows = self.updates()[1:]
         self.assertEqual(rows[0]["kind"], "execute")
         self.assertEqual(rows[0]["rawInput"], {"command": "pwd", "cwd": "/fixture"})
-        self.assertEqual("".join(block["content"]["text"] for row in rows for block in row.get("content", [])), "/fixture\nend")
+        self.assertEqual(list(self.displayed_blocks(rows).values()), ["/fixture\nend"])
+        self.assertTrue(all(not row['_meta'].get('replace') for row in rows if row.get('content')))
         self.assertTrue(any(row.get("status") == "completed" for row in rows))
 
     def test_file_changes_keep_locations_diff_and_input_output(self):
@@ -244,6 +284,7 @@ class SessionProjectionTests(unittest.TestCase):
         self.projector.flush()
         rows = self.updates()[1:]
         self.assertEqual(rows[0]["_meta"]["nativeType"], "turn/diff/updated")
+        self.assertEqual(rows[0]['_meta']['nativeItemId'], 'turn/diff/updated:turn')
         self.assertTrue(rows[0]["_meta"]["marker"])
         self.assertEqual(rows[-1]["toolCallId"], "edit")
 
@@ -254,10 +295,15 @@ class SessionProjectionTests(unittest.TestCase):
         self.item('item/completed', 'fileChange', 'edit', changes=[{'path': '/fixture/a', 'diff': '-a\n+c'}])
         self.projector.flush()
         rows = self.updates()[1:]
-        self.assertEqual([row['content']['text'] for row in rows if row['sessionUpdate'] == 'agent_message_chunk'],
-                         ['[turn/diff/updated]\n-old\n+first', '[turn/diff/updated]\n-old\n+second'])
-        self.assertEqual([part['content']['text'] for row in rows if row['sessionUpdate'] == 'tool_call_update'
-                          for part in row.get('content', [])], ['-a\n+b', '-a\n+c'])
+        self.assertTrue(all(row['_meta']['replace'] for row in rows if row.get('content')))
+        self.assertEqual(list(self.displayed_blocks(rows).values()),
+                         ['[turn/diff/updated]\n-old\n+second', '-a\n+c'])
+
+    def test_duration_is_a_result_fact(self):
+        self.item('item/completed', 'sleep', 'sleep', durationMs=17)
+        row = self.updates()[-1]
+        self.assertNotIn('rawInput', row)
+        self.assertEqual(row['rawOutput'], {'durationMs': 17})
 
     def test_long_line_multibyte_flush_close_and_partial_tail(self):
         text = "中文𝄞\n" * 100000
@@ -296,11 +342,14 @@ class SessionProjectionTests(unittest.TestCase):
         root = attempt_root(self.state, "codex", "task", "linked")
         root.mkdir()
         (root / "session.jsonl").symlink_to(self.record.path)
-        with self.assertRaises(BoardError):
-            SessionRecord(self.state, "codex", "task", "linked")
+        linked = SessionRecord(self.state, "codex", "task", "linked")
+        with self.assertRaises(SessionRecordWriteError) as caught:
+            linked.append(MessageChunk(session_update='user_message_chunk', content=TextContent(text='input')))
+        self.assertIsInstance(caught.exception.__cause__, BoardError)
 
     def test_io_failure_propagates(self):
         self.frame("item/agentMessage/delta", itemId="message", delta="pending")
-        with patch.object(self.record, "append", side_effect=OSError("controlled write failure")):
-            with self.assertRaisesRegex(OSError, "controlled write failure"):
+        with patch.object(self.record._stream, "flush", side_effect=OSError("controlled write failure")):
+            with self.assertRaises(SessionRecordWriteError) as caught:
                 self.projector.flush()
+        self.assertIsInstance(caught.exception.__cause__, OSError)

@@ -22,14 +22,14 @@ class SessionContentTests(unittest.TestCase):
     def test_six_updates_round_trip(self):
         updates = [
             *({"sessionUpdate": kind, "content": {"type": "text", "text": "正文𝄞"},
-               "_meta": {"nativeItemId": "item", "reasoning": "summary", "partIndex": 0}}
+               "_meta": {"nativeItemId": "item", "contentSegment": "turn/summary/0", "reasoning": "summary", "partIndex": 0}}
               for kind in ("user_message_chunk", "agent_message_chunk", "agent_thought_chunk")),
             {"sessionUpdate": "tool_call", "toolCallId": "call", "title": "command", "kind": "execute",
              "status": "in_progress", "rawInput": {"command": "pwd"}},
             {"sessionUpdate": "tool_call_update", "toolCallId": "call", "status": "completed",
-             "rawOutput": {"exitCode": 0}, "content": [{"type": "content", "content": {"type": "text", "text": "out"}},
-                 {"type": "diff", "path": "/fixture/file", "oldText": "before", "newText": "after"}],
-             "locations": [{"path": "/fixture/file", "line": 2}]},
+             "rawOutput": {"exitCode": 0}, "content": [{"type": "content", "content": {"type": "text", "text": "out"}}],
+             "_meta": {"nativeItemId": "call", "contentSegment": "turn/output/0"},
+             "locations": [{"path": "/fixture/file"}]},
             {"sessionUpdate": "plan", "entries": [{"content": "step", "priority": "medium", "status": "pending"}]},
         ]
         for update in updates:
@@ -58,3 +58,23 @@ class SessionContentTests(unittest.TestCase):
                     '{"sessionId":"a","update":{"rawOutput":NaN}}', '{"x":1e999}'):
             with self.assertRaises(ValueError):
                 decode_strict_json(raw)
+
+    def test_replacement_metadata_identifies_a_block_for_messages_and_tools(self):
+        for update in ({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "new snapshot"}},
+                       {"sessionUpdate": "tool_call_update", "toolCallId": "call",
+                        "content": [{"type": "content", "content": {"type": "text", "text": "new diff"}}]}):
+            update['_meta'] = {'nativeItemId': 'item', 'contentSegment': 'turn/diff/0', 'replace': True}
+            parsed = SessionNotification.from_payload({'sessionId': 'attempt', 'update': update})
+            self.assertEqual(parsed.update.meta.replace, True)
+            for field in ('nativeItemId', 'contentSegment'):
+                invalid = {**update, '_meta': {**update['_meta'], field: ''}}
+                with self.assertRaises(BoardError):
+                    SessionNotification.from_payload({'sessionId': 'attempt', 'update': invalid})
+
+    def test_unused_content_shapes_are_not_part_of_the_projection_format(self):
+        for update in ({'sessionUpdate': 'agent_message_chunk', 'content': {'type': 'image', 'data': 'data', 'mimeType': 'image/png'}},
+                       {'sessionUpdate': 'tool_call_update', 'toolCallId': 'call', 'content': [
+                           {'type': 'diff', 'path': '/fixture', 'newText': 'text'}]},
+                       {'sessionUpdate': 'tool_call_update', 'toolCallId': 'call', 'locations': [{'path': '/fixture', 'line': 2}]}):
+            with self.assertRaises(BoardError):
+                SessionNotification.from_payload({'sessionId': 'attempt', 'update': update})

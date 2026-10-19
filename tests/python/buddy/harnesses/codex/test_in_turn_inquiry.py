@@ -27,8 +27,9 @@ class FakeConnection:
         self.sent = []
         self.response = {"turnId": "turn-1"}
 
-    def call(self, method, params):
+    def call(self, method, params, *, on_sent):
         self.calls.append((method, params))
+        on_sent()
         return self.response
 
     def send(self, message):
@@ -56,7 +57,7 @@ class NativeInquiryTests(unittest.TestCase):
         self.connection = FakeConnection()
         self.evidence = TurnEvidence("thread-1", "turn-1")
         self.native = _NativeInquiry(self.connection, self.evidence, "thread-1", "turn-1",
-                                     self.services, self.bridge)
+                                     self.services, self.bridge, mock.Mock())
 
     def ask(self):
         response = self.bridge._ask({"inquiryId": "q1", "question": "What is the answer?"},
