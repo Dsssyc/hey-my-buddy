@@ -115,6 +115,9 @@ from .protocol import (
     total_cost_usd,
 )
 from .tool_evidence import ReadOnlyToolEvidence
+from ..runtime_selection import environment_for
+from ..session_record import SessionRecord, SessionRecordWriteError, SESSION_RECORD_WRITE_FAILED
+from .session_content import ClaudeSessionProjector
 
 _SETTINGS_FILE = "settings.json"
 _NATIVE_STDERR_FILE = "native.stderr.log"
@@ -285,7 +288,6 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
         raise ClaudeProtocolError("wrong-native-session",
                                   "a reconstructed claude turn must allocate a fresh session id")
     deadline = execution_deadline(request.budget.timeout_seconds)
-    from ..runtime_selection import environment_for
     incoming = dict(environment_for())
     command = cli_command(incoming)
     environment = native_environment(incoming)
@@ -412,7 +414,8 @@ class _TurnCollector:
     def __init__(self, request: RunRequest, publisher: ActivityPublisher,
                  observer: Callable[[Mapping[str, Any]], RunFeedback],
                  native_schema_delivery: bool = False, expected_permission_mode: str | None = None,
-                 inquiry: InquiryServices | None = None, bridge: InquiryBridge | None = None):
+                 inquiry: InquiryServices | None = None, bridge: InquiryBridge | None = None,
+                 session: ClaudeSessionProjector | None = None):
         self._publisher = publisher
         self._observer = observer
         self.tools = ReadOnlyToolEvidence({"harness": "claude", "taskId": request.identity.task_id,
@@ -444,6 +447,8 @@ class _TurnCollector:
         self.inquiry_tool_failures: list[dict] = []
         self.inquiry_tool_failures_dropped = 0
         self._native_handle: ProcessHandle | None = None
+        self.session = session
+        self.session_error: SessionRecordWriteError | None = None
 
     def install(self, connection: Connection, handle: ProcessHandle | None = None) -> None:
         self._connection = connection
@@ -505,6 +510,8 @@ class _TurnCollector:
         self.user_sent = True
         connection.send({"type": "user", "message": {"role": "user",
                        "content": [{"type": "text", "text": input_text}]}})
+        if self.session is not None:
+            self.session.start_prompt(session_id, input_text)
         self.evidence = TurnEvidence(session_id, cwd, provider=self.provider)
         connection.on_message = self.observe
 
@@ -537,6 +544,11 @@ class _TurnCollector:
         # Projection precedes every check: a frame a later rule rejects keeps
         # its tool facts, and the evidence observation follows the same rule.
         self.tools.observe_frame(frame)
+        if self.session is not None:
+            try:
+                self.session.observe_frame(frame)
+            except SessionRecordWriteError as error:
+                self.session_error = error
         if self.evidence is not None:
             initialized = self.evidence.init_observed
             activity = self.evidence.observe(frame)
@@ -572,6 +584,8 @@ class _TurnCollector:
         if self.tools.tool_calls != self._last_tool_calls:
             self._last_tool_calls = self.tools.tool_calls
             self._notify(settled=False, raw=None)
+        if self.session_error is not None:
+            raise self.session_error
 
     def _observe_inquiry_tool(self, frame: dict) -> None:
         """Accept only a completed tool result tied to this native root call."""
@@ -734,6 +748,8 @@ def _send_pending_inquiries(collector: _TurnCollector, connection: Connection, s
         bridge.deliver_native(inquiry_id, {"sessionId": session_id,
                                            "source": "claude/stream-json-user",
                                            "eventSeq": collector.evidence.event_seq})
+        if collector.session is not None:
+            collector.session.record_input(message)
         if bridge.error:
             raise ClaudeProtocolError("inquiry-journal-unavailable", bridge.error)
 
@@ -1099,6 +1115,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     inquiry_bridge: InquiryBridge | None = None
     native_result: dict | None = None
     cancel = CancelFlag(cancelled)
+    session = ClaudeSessionProjector(SessionRecord(Path(environment_for()["HMB_STATE_DIR"]), "claude",
+        request.identity.task_id, request.identity.attempt_id))
+    record_error: SessionRecordWriteError | None = None
 
     def request_interrupt() -> None:
         # A fresh short control budget permits a native interrupt after the
@@ -1135,7 +1154,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             native_schema_delivery="--json-schema" in preparation.args,
             expected_permission_mode=_flag_value(preparation.args, "--permission-mode")
             if request.worker_permission is not None else None,
-            inquiry=inquiry, bridge=inquiry_bridge)
+            inquiry=inquiry, bridge=inquiry_bridge, session=session)
         spawn = _spawn_native(command=preparation.command, args=preparation.args, cwd=request.cwd,
                               environment=preparation.environment,
                               invocation_root=preparation.invocation_root, deadline=preparation.deadline,
@@ -1166,6 +1185,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 inquiry_bridge.close()
                 state.inquiry_report = inquiry_bridge.report()
             collector.settled_notify(native_result)
+    except SessionRecordWriteError as error:
+        record_error = error
+        state.status = "error"
     except ObserverInterrupt:
         state.status = "cancelled"
         state.reason = "observer-interrupt"
@@ -1224,6 +1246,17 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.status = "cancelled"
             state.reason = "user-cancel"
             state.error_text = "the owned Claude execution was cancelled"
+    # Display failure never bypasses native facts, stop collection or the
+    # result builder, including a failure closing an otherwise complete run.
+    if collector is not None and collector.session_error is not None:
+        record_error = collector.session_error
+    try:
+        session.close()
+    except SessionRecordWriteError as error:
+        record_error = error
+    if record_error is not None:
+        state.status, state.reason = "error", SESSION_RECORD_WRITE_FAILED
+        state.error_text = str(record_error)
     return _build_result(request, state=state, collector=collector, spawn=spawn,
                          owned_spawn=owned_spawn, preparation=preparation, native_result=native_result)
 

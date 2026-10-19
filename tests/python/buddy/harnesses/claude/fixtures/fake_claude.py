@@ -275,6 +275,17 @@ def run_turn(case):
         send({"type": "rate_limit_event", "rate_limit_info": {
             "status": "allowed_warning", "rateLimitType": "seven_day", "resetsAt": "2026-09-27T00:00:00Z"}})
     send({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}})
+    if case == "session-content":
+        # Synthetic display coverage only: this is not evidence that a real
+        # CLI version supplies thinking blocks for the configured invocation.
+        assistant = {"type": "assistant", "session_id": session_id, "message": {
+            "id": "display-message", "role": "assistant", "content": [
+                {"type": "thinking", "thinking": "fixture thought 中文"},
+                {"type": "tool_use", "id": "display-call", "name": "Read", "input": {"file_path": "a.py"}}]}}
+        send(assistant)
+        send(assistant)
+        send({"type": "user", "session_id": session_id, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "display-call", "content": "fixture file 中文"}]}})
     if case in ("inquiry-answer", "inquiry-wrong-call", "inquiry-child", "inquiry-text-only",
                 "inquiry-unanswered", "inquiry-tool-error", "inquiry-tool-error-retry",
                 "inquiry-forged-refusal", "inquiry-signed-refusal", "inquiry-late-input",
