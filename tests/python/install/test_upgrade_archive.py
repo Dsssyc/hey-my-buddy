@@ -1,4 +1,4 @@
-"""Schema upgrades and later cutovers preserve historical workspace files."""
+"""Runtime cutovers preserve historical workspace files."""
 from contextlib import ExitStack
 import json
 import os
@@ -11,7 +11,6 @@ from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
-from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade
@@ -30,7 +29,7 @@ class UpgradeCutoverTests(BoardTestCase):
         shutil.copytree(old_backup, self.retained_archive)
         self.archive_bytes = {path.relative_to(self.retained_archive): path.read_bytes()
                               for path in self.retained_archive.rglob("*") if path.is_file()}
-        self.assertEqual(backup.verify(self.retained_archive)["schema"], UPGRADE_BASE_SCHEMA)
+        self.assertEqual(backup.verify(self.retained_archive)["schema"], SCHEMA_VERSION)
         self.evidence = self.state / "attempts" / "fixture-run" / "fixture-attempt" / "result.json"
         self.evidence.parent.mkdir(parents=True, exist_ok=True)
         self.evidence.write_text('{"retained":"evidence"}')
@@ -50,7 +49,7 @@ class UpgradeCutoverTests(BoardTestCase):
         self.started_runtimes = []
 
     def cutover(self, previous: Path, target: Path, *, fail_target=False,
-                fail_backup=False, interrupt_target=False, fail_migration=False):
+                fail_backup=False, interrupt_target=False):
         target.mkdir(parents=True, exist_ok=True)
         endpoint = {"runtimeIdentity": "runtime:" + previous.name,
                     "serviceId": "private-old", "pid": 123, "contractVersion": "fixture-contract"}
@@ -77,8 +76,7 @@ class UpgradeCutoverTests(BoardTestCase):
                 raise KeyboardInterrupt("interrupted after backup")
             if fail_target and path == target:
                 raise BoardError("INJECTED_START", "new runtime did not start")
-            schema = SCHEMA_VERSION if path == target else UPGRADE_BASE_SCHEMA
-            return {**health, "runtimeContentId": path.name, "schemaVersion": schema}
+            return {**health, "runtimeContentId": path.name, "schemaVersion": SCHEMA_VERSION}
 
         with ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, {"HMB_RUNTIME_ROOT": str(self.runtime_root)}))
@@ -99,25 +97,16 @@ class UpgradeCutoverTests(BoardTestCase):
             if fail_backup:
                 stack.enter_context(mock.patch.object(
                     backup, "create", side_effect=BoardError("BACKUP_INVALID", "injected backup failure")))
-            if fail_migration:
-                migrate = upgrade.upgrade_schema_24_to_25
-
-                def failed_migration(state):
-                    migrate(state)
-                    raise BoardError('INJECTED_MIGRATION', 'migration did not complete')
-
-                stack.enter_context(mock.patch.object(upgrade, 'upgrade_schema_24_to_25', side_effect=failed_migration))
             if interrupt_target:
                 with self.assertRaises(KeyboardInterrupt):
                     upgrade.upgrade({})
                 journal = json.loads((self.state / "upgrade.json").read_text())
-                self.assertIn(journal["phase"], ("backed-up", "migrated"))
+                self.assertEqual(journal["phase"], "prepared")
                 return upgrade.recover(self.state, self.runtime_root)
             return upgrade.upgrade({})
 
-    def assert_history_preserved(self, *, migrated=False):
-        if not migrated:
-            self.assertEqual((self.state / "board.sqlite3").read_bytes(), self.original_board)
+    def assert_history_preserved(self):
+        self.assertEqual((self.state / "board.sqlite3").read_bytes(), self.original_board)
         self.assertEqual((self.state / "console-settings.json").read_text(), '{"theme":"dark"}')
         self.assertEqual(self.evidence.read_text(), self.expected_evidence)
         self.assertEqual(self.start_log.read_text(), self.expected_start_log)
@@ -126,27 +115,23 @@ class UpgradeCutoverTests(BoardTestCase):
             self.assertNotEqual(self.history, self.original_history)
         self.assertEqual({path.relative_to(self.retained_archive): path.read_bytes()
                           for path in self.retained_archive.rglob("*") if path.is_file()}, self.archive_bytes)
-        if migrated:
-            self.assertEqual(upgrade.idle_snapshot(self.state), self.after_upgrade)
-        else:
-            self.assertEqual(upgrade.idle_snapshot(self.state), self.before)
+        self.assertEqual(upgrade.idle_snapshot(self.state), self.before)
 
-    def test_schema_upgrade_then_same_schema_cutover_keep_board_and_history(self):
+    def test_same_schema_cutovers_keep_board_and_history(self):
         first = self.runtime_root / ("b" * 32)
         result = self.cutover(self.previous, first)
         self.assertTrue(result["upgraded"], result)
-        self.after_upgrade = upgrade.idle_snapshot(self.state)
-        self.assertEqual(self.after_upgrade['schema'], SCHEMA_VERSION)
+        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], SCHEMA_VERSION)
         self.assertNotIn("archive", result)
-        self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], UPGRADE_BASE_SCHEMA)
-        self.assert_history_preserved(migrated=True)
+        self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], SCHEMA_VERSION)
+        self.assert_history_preserved()
 
         second = self.runtime_root / ("c" * 32)
         result = self.cutover(first, second)
         self.assertTrue(result["upgraded"], result)
         self.assertNotIn("archive", result)
         self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], SCHEMA_VERSION)
-        self.assert_history_preserved(migrated=True)
+        self.assert_history_preserved()
         self.assertEqual(self.started_runtimes, [first, second])
 
     def test_failed_new_runtime_returns_to_previous_runtime_with_history(self):
@@ -164,14 +149,6 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertFalse(result["upgraded"], result)
         self.assertEqual(result["error"]["details"]["reason"]["code"], "BACKUP_INVALID")
         self.assertEqual(result["rollback"]["runtimeContentId"], self.previous.name)
-        self.assertEqual(self.started_runtimes, [self.previous])
-        self.assert_history_preserved()
-
-    def test_failed_migration_restores_exact_schema_24_backup(self):
-        target = self.runtime_root / ('b' * 32)
-        result = self.cutover(self.previous, target, fail_migration=True)
-        self.assertFalse(result['upgraded'], result)
-        self.assertEqual(result['error']['details']['reason']['code'], 'INJECTED_MIGRATION')
         self.assertEqual(self.started_runtimes, [self.previous])
         self.assert_history_preserved()
 

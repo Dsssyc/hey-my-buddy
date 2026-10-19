@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate schema-24 upgrade stock using the frozen installed base source.
+"""Generate schema-25 upgrade stock using the frozen installed base source.
 
 No product installation, daemon, native harness or model is started. The base
 named service operations run in process; only native discovery and execution
@@ -26,9 +26,9 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "90bd0148230fe1b030cc65e325026dea0cdfb8b9"
-BASE_VERSION = "0.42.0"
-BASE_SCHEMA = 24
+BASE = "137caef7b42c26616fbaf4fcaf36c1252449bd76"
+BASE_VERSION = "0.46.0"
+BASE_SCHEMA = 25
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
@@ -114,12 +114,11 @@ def populate(args):
     from hey_my_buddy.blackboard.service import harness_health as health_module
     from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
     from hey_my_buddy.blackboard.service.service import BoardService, dispatch_local
+    from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
     from hey_my_buddy.blackboard.store.store import BoardStore
     from hey_my_buddy.blackboard.catalog import catalog_store, catalog as catalog_module
     from hey_my_buddy.blackboard.tasks import workspace
-    from hey_my_buddy.blackboard.evaluation import native_observations
     from hey_my_buddy.blackboard.evaluation import model_facts
-    from hey_my_buddy.blackboard.routing import quota_routing
 
     assert Path(db_module.__file__).resolve() == source / "src/hey_my_buddy/blackboard/store/db.py"
     assert db_module.SCHEMA_VERSION == BASE_SCHEMA
@@ -167,11 +166,11 @@ def populate(args):
             "harness": "codex", "status": "ready", "version": "0.157.0", "command": ["fixture-codex"], "accountStatus": "confirmed", "fixture": True}))
         stack.enter_context(patch.object(CodexAdapter, "discover_models", return_value=catalog))
         stack.enter_context(patch.object(model_facts, "refresh_model_services", return_value=None))
-        stack.enter_context(patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=(None, None, None)))
+        stack.enter_context(patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=None))
         store = BoardStore(work / "state", clock=lambda: AT)
         store.initialize()
         service = BoardService(store, token="fixture-service-token", control={},
-                               on_stop=lambda p: p, on_restart=lambda p: p)
+                               on_stop=lambda p: p, on_restart=lambda p: p, live_registry=LiveRegistry())
         service.register_console_authority("fixture-console", "f" * 24)
 
         def call(name, params, *, human=False):
@@ -199,14 +198,16 @@ def populate(args):
         call("harness_set", {"harness": "codex", "path": None})
         call("model_catalog_refresh", {"requestId": "fixture-catalog"})
         publish(buddySettings=[{"buddyId": profile, "enabled": True} for profile in PROFILES])
-        publish(preferenceChanges=[{"buddyId": PROFILES[0], "mode": "prefer", "reason": "fixture preference"},
-                                   {"buddyId": PROFILES[1], "mode": "exclude", "reason": "fixture exclusion"}],
+        publish(preferenceChanges=[{"buddyId": PROFILES[0], "mode": "prefer", "note": "fixture preference"},
+                                   {"buddyId": PROFILES[1], "mode": "exclude", "note": "fixture exclusion"}],
                 modelServiceConcurrency=[{"harness": "codex", "provider": "openai", "model": "fixture-alpha", "limit": 3}])
         publish(configuration={"routerBuddyIds": PROFILES,
                                         "routerRetryIntervalSeconds": 47,
                                         "defaultRoutingMode": "review", "routingBudget": "deep"},
                 modelServiceNoteChanges=[{"harness": "codex", "provider": "openai", "model": "fixture-alpha",
                                           "text": "升级夹具的模型备注；应保留。"}])
+        # Keep a program selection before the failed execution cools its provider.
+        call("selection_request", {"requestId": "fixture-routing", "task": "fixture routing choice"})
         nonce = "fixture-nonce-00000000000000000000"
         for label in ("delivered", "accepted", "failed", "cancelled"):
             submitted = call("workflow_submit", {"requestId": "fixture-" + label, "hostId": "fixture-host",
@@ -218,13 +219,14 @@ def populate(args):
             ids[label] = run_id
             control = submitted["control"]
             if label == "cancelled":
-                call("workflow_cancel", {"runId": run_id, "commandId": "cancel-fixture", "reason": "fixture only", **control})
+                call("workflow_cancel", {"runId": run_id, "commandId": "cancel-fixture", "note": "fixture only", **control})
                 continue
             claim = admit(nonce, run_id)
             attempt, turn = claim["attempt"], claim["turn"]
             if label == "failed":
                 report(claim, nonce, status="failed", result={"status": "error", "code": "fixture-failed",
-                                                              "modelStarted": False,
+                                                              "modelStarted": True,
+                                                              "quotaFailure": {"code": "quota-exceeded", "provider": "openai"},
                                                               "stopEvidence": {"shutdownConfirmed": True}})
                 view = call("workflow_get", {"runId": run_id})
                 assert view["state"] == "failed", view
@@ -252,23 +254,19 @@ def populate(args):
                     "keepCheckout": True, **control})
             elif label == "delivered":
                 call("workflow_conclude", {"runId": run_id, "note": "Fixture Host concluded the delivered work", **control})
-        # Freeze a real Router claim via base operations, then fail it with an
-        # explicit synthetic result; no harness process is spawned.
-        router_nonce = "fixture-router-nonce-000000000000"
-        requested = call("selection_request", {"requestId": "fixture-routing", "task": "fixture routing choice"})
-        while requested.get("runId"):
-            claim = admit(router_nonce, requested["runId"])
-            report(claim, router_nonce, status="failed", result={"status": "error", "code": "fixture-no-answer",
-                                                                 "modelStarted": False})
-            requested = call("selection_get", {"decisionId": requested["decisionId"]})["decision"]
-            if requested["status"] != "queued":
-                break
-        quota = {"source": "fixture/native-quota", "provider": "openai", "observedAt": AT,
-                 "ordinaryUsageAllowed": False, "windows": []}
-        with store.db.write() as connection:
-            native_observations.record_quota(connection, "codex", quota, now=AT)
-            quota_routing.redetect(connection, "codex", "openai", now=AT)
-        operations.append({"operation": "native_observations.record_quota + quota_routing.redetect", "params": quota, "response": "stored"})
+        call("inquiry_observe", {"runId": ids["delivered"], "inquiryId": "fixture-inquiry",
+                              "question": "fixture question after the execution ended"})
+        # The failed execution above recorded a native quota refusal through
+        # execution_result. Re-detection keeps its rejection count as stock.
+        call("quota_redetect", {"requestId": "fixture-quota-redetect", "harness": "codex", "provider": "openai"})
+        deleted = call("workflow_submit", {"requestId": "fixture-deleted", "hostId": "fixture-host",
+            "submissionToken": "fixture-submission-token-deleted", "task": "fixture deleted macro task",
+            "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+            "cwd": str(work / "repository"), "executionWorkspace": {"kind": "existing", "access": "read"},
+            "macroTask": {"title": "待删除的升级夹具"}})
+        call("workflow_cancel", {"runId": deleted["runId"], "commandId": "cancel-deleted-fixture",
+                                 "note": "fixture deletion", **deleted["control"]})
+        call("macro_task_delete", {"macroTaskId": deleted["macroTaskId"], "confirm": True, "microTaskCount": 1}, human=True)
         # A trusted missing-model reading starts the base's pending absence row.
         missing_catalog = {**catalog, "source": "fixture:missing-beta", "providers": [{**catalog["providers"][0], "models": [catalog["providers"][0]["models"][0]]}]}
         catalog_store.record(store.evaluation, missing_catalog)
@@ -276,7 +274,7 @@ def populate(args):
         catalog_module.coordinate_catalog_reread(store.directory, "codex", reader=lambda: None, wait=True)
         operations.append({"operation": "coordinate_catalog_reread", "params": {"adapter": "codex"}, "response": "window-written"})
         publish(buddySettings=[{"buddyId": PROFILES[1], "enabled": False}],
-                preferenceChanges=[{"buddyId": PROFILES[0], "mode": "pin", "reason": "fixture pinned buddy"}])
+                preferenceChanges=[{"buddyId": PROFILES[0], "mode": "pin", "note": "fixture pinned buddy"}])
         hashing.close()
         # All rows were created by base public operations. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -404,6 +402,11 @@ def verify(output, restored):
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == str(BASE_SCHEMA)
         assert connection.execute("SELECT COUNT(*) FROM macro_tasks").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM provider_cooling").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE state='deleted'").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM commands WHERE deletion_id IS NOT NULL").fetchone()[0] > 0
+        assert connection.execute("SELECT COUNT(*) FROM messages WHERE reason_code IS NOT NULL").fetchone()[0] > 0
+        assert connection.execute("SELECT COUNT(*) FROM evaluation_preferences WHERE note IS NOT NULL").fetchone()[0] == 2
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
         assert states == {metadata["stableIds"][key]: value for key, value in
                           (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))}

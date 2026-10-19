@@ -428,7 +428,7 @@ class UpgradeTests(BoardTestCase):
 
     def test_upgrade_refuses_older_or_unknown_schema(self):
         board=self.board()
-        for version in ('19', '20', '21', '22', '23', '999'):
+        for version in ('19', '20', '21', '22', '23', '24', '26', '025', '999'):
             with self.subTest(schema=version):
                 with board.store.db.write() as connection:
                     connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))

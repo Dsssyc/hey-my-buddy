@@ -66,8 +66,6 @@ CREATE TABLE IF NOT EXISTS macro_task_deletions (
         OR (state='deleted' AND deleted_at IS NOT NULL))
 );
 """
-COMMAND_DELETION_COLUMN = 'deletion_id TEXT REFERENCES macro_task_deletions(deletion_id) ON DELETE RESTRICT'
-
 #: Every task state the durable model may hold. See ``docs/board.md`` for the
 #: documented transition table; ``store.py`` enforces it.
 TASK_STATES = (
@@ -490,8 +488,7 @@ CREATE TABLE IF NOT EXISTS model_service_concurrency (
     # ``current`` row carries the extracted facts with their exact source, payload
     # hash and fetch date; an ``unknown`` row records a completed fetch with no
     # resolvable entry for this model service. A failed fetch writes nothing, so the
-    # previous snapshot is retained untouched. Recorded by the schema-17 upgrade base; the explicit idle upgrade
-    # remains owned by the upgrade module.
+    # previous snapshot is retained untouched.
     """
 CREATE TABLE IF NOT EXISTS model_facts (
     harness          TEXT NOT NULL,
