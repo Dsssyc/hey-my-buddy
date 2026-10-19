@@ -6,7 +6,7 @@ hey-my-buddy runs the coding harnesses you installed, on your machine, with your
 
 ## What hey-my-buddy does
 
-- It starts the harness you installed without modifying it, and leaves the harness's sign-in, settings, providers and extensions as you configured them.
+- It starts the command-line program of the harness you installed (for Codex, the App Server that comes with the Codex CLI) without modifying it, and leaves the harness's sign-in, settings, providers and extensions as you configured them.
 - Each harness signs in with what it stores itself. hey-my-buddy does not keep, copy or forward the credentials you sign in with. Provider keys that exist only as environment variables in your shell are not passed to Workers.
 - To show whether a buddy is paid by subscription or metered, it reads only the provider and the access type from the harness's own status reply or configuration file. Keys stored in the same file are not copied or kept.
 - When work can run in parallel, it runs several Workers at once, within the limits you set in the console. All usage is made with your accounts and counts against your plans and keys.
@@ -26,7 +26,7 @@ Before raising concurrency in the console, check your plan's terms and limits. G
 
 ## Official terms
 
-The vendors' own pages are authoritative and change over time.
+The vendors' own pages are authoritative and change over time. They apply to a harness in every form, CLI or app.
 
 | Harness | Pages |
 | --- | --- |
