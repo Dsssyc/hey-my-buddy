@@ -111,6 +111,10 @@ _Avoid_: 供应方, 服务商
 The time a provider of one harness sits out automatic routing after it refused work for quota. It grows with consecutive refusals, ends by itself or when the user clears it, and a later success ends the sequence. It belongs to the provider in that harness, not to a model or a buddy, and never changes the user's enablement or preferences.
 _Avoid_: 额度耗尽 / exhausted (for the provider's state; a refusal that interrupts a turn is still reported as quota used up), quota window
 
+**会话记录 / session record**:
+What one execution showed while it ran, as the harness gave it: messages, the reasoning it supplied, tool calls and plans, kept for the console to display. It is not evidence of what happened: settlement, acceptance and stop decisions never read it. It is deleted with its macro task.
+_Avoid_: transcript, 会话日志 (for the product's record; a harness's own session store is its native session)
+
 **改派 / reroute**:
 A new routing decision for the same micro task, without starting another micro task: at a Host's request, or by the blackboard when the chosen buddy's provider refused the turn for quota before its model started.
 _Avoid_: 重派, 换 buddy (for the routing step itself)
