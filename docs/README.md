@@ -20,7 +20,8 @@ Both READMEs stay concise and avoid internal terminology; details belong in the 
 | `tests/python/` | Python and cross-component verification, mirroring the package layout; DSH ACP tests live under `tests/python/buddy/harnesses/dsh/` |
 | `packaging/runtime-assets.json` | The explicit runtime resource manifest consumed by `packaging/build-skill.py` and the stable-runtime materializer |
 | `skills/hey-my-buddy/` | The shared agent skill: `SKILL.md` and its `scripts/hey-my-buddy` launcher |
-| `docs/reference/`, `docs/decisions/`, `docs/acceptance/` | Current operational contracts, the design record, and versioned evidence |
+| `docs/reference/`, `docs/decisions/` | Current operational contracts and the design record |
+| `docs/design/`, `docs/acceptance/` | Plans and notes, and the verification evidence of what was built. Records of work that implements an ADR live in `adrNNN/`; records of other work live in a folder named after that work (for example `c-two/`, `workspace-boundaries/`); install records live in `acceptance/installs/`; a record that belongs to neither stays at the top, as do `design/backlog.md` and this index |
 | `docs/research/` | What was looked at before a decision: dated notes on other projects, papers and products |
 
 ## Current references
