@@ -2,7 +2,7 @@
 
 ## Boundary
 
-The source candidate is contract 0.19.0/schema 14, based on `socu/buddy-core` at `dcd482a`, on `socu/local-harness-discovery`. The developer approved schema 14 separately, then authorized subsequent Codex probes after individually approving probes 1 and 2. The actual daily installation remains [0.18.0/schema 13](installed-0.18.0.md). The daily active installation was not upgraded, its board was not migrated and its settings were not changed. An installer-test isolation incident affected runtime directories and was remediated as recorded below; no branch was merged or package published. Normal Buddy delegations used the existing daily board under the developer's authorization; tests used private state/runtime roots.
+The source candidate is contract 0.19.0/schema 14, based on `socu/buddy-core` at `dcd482a`, on `socu/local-harness-discovery`. The developer approved schema 14 separately, then authorized subsequent Codex probes after individually approving probes 1 and 2. The actual daily installation remains [0.18.0/schema 13](installs/0.18.0.md). The daily active installation was not upgraded, its board was not migrated and its settings were not changed. An installer-test isolation incident affected runtime directories and was remediated as recorded below; no branch was merged or package published. Normal Buddy delegations used the existing daily board under the developer's authorization; tests used private state/runtime roots.
 
 ## Implementation
 

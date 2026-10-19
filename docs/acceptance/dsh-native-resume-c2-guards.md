@@ -31,7 +31,7 @@ V-C10（只有检查点、没有完整回合，任一层unknown/未确认不可�
 | c2-mut-M10c-continuation-true | `continuation.resumable is True`合取 | 红（unknown subTest；absent subTest仍绿，`is not None`仍在护） | 正向见证绿 | 09810866717037fc4a7a37b23c53491fdc5d7414a799aeaa055bafbc15271efe |
 | c2-mut-M10d-checkpoint-resumable | `checkpoint_resumable`判定项 | 红（not-resumable subTest；absent subTest仍绿） | 正向见证绿 | b345afa555abd83914725bfff0c9c8cffeb7ecc8370ac64782d75df3f3f14e11 |
 
-超上限条件的冗余事实：该条件由两个独立点执行（fstat的`st_size`项与读取后的长度guard），真实普通文件两处同时命中，任一单点删除都被另一层遮蔽——M9a/M9b行为不变，按计划"不把冗余防护……当成目标条件已由断言守住"如实登记为冗余层观察，不声称任一单点被断言单独守住；红证据M9ab在一次登记运行中去掉该条件的全部两个执行点，目标测试红、非普通文件邻居保持绿。此处理与[adr025-step5-host-review](adr025-step5-host-review.md)对"就绪文件路径防护另有一层打开方式防护，去掉这一层时行为不变"的既有结论一致。全部红因均为行为AssertionError（含"BoardError not raised"与"True is not False"），无超时、无装载/import错误充当红。
+超上限条件的冗余事实：该条件由两个独立点执行（fstat的`st_size`项与读取后的长度guard），真实普通文件两处同时命中，任一单点删除都被另一层遮蔽——M9a/M9b行为不变，按计划"不把冗余防护……当成目标条件已由断言守住"如实登记为冗余层观察，不声称任一单点被断言单独守住；红证据M9ab在一次登记运行中去掉该条件的全部两个执行点，目标测试红、非普通文件邻居保持绿。此处理与[adr025-step5-host-review](adr025/step5-host-review.md)对"就绪文件路径防护另有一层打开方式防护，去掉这一层时行为不变"的既有结论一致。全部红因均为行为AssertionError（含"BoardError not raised"与"True is not False"），无超时、无装载/import错误充当红。
 
 ## 编号、环境与材料
 

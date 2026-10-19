@@ -14,7 +14,7 @@ cancellation and the unchanged single native ``session/send``.
 
 The retired raw-socket bridge — including its Host ``discard`` operation — is
 gone with its backend; the two old withdrawal flows are mapped in
-``docs/acceptance/adr025-step5-native-fixture-migration.md``.
+``docs/acceptance/adr025/step5-native-fixture-migration.md``.
 """
 from __future__ import annotations
 

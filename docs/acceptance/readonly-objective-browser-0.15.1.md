@@ -2,7 +2,7 @@
 
 ## Scope and installation
 
-The developer authorized U1–U4 and normal routed delegations under objective `obj-11f3e1a9-6b3a-4374-944d-61fde180672f`. Source/release contract is 0.15.1; schema remains 12. Daily installation remains verified 0.15.0, stable runtime `091d997d8164557d9877366d48095971`, service `a1a93886-9e11-42ed-9418-3cc956e5264e`. Installation was not part of this source-acceptance authorization; the subsequent developer-authorized cutover is recorded in [installed-0.15.1.md](installed-0.15.1.md). No native acceptance probe was run. The protected uncommitted production-repairs-0.8.0.md is excluded. A2/A3 remain unimplemented proposals.
+The developer authorized U1–U4 and normal routed delegations under objective `obj-11f3e1a9-6b3a-4374-944d-61fde180672f`. Source/release contract is 0.15.1; schema remains 12. Daily installation remains verified 0.15.0, stable runtime `091d997d8164557d9877366d48095971`, service `a1a93886-9e11-42ed-9418-3cc956e5264e`. Installation was not part of this source-acceptance authorization; the subsequent developer-authorized cutover is recorded in [0.15.1.md](installs/0.15.1.md). No native acceptance probe was run. The protected uncommitted production-repairs-0.8.0.md is excluded. A2/A3 remain unimplemented proposals.
 
 ## Implemented contracts and backend
 
@@ -54,4 +54,4 @@ Remaining boundaries: this agenda contains one smart-routed selection (success, 
 
 ## Subsequent installation
 
-The developer subsequently authorized installation. [Installed 0.15.1](installed-0.15.1.md) records the completed idle cutover, verified archive, unchanged schema-12 database, retained history/control files/settings and actual served assets. Earlier uninstalled statements above describe the source-acceptance boundary at that time.
+The developer subsequently authorized installation. [Installed 0.15.1](installs/0.15.1.md) records the completed idle cutover, verified archive, unchanged schema-12 database, retained history/control files/settings and actual served assets. Earlier uninstalled statements above describe the source-acceptance boundary at that time.
