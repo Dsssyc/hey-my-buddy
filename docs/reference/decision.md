@@ -86,7 +86,7 @@ A routing decision is created by `selection-request` or micro task routing. The 
 
 ## Local review admission and cooling
 
-Read-only eligibility is a local mechanism check, separate from health, account and cooling and the runtime native-policy check. The pending schema upgrade converts the upgrade-base board in place after the verified rollback backup ([operations](operations.md#backup-upgrade-and-storage-contract)).
+Read-only eligibility is a local mechanism check, separate from health, account and cooling and the runtime native-policy check.
 
 Candidate selection and Router eligibility also exclude the buddies whose provider is cooling ([harnesses](harnesses.md#quota-refusals-and-cooling)). The request freezes them into `routingBasis.coolingBuddies`, each with its full identity and `coolingUntil`, bounded like `excludedBuddies`, and counts them all in `coolingCount`. When no candidate is left and at least one was excluded for cooling, the decision stops at the Host's routing boundary with `all-candidates-cooling {retryAt}`, `retryAt` being the earliest `coolingUntil` among all cooling exclusions, not only the listed ones; without a cooling exclusion it stays `no-legal-candidate`. The Host may reroute later or name a buddy; a named buddy is not silently changed, and its micro task shows `providerCooling`. Publication re-checks cooling with the other bounds. A Router whose provider is cooling is skipped with `router-quota-exhausted` and its `coolingUntil` as `retryAt`. Billing labels do not affect candidates, pins or ordering, and reads never change a cooldown.
 

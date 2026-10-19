@@ -1,6 +1,6 @@
 # Macro tasks and micro task timelines
 
-Macro tasks supply archival grouping and timeline reads under the [macro task contract](../decisions/012-claude-code-distribution-and-evidence-routing.md); the current schema is 25, and the pending explicit upgrade converts the schema-24 upgrade-base board. Group metadata supplies no scheduler, dependency graph, execution permission, result ledger or model-routing input. Settled groups can be deleted through the console's preview and confirmation operations.
+Macro tasks supply archival grouping and timeline reads under the [macro task contract](../decisions/012-claude-code-distribution-and-evidence-routing.md); the current schema is 25, with no pending upgrade. Group metadata supplies no scheduler, dependency graph, execution permission, result ledger or model-routing input. Settled groups can be deleted through the console's preview and confirmation operations.
 
 ## Submission metadata
 
@@ -69,7 +69,7 @@ The preview helper `tests/probes/macro_task_console_preview.py` serves synthetic
 
 ## Schema and verification
 
-Startup accepts schema 25 only and performs no conversion; the explicit pending upgrade converts schema 24 from the upgrade base ([operations](operations.md#backup-upgrade-and-storage-contract)). It includes deletion records and command deletion links, structured reasons, authored notes and the preference `note` field. Other unsupported boards remain archives and have no conversion entrypoint in this source.
+Startup and installation accept schema 25 only and perform no conversion ([operations](operations.md#backup-upgrade-and-storage-contract)); unsupported boards remain archives and have no conversion entrypoint in this source.
 
 The check suite restores the fixture board written by the upgrade base, runs the pending upgrade when there is one, and compares the result with a new board that carries the same settings.
 
