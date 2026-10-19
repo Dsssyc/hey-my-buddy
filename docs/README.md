@@ -8,6 +8,7 @@ This page names every current document in the repository and what it owns. It is
 | --- | --- |
 | [README.md](../README.md) | English entry point: delegated micro tasks, install and first request, routing and console, recovery and current limits |
 | [README.zh-CN.md](../README.zh-CN.md) | Chinese entry point with the same structure and content (language parity) |
+| [terms.md](terms.md), [terms.zh-CN.md](terms.zh-CN.md) | Accounts and terms, in English and Chinese with parity: what the product does with the user's harness accounts, the two layers of terms that still apply, and links to each vendor's official terms |
 
 Both READMEs stay concise and avoid internal terminology; details belong in the current references below.
 

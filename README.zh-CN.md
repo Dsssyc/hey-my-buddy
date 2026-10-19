@@ -24,6 +24,8 @@
 
 Host buddy 拥有微任务并负责验收，Worker buddy 在本地的编码 harness 里执行其中边界明确的部分。两者都是地位对等的 buddy，只通过共享黑板协作，区别在于角色。Host 可以亲自实现一部分，再把其他部分交给能力、成本或模型更适合的 Worker。目前接入的编码 harness 是 DeepSeek Harness（`dsh`）、ZCode（`zcode`）以及实验性的 Codex App Server（`codex`）；Claude Code harness（`claude`，[参考文档](docs/reference/claude-code.md)）作为 P1 harness 加入，已授权的实机探针验证了原生结果、取消和有界沙箱路径，随后又通过已安装服务完成了单独获准的只读微任务链路验收。
 
+Worker 用你自己的 harness 登录，用量计入你自己的套餐和密钥。[账户与条款](docs/terms.zh-CN.md)说明 hey-my-buddy 怎样对待你的账户，以及哪些条款仍然适用于你。
+
 编码任务有明确的 Git 工作区和固定输入、产物快照。黑板是本地的 SQLite 数据库，私有的 React/Vite 控制台可以查看任务、路由、共享 buddy、用户偏好和模型并发设置。
 
 ## 如何协作
