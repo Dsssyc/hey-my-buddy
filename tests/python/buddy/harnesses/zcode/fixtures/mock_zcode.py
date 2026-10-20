@@ -514,12 +514,18 @@ def handle_message(message):
                 event("message.upserted", {"message": {
                     "info": {**item["info"], "sessionId": session_id},
                     "parts": [{**part, "sessionId": session_id} for part in item["parts"]]}})
+            read_input = {"file_path": "/workspace/file.py"}
+            event("model.streaming", {"kind": "tool_call", "toolCallId": "display-read", "toolName": "Read",
+                                      "input": read_input, "delta": "", "done": False})
             event("tool.updated", {"kind": "scheduled", "toolCallId": "display-read", "toolName": "Read",
-                                   "arguments": {"file_path": "/workspace/file.py"}})
+                                   "inputOmitted": True, "inputByteLength": len(json.dumps(read_input).encode())})
             result = {"kind": "result", "toolCallId": "display-read",
                       "result": {"success": True, "content": "file 中文"}}
             event("tool.updated", result)
             event("tool.updated", result)  # Native terminal replay.
+            event("tool.updated", {"kind": "scheduled", "toolCallId": "display-execute", "toolName": "Bash",
+                                   "input": {"command": "pwd"}})
+            event("tool.updated", {"kind": "result", "toolCallId": "display-execute", "result": {"success": True}})
             event("part.upserted", {"part": {"type": "plan", "partId": "display-plan", "entries": [
                 {"content": "finish fixture", "status": "completed", "priority": "high"}]}})
             event("part.upserted", {"part": {"type": "text", "partId": "foreign-part", "text": "foreign secret"}},

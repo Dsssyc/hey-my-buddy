@@ -262,7 +262,7 @@ class ProjectionTests(unittest.TestCase):
     def test_settled_pair_keeps_the_scheduled_name_and_fixed_fields_only(self):
         facts = self.facts()
         facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read",
-                             "title": "Reading main.py", "arguments": {"path": "/etc/passwd"}}))
+                             "title": "Reading main.py", "input": {"path": "/etc/passwd"}}))
         facts.observe(frame({"kind": "result", "toolCallId": "c-1",
                              "result": {"content": "whole file body"}}, seq=3))
         package = facts.finish(True)

@@ -40,7 +40,7 @@ class ProjectorTests(unittest.TestCase):
         self.part('思考', kind='reasoning', part_id='r')
         self.part('更多', kind='reasoning', part_id='r', delta=True)
         self.part('答复')
-        self.emit('tool.updated', kind='scheduled', toolCallId='call', toolName='Read', arguments={'file_path': 'a.py'})
+        self.emit('tool.updated', kind='scheduled', toolCallId='call', toolName='Read', input={'file_path': 'a.py'})
         self.emit('tool.updated', kind='result', toolCallId='call', result={'success': True, 'content': 'file 中文'})
         self.emit('part.upserted', part={'type': 'plan', 'partId': 'plan', 'entries': [
             {'content': 'finish', 'status': 'pending', 'priority': 'high'}]})
@@ -53,6 +53,35 @@ class ProjectorTests(unittest.TestCase):
         call = next(e for e in events if e['sessionUpdate'] == 'tool_call')
         self.assertEqual((call['kind'], call['rawInput']), ('read', {'file_path': 'a.py'}))
         self.assertTrue(any(e.get('rawOutput') == {'success': True, 'content': 'file 中文'} for e in events))
+
+    def test_streamed_tool_input_survives_omitted_scheduled_input(self):
+        payload = {'kind': 'tool_call', 'toolCallId': 'call', 'toolName': 'Bash',
+                   'input': {'command': 'pwd'}, 'delta': '', 'done': False}
+        self.emit('model.streaming', **payload)
+        self.emit('tool.updated', kind='scheduled', toolCallId='call', toolName='Bash',
+                  inputOmitted=True, inputByteLength=len(json.dumps(payload['input']).encode()))
+        self.assertEqual(len(self.record.events), 2)
+        call = self.record.events[-1]
+        self.assertEqual((call['sessionUpdate'], call['kind'], call['status'], call['rawInput']),
+                         ('tool_call', 'execute', 'pending', {'command': 'pwd'}))
+        self.emit('tool.updated', kind='started', toolCallId='call')
+        self.assertEqual(self.record.events[-1]['status'], 'in_progress')
+        self.assertNotIn('rawInput', self.record.events[-1])
+
+    def test_first_tool_input_wins_without_duplicate_writes(self):
+        for first, second in (('model.streaming', 'tool.updated'), ('tool.updated', 'model.streaming')):
+            with self.subTest(first=first):
+                self.setUp()
+                for event_type, value in ((first, {}), (second, {'file_path': 'later.py'})):
+                    payload = {'kind': 'tool_call' if event_type == 'model.streaming' else 'scheduled',
+                               'toolCallId': 'call', 'toolName': 'Read', 'input': value}
+                    if event_type == 'model.streaming':
+                        payload.update(delta='', done=False)
+                    self.emit(event_type, **payload)
+                    self.emit(event_type, **payload)
+                self.assertEqual(len(self.record.events), 2)
+                self.assertEqual(self.record.events[-1]['sessionUpdate'], 'tool_call')
+                self.assertEqual(self.record.events[-1]['rawInput'], {})
 
     def test_versioned_message_parts_preserve_exact_supplied_reasoning(self):
         sample = json.loads((Path(__file__).with_name('fixtures') / 'native-usage-zcode.json').read_text())
@@ -113,6 +142,9 @@ class ProjectorTests(unittest.TestCase):
         self.emit('part.upserted', turn='old', part={'type': 'text', 'partId': 'p', 'text': 'history'})
         self.part('child', part_id='child', source='sub-agent')
         self.emit('tool.updated', kind='scheduled', toolCallId='c', toolName='Read', childSessionId='child')
+        for identity in ({'session': 'foreign'}, {'turn': 'old'}, {'source': 'sub-agent'}):
+            self.emit('model.streaming', kind='tool_call', toolCallId='c', toolName='Read',
+                      input={'file_path': 'secret'}, delta='', done=False, **identity)
         self.emit('message.upserted', message={'info': {'role': 'assistant', 'parentToolCallId': 'child'},
                                              'parts': [{'type': 'text', 'partId': 'p', 'text': 'child'}]})
         self.assertEqual(self.record.events, before)
@@ -274,6 +306,12 @@ class WorkerSessionTests(MockNativeCase):
             'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan'})
         self.assertEqual([e['content']['text'] for e in events if e['sessionUpdate'] == 'agent_thought_chunk'],
                          ['fixture reasoning that is never assistant output'])
+        for call_id, expected in (('display-read', {'file_path': '/workspace/file.py'}),
+                                  ('display-execute', {'command': 'pwd'})):
+            calls = [e for e in events if e.get('toolCallId') == call_id and e['sessionUpdate'] == 'tool_call']
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0]['rawInput'], expected)
+            self.assertEqual(sum('rawInput' in e for e in events if e.get('toolCallId') == call_id), 1)
         completed = [e for e in events if e.get('toolCallId') == 'display-read' and e.get('status') == 'completed']
         self.assertEqual(len(completed), 1)
         output = [e for e in events if e.get('toolCallId') == 'display-read' and e.get('content')]

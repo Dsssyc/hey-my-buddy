@@ -76,7 +76,7 @@ class ZcodeSessionProjector:
         elif kind in ("part.started", "part.upserted", "part.delta"):
             self._part(root, data.get("delta") if kind == "part.delta" else data.get("part"),
                        delta=kind == "part.delta", new_segment=kind == "part.started")
-        elif kind == "tool.updated":
+        elif kind == "tool.updated" or (kind == "model.streaming" and data.get("kind") == "tool_call"):
             self.active_parts.pop(root, None)
             self._tool(root, data)
         elif kind == "turn.completed" and isinstance(data.get("response"), str):
@@ -161,19 +161,19 @@ class ZcodeSessionProjector:
         key = (self.roots[root], call_id, "tool")
         before = self.tools.get(key, {})
         payload = {}
-        name = data.get("toolName") if phase == "scheduled" else before.get("title")
+        name = data.get("toolName") if phase in ("tool_call", "scheduled") else before.get("title")
         if isinstance(name, str) and name:
             event = normalize_tool_event("zcode", {"nativeIdentity": {"sessionId": root[0], "turnId": root[1]},
                 "callId": call_id, "toolName": name, "phase": "start"})
             payload.update(title=name, kind=event["category"])
-        statuses = {"scheduled": "pending", "started": "in_progress", "progress": "in_progress",
+        statuses = {"tool_call": "pending", "scheduled": "pending", "started": "in_progress", "progress": "in_progress",
                     "result": "completed", "error": "failed"}
         if not isinstance(phase, str) or phase not in statuses:
             self._marker(root, "unknown-tool-phase", call_id)
             return
         payload["status"] = statuses[phase]
-        if "arguments" in data:
-            payload["raw_input"] = data["arguments"]
+        if phase in ("tool_call", "scheduled") and "input" in data and "raw_input" not in before:
+            payload["raw_input"] = data["input"]
         if phase == "result":
             payload["raw_output"] = data.get("result")
             if isinstance(data.get("result"), dict) and data["result"].get("success") is False:
