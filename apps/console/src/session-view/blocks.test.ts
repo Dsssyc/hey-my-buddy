@@ -13,15 +13,23 @@ describe("session projection blocks", () => {
     expect(blocks.map(block => block.type === "message" && block.update.content.text)).toEqual(["The revised answer", "A separate segment"]);
     expect(early[0].event.update).toEqual(message("The old ").update);
   });
-  it("keeps tool identity and all segments when a page begins with tool updates; latest snapshots replace only their own segment", () => {
+  it("keeps tool identity and all segments after loading the opening; latest snapshots replace only their own segment", () => {
     const tool = (text: string, segment: string, replace = false, fields = {}) => ({ sessionId: "attempt", update: { sessionUpdate: "tool_call_update", toolCallId: "call", content: [{ type: "content", content: { type: "text", text } }], _meta: { nativeItemId: "call", contentSegment: segment, replace }, ...fields } });
-    const blocks = sessionBlocks(records(page([tool("first ", "stdout", false, { title: "command", status: "in_progress", rawInput: { command: "test" } }), tool("second", "stdout"), tool("diagnostic", "stderr"), tool("complete snapshot", "stdout", true, { status: "completed", rawOutput: { exitCode: 0 } })])));
+    const opening = { sessionId: "attempt", update: { sessionUpdate: "tool_call", toolCallId: "call" } };
+    const blocks = sessionBlocks(records(page([opening, tool("first ", "stdout", false, { title: "command", status: "in_progress", rawInput: { command: "test" } }), tool("second", "stdout"), tool("diagnostic", "stderr"), tool("complete snapshot", "stdout", true, { status: "completed", rawOutput: { exitCode: 0 } })])));
     expect(blocks).toHaveLength(1);
     const block = blocks[0];
     expect(block.type).toBe("tool");
     if (block.type !== "tool") throw Error("Expected tool");
     expect([...block.segments.values()]).toEqual(["complete snapshot", "diagnostic"]);
     expect(block.update).toMatchObject({ title: "command", status: "completed", rawInput: { command: "test" }, rawOutput: { exitCode: 0 } });
+  });
+  it("hides updates whose opening is in an unloaded page, then reconstructs them when prepended", () => {
+    const update = { sessionId: "attempt", update: { sessionUpdate: "tool_call_update", toolCallId: "earlier", status: "failed", content: [{ type: "content", content: { type: "text", text: "failure" } }] } };
+    const tail = records(page([update, message("answer")]));
+    expect(sessionBlocks(tail)).toHaveLength(1);
+    const opening = records(parseSession({ ...page([{ sessionId: "attempt", update: { sessionUpdate: "tool_call", toolCallId: "earlier", title: "test", kind: "execute", status: "pending" } }]), before: 0, after: 10 }));
+    expect(sessionBlocks([...opening, ...tail])[0]).toMatchObject({ type: "tool", update: { title: "test", status: "failed" } });
   });
   it("refuses a malformed event instead of silently dropping it", () => {
     expect(() => page([message("valid"), { sessionId: "attempt", update: { sessionUpdate: "unknown" } }])).toThrow("Invalid session response");

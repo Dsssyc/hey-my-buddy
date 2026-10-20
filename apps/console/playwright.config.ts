@@ -3,7 +3,8 @@ import { fileURLToPath } from "node:url";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
 const assets = fileURLToPath(new URL("../../src/hey_my_buddy/console/assets", import.meta.url));
-const port = 49737;
+// Parallel checkouts can run their synthetic previews independently.
+const port = Number(process.env.HMB_PREVIEW_PORT ?? 49737);
 const previewPython = process.env.HMB_PREVIEW_PYTHON;
 
 // Geometry is checked on the built console in a real browser (ADR-029). The page

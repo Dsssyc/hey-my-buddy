@@ -1,132 +1,199 @@
 import { expect, type Page } from "@playwright/test";
 import { mkdirSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { open, test, expectNoSidewaysScroll } from "./preview";
+import { open, test, expectNoSidewaysScroll, screenshots } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
+const B = "macro-22222222-2222-4222-8222-222222222222";
 const step = (run: string, number: number, macro = A) => `#tasks/${macro}/${run}/${number}`;
 const session = (run: string, number: number, macro = A) => `${step(run, number, macro)}?tab=session`;
 const long = session("preview-run-a1", 7);
-const captures = fileURLToPath(new URL("../../../tmp/readability-r4/", import.meta.url));
+type Language = "en" | "zh";
+
+const panel = (page: Page) => page.locator('[data-slot="session-view"]');
+const viewport = (page: Page) => panel(page).locator('[data-slot="message-scroller-viewport"]');
+const row = (page: Page, type: string) => panel(page).locator(`[data-session-row="${type}"]`);
+const tool = (page: Page, id: string) => panel(page).locator(`[data-session-tool="tool:${id}"]`);
+const tabs = (page: Page) => page.locator('[data-slot="detail-tabs"]');
+const overviewTab = (page: Page, language: Language = "en") => tabs(page).getByRole("tab", { name: language === "zh" ? "概述" : "Overview" });
+const sessionTab = (page: Page, language: Language = "en") => tabs(page).getByRole("tab", { name: language === "zh" ? "会话" : "Session" });
+
 async function openSession(page: Page, hash: string) {
   await open(page, hash);
-  await expect(page.locator('[data-slot=session-view]')).toBeVisible();
+  await expect(panel(page)).toBeVisible();
 }
-const panel = (page: Page) => page.locator('[data-slot=session-view]');
-const viewport = (page: Page) => panel(page).locator('[data-slot=scroll-area-viewport]');
-const tabs = (page: Page) => page.locator('[data-slot=detail-tabs]');
-const overviewTab = (page: Page, language: "en" | "zh" = "en") => tabs(page).getByRole("tab", { name: language === "zh" ? "概述" : "Overview" });
-const sessionTab = (page: Page, language: "en" | "zh" = "en") => tabs(page).getByRole("tab", { name: language === "zh" ? "会话" : "Session" });
-async function earlier(page: Page, name: string) {
+async function loadEarlier(page: Page, language: Language = "en") {
   await viewport(page).evaluate(node => { node.scrollTop = 0; });
-  await panel(page).getByRole("button", { name, exact: true }).click();
+  await panel(page).getByRole("button", { name: language === "zh" ? "加载更早内容" : "Load earlier content", exact: true }).click();
+  await expect(panel(page).getByRole("button", { name: language === "zh" ? "加载更早内容" : "Load earlier content", exact: true })).toHaveCount(0);
+  await expect(row(page, "task")).toBeAttached();
+}
+async function expandTool(page: Page, id: string) {
+  const call = tool(page, id);
+  await call.locator('[data-slot="trace-collapsible-trigger"]').click();
+  await expect(call.locator('[data-slot="trace-collapsible-trigger"]')).toHaveAttribute("aria-expanded", "true");
+  return call;
 }
 
+// All supported reading surfaces use the same row model. The expensive full
+// output and history checks below run once against a representative surface.
 for (const language of ["en", "zh"] as const) for (const width of [1440, 390]) for (const theme of ["light", "dark"] as const) {
   test.describe(`session ${language} ${width} ${theme}`, () => {
     test.use({ locale: language === "zh" ? "zh-CN" : "en-US", viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce", colorScheme: theme });
-    test("shows full content, pages to the start, anchors prepends, and restores its position after refresh", async ({ page }) => {
+    test("renders the current rows without horizontal overflow", async ({ page }) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await openSession(page, long);
-      const more = language === "zh" ? "加载更早内容" : "Load earlier content";
-      await expect(panel(page)).toBeVisible();
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
       await expect(sessionTab(page, language)).toHaveAttribute("aria-selected", "true");
-      await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect(panel(page).getByText(language === "zh" ? "已结束" : "Ended", { exact: true })).toBeVisible();
       await expect(panel(page).getByText(/Codex/)).toContainText(language === "zh" ? "不提供" : "Not provided");
-      await expect(panel(page)).not.toContainText(language === "zh" ? "返回" : "Back");
-      await viewport(page).evaluate(node => { node.scrollTop = 0; });
-      const first = panel(page).locator('[data-session-block]').first();
-      const key = await first.getAttribute("data-session-block");
-      const oldY = (await first.boundingBox())!.y;
-      await earlier(page, more);
-      await expect(panel(page).getByText(language === "zh" ? "已到开头" : "Start of session", { exact: true })).toBeAttached();
-      const newY = await panel(page).locator('[data-session-block]').evaluateAll((nodes, key) => nodes.find(node => node.getAttribute("data-session-block") === key)!.getBoundingClientRect().y, key);
-      expect(Math.abs(newY - oldY)).toBeLessThan(3);
-      await viewport(page).evaluate(node => { node.scrollTop = node.scrollHeight; });
-      const output = language === "zh" ? "输出正文" : "Output text";
-      await expect(panel(page).getByRole("button", { name: language === "zh" ? "结果数据" : "Result data", exact: true })).toBeVisible();
-      await panel(page).getByRole("button", { name: output, exact: true }).click();
-      const terminal = panel(page).locator('[data-slot=session-terminal]');
-      await expect(terminal).toContainText("FULL_OUTPUT_END");
-      await expect(terminal).not.toContainText("开始输出");
-      await expect(terminal).not.toContainText("增量 2：");
-      await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-      await terminal.locator('xpath=ancestor::*[@data-slot="collapsible"][1]').getByRole("button", { name: language === "zh" ? "复制全文" : "Copy full text", exact: true }).click();
-      expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("FULL_OUTPUT_END");
-      expect((await terminal.innerText()).length).toBeGreaterThan(20_000);
+      await expect(row(page, "calls").first()).toBeAttached();
+      await expect(tool(page, "tool-long")).toBeAttached();
+      await expect(tool(page, "codex-failed-command")).toHaveCount(0);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
       await expectNoSidewaysScroll(page);
-      if (language === "en") {
-        mkdirSync(captures, { recursive: true });
-        await page.screenshot({ path: `${captures}/session-${width}-${theme}.png`, fullPage: true });
+      if (language === "en" && width === 390 && theme === "light") {
+        mkdirSync(screenshots, { recursive: true });
+        await page.screenshot({ path: `${screenshots}/session-narrow-light.png`, fullPage: true });
       }
-      const finalCopy = panel(page).locator('[data-session-block]').last().getByRole("button", { name: language === "zh" ? "复制全文" : "Copy full text", exact: true });
-      await expect(finalCopy).toHaveCSS("opacity", "0");
-      await finalCopy.focus();
-      await expect(finalCopy).toHaveCSS("opacity", "1");
-      await viewport(page).evaluate(async node => { node.scrollTop = 500; await new Promise(resolve => requestAnimationFrame(resolve)); });
-      const before = await viewport(page).evaluate(node => node.scrollTop);
-      await overviewTab(page, language).click();
-      await expect(page).toHaveURL(step("preview-run-a1", 7));
-      await expect(panel(page)).toBeHidden();
-      await expect(panel(page)).toHaveCount(1);
-      await sessionTab(page, language).click();
-      await expect(page).toHaveURL(long);
-      await expect(panel(page)).toBeVisible();
-      await expect(panel(page).getByText(language === "zh" ? "已到开头" : "Start of session", { exact: true })).toBeAttached();
-      await expect(panel(page).getByRole("button", { name: output, exact: true })).toHaveAttribute("aria-expanded", "true");
-      await expect.poll(() => viewport(page).evaluate(node => node.scrollTop)).toBeCloseTo(before, 0);
-      await finalCopy.focus();
-      await viewport(page).evaluate(node => new Promise<void>(resolve => {
-        node.addEventListener("scroll", () => resolve(), { once: true });
-        node.scrollTop = 500;
-      }));
-      const saved = await viewport(page).evaluate(node => node.scrollTop);
-      await page.reload();
-      await expect(panel(page).getByText(language === "zh" ? "已到开头" : "Start of session", { exact: true })).toBeAttached();
-      await expect.poll(() => viewport(page).evaluate(node => node.scrollTop)).toBeCloseTo(saved, 0);
-      await expect(finalCopy).toBeFocused();
-      await page.goBack();
-      await expect(page).toHaveURL(step("preview-run-a1", 7));
-      await expect(panel(page)).toBeHidden();
-      await page.goForward();
-      await expect(page).toHaveURL(long);
-      await expect(panel(page)).toBeVisible();
-      await expect.poll(() => viewport(page).evaluate(node => node.scrollTop)).toBeCloseTo(saved, 0);
-      await expect(finalCopy).toBeFocused();
     });
   });
 }
 
-test.describe("session navigation and requests", () => {
-  test.use({ locale: "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
-  test("keeps copy controls beside message text and fold titles on a narrow screen", async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
+test.describe("session content and navigation", () => {
+  test.use({ locale: "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
+
+  test("loads a cross-page call, summarizes failures, and reveals individual details", async ({ page }) => {
     await openSession(page, long);
-    await earlier(page, "Load earlier content");
-    for (const from of ["user", "assistant"]) {
-      const message = panel(page).locator(`[data-slot=session-message][data-from=${from}]`).first();
-      await expect(message).toBeVisible();
-      const geometry = await message.evaluate(node => {
-        const content = node.querySelector<HTMLElement>('[data-slot="session-message-content"]')!;
-        const response = content.lastElementChild!.getBoundingClientRect();
-        const copy = content.querySelector<HTMLButtonElement>('[data-session-focus$=":copy"]')!.getBoundingClientRect();
-        return { textOffset: response.top - content.getBoundingClientRect().top, copyOffset: copy.top - response.top, radius: getComputedStyle(content).borderTopLeftRadius };
-      });
-      expect(geometry.textOffset).toBeLessThan(12);
-      expect(Math.abs(geometry.copyOffset)).toBeLessThan(12);
-      if (from === "user") expect(geometry.radius).toBe("0px");
-    }
-    const fold = panel(page).getByRole("button", { name: "Tool input", exact: true }).locator('xpath=ancestor::*[@data-slot="collapsible"][1]');
-    await expect(fold).toBeVisible();
-    const foldGeometry = await fold.evaluate(node => {
-      const title = node.querySelector<HTMLElement>('[data-slot="collapsible-trigger"]')!.getBoundingClientRect();
-      const copy = node.querySelector<HTMLButtonElement>('[data-session-focus$=":copy"]')!.getBoundingClientRect();
-      return { top: Math.abs(copy.top - title.top), right: Math.abs(copy.right - title.right) };
+    await expect(tool(page, "codex-failed-command")).toHaveCount(0);
+    const longCall = await expandTool(page, "tool-long");
+    await longCall.getByRole("button", { name: /^Show remaining \d+ lines$/ }).click();
+    await viewport(page).evaluate(node => { node.scrollTop = 0; });
+    const reasoning = row(page, "reasoning");
+    const oldY = (await reasoning.boundingBox())!.y;
+    await loadEarlier(page);
+    expect(Math.abs((await reasoning.boundingBox())!.y - oldY)).toBeLessThan(3);
+
+    await expect(row(page, "calls").first()).toContainText(/Ran \d+ commands/);
+    await expect(row(page, "marker").filter({ hasText: "Changes in this turn" })).toHaveCount(1);
+    const failed = await expandTool(page, "codex-failed-command");
+    await expect(failed.locator('[data-slot="trace-collapsible-trigger"]')).toContainText("synthetic-preview-missing --verify");
+    await expect(failed).toContainText("command not found");
+    await expect(failed).toContainText("127");
+    await expect(failed.locator('[aria-label="Failed"]')).toBeAttached();
+
+    const task = row(page, "task");
+    await expect(task.locator('[data-slot="session-task"]')).toContainText("设计并实现工作目标时间轴");
+    const prompt = task.getByRole("button", { name: /Expand full text sent to buddy/ });
+    await expect(prompt).toHaveAttribute("aria-expanded", "false");
+    await prompt.click();
+    await expect(prompt).toHaveAttribute("aria-expanded", "true");
+    await expect(task.locator('[data-slot="session-output"]')).toContainText("请检查合成预览的会话分页和完整工具输出。");
+  });
+
+  test("clamps a short page to the available scroll end when earlier content arrives", async ({ page }) => {
+    await openSession(page, long);
+    await loadEarlier(page);
+    const { top, end } = await viewport(page).evaluate(node => ({ top: node.scrollTop, end: node.scrollHeight - node.clientHeight }));
+    expect(top).toBeCloseTo(end, 0);
+    await expect(row(page, "task")).toBeAttached();
+  });
+
+  test("shows the first 14 output lines, then the full replacement snapshot", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
+    await openSession(page, long);
+    const call = await expandTool(page, "tool-long");
+    const output = call.locator('[data-slot="session-output"]').first();
+    const background = await output.locator('[data-slot="code-block"]').evaluate(node => {
+      const sample = document.createElement("div");
+      sample.style.backgroundColor = "var(--sunk)";
+      document.body.appendChild(sample);
+      const expected = getComputedStyle(sample).backgroundColor;
+      sample.remove();
+      return { actual: getComputedStyle(node).backgroundColor, expected };
     });
-    expect(foldGeometry.top).toBeLessThan(4);
-    expect(foldGeometry.right).toBeLessThan(4);
-    await expectNoSidewaysScroll(page);
+    expect(background.actual).toBe(background.expected);
+    await expect(output).toContainText("最终完整快照");
+    await expect(output).not.toContainText("FULL_OUTPUT_END");
+    await expect(output).not.toContainText("开始输出");
+    await expect(output).not.toContainText("增量 2：");
+    const more = output.getByRole("button", { name: /^Show remaining \d+ lines$/ });
+    await expect(more).toHaveAttribute("aria-expanded", "false");
+    await more.click();
+    await expect(output).toContainText("FULL_OUTPUT_END");
+    await expect(output.locator('[data-slot="code-block"]')).toContainText("FULL_OUTPUT_END");
+    expect((await output.innerText()).length).toBeGreaterThan(20_000);
+    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+    await output.getByRole("button", { name: "Copy full text" }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain("FULL_OUTPUT_END");
+  });
+
+  test("shows the native Codex turn diff as highlighted code and keeps command inputs concise", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
+    await openSession(page, long);
+    const command = await expandTool(page, "tool-long");
+    await expect(command.locator("dt")).toHaveCount(0);
+    await expect(command).not.toContainText("commandActions");
+    await expect(command).not.toContainText("/synthetic-preview/hey-my-buddy");
+    await expect(command.locator('[data-slot="session-output"]').first()).toContainText("最终完整快照");
+    await loadEarlier(page);
+
+    const marker = row(page, "marker").filter({ hasText: "Changes in this turn" });
+    await expect(marker).toHaveCount(1);
+    const trigger = marker.getByRole("button", { name: "Changes in this turn" });
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    const diff = marker.locator('[data-slot="code-block"]');
+    await expect(diff).toContainText("diff --git a/synthetic-preview/fixture.txt b/synthetic-preview/fixture.txt");
+    await expect(diff).toContainText("-old fixture line");
+    await expect(diff).toContainText("+new fixture line");
+    await expect(diff).not.toContainText("[turn/diff/updated]");
+    await expect.poll(() => diff.locator("span[style*='--shiki']").count()).toBeGreaterThan(0);
+    const colors = await diff.evaluate(node => {
+      const lines = [...node.querySelectorAll('[data-slot="code-block-line"]')];
+      return ["-old fixture line", "+new fixture line"].map(text => {
+        const line = lines.find(item => item.textContent?.includes(text));
+        return line ? getComputedStyle(line.querySelector('[data-slot="code-block-line-content"] span[style]')!).color : null;
+      });
+    });
+    expect(colors[0]).not.toBeNull();
+    expect(colors[1]).not.toBeNull();
+    expect(colors[0]).not.toBe(colors[1]);
+    await marker.scrollIntoViewIfNeeded();
+    mkdirSync(screenshots, { recursive: true });
+    await page.screenshot({ path: `${screenshots}/session-codex-diff-dark.png`, fullPage: true });
+  });
+
+  test("restores reading position, disclosure and focus through tabs, reload and history", async ({ page }) => {
+    await openSession(page, long);
+    await loadEarlier(page);
+    const call = await expandTool(page, "tool-long");
+    const trigger = call.locator('[data-slot="trace-collapsible-trigger"]');
+    await viewport(page).evaluate(node => new Promise<void>(resolve => {
+      node.addEventListener("scroll", () => resolve(), { once: true });
+      node.scrollTop = 300;
+    }));
+    await trigger.focus();
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    const before = await viewport(page).evaluate(node => node.scrollTop);
+    await overviewTab(page).click();
+    await expect(page).toHaveURL(step("preview-run-a1", 7));
+    await expect(panel(page)).toBeHidden();
+    await sessionTab(page).click();
+    await expect(page).toHaveURL(long);
+    await expect(trigger).toHaveAttribute("aria-expanded", "true");
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollTop)).toBeCloseTo(before, 0);
+    await page.reload();
+    await expect(row(page, "task")).toBeAttached();
+    await expect(trigger).toBeFocused();
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollTop)).toBeCloseTo(before, 0);
+    await page.goBack();
+    await expect(page).toHaveURL(step("preview-run-a1", 7));
+    await expect(panel(page)).toBeHidden();
+    await page.goForward();
+    await expect(page).toHaveURL(long);
+    await expect(trigger).toBeFocused();
+    await expect.poll(() => viewport(page).evaluate(node => node.scrollTop)).toBeCloseTo(before, 0);
   });
 
   test("offers Session only on routing and execution steps", async ({ page }) => {
@@ -146,41 +213,22 @@ test.describe("session navigation and requests", () => {
     page.on("request", request => { if (request.url().endsWith(".js")) loaded.push(request.url()); });
     await open(page, `#tasks/${A}`);
     expect(loaded.some(url => /SessionPanel|highlight|shiki/.test(url))).toBe(false);
-    const span = page.locator('[data-slot=timeline-tracks] [data-key="span:execution:att-a1-2"]');
-    await span.click();
+    await page.locator('[data-slot=timeline-tracks] [data-key="span:execution:att-a1-2"]').click();
     await expect.poll(() => page.evaluate(() => location.hash)).toBe(step("preview-run-a1", 7));
-    await expect(sessionTab(page)).toBeVisible();
     await sessionTab(page).click();
-    await expect.poll(() => page.evaluate(() => location.hash)).toBe(long);
+    await expect(page).toHaveURL(long);
     await expect(panel(page)).toBeVisible();
-    await expect(panel(page)).not.toContainText("Turn 2 · Session");
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.goBack();
-    await expect.poll(() => page.evaluate(() => location.hash)).toBe(step("preview-run-a1", 7));
     await expect(panel(page)).toBeHidden();
     await page.goForward();
     await expect(panel(page)).toBeVisible();
     await page.reload();
     await expect(sessionTab(page)).toHaveAttribute("aria-selected", "true");
-    await expect(panel(page)).toBeVisible();
     expect(loaded.some(url => /SessionPanel/.test(url))).toBe(true);
   });
 
-  test("loads the highlighter and requested grammar only after a code disclosure opens", async ({ page }) => {
-    const scripts: string[] = [];
-    page.on("request", request => { if (request.url().endsWith(".js")) scripts.push(request.url()); });
-    await openSession(page, long);
-    await expect(panel(page).getByRole("button", { name: "Tool input", exact: true })).toBeAttached();
-    expect(scripts.some(url => /\/(?:core|json|javascript|typescript)-/.test(url))).toBe(false);
-    await panel(page).getByRole("button", { name: "Tool input", exact: true }).click();
-    await expect.poll(() => scripts.some(url => /\/json-/.test(url))).toBe(true);
-    await expect(panel(page).locator('[data-slot=session-code] pre:visible')).toContainText("synthetic-preview-check");
-    await expect(panel(page).getByRole("alert")).toHaveCount(0);
-  });
-
-  test("shows Markdown code without a click and explains why recording stopped", async ({ page }) => {
-    const scripts: string[] = [];
-    page.on("request", request => { if (request.url().endsWith(".js")) scripts.push(request.url()); });
+  test("shows Markdown code and explains why recording stopped", async ({ page }) => {
     await page.route('**/api/tasks/*/attempts/*/session?*', async route => {
       const response = await route.fetch();
       const body = await response.json();
@@ -190,11 +238,7 @@ test.describe("session navigation and requests", () => {
     });
     await openSession(page, long);
     await expect(panel(page).getByRole("status")).toContainText("Session recording stopped: The session record could not be written.");
-    await expect(panel(page).locator('[data-slot=session-markdown-code]')).toBeVisible();
-    await expect(panel(page).locator('[data-slot=session-code]')).toContainText('{"ready":true}');
-    await expect.poll(() => scripts.some(url => /\/json-/.test(url))).toBe(true);
-    await expect(panel(page).getByRole("button", { name: /Collapse code/ })).toHaveAttribute("aria-expanded", "true");
-    await expect(panel(page).getByRole("heading", { name: "Response", includeHidden: true })).toHaveClass(/sr-only/);
+    await expect(row(page, "answer").locator('[data-slot="code-block"]')).toContainText('{"ready":true}');
   });
 
   test("keeps a reader away from the bottom until New content is pressed, then follows additions", async ({ page }) => {
@@ -222,13 +266,17 @@ test.describe("session navigation and requests", () => {
       await route.fulfill({ json: { state: "running", stopped: null, omitted: [], before, after: before + 1, hasEarlier: false, events: [{ sessionId: "att-a1-2", update }] } });
     });
     await openSession(page, long);
-    await panel(page).getByRole("button", { name: "Output text", exact: true }).click();
-    await viewport(page).evaluate(node => { node.scrollTop = node.scrollHeight; });
+    const call = await expandTool(page, "stream-tool");
+    await call.getByRole("button", { name: /^Show remaining \d+ lines$/ }).click();
+    await viewport(page).evaluate(node => new Promise<void>(resolve => {
+      node.addEventListener("scroll", () => resolve(), { once: true });
+      node.scrollTop = node.scrollHeight;
+    }));
     await page.clock.runFor(20);
     const first = page.waitForResponse(response => response.url().includes("/session?") && response.url().includes("after="));
     await page.clock.fastForward(3000);
     await first;
-    await expect(panel(page).locator('[data-slot=session-terminal]')).toContainText("stream-tail-1");
+    await expect(call.locator('[data-slot="session-output"]')).toContainText("stream-tail-1");
     await expect.poll(() => viewport(page).evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThan(48);
     await viewport(page).evaluate(node => new Promise<void>(resolve => {
       node.addEventListener("scroll", () => resolve(), { once: true });
@@ -255,7 +303,9 @@ test.describe("session navigation and requests", () => {
     const switched = page.waitForEvent("requestfailed", { predicate: request => request.url().includes("/session?") });
     await page.evaluate(hash => { location.hash = hash; }, session("preview-run-a1", 2));
     expect((await switched).failure()?.errorText).toContain("ABORTED");
-    await expect(panel(page).getByText("为合成任务选择执行 buddy。", { exact: true })).toBeVisible();
+    const prompt = row(page, "task").getByRole("button", { name: /Expand full text sent to buddy/ });
+    await prompt.click();
+    await expect(row(page, "task")).toContainText("为合成任务选择执行 buddy。");
   });
 
   for (const [code, message] of [
@@ -265,12 +315,124 @@ test.describe("session navigation and requests", () => {
     ["SESSION_INVALID_RECORD", "The session record is damaged and cannot be displayed."],
     ["SESSION_UNREADABLE", "The session could not be read. Try again."],
   ]) test(`explains ${code}`, async ({ page }) => {
-    // Expected error responses do not masquerade as an empty conversation.
     await page.route('**/api/tasks/*/attempts/*/session?*', async route => {
       await route.fulfill({ status: 200, json: { ok: false, error: { code, message: "synthetic session failure" } } });
     });
     await openSession(page, long);
     await expect(panel(page).getByRole("alert")).toContainText(message);
     await expect(panel(page).getByText("This execution has no session content yet")).toHaveCount(0);
+  });
+});
+
+test.describe("four harness preview records", () => {
+  test.use({ locale: "en-US", viewport: { width: 1440, height: 900 }, reducedMotion: "reduce", colorScheme: "dark" });
+
+  test("Claude Code keeps its interim note and presents StructuredOutput as the answer", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
+    await openSession(page, session("preview-run-b10", 2, B));
+    const group = row(page, "calls");
+    await expect(group).toContainText("Read 1 file");
+    await expect(group).toContainText("Searched 1 time");
+    await group.locator('[data-slot="trace-collapsible-trigger"]').first().click();
+    const read = await expandTool(page, "claude-read-guide");
+    await expect(read).toContainText("file_path");
+    await expect(read).toContainText("docs/reference/path-guide.md");
+    const search = await expandTool(page, "claude-search-path");
+    await expect(search).toContainText("pattern");
+    await expect(search).toContainText("synthetic/path");
+    await expect(search).toContainText("docs/**/*.md");
+    const note = row(page, "note");
+    await expect(note).toContainText("路径示例与说明一致，准备提交结构化核对结果。");
+    await expect(note).not.toContainText("Answer");
+    const answer = row(page, "answer");
+    await expect(answer).toHaveCount(1);
+    await expect(answer).toContainText("独立核对完成：路径示例与说明一致。");
+    await expect(answer.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["disposition", "summary", "artifacts", "decisions", "remaining", "request"]);
+    await expect(answer).not.toContainText('"outcome"');
+    await expect(tool(page, "claude-structured-output")).toHaveCount(0);
+    await answer.scrollIntoViewIfNeeded();
+    mkdirSync(screenshots, { recursive: true });
+    await page.screenshot({ path: `${screenshots}/session-claude-outcome-dark.png`, fullPage: true });
+  });
+
+  test("ZCode current input and blackboard actions remain distinct", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
+    await openSession(page, session("preview-run-b1", 5, B));
+    const read = await expandTool(page, "zcode-read");
+    await expect(read).toContainText("synthetic/path-guide.txt");
+    await expect(read).toContainText("path");
+    await expect(read).toContainText("路径示例已读取。");
+    await expect(row(page, "blackboard")).toHaveCount(2);
+    await expect(row(page, "blackboard").first()).toContainText("Check Host questions");
+    await expect(row(page, "blackboard").last()).toContainText("Return result");
+    await expect(row(page, "answer")).toContainText("路径编码一致");
+    mkdirSync(screenshots, { recursive: true });
+    await page.screenshot({ path: `${screenshots}/session-zcode-dark.png`, fullPage: true });
+  });
+
+  test("ZCode old record shows its result without inventing missing input", async ({ page }) => {
+    await openSession(page, session("preview-run-b1", 2, B));
+    const read = await expandTool(page, "zcode-old-read");
+    await expect(read).toContainText("旧记录没有保留工具输入。");
+    await expect(read.locator("dt")).toHaveCount(0);
+    await expect(row(page, "blackboard")).toHaveCount(0);
+  });
+
+  test("DSH renders a question and answer without tool rows", async ({ page }) => {
+    await openSession(page, session("preview-run-b9", 5, B));
+    await expect(row(page, "task")).toContainText("核对合成平台路径中的字符编码并交回结果");
+    await row(page, "task").getByRole("button", { name: /Expand full text sent to buddy/ }).click();
+    await expect(row(page, "task").locator('[data-slot="session-output"]')).toContainText("合成平台路径的编码是否一致？");
+    await expect(row(page, "answer")).toContainText("合成样例里的路径可以正常读取");
+    await expect(row(page, "calls")).toHaveCount(0);
+    await expect(row(page, "tool")).toHaveCount(0);
+  });
+
+  test("DSH Router shows the routing task, full prompt and ordered decision fields", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
+    await openSession(page, session("preview-run-a1", 2));
+    const task = row(page, "task");
+    await expect(task.locator("h3")).toHaveText("Choose a buddy for this micro task");
+    await task.getByRole("button", { name: /Expand full text sent to buddy/ }).click();
+    await expect(task.locator('[data-slot="session-output"]')).toContainText("ROLE: Router buddy");
+    await expect(task.locator('[data-slot="session-output"]')).toContainText("为合成任务选择执行 buddy。");
+    const answer = row(page, "answer");
+    await expect(answer.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Selected buddy", "Explanation", "Evidence"]);
+    await expect(answer).toContainText("dsh:deepseek-official:deepseek-flash:max");
+    await expect(answer).toContainText("合成任务由 DeepSeek Flash 执行。");
+    await expect(answer).toContainText("符合本次合成路由约束。");
+    await expect(answer).not.toContainText('"buddyId"');
+    mkdirSync(screenshots, { recursive: true });
+    await page.screenshot({ path: `${screenshots}/session-router-dark.png`, fullPage: true });
+  });
+
+  test("review-mode Router abstention keeps its own task heading and structured decision", async ({ page }) => {
+    await openSession(page, session("preview-run-a2", 5));
+    await expect(row(page, "task").locator("h3")).toHaveText("Choose a buddy for this micro task (review mode)");
+    await expect(row(page, "answer").locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Selected buddy", "Explanation", "Evidence"]);
+    await expect(row(page, "answer")).toContainText("null");
+    await expect(row(page, "answer")).toContainText("合成证据不足，请 Host 选择。");
+  });
+});
+
+for (const language of ["en", "zh"] as const) test.describe(`structured answers on a narrow light screen: ${language}`, () => {
+  test.use({ locale: language === "zh" ? "zh-CN" : "en-US", viewport: { width: 390, height: 844 }, reducedMotion: "reduce", colorScheme: "light" });
+  test("keeps the Claude outcome and Router fields readable", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "light"));
+    await openSession(page, session("preview-run-b10", 2, B));
+    const claude = row(page, "answer");
+    await expect(claude.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["disposition", "summary", "artifacts", "decisions", "remaining", "request"]);
+    await expectNoSidewaysScroll(page);
+    await claude.scrollIntoViewIfNeeded();
+    mkdirSync(screenshots, { recursive: true });
+    await page.screenshot({ path: `${screenshots}/session-claude-outcome-${language}-narrow-light.png`, fullPage: true });
+
+    await page.evaluate(hash => { location.hash = hash; }, session("preview-run-a1", 2));
+    await expect(panel(page)).toBeVisible();
+    const router = row(page, "answer");
+    await expect(router.locator('[data-slot="session-answer-fields"] dt')).toHaveText(language === "zh" ? ["选中的 buddy", "说明", "依据"] : ["Selected buddy", "Explanation", "Evidence"]);
+    await expectNoSidewaysScroll(page);
+    await router.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `${screenshots}/session-router-${language}-narrow-light.png`, fullPage: true });
   });
 });

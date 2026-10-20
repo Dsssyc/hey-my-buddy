@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { ArrowDown } from "lucide-react";
 import { ApiError } from "../api";
 import { Button } from "../components/ui/button";
-import { ScrollArea } from "../components/ui/scroll-area";
+import { MessageScrollerProvider, MessageScroller, MessageScrollerViewport, MessageScrollerContent } from "../components/ui/message-scroller";
+import { sessionRows } from "./rows";
 import { reasonText } from "../i18n/reason";
 import { sessionBlocks } from "./blocks";
 import { SessionBlocks } from "./SessionBlocks";
@@ -12,19 +13,19 @@ import type { SessionClient } from "./use-session";
 import type { SessionPosition } from "./types";
 
 export type SessionPanelProps = {
-  client: SessionClient; taskId: string; attemptId: string; harness: string;
+  routingMode?: "fast" | "review" | null; taskText: string; checkoutRoot: string; client: SessionClient; taskId: string; attemptId: string; harness: string;
   active: boolean; position?: SessionPosition; onPosition: (position: SessionPosition) => void;
 };
 
 /** One read-only attempt. Navigation and persistence are owned by the enclosing shell. */
-export default function SessionPanel({ client, taskId, attemptId, harness, active, position, onPosition }: SessionPanelProps) {
+export default function SessionPanel({ routingMode, taskText, checkoutRoot, client, taskId, attemptId, harness, active, position, onPosition }: SessionPanelProps) {
   const { t } = useTranslation("taskDetail");
   const { data, error, earlierBusy, earlier, retry } = useSession(client, taskId, attemptId, active, position?.before);
   const viewport = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const atBottom = useRef(position?.atBottom ?? true);
-  const anchor = useRef<{ height: number; top: number } | null>(null);
+  const anchor = useRef<{ bottom: number } | null>(null);
   const [newContent, setNewContent] = useState(false);
   const [expanded, setExpanded] = useState(() => new Set(position?.expanded ?? []));
   const expandedRef = useRef(expanded);
@@ -33,7 +34,7 @@ export default function SessionPanel({ client, taskId, attemptId, harness, activ
   const previousAfter = useRef<number | null>(null);
   const wasActive = useRef(false);
   const savedPosition = useRef(position);
-  const blocks = useMemo(() => sessionBlocks(data?.events ?? []), [data?.events]);
+  const rows = useMemo(() => sessionRows(sessionBlocks(data?.events ?? [])), [data?.events]);
   const persist = () => {
     if (!active || !data || !viewport.current || viewport.current.clientHeight === 0) return;
     const node = viewport.current;
@@ -66,7 +67,7 @@ export default function SessionPanel({ client, taskId, attemptId, harness, activ
         panel.current?.querySelectorAll<HTMLElement>("[data-session-focus]")[savedPosition.current.focus]?.focus({ preventScroll: true });
       }
     } else if (data.change === "earlier" && anchor.current) {
-      node.scrollTop = anchor.current.top + node.scrollHeight - anchor.current.height;
+      node.scrollTop += content.current!.querySelector<HTMLElement>('[data-slot="session-blocks"]')!.getBoundingClientRect().bottom - anchor.current.bottom;
       anchor.current = null;
     } else if (previousAfter.current !== null && data.after > previousAfter.current) {
       if (atBottom.current) node.scrollTop = node.scrollHeight;
@@ -100,30 +101,33 @@ export default function SessionPanel({ client, taskId, attemptId, harness, activ
       {error ? <div className="flex min-h-0 flex-1 flex-col items-start gap-4 p-6" role="alert"><p>{t(`sessionView.errors.${failure}`)}</p><Button variant="outline" onClick={retry}>{t("retry")}</Button></div>
         : !data ? <p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>
           : <div className="relative flex min-h-0 flex-1 flex-col">
-            <ScrollArea className="min-h-0 flex-1" viewportProps={{ ref: viewport, tabIndex: 0, "data-session-focus": "viewport", "aria-label": t("sessionView.content"), className: "[overflow-anchor:none]", onScroll: () => {
+            <MessageScrollerProvider defaultScrollPosition="start"><MessageScroller><MessageScrollerViewport preserveScrollOnPrepend={false} ref={viewport} tabIndex={0} data-session-focus="viewport" aria-label={t("sessionView.content")} className="[overflow-anchor:none]" onScroll={() => {
               if (!active) return;
               const node = viewport.current!;
               atBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
               if (atBottom.current) setNewContent(false);
               persist();
-            } }}>
-              <div ref={content} className="mx-auto w-full max-w-[880px] px-4 pt-4 pb-8 sm:px-8">
-                <div className="mb-6 flex justify-center">
-                  {data.hasEarlier ? <Button variant="ghost" size="sm" data-session-focus="earlier" disabled={earlierBusy} onClick={() => {
-                    const node = viewport.current!;
-                    anchor.current = { height: node.scrollHeight, top: node.scrollTop };
+            }}>
+              <MessageScrollerContent ref={content} className="mx-auto w-full max-w-[868px] gap-0 px-4 pt-4 pb-8 sm:px-6">
+                {data.hasEarlier && <div className="mb-4 flex justify-center">
+                  <Button variant="ghost" size="sm" data-session-focus="earlier" disabled={earlierBusy} onClick={() => {
+                    // Group IDs change as history merges. Anchor the transcript end,
+                    // excluding the viewport's unused space when the latest page is short.
+                    const body = content.current!.querySelector<HTMLElement>('[data-slot="session-blocks"]');
+                    anchor.current = body ? { bottom: body.getBoundingClientRect().bottom } : null;
+                    atBottom.current = false;
                     void earlier();
-                  }}>{t(earlierBusy ? "sessionView.loadingEarlier" : "sessionView.earlier")}</Button> : <p className="py-2 text-xs text-ink3">{t("sessionView.start")}</p>}
-                </div>
-                {blocks.length ? <SessionBlocks blocks={blocks} expansion={{ expanded, toggle: (key, open) => {
+                  }}>{t(earlierBusy ? "sessionView.loadingEarlier" : "sessionView.earlier")}</Button>
+                </div>}
+                {rows.length ? <SessionBlocks routingMode={routingMode} rows={rows} taskText={taskText} checkoutRoot={checkoutRoot} expansion={{ expanded, toggle: (key, open) => {
                   setExpanded(previous => { const next = new Set(previous); if (open) next.add(key); else next.delete(key); expandedRef.current = next; return next; });
                   // The disclosure keeps the viewport where the reader is interacting.
                   atBottom.current = false;
                   queueMicrotask(persist);
                 } }}/> : <p className="text-sm text-ink2">{t("sessionView.empty")}</p>}
                 {data.stopped && <p data-slot="session-stopped" role="status" className="mt-6 border-t pt-3 text-xs leading-relaxed text-fail">{t("sessionView.recordingStopped", { reason: reasonText(data.stopped) })}</p>}
-              </div>
-            </ScrollArea>
+              </MessageScrollerContent>
+            </MessageScrollerViewport></MessageScroller></MessageScrollerProvider>
             {newContent && <Button data-slot="session-new-content" aria-live="polite" className="absolute bottom-4 left-1/2 -translate-x-1/2 shadow-sm" onClick={() => {
               atBottom.current = true; viewport.current!.scrollTop = viewport.current!.scrollHeight; setNewContent(false); persist(); viewport.current?.focus({ preventScroll: true });
             }}><ArrowDown size={14} aria-hidden/>{t("sessionView.newContent")}</Button>}

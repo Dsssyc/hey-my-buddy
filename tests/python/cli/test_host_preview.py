@@ -369,6 +369,128 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertTrue(any(not entry for entry in host_paths), "the preview must also keep Host paths empty")
 
 
+class SessionFixtureTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        spec = importlib.util.spec_from_file_location("synthetic_console_preview_sessions", PREVIEW)
+        cls.preview = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.preview)
+
+    def test_each_harness_session_matches_its_existing_attempt(self) -> None:
+        preview = self.preview
+        harnesses = {
+            preview.SESSION_LONG: "codex",
+            preview.SESSION_RUNNING: "claude",
+            preview.SESSION_CLAUDE: "claude",
+            preview.SESSION_ROUTER: "dsh",
+            preview.SESSION_ROUTER_REVIEW: "codex",
+            preview.SESSION_ZCODE: "zcode",
+            preview.SESSION_ZCODE_OLD: "zcode",
+            preview.SESSION_DSH: "dsh",
+        }
+        self.assertFalse(set(harnesses) & set(preview.SESSION_ERRORS))
+        for pair, harness in harnesses.items():
+            with self.subTest(pair=pair):
+                attempt = next(item for item in preview.FIXTURES["runs"][pair[0]]["attempts"]
+                               if item["attemptId"] == pair[1])
+                self.assertEqual(harness, attempt["buddy"]["harness"])
+                events = preview.session_read(*pair, {}, preview.PreviewState())["events"]
+                self.assertTrue(events)
+                self.assertTrue(all(event["sessionId"] == pair[1] for event in events))
+
+        dsh_updates = [event["update"]["sessionUpdate"] for event in preview.session_events(preview.SESSION_DSH)]
+        self.assertEqual(["user_message_chunk", "agent_message_chunk"], dsh_updates)
+        old_tools = [event["update"] for event in preview.session_events(preview.SESSION_ZCODE_OLD)
+                     if event["update"]["sessionUpdate"].startswith("tool_call")]
+        new_tools = [event["update"] for event in preview.session_events(preview.SESSION_ZCODE)
+                     if event["update"]["sessionUpdate"] == "tool_call"]
+        self.assertTrue(old_tools)
+        self.assertTrue(all("rawInput" not in update for update in old_tools))
+        self.assertTrue(new_tools)
+        self.assertTrue(all(update.get("rawInput") for update in new_tools))
+        self.assertTrue(any(update["title"].endswith("hey_my_buddy_finish_turn") for update in new_tools))
+        for pair in (preview.SESSION_RUNNING, preview.SESSION_CLAUDE):
+            tools = [event["update"] for event in preview.session_events(pair)
+                     if event["update"]["sessionUpdate"] == "tool_call"
+                     and event["update"].get("kind") in {"read", "search"}]
+            self.assertEqual({"read", "search"}, {tool["kind"] for tool in tools})
+            self.assertTrue(all(tool.get("rawInput") for tool in tools))
+
+    def test_structured_claude_end_and_router_answers(self) -> None:
+        preview = self.preview
+        claude = [event["update"] for event in preview.session_events(preview.SESSION_CLAUDE)]
+        self.assertEqual("agent_message_chunk", claude[-4]["sessionUpdate"])
+        self.assertIn("准备提交", claude[-4]["content"]["text"])
+        delivery, first_update, last_update = claude[-3:]
+        self.assertEqual(("tool_call", "StructuredOutput", "other"),
+                         (delivery["sessionUpdate"], delivery["title"], delivery["kind"]))
+        self.assertEqual({"disposition": "completed", "summary": "独立核对完成：路径示例与说明一致。",
+                          "artifacts": ["docs/reference/path-guide.md"], "decisions": ["保留相对路径示例。"],
+                          "remaining": [], "request": None}, delivery["rawInput"]["outcome"])
+        self.assertEqual(["tool_call_update", "tool_call_update"],
+                         [first_update["sessionUpdate"], last_update["sessionUpdate"]])
+        self.assertEqual(["in_progress", "completed"], [first_update["status"], last_update["status"]])
+        self.assertEqual({"claude-structured-output"},
+                         {update["toolCallId"] for update in (delivery, first_update, last_update)})
+
+        for pair, mode, buddy_id in ((preview.SESSION_ROUTER, "fast", "dsh:deepseek-official:deepseek-flash:max"),
+                                     (preview.SESSION_ROUTER_REVIEW, "review", None)):
+            with self.subTest(pair=pair):
+                run = preview.FIXTURES["runs"][pair[0]]
+                owner = preview.FIXTURES["runs"][run["parentRunId"]]
+                recorded = next(span for span in owner["spans"] if span.get("decisionId") == run["decisionId"])
+                self.assertEqual(pair[1], recorded["attemptId"])
+                self.assertEqual(mode, recorded["routing"]["routingMode"])
+                self.assertEqual(run["attempts"][0]["buddy"], recorded["routing"]["routerBuddy"])
+                updates = [event["update"] for event in preview.session_events(pair)]
+                self.assertTrue(updates[0]["content"]["text"].startswith("ROLE: Router buddy"))
+                answer = json.loads(updates[-1]["content"]["text"])
+                self.assertEqual(buddy_id, answer["buddyId"])
+                self.assertTrue(answer["note"])
+                self.assertTrue(answer["evidence"])
+
+    def test_failed_codex_call_crosses_page_boundary_and_long_output_is_complete(self) -> None:
+        preview = self.preview
+        pair = preview.SESSION_LONG
+        state = preview.PreviewState()
+        latest = preview.session_page(pair, {}, state)
+        earlier = preview.session_page(pair, {"before": latest["before"]}, state)
+        self.assertEqual(100, len(latest["events"]))
+        self.assertFalse(earlier["hasEarlier"])
+        self.assertEqual(earlier["after"], latest["before"])
+        self.assertEqual(preview.session_events(pair), earlier["events"] + latest["events"])
+        opening = earlier["events"][-1]["update"]
+        marker, failure = [event["update"] for event in latest["events"][:2]]
+        self.assertEqual(("tool_call", "codex-failed-command", "in_progress"),
+                         (opening["sessionUpdate"], opening["toolCallId"], opening["status"]))
+        self.assertEqual(("agent_message_chunk", True),
+                         (marker["sessionUpdate"], marker["_meta"]["marker"]))
+        self.assertEqual("turn/diff/updated", marker["_meta"]["nativeType"])
+        self.assertEqual("diff/0", marker["_meta"]["contentSegment"])
+        self.assertTrue(marker["_meta"]["replace"])
+        self.assertTrue(marker["content"]["text"].startswith("[turn/diff/updated]\ndiff --git "))
+        self.assertIn("\n@@ -1,3 +1,3 @@\n unchanged context\n-old fixture line\n+new fixture line\n trailing context\n",
+                      marker["content"]["text"])
+        self.assertEqual(("tool_call_update", "codex-failed-command", "failed", 127),
+                         (failure["sessionUpdate"], failure["toolCallId"], failure["status"],
+                          failure["rawOutput"]["exitCode"]))
+        commands = [event["update"] for event in preview.session_events(pair)
+                    if event["update"]["sessionUpdate"] == "tool_call" and event["update"].get("kind") == "execute"]
+        self.assertGreaterEqual(len(commands), 50)
+        self.assertTrue(all(command.get("rawInput", {}).get("command") for command in commands))
+        decomposed = next(command["rawInput"] for command in commands if command["toolCallId"] == "tool-long")
+        self.assertEqual("pwd && synthetic-preview-check", decomposed["command"])
+        self.assertEqual("/synthetic-preview/hey-my-buddy", decomposed["cwd"])
+        self.assertEqual(["pwd", "synthetic-preview-check"],
+                         [action["command"] for action in decomposed["commandActions"]])
+        long_output = next(event["update"] for event in latest["events"]
+                           if event["update"].get("toolCallId") == "tool-long"
+                           and event["update"].get("_meta", {}).get("replace"))
+        output = long_output["content"][0]["content"]["text"]
+        self.assertEqual(2400, output.count("完整快照输出行。"))
+        self.assertTrue(output.endswith("FULL_OUTPUT_END"))
+
+
 class PreviewDeletionTest(unittest.TestCase):
     """Exercise only the loopback synthetic server; it never imports product operations."""
 

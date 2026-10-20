@@ -154,7 +154,7 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
     </div>}
     {steps && current && ctx
       ? <div key={current.key} className="flex min-h-0 min-w-0 flex-1 flex-col">{execution
-        ? <ExecutionTabs client={sessionClient} taskId={execution.kind === "routing" ? execution.decisionTaskId! : runId} attemptId={execution.attemptId!}
+        ? <ExecutionTabs routingMode={execution.kind === "routing" ? execution.routing?.routingMode ?? null : undefined} taskText={view.task.task} checkoutRoot={workflow?.cwd ?? view.task.cwd} client={sessionClient} taskId={execution.kind === "routing" ? execution.decisionTaskId! : runId} attemptId={execution.attemptId!}
           harness={(execution.kind === "routing" ? execution.routing?.routerBuddy?.harness : execution.buddy?.harness) ?? t("unrecorded")} active={active} tab={tab} onTab={onTab}>{pane(current, ctx)}</ExecutionTabs>
         : pane(current, ctx)}</div>
       : <p role="status" className="p-6 text-ink2">{t("loading")}</p>}

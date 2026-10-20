@@ -65,10 +65,17 @@ The asset directory is Host-supplied; the repository's current bundle lives at
 ``src/hey_my_buddy/console/assets``.
 
 Session view fixtures (GET /api/tasks/<taskId>/attempts/<attemptId>/session):
-``preview-run-a1/att-a1-2`` is an ended Codex session with more than 100
-events; ``preview-run-a3/att-a3-1`` is a running Claude session that gains
-events on later ``after`` polls; ``preview-run-a1-router/att-router-a1`` is a
-Router decision session. Error pairs are listed in SESSION_ERRORS below.
+``preview-run-a1/att-a1-2`` is a paginated Codex session; its failed command
+starts on the earlier page and finishes on the latest page. The long command
+keeps 2,400 output lines and ``FULL_OUTPUT_END``. ``preview-run-a3/att-a3-1``
+is a running Claude Code session; ``preview-run-b10/att-b10-1`` is an ended
+Claude read/search session. ``preview-run-b1/att-b1-2`` is a ZCode session
+with tool inputs, and ``att-b1-1`` models an older input-free projection.
+``preview-run-b9/att-b9-2`` is a DSH question/answer session.
+``preview-run-a1-router/att-router-a1`` is a Router decision session.
+``preview-run-a2-router-abstention/att-router-a2-abstention`` is a review-mode
+Router abstention tied to its recorded routing span.
+Error pairs are listed in SESSION_ERRORS below.
 """
 from __future__ import annotations
 
@@ -231,6 +238,13 @@ STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND":
 SESSION_LONG = ("preview-run-a1", "att-a1-2")
 SESSION_RUNNING = ("preview-run-a3", "att-a3-1")
 SESSION_ROUTER = ("preview-run-a1-router", "att-router-a1")
+SESSION_ROUTER_REVIEW = ("preview-run-a2-router-abstention", "att-router-a2-abstention")
+SESSION_CLAUDE = ("preview-run-b10", "att-b10-1")
+SESSION_ZCODE = ("preview-run-b1", "att-b1-2")
+SESSION_ZCODE_OLD = ("preview-run-b1", "att-b1-1")
+SESSION_DSH = ("preview-run-b9", "att-b9-2")
+SESSION_PAIRS = (SESSION_LONG, SESSION_RUNNING, SESSION_ROUTER, SESSION_ROUTER_REVIEW, SESSION_CLAUDE,
+                 SESSION_ZCODE, SESSION_ZCODE_OLD, SESSION_DSH)
 SESSION_ERRORS = {
     ("preview-run-a2", "att-a2-1"): (501, "SESSION_NOT_INTEGRATED", "session.not-integrated",
                                        "Session projection is not integrated for this harness"),
@@ -442,6 +456,9 @@ ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed"
                      {}, attempt_id="att-router-a1", user_outcome="alternative",
                      mode="fast",
                      elapsed_ms=60000, tool_calls=0, bytes_read=0)
+ROUTING_A1.update(routerBuddyIds=["dsh:deepseek-official:deepseek-flash:max"],
+                  routerIdentities=[CFG_FLASH], routerBuddyId="dsh:deepseek-official:deepseek-flash:max",
+                  routerBuddy=CFG_FLASH)
 ROUTING_A2 = routing("preview-decision-a2", "preview-run-a2-router", "failed", None,
                      "合成预览：候选超出路由边界，等待 Host 选择配置。", {"harness": "claude"},
                      attempt_id="att-router-a2", program_reason=reason("router-out-of-bounds", bound="constraints"))
@@ -1128,11 +1145,13 @@ def build_runs() -> dict[str, dict]:
                         created=recorded_span["startAt"], updated=recorded_span["endAt"],
                         state="cancelled" if record["status"] == "cancelled" else "accepted",
                         status=record["status"] if record["status"] in ("failed", "cancelled") else "completed",
-                        category="ended", buddy=CFG_CODEX, micro_task=False, routing=record,
+                        category="ended", buddy=CFG_FLASH if record is ROUTING_A1 else CFG_CODEX,
+                        micro_task=False, routing=record,
                         adapter="decision", router_budget_seconds=record["budget"]["timeoutSeconds"] + 10,
                         accepted=recorded_span["endAt"], result=True,
                         attempts=[attempt(record["attemptId"], 1, "finished", True,
-                                          recorded_span["startAt"], recorded_span["endAt"], CFG_CODEX,
+                                          recorded_span["startAt"], recorded_span["endAt"],
+                                          CFG_FLASH if record is ROUTING_A1 else CFG_CODEX,
                                           error=("router-out-of-bounds" if record["status"] == "failed" else None),
                                           result=decision_result(record), disposition=("abstention" if record["status"] == "needs-host" else record["status"]),
                                           usage=usage("synthetic-preview", 2100, 400, 200))],
@@ -1262,17 +1281,63 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
     if pair == SESSION_LONG:
         events = [session_event(attempt_id, "user_message_chunk",
                                 content=session_text("请检查合成预览的会话分页和完整工具输出。"))]
-        events += [session_event(attempt_id, "agent_message_chunk",
-                                 content=session_text(f"第 {index:03d} 条合成进度：核对消息、游标和滚动位置。"),
-                                 _meta={"nativeItemId": f"message-{index}", "contentSegment": "main"})
-                   for index in range(118)]
-        events += [
+        for index in range(9):
+            call_id = f"codex-setup-{index:02d}"
+            events.extend((
+                session_event(attempt_id, "tool_call", toolCallId=call_id,
+                              title=f"rg -n 'fixture-{index}' tests/probes", kind="execute",
+                              status="in_progress",
+                              rawInput={"command": f"rg -n 'fixture-{index}' tests/probes"}),
+                session_event(attempt_id, "tool_call_update", toolCallId=call_id,
+                              status="completed", rawOutput={"exitCode": 0},
+                              content=[{"type": "content", "content": session_text(f"fixture-{index}: checked\n")}]),
+            ))
+        events.append(session_event(attempt_id, "agent_message_chunk",
+                                    content=session_text("已核对起始样例，继续检查失败路径。")))
+        # The opening is the last event of the earlier page. A native Codex
+        # diff marker and the failed update start the latest page.
+        events.append(session_event(attempt_id, "tool_call", toolCallId="codex-failed-command",
+                                    title="synthetic-preview-missing --verify", kind="execute",
+                                    status="in_progress",
+                                    rawInput={"command": "bash -lc 'synthetic-preview-missing --verify'"}))
+        events.extend((
+            session_event(attempt_id, "agent_message_chunk",
+                          content=session_text("[turn/diff/updated]\n"
+                                               "diff --git a/synthetic-preview/fixture.txt b/synthetic-preview/fixture.txt\n"
+                                               "index 1111111..2222222 100644\n"
+                                               "--- a/synthetic-preview/fixture.txt\n"
+                                               "+++ b/synthetic-preview/fixture.txt\n"
+                                               "@@ -1,3 +1,3 @@\n"
+                                               " unchanged context\n"
+                                               "-old fixture line\n"
+                                               "+new fixture line\n"
+                                               " trailing context\n"),
+                          _meta={"nativeItemId": "turn/diff/updated:att-a1-2", "contentSegment": "diff/0",
+                                 "nativeType": "turn/diff/updated", "marker": True, "replace": True}),
+            session_event(attempt_id, "tool_call_update", toolCallId="codex-failed-command",
+                          status="failed", rawOutput={"exitCode": 127},
+                          content=[{"type": "content", "content": session_text("command not found\n")}]),
+        ))
+        for index in range(45):
+            call_id = f"codex-check-{index:02d}"
+            command = f"python -m compileall -q synthetic-preview/part-{index:02d}.py"
+            events.extend((
+                session_event(attempt_id, "tool_call", toolCallId=call_id,
+                              title=command, kind="execute", status="in_progress",
+                              rawInput={"command": command}),
+                session_event(attempt_id, "tool_call_update", toolCallId=call_id,
+                              status="completed", rawOutput={"exitCode": 0},
+                              content=[{"type": "content", "content": session_text(f"part {index:02d}: OK\n")}]),
+            ))
+        events.extend((
             session_event(attempt_id, "agent_thought_chunk",
                           content=session_text("Codex 提供的推理摘要片段；内部未提供的推理不在记录中。"),
                           _meta={"nativeItemId": "reasoning-1", "contentSegment": "summary-0",
                                  "reasoning": "summary"}),
             session_event(attempt_id, "tool_call", toolCallId="tool-long", title="检查合成源码与测试",
-                          kind="execute", status="in_progress", rawInput={"command": "synthetic-preview-check"},
+                          kind="execute", status="in_progress",
+                          rawInput={"command": "pwd && synthetic-preview-check", "cwd": "/synthetic-preview/hey-my-buddy",
+                                    "commandActions": [{"command": "pwd"}, {"command": "synthetic-preview-check"}]},
                           content=[{"type": "content", "content": session_text("开始输出\n")}],
                           _meta={"nativeItemId": "tool-long", "contentSegment": "stdout"}),
             session_event(attempt_id, "tool_call_update", toolCallId="tool-long", status="in_progress",
@@ -1280,7 +1345,7 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
                           _meta={"nativeItemId": "tool-long", "contentSegment": "stdout"}),
             session_event(attempt_id, "tool_call_update", toolCallId="tool-long", status="completed",
                           rawOutput={"exitCode": 0},
-                          content=[{"type": "content", "content": session_text("增量 2：" + "完整输出行。" * 2400)}],
+                          content=[{"type": "content", "content": session_text("增量 2：\n" + "完整输出行。\n" * 2400)}],
                           _meta={"nativeItemId": "tool-long", "contentSegment": "stdout"}),
             session_event(attempt_id, "tool_call_update", toolCallId="tool-long", status="completed",
                           content=[{"type": "content", "content": session_text("最终完整快照：增量 1 与增量 2 已合并。\n" + "完整快照输出行。\n" * 2400 + "FULL_OUTPUT_END")}],
@@ -1289,25 +1354,108 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
                 {"content": "核对会话分页", "status": "completed", "priority": "high"},
                 {"content": "检查完整输出", "status": "in_progress", "priority": "medium"}]),
             session_event(attempt_id, "agent_message_chunk",
-                          content=session_text("原生未知类型标记：synthetic/previewMarker"),
+                          content=session_text("[synthetic/previewMarker]\n检查结束，保留这条带正文的标记。"),
                           _meta={"nativeItemId": "marker-1", "contentSegment": "marker",
                                  "nativeType": "synthetic/previewMarker", "marker": True}),
             session_event(attempt_id, "agent_message_chunk",
                           content=session_text("最终答复：合成预览会话已结束。")),
-        ]
+        ))
         return events
     if pair == SESSION_RUNNING:
         return [session_event(attempt_id, "user_message_chunk", content=session_text("运行中的合成回合。")),
-                session_event(attempt_id, "agent_message_chunk", content=session_text("开始核对当前结果。\n\n" + "运行中上下文，保留阅读位置。\n\n" * 50))]
+                session_event(attempt_id, "tool_call", toolCallId="claude-running-read", title="Read",
+                              kind="read", status="in_progress",
+                              rawInput={"file_path": "apps/console/src/session-view/blocks.ts"}),
+                session_event(attempt_id, "tool_call_update", toolCallId="claude-running-read",
+                              status="completed", rawOutput="读取 124 行。"),
+                session_event(attempt_id, "tool_call", toolCallId="claude-running-search", title="Grep",
+                              kind="search", status="in_progress",
+                              rawInput={"pattern": "aria-expanded", "glob": "apps/console/src/**/*.tsx"}),
+                session_event(attempt_id, "tool_call_update", toolCallId="claude-running-search",
+                              status="completed", rawOutput="找到 3 处。"),
+                session_event(attempt_id, "agent_message_chunk",
+                              content=session_text("开始核对当前结果。\n\n" + "运行中上下文，保留阅读位置。\n\n" * 50))]
+    if pair == SESSION_CLAUDE:
+        return [session_event(attempt_id, "user_message_chunk",
+                              content=session_text("独立核对合成路径文档中的示例。")),
+                session_event(attempt_id, "tool_call", toolCallId="claude-read-guide", title="Read",
+                              kind="read", status="in_progress",
+                              rawInput={"file_path": "docs/reference/path-guide.md"}),
+                session_event(attempt_id, "tool_call_update", toolCallId="claude-read-guide",
+                              status="completed", rawOutput="文档中的相对路径示例。"),
+                session_event(attempt_id, "tool_call", toolCallId="claude-search-path", title="Grep",
+                              kind="search", status="in_progress",
+                              rawInput={"pattern": "synthetic/path", "glob": "docs/**/*.md"}),
+                session_event(attempt_id, "tool_call_update", toolCallId="claude-search-path",
+                              status="completed", rawOutput="2 个匹配。"),
+                session_event(attempt_id, "agent_message_chunk",
+                              content=session_text("路径示例与说明一致，准备提交结构化核对结果。")),
+                session_event(attempt_id, "tool_call", toolCallId="claude-structured-output",
+                              title="StructuredOutput", kind="other", status="in_progress",
+                              rawInput={"outcome": {"disposition": "completed",
+                                                    "summary": "独立核对完成：路径示例与说明一致。",
+                                                    "artifacts": ["docs/reference/path-guide.md"],
+                                                    "decisions": ["保留相对路径示例。"],
+                                                    "remaining": [], "request": None}}),
+                session_event(attempt_id, "tool_call_update", toolCallId="claude-structured-output",
+                              status="in_progress"),
+                session_event(attempt_id, "tool_call_update", toolCallId="claude-structured-output",
+                              status="completed", rawOutput={"accepted": True})]
+    if pair == SESSION_ZCODE:
+        return [session_event(attempt_id, "user_message_chunk",
+                              content=session_text("核对合成平台路径并交回有格式的结果。")),
+                session_event(attempt_id, "tool_call", toolCallId="zcode-read", title="read_file",
+                              kind="read", status="pending",
+                              rawInput={"path": "synthetic/path-guide.txt"}),
+                session_event(attempt_id, "tool_call_update", toolCallId="zcode-read",
+                              status="completed", rawOutput={"content": "路径示例已读取。"}),
+                session_event(attempt_id, "tool_call", toolCallId="zcode-checkpoint",
+                              title="mcp__blackboard__hey_my_buddy_checkpoint", kind="other",
+                              status="pending", rawInput={"note": "路径样例已核对"}),
+                session_event(attempt_id, "tool_call_update", toolCallId="zcode-checkpoint",
+                              status="completed", rawOutput={"ok": True}),
+                session_event(attempt_id, "tool_call", toolCallId="zcode-finish",
+                              title="mcp__blackboard__hey_my_buddy_finish_turn", kind="other",
+                              status="pending", rawInput={"summary": "路径核对完成"}),
+                session_event(attempt_id, "tool_call_update", toolCallId="zcode-finish",
+                              status="completed", rawOutput={"ok": True}),
+                session_event(attempt_id, "agent_message_chunk",
+                              content=session_text("## 核对结果\n\n- 路径编码一致。\n- 示例可读取。"))]
+    if pair == SESSION_ZCODE_OLD:
+        return [session_event(attempt_id, "user_message_chunk",
+                              content=session_text("读取旧版合成路径记录。")),
+                session_event(attempt_id, "tool_call", toolCallId="zcode-old-read", title="read_file",
+                              kind="read", status="pending"),
+                session_event(attempt_id, "tool_call_update", toolCallId="zcode-old-read",
+                              status="completed", rawOutput={"content": "旧记录没有保留工具输入。"}),
+                session_event(attempt_id, "agent_message_chunk",
+                              content=session_text("旧记录的读取结果已确认。"))]
+    if pair == SESSION_DSH:
+        return [session_event(attempt_id, "user_message_chunk",
+                              content=session_text("合成平台路径的编码是否一致？")),
+                session_event(attempt_id, "agent_message_chunk",
+                              content=session_text("一致。合成样例里的路径可以正常读取。"))]
     if pair == SESSION_ROUTER:
         return [session_event(attempt_id, "user_message_chunk",
-                              content=session_text("为合成任务选择执行 buddy。")),
-                session_event(attempt_id, "agent_thought_chunk",
-                              content=session_text("比较已给出的候选约束与可用性。"),
-                              _meta={"nativeItemId": "router-reasoning", "contentSegment": "summary",
-                                     "reasoning": "summary"}),
+                              content=session_text("ROLE: Router buddy\n为合成任务选择执行 buddy。")),
                 session_event(attempt_id, "agent_message_chunk",
-                              content=session_text("选择 DeepSeek Flash。"))]
+                              content=session_text(json.dumps({"buddyId": "dsh:deepseek-official:deepseek-flash:max",
+                                                               "note": "合成任务由 DeepSeek Flash 执行。",
+                                                               "evidence": ["符合本次合成路由约束。"]},
+                                                              ensure_ascii=False)))]
+    if pair == SESSION_ROUTER_REVIEW:
+        return [session_event(attempt_id, "user_message_chunk",
+                              content=session_text("ROLE: Router buddy\nReview the synthetic Claude-only routing request.")),
+                session_event(attempt_id, "tool_call", toolCallId="router-review-read", title="Read",
+                              kind="read", status="in_progress",
+                              rawInput={"file_path": "docs/reference/path-guide.md"}),
+                session_event(attempt_id, "tool_call_update", toolCallId="router-review-read",
+                              status="completed", rawOutput="Insufficient evidence for a confident selection."),
+                session_event(attempt_id, "agent_message_chunk",
+                              content=session_text(json.dumps({"buddyId": None,
+                                                               "note": "合成证据不足，请 Host 选择。",
+                                                               "evidence": ["候选约束仅指定 Claude。"]},
+                                                              ensure_ascii=False)))]
     return []
 
 
@@ -1364,7 +1512,7 @@ def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewSt
         last = boundaries.index(cursor) if cursor is not None else len(events)
         first = max(0, last - limit)
     omitted = ([reason("session.codex-internal-reasoning-omitted")]
-               if pair in (SESSION_LONG, SESSION_ROUTER) else [])
+               if pair in (SESSION_LONG, SESSION_ROUTER_REVIEW) else [])
     return {"state": "running" if pair == SESSION_RUNNING else "ended", "omitted": omitted,
             "events": events[first:last], "before": boundaries[first], "after": boundaries[last],
             "hasEarlier": first > 0, "stopped": None}
@@ -1381,7 +1529,7 @@ def session_read(task_id: str, attempt_id: str, params: dict[str, int], state: P
     if pair in SESSION_ERRORS:
         _status, code, reason_code, message = SESSION_ERRORS[pair]
         raise PreviewError(code, message, reason=reason(reason_code))
-    if pair not in (SESSION_LONG, SESSION_RUNNING, SESSION_ROUTER):
+    if pair not in SESSION_PAIRS:
         raise PreviewError("SESSION_NOT_RECORDED", "This attempt has no session record",
                            reason=reason("session.not-recorded"))
     return session_page(pair, params, state)
@@ -2381,6 +2529,11 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
         f"GET  {base}/api/tasks/{SESSION_LONG[0]}/attempts/{SESSION_LONG[1]}/session",
         f"GET  {base}/api/tasks/{SESSION_RUNNING[0]}/attempts/{SESSION_RUNNING[1]}/session",
         f"GET  {base}/api/tasks/{SESSION_ROUTER[0]}/attempts/{SESSION_ROUTER[1]}/session",
+        f"GET  {base}/api/tasks/{SESSION_ROUTER_REVIEW[0]}/attempts/{SESSION_ROUTER_REVIEW[1]}/session",
+        f"GET  {base}/api/tasks/{SESSION_CLAUDE[0]}/attempts/{SESSION_CLAUDE[1]}/session",
+        f"GET  {base}/api/tasks/{SESSION_ZCODE[0]}/attempts/{SESSION_ZCODE[1]}/session",
+        f"GET  {base}/api/tasks/{SESSION_ZCODE_OLD[0]}/attempts/{SESSION_ZCODE_OLD[1]}/session",
+        f"GET  {base}/api/tasks/{SESSION_DSH[0]}/attempts/{SESSION_DSH[1]}/session",
         f"GET  {base}/api/runtime-version",
         f"POST {base}/api/command  workflow_get · message_list · selection_get · selection_list · "
         f"buddy_list · macro_task_deletion_preview · macro_task_delete "
@@ -3378,8 +3531,14 @@ def print_banner(server: PreviewHTTPServer, assets: Path) -> None:
         members = summary["counts"]["roots"] + summary["counts"]["helpers"]
         print(f"  {group}  state={summary['state']} members={members} project={summary['project']['label']}")
     print("session fixtures (taskId / attemptId):")
-    for label, pair in (("ended, >100 events", SESSION_LONG), ("running, later after polls append", SESSION_RUNNING),
-                        ("Router decision", SESSION_ROUTER)):
+    for label, pair in (("Codex, ended, >100 events", SESSION_LONG),
+                        ("Claude Code, running, later after polls append", SESSION_RUNNING),
+                        ("DSH Router decision", SESSION_ROUTER),
+                        ("Codex review Router abstention", SESSION_ROUTER_REVIEW),
+                        ("Claude Code read and search", SESSION_CLAUDE),
+                        ("ZCode with inputs", SESSION_ZCODE),
+                        ("ZCode old turn without inputs", SESSION_ZCODE_OLD),
+                        ("DSH question and answer", SESSION_DSH)):
         print(f"  {pair[0]} / {pair[1]}  {label}")
     for pair, (_status, code, _reason, _message) in SESSION_ERRORS.items():
         print(f"  {pair[0]} / {pair[1]}  {code}")
