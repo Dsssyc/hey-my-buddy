@@ -20,9 +20,9 @@ Worker、Router 与将来的 Lead 所用的 agent，在这里对接的是 Host �
 
 ## Router
 
-Router 有三个面（[ADR-021](../../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 3 条），每次调用是其中之一；工作面又分快速与审阅两种模式，审阅可以只读查看冻结的副本。
+Router 有三个面（[ADR-021](../../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 3 条），每次调用是其中之一；路由面又分快速与审阅两种模式，审阅可以只读查看冻结的副本。
 
-正文在 `router.txt`。它写了三个面，其中维护面与画像面还没有调用方，接线的只有工作面的两种模式。
+正文在 `router.txt`。它写了三个面，其中维护面与画像面还没有调用方，接线的只有路由面的两种模式。
 
 ## Lead
 

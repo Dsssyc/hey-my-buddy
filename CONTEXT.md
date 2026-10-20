@@ -47,8 +47,18 @@ A micro task a Lead delegates under the micro task that carries delegation autho
 _Avoid_: child task, sub-task; a helper is a different thing
 
 **Router buddy**:
-The buddy acting with routing authority. The user lists one or more buddies for the role in order, and the first available one holds it. It works in three planes: it chooses the Worker buddy for a micro task within the routing bounds, it maintains evaluations from recorded outcomes, and it builds model profiles from public sources. When the role passes to the next buddy in the list, all three planes pass with it. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
+The buddy acting with routing authority. The user lists one or more buddies for the role in order, and the first available one holds it. It works in three planes (三个面 / three planes): the routing plane, the maintenance plane and the profile plane. When the role passes to the next buddy in the list, all three planes pass with it. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
 _Avoid_: decision Buddy, selector (for the buddy)
+
+**路由面 / routing plane**:
+The Router's plane that chooses the Worker buddy for one micro task within its routing bounds, in fast or review mode; each choice is one routing calculation.
+_Avoid_: 工作面 / work plane (it reads as a name for all three planes), 执行面
+
+**维护面 / maintenance plane**:
+The Router's plane that classifies finished micro tasks into the domain list and the task types and writes each buddy's evaluation from the recorded outcomes.
+
+**画像面 / profile plane**:
+The Router's plane that builds model profiles from public sources.
 
 **路由边界 / routing bounds**:
 The legal candidates a Router may choose from: the published, enabled and available buddies that satisfy the micro task's required capabilities and the user's pins and exclusions. The blackboard checks a Router's choice against these bounds only, never its judgment.

@@ -8,7 +8,7 @@
 
 另删除 `BoardClient.evaluation_write_publish`：它只封装已经不受服务支持的 `evaluation_write_publish`，并非本次之前仍可调用的第 10 个公开操作。客户端关于维护写者、读者与证据的便捷方法随所属操作删除。
 
-`model-profiles` 与 `console-snapshot` 保留为模型、设置和路由记录的读法，但不再返回卡片、证据、样本、待处理证据或维护状态。`selection-get` 与 `selection-list` 保留工作面路由记录，删除维护分支及其发布材料。公开 `evaluation-reader-*` 被删，Router 内部的选择读者继续由路由生命周期持有。
+`model-profiles` 与 `console-snapshot` 保留为模型、设置和路由记录的读法，但不再返回卡片、证据、样本、待处理证据或维护状态。`selection-get` 与 `selection-list` 保留路由面的路由记录，删除维护分支及其发布材料。公开 `evaluation-reader-*` 被删，Router 内部的选择读者继续由路由生命周期持有。
 
 服务能力说明中删除 `maintenanceScope`，快照能力删除 `maintenance`、`maintenanceMode`、`evaluationWriteGate`、`readerAdmission`、`evidenceRecord`。没有新增角色或许可。Worker 的回合凭据继续只允许观察自己及提交结果等原有操作；维护操作已经从允许的方法集合中消失。数据库的写者 HMAC 生成、校验、版本常量和写者序号一并删除。
 

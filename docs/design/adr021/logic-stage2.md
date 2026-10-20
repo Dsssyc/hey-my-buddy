@@ -12,7 +12,7 @@ L5 保留：共同 toolEvidence 分类、绑定和完整性事实、黑板唯一
 
 ## 保留接口与不变量
 
-RouterSettings 的现行字段继续是 routerProfileIds、mode、budgetPreset、retryIntervalSeconds，列表非空且身份完整，稳定去重、顺序有效，全局模式/预算不降级。convert_legacy_router_settings 只是可调用的纯换算：按旧默认模式决定两个位置的先后、两者都保留并稳定去重；不用于日常读取或保存，实际升级归 L15。current_router 是三个工作面后续复用的唯一解析入口，不新增持久熔断状态；从当前设置、资格与不可变 outcome/receipt 推出跳过、到期和可用项。
+RouterSettings 的现行字段继续是 routerProfileIds、mode、budgetPreset、retryIntervalSeconds，列表非空且身份完整，稳定去重、顺序有效，全局模式/预算不降级。convert_legacy_router_settings 只是可调用的纯换算：按旧默认模式决定两个位置的先后、两者都保留并稳定去重；不用于日常读取或保存，实际升级归 L15。current_router 是三个路由面后续复用的唯一解析入口，不新增持久熔断状态；从当前设置、资格与不可变 outcome/receipt 推出跳过、到期和可用项。
 
 请求冻结 Router 列表、共同输入、模式、预算与候选事实；每项使用独立内部 dispatch task/attempt，业务请求身份不变。前项没有答案且实际停止已确认才能推进；有效选择/弃权停止链，取消、停止未知、身份或输入/设置/候选/账户/reader/owner 漂移不切换，容量与 writer gate 排队。认领复核和发布时的冻结、防护、工具证据判定保留；后来缓存资格变差不覆盖已核对的原生策略与事实。失败和超时进入各 Router 的健康统计，停止未知不伪装停止。
 
