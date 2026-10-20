@@ -167,7 +167,6 @@ class ConsoleSnapshotContractTests(BoardTestCase):
         snapshot = board.call("console_snapshot", {})
         self.assertIn("runs", snapshot["tasks"])
         self.assertIn("total", snapshot["tasks"])
-        self.assertNotIn("backupPreflight", snapshot)
         self.assertIn("harnesses", snapshot)
         self.assertIn("routingHealth", snapshot)
         self.assertTrue(snapshot["capabilities"]["consoleAssets"] is False or

@@ -127,15 +127,10 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         browser = self.open(board)
         first, replays = self.polls(browser, count=2)
         snapshot = json.loads(first[2])
-        self.assertNotIn("backupPreflight", snapshot)
         self.assertNotIn("runs", snapshot["tasks"])
         self.assertEqual(snapshot["tasks"], {"pendingCount": 0})
         for _status, _headers, body in replays:
             self.assertEqual(body, b"")
-
-    def test_removed_backup_preflight_route_is_unavailable(self):
-        status, _headers, body = self.open(self.board()).get("/api/backup-preflight")
-        self.assertEqual(status, 404, body[:300])
 
     def test_pending_count_counts_distinct_roots_awaiting_their_host(self):
         board = self.board()

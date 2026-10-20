@@ -13,7 +13,7 @@ import subprocess
 import time
 import uuid
 
-from ..blackboard.store import backup, upgrade as schema_upgrade
+from ..blackboard.store import backup
 from .. import private_dirs
 from . import runtime
 from .launcher import write_active_runtime
@@ -61,9 +61,8 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or schema[0] not in (str(schema_upgrade.BASE_SCHEMA_VERSION), str(SCHEMA_VERSION)):
-            raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schema {schema_upgrade.BASE_SCHEMA_VERSION} or {SCHEMA_VERSION} only')
+        if schema is None or schema[0] != str(SCHEMA_VERSION):
+            raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -242,9 +241,8 @@ def restore(state: Path, current: Path) -> None:
     compressed = current / 'board.sqlite3.gz'
     for path in (state, current):
         _restore_guard(path)
-    for path in (snapshot, board, *sidecars, compressed):
+    for path in (snapshot, board, *sidecars):
         _restore_guard(path, regular=True)
-    backup.recover(state)
     backup.verify(current)
     sources = list(backup._regular_files(current / 'state'))
     destinations = [(source, state / source.relative_to(current / 'state')) for source in sources]
@@ -501,19 +499,9 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     before['runtimeSettings'] = runtime_settings
                     journal['before'] = before
                     backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
-                    stored = backup.verify(Path(backed_up['path']))
-                    if stored.get('databaseSnapshot') is not None:
-                        before = {**before, **stored['databaseSnapshot'], 'schema': stored.get('schema'), 'runtimeSettings':runtime_settings}
-                        journal['before'] = before
                     journal.update(phase='backed-up', backup=backed_up)
                     write_journal(marker, journal)
                 expected = before
-                if contract_changed and before['schema'] == schema_upgrade.BASE_SCHEMA_VERSION:
-                    journal.update(phase='converting')
-                    write_journal(marker, journal)
-                    schema_upgrade.upgrade(state)
-                    expected = idle_snapshot(state, exact=True)
-                    expected['runtimeSettings'] = runtime_settings
                 journal.update(phase='prepared', expected=expected)
                 write_journal(marker, journal)
             active = target
@@ -568,7 +556,11 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 journal.update(phase='rolled-back', rollback=evidence, failure=reason)
                 write_journal(state / 'upgrade-last.json', journal)
                 clear_journal(marker)
-                error = failure.payload() if backed_up is None and isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE' else {'code':'UPGRADE_ROLLED_BACK','message':('Upgrade failed; the previous runtime and backup were restored' if contract_changed else 'Installation failed; the previous runtime was restored')}
+                if backed_up is None and isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE':
+                    error = failure.payload()
+                else:
+                    restored = 'Upgrade failed; the previous runtime and backup were restored' if backed_up is not None else 'Installation failed; the previous runtime was restored'
+                    error = {'code':'UPGRADE_ROLLED_BACK', 'message':restored}
                 error.setdefault('details', {})['reason'] = reason
                 return {'upgraded':False, 'error':error,
                         **({'backup':backed_up} if backed_up is not None else {}), 'rollback':evidence}

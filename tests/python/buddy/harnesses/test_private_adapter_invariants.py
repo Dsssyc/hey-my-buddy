@@ -212,11 +212,19 @@ class PrivateAdapterInvariants(unittest.TestCase):
         self.addCleanup(value.doCleanups)
         return value
 
-    def assert_partition(self, context):
+    def assert_partition(self, context, harness):
         self.assertTrue(context.directory.is_dir())
+        evidence_names = set()
         for path in context.directory.rglob("*"):
             if path.is_file():
                 self.assertFalse(path.is_symlink(), path)
+                evidence_names.add(path.name)
+        if harness is not None:
+            state = Path(context.environment["HMB_STATE_DIR"])
+            native = native_root(state, harness, context.task_id)
+            native_names = {path.name for path in native.rglob("*") if path.is_file()}
+            self.assertFalse(evidence_names & native_names,
+                             "native state files must stay out of execution evidence")
 
     def test_micro_task_mock_codex_zcode_claude_and_native_continuation(self):
         for kind, harness in ((codex_tests.CodexAdapterTests, "codex"), (zcode_tests.ZcodeFixtureCase, "zcode"),
@@ -241,7 +249,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     self.assertFalse((private / "inquiry.json").exists())
                 if harness in {"codex", "zcode"}:
                     self.assertTrue(any(native_root(state, harness, context.task_id).glob("*.json")))
-                self.assert_partition(context)
+                self.assert_partition(context, harness)
 
     def test_mock_dsh_fast_router_and_command_use_private_attempt_directories(self):
         fixture = self.fixture(dsh_tests.DshNoToolTests)
@@ -260,7 +268,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         control = handle.role_run_control
         self.assertTrue(Path(control["directory"]).is_relative_to(context_root(context, "dsh")))
         self.assertTrue((handle.no_tool_evidence.evidence_root / "call-1/result.json").is_file())
-        self.assert_partition(context)
+        self.assert_partition(context, "dsh")
 
         command_evidence = state / "attempts/command-task/attempt-2"
         command = ExecutionContext("command-task", "attempt-2", 1,
@@ -271,7 +279,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         self.addCleanup(lambda: child.terminate(grace_seconds=0.1) if child.group_alive() else None)
         self.assertEqual(child.wait(5), 0)
         self.assertEqual(adapter.collect(child, command).status, "ok")
-        self.assert_partition(command)
+        self.assert_partition(command, None)
 
     def test_codex_and_zcode_fast_router_calls_use_private_native_roots(self):
         for kind, adapter in ((codex_fast_tests.NoToolCodexTests, CodexAdapter),
@@ -306,7 +314,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                            else json.loads((evidence / "no-tool-control.json").read_text()))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, adapter.name)))
                 cleanup_attempt_credentials(Path(environment["HMB_STATE_DIR"]), adapter.name, "task", "attempt")
-                self.assert_partition(context)
+                self.assert_partition(context, adapter.name)
 
     def test_review_read_only_calls_use_codex_private_root(self):
         fixture = self.fixture(codex_tests.CodexAdapterTests)
@@ -332,7 +340,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, "codex")))
         self.assertFalse((context_root(context, "codex") / "review-native/codex-home/auth.json").exists())
         cleanup_attempt_credentials(Path(context.environment["HMB_STATE_DIR"]), "codex", context.task_id, context.attempt_id)
-        self.assert_partition(context)
+        self.assert_partition(context, "codex")
 
     def test_decision_fast_router_wraps_each_native_adapter(self):
         setups = (
@@ -376,7 +384,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                            else json.loads((context.directory / "no-tool-control.json").read_text()))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, name)))
                 cleanup_attempt_credentials(Path(env["HMB_STATE_DIR"]), name, "task", "attempt")
-                self.assert_partition(context)
+                self.assert_partition(context, name)
 
     def test_execution_entry_journals_each_offline_fast_router_native_tree(self):
         setups = ((dsh_tests.DshNoToolTests, "dsh"),
@@ -499,7 +507,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assertEqual({path: path.read_bytes() for path in records}, before_cleanup)
                 self.assertFalse((context_root(context, "dsh") / "inquiry.json").exists())
                 self.assertIsNotNone(handle.result)
-                self.assert_partition(context)
+                self.assert_partition(context, "dsh")
 
         claude = self.fixture(claude_tests.ClaudeAdapterTests)
         initial = claude.context()
@@ -513,8 +521,8 @@ class PrivateAdapterInvariants(unittest.TestCase):
         self.assertEqual(second.status, "ok", second.to_report())
         self.assertEqual(second.result["turn"]["resumeMode"], "reconstructed-new-session")
         cleanup_attempt_credentials(Path(continuation.environment["HMB_STATE_DIR"]), "claude", continuation.task_id, continuation.attempt_id)
-        self.assert_partition(initial)
-        self.assert_partition(continuation)
+        self.assert_partition(initial, "claude")
+        self.assert_partition(continuation, "claude")
 
     def test_codex_and_zcode_native_continuation_survives_credential_cleanup(self):
         for kind, name in ((codex_tests.CodexAdapterTests, "codex"),
@@ -536,8 +544,8 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assertEqual(result.status, "ok", result.to_report())
                 self.assertEqual(result.result["turn"]["sessionId"], session)
                 cleanup_attempt_credentials(state, name, second.task_id, second.attempt_id)
-                self.assert_partition(first)
-                self.assert_partition(second)
+                self.assert_partition(first, name)
+                self.assert_partition(second, name)
 
 
 if __name__ == "__main__":

@@ -10,10 +10,9 @@ module builds the projection the console actually polls:
 * ``tasks`` reduced to ``pendingCount`` — the full-board count of micro task
   roots awaiting their Host, with the exact dedup semantics the top bar used.
 
-Each projection also reports the earliest
-time at which one of its own fields can flip (provider cooling and
-router skip windows), so a read cache can serve it unchanged
-without freezing state that must expire.
+The projection also reports the earliest time at which one of its fields can
+flip (provider cooling and router skip windows), so a read cache can serve it
+unchanged without freezing state that must expire.
 """
 from __future__ import annotations
 

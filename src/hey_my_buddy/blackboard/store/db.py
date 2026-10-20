@@ -1027,8 +1027,6 @@ CREATE TABLE IF NOT EXISTS router_dispatches (
     created_at   TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_binding_unique ON attempts(attempt_id, task_id, generation);
-"""
-ROUTER_CLAIMS_DDL = """
 CREATE TABLE IF NOT EXISTS router_claims (
     attempt_id TEXT NOT NULL PRIMARY KEY,
     task_id    TEXT NOT NULL REFERENCES router_dispatches(task_id) ON DELETE RESTRICT,
@@ -1036,8 +1034,6 @@ CREATE TABLE IF NOT EXISTS router_claims (
     FOREIGN KEY (attempt_id, task_id, generation) REFERENCES attempts(attempt_id, task_id, generation) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
     UNIQUE (task_id, generation)
 );
-"""
-ROUTER_OUTCOMES_DDL = """
 CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_outcome_binding_unique ON attempts(attempt_id, task_id);
 CREATE TABLE IF NOT EXISTS router_outcomes (
     receipt_id   TEXT NOT NULL PRIMARY KEY,
@@ -1059,7 +1055,6 @@ CREATE INDEX IF NOT EXISTS router_outcomes_buddy_idx ON router_outcomes(buddy_id
 CREATE INDEX IF NOT EXISTS router_outcomes_task_idx ON router_outcomes(task_id, event_seq);
 CREATE INDEX IF NOT EXISTS router_outcomes_attempt_idx ON router_outcomes(attempt_id);
 """
-ROUTER_SCHEMA += ROUTER_CLAIMS_DDL + ROUTER_OUTCOMES_DDL
 CATALOG_PENDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS catalog_pending (
     harness      TEXT NOT NULL REFERENCES catalog_current(harness) ON DELETE RESTRICT,

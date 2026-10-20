@@ -11,23 +11,23 @@ from unittest import mock
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from blackboard.store.upgrade_fixture import load_fixture
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 
-STATE_FILES = ('console-settings.json', 'runtime-retention.json',
-               'active-runtime.json', 'launch-settings.json')
+STATE_FILES = ('console-settings.json',)
 
 
 class BackupTests(BoardTestCase):
-    def test_upgrade_base_backup_retains_schema_and_exact_board_bytes(self):
+    def test_fixture_backup_retains_current_schema_and_exact_board_bytes(self):
         import gzip
 
         fixture = load_fixture(self.directory)
         before = (self.directory / 'board.sqlite3').read_bytes()
-        current = Path(backup.create(self.directory)['path'])
-        self.assertEqual(backup.verify(current)['schema'], 25)
-        self.assertEqual(fixture['schemaVersion'], 25)
+        current = Path(backup.create(self.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
+        self.assertEqual(backup.verify(current)['schema'], SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
 
@@ -36,19 +36,21 @@ class BackupTests(BoardTestCase):
         board.store.db.close()
         for name in STATE_FILES:
             (board.directory / name).write_text(json.dumps({'name': name, 'generation': 1}))
+        for name in ('runtime-retention.json', 'active-runtime.json', 'launch-settings.json'):
+            (board.directory / name).write_text(json.dumps({'name': name, 'generation': 1}))
         for name in ('controls/x.json', 'attempts/run/attempt/result.json',
                      'workspaces/large', 'harnesses/zcode/native', 'console-sessions.json'):
             path = board.directory / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('retained evidence')
-        first = backup.create(board.directory)
+        first = backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         current = Path(first['path'])
         manifest = backup.verify(current)
         self.assertTrue(first['verified'])
         self.assertEqual(set(manifest['files']), {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)})
         self.assertEqual((current / 'state/console-settings.json').stat().st_mode & 0o777, 0o600)
         (board.directory / 'console-settings.json').write_text('{"generation":2}')
-        second = backup.create(board.directory)
+        second = backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(first['path'], second['path'])
         self.assertEqual(json.loads((current / 'state/console-settings.json').read_text()), {'generation': 2})
         self.assertEqual([path.name for path in current.parent.iterdir() if path.is_dir()], ['current'])
@@ -56,13 +58,13 @@ class BackupTests(BoardTestCase):
     def test_missing_state_files_are_optional(self):
         board = self.board()
         board.store.db.close()
-        manifest = backup.verify(Path(backup.create(board.directory)['path']))
+        manifest = backup.verify(Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path']))
         self.assertEqual(set(manifest['files']), {'board.sqlite3.gz'})
 
     def test_verify_rejects_out_of_scope_manifest_entry_with_valid_hash(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.directory)['path'])
+        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         outside = current / 'state/attempts/run/result.json'
         outside.parent.mkdir(parents=True)
         outside.write_bytes(b'outside backup scope')
@@ -75,13 +77,40 @@ class BackupTests(BoardTestCase):
             backup.verify(current)
         self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
 
+    def test_verify_refuses_database_schema_that_disagrees_with_manifest(self):
+        import gzip
+
+        board = self.board()
+        board.store.db.close()
+        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None,
+                                     contract_version=CONTRACT_VERSION)['path'])
+        path = current / 'manifest.json'
+        manifest = json.loads(path.read_text())
+        source = self.directory / 'mismatched.sqlite3'
+        source.write_bytes(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()))
+        with sqlite3.connect(source) as connection:
+            connection.execute("UPDATE meta SET value='25' WHERE key='schema_version'")
+            manifest['databaseSnapshot'] = backup.database_snapshot(connection)
+        connection.close()
+        payload = current / 'board.sqlite3.gz'
+        payload.write_bytes(gzip.compress(source.read_bytes()))
+        manifest['files']['board.sqlite3.gz'] = {'bytes': payload.stat().st_size,
+                                                'sha256': hashlib.sha256(payload.read_bytes()).hexdigest()}
+        path.write_text(json.dumps(manifest))
+        before = {file: file.read_bytes() for file in current.rglob('*') if file.is_file()}
+        with self.assertRaises(BoardError) as caught:
+            backup.verify(current)
+        self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
+        self.assertEqual(caught.exception.message, 'Backup schema does not match its manifest')
+        self.assertEqual({file: file.read_bytes() for file in current.rglob('*') if file.is_file()}, before)
+
     def test_verify_refuses_unsupported_schema(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.directory)['path'])
+        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text())
-        for version in (21, 23, 24, 27):
+        for version in (21, 23, 24, 25, 27):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest))
@@ -97,7 +126,7 @@ class BackupTests(BoardTestCase):
             before = (board.directory / 'board.sqlite3').read_bytes()
             wal = (board.directory / 'board.sqlite3-wal').read_bytes()
             with self.assertRaises(BoardError) as caught:
-                backup.create(board.directory)
+                backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
             self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
             self.assertEqual((board.directory / 'board.sqlite3').read_bytes(), before)
             self.assertEqual((board.directory / 'board.sqlite3-wal').read_bytes(), wal)
@@ -106,20 +135,20 @@ class BackupTests(BoardTestCase):
     def test_failed_validation_keeps_old_backup_and_retries_incoming(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.directory)['path'])
+        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         original = (current / 'manifest.json').read_bytes()
         with mock.patch.object(backup, 'verify', side_effect=BoardError('BACKUP_INVALID', 'injected')):
             with self.assertRaises(BoardError):
-                backup.create(board.directory)
+                backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual((current / 'manifest.json').read_bytes(), original)
-        backup.create(board.directory)
+        backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         backup.verify(current)
         self.assertFalse((current.parent / '.incoming').exists())
 
     def test_tamper_is_detected_and_linked_retained_evidence_is_untouched(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.directory)['path'])
+        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         with (current / 'board.sqlite3.gz').open('ab') as stream:
             stream.write(b'tamper')
         with self.assertRaises(BoardError):
@@ -129,7 +158,7 @@ class BackupTests(BoardTestCase):
         evidence = board.directory / 'attempts/run/attempt/result.json'
         evidence.parent.mkdir(parents=True)
         evidence.symlink_to(sentinel)
-        backup.create(board.directory)
+        backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(sentinel.read_text(), 'retained evidence')
         self.assertTrue(evidence.is_symlink())
 
@@ -141,7 +170,7 @@ class BackupTests(BoardTestCase):
         state_file = board.directory / 'console-settings.json'
         state_file.symlink_to(sentinel)
         with self.assertRaises(BoardError) as caught:
-            backup.create(board.directory)
+            backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')
         self.assertEqual(caught.exception.details['path'], str(state_file))
         self.assertEqual(sentinel.read_text(), 'keep outside')
@@ -158,7 +187,7 @@ class BackupTests(BoardTestCase):
         checkout = board.directory / 'workspaces/large'
         checkout.parent.mkdir()
         checkout.write_text('unchanged checkout')
-        current = Path(backup.create(board.directory)['path'])
+        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         self.assertEqual(set(backup.verify(current)['files']), {'board.sqlite3.gz'})
         self.assertTrue((native / 'auth.json').is_symlink())
         self.assertEqual(secret.read_text(), 'private credential')
@@ -168,7 +197,7 @@ class BackupTests(BoardTestCase):
     def test_special_rollback_source_refuses_publication_and_keeps_previous_generation(self):
         board = self.board()
         board.store.db.close()
-        current = Path(backup.create(board.directory)['path'])
+        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         before = (current / 'manifest.json').read_bytes()
         source = board.directory / 'console-settings.json'
         for kind in ('directory', 'fifo'):
@@ -179,7 +208,7 @@ class BackupTests(BoardTestCase):
                     os.mkfifo(source)
                 try:
                     with self.assertRaises(BoardError) as caught:
-                        backup.create(board.directory)
+                        backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
                     self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')
                     self.assertEqual((current / 'manifest.json').read_bytes(), before)
                     self.assertEqual(stat.S_ISDIR(source.lstat().st_mode), kind == 'directory')

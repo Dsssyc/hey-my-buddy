@@ -75,7 +75,6 @@ class TestNamedContract(BoardTestCase):
                 self.assertEqual(health["contractVersion"], CONTRACT_VERSION)
                 self.assertEqual(health["schemaVersion"], SCHEMA_VERSION)
                 self.assertIn("runtimeIdentity", health)
-                self.assertNotIn("backupPreflight", health)
                 self.assertTrue(hasattr(board, "execution_result"))
                 self.assertFalse(hasattr(board, "worker_claim"))
                 self.assertTrue(hasattr(board, "events_read"))

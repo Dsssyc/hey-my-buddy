@@ -1,4 +1,4 @@
-"""The immutable schema-25 fixture exercises the explicit current upgrade."""
+"""The immutable schema-26 fixture is the accepted current upgrade base."""
 from __future__ import annotations
 
 import hashlib
@@ -12,8 +12,7 @@ from unittest import mock
 from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router
-from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION, canonical_json
-from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
+from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
@@ -25,10 +24,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix='upgrade-base-fixture-'))
 
 
-    def restored(self, name='state', *, base=False):
+    def restored(self, name='state'):
         fixture = load_fixture(self.root / name)
-        if not base:
-            schema_upgrade.upgrade(fixture['state'])
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
@@ -112,14 +109,14 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
-        fixture, connection = self.restored(base=True)
-        self.assertEqual(fixture['sourceCommit'], '137caef7b42c26616fbaf4fcaf36c1252449bd76')
-        self.assertEqual(fixture['sourceVersion'], '0.46.0')
-        self.assertEqual(fixture['schemaVersion'], schema_upgrade.BASE_SCHEMA_VERSION)
+        fixture, connection = self.restored()
+        self.assertEqual(fixture['sourceCommit'], 'd9e8df5d039708654f098015fbc8fc76f9fbd11d')
+        self.assertEqual(fixture['sourceVersion'], '0.48.0')
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                         str(schema_upgrade.BASE_SCHEMA_VERSION))
+                         str(SCHEMA_VERSION))
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                          {'schema_version', 'created_at', 'capability_secret'})
         schema = [list(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
@@ -191,25 +188,17 @@ class UpgradeFixtureTests(unittest.TestCase):
             load_fixture(first['state'])
 
 
-    def test_base_requires_explicit_upgrade_and_matches_fresh_structure(self):
-        fixture, connection = self.restored(base=True)
+    def test_base_is_accepted_unchanged_and_matches_fresh_structure(self):
+        fixture, connection = self.restored()
         state = fixture['state']
         stock = list(connection.iterdump())
         fresh = Database(self.root / 'fresh')
         fresh.initialize()
         self.addCleanup(fresh.close)
         current = Database(state)
-        with self.assertRaises(Corruption):
-            current.initialize()
-        self.assertEqual(list(connection.iterdump()), stock)
-        connection.close()
-        schema_upgrade.upgrade(state)
-        connection = sqlite3.connect(state / 'board.sqlite3')
-        self.addCleanup(connection.close)
-        self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                         str(SCHEMA_VERSION))
         current.initialize()
-        current.close()
+        self.addCleanup(current.close)
+        self.assertEqual(list(connection.iterdump()), stock)
         with fresh.read() as baseline:
             query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
             self.assertEqual([tuple(row) for row in connection.execute(query)],
@@ -218,6 +207,9 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertEqual([tuple(row) for row in connection.execute(f'PRAGMA table_info({table})')],
                                  [tuple(row) for row in baseline.execute(f'PRAGMA table_info({table})')])
         self.assertEqual(upgrade.idle_snapshot(state)['schema'], SCHEMA_VERSION)
+        for changed in (False, True):
+            self.assertEqual(upgrade.preflight(state, contract_changed=changed)['schema'], SCHEMA_VERSION)
+        self.assertEqual(list(connection.iterdump()), stock)
 
     def test_base_contains_current_stored_forms(self):
         _fixture, connection = self.restored()
@@ -236,112 +228,88 @@ class UpgradeFixtureTests(unittest.TestCase):
             {('pin', 'fixture pinned buddy'), ('exclude', 'fixture exclusion')})
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind='quota.redetect'").fetchone()[0], 1)
 
-    def test_explicit_upgrade_converts_mutable_facts_and_preserves_sealed_content(self):
-        fixture, connection = self.restored('converted', base=True)
-        state = fixture['state']
-        run_id, manifest, attempt_id = self.sample(fixture, connection)
-        generation = connection.execute('SELECT generation FROM attempts WHERE attempt_id=?',
-                                        (attempt_id,)).fetchone()[0]
-        decision_id = connection.execute('SELECT decision_id FROM decision_requests LIMIT 1').fetchone()[0]
-        connection.execute('INSERT INTO router_requests VALUES(?,?,?)', (decision_id, '{}', '2026-01-01T00:00:00Z'))
-        document = '{"sealed":"unchanged"}'
-        document_hash = hashlib.sha256(document.encode()).hexdigest()
-        connection.execute('INSERT INTO router_dispatches VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                           (run_id, decision_id, 0, 'codex:openai:fixture-alpha:high', 'codex', 'openai',
-                            'fixture-alpha', 'high', document, document_hash, '2026-01-01T00:00:00Z'))
-        connection.execute('INSERT INTO router_claims VALUES(?,?,?,?)',
-                           (attempt_id, run_id, generation, '{"tools":false}'))
-        connection.execute("UPDATE buddies SET capabilities_json=? WHERE buddy_id=?",
-                           (canonical_json(['execution:codex', 'decision', 'routing:fast', 'permission:read',
-                                            'input:text']), 'codex:openai:fixture-alpha:high'))
+    def test_router_stock_binds_claims_dispatches_and_current_outcomes(self):
+        fixture, connection = self.restored()
+        self.assertEqual([row['name'] for row in connection.execute('PRAGMA table_info(router_claims)')],
+                         ['attempt_id', 'task_id', 'generation'])
+        claims = connection.execute('SELECT * FROM router_claims').fetchall()
+        self.assertEqual(len(claims), 2)
+        for claim in claims:
+            attempt = connection.execute('SELECT task_id,generation FROM attempts WHERE attempt_id=?',
+                                         (claim['attempt_id'],)).fetchone()
+            self.assertEqual(tuple(attempt), (claim['task_id'], claim['generation']))
+            dispatch = connection.execute('SELECT document_json,input_sha256 FROM router_dispatches WHERE task_id=?',
+                                          (claim['task_id'],)).fetchone()
+            self.assertEqual(_sha(dispatch['document_json'].encode()), dispatch['input_sha256'])
+        outcomes = connection.execute('SELECT * FROM router_outcomes').fetchall()
+        self.assertEqual({(row['plane'], row['outcome']) for row in outcomes},
+                         {('routing', 'answered'), ('routing', 'no_answer')})
+        for outcome in outcomes:
+            event = connection.execute('SELECT kind,payload_json FROM events WHERE seq=?',
+                                       (outcome['event_seq'],)).fetchone()
+            payload = json.loads(event['payload_json'])
+            self.assertEqual(event['kind'], 'router.' + outcome['outcome'])
+            self.assertEqual(payload['plane'], 'routing')
+            fields = ['routing', outcome['request_id'], payload.get('selectionRetry', False),
+                      outcome['router_index'], outcome['phase'], outcome['task_id'],
+                      outcome['attempt_id'], outcome['outcome']]
+            self.assertEqual(_sha(_json(fields).encode()), outcome['receipt_id'])
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='router.claimed'").fetchone()[0], 2)
+
+    def test_current_file_stock_and_stored_evidence_are_not_empty(self):
+        from hey_my_buddy.protocol.execution import read_execution_receipt
+        from hey_my_buddy.protocol.session_content import SessionFormat, SessionNotification
+        fixture, connection = self.restored()
+        references = [entry['params']['receipt'] for entry in fixture['operations']
+                      if entry['operation'] == 'execution_result']
+        self.assertEqual(len(references), 5)
+        for reference in references:
+            receipt = read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'])
+            self.assertIsNotNone(receipt)
+            attempt = connection.execute('SELECT task_id,generation FROM attempts WHERE attempt_id=?',
+                                         (receipt['attemptId'],)).fetchone()
+            self.assertEqual(tuple(attempt), (receipt['taskId'], receipt['generation']))
+        sessions = list((fixture['state'] / 'sessions').rglob('*.jsonl'))
+        self.assertEqual(len(sessions), 3)
+        for path in sessions:
+            lines = path.read_text().splitlines()
+            format = SessionFormat.model_validate_json(lines[0])
+            self.assertEqual((format.protocol_version, format.projection_version), (1, 1))
+            notification = SessionNotification.model_validate_json(lines[1])
+            self.assertEqual(notification.session_id, path.stem)
+        self.assertEqual({row[0] for row in connection.execute(
+            "SELECT run_id FROM workflow_artifacts WHERE kind='turn-input'")},
+            {fixture['stableIds']['delivered'], fixture['stableIds']['accepted']})
+        outputs = [json.loads(row[0]) for row in connection.execute(
+            "SELECT manifest_json FROM workflow_artifacts WHERE kind='output'")]
+        self.assertTrue(outputs)
+        self.assertTrue(any(output['snapshot']['changedPaths'] == ['fixture.txt'] for output in outputs))
+        for output in outputs:
+            self.assertEqual(output['snapshot']['version'], 1)
+            self.assertEqual(_sha(_json(output['snapshot']).encode()), output['snapshotSha256'])
+        conflict = connection.execute('SELECT * FROM workflow_workspace_conflicts').fetchone()
+        self.assertEqual(conflict['state'], 'restored')
+        evidence = json.loads(conflict['evidence_json'])
+        self.assertEqual(evidence['blockingPaths'], ['outside.txt'])
+        self.assertEqual([entry['path'] for entry in evidence['entries']], ['outside.txt'])
+        for row in connection.execute('SELECT capabilities_json FROM buddies'):
+            self.assertEqual(set(json.loads(row[0])), {'execution:codex', 'effort:high', 'input:text'})
         health = json.loads(connection.execute("SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
-        health.update({'reviewVerification': 'old', 'readOnlyStructured': True})
-        connection.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'", (canonical_json(health),))
-        request_id = 'upgrade-routing-fixture'
-        claimed = {'plane': 'work', 'requestId': request_id, 'buddyId': 'codex:openai:fixture-alpha:high'}
-        connection.execute("INSERT INTO events(kind,payload_json,created_at) VALUES('router.claimed',?,?)",
-                           (canonical_json(claimed), '2026-01-01T00:00:00Z'))
-        outcomes = {}
-        for outcome in ('answered', 'no_answer'):
-            payload = {'plane': 'work', 'requestId': request_id, 'routerIndex': 0,
-                       'buddyId': 'codex:openai:fixture-alpha:high', 'phase': outcome,
-                       'taskId': None, 'attemptId': None, 'outcome': outcome, 'code': None}
-            if outcome == 'no_answer':
-                payload['selectionRetry'] = True
-            seq = connection.execute('INSERT INTO events(kind,payload_json,created_at) VALUES(?,?,?)',
-                                     (f'router.{outcome}', canonical_json(payload),
-                                      '2026-01-01T00:00:00Z')).lastrowid
-            receipt = hashlib.sha256(canonical_json(['work', request_id,
-                outcome == 'no_answer', 0, outcome, None, None, outcome]).encode()).hexdigest()
-            connection.execute('INSERT INTO router_outcomes VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
-                               (receipt, 'work', request_id, 0, payload['buddyId'], outcome, None, None,
-                                outcome, None, seq, '2026-01-01T00:00:00Z'))
-            outcomes[outcome] = (seq, receipt)
-        connection.commit()
-        frozen = {
-            'turns': [tuple(row) for row in connection.execute('SELECT input_json,input_sha256 FROM workflow_turns ORDER BY turn_id')],
-            'artifacts': [tuple(row) for row in connection.execute('SELECT artifact_id,manifest_json FROM workflow_artifacts ORDER BY artifact_id')],
-            'dispatch': tuple(connection.execute('SELECT document_json,input_sha256 FROM router_dispatches').fetchone()),
-        }
-        output = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='output'",
-                                               (run_id,)).fetchone()[0])
-        file_path = Path(output['diffPath'])
-        file_bytes = file_path.read_bytes()
-        connection.close()
-
-        schema_upgrade.upgrade(state)
-        with sqlite3.connect(state / 'board.sqlite3') as migrated:
-            migrated.row_factory = sqlite3.Row
-            self.assertEqual([row[1] for row in migrated.execute('PRAGMA table_info(router_claims)')],
-                             ['attempt_id', 'task_id', 'generation'])
-            self.assertEqual(tuple(migrated.execute('SELECT * FROM router_claims').fetchone()),
-                             (attempt_id, run_id, generation))
-            self.assertEqual(json.loads(migrated.execute('SELECT capabilities_json FROM buddies WHERE buddy_id=?',
-                ('codex:openai:fixture-alpha:high',)).fetchone()[0]), ['execution:codex', 'input:text'])
-            health = json.loads(migrated.execute("SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
-            self.assertFalse({'reviewVerification', 'systemSandbox', 'readOnlyStructured'} & health.keys())
-            self.assertEqual(json.loads(migrated.execute("SELECT payload_json FROM events WHERE kind='router.claimed'"
-                                                            ).fetchone()[0])['plane'], 'routing')
-            for outcome, (seq, old_receipt) in outcomes.items():
-                row = migrated.execute('SELECT * FROM router_outcomes WHERE event_seq=?', (seq,)).fetchone()
-                self.assertEqual(row['plane'], 'routing')
-                self.assertNotEqual(row['receipt_id'], old_receipt)
-                event = json.loads(migrated.execute('SELECT payload_json FROM events WHERE seq=?', (seq,)).fetchone()[0])
-                self.assertEqual(event['plane'], 'routing')
-                expected = hashlib.sha256(canonical_json(['routing', request_id,
-                    outcome == 'no_answer', 0, outcome, None, None, outcome]).encode()).hexdigest()
-                self.assertEqual(row['receipt_id'], expected)
-            self.assertEqual([tuple(row) for row in migrated.execute('SELECT input_json,input_sha256 FROM workflow_turns ORDER BY turn_id')], frozen['turns'])
-            self.assertEqual([tuple(row) for row in migrated.execute('SELECT artifact_id,manifest_json FROM workflow_artifacts ORDER BY artifact_id')], frozen['artifacts'])
-            self.assertEqual(tuple(migrated.execute('SELECT document_json,input_sha256 FROM router_dispatches').fetchone()), frozen['dispatch'])
-            self.assertEqual(migrated.execute('PRAGMA foreign_key_check').fetchall(), [])
-        self.assertEqual(file_path.read_bytes(), file_bytes)
-
-    def test_failed_conversion_rolls_back_all_database_changes(self):
-        fixture, connection = self.restored('rollback', base=True)
-        before = list(connection.iterdump())
-        connection.close()
-        rebuild = schema_upgrade._rebuild_router_tables
-        def fail_after_rebuild(db):
-            rebuild(db)
-            raise RuntimeError('injected')
-        with mock.patch.object(schema_upgrade, '_rebuild_router_tables', side_effect=fail_after_rebuild):
-            with self.assertRaisesRegex(RuntimeError, 'injected'):
-                schema_upgrade.upgrade(fixture['state'])
-        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as returned:
-            self.assertEqual(list(returned.iterdump()), before)
-            self.assertEqual(returned.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                             str(schema_upgrade.BASE_SCHEMA_VERSION))
+        self.assertEqual(health['status'], 'ready')
+        self.assertFalse({'reviewVerification', 'systemSandbox', 'readOnlyStructured'} & health.keys())
 
     def test_every_other_schema_is_refused_without_writes(self):
-        fixture, connection = self.restored(base=True)
-        for version in ('24', '0', '999', '025'):
+        fixture, connection = self.restored()
+        for version in ('24', '25', '0', '999', '026', '26.0', 'unrecognized'):
             with self.subTest(schema=version):
                 connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))
                 connection.commit()
                 before = (fixture['state'] / 'board.sqlite3').read_bytes()
                 with self.assertRaises(Corruption):
                     Database(fixture['state']).initialize()
+                with self.assertRaises(BoardError) as caught:
+                    upgrade.idle_snapshot(fixture['state'])
+                self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
                 for changed in (False, True):
                     with self.assertRaises(BoardError) as caught:
                         upgrade.preflight(fixture['state'], contract_changed=changed)

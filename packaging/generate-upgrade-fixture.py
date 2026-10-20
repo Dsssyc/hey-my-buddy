@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate schema-25 upgrade stock using the frozen installed base source.
+"""Generate schema-26 upgrade stock using the frozen installed base source.
 
 No product installation, daemon, native harness or model is started. The base
 named service operations run in process; only native discovery and execution
@@ -26,9 +26,9 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "137caef7b42c26616fbaf4fcaf36c1252449bd76"
-BASE_VERSION = "0.46.0"
-BASE_SCHEMA = 25
+BASE = "d9e8df5d039708654f098015fbc8fc76f9fbd11d"
+BASE_VERSION = "0.48.0"
+BASE_SCHEMA = 26
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
@@ -119,6 +119,11 @@ def populate(args):
     from hey_my_buddy.blackboard.catalog import catalog_store, catalog as catalog_module
     from hey_my_buddy.blackboard.tasks import workspace
     from hey_my_buddy.blackboard.evaluation import model_facts
+    from hey_my_buddy.protocol.execution import RECEIPT, execution_directory, fsync_json, receipt_reference
+    from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence
+    from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
+    from hey_my_buddy.protocol.session_content import MessageChunk, TextContent
+    from hey_my_buddy.errors import BoardError
 
     assert Path(db_module.__file__).resolve() == source / "src/hey_my_buddy/blackboard/store/db.py"
     assert db_module.SCHEMA_VERSION == BASE_SCHEMA
@@ -191,9 +196,23 @@ def populate(args):
             return response["claim"]
 
         def report(claim, nonce, *, status, result):
-            return call("execution_result", {"attemptId": claim["attempt"]["attemptId"],
-                "generation": claim["attempt"]["generation"], "nonce": nonce, "status": status,
-                "shutdownConfirmed": True, "exitCode": 0 if status == "ok" else 1, "result": result})
+            attempt = claim["attempt"]
+            if claim.get("turn") is not None:
+                result = {"workspaceManifest": claim["turn"]["input"]["executionWorkspace"], **result}
+            directory = execution_directory(claim, work / "state")
+            fsync_json(directory / RECEIPT, {"taskId": claim["task"]["taskId"],
+                "attemptId": attempt["attemptId"], "generation": attempt["generation"], "createdAt": AT,
+                "report": {"status": status, "shutdownConfirmed": True,
+                           "exitCode": 0 if status == "ok" else 1, "result": result}})
+            if claim["sessionRecordPath"] is not None:
+                record = SessionRecord(Path(claim["sessionRecordPath"]), attempt["attemptId"])
+                record.append(MessageChunk(session_update="agent_message_chunk",
+                    content=TextContent(text="Synthetic fixture display record; no native execution.")))
+                record.close()
+                assert record.failure is None, record.failure
+            recorded_sha256((directory / RECEIPT).read_bytes())
+            return call("execution_result", {"attemptId": attempt["attemptId"],
+                "generation": attempt["generation"], "nonce": nonce, "receipt": receipt_reference(directory)})
 
         call("harness_set", {"harness": "codex", "path": None})
         call("model_catalog_refresh", {"requestId": "fixture-catalog"})
@@ -206,14 +225,37 @@ def populate(args):
                                         "defaultRoutingMode": "review", "routingBudget": "deep"},
                 modelServiceNoteChanges=[{"harness": "codex", "provider": "openai", "model": "fixture-alpha",
                                           "text": "升级夹具的模型备注；应保留。"}])
-        # Keep a program selection before the failed execution cools its provider.
-        call("selection_request", {"requestId": "fixture-routing", "task": "fixture routing choice"})
+        # Both candidates must be legal to exercise the Router rather than the
+        # sole-candidate shortcut. One Router keeps a no-answer terminal.
+        publish(preferenceChanges=[{"buddyId": PROFILES[1], "mode": None}],
+                configuration={"routerBuddyIds": [PROFILES[0]]})
         nonce = "fixture-nonce-00000000000000000000"
+        for outcome in ("answered", "no_answer"):
+            selected = call("selection_request", {"requestId": "fixture-routing-" + outcome,
+                                                 "task": "fixture routing " + outcome})
+            claim = admit(nonce, selected["runId"])
+            document = claim["decisionInput"]
+            identity = {"sessionId": "fixture-router-" + outcome}
+            binding = {"harness": "codex", "taskId": claim["task"]["taskId"],
+                       "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"]}
+            result = {"status": "ok", "operation": "select", "nativeIdentity": identity,
+                      "toolEvidence": ToolEventEvidence(binding).finish([identity], True),
+                      "usage": {"elapsedMs": 100, "toolCalls": 0},
+                      "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                      "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
+                          "manifestSha256": (document.get("executionWorkspace") or {}).get("manifestSha256")},
+                      "decision": {"buddyId": PROFILES[0], "note": "fixture routing answer", "evidence": []}}
+            if outcome == "no_answer":
+                result.update(status="error", code="fixture-router-no-answer")
+            report(claim, nonce, status="ok" if outcome == "answered" else "failed", result=result)
+        publish(preferenceChanges=[{"buddyId": PROFILES[1], "mode": "exclude", "note": "fixture exclusion"}],
+                configuration={"routerBuddyIds": PROFILES})
         for label in ("delivered", "accepted", "failed", "cancelled"):
             submitted = call("workflow_submit", {"requestId": "fixture-" + label, "hostId": "fixture-host",
                 "submissionToken": "fixture-submission-token-" + label, "task": "fixture " + label,
                 "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
-                "cwd": str(work / "workspaces" / label), "executionWorkspace": {"kind": "existing", "access": "read"},
+                "cwd": str(work / "workspaces" / label), "executionWorkspace": {"kind": "existing", "access": "full", "accessNote": "Isolated fixture stock generation", "writeScope": ["fixture.txt"]}
+                    if label in ("delivered", "failed") else {"kind": "existing", "access": "read"},
                 **({"macroTask": {"title": "Worker 权限档位升级夹具"}} if not ids else {"macroTaskOf": ids["delivered"]})})
             run_id = submitted["runId"]
             ids[label] = run_id
@@ -224,15 +266,35 @@ def populate(args):
             claim = admit(nonce, run_id)
             attempt, turn = claim["attempt"], claim["turn"]
             if label == "failed":
+                # Exercise the complete current scope-failure record as well as
+                # the native quota refusal. Restore the site after recording it.
+                root = work / "workspaces" / label
+                forbidden = root / "outside.txt"
+                forbidden.write_text("fixture unauthorized change\n")
+                try:
+                    workspace.seal(work / "state", turn["input"]["executionWorkspace"], run_id, attempt["attemptId"])
+                except BoardError as error:
+                    assert error.code == "WORKSPACE_SCOPE_VIOLATION", error
+                else:
+                    raise AssertionError("Expected a scope failure")
                 report(claim, nonce, status="failed", result={"status": "error", "code": "fixture-failed",
                                                               "modelStarted": True,
                                                               "quotaFailure": {"code": "quota-exceeded", "provider": "openai"},
                                                               "stopEvidence": {"shutdownConfirmed": True}})
                 view = call("workflow_get", {"runId": run_id})
-                assert view["state"] == "failed", view
+                assert view["state"] == "awaiting-host", view
+                conflict = view["workspaceConflicts"][0]
+                call("workflow_workspace_resolve", {"runId": run_id, "commandId": "restore-fixture",
+                     "expectedRevision": view["revision"], "conflictId": conflict["conflictId"],
+                     "observedFingerprint": conflict["observedFingerprint"], "action": "restore",
+                     "paths": ["outside.txt"], **control})
+                call("workflow_cancel", {"runId": run_id, "commandId": "close-failed-fixture",
+                     "note": "Close the resolved fixture Host boundary", **control})
                 call("workflow_conclude", {"runId": run_id, "note": "Fixture Host concluded failed work", **control})
                 continue
             manifest = turn["input"]["executionWorkspace"]
+            if label == "delivered":
+                (work / "workspaces" / label / "fixture.txt").write_text("fixture sealed change\n")
             sealed = workspace.seal(work / "state", manifest, run_id, attempt["attemptId"])
             record = {"version": 1, "taskId": run_id, "attemptId": attempt["attemptId"],
                       "generation": attempt["generation"], "turnId": turn["turnId"], "resumeMode": turn["resumeMode"],
@@ -278,7 +340,7 @@ def populate(args):
         hashing.close()
         # All rows were created by base public operations. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
-        # graph before any migration or data-preservation baseline is taken.
+        # graph before the data-preservation baseline is taken.
         with store.db.read() as connection:
             raw_sql = "\n".join(connection.iterdump()) + "\n"
             assert connection.execute("SELECT COUNT(*) FROM catalog_pending").fetchone()[0] > 0
@@ -313,7 +375,7 @@ def populate(args):
             "stableIds": ids,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService named operations in process; synthetic native discovery and execution result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before upgrade; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
+            "boundary": "Base BoardService named operations in process; synthetic native discovery and execution result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
@@ -342,15 +404,16 @@ def export_resources(work, workspace, preimages):
     # The fixed input is a root commit: its complete reachable object closure is
     # tiny. Export raw object bytes as hex so no generating repository is needed.
     oids = sorted({line.split(" ")[0] for line in subprocess.check_output(
-        ["git", "-C", str(repository), "rev-list", "--objects", WORKSPACE_INPUT], text=True).splitlines()})
+        ["git", "-C", str(repository), "rev-list", "--objects", WORKSPACE_INPUT, *refs.values()], text=True).splitlines()})
     objects = []
     for oid in oids:
         kind = subprocess.check_output(["git", "-C", str(repository), "cat-file", "-t", oid], text=True).strip()
         data = subprocess.check_output(["git", "-C", str(repository), "cat-file", kind, oid])
         objects.append({"oid": oid, "type": kind, "hex": data.hex()})
     files = {str(path.relative_to(work / "state")): template(path.read_text())
-             for path in sorted((work / "state/workspaces").rglob("*"))
-             if path.is_file() and path.name in {"input.json", "manifest.json", "pending.json", "output.json", "output.patch"}}
+             for folder in ("workspaces", "harnesses", "sessions")
+             for path in sorted((work / "state" / folder).rglob("*"))
+             if path.is_file() and (path.suffix in {".json", ".jsonl", ".patch"})}
     # Emit only path/identity-dependent hashes, in dependency order. Immutable
     # Git and path-free native/history facts need no rebinding.
     selected = dict.fromkeys(identities)
@@ -407,6 +470,10 @@ def verify(output, restored):
         assert connection.execute("SELECT COUNT(*) FROM commands WHERE deletion_id IS NOT NULL").fetchone()[0] > 0
         assert connection.execute("SELECT COUNT(*) FROM messages WHERE reason_code IS NOT NULL").fetchone()[0] > 0
         assert connection.execute("SELECT COUNT(*) FROM evaluation_preferences WHERE note IS NOT NULL").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM router_claims").fetchone()[0] == 2
+        assert set(connection.execute("SELECT plane,outcome FROM router_outcomes")) == {
+            ("routing", "answered"), ("routing", "no_answer")}
+        assert connection.execute("SELECT COUNT(*) FROM workflow_workspace_conflicts").fetchone()[0] == 1
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
         assert states == {metadata["stableIds"][key]: value for key, value in
                           (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))}

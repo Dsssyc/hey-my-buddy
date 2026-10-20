@@ -1,9 +1,10 @@
 """A real private service reads the current fixture board and its history."""
 from unittest import mock
 
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
-from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
+from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
@@ -15,12 +16,14 @@ class UpgradeServiceTests(BoardTestCase):
     def test_private_service_reads_settings_and_preserved_work(self):
         state = self.directory
         fixture = load_fixture(state)
-        archived = backup.create(state)
+        archived = backup.create(state, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(backup.verify(archived["path"])["schema"], fixture["schemaVersion"])
-        schema_upgrade.upgrade(state)
         Database(state).initialize()
         with Database(state).read() as connection:
-            resolution = router.current_router(connection, now="2026-01-01T00:00:00.000Z")
+            skipped = router.current_router(connection, now="2026-01-01T00:00:00.000Z")
+            self.assertIsNone(skipped.buddy_id)
+            self.assertEqual(skipped.inspections[0]['code'], 'router-skip-window')
+            resolution = router.current_router(connection, now="2026-01-01T00:01:00.000Z")
         self.assertEqual(resolution.buddy_id, fixture["routerBuddyIds"][0])
         self.assertIsNone(resolution.problem)
         self.assertEqual([item["code"] for item in resolution.inspections], [None])

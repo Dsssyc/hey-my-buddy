@@ -16,8 +16,7 @@ import sys
 import tempfile
 import time
 
-from .db import SCHEMA_VERSION, Database, utc_now
-from .upgrade import BASE_SCHEMA_VERSION, upgrade as upgrade_schema
+from .db import SCHEMA_VERSION, utc_now
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ... import private_dirs
@@ -75,7 +74,7 @@ def exchange(left: Path, right: Path) -> None:
         raise OSError(ctypes.get_errno(), 'Atomic backup exchange failed')
 
 
-#: Bound for any state-relative path carried in an error or the manifest.
+#: Bound for state-relative paths carried in errors.
 _SHOWN_PATH_LIMIT = 200
 
 
@@ -107,7 +106,7 @@ def _open(path: Path, mode: str):
     return os.fdopen(fd, mode)
 
 
-def _regular_files(root: Path, *, scope: str = ''):
+def _regular_files(root: Path):
     """Walk backup payloads, refusing links and special files."""
     _guard(root)
     try:
@@ -115,11 +114,11 @@ def _regular_files(root: Path, *, scope: str = ''):
     except FileNotFoundError:
         return
     if not stat.S_ISDIR(root_info.st_mode):
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source must be a directory', path=scope or str(root))
+        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source must be a directory', path=str(root))
 
     def report(path: Path) -> str:
         relative = str(path.relative_to(root))
-        return _shown_path(scope + '/' + relative if scope else relative)
+        return _shown_path(relative)
 
     def visit(parent):
         _guard(parent)
@@ -142,8 +141,7 @@ def _regular_files(root: Path, *, scope: str = ''):
     yield from visit(root)
 
 
-STATE_FILES = ('console-settings.json', 'runtime-retention.json',
-               'active-runtime.json', 'launch-settings.json')
+STATE_FILES = ('console-settings.json',)
 
 
 def _private_copy(source: Path, target: Path) -> None:
@@ -236,7 +234,7 @@ def _verify(directory: Path) -> dict:
     _guard(directory)
     with _open(directory / 'manifest.json', 'rb') as stream:
         manifest = json.load(stream)
-    if manifest.get('format') != 1 or manifest.get('schema') not in (BASE_SCHEMA_VERSION, SCHEMA_VERSION):
+    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
     if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:
@@ -257,19 +255,15 @@ def _verify(directory: Path) -> dict:
                 shutil.copyfileobj(source, destination)
         _guard(trial / 'board.sqlite3')
         with closing(sqlite3.connect(trial / 'board.sqlite3')) as connection:
+            schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+            if schema is None or schema[0] != str(manifest['schema']):
+                raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
             if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
                 raise BoardError('BACKUP_INVALID', 'SQLite integrity check failed')
             if connection.execute('PRAGMA foreign_key_check').fetchall():
                 raise BoardError('BACKUP_INVALID', 'SQLite foreign key check failed')
             if manifest.get('databaseSnapshot') is not None and database_snapshot(connection) != manifest['databaseSnapshot']:
                 raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
-        with closing(sqlite3.connect(trial / 'board.sqlite3')) as connection:
-            schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if schema is None or int(schema[0]) != manifest['schema']:
-                raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
-        if manifest["schema"] == BASE_SCHEMA_VERSION:
-            upgrade_schema(trial)
-        Database(trial).initialize()
     return manifest
 
 
@@ -405,7 +399,7 @@ def recover(state: Path) -> Path:
         os.close(lock)
 
 
-def create(state: Path, *, runtime_identity: dict | None = None, plugin_commit: str | None = None, contract_version: str = CONTRACT_VERSION) -> dict:
+def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | None, contract_version: str) -> dict:
     started = time.monotonic()
     if _linked_component(state):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup state path cannot contain links', path='.')
@@ -455,7 +449,7 @@ def create(state: Path, *, runtime_identity: dict | None = None, plugin_commit: 
                 _private_copy(path, incoming / 'state' / name)
         files = {str(path.relative_to(incoming)): {'bytes': path.lstat().st_size, 'sha256': digest(path)} for path in _regular_files(incoming)}
         manifest = {'format': 1, 'createdAt': utc_now(), 'schema': schema, 'contract': contract_version, 'backupToolContract': CONTRACT_VERSION,
-                    'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-source-metadata',
+                    'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-runtime-metadata',
                     'files': files}
         manifest_path = incoming / 'manifest.json'
         with _open(manifest_path, 'x') as stream:

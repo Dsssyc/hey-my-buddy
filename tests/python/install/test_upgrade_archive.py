@@ -7,9 +7,10 @@ import shutil
 import sqlite3
 from unittest import mock
 
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
-from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
+from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
@@ -21,11 +22,10 @@ class UpgradeCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
-        schema_upgrade.upgrade(self.state)
         (self.state / "console-settings.json").write_text('{"theme":"dark"}')
         store = BoardStore(self.state)
         store.db.close()
-        old_backup = Path(backup.create(self.state)["path"])
+        old_backup = Path(backup.create(self.state, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)["path"])
         self.retained_archive = self.state / "archives" / "previous"
         shutil.copytree(old_backup, self.retained_archive)
         self.archive_bytes = {path.relative_to(self.retained_archive): path.read_bytes()
@@ -140,6 +140,7 @@ class UpgradeCutoverTests(BoardTestCase):
         result = self.cutover(self.previous, target, fail_target=True)
         self.assertFalse(result["upgraded"], result)
         self.assertEqual(result["error"]["details"]["reason"]["code"], "INJECTED_START")
+        self.assertEqual(result["error"]["message"], "Upgrade failed; the previous runtime and backup were restored")
         self.assertEqual(result["rollback"]["runtimeContentId"], self.previous.name)
         self.assertEqual(self.started_runtimes, [target, self.previous])
         self.assert_history_preserved()
@@ -149,6 +150,8 @@ class UpgradeCutoverTests(BoardTestCase):
         result = self.cutover(self.previous, target, fail_backup=True)
         self.assertFalse(result["upgraded"], result)
         self.assertEqual(result["error"]["details"]["reason"]["code"], "BACKUP_INVALID")
+        self.assertEqual(result["error"]["message"], "Installation failed; the previous runtime was restored")
+        self.assertNotIn("backup", result)
         self.assertEqual(result["rollback"]["runtimeContentId"], self.previous.name)
         self.assertEqual(self.started_runtimes, [self.previous])
         self.assert_history_preserved()
