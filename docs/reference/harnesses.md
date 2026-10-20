@@ -1,6 +1,6 @@
 # Local harness discovery
 
-The service stores one authoritative `harness_health` record per native harness, and a cooling record for each harness provider whose quota refusals no success has followed yet ([quota refusals and cooling](#quota-refusals-and-cooling)). Discovery readiness, `readOnlyStructured` and `systemSandbox` are separate facts. Local eligibility calls no model or account endpoint; it checks the shipped read-only entry and confinement mechanism, with declared sandbox platforms exposed explicitly.
+The service stores one authoritative `harness_health` record per native harness, and a cooling record for each harness provider whose quota refusals no success has followed yet ([quota refusals and cooling](#quota-refusals-and-cooling)). Discovery readiness and the harness's declared permission levels (`permissions`: for each level, whether it is enforced natively or by convention) are separate facts. The declaration is code, not a reading of the installation: eligibility calls no model or account endpoint and launches no native process.
 
 ## Discovery and environment
 
@@ -40,7 +40,7 @@ The harness view lists `providers: [{provider, coolingUntil, consecutiveRejectio
 
 ## Read-only eligibility and native account observations
 
-Codex and Claude Code retain their native sandbox implementations, effective-policy readback and tool-flow checks. A local `readOnlyStructured` record contains `eligible`, nullable reason object `reason`, `systemSandbox` and `sameAttemptContinuation`; it does not certify a live native run. DSH/ZCode review is unavailable because no read-only structured mechanism is implemented. Their Worker-carrier review will be designed in a separate L6 stage; their Worker and fast entries and normalized tool projections remain implemented. See the ADR-021 module acceptance for historical checks and the current boundary.
+Every role uses the same native configuration for a level ([ADR-023](../decisions/023-harness-integration-principles.md) “各角色共用一套档位”, implemented 2026-10-20): a Router's fast run is the no-tools level and its review the read-only level, which all four harnesses declare; Claude Code does not declare the no-tools level. Codex keeps its effective-policy readback for a review, and every harness projects its tool facts into one evidence package that the blackboard judges by level ([routing](decision.md)).
 
 `billingByProvider` records `{kind:subscription|metered|unknown,source,observedAt}` from native account/provider metadata; buddy reads project it as `billing`. Codex uses read-only `account/read` and `config/read`, Claude uses native auth-status metadata, ZCode uses native provider access types, and DSH’s official DeepSeek API provider establishes metered access. Codex account queries borrow on-demand health refresh and are limited to one per 180 seconds, including forced refresh; there is no periodic scanner and no model turn. A failed read keeps the previous billing fact, without logging raw account responses. Billing labels never filter routing.
 

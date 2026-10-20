@@ -2,6 +2,8 @@
 
 2026-10-20，整合 Host。依据是 [ADR-023](../../decisions/023-harness-integration-principles.md)“各角色共用一套档位”一节（2026-10-13 定，尚未实现）与 [ADR-021](../../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 4 条。开发者于 2026-10-20 定：让 DSH 与 ZCode 能担任审阅模式的 Router（ADR-021 的 L6），提前到首次发版之前做。按 ADR-023，L6 由共用档位取代，所以这一步就是把 Router 的两种运行并进档位。只联网一档随画像面再做。本文只安排实现，不表示已经实现。
 
+2026-10-20 做完，四个回合，合入为 `d1eae33e`，在源码 0.48.0 里，尚未安装（[验收记录](../../acceptance/adr023/shared-levels.md)）。与本计划不同的有两处：存储形式的改动做成了 25 → 26 的升级，而不是让两种形式并存；审阅的提示词补上了答案格式，这是真实运行发现的。
+
 ## 现状（读 `8751dea4` 的源码所得）
 
 - **Worker 的档位声明：** `protocol/capabilities.py` 的 `WORKER_PERMISSIONS`。四个 harness 都声明了只读、写检出与放开，并各写明强制还是约定。
