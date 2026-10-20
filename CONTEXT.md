@@ -47,7 +47,7 @@ A micro task a Lead delegates under the micro task that carries delegation autho
 _Avoid_: child task, sub-task; a helper is a different thing
 
 **Router buddy**:
-The buddy acting with routing authority. The user lists one or more buddies for the role in order, and the first available one holds it. It works in three planes (三个面 / three planes): the routing plane, the maintenance plane and the profile plane. When the role passes to the next buddy in the list, all three planes pass with it. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
+A buddy acting with Router authority in one of the three planes (三个面 / three planes): the routing plane, the maintenance plane and the profile plane. The user lists one or more buddies in order for the routing plane, and the first available one holds it; the maintenance and profile planes each have the one buddy the user names. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
 _Avoid_: decision Buddy, selector (for the buddy)
 
 **路由面 / routing plane**:
