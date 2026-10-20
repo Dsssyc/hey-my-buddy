@@ -16,7 +16,13 @@
 
 开发者于 2026-10-20 与 Host 讨论 Router 之后定：三个面各由自己的 buddy 担任（ADR-021 第 2、8、14、16 条的修订）；三个面的实现仍在首次发版之后，先让路由面拿到价格与按 buddy 的本机结果统计，再做维护面、二维表、探索与画像面；DSH 与 ZCode 担任审阅模式的 Router（ADR-021 的 L6）提前到发版之前做（2026-10-20 按 ADR-023 共用档位做完，同日随 0.48.0 安装；[验收记录](../acceptance/adr023/shared-levels.md)）。
 
-开发者于 2026-10-18 把 [ADR-024](../decisions/024-console-session-view.md) 的会话视图排在第 4 步批次三装好之后、首次发版之前：先做 Codex，再补其余三个 harness（2026-10-20 随 0.47.0 装好，[安装记录](../acceptance/installs/0.47.0.md)；记录还没有用真实回合核对过，装后用日常的头几个回合核对）；同时要的 harness [接入要点](../reference/harness-integration.md)与检查套件里的一致性检查已于同日写成，在批次二里（[验收记录](../acceptance/harness-integration-guide.md)）。
+开发者于 2026-10-20 定：首次发版之前，清点一次 schema 26 里已有的冗余，在一次升级里剪掉，不把它们带进发布的版本。剪什么、哪些不算冗余，按 AGENTS.md 的存储规则。做法分三步：
+
+1. 先做只读的清点：每张表、每一列，列出写入者与读者，判断是否重复、能否推出，以及是否属于例外；
+2. Host 据此写执行计划；
+3. 再做 26 → 27 的升级，样板看板补上它要转换或删除的存量。
+
+开发者于 2026-10-18 把 [ADR-024](../decisions/024-console-session-view.md) 的会话视图排在第 4 步批次三装好之后、首次发版之前：先做 Codex，再补其余三个 harness（2026-10-20 随 0.47.0 装好，[安装记录](../acceptance/installs/0.47.0.md)；同日装上 0.48.0 之后，已用四个 harness 的真实回合核对过记录）；同时要的 harness [接入要点](../reference/harness-integration.md)与检查套件里的一致性检查已于同日写成，在批次二里（[验收记录](../acceptance/harness-integration-guide.md)）。
 
 开发者于 2026-10-13 另提出全平台适配，排在控制台（第 4 步）之后：在 Linux 与 Windows 上跑检查套件是发版准备（第 5 步）的第一件事，各 harness 的真机验证在首次发版之后。见“运行环境”一节的同名一条。
 
