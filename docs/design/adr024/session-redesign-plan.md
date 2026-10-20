@@ -113,6 +113,11 @@
    - 这改了 Host 可见的方法参数，契约随之移动。
 2. **被改派的尝试：** 由服务的宏任务时间轴在片段上标出 `rejected`，删掉微任务页 `TaskDetail.tsx` 里那段前端拼接（待办“宏任务时间轴把被改派的那次尝试画成失败”）。
 3. **“适应宽度”：** 统一成一种叫法（待办同名一条）。
+4. **剪枝一的审查分来的几条**（[审查记录](../schema-audit/review-m1.md)，Host 核实过）：
+   - 错误码 `MACRO_TASK_DELETED` 现在只在删除进行中出现：改名为表达“删除中”的码，去掉细节里恒为常量的 `state` 与 `deletedAt`，HTTP 映射与控制台文字随之改；
+   - 公开视图里由别的字段推出的 `acceptanceVerdict` 与 `correlationId` 从接口删掉，控制台里 `acceptanceVerdict === "failed"` 的死分支一并删；
+   - 合成预览按新的删除契约回答：删完之后预览与再删都是 `NOT_FOUND`，`test_host_preview.py` 里钉着旧行为的断言随之改；
+   - 两个浏览器同时删除时，后一个得到 `NOT_FOUND`，按已删完处理，不显示成错误。
 
 写入范围与检查在 A 合入之后定。
 
