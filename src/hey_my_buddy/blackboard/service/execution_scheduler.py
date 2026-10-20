@@ -381,14 +381,14 @@ class ExecutionScheduler:
     def _timestamp(value: str | None) -> float | None:
         if value is None:
             return None
-        return time.monotonic() + (datetime.fromisoformat(value.replace("Z", "+00:00")) -
+        return time.monotonic() + (datetime.fromisoformat(value) -
                                    datetime.now(timezone.utc)).total_seconds()
 
     @staticmethod
     def _deadline(value: str | None) -> float | None:
         if value is None:
             return None
-        remaining = (datetime.fromisoformat(value.replace("Z", "+00:00")) -
+        remaining = (datetime.fromisoformat(value) -
                      datetime.now(timezone.utc)).total_seconds()
         return time.monotonic() + max(0, remaining)
 

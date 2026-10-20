@@ -79,7 +79,7 @@ class CurrentSchemaTests(BoardTestCase):
             }
         self.assertEqual(
             columns,
-            {"harness", "provider", "model", "concurrency_limit", "created_at", "updated_at"},
+            {"harness", "provider", "model", "concurrency_limit"},
         )
         self.assertEqual(model_services, 0)
         self.assertTrue({"model_harness", "model_provider", "model_model"} <= attempt_columns)

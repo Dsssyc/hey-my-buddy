@@ -25,7 +25,7 @@ class RoutingHealthTests(BoardTestCase):
         self.sequence = 0
 
     def settle(self, status="needs-host", *, code=None, termination="harness-error",
-               output=None, error=None, invoked=True, kind="select"):
+               output=None, error=None, invoked=True):
         """Persist a bound, stopped receipt and use the real atomic terminal writer."""
         self.sequence += 1
         decision_id = f"dec-health-{self.sequence}"
@@ -33,7 +33,7 @@ class RoutingHealthTests(BoardTestCase):
         attempt_id = f"attempt-health-{self.sequence}" if invoked else None
         now = self.clock.advance(1)
         if output is None:
-            output = {"operation": kind, "status": "ok" if status == "completed" else "error"}
+            output = {"operation": "select", "status": "ok" if status == "completed" else "error"}
             if status == "completed":
                 output["decision"] = {"buddyId": "worker-fixture", "note": "fixture choice", "evidence": []}
         if code is not None:
@@ -48,7 +48,7 @@ class RoutingHealthTests(BoardTestCase):
                 " VALUES(?,'running','fixture selection',?)", (decision_id, now))
             if invoked:
                 spec = {"adapter": "decision", "task": "fixture selection",
-                        "decision": {"decisionId": decision_id, "kind": kind, "routerBudgetSeconds": 60}}
+                        "decision": {"decisionId": decision_id, "kind": "select", "routerBudgetSeconds": 60}}
                 encoded = canonical_json(spec)
                 task_state = "completed" if receipt_status == "ok" else receipt_status
                 connection.execute(
@@ -58,10 +58,10 @@ class RoutingHealthTests(BoardTestCase):
                     (task_id, task_id, "fixture-host", encoded, sha256_text(encoded), task_state, now, now))
                 connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,finished_at,created_at,updated_at) VALUES(?,?,1,'fixture-nonce','finished','decision',?,1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), now, now, now))
             connection.execute(
-                "INSERT INTO decision_requests(decision_id,request_id,kind,input_fingerprint,"
-                " task_id,attempt_id,generation,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (decision_id, decision_id, kind, sha256_text(decision_id), task_id, attempt_id,
-                 1 if invoked else None, now, now))
+                "INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,"
+                " task_id,attempt_id,generation,updated_at) VALUES(?,?,?,?,?,?,?)",
+                (decision_id, decision_id, sha256_text(decision_id), task_id, attempt_id,
+                 1 if invoked else None, now))
             if invoked:
                 router_sequence.freeze_request(connection, decision_id,
                     snapshot={"facts": {}, "baseInput": {}, "inspections": []}, now=now)

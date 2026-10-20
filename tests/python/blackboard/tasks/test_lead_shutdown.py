@@ -15,11 +15,10 @@ class LeadShutdownTests(WorkflowTestCase):
 
     def allow_parallel_claims(self, board):
         with board.store.db.write() as db:
-            now = board.store.now()
             db.execute(
-                "INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit,created_at,updated_at)"
-                " VALUES(?,?,?,8,?,?)",
-                (BUDDY["harness"], BUDDY["provider"], BUDDY["model"], now, now),
+                "INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit)"
+                " VALUES(?,?,?,8)",
+                (BUDDY["harness"], BUDDY["provider"], BUDDY["model"]),
             )
 
     def get(self, board, run):

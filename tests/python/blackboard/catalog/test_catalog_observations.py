@@ -86,8 +86,8 @@ class CatalogObservationTests(BoardTestCase):
             current = db.execute("SELECT read_at,account_status,updated_at FROM catalog_current WHERE harness='dsh'").fetchone()
             self.assertEqual((current['read_at'], current['account_status'], current['updated_at']),
                              (self.clock.value, 'confirmed', self.clock.value))
-            self.assertEqual(db.execute('SELECT completed_at FROM catalog_observations WHERE observation_id=?',
-                                        (second['observationId'],)).fetchone()[0], self.clock.value)
+            self.assertEqual(json.loads(db.execute('SELECT response_json FROM catalog_observations WHERE observation_id=?',
+                                        (second['observationId'],)).fetchone()[0])['catalog']['discoveredAt'], self.clock.value)
 
     def test_provenance_and_discovery_identity_alone_do_not_change_buddy_facts(self):
         first = self.record(catalog())

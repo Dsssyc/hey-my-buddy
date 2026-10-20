@@ -313,8 +313,6 @@ EVALUATION_TABLES = (
 CREATE TABLE IF NOT EXISTS catalog_observations (
     observation_id INTEGER PRIMARY KEY AUTOINCREMENT,
     request_id TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL,
-    completed_at TEXT,
     response_json TEXT,
     harnesses_json TEXT NOT NULL
 );
@@ -390,12 +388,7 @@ CREATE TABLE IF NOT EXISTS evaluation_decisions (
     """
 CREATE TABLE IF NOT EXISTS evaluation_catalog (
     discovery_id      TEXT PRIMARY KEY,
-    discovered_at     TEXT NOT NULL,
-    source            TEXT NOT NULL,
-    harness_version   TEXT,
-    provider_version  TEXT,
-    payload_json      TEXT NOT NULL,
-    created_at        TEXT NOT NULL
+    payload_json      TEXT NOT NULL
 );
 """,
     # Extended decision state. ``evaluation_decisions`` stays the bounded public
@@ -406,7 +399,6 @@ CREATE TABLE IF NOT EXISTS evaluation_catalog (
 CREATE TABLE IF NOT EXISTS decision_requests (
     decision_id            TEXT PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
     request_id             TEXT NOT NULL UNIQUE,
-    kind                   TEXT NOT NULL CHECK (kind IN ('select')),
     input_fingerprint      TEXT NOT NULL,
     task_id                TEXT,
     attempt_id             TEXT,
@@ -416,12 +408,10 @@ CREATE TABLE IF NOT EXISTS decision_requests (
     input_sha256           TEXT,
     output_json            TEXT,
     requested_json         TEXT NOT NULL DEFAULT '{}',
-    created_at             TEXT NOT NULL,
     updated_at             TEXT NOT NULL
 );
 """,
     """
-CREATE INDEX IF NOT EXISTS decision_requests_created_idx ON decision_requests(created_at, decision_id);
 CREATE INDEX IF NOT EXISTS decision_requests_task_idx ON decision_requests(task_id);
 """,
     """
@@ -440,8 +430,6 @@ CREATE TABLE IF NOT EXISTS model_service_concurrency (
     provider          TEXT NOT NULL,
     model             TEXT NOT NULL,
     concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK (concurrency_limit BETWEEN 1 AND 32),
-    created_at        TEXT NOT NULL,
-    updated_at        TEXT NOT NULL,
     PRIMARY KEY (harness, provider, model)
 );
 """,
@@ -795,7 +783,7 @@ CREATE INDEX IF NOT EXISTS workspace_cleanup_plans_run_idx ON workspace_cleanup_
 CREATE TABLE IF NOT EXISTS agent_credentials (
     credential_id   TEXT PRIMARY KEY,
     run_id          TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    attempt_id      TEXT,
+    attempt_id      TEXT NOT NULL REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     turn_id         TEXT,
     token_verifier  TEXT NOT NULL,
     state           TEXT NOT NULL CHECK (state IN ('active','revoked'))
@@ -951,7 +939,6 @@ CREATE TABLE IF NOT EXISTS router_outcomes (
     outcome      TEXT NOT NULL CHECK (outcome IN ('answered','no_answer')),
     code         TEXT,
     event_seq    INTEGER NOT NULL UNIQUE REFERENCES events(seq) ON DELETE RESTRICT,
-    recorded_at  TEXT NOT NULL,
     CHECK (attempt_id IS NULL OR task_id IS NOT NULL),
     FOREIGN KEY (attempt_id, task_id) REFERENCES attempts(attempt_id, task_id) ON DELETE RESTRICT
 );
@@ -1170,9 +1157,6 @@ class Database:
                     try:
                         connection.execute(
                             "INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),)
-                        )
-                        connection.execute(
-                            "INSERT INTO meta(key, value) VALUES('created_at', ?)", (utc_now(),)
                         )
                         connection.execute("COMMIT")
                     except BaseException:

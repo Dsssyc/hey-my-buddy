@@ -220,7 +220,7 @@ def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
     else:
         return ['continuation-supported', *reasons]
     try:
-        finished = datetime.fromisoformat(finished_at.replace('Z', '+00:00')).timestamp()
+        finished = datetime.fromisoformat(finished_at).timestamp()
         if now - finished < GRACE_SECONDS:
             reasons.append('grace-period')
     except (ValueError, TypeError, AttributeError):

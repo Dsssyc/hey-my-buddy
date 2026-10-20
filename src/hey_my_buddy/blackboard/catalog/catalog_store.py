@@ -19,8 +19,8 @@ def begin(evaluation, request_id=None, *, harnesses=None):
             from ...protocol.harness_names import HARNESS_NAMES
             from ..service.harness_health import read_health
             records = harnesses if harnesses is not None else [read_health(db, name) for name in HARNESS_NAMES]
-            db.execute('INSERT INTO catalog_observations(request_id,created_at,harnesses_json) VALUES(?,?,?)',
-                       (request_id, evaluation._now(), canonical_json(records)))
+            db.execute('INSERT INTO catalog_observations(request_id,harnesses_json) VALUES(?,?)',
+                       (request_id, canonical_json(records)))
             row = db.execute('SELECT * FROM catalog_observations WHERE request_id=?', (request_id,)).fetchone()
         return {'observationId': row['observation_id'], 'response': json.loads(row['response_json']) if row['response_json'] else None,
                 'harnesses': json.loads(row['harnesses_json'])}
@@ -80,7 +80,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             return {**response, 'duplicate': True}
         now = evaluation._now()
         duplicate = db.execute('SELECT 1 FROM evaluation_catalog WHERE discovery_id=?', (discovery_id,)).fetchone() is not None
-        db.execute('INSERT OR IGNORE INTO evaluation_catalog(discovery_id,discovered_at,source,harness_version,provider_version,payload_json,created_at) VALUES(?,?,?,?,?,?,?)', (discovery_id, now, payload['source'], payload.get('harnessVersion'), payload.get('providerVersion'), canonical_json(payload), now))
+        db.execute('INSERT OR IGNORE INTO evaluation_catalog(discovery_id,payload_json) VALUES(?,?)', (discovery_id, canonical_json(payload)))
         before = {row['buddy_id']: _buddy_content(row)
                   for row in db.execute('SELECT * FROM buddies')}
         pending_before = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY harness,provider,model')]
@@ -237,7 +237,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         if active_count > 200:
             raise BoardError('CATALOG_LIMIT', 'The current native buddy set exceeds 200 buddies; no entries were silently dropped')
         response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'buddies': CatalogView.from_payload(payload).proposed_buddies(), 'appliedHarnesses': applied, 'staleHarnesses': stale}
-        db.execute('UPDATE catalog_observations SET completed_at=?,response_json=? WHERE observation_id=?', (now, canonical_json(response), observation_id))
+        db.execute('UPDATE catalog_observations SET response_json=? WHERE observation_id=?', (canonical_json(response), observation_id))
         for transition in transitions:
             kind = transition.pop('kind')
             evaluation.board._append_event(db, kind, payload=transition)

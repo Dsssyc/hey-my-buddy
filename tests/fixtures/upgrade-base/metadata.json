@@ -1,6 +1,6 @@
 {
   "boundary": "Base BoardService named operations in process and base model-facts writer with synthetic local source; explicit synthetic retired stock is listed separately; synthetic native discovery and execution result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
-  "catalogSha256": "ccb9a3219cee553f3c0b22081b6f459de78c35f6dc70565732a9c2543e30a541",
+  "catalogSha256": "a8c23bc839691370939c3e35b3f91b4b7845f1460d93c5d618a05a521ef5fcfe",
   "dependencyMode": "prepared-read-only-interpreter",
   "dependencyVersions": {
     "c-two": "0.7.6",
@@ -10,8 +10,8 @@
   },
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
-  "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/fixture-m3-stock-20261020-e --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "49da293212cf52c4aa5399d65d0719219e63514884ed12287207cc56308c9ee7",
+  "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/fixture-m4-final --output-dir tests/fixtures/upgrade-base",
+  "generatorSha256": "9a6f56fbff656505479e980d85a160c0ae0dcfb584b792c967c9ddc4578dab7a",
   "loadedSourceModules": [
     "src/hey_my_buddy/blackboard/__init__.py",
     "src/hey_my_buddy/blackboard/catalog/__init__.py",
@@ -155,8 +155,8 @@
     "src/hey_my_buddy/protocol/usage.py",
     "src/hey_my_buddy/protocol/windows_process.py"
   ],
-  "operationsSha256": "45e3961a359dcf421fc335ad863699d31874d76871ab64a36aeb28ccada4c09e",
-  "resourcesSha256": "9c0ed0a87b8b14e768c6605617910ed151d5b8d1a8c36b35b06947e95d043f7d",
+  "operationsSha256": "b3518487df6e6e3b75cfd706789a4ee0d0180339af521789acdb7d3bdb682548",
+  "resourcesSha256": "0646b3fd20bd31c1afd4c897e2e75756b3286f5708d19fe47e12ab9a60ed511f",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 26; baseline only after return",
   "routerBuddyIds": [
     "codex:openai:fixture-alpha:high",
@@ -354,7 +354,7 @@
   },
   "sourceTree": "ae4b1b72eb3234410c67dae4324ad5506de02508",
   "sourceVersion": "0.48.0",
-  "sqlSha256": "2b8337a98eb97596e432ab076a046f3e5073b58a821b4e304e5e5ef6795dc690",
+  "sqlSha256": "9291236b0b2f856f719e50ce42aa5376e386cf1c190666f6ee5feba887dece82",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-00000000001b",
     "cancelled": "00000000-0000-0000-0000-000000000035",
@@ -363,6 +363,8 @@
   },
   "stockIds": {
     "adopted": "00000000-0000-0000-0000-000000000038",
+    "helper": "00000000-0000-0000-0000-00000000005c",
+    "helperParent": "00000000-0000-0000-0000-000000000051",
     "verified": "00000000-0000-0000-0000-000000000045"
   },
   "syntheticRetiredStock": [
@@ -370,7 +372,6 @@
     "evaluation_state.decision_buddy_id",
     "tasks.queue_position",
     "attempt_interruptions",
-    "workflow_children",
     "workflow_suggestions.worker",
     "workflow_suggestions.agent",
     "attempt_activity",

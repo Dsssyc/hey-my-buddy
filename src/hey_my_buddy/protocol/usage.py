@@ -127,7 +127,7 @@ def _timestamp(value: Any) -> str | None:
     if text is None or not TIMESTAMP.fullmatch(text):
         return None
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         return None
     if parsed.tzinfo is None:

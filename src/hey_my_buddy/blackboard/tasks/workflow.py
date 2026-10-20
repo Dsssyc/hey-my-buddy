@@ -1603,7 +1603,6 @@ class WorkflowCoordinator:
         spec: dict,
         executionWorkspace: dict,
         manifest: dict,
-        microTaskFingerprint: str,
         requestFingerprint: str,
         buddy: dict | None = None,
         submissionToken: str | None = None,
@@ -1823,7 +1822,6 @@ class WorkflowCoordinator:
                             "spec": spec,
                             "executionWorkspace": normalized["executionWorkspace"],
                             "manifest": manifest,
-                            "microTaskFingerprint": fingerprint,
                             "requestFingerprint": request_fingerprint,
                             "submissionToken": submission_token,
                             "buddy": buddy,
@@ -3776,7 +3774,7 @@ class WorkflowCoordinator:
             if (wrap_up and initiator in WRAP_UP_INITIATORS
                     and self._execution_adapter(attempt["adapter"]).interrupted_resume
                     and attempt["execution_state"] in ("starting", "executing")):
-                deadline = (datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(seconds=WRAP_UP_SECONDS)).isoformat(
+                deadline = (datetime.fromisoformat(now) + timedelta(seconds=WRAP_UP_SECONDS)).isoformat(
                     timespec="milliseconds").replace("+00:00", "Z")
             connection.execute(
                 "UPDATE attempts SET cancel_requested_at=COALESCE(cancel_requested_at,?),stop_initiator=?,"
@@ -5647,7 +5645,7 @@ class WorkflowCoordinator:
 
     def _expiry(self, seconds: int) -> str:
         from datetime import datetime, timedelta
-        moment = datetime.fromisoformat(self.now().replace("Z", "+00:00")) + timedelta(seconds=seconds)
+        moment = datetime.fromisoformat(self.now()) + timedelta(seconds=seconds)
         return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
     @staticmethod

@@ -65,7 +65,7 @@ class RouterListConfigurationTests(BoardTestCase):
         stored = self.stored()
         self.assertEqual(stored["settings"], ("fast", "standard", 600))
         self.assertEqual(stored["buddies"], [])
-        self.assertEqual(set(stored["meta"]), {"schema_version", "created_at", "capability_secret"})
+        self.assertEqual(set(stored["meta"]), {"schema_version", "capability_secret"})
 
     def test_publish_writes_list_settings_and_projection(self):
         result = self.publish({"routerBuddyIds": [A, B], "routerRetryIntervalSeconds": 30,

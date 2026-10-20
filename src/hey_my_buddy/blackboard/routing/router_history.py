@@ -33,7 +33,7 @@ def _parse(value: str | None) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
 
@@ -125,9 +125,9 @@ def record_outcome(connection, *, buddy_id: str, plane: str, request_id: str, ta
     seq = _append_event(connection, kind=kind, task_id=task_id, attempt_id=attempt_id,
                         payload=payload, now=now)
     connection.execute("INSERT INTO router_outcomes(receipt_id,plane,request_id,router_index,buddy_id,phase,"
-                       "task_id,attempt_id,outcome,code,event_seq,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                       "task_id,attempt_id,outcome,code,event_seq) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                        (key, plane, request_id, router_index, buddy_id, phase, task_id, attempt_id,
-                        outcome, code, seq, now))
+                        outcome, code, seq))
     return {"recorded": True, "seq": seq, "event": kind}
 
 
@@ -135,8 +135,10 @@ def _fact_entries(connection, buddy_id: str) -> list[dict]:
     """Recorded outcome receipts of one buddy, ordered by the event sequence."""
     entries = []
     rows = connection.execute(
-        "SELECT event_seq, recorded_at, plane, request_id, router_index, phase, task_id,"
-        " attempt_id, outcome, code FROM router_outcomes WHERE buddy_id=? ORDER BY event_seq", (buddy_id,))
+        "SELECT o.event_seq, e.created_at AS recorded_at, o.plane, o.request_id, o.router_index,"
+        " o.phase, o.task_id, o.attempt_id, o.outcome, o.code"
+        " FROM router_outcomes o JOIN events e ON e.seq=o.event_seq"
+        " WHERE o.buddy_id=? ORDER BY o.event_seq", (buddy_id,))
     for row in rows:
         entries.append({"seq": int(row["event_seq"]), "at": row["recorded_at"],
                         "outcome": row["outcome"], "plane": row["plane"],
@@ -179,7 +181,7 @@ def active_executions(connection, *, buddy_id: str) -> list[dict]:
         " COALESCE(a.started_at, a.created_at) AS started_at"
         " FROM decision_requests r JOIN attempts a ON a.task_id=r.task_id AND a.attempt_id=r.attempt_id"
         " AND a.generation=r.generation"
-        f" WHERE r.kind='select' AND json_extract({_VALID_REQUESTED}, '$.routerBuddyId')=?"
+        f" WHERE json_extract({_VALID_REQUESTED}, '$.routerBuddyId')=?"
         f" AND a.execution_state IN ({markers})", (buddy_id, *ACTIVE_ATTEMPT_STATES))
     for row in rows:
         executions[row["attempt_id"]] = {"taskId": row["task_id"], "attemptId": row["attempt_id"],
