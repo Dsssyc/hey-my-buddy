@@ -1,6 +1,7 @@
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
+import { Button } from "@/components/ui/button";
 import { CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { reasonText } from "../i18n/reason";
 import type { HarnessHealth } from "../types";
@@ -37,10 +38,10 @@ export function HarnessHeader({ block, health, state, accountOpen, onToggleAccou
   </>;
   return <div data-slot="harness-header" className="flex min-h-12 items-stretch">
     <Hint text={t(block.folded ? "models.unfold" : "models.fold", { name: block.name })}><CollapsibleTrigger asChild>
-      <button type="button" data-slot="fold-handle" aria-label={t(block.folded ? "models.unfold" : "models.fold", { name: block.name })}
-        className="disclosure-trigger ml-3 inline-flex size-8 shrink-0 items-center justify-center self-center rounded-md sm:ml-4">
+      <Button type="button" variant="ghost" size="icon-sm" data-slot="fold-handle" aria-label={t(block.folded ? "models.unfold" : "models.fold", { name: block.name })}
+        className="ml-3 self-center sm:ml-4">
         <Disclosure open={!block.folded} />
-      </button>
+      </Button>
     </CollapsibleTrigger></Hint>
     {health
       ? <Hint text={said || undefined}>

@@ -23,7 +23,7 @@ function LineButton({ label, disabled, reason, className, onClick, children }: {
   label: string; disabled: boolean; reason?: string; className?: string; onClick: () => void; children: ReactNode;
 }) {
   return <Hint text={reason || label}>
-    <Button variant="ghost" size="icon-sm" className={cn("text-ink2", className)} aria-label={label} aria-disabled={disabled || undefined}
+    <Button variant="ghost" size="icon-sm" className={className} aria-label={label} aria-disabled={disabled || undefined}
       onClick={() => { if (!disabled) onClick(); }}>{children}</Button>
   </Hint>;
 }

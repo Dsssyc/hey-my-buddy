@@ -38,14 +38,14 @@ describe("a harness section's head", () => {
       expect(header(name).querySelectorAll("[data-slot=disclosure]")).toHaveLength(1);
       expect(fold.querySelectorAll("[data-slot=disclosure]")).toHaveLength(1);
       expect(header(name).textContent).not.toMatch(/[▲▼▶▷△▽▸▾]/);
-      // A thin chevron: 16px, a stroke of 1.5, no fill.
+      // The shared icon uses a 16px chevron with the default stroke.
       const mark = fold.querySelector("[data-slot=disclosure]")!;
       expect(mark.getAttribute("class")).toContain("lucide-chevron-right");
       expect(mark.getAttribute("width")).toBe("16");
-      expect(mark.getAttribute("stroke-width")).toBe("1.5");
+      expect(mark.getAttribute("stroke-width")).toBe("2");
       expect(mark.getAttribute("fill")).toBe("none");
-      // The chevron is a target of at least 28px (32px, size-8).
-      expect(fold.className).toContain("size-8");
+      expect(fold.getAttribute("data-variant")).toBe("ghost");
+      expect(fold.getAttribute("data-size")).toBe("icon-sm");
     }
   });
 

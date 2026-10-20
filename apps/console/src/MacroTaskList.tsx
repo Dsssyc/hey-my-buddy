@@ -8,7 +8,8 @@ import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { ScrollArea } from "./components/ui/scroll-area";
 import { formatNumber, formatRelative } from "./i18n/format";
 import { cn } from "cn";
-import { PanelLeft } from "lucide-react";
+import { CopyMinus, PanelLeft, RefreshCw } from "lucide-react";
+import { MacroSort } from "./MacroSort";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent, Disclosure } from "./components/ui/collapsible";
@@ -24,7 +25,7 @@ export type MacroTaskListProps = {
   onSelect: (id: string) => void; onMore: () => void; onApplyReorder: () => void;
 };
 export function ListFold({ label, onClick }: { label: string; onClick: () => void }) {
-  return <Hint text={label}><Button data-slot="macro-fold" variant="outline" size="icon-sm" aria-label={label} onClick={onClick}><PanelLeft strokeWidth={1.5} aria-hidden="true"/></Button></Hint>;
+  return <Hint text={label}><Button data-slot="macro-fold" variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}><PanelLeft aria-hidden="true"/></Button></Hint>;
 }
 export function MacroCounts({ row }: { row: MacroTaskSummary }) {
   const { t } = useTranslation("tasks");
@@ -80,19 +81,13 @@ export function MacroTaskList(props: MacroTaskListProps) {
   const empty = !props.rows.length && !props.loading && !props.error;
   return <section data-slot="macro-list" className="flex h-full min-h-0 w-[316px] flex-col border-r bg-card text-sm max-[760px]:w-full" aria-label={t("list")} onPointerEnter={() => { pointer.current = true; }} onPointerLeave={() => { pointer.current = false; idle(); }}>
     <div className="shrink-0 px-4 pt-3.5">
-      <div className="flex min-h-7 items-center gap-2">{props.listNavigation}
-        {props.reorder && <Hint text={t("update")}><button type="button" data-slot="macro-update" className="inline-flex size-7 items-center justify-center" aria-label={t("update")} onClick={() => { apply(); scroll.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")?.scrollTo?.(0, 0); }}><StateMark kind="live"/></button></Hint>}
-        <span className="ml-auto"><ListFold label={t("collapse")} onClick={props.onCollapse}/></span>
-      </div>
-      <div data-slot="macro-sort" className="mt-2.5 flex h-8 items-center divide-x border border-input text-xs">
-        <select aria-label={t("sort.by")} className="h-full min-w-0 flex-1 bg-card px-2 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          value={props.sort.split("-")[0]} onChange={event => props.onSortChange(`${event.target.value}-${props.sort.split("-")[1]}` as MacroTaskSort)}>
-          <option value="activity">{t("sort.activity")}</option><option value="created">{t("sort.created")}</option>
-        </select>
-        <select aria-label={t("sort.direction")} className="h-full bg-card px-2 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          value={props.sort.split("-")[1]} onChange={event => props.onSortChange(`${props.sort.split("-")[0]}-${event.target.value}` as MacroTaskSort)}>
-          <option value="desc">{t("sort.desc")}</option><option value="asc">{t("sort.asc")}</option>
-        </select>
+      <div data-slot="macro-list-toolbar" className="flex min-h-7 items-center gap-2">{props.listNavigation}
+        {props.reorder && <Hint text={t("update")}><Button data-slot="macro-update" variant="ghost" size="icon-sm" aria-label={t("update")} onClick={() => { apply(); scroll.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")?.scrollTo?.(0, 0); }}><RefreshCw aria-hidden="true"/></Button></Hint>}
+        <div className="ml-auto flex items-center gap-1">
+          <MacroSort sort={props.sort} onChange={props.onSortChange}/>
+          <Hint text={t("collapseAll")}><Button data-slot="macro-collapse-all" variant="ghost" size="icon-sm" aria-label={t("collapseAll")} onClick={() => setCollapsed(new Set(groups.map(group => group.id)))}><CopyMinus aria-hidden="true"/></Button></Hint>
+          <ListFold label={t("collapse")} onClick={props.onCollapse}/>
+        </div>
       </div>
       {!(empty && props.totals.all === 0 && !props.query && props.filter === "all") && <>
         <Input data-slot="macro-search" className="mt-2.5 h-8 text-sm" aria-label={t("search")} placeholder={t("search")} value={props.query} maxLength={200} onChange={e => props.onQueryChange(e.target.value)}/>

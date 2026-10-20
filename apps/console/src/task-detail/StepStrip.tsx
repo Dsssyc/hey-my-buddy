@@ -113,12 +113,12 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
     <div data-slot="step-navigation" className="flex shrink-0 flex-col items-center justify-between border-r border-line px-3 py-2">
       <span data-slot="step-counter" className="whitespace-nowrap text-xs font-medium tabular-nums text-ink">{t("strip.position", { current: selected + 1, total: steps.steps.length })}</span>
       <div className="flex gap-1.5">
-        <Hint text={t("strip.previous")}><span className="inline-flex outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={selected === 0 ? 0 : undefined}><Button type="button" variant="outline" size="icon-sm" className="border-line2 text-ink disabled:text-ink3" aria-label={t("strip.previous")} disabled={selected === 0} onClick={() => onStep(selected)}>
-          <ChevronLeft aria-hidden="true" strokeWidth={2.5}/>
-        </Button></span></Hint>
-        <Hint text={t("strip.next")}><span className="inline-flex outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={selected === steps.steps.length - 1 ? 0 : undefined}><Button type="button" variant="outline" size="icon-sm" className="border-line2 text-ink disabled:text-ink3" aria-label={t("strip.next")} disabled={selected === steps.steps.length - 1} onClick={() => onStep(selected + 2)}>
-          <ChevronRight aria-hidden="true" strokeWidth={2.5}/>
-        </Button></span></Hint>
+        <Hint text={t("strip.previous")}><Button type="button" variant="ghost" size="icon-sm" aria-label={t("strip.previous")} aria-disabled={selected === 0 || undefined} onClick={() => { if (selected > 0) onStep(selected); }}>
+          <ChevronLeft aria-hidden="true"/>
+        </Button></Hint>
+        <Hint text={t("strip.next")}><Button type="button" variant="ghost" size="icon-sm" aria-label={t("strip.next")} aria-disabled={selected === steps.steps.length - 1 || undefined} onClick={() => { if (selected < steps.steps.length - 1) onStep(selected + 2); }}>
+          <ChevronRight aria-hidden="true"/>
+        </Button></Hint>
       </div>
     </div>
     <ScrollArea className="min-w-0 flex-1" orientation="both" viewportProps={{ ref: setViewport, "data-slot": "detail-strip-scroll" }}>

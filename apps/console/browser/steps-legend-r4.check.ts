@@ -22,8 +22,8 @@ for (const { locale, theme, width, counter, next, waitMeaning, clusterMeaning, i
     expect(positionBox!.y + positionBox!.height).toBeLessThan(arrowBox!.y);
     expect(arrowBox!.width).toBe(28);
     expect(arrowBox!.height).toBe(28);
-    await expect(forward).toHaveAttribute("data-variant", "outline");
-    await expect(forward.locator("svg")).toHaveAttribute("stroke-width", "2.5");
+    await expect(forward).toHaveAttribute("data-variant", "ghost");
+    await expect(forward.locator("svg")).toHaveAttribute("stroke-width", "2");
     await forward.click();
     await expect(position).toHaveText(before!.replace(" 1 / ", " 2 / "));
 

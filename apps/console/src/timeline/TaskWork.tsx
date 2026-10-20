@@ -188,11 +188,11 @@ export function TaskWork(props: TaskWorkProps) {
     if (next.has(leadRunId)) next.delete(leadRunId); else next.add(leadRunId);
     return next;
   });
-  const laneToggle = (lead: TimelineRow, collapsed: boolean) => <Hint text={t("laneToggle", { title: displayTitle(lead.titleSource, lead.title).fullText })}><button type="button" data-slot="lane-toggle" aria-expanded={!collapsed} aria-controls={`lane-${lead.runId}`}
+  const laneToggle = (lead: TimelineRow, collapsed: boolean) => <Hint text={t("laneToggle", { title: displayTitle(lead.titleSource, lead.title).fullText })}><Button type="button" variant="ghost" size="icon-sm" data-slot="lane-toggle" aria-expanded={!collapsed} aria-controls={`lane-${lead.runId}`}
     aria-label={t("laneToggle", { title: displayTitle(lead.titleSource, lead.title).fullText })} onClick={() => toggleLane(lead.runId)}
-    className="flex size-7 shrink-0 self-center items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-focus">
+    className="self-center">
     <Disclosure open={!collapsed}/>
-  </button></Hint>;
+  </Button></Hint>;
   const laneFacts = (index: number) => {
     const lane = layout.lanes[index]!;
     const summary = summaries[index]!;

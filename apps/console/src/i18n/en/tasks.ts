@@ -1,6 +1,7 @@
 import type { tasks as zh } from "../zh/tasks";
 export const tasks = {
-  sort: { by: "Sort by", direction: "Sort direction", activity: "Last updated", created: "Created", asc: "Ascending", desc: "Descending" },
+  sort: { label: "Sort", order: "Order", current: "Sort: {{basis}} · {{order}}", activity: "Last updated", created: "Created", newest: "Newest first", oldest: "Oldest first" },
+  collapseAll: "Collapse all",
   legendLabel: "Legend",
   resizeNames: "Drag to resize names; use arrow keys to adjust, or double-click to reset.",
   zoomFit: "Fit width",

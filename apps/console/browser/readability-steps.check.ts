@@ -18,7 +18,7 @@ for (const { locale, previous, next, copy, failed } of [
       const forward = strip.getByRole("button", { name: next });
       await expect(back).toBeDisabled();
       await expect(forward).toBeEnabled();
-      await back.locator("..").hover();
+      await back.hover();
       await expect(page.getByRole("tooltip")).toContainText(previous);
       await forward.hover();
       await expect(page.getByRole("tooltip")).toContainText(next);

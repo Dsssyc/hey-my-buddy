@@ -23,9 +23,16 @@ const buttonVariants = cva(
         default: "h-8 px-3 has-[>svg]:px-2.5",
         sm: "h-7 gap-1.5 px-2.5 has-[>svg]:px-2",
         icon: "size-8",
-        "icon-sm": "size-7",
+        "icon-sm": "size-7 focus-visible:ring-2 focus-visible:ring-inset",
       },
     },
+    compoundVariants: [
+      {
+        variant: "ghost",
+        size: "icon-sm",
+        className: "text-muted-foreground data-[emphasized=true]:text-foreground",
+      },
+    ],
     defaultVariants: {
       variant: "default",
       size: "default",
