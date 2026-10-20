@@ -38,7 +38,7 @@ Worker 用你自己的 harness 登录，用量计入你自己的套餐和密钥�
 
 ## 安装
 
-hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.46.0（contract 0.46.0、schema 25），安装于 2026-10-18（[记录](docs/acceptance/installs/0.46.0.md)）；当前源码是 0.47.0（contract 0.47.0、schema 25），加了控制台会话视图要用的会话记录，尚未安装。0.46.0 不再读取额度读数，改为冷却：因额度拒绝工作的提供方暂停参与路由一段时间，模型开始之前就被拒的微任务改派给别的 buddy（[验收记录](docs/acceptance/adr021/quota-cooling.md)）。Host 只经微任务委派，`execution-submit` 这个方法已经删掉。它让 Host 能在 Codex 与 Claude Code 正在跑的回合里提问，Host 等待过微任务之后也一样；它用 C-Two 0.7.6，不再加载 NumPy 与 FastDB（[验收记录](docs/acceptance/live-channel-0.43.0.md)）。控制台各页都已重做，宏任务的时间轴也在内，可以在中文与英文之间切换（[验收记录](docs/acceptance/adr029/console-frontend.md)）。在 Linux 上，状态目录的上层目录组可写而这个组是用户自己的私有组时，它信任这个目录（[验收记录](docs/acceptance/linux-portability/linux-portability.md)）。0.42.0 把看板从 schema 23 升级到 24：每条命令只留下标识这次提交的内容，执行心跳这类周期性状态只留最新的一条。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review/0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/adr019/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量观察。[Host 工作流验收](docs/acceptance/adr018/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。改了中间号的安装在切换之前先做校验过的备份（见[运行参考](docs/reference/operations.md#installation)）。
+hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并且每个状态目录只有一个本地服务。已核验的日常安装是 0.47.0（contract 0.47.0、schema 25），安装于 2026-10-20（[记录](docs/acceptance/installs/0.47.0.md)）。0.47.0 为每次执行记下会话，在微任务详情的“会话”标签里查看（[验收记录](docs/acceptance/adr024/session-view.md)）；这些记录还没有用真实的 harness 回合核对过。它也让控制台更好读：单击就打开一步，buddy 的颜色避开有含义的颜色，时间轴在刻度上用手势缩放（[验收记录](docs/acceptance/adr029/console-frontend.md)）。0.46.0 不再读取额度读数，改为冷却：因额度拒绝工作的提供方暂停参与路由一段时间，模型开始之前就被拒的微任务改派给别的 buddy（[验收记录](docs/acceptance/adr021/quota-cooling.md)）。Host 只经微任务委派，`execution-submit` 这个方法已经删掉。它让 Host 能在 Codex 与 Claude Code 正在跑的回合里提问，Host 等待过微任务之后也一样；它用 C-Two 0.7.6，不再加载 NumPy 与 FastDB（[验收记录](docs/acceptance/live-channel-0.43.0.md)）。控制台各页都已重做，宏任务的时间轴也在内，可以在中文与英文之间切换（[验收记录](docs/acceptance/adr029/console-frontend.md)）。在 Linux 上，状态目录的上层目录组可写而这个组是用户自己的私有组时，它信任这个目录（[验收记录](docs/acceptance/linux-portability/linux-portability.md)）。0.42.0 把看板从 schema 23 升级到 24：每条命令只留下标识这次提交的内容，执行心跳这类周期性状态只留最新的一条。skill 位于 `~/.agents/skills/hey-my-buddy`，Claude Code 通过 `~/.claude/skills/hey-my-buddy` 链接读取同一目录，旧的 Codex 插件已不再使用。源码与日常安装是相互独立的事实。[原生沙盒审阅验收](docs/acceptance/native-sandbox-review/0.27.0.md)记录由固定原生探针拥有、不再解读模型输出的验证。[路由与验证验收](docs/acceptance/adr019/routing-validation-0.25.0.md)记录审阅诊断留存与有界的额度恢复。它实现 ADR-018 的 Host 工作流：文件／标准输入任务包、按方法帮助、同一宏任务内委派、Host 直接收尾、失败结论与清理、部分成果、更换 buddy 续做、累计补丁和原生用量观察。[Host 工作流验收](docs/acceptance/adr018/host-workflow-0.21.0.md)记录验证结果与未验证范围。它尚未发布。改了中间号的安装在切换之前先做校验过的备份（见[运行参考](docs/reference/operations.md#installation)）。
 
 在开发者确定发布渠道与确切版本之后，安装入口是一条固定版本的包命令：
 
@@ -51,7 +51,7 @@ uvx hey-my-buddy@0.47.0 install
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.46.0-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.47.0-py3-none-any.whl hey-my-buddy install
 ```
 
 机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时。只改末位的版本不打断在跑的工作：服务换到新运行时上重启，接回在跑的执行。改了中间号的版本，有排队或在跑的工作、未确认的停止时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`），空闲后切换，并做校验过的备份。两种都是 skill、启动器、运行时与服务整体切换，失败时回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
@@ -108,7 +108,7 @@ Codex Host 为每个运行中的微任务派生一个只做监控的原生子代
 
 ## 当前状态与限制
 
-日常安装是 [0.46.0/contract 0.46.0/schema 25](docs/acceptance/installs/0.46.0.md)。安装时在校验过的备份之后把 schema 24 的看板就地转换。
+日常安装是 [0.47.0/contract 0.47.0/schema 25](docs/acceptance/installs/0.47.0.md)。它改了契约，所以在空闲的看板上、做过校验的备份之后安装；schema 没有变。
 
 日常运行时支持 macOS 与 Linux、本地单用户 SQLite 状态；Windows 的代码与脚本可移植，但未在真机验证。ZCode 支持活动观察和协作式询问：问题等待根任务的下一个工具检查点或结束尝试，无法打断正在运行的工具，也不会开启新回合。原生权限请求和需要长时间等待的 Host 决策仍通过 attention/assistance 边界处理。Codex 与 Claude Code 把 Host 的问题送进正在跑的回合：模型在下一次决策时读到，用它的问询工具作答；问题不开启也不延长回合，回合结束之后才到的问题会被拒绝。Codex 使用实验性的 App Server。0.19.0 源码在 macOS 的 Codex CLI 0.157.0 上验证了 `openai / gpt-6-sol / high` 的只读 Router，推荐 `standard` 预算；Linux/Windows 与其他 harness 仍未验证。安装不会修改用户的 Router 设置。Claude P1 读取用户原生的提供方、账户与设置，每次接续都重建会话。其[参考文档](docs/reference/claude-code.md)记录已验证的原生路径、日常安装的只读微任务链路、模拟回归覆盖和其余限制。目前不提供货币预算、自动社区评价或原生 App 回合结束后唤醒。后台回访需要用户明确要求。
 
