@@ -12,6 +12,8 @@
 
 开发者看过设计稿后定：一行只放图标、对象与状态，照这一版做；看稿与验收先看深色。本文只安排实现，不表示已经实现。
 
+**进度：** B 于 2026-10-20 合入为 `1c575cd2`，A 于同日合入为 `9194f8fd`，都在源码里，尚未安装（[验收记录](../../acceptance/adr024/session-view.md)）；C 还没有开始。
+
 ## 现状（读 `908384a5` 的源码所得）
 
 - **组件：** `apps/console/src/components/ai-elements/` 是从 `ai-elements@1.9.1` 改写的六个展示部件（消息、推理、工具、计划、终端、代码块），Apache 2.0。
@@ -118,6 +120,12 @@
    - 公开视图里由别的字段推出的 `acceptanceVerdict` 与 `correlationId` 从接口删掉，控制台里 `acceptanceVerdict === "failed"` 的死分支一并删；
    - 合成预览按新的删除契约回答：删完之后预览与再删都是 `NOT_FOUND`，`test_host_preview.py` 里钉着旧行为的断言随之改；
    - 两个浏览器同时删除时，后一个得到 `NOT_FOUND`，按已删完处理，不显示成错误。
+5. **A 的验收记下的与设计稿不同之处**（[验收记录](../../acceptance/adr024/session-view.md)，Host 在真实像素上看到）：
+   - 点开一次调用，结果只显示一次：结果数据里与输出正文相同的值不再显示（Claude Code 与 DSH 的整段文字、Codex 的 `aggregatedOutput`、ZCode 的 `content`），其余字段（退出码、用时、ZCode 的 `truncated` 等）照“键 值”排在输出之后；
+   - 命令的完整内容去掉外层的 shell 包装，与行里的一致；
+   - 只有类型的标记不原样显示方括号里的类型：已知的类型（Codex 的 `subAgentActivity`、`contextCompaction`）各有自己的名字，走 i18n，摘要里分别计数；不认得的才用通称；
+   - 调用组的摘要行右端有状态：全部完成是淡色的勾，有失败是失败色的叉，进行中用动效；
+   - 搜索一行的模式加引号，后面跟 `glob`。
 
 写入范围与检查在 A 合入之后定。
 
