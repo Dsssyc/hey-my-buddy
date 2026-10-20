@@ -35,7 +35,7 @@ def replay(board, kind, response):
 
 
 class WorkflowReceiptTests(WorkflowTestCase):
-    def test_deleted_decision_and_cancel_replay_before_run_lookup(self):
+    def test_deleted_decision_and_cancel_commands_are_removed_with_the_run(self):
         board = self.board()
         submitted = self.submit(board, request_id="delete-replay", macroTask={"title": "Disposable"})
         self.finish_turn(board, self.claim(board), disposition="attention")
@@ -56,44 +56,14 @@ class WorkflowReceiptTests(WorkflowTestCase):
                           "_delete_private_roots", "_delete_cli_files"):
                 stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
             macro_task_deletion.delete(board.store, submitted["macroTaskId"], 1)
-        expected = {"commandId": "deleted-decision", "deleted": True}
-        self.assertEqual(board.call("workflow_decide", {**decision_params, "expectedRevision": 999}), expected)
-        self.assertEqual(board.call("workflow_cancel", {**cancel_params, "note": "Different note"}),
-                         {"commandId": "deleted-cancel", "deleted": True})
-
-    def test_deleted_receipt_checks_identity_without_loading_response(self):
-        board = self.board()
-        params = {"requestId": "deleted-command", "adapter": "command", "task": "Record a command",
-                  "cwd": str(self.workdir()), "argv": ["/bin/true"]}
-        board.store.task_submit(params, command_id="deleted-command-id")
-        with board.store.db.write() as connection:
-            connection.execute(
-                "INSERT INTO macro_task_deletions"
-                " (deletion_id,target_kind,target_id,state,started_at,deleted_at,micro_task_count)"
-                " VALUES('deletion-1','macro-task','macro-old','deleted',?,?,1)",
-                (board.store.now(), board.store.now()),
-            )
-            connection.execute(
-                "UPDATE commands SET response_json='{}',deletion_id='deletion-1' WHERE command_id='deleted-command-id'"
-            )
-        self.assertEqual(board.store.task_submit(params, command_id="deleted-command-id"),
-                         {"commandId": "deleted-command-id", "deleted": True})
-        self.assertEqual(board.store.task_submit({**params, "task": "Different input"}, command_id="deleted-command-id"),
-                         {"commandId": "deleted-command-id", "deleted": True})
         with board.store.db.read() as connection:
-            with self.assertRaises(BoardError) as caught:
-                board.store._receipt(connection, "deleted-command-id", "task.retry", {})
-        self.assertEqual(caught.exception.code, "CONFLICT")
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE commands SET subject='owner-identity' WHERE command_id='deleted-command-id'")
-        with board.store.db.read() as connection:
-            self.assertEqual(board.store._receipt(connection, "deleted-command-id", "task.submit", {},
-                                                  "owner-identity"),
-                             {"commandId": "deleted-command-id", "deleted": True})
-            for subject in (None, "other-identity"):
-                with self.subTest(subject=subject), self.assertRaises(BoardError) as caught:
-                    board.store._receipt(connection, "deleted-command-id", "task.submit", {}, subject)
-                self.assertEqual(caught.exception.code, "UNAUTHORIZED")
+            self.assertEqual(connection.execute(
+                "SELECT COUNT(*) FROM commands WHERE command_id IN ('deleted-decision','deleted-cancel')"
+            ).fetchone()[0], 0)
+        for operation, request in (("workflow_decide", decision_params), ("workflow_cancel", cancel_params)):
+            with self.subTest(operation=operation), self.assertRaises(BoardError) as caught:
+                board.call(operation, request)
+            self.assertEqual(caught.exception.code, "NOT_FOUND")
 
     def test_decision_continuation_takeover_and_cancel_keep_commits_with_current_view(self):
         board = self.board()
@@ -338,8 +308,8 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO macro_task_deletions"
-                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
-                " VALUES('gone-deletion','micro-task-tree',?,'deleting',?,1)",
+                " (deletion_id,target_kind,target_id,started_at,micro_task_count)"
+                " VALUES('gone-deletion','micro-task-tree',?,?,1)",
                 ('run:' + run_id,board.store.now()),
             )
         expected = applied['targetRevision']

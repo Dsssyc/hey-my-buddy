@@ -78,13 +78,16 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                 self.assertIsNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
                 self.assertIsNone(db.execute("SELECT 1 FROM tasks WHERE task_id=?", (run["runId"],)).fetchone())
             self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (other["runId"],)).fetchone())
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 1)
-        duplicate = macro_task_deletion.delete(board.store, target, 2)
-        self.assertEqual(duplicate["deletionId"], deleted["deletionId"])
-        self.assertTrue(duplicate["duplicate"])
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE target_id=?", (target,)).fetchone()[0], 0)
+        self.assert_code("NOT_FOUND", macro_task_deletion.preview, board.store, target)
+        self.assert_code("NOT_FOUND", macro_task_deletion.delete, board.store, target, 2)
+        with self.assertRaises(BoardError) as caught:
+            self.submit(board, request_id="deleted-target", macroTaskId=target)
+        self.assertEqual(caught.exception.code, "NOT_FOUND")
         with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE target_id=?", (target,)).fetchone()[0], 1)
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE target_id=?", (target,)).fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
 
     def test_count_revision_conflict_precedes_mark_and_physical_io(self):
         board = self.board()
@@ -126,8 +129,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             result = macro_task_deletion.delete(board.store, target, 1)
         self.assertEqual(result["state"], "deleted")
         with board.store.db.read() as db:
-            row = db.execute("SELECT target_kind,target_id FROM macro_task_deletions").fetchone()
-            self.assertEqual(tuple(row), ("micro-task-tree", target))
+            self.assertIsNone(db.execute("SELECT 1 FROM macro_task_deletions").fetchone())
 
     def test_unsettled_run_rejected_with_structured_blocker(self):
         board = self.board()
@@ -186,9 +188,9 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        "task_id,attempt_id,outcome,event_seq,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                        ("route-outcome", "routing", "route-history", 0, "fixture", "review",
                         "route-earlier", "route-attempt-0", "answered", event.lastrowid, now))
-            db.execute("INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,subject,created_at)"
-                       " VALUES(?,?,?,?,?,?,?)", ("route-command", "route-earlier", "fixture", "hash",
-                                               '{"private":"Router private text"}', "host-1", now))
+            db.execute("INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,subject)"
+                       " VALUES(?,?,?,?,?,?)", ("route-command", "route-earlier", "fixture", "hash",
+                                               '{"private":"Router private text"}', "host-1"))
         with self.without_physical_io()[0]:
             self.assertEqual(macro_task_deletion.delete(board.store, target, 1)["state"], "deleted")
         with board.store.db.read() as db:
@@ -204,9 +206,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             ):
                 with self.subTest(table=table):
                     self.assertEqual(db.execute(f"SELECT COUNT(*) FROM {table} WHERE {where}", values).fetchone()[0], 0)
-            receipt = db.execute("SELECT task_id,attempt_id,response_json,deletion_id FROM commands WHERE command_id='route-command'").fetchone()
-            self.assertEqual(tuple(receipt)[:3], (None, None, "{}"))
-            self.assertIsNotNone(receipt["deletion_id"])
+            self.assertIsNone(db.execute("SELECT 1 FROM commands WHERE command_id='route-command'").fetchone())
             self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (other["runId"],)).fetchone())
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
 
@@ -222,9 +222,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                     macro_task_deletion.delete(board.store, target, 1)
                 self.assertIn(stage, calls)
                 with board.store.db.read() as db:
-                    deletion = db.execute("SELECT deletion_id,state FROM macro_task_deletions WHERE target_id=?", (target,)).fetchone()
+                    deletion = db.execute("SELECT deletion_id FROM macro_task_deletions WHERE target_id=?", (target,)).fetchone()
                     self.assertIsNotNone(deletion)
-                    self.assertEqual(deletion["state"], "deleting")
                     self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
                     self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
                     if deletion_id is None:
@@ -244,7 +243,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             with self.assertRaises(RuntimeError):
                 macro_task_deletion.delete(board.store, target, 1)
         with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT state FROM macro_task_deletions WHERE target_id=?", (target,)).fetchone()[0], "deleting")
+            self.assertIsNotNone(db.execute("SELECT 1 FROM macro_task_deletions WHERE target_id=?", (target,)).fetchone())
             self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
         with self.without_physical_io()[0]:
@@ -263,8 +262,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             with self.assertRaisesRegex(RuntimeError, "before final commit"):
                 macro_task_deletion.delete(board.store, target, 1)
         with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT state FROM macro_task_deletions WHERE target_id=?",
-                                        (target,)).fetchone()[0], "deleting")
+            self.assertIsNotNone(db.execute("SELECT 1 FROM macro_task_deletions WHERE target_id=?",
+                                            (target,)).fetchone())
             self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?",
                                             (run["runId"],)).fetchone())
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
@@ -272,7 +271,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with self.without_physical_io()[0]:
             self.assertEqual(macro_task_deletion.delete(board.store, target, 1)["state"], "deleted")
 
-    def test_notification_failure_after_commit_retries_as_single_deleted_record(self):
+    def test_notification_failure_after_commit_leaves_no_deletion_record(self):
         board = self.board()
         run = self.closed(board, "after-commit", macro_task="After commit")
         target = run["macroTaskId"]
@@ -281,16 +280,14 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             with self.assertRaisesRegex(RuntimeError, "after commit"):
                 macro_task_deletion.delete(board.store, target, 1)
         with board.store.db.read() as db:
-            record = db.execute("SELECT deletion_id,state FROM macro_task_deletions WHERE target_id=?",
+            record = db.execute("SELECT 1 FROM macro_task_deletions WHERE target_id=?",
                                 (target,)).fetchone()
-            self.assertEqual(record["state"], "deleted")
+            self.assertIsNone(record)
             self.assertIsNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 1)
-        repeated = macro_task_deletion.delete(board.store, target, 1)
-        self.assertEqual((repeated["state"], repeated["deletionId"], repeated["duplicate"]),
-                         ("deleted", record["deletion_id"], True))
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
+        self.assert_code("NOT_FOUND", macro_task_deletion.delete, board.store, target, 1)
         with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
 
     def test_private_evidence_controls_and_submissions_are_scoped_to_target(self):
         board = self.board()
@@ -351,10 +348,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         router_id = 'tree-router-task'
         with board.store.db.write() as db:
             spec = json.dumps({'adapter': 'decision', 'cwd': str(self.workdir('tree-router')), 'task': 'route'})
-            db.execute("INSERT INTO tasks(task_id,request_id,spec_json,spec_canonical_json,input_fingerprint,"
+            db.execute("INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,"
                        "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
-                       " VALUES(?,?,?,?,?,2,'decision',?,30,'cancelled',1,?,?)",
-                       (router_id, 'tree-router-request', spec, spec, 'router-fixture',
+                       " VALUES(?,?,?,?,2,'decision',?,30,'cancelled',1,?,?)",
+                       (router_id, 'tree-router-request', spec, 'router-fixture',
                         str(self.workdir('tree-router')), now, now))
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at)"
                        " VALUES('tree-decision','completed','route',?)", (now,))
@@ -417,8 +414,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                            "root_started_at,process_group_id) VALUES(?,?,?,?,?)",
                            (attempt_id, "fixture-boot", generation + 100, generation + 1000,
                             generation + 100))
-                db.execute("INSERT INTO attempt_interruptions(attempt_id,evidence_kind,observed_at,state)"
-                           " VALUES(?,?,?,?)", (attempt_id, "identity-absent", now, "settled"))
+                db.execute("INSERT INTO attempt_interruptions(attempt_id,evidence_kind,state)"
+                           " VALUES(?,?,?)", (attempt_id, "identity-absent", "settled"))
                 db.execute("INSERT INTO attempt_shutdown_evidence(attempt_id,evidence_kind,detail_json,observed_at)"
                            " VALUES(?,?,?,?)", (attempt_id, "identity-absent", "{}", now))
                 db.execute("INSERT INTO execution_issues(attempt_id,stage,code,message,observed_at)"
@@ -430,10 +427,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                            "elapsed_seconds,tool_in_progress,created_at) VALUES(?,?,?,?,?,?,?)",
                            (task_id, attempt_id, "expected-duration", 2, 1.0, 0, now))
                 db.execute("INSERT INTO messages(message_id,task_id,attempt_id,inquiry_id,direction,author,"
-                           "body,body_bytes,payload_hash,state,created_at,updated_at)"
-                           " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                           "body,payload_hash,state,created_at,updated_at)"
+                           " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                            (f"message-{generation}", task_id, attempt_id, f"inquiry-{generation}",
-                            "outbound", "fixture", "private content", 15, "hash", "delivered", now, now))
+                            "outbound", "fixture", "private content", "hash", "delivered", now, now))
                 db.execute("INSERT INTO artifacts(artifact_id,task_id,attempt_id,kind,location,content_hash,"
                            "size_bytes,created_at) VALUES(?,?,?,?,?,?,?,?)",
                            (f"artifact-{generation}", task_id, attempt_id, "fixture", "private-location",
@@ -635,7 +632,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         self.assertEqual(calls, [[session_id], [session_id]])
         self.assertEqual(inventory.call_count,2)
         with board.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
 
     def test_native_session_reused_by_other_run_refuses_deletion(self):
         board = self.board()
@@ -708,13 +705,13 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             db.execute("INSERT INTO provider_cooling(harness,provider,consecutive_rejections,"
                        "cooling_until,last_rejected_at) VALUES(?,?,?,?,?)",
                        ("codex", "fixture", 2, now, now))
-            db.execute("INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,subject,"
-                       "created_at) VALUES(?,?,?,?,?,?,?)",
+            db.execute("INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,subject)"
+                       " VALUES(?,?,?,?,?,?)",
                        ("owned-content-command", run["runId"], "workflow.fixture", "hash",
-                        json.dumps({"runId": run["runId"], "private": "content"}), "host-1", now))
-            db.execute("INSERT INTO commands(command_id,kind,request_hash,response_json,subject,created_at)"
-                       " VALUES(?,?,?,?,?,?)", ("owned-stop-command", "macro_task.stop", "hash",
-                       json.dumps({"macroTaskId": run["macroTaskId"], "private": "content"}), "host-1", now))
+                        json.dumps({"runId": run["runId"], "private": "content"}), "host-1"))
+            db.execute("INSERT INTO commands(command_id,kind,request_hash,response_json,subject)"
+                       " VALUES(?,?,?,?,?)", ("owned-stop-command", "macro_task.stop", "hash",
+                       json.dumps({"macroTaskId": run["macroTaskId"], "private": "content"}), "host-1"))
             self.assertEqual(db.execute("PRAGMA foreign_key_check").fetchall(), [])
             self.assertGreater(db.execute("SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?",
                                                 (run["runId"],)).fetchone()[0], 0)
@@ -737,13 +734,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             ):
                 with self.subTest(table=table):
                     self.assertIsNone(db.execute(f"SELECT 1 FROM {table} WHERE {column}=?", (value,)).fetchone())
-            command = db.execute("SELECT task_id,attempt_id,response_json,deletion_id FROM commands"
-                                 " WHERE command_id='owned-content-command'").fetchone()
-            self.assertEqual(tuple(command)[:3], (None, None, "{}"))
-            self.assertEqual(command["deletion_id"], result["deletionId"])
-            stop = db.execute("SELECT response_json,deletion_id FROM commands"
-                              " WHERE command_id='owned-stop-command'").fetchone()
-            self.assertEqual(tuple(stop), ("{}", result["deletionId"]))
+            self.assertIsNone(db.execute("SELECT 1 FROM commands WHERE command_id='owned-content-command'").fetchone())
+            self.assertIsNone(db.execute("SELECT 1 FROM commands WHERE command_id='owned-stop-command'").fetchone())
             cooling = db.execute("SELECT consecutive_rejections,cooling_until,last_rejected_at"
                                  " FROM provider_cooling WHERE harness='codex' AND provider='fixture'").fetchone()
             self.assertEqual(tuple(cooling), (2, now, now))

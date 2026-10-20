@@ -26,7 +26,7 @@ export type MacroTaskDeletionPreview = {
   blockerTotal: number;
   blockers: DeletionBlocker[];
   backupRetention: "until-backup-rotation";
-  deletionState: "deleting" | "deleted" | null;
+  deletionState: "deleting" | null;
 };
 export type ConfirmedMacroTaskDeletion = { macroTaskId: string; microTaskCount: number; confirm: true };
 
@@ -90,8 +90,7 @@ export function parseMacroTaskDeletionPreview(macroTaskId: string, value: unknow
     || value.unconcludedFailureCount > value.microTaskCount || !deletionScope(value.scope) || !count(value.blockerTotal)
     || !Array.isArray(value.blockers) || value.blockers.length !== Math.min(50, value.blockerTotal)
     || !value.blockers.every(blocker) || value.backupRetention !== "until-backup-rotation"
-    || ![null, "deleting", "deleted"].includes(value.deletionState as null | string)
-    || value.deletionState === "deleted" && (value.blockerTotal !== 0 || value.unconcludedFailureCount !== 0)) invalid();
+    || ![null, "deleting"].includes(value.deletionState as null | string)) invalid();
   return value as MacroTaskDeletionPreview;
 }
 

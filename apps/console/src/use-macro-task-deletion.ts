@@ -57,11 +57,6 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
       return;
     }
     if (!mounted.current || ticket !== reading.current) return;
-    if (preview.deletionState === "deleted") {
-      completed.current = true;
-      current.current.onDeleted(macroTaskId, 0);
-      return;
-    }
     if (preview.deletionState === "deleting") confirmation.current = { macroTaskId, microTaskCount: preview.microTaskCount, confirm: true };
     setState({ phase: preview.deletionState === "deleting" ? "incomplete" : "ready", preview, errorCode: null, result: null });
   }, [macroTaskId]);
@@ -89,6 +84,11 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
       if (!mounted.current) return;
       loseAuthority(error);
       const unresolved = state.phase === "unknown" || state.phase === "incomplete";
+      if (unresolved && error instanceof ApiError && error.code === "NOT_FOUND") {
+        completed.current = true;
+        current.current.onDeleted(macroTaskId, 0);
+        return;
+      }
       setState({ ...state, phase: uncertainResponse(error) ? "unknown" : unresolved ? state.phase : "failed",
         errorCode: error instanceof ApiError ? error.code : "NETWORK" });
       return;

@@ -10,7 +10,7 @@ from unittest import mock
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
-from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
@@ -22,6 +22,7 @@ class UpgradeCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
+        schema_upgrade.upgrade(self.state)
         (self.state / "console-settings.json").write_text('{"theme":"dark"}')
         store = BoardStore(self.state)
         store.db.close()

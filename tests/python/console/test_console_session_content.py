@@ -320,9 +320,9 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         board, browser, route, _, _, _, run = self.fixture(macro=macro)
         target = run.get('macroTaskId') or 'run:' + run['runId']
         with board.store.db.write() as connection:
-            connection.execute('INSERT INTO macro_task_deletions VALUES(?,?,?,?,?,?,?)',
+            connection.execute('INSERT INTO macro_task_deletions VALUES(?,?,?,?,?)',
                                ('delete-test', 'macro-task' if macro else 'micro-task-tree', target,
-                                'deleting', board.store.now(), None, 1))
+                                board.store.now(), 1))
         with mock.patch.object(session_content, 'session_projector', side_effect=AssertionError('projection read')):
             self.get(browser, route, status=410, code='SESSION_DELETED')
 

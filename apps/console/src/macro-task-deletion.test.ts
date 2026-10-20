@@ -18,7 +18,6 @@ describe("macro task deletion boundary", () => {
     const blocked = { ...preview, blockerTotal: 51, blockers: Array.from({ length: 50 }, (_, index) => ({ ...blocker, taskId: `task-${index}` })) };
     expect(parseMacroTaskDeletionPreview(preview.macroTaskId, blocked)).toEqual(blocked);
     expect(parseMacroTaskDeletionPreview(preview.macroTaskId, { ...preview, deletionState: "deleting" }).deletionState).toBe("deleting");
-    expect(parseMacroTaskDeletionPreview(preview.macroTaskId, { ...preview, unconcludedFailureCount: 0, deletionState: "deleted" }).deletionState).toBe("deleted");
   });
 
   it.each([

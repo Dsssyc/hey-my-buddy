@@ -1,4 +1,4 @@
-"""The immutable schema-26 fixture is the accepted current upgrade base."""
+"""The fixed schema-26 stock exercises the pending schema-27 upgrade."""
 from __future__ import annotations
 
 import hashlib
@@ -11,6 +11,7 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.tasks import workspace
@@ -24,8 +25,10 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix='upgrade-base-fixture-'))
 
 
-    def restored(self, name='state'):
+    def restored(self, name='state', *, convert=True):
         fixture = load_fixture(self.root / name)
+        if convert:
+            schema_upgrade.upgrade(fixture['state'])
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
@@ -109,14 +112,14 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
-        fixture, connection = self.restored()
+        fixture, connection = self.restored(convert=False)
         self.assertEqual(fixture['sourceCommit'], 'd9e8df5d039708654f098015fbc8fc76f9fbd11d')
         self.assertEqual(fixture['sourceVersion'], '0.48.0')
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], schema_upgrade.BASE_SCHEMA_VERSION)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                         str(SCHEMA_VERSION))
+                         str(schema_upgrade.BASE_SCHEMA_VERSION))
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                          {'schema_version', 'created_at', 'capability_secret'})
         schema = [list(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
@@ -188,36 +191,99 @@ class UpgradeFixtureTests(unittest.TestCase):
             load_fixture(first['state'])
 
 
-    def test_base_is_accepted_unchanged_and_matches_fresh_structure(self):
-        fixture, connection = self.restored()
+    def test_upgrade_matches_fresh_structure_and_preserves_every_retained_value(self):
+        fixture, connection = self.restored(convert=False)
         state = fixture['state']
-        stock = list(connection.iterdump())
+        before = list(connection.iterdump())
+        with self.assertRaises(Corruption):
+            Database(state).initialize()
+        self.assertEqual(list(connection.iterdump()), before)
+        self.assertEqual(upgrade.idle_snapshot(state)['schema'], 26)
+        self.assertEqual(upgrade.preflight(state, contract_changed=True)['schema'], 26)
+        with self.assertRaises(BoardError):
+            upgrade.preflight(state, contract_changed=False)
+        files = {p.relative_to(state): p.read_bytes() for p in state.rglob('*')
+                 if p.is_file() and not p.name.startswith('board.sqlite3')}
+        old_tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        removed = {'cursors', 'evaluation_state', 'model_facts'}
+        saved = {}
         fresh = Database(self.root / 'fresh')
         fresh.initialize()
         self.addCleanup(fresh.close)
-        current = Database(state)
-        current.initialize()
-        self.addCleanup(current.close)
-        self.assertEqual(list(connection.iterdump()), stock)
         with fresh.read() as baseline:
+            for table in old_tables - removed:
+                columns = ','.join('"' + row[1] + '"' for row in baseline.execute(f'PRAGMA table_info("{table}")'))
+                predicate = {"meta": " WHERE key!='schema_version'",
+                             "macro_task_deletions": " WHERE state='deleting'",
+                             "commands": " WHERE deletion_id IS NULL",
+                             "events": " WHERE kind!='macro_task.deleted'"}.get(table, '')
+                saved[table] = (columns, sorted((tuple(row) for row in connection.execute(f'SELECT {columns} FROM "{table}"{predicate}')), key=repr))
+            schema_upgrade.upgrade(state)
             query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
             self.assertEqual([tuple(row) for row in connection.execute(query)],
                              [tuple(row) for row in baseline.execute(query)])
-            for table, in connection.execute("SELECT name FROM sqlite_master WHERE type='table'"):
-                self.assertEqual([tuple(row) for row in connection.execute(f'PRAGMA table_info({table})')],
-                                 [tuple(row) for row in baseline.execute(f'PRAGMA table_info({table})')])
-        self.assertEqual(upgrade.idle_snapshot(state)['schema'], SCHEMA_VERSION)
-        for changed in (False, True):
-            self.assertEqual(upgrade.preflight(state, contract_changed=changed)['schema'], SCHEMA_VERSION)
-        self.assertEqual(list(connection.iterdump()), stock)
+            for table, (columns, rows) in saved.items():
+                predicate = " WHERE key!='schema_version'" if table == 'meta' else ''
+                self.assertEqual(sorted((tuple(row) for row in connection.execute(f'SELECT {columns} FROM "{table}"{predicate}')), key=repr), rows, table)
+        current = Database(state)
+        current.initialize()
+        self.addCleanup(current.close)
+        self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
+                          if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+        self.assertEqual(upgrade.preflight(state, contract_changed=False)['schema'], SCHEMA_VERSION)
 
-    def test_base_contains_current_stored_forms(self):
-        _fixture, connection = self.restored()
+    def test_failed_conversion_rolls_back_all_rows_and_ddl(self):
+        fixture, connection = self.restored(convert=False)
+        before = list(connection.iterdump())
+        convert = schema_upgrade._convert
+        def fail(db):
+            convert(db)
+            raise RuntimeError('injected after DDL and data conversion')
+        with mock.patch.object(schema_upgrade, '_convert', side_effect=fail):
+            with self.assertRaisesRegex(RuntimeError, 'injected'):
+                schema_upgrade.upgrade(fixture['state'])
+        self.assertEqual(list(connection.iterdump()), before)
+        self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+
+    def test_inconsistent_redundant_values_are_rejected_without_changes(self):
+        for name, mutation in (
+            ('acceptance', "UPDATE tasks SET acceptance_verdict=NULL WHERE accepted_at IS NOT NULL"),
+            ('correlation', "UPDATE messages SET correlation_id='different'"),
+            ('body-bytes', "UPDATE messages SET body_bytes=body_bytes+1"),
+        ):
+            with self.subTest(form=name):
+                fixture, connection = self.restored(name, convert=False)
+                connection.execute(mutation)
+                connection.commit()
+                before = list(connection.iterdump())
+                with self.assertRaisesRegex(ValueError, 'Inconsistent'):
+                    schema_upgrade.upgrade(fixture['state'])
+                self.assertEqual(list(connection.iterdump()), before)
+
+    def test_unknown_shutdown_stays_unknown_and_blocks_installation(self):
+        fixture, connection = self.restored(convert=False)
+        attempt = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?',
+                                     (fixture['stableIds']['accepted'],)).fetchone()[0]
+        connection.execute("UPDATE attempts SET execution_state='uncertain',shutdown_confirmed=0 WHERE attempt_id=?", (attempt,))
+        connection.commit()
+        schema_upgrade.upgrade(fixture['state'])
+        self.assertEqual(tuple(connection.execute('SELECT execution_state,shutdown_confirmed FROM attempts WHERE attempt_id=?', (attempt,)).fetchone()), ('uncertain', 0))
+        with self.assertRaises(BoardError) as caught:
+            upgrade.preflight(fixture['state'], contract_changed=True)
+        self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
+
+    def test_base_contains_every_pruned_form_and_in_progress_deletion(self):
+        _fixture, connection = self.restored(convert=False)
         cooling = connection.execute('SELECT harness,provider,consecutive_rejections,cooling_until '
                                      'FROM provider_cooling').fetchone()
         self.assertEqual(tuple(cooling), ('codex', 'openai', 1, None))
-        deletion = connection.execute('SELECT deletion_id,state,micro_task_count FROM macro_task_deletions').fetchone()
+        deletion = connection.execute("SELECT deletion_id,state,micro_task_count FROM macro_task_deletions WHERE state='deleted'").fetchone()
         self.assertEqual(tuple(deletion)[1:], ('deleted', 1))
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE state='deleting'").fetchone()[0], 1)
+        for table in ('cursors', 'evaluation_state', 'model_facts', 'attempt_interruptions'):
+            self.assertGreater(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0], 0, table)
+        self.assertGreater(connection.execute('SELECT COUNT(*) FROM tasks WHERE queue_position IS NOT NULL').fetchone()[0], 0)
+
         self.assertGreater(connection.execute('SELECT COUNT(*) FROM commands WHERE deletion_id=?',
                                              (deletion['deletion_id'],)).fetchone()[0], 0)
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
@@ -300,7 +366,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_every_other_schema_is_refused_without_writes(self):
         fixture, connection = self.restored()
-        for version in ('24', '25', '0', '999', '026', '26.0', 'unrecognized'):
+        for version in ('24', '25', '0', '999', '026', '26.0', '027', '27.0', 'unrecognized'):
             with self.subTest(schema=version):
                 connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))
                 connection.commit()

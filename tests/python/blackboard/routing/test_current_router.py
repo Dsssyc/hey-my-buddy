@@ -69,9 +69,9 @@ class CurrentRouterTestCase(BoardTestCase):
     def add_task(self, task_id, *, at=T0, state="completed"):
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
+                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
                 "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
-                " VALUES(?,?,'host','{}','{}','digest',1,'decision','/work',60,?,1,?,?)",
+                " VALUES(?,?,'host','{}','digest',1,'decision','/work',60,?,1,?,?)",
                 (task_id, f"task-request-{task_id}", state, at, at))
 
     def add_attempt(self, attempt_id, task_id, *, at=T0, state="finished", receipt=None):

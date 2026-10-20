@@ -42,7 +42,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         self.assertIs(payload['ok'], True)
         return payload['result']
 
-    def test_browser_previews_and_deletes_whole_macro_task_with_one_replay_record(self):
+    def test_browser_previews_and_deletes_whole_macro_task_without_residual_record(self):
         board = self.board()
         first = self.create(board, macroTask={'title': 'Disposable'})
         second = self.create(board, 'second', macroTaskId=first['macroTaskId'])
@@ -65,11 +65,11 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         self.assertEqual(set(deleted), {'deletionId', 'macroTaskId', 'state', 'deletedAt', 'microTaskCount', 'duplicate'})
         self.assertEqual((deleted['state'], deleted['microTaskCount'], deleted['duplicate']), ('deleted', 2, False))
         self.assertIsNotNone(deleted['deletedAt'])
-        self.assertEqual(self.command(browser, DELETE, params), {**deleted, 'duplicate': True})
-        self.assertEqual(self.command(browser, PREVIEW, {'macroTaskId': target})['deletionState'], 'deleted')
+        self.command(browser, DELETE, params, status=404, code='NOT_FOUND')
+        self.command(browser, PREVIEW, {'macroTaskId': target}, status=404, code='NOT_FOUND')
         with board.store.db.read() as connection:
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0], 1)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 1)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
             self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertTrue(all(not checkout.exists() for checkout in checkouts))
         self.assertEqual(board.call('workflow_get', {'runId': other['runId']})['state'], 'cancelled')

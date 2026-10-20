@@ -211,7 +211,7 @@ def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
     reasons = []
     if not all(shutdown.get(k) is True for k in ('selfConfirmed', 'descendantsConfirmed')):
         reasons.append('shutdown-unconfirmed')
-    if run['state'] == 'accepted' and task['acceptance_verdict'] == 'accepted':
+    if run['state'] == 'accepted' and task['accepted_at']:
         finished_at = task['accepted_at']
         unproven = 'acceptance-time-unproven'
     elif run['state'] == 'concluded':

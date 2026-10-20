@@ -1,10 +1,10 @@
-"""A real private service reads the current fixture board and its history."""
+"""A real private service reads the upgraded fixture board and its history."""
 from unittest import mock
 
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
-from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
@@ -18,6 +18,7 @@ class UpgradeServiceTests(BoardTestCase):
         fixture = load_fixture(state)
         archived = backup.create(state, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(backup.verify(archived["path"])["schema"], fixture["schemaVersion"])
+        schema_upgrade.upgrade(state)
         Database(state).initialize()
         with Database(state).read() as connection:
             skipped = router.current_router(connection, now="2026-01-01T00:00:00.000Z")

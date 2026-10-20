@@ -298,7 +298,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
         # to test the independent late-callback/lineage fence.
         with board.store.db.write() as connection:
             connection.execute("UPDATE workflow_runs SET state='accepted', active_request_id=NULL WHERE run_id=?", (parent["runId"],))
-            connection.execute("UPDATE tasks SET accepted_at=?, acceptance_verdict='accepted' WHERE task_id=?", (board.store.now(), parent["runId"]))
+            connection.execute("UPDATE tasks SET accepted_at=? WHERE task_id=?", (board.store.now(), parent["runId"]))
             board.store.workflow._release_reservations(connection, parent["runId"], board.store.now())
         self.finish_turn(board, helper, disposition="attention")
         accepted = board.call("workflow_get", {"runId": parent["runId"]})

@@ -170,16 +170,6 @@ _INHERITED_CHILD_KEYS = {
 }
 
 
-def offline_facts_source(directory: Path) -> str:
-    """The offline model-facts source every test harness pins by default.
-
-    The path names a fixture that normally does not exist, so a facts refresh inside
-    a test fails its source read and retains the previous snapshot instead of
-    touching the network. A test that wants a real parse writes its fixture there.
-    """
-    return str(Path(directory) / "model-facts-fixture.json")
-
-
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
     environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("HMB_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
     # HOME and SDK locations belong to this fixture, never to the interpreter's
@@ -209,9 +199,6 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
         HMB_CONSOLE_PORT="0",
         HMB_CLAUDE_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/claude-not-installed"),
         HMB_CODEX_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/codex-not-installed"),
-        # Model-facts refreshes stay offline: the pinned source is a private fixture
-        # path, and a missing one is a retained snapshot, never a network request.
-        HMB_MODEL_FACTS_FILE=str(directory / "model-facts-fixture.json"),
     )
     environment.update(overrides or {})
     # Test-supplied paths may vary within the fixture, but must not redirect its
@@ -235,19 +222,9 @@ def private_state_dir(prefix: str = "hey-my-buddy-test-"):
     # different roots inside one test (storage boundaries and Git both resolve).
     directory = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
     os.chmod(directory, 0o700)
-    previous = os.environ.get("HMB_MODEL_FACTS_FILE")
-    os.environ["HMB_MODEL_FACTS_FILE"] = offline_facts_source(directory)
-
-    def restore_facts_source() -> None:
-        if previous is None:
-            os.environ.pop("HMB_MODEL_FACTS_FILE", None)
-        else:
-            os.environ["HMB_MODEL_FACTS_FILE"] = previous
-
     try:
         yield directory
     finally:
-        restore_facts_source()
         stop_private_service(directory)
         shutdown_private_rpc()
         assert_private_processes_gone(directory)
@@ -419,19 +396,7 @@ class BoardTestCase(unittest.TestCase):
         self._stack = []
         self.directory = Path(tempfile.mkdtemp(prefix="hey-my-buddy-test-")).resolve()
         os.chmod(self.directory, 0o700)
-        # In-process boards read the source hook from this process environment; pin
-        # the same offline fixture path the child environments get, so enabling a
-        # model in any test cannot reach the network.
-        previous = os.environ.get("HMB_MODEL_FACTS_FILE")
-        os.environ["HMB_MODEL_FACTS_FILE"] = offline_facts_source(self.directory)
-        self.addCleanup(self._restore_facts_source, previous)
         self.addCleanup(self._cleanup)
-
-    def _restore_facts_source(self, previous: str | None) -> None:
-        if previous is None:
-            os.environ.pop("HMB_MODEL_FACTS_FILE", None)
-        else:
-            os.environ["HMB_MODEL_FACTS_FILE"] = previous
 
     def _cleanup(self) -> None:
         stop_private_service(self.directory)

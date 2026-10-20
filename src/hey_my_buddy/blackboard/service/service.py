@@ -866,11 +866,6 @@ class BoardService(_BaseResource):
                     names = {row[0] for row in db.execute(
                         "SELECT DISTINCT adapter FROM tasks WHERE state='queued' "
                         "AND queue_reason IN ('awaiting-execution','capacity','awaiting-buddy-validation')")}
-                    if 'decision' in names:
-                        row = db.execute('SELECT p.harness FROM evaluation_state e JOIN buddies p '
-                                         'ON p.buddy_id=e.decision_buddy_id WHERE e.id=1').fetchone()
-                        if row:
-                            names.add(row[0])
                 for name in sorted(names & {'dsh', 'zcode', 'codex', 'claude'}):
                     self.harnesses.refresh(name, preflight=True)
             self.store.workflow.prepare_continuation_workspace({"taskId": task_id} if task_id else {})

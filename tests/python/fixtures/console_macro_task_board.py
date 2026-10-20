@@ -109,7 +109,6 @@ def private_environment(state: Path, runtime: Path, source: Path):
     os.environ.update(clean_environment(old))
     os.environ.update(HMB_STATE_DIR=str(state), HMB_RUNTIME_ROOT=str(runtime),
                       HMB_DEV_SOURCE="1", HMB_CONSOLE_PORT="0",
-                      HMB_MODEL_FACTS_FILE=str(state / "offline-model-facts.json"),
                       PYTHONPATH=os.pathsep.join((str(source / "src"), str(source / "tests/python"))))
     try:
         yield

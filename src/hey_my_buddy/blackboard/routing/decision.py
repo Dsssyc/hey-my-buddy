@@ -618,15 +618,14 @@ class DecisionCoordinator:
         fingerprint = schemas.spec_fingerprint(spec)
         blocker = self.board._admission_blocker(connection, spec)
         connection.execute(
-            "INSERT INTO tasks(task_id, request_id, owner, spec_json, spec_canonical_json, input_fingerprint,"
+            "INSERT INTO tasks(task_id, request_id, owner, spec_json, input_fingerprint,"
             " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, router_budget_seconds,"
             " state, queue_reason, revision, created_at, updated_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 task_id,
                 request_key,
                 "decision",
-                canonical_json(spec),
                 canonical_json(spec),
                 fingerprint,
                 schemas.FINGERPRINT_VERSION_CURRENT,

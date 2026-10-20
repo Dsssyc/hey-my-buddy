@@ -385,23 +385,18 @@ class BoardStore:
         kind: str,
         request: dict | None,
         subject: str | None = None,
-        *,
-        deleted_only: bool = False,
     ) -> sqlite3.Row | None:
         row = connection.execute("SELECT * FROM commands WHERE command_id = ?", (command_id,)).fetchone()
         if row is None:
             return None
-        if deleted_only and row["deletion_id"] is None:
-            return None
-        if row["subject"] and ((subject is None and row["deletion_id"] is not None)
-                               or (subject is not None and not _constant_time_equal(row["subject"], subject))):
+        if row["subject"] and subject is not None and not _constant_time_equal(row["subject"], subject):
             raise BoardError(
                 "UNAUTHORIZED",
                 "This commandId belongs to a different execution identity; it cannot be replayed from here",
                 commandId=command_id,
             )
-        if row["kind"] != kind or (row["deletion_id"] is None and request is not None
-                                    and row["request_hash"] != sha256_text(canonical_json(request))):
+        if row["kind"] != kind or (request is not None
+                                   and row["request_hash"] != sha256_text(canonical_json(request))):
             raise BoardError(
                 "CONFLICT",
                 "This commandId already belongs to a different request; use a new commandId",
@@ -412,8 +407,6 @@ class BoardStore:
     def _receipt_response(self, connection: sqlite3.Connection, row: sqlite3.Row | None) -> dict | None:
         if row is None:
             return None
-        if row["deletion_id"] is not None:
-            return {"commandId": row["command_id"], "deleted": True}
         from ..tasks.command_receipts import replay_response
 
         return replay_response(self.workflow, connection, row["kind"], json.loads(row["response_json"]))
@@ -446,7 +439,7 @@ class BoardStore:
 
         connection.execute(
             "INSERT OR REPLACE INTO commands(command_id, task_id, attempt_id, kind, request_hash, response_json,"
-            " subject, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            " subject) VALUES(?,?,?,?,?,?,?)",
             (
                 command_id,
                 task_id,
@@ -455,7 +448,6 @@ class BoardStore:
                 sha256_text(canonical_json(request)),
                 canonical_json(stored_response(kind, response)),
                 subject,
-                self.now(),
             ),
         )
 
@@ -489,7 +481,7 @@ class BoardStore:
             "updatedAt": row["updated_at"],
             "acceptedAt": row["accepted_at"],
             "acceptanceNote": row["acceptance_note"],
-            "acceptanceVerdict": row["acceptance_verdict"],
+            "acceptanceVerdict": "accepted" if row["accepted_at"] is not None else None,
             "reviewRejectedAt": row["review_rejected_at"],
             "reviewRejectionNote": row["review_rejection_note"],
             "resultAvailable": False,
@@ -548,9 +540,9 @@ class BoardStore:
             "direction": row["direction"],
             "author": row["author"],
             "recipient": row["recipient"],
-            "correlationId": row["correlation_id"],
+            "correlationId": row["inquiry_id"],
             "question": row["body"],
-            "questionBytes": row["body_bytes"],
+            "questionBytes": len(row["body"].encode("utf-8")),
             "questionSha256": row["payload_hash"],
             "state": row["state"],
             "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
@@ -926,8 +918,8 @@ class BoardStore:
 
     def _release_claims(self, connection: sqlite3.Connection, attempt_id: str) -> None:
         connection.execute(
-            "UPDATE resource_claims SET state='released', released_at=? WHERE attempt_id = ? AND state IN ('held','retained')",
-            (self.now(), attempt_id),
+            "UPDATE resource_claims SET state='released' WHERE attempt_id = ? AND state IN ('held','retained')",
+            (attempt_id,),
         )
 
     def _activity_latest(self, connection: sqlite3.Connection, attempt_id: str) -> dict | None:
@@ -1030,15 +1022,14 @@ class BoardStore:
                 now = self.now()
                 blocker = self._admission_blocker(connection, spec)
                 connection.execute(
-                    "INSERT INTO tasks(task_id, request_id, owner, spec_json, spec_canonical_json, input_fingerprint,"
+                    "INSERT INTO tasks(task_id, request_id, owner, spec_json, input_fingerprint,"
                     " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, expected_seconds,"
                     " state, queue_reason, revision, created_at, updated_at)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         task_id,
                         request_id,
                         owner,
-                        canonical_json(spec),
                         canonical_json(spec),
                         fingerprint,
                         schemas.FINGERPRINT_VERSION_CURRENT,
@@ -1368,7 +1359,7 @@ class BoardStore:
             self._transition_task(connection, task, "queued")
             connection.execute(
                 "UPDATE tasks SET queue_reason=?, active_attempt_id=NULL, selected_attempt_id=NULL,"
-                " accepted_at=NULL, acceptance_note=NULL, acceptance_verdict=NULL,"
+                " accepted_at=NULL, acceptance_note=NULL,"
                 " review_rejected_at=NULL, review_rejection_note=NULL WHERE task_id = ?",
                 (blocker or "awaiting-execution", task["task_id"]),
             )
@@ -1476,7 +1467,7 @@ class BoardStore:
                 now = self.now()
                 if verdict == "accepted":
                     connection.execute(
-                        "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict='accepted',"
+                        "UPDATE tasks SET accepted_at=?, acceptance_note=?,"
                         " updated_at=?, revision=revision+1 WHERE task_id = ?",
                         (now, note, now, task["task_id"]),
                     )
@@ -1791,10 +1782,10 @@ class BoardStore:
                     # (task, resource) is unique, so a retried task re-holds its own
                     # previously released claim instead of leaving it released.
                     connection.execute(
-                        "INSERT INTO resource_claims(claim_id, task_id, attempt_id, resource, kind, state, created_at,"
-                        " released_at) VALUES(?,?,?,?,?,?,?,NULL)"
+                        "INSERT INTO resource_claims(claim_id, task_id, attempt_id, resource, kind, state, created_at)"
+                        " VALUES(?,?,?,?,?,?,?)"
                         " ON CONFLICT(task_id, resource) DO UPDATE SET attempt_id=excluded.attempt_id,"
-                        " kind=excluded.kind, state='held', created_at=excluded.created_at, released_at=NULL",
+                        " kind=excluded.kind, state='held', created_at=excluded.created_at",
                         (str(uuid.uuid4()), chosen["task_id"], attempt_id, resource, kind, "held", now),
                     )
             self._transition_task(connection, chosen, "running")
@@ -2662,8 +2653,8 @@ class BoardStore:
                 message_id = str(uuid.uuid4())
                 connection.execute(
                     "INSERT INTO messages(message_id, task_id, attempt_id, inquiry_id, direction, author, recipient,"
-                    " correlation_id, body, body_bytes, payload_hash, state, reason_code, reason_params_json, created_at, updated_at, revision)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
+                    " body, payload_hash, state, reason_code, reason_params_json, created_at, updated_at, revision)"
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
                         message_id,
                         task["task_id"],
@@ -2672,9 +2663,7 @@ class BoardStore:
                         "question",
                         "cli",
                         None,
-                        inquiry_id,
                         question,
-                        question_bytes,
                         payload_hash,
                         state,
                         reason_code,

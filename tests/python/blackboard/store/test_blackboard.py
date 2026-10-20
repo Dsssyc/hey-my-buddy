@@ -1037,7 +1037,8 @@ class TestPackaging(BoardTestCase):
                 == "completed",
                 90,
             ),
-            "the runtime-hosted worker must complete real work",
+            {"message": "the runtime-hosted worker must complete real work",
+             "task": self.cli("status", json.dumps({"runId": task["runId"]}), env=environment)[1]},
         )
 
     def test_no_secrets_or_environments_are_copied_into_a_runtime(self):

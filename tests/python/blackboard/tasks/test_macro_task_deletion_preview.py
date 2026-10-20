@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from blackboard.tasks import test_workflow as workflow_fixtures, test_workspace as workspace_fixtures
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion, macro_tasks, worker_sessions, workflow, workspace
 
 
@@ -143,17 +144,16 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
             self.assertEqual(scope['sessions'], {'count': 1, 'bytes': None})
             self.assertEqual(self.dump(board), before)
 
-    def test_deleted_preview_keeps_confirmation_count_and_has_only_unknown_scope(self):
+    def test_deleted_target_preview_is_not_found_without_writes(self):
         board = self.board()
         run = self.create(board)
         board.call('workflow_cancel', {'runId': run['runId'], **self.control(run)})
         target = 'run:' + run['runId']
         self.assertEqual(deletion.delete(board.store, target, 1)['state'], 'deleted')
         before = self.dump(board)
-        preview = deletion.preview(board.store, target)
-        self.assertEqual((preview['microTaskCount'], preview['deletionState']), (1, 'deleted'))
-        self.assertEqual(preview['scope'], {'artifacts': {'count': None, 'bytes': None},
-                                           'sessions': {'count': None, 'bytes': None}, 'checkouts': None, 'gitRefs': None})
+        with self.assertRaises(BoardError) as caught:
+            deletion.preview(board.store, target)
+        self.assertEqual(caught.exception.code, 'NOT_FOUND')
         self.assertEqual(self.dump(board), before)
 
     def test_blockers_use_the_same_stored_title_and_task_rules_without_loaded_timeline_rows(self):

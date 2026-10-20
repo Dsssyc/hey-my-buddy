@@ -128,10 +128,6 @@ def child_environment(root: Path, private_root: Path, *, home_root: Path) -> dic
     values["HMB_CHECKS_TMPDIR"] = str(private_root / "tmp")
     values['HMB_STATE_DIR'] = str(private_root / 'state')
     values['HMB_RUNTIME_ROOT'] = str(private_root / 'runtime')
-    # Model-facts refreshes stay offline in the check suite: the pinned source is a
-    # private fixture path inside this root, and a missing one retains the snapshot
-    # instead of fetching.
-    values['HMB_MODEL_FACTS_FILE'] = str(private_root / 'state' / 'model-facts-fixture.json')
     return values
 
 

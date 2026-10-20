@@ -254,8 +254,8 @@ def _busy(connection, scope):
 
 
 def _summary(row, *, duplicate):
-    return {'deletionId':row['deletion_id'], 'macroTaskId':row['target_id'], 'state':row['state'],
-            'deletedAt':row['deleted_at'], 'microTaskCount':row['micro_task_count'], 'duplicate':duplicate}
+    return {'deletionId':row['deletion_id'], 'macroTaskId':row['target_id'], 'state':'deleting',
+            'deletedAt':None, 'microTaskCount':row['micro_task_count'], 'duplicate':duplicate}
 
 
 def _scope_summary(store, scope):
@@ -304,12 +304,6 @@ def preview(store, target: str) -> dict:
     """Return confirmation counts and at most fifty blockers in one snapshot."""
     with store.db.read() as connection:
         deletion = _record(connection, target)
-        if deletion is not None and deletion['state'] == 'deleted':
-            return {'macroTaskId':target, 'microTaskCount':deletion['micro_task_count'],
-                    'unconcludedFailureCount':0, 'blockerTotal':0, 'blockers':[],
-                    'scope': {'artifacts': {'count': None, 'bytes': None},
-                              'sessions': {'count': None, 'bytes': None}, 'checkouts': None, 'gitRefs': None},
-                    'backupRetention':'until-backup-rotation', 'deletionState':'deleted'}
         scope = _collect(connection, target)
         if _busy(connection, scope):
             raise BoardError('MACRO_TASK_BUSY', 'A workspace cleanup is applying', macroTaskId=target)
@@ -329,7 +323,7 @@ def preview(store, target: str) -> dict:
         return {'macroTaskId':target, 'microTaskCount':len(scope.runs), 'unconcludedFailureCount':failures,
                 'scope': _scope_summary(store, scope),
                 'blockerTotal':len(blockers), 'blockers':blockers[:50],
-                'backupRetention':'until-backup-rotation', 'deletionState':deletion['state'] if deletion else None}
+                'backupRetention':'until-backup-rotation', 'deletionState':'deleting' if deletion else None}
 
 
 def _delete_sessions(store, scope):
@@ -468,10 +462,9 @@ def _delete_rows(store, connection, scope, deletion):
     clauses.append("((kind LIKE 'workflow.%' OR kind='macro_task.stop') AND (" + ' OR '.join(response_clauses) + '))')
     args.extend(response_args)
     commands.update(row[0] for row in connection.execute(
-        'SELECT command_id FROM commands WHERE deletion_id IS NULL AND (' + ' OR '.join(clauses) + ')',args))
+        'SELECT command_id FROM commands WHERE ' + ' OR '.join(clauses),args))
     clause,args = _in('command_id',commands)
-    connection.execute(f"UPDATE commands SET task_id=NULL,attempt_id=NULL,response_json='{{}}',deletion_id=? WHERE {clause}",
-                       [deletion['deletion_id'],*args])
+    connection.execute(f'DELETE FROM commands WHERE {clause}',args)
     def remove(table, *conditions):
         clauses,args = [],[]
         for column,values in conditions:
@@ -513,10 +506,8 @@ def _delete_rows(store, connection, scope, deletion):
     remove('tasks',('task_id',t))
     if deletion['target_kind'] == 'macro-task':
         connection.execute('DELETE FROM macro_tasks WHERE macro_task_id=?',(deletion['target_id'],))
-    connection.execute("UPDATE macro_task_deletions SET state='deleted',deleted_at=? WHERE deletion_id=?",
-                       (store.now(),deletion['deletion_id']))
-    return store._append_event(connection,'macro_task.deleted',payload={'macroTaskId':deletion['target_id'],
-                                                                      'microTaskCount':deletion['micro_task_count']})
+    connection.execute('DELETE FROM macro_task_deletions WHERE deletion_id=?',(deletion['deletion_id'],))
+    return store._head_of(connection)
 
 
 def delete(store, target: str, micro_task_count: int) -> dict:
@@ -527,9 +518,6 @@ def delete(store, target: str, micro_task_count: int) -> dict:
         # Both marking and cleanup admission take the allocation lock before
         # opening their short write transaction. No restore can cross this fence.
         with store.db.read() as connection:
-            previous = _record(connection,target)
-            if previous is not None and previous['state'] == 'deleted':
-                return _summary(previous,duplicate=True)
             initial_scope = _collect(connection,target)
         from . import workspace
         with ExitStack() as locks:
@@ -547,8 +535,6 @@ def delete(store, target: str, micro_task_count: int) -> dict:
             with store.db.write() as connection:
                 deletion = _record(connection,target)
                 duplicate = deletion is not None
-                if deletion is not None and deletion['state'] == 'deleted':
-                    return _summary(deletion,duplicate=True)
                 scope = _collect(connection,target)
                 scope.sessions = worker_sessions.deletable_sessions(store,scope.tasks,connection=connection)
                 if deletion is None:
@@ -568,8 +554,8 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                         raise BoardError('MACRO_TASK_HARNESS_UNAVAILABLE','A harness with stored sessions is unavailable',
                                          macroTaskId=target,harnesses=unavailable)
                     kind,identifier = _target(target)
-                    connection.execute('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id,state,started_at,micro_task_count)'
-                                       " VALUES(?,?,?,'deleting',?,?)",('del-'+uuid.uuid4().hex,kind,identifier,store.now(),len(scope.runs)))
+                    connection.execute('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id,started_at,micro_task_count)'
+                                       ' VALUES(?,?,?,?,?)',('del-'+uuid.uuid4().hex,kind,identifier,store.now(),len(scope.runs)))
                     deletion = _record(connection,target)
         skipped = []
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
@@ -585,12 +571,12 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                         'objectKind':phase}
         with store.db.write() as connection:
             current = _record(connection,target)
-            assert current['state'] == 'deleting'
+            assert current is not None
             current_scope = _collect(connection,target)
             assert (current_scope.runs,current_scope.tasks,current_scope.attempts,current_scope.decisions) == (
                     scope.runs,scope.tasks,scope.attempts,scope.decisions), 'Deletion scope grew after its fence'
             head = _delete_rows(store,connection,scope,current)
-            result = _summary(_record(connection,target),duplicate=duplicate)
+            result = {**_summary(current,duplicate=duplicate), 'state':'deleted', 'deletedAt':store.now()}
         store._notify(head)
         if skipped:
             result['skipped'] = skipped

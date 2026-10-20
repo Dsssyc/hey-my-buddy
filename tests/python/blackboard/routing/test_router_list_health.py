@@ -85,9 +85,9 @@ class RouterListHealthTestCase(BoardTestCase):
             task_id, attempt_id = f"legacy-task-{self.sequence}", f"legacy-attempt-{self.sequence}"
             with self.db.write() as db:
                 db.execute(
-                    "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
+                    "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
                     "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
-                    " VALUES(?,?,'host','{}','{}','digest',1,'decision','<private>',60,'completed',1,?,?)",
+                    " VALUES(?,?,'host','{}','digest',1,'decision','<private>',60,'completed',1,?,?)",
                     (task_id, task_id, at, at))
                 db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,0,'nonce','finished','decision',?,1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), at, at, at))
         requested = {"kind": "select", "routerBuddyId": buddy_id,
@@ -290,9 +290,9 @@ class CurrentRoleTests(RouterListHealthTestCase):
         self.set_settings(ids=[A], interval=600)
         with self.db.write() as db:
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,owner,spec_json,spec_canonical_json,input_fingerprint,"
+                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
                 "fingerprint_version,adapter,cwd,router_budget_seconds,state,revision,created_at,updated_at)"
-                " VALUES('task-live','req-live','host','{}','{}','digest',1,'decision','<private>',60,"
+                " VALUES('task-live','req-live','host','{}','digest',1,'decision','<private>',60,"
                 "'running',1,?,?)", (T0, T0))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,created_at,updated_at) VALUES('attempt-live','task-live',0,'nonce','executing','decision',NULL,0,?,?)", (T0, T0))
             db.execute(

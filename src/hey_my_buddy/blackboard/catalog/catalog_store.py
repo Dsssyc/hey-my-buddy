@@ -236,8 +236,6 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         active_count = db.execute('SELECT COUNT(*) FROM buddies WHERE available=1').fetchone()[0]
         if active_count > 200:
             raise BoardError('CATALOG_LIMIT', 'The current native buddy set exceeds 200 buddies; no entries were silently dropped')
-        if table_changed:
-            db.execute('UPDATE evaluation_state SET updated_at=? WHERE id=1', (now,))
         response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'buddies': CatalogView.from_payload(payload).proposed_buddies(), 'appliedHarnesses': applied, 'staleHarnesses': stale}
         db.execute('UPDATE catalog_observations SET completed_at=?,response_json=? WHERE observation_id=?', (now, canonical_json(response), observation_id))
         for transition in transitions:

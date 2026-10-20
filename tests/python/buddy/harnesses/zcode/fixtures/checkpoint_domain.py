@@ -123,8 +123,7 @@ def serve():
         environment[key] = str(home / suffix)
     environment.update(XDG_RUNTIME_DIR=str(runtime),
                        ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(home / "builtin.json"),
-                       ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(home / "personal.json"),
-                       HMB_MODEL_FACTS_FILE=str(root / "offline-facts.json"))
+                       ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(home / "personal.json"))
     os.environ.clear()
     os.environ.update(environment)
 

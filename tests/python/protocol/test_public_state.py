@@ -43,7 +43,6 @@ def prepare_daemon_spawn(command, kwargs, state: Path):
         PYTHONPATH=os.pathsep.join(paths),
         PYTHONDONTWRITEBYTECODE="1",
         HMB_MODEL_CATALOG_FILE=str(state / "model-catalog.json"),
-        HMB_MODEL_FACTS_FILE=str(state / "model-facts-fixture.json"),
         HMB_CHECKS_TMPDIR=os.environ["HMB_CHECKS_TMPDIR"],
     )
     return [command[0], *DAEMON_COMMAND[1:]]
@@ -503,7 +502,6 @@ if __name__ == "__main__":
         assert str(ROOT / "tests/python") in sys.path and str(ROOT / "src") in sys.path
         state = Path(os.environ["HMB_STATE_DIR"])
         assert Path(os.environ["HMB_MODEL_CATALOG_FILE"]) == state / "model-catalog.json"
-        assert Path(os.environ["HMB_MODEL_FACTS_FILE"]) == state / "model-facts-fixture.json"
         assert Path(os.environ["HMB_CHECKS_TMPDIR"]).is_dir()
         print(json.dumps({"supportFile": sys.modules["support"].__file__, "state": str(state)}))
     elif len(sys.argv) > 1 and sys.argv[1] == "--daemon-fixture":

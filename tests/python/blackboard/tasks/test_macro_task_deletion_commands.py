@@ -46,7 +46,6 @@ def assert_deleted_receipts(case, board, target, expected_kinds, retained_comman
     owned = {command_id: row for command_id, row in before.items()
              if row["kind"] in expected_kinds and command_id not in retained_command_ids}
     case.assertEqual({row["kind"] for row in owned.values()}, set(expected_kinds))
-    case.assertTrue(all(row["deletion_id"] is None for row in before.values()))
     references = {field: set() for field in RESPONSE_BINDINGS}
     references["runId"].update(owned_run_ids)
     references["targetRunId"].update(owned_run_ids)
@@ -64,21 +63,13 @@ def assert_deleted_receipts(case, board, target, expected_kinds, retained_comman
     deleted = delete_without_physical_io(board, target)
     case.assertEqual(deleted["state"], "deleted")
     after = receipt_rows(board)
-    case.assertEqual(set(after), set(before))
+    case.assertLessEqual(set(after), set(before))
     for command_id, original in owned.items():
         with case.subTest(command_id=command_id, kind=original["kind"]):
-            row = after[command_id]
-            case.assertEqual(row["deletion_id"], deleted["deletionId"])
-            case.assertEqual(row["response_json"], "{}")
-            case.assertIsNone(row["task_id"])
-            case.assertIsNone(row["attempt_id"])
-            case.assertEqual(row["kind"], original["kind"])
-            case.assertEqual(row["request_hash"], original["request_hash"])
+            case.assertNotIn(command_id, after)
     for command_id in retained_command_ids:
         case.assertEqual(after[command_id], before[command_id])
     for command_id, row in after.items():
-        if row["deletion_id"] is not None:
-            continue
         case.assertNotIn(row["task_id"], owned_run_ids, command_id)
         case.assertNotIn(row["attempt_id"], attempt_ids, command_id)
         response = json.loads(row["response_json"])
@@ -92,7 +83,7 @@ def assert_deleted_receipts(case, board, target, expected_kinds, retained_comman
 
 
 class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
-    def test_real_workflow_commands_are_tombstoned_with_their_macro_task(self):
+    def test_real_workflow_commands_are_removed_with_their_macro_task(self):
         board = self.board()
         first = self.submit(board, request_id="commands-first", macroTask={"title": "Disposable"})
         self.finish_turn(board, self.claim(board), disposition="attention")
@@ -138,8 +129,14 @@ class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
             "workflow.decide", "workflow.continue", "workflow.scope_amend", "workflow.accept",
             "workflow.cancel", "workflow.conclude", "macro_task.stop",
         }, retained, {first["runId"], second["runId"]})
-        self.assertEqual(after["commands-stop"]["response_json"], "{}")
+        self.assertNotIn("commands-stop", after)
         self.assertEqual(before["commands-other-cancel"], after["commands-other-cancel"])
+        status, _, raw = browser.command(
+            "macro_task_stop", {"macroTaskId": other["macroTaskId"], "commandId": "commands-stop"},
+            csrf=browser.bootstrap()["csrfToken"],
+        )
+        self.assertEqual(status, 200, raw)
+        self.assertEqual(receipt_rows(board)["commands-stop"]["kind"], "macro_task.stop")
 
 
 class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):

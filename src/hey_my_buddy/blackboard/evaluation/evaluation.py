@@ -212,10 +212,4 @@ class EvaluationStore:
             self.board._store_receipt(connection, command_id, "user_policy.publish", request, response)
             head = self.board._head_of(connection)
         self.board._notify(head)
-        if published.get("enabledModelServices"):
-            from . import model_facts
-            try:
-                model_facts.refresh_model_services(self.board, published["enabledModelServices"], now=self._now())
-            except Exception:  # noqa: BLE001 - a committed setting does not depend on the network
-                pass
         return response

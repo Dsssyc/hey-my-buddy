@@ -13,7 +13,7 @@ import subprocess
 import time
 import uuid
 
-from ..blackboard.store import backup
+from ..blackboard.store import backup, upgrade as schema_upgrade
 from .. import private_dirs
 from . import runtime
 from .launcher import write_active_runtime
@@ -61,8 +61,9 @@ def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = F
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or schema[0] != str(SCHEMA_VERSION):
-            raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade accepts schema {SCHEMA_VERSION} only')
+        if schema is None or schema[0] not in (str(schema_upgrade.BASE_SCHEMA_VERSION), str(SCHEMA_VERSION)):
+            raise BoardError('UNSUPPORTED_SCHEMA',
+                             f'Upgrade accepts schema {schema_upgrade.BASE_SCHEMA_VERSION} or {SCHEMA_VERSION} only')
         # A micro-task Host boundary has no autonomous next turn. A recorded or
         # queued continuation still has work to prepare/claim, even if the run
         # currently reports a Host boundary. Routing and helper tasks are checked
@@ -502,6 +503,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal.update(phase='backed-up', backup=backed_up)
                     write_journal(marker, journal)
                 expected = before
+                if contract_changed and before['schema'] == schema_upgrade.BASE_SCHEMA_VERSION:
+                    journal.update(phase='converting')
+                    write_journal(marker, journal)
+                    schema_upgrade.upgrade(state)
+                    expected = idle_snapshot(state, exact=True)
+                    expected['runtimeSettings'] = runtime_settings
                 journal.update(phase='prepared', expected=expected)
                 write_journal(marker, journal)
             active = target

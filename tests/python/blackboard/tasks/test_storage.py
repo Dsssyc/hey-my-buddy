@@ -669,7 +669,7 @@ class StorageTests(BoardTestCase):
         workflow.shutdown_summary.return_value = {'selfConfirmed': None, 'descendantsConfirmed': None}
         store = mock.Mock(workflow=workflow)
         reasons = storage._zcode_reasons(store, object(), {'run_id': 'run', 'state': 'running'},
-                                         {'acceptance_verdict': None}, 0)
+                                         {'accepted_at': None}, 0)
         self.assertEqual(reasons, ['continuation-supported', 'shutdown-unconfirmed'])
 
 

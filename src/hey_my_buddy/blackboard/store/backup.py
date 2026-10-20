@@ -16,7 +16,8 @@ import sys
 import tempfile
 import time
 
-from .db import SCHEMA_VERSION, utc_now
+from .db import SCHEMA_VERSION, Database, utc_now
+from .upgrade import BASE_SCHEMA_VERSION, upgrade as upgrade_schema
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ... import private_dirs
@@ -234,7 +235,7 @@ def _verify(directory: Path) -> dict:
     _guard(directory)
     with _open(directory / 'manifest.json', 'rb') as stream:
         manifest = json.load(stream)
-    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
+    if manifest.get('format') != 1 or manifest.get('schema') not in (BASE_SCHEMA_VERSION, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
     if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:
@@ -264,6 +265,9 @@ def _verify(directory: Path) -> dict:
                 raise BoardError('BACKUP_INVALID', 'SQLite foreign key check failed')
             if manifest.get('databaseSnapshot') is not None and database_snapshot(connection) != manifest['databaseSnapshot']:
                 raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
+        if manifest['schema'] == BASE_SCHEMA_VERSION:
+            upgrade_schema(trial)
+        Database(trial).initialize()
     return manifest
 
 

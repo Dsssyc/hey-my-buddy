@@ -8,7 +8,7 @@ import stat
 import unittest
 from unittest import mock
 
-from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
@@ -20,14 +20,14 @@ STATE_FILES = ('console-settings.json',)
 
 
 class BackupTests(BoardTestCase):
-    def test_fixture_backup_retains_current_schema_and_exact_board_bytes(self):
+    def test_fixture_backup_trials_upgrade_and_retains_base_schema_and_exact_bytes(self):
         import gzip
 
         fixture = load_fixture(self.directory)
         before = (self.directory / 'board.sqlite3').read_bytes()
         current = Path(backup.create(self.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
-        self.assertEqual(backup.verify(current)['schema'], SCHEMA_VERSION)
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        self.assertEqual(backup.verify(current)['schema'], schema_upgrade.BASE_SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], schema_upgrade.BASE_SCHEMA_VERSION)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
 
@@ -110,7 +110,7 @@ class BackupTests(BoardTestCase):
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text())
-        for version in (21, 23, 24, 25, 27):
+        for version in (21, 23, 24, 25, 28):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest))

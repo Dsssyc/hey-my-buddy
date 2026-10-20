@@ -241,15 +241,32 @@ describe("macro task deletion confirmation", () => {
     expect(f.onDeleted).not.toHaveBeenCalled();
   });
 
-  it("resumes a deletion already started in another browser and recognizes an already deleted target", async () => {
+  it("resumes a deletion already started in another browser", async () => {
     const command = vi.fn().mockResolvedValueOnce(preview({ deletionState: "deleting" })).mockResolvedValueOnce(receipt({ duplicate: true }));
     const f = dialogHarness({ api: { command } as unknown as ConsoleApi });
     await f.user.click(await screen.findByRole("button", { name: "重试删除" }));
     expect(command).toHaveBeenLastCalledWith("macro_task_delete", { macroTaskId: "macro-1", microTaskCount: 73, confirm: true }, "synthetic-csrf");
     expect(f.onDeleted).toHaveBeenCalledOnce();
-    f.unmount();
-    const other = dialogHarness({ api: { command: vi.fn(async () => preview({ deletionState: "deleted", unconcludedFailureCount: 0 })) } as unknown as ConsoleApi });
-    await waitFor(() => expect(other.onDeleted).toHaveBeenCalledWith("macro-1", 0));
+  });
+
+  it("treats NOT_FOUND on a deletion retry as completed", async () => {
+    const f = dialogHarness();
+    await screen.findByRole("button", { name: "删除" });
+    f.command.mockRejectedValueOnce(new ApiError("NETWORK", "lost reply"));
+    await confirm();
+    await screen.findByText(/删除结果尚未确认/);
+    f.command.mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
+    await f.user.click(screen.getByRole("button", { name: "重试删除" }));
+    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
+  });
+
+  it("shows NOT_FOUND on the first deletion attempt as an error", async () => {
+    const f = dialogHarness();
+    await screen.findByRole("button", { name: "删除" });
+    f.command.mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
+    await confirm();
+    await screen.findByRole("alert");
+    expect(f.onDeleted).not.toHaveBeenCalled();
   });
 
   it("ignores a preview completing after its confirmation has been cancelled", async () => {
@@ -257,7 +274,7 @@ describe("macro task deletion confirmation", () => {
     const f = dialogHarness({ api: { command: vi.fn(async () => pending.promise) } as unknown as ConsoleApi });
     await screen.findByText("正在读取删除范围…");
     f.unmount();
-    await act(async () => pending.resolve(preview({ deletionState: "deleted", unconcludedFailureCount: 0 })));
+    await act(async () => pending.resolve(preview()));
     expect(f.onDeleted).not.toHaveBeenCalled();
   });
 

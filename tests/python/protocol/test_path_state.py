@@ -39,7 +39,6 @@ def run_path_case(name, work):
     write_catalog_fixture(state)
     environment = dict(os.environ, HMB_STATE_DIR=str(state),
                        HMB_MODEL_CATALOG_FILE=str(state / 'model-catalog.json'),
-                       HMB_MODEL_FACTS_FILE=str(state / 'model-facts-fixture.json'),
                        HMB_RUNTIME_ROOT=str(work / 'runtime'))
     evidence = {'case': name, 'state': str(state), 'processes': [], 'requests': []}
     handles = []

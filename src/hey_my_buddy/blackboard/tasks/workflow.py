@@ -2199,9 +2199,6 @@ class WorkflowCoordinator:
                 if params.get("note") is not None else None)
         auto_continue = schemas.optional_bool(params, "autoContinue", True)
         with self.db.read() as connection:
-            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.decide", None, deleted_only=True)
-            if receipt_entry is not None:
-                return {"deletedReceipt": self.board._receipt_response(connection, receipt_entry), "helpers": []}
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A Host decision")
             integrator = self._owner_actor(connection, owner)
@@ -2215,8 +2212,6 @@ class WorkflowCoordinator:
         return self.decide_normalized(params, normalized, console_authority=console_authority)
 
     def decide_normalized(self, params: dict, normalized: dict, *, console_authority: dict | None = None) -> dict:
-        if "deletedReceipt" in normalized:
-            return normalized["deletedReceipt"]
         run_id, request_id, command_id = (normalized[key] for key in ("runId", "requestId", "commandId"))
         expected, decision, note = (normalized[key] for key in ("expectedRevision", "decision", "note"))
         auto_continue, helpers = normalized["autoContinue"], normalized["helpers"]
@@ -2252,8 +2247,6 @@ class WorkflowCoordinator:
             now = self.now()
             with self.db.write() as connection:
                 receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.decide", request_key)
-                if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                    return self.board._receipt_response(connection, receipt_entry)
                 run_row = self._run_row(connection, run_id)
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
                 actor, _initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="A Host decision")
@@ -2477,8 +2470,6 @@ class WorkflowCoordinator:
         """Read-only authority/revision/replay check before any workspace preparation."""
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.decide", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             run_row = self._run_row(connection, run_id)
             # Authority is checked before a replay is returned; a delayed old owner
             # can never read back another Host's recorded response.
@@ -2791,14 +2782,13 @@ class WorkflowCoordinator:
                 )
             return
         connection.execute(
-            "INSERT INTO tasks(task_id, request_id, owner, spec_json, spec_canonical_json, input_fingerprint,"
+            "INSERT INTO tasks(task_id, request_id, owner, spec_json, input_fingerprint,"
             " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, expected_seconds,"
-            " state, queue_reason, revision, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
+            " state, queue_reason, revision, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
             (
                 helper_task_id,
                 request_id,
                 None,
-                canonical_json(spec),
                 canonical_json(spec),
                 fingerprint,
                 schemas.FINGERPRINT_VERSION_CURRENT,
@@ -2977,8 +2967,6 @@ class WorkflowCoordinator:
         # checked again after validation, before any durable mutation.
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.continue", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             run = self._run_row(connection, run_id)
             self._authorize(connection, run, params, console_authority=console_authority, action="A continuation")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -3004,8 +2992,6 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.continue", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A continuation")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -3365,8 +3351,6 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.takeover", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             run_row = self._run_row(connection, run_id)
             receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
@@ -3490,8 +3474,6 @@ class WorkflowCoordinator:
         with self.db.write() as connection:
             if command_id:
                 receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cancel", request_key)
-                if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                    return self.board._receipt_response(connection, receipt_entry)
             run_row = self._run_row(connection, run_id)
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             actor, initiator = self._authorize(connection, run_row, params, console_authority=console_authority, action="Cancellation")
@@ -3523,8 +3505,6 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "macro_task.stop", request)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             receipt = self.board._receipt_response(connection, receipt_entry)
             if receipt is not None:
                 return {**receipt, "duplicate": True}
@@ -3992,8 +3972,6 @@ class WorkflowCoordinator:
         duplicate = None
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.accept", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -4034,8 +4012,6 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.accept", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="An acceptance")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -4079,8 +4055,8 @@ class WorkflowCoordinator:
         """
         if connection.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone() is None:
             return False
-        task = connection.execute("SELECT accepted_at, acceptance_verdict, acceptance_note FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-        if not task["accepted_at"] or task["acceptance_verdict"] != "accepted":
+        task = connection.execute("SELECT accepted_at, acceptance_note FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        if not task["accepted_at"]:
             return False
         if task["acceptance_note"] != note:
             return True
@@ -4336,7 +4312,7 @@ class WorkflowCoordinator:
                     "CONFLICT",
                     "This run already has a different recorded acceptance; a reviewed outcome is not relabelled",
                     acceptedAt=task["accepted_at"],
-                    verdict=task["acceptance_verdict"],
+                    verdict="accepted",
                 )
             response = {**self.compact(connection, run_row, task), "verdict": "accepted", "duplicate": True,
                         "targetRunId": run_id, "targetRevision": run_row["revision"]}
@@ -4402,7 +4378,7 @@ class WorkflowCoordinator:
                                  integrationId=existing["integration_id"])
             integration = existing
         updated = connection.execute(
-            "UPDATE tasks SET accepted_at=?, acceptance_note=?, acceptance_verdict='accepted',"
+            "UPDATE tasks SET accepted_at=?, acceptance_note=?,"
             " review_rejected_at=NULL, review_rejection_note=NULL, updated_at=?,"
             " revision=revision+1 WHERE task_id=?",
             (now, note, now, run_id),
@@ -4991,8 +4967,6 @@ class WorkflowCoordinator:
                        "writeScope": write_scope, "note": note, "expectedRevision": expected}
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.scope_amend", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -5004,8 +4978,6 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.scope_amend", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A scope amendment")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -5220,8 +5192,6 @@ class WorkflowCoordinator:
                        "paths": paths, "observedFingerprint": observed, "note": note, "expectedRevision": expected}
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.workspace_resolve", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -5268,8 +5238,6 @@ class WorkflowCoordinator:
         now = self.now()
         with self.db.write() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.workspace_resolve", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A workspace resolution")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -5542,7 +5510,7 @@ class WorkflowCoordinator:
             "ownerGeneration": run_row["owner_generation"],
             "attemptId": task["selected_attempt_id"],
             "acceptance": {"state": run_row["state"], "acceptedAt": task["accepted_at"],
-                           "verdict": task["acceptance_verdict"]},
+                           "verdict": "accepted" if task["accepted_at"] else None},
             "shutdown": summary,
             "finalArtifactId": run_row["final_artifact_id"],
             "integrationId": integration["integration_id"] if integration is not None else None,
@@ -5597,8 +5565,6 @@ class WorkflowCoordinator:
         request_key = {"runId": run_id, "targetRunId": target_id, "expectedRevision": expected}
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_plan", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -5643,8 +5609,6 @@ class WorkflowCoordinator:
         expires_at = self._expiry(CLEANUP_PLAN_TTL_SECONDS)
         with self.db.write() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_plan", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, owner_run_id)
             actor, _initiator = self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup plan")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -5745,8 +5709,6 @@ class WorkflowCoordinator:
                        "expectedRevision": expected}
         with self.db.read() as connection:
             receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_apply", request_key)
-            if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                return self.board._receipt_response(connection, receipt_entry)
             owner = self._run_row(connection, run_id)
             self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
             receipt = self.board._receipt_response(connection, receipt_entry)
@@ -5810,8 +5772,6 @@ class WorkflowCoordinator:
             now = self.now()
             with self.db.write() as connection:
                 receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_apply", request_key)
-                if receipt_entry is not None and receipt_entry["deletion_id"] is not None:
-                    return self.board._receipt_response(connection, receipt_entry)
                 owner = self._run_row(connection, owner_run_id)
                 self._authorize(connection, owner, params, console_authority=console_authority, action="A cleanup apply")
                 receipt = self.board._receipt_response(connection, receipt_entry)
@@ -7775,7 +7735,7 @@ class WorkflowCoordinator:
             (task["task_id"],),
         ).fetchone() is not None
         if fenced:
-            if run_row is not None and run_row["state"] == "accepted" and task["acceptance_verdict"] == "accepted":
+            if run_row is not None and run_row["state"] == "accepted" and task["accepted_at"]:
                 state = "succeeded"
             else:
                 state = child["state"] if child["state"] in ("succeeded", "failed", "cancelled") else "cancelled"

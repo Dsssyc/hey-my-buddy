@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from hey_my_buddy import private_dirs
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion
 from hey_my_buddy.home import control_file_path, submission_file_path
 from support import BoardTestCase
@@ -84,7 +85,7 @@ from blackboard.tasks import test_workflow as workflow_fixtures
 class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
     closed = engine_fixtures.MacroTaskDeletionTests.closed
 
-    def test_session_group_removal_is_idempotent_for_macro_and_independent_micro(self):
+    def test_session_group_removal_is_idempotent_and_finished_deletion_is_not_found(self):
         for macro in (True, False):
             with self.subTest(macro=macro):
                 board = self.board()
@@ -98,7 +99,10 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
                     result = deletion.delete(board.store, target, 1)
                 self.assertEqual(result['state'], 'deleted')
                 self.assertFalse(record.parent.exists())
-                self.assertTrue(deletion.delete(board.store, target, 1)['duplicate'])
+                self.assertEqual(deletion._delete_session_group(board.store, target), [])
+                with self.assertRaises(BoardError) as caught:
+                    deletion.delete(board.store, target, 1)
+                self.assertEqual(caught.exception.code, 'NOT_FOUND')
 
     def test_session_group_link_is_reported_without_following_target(self):
         board = self.board()

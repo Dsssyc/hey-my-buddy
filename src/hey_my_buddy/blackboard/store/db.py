@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -57,13 +57,9 @@ CREATE TABLE IF NOT EXISTS macro_task_deletions (
     deletion_id      TEXT PRIMARY KEY,
     target_kind      TEXT NOT NULL CHECK (target_kind IN ('macro-task','micro-task-tree')),
     target_id        TEXT NOT NULL,
-    state            TEXT NOT NULL CHECK (state IN ('deleting','deleted')),
     started_at       TEXT NOT NULL,
-    deleted_at       TEXT,
     micro_task_count INTEGER NOT NULL,
-    UNIQUE(target_kind, target_id),
-    CHECK ((state='deleting' AND deleted_at IS NULL)
-        OR (state='deleted' AND deleted_at IS NOT NULL))
+    UNIQUE(target_kind, target_id)
 );
 """
 #: Every task state the durable model may hold. See ``docs/board.md`` for the
@@ -99,7 +95,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     request_id              TEXT NOT NULL UNIQUE,
     owner                   TEXT,
     spec_json               TEXT NOT NULL,
-    spec_canonical_json     TEXT NOT NULL,
     input_fingerprint       TEXT NOT NULL,
     fingerprint_version     INTEGER NOT NULL,
     adapter                 TEXT NOT NULL,
@@ -118,15 +113,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     updated_at              TEXT NOT NULL,
     accepted_at             TEXT,
     acceptance_note         TEXT,
-    acceptance_verdict      TEXT CHECK (acceptance_verdict = 'accepted'),
     review_rejected_at      TEXT,
     review_rejection_note   TEXT,
-    queue_position          INTEGER,
     CHECK ((adapter='decision' AND expected_seconds IS NULL AND router_budget_seconds IS NOT NULL)
         OR (adapter!='decision' AND expected_seconds IS NOT NULL AND router_budget_seconds IS NULL))
 );
 CREATE INDEX IF NOT EXISTS tasks_state_idx ON tasks(state, created_at);
-CREATE INDEX IF NOT EXISTS tasks_request_idx ON tasks(request_id);
 
 CREATE TABLE IF NOT EXISTS attempts (
     attempt_id          TEXT PRIMARY KEY,
@@ -167,7 +159,6 @@ CREATE TABLE IF NOT EXISTS attempts (
     token_usage_json    TEXT,
     UNIQUE(task_id, generation)
 );
-CREATE INDEX IF NOT EXISTS attempts_task_idx ON attempts(task_id, generation);
 -- Relational guarantee of the documented invariant: at most one effective active
 -- attempt per task. An unconfirmed (uncertain) attempt keeps its slot, so a
 -- replacement cannot be created while a survivor may still be running.
@@ -191,7 +182,6 @@ CREATE TABLE IF NOT EXISTS attempt_process_identities (
 CREATE TABLE IF NOT EXISTS attempt_interruptions (
     attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
     evidence_kind       TEXT NOT NULL CHECK (evidence_kind IN ('boot-changed','identity-absent','orphan-stopped')),
-    observed_at         TEXT NOT NULL,
     state               TEXT NOT NULL CHECK (state IN ('sealing','settled')),
     seal_error          TEXT
 );
@@ -227,9 +217,7 @@ CREATE TABLE IF NOT EXISTS messages (
     direction       TEXT NOT NULL,
     author          TEXT NOT NULL,
     recipient       TEXT,
-    correlation_id  TEXT,
     body            TEXT NOT NULL,
-    body_bytes      INTEGER NOT NULL,
     payload_hash    TEXT NOT NULL,
     state           TEXT NOT NULL
         CHECK (state IN ('queued','claimed','delivered','answered','discarded','unavailable')),
@@ -292,11 +280,8 @@ CREATE TABLE IF NOT EXISTS commands (
     kind            TEXT NOT NULL,
     request_hash    TEXT NOT NULL,
     response_json   TEXT NOT NULL,
-    subject         TEXT,
-    created_at      TEXT NOT NULL,
-    deletion_id TEXT REFERENCES macro_task_deletions(deletion_id) ON DELETE RESTRICT
+    subject         TEXT
 );
-CREATE INDEX IF NOT EXISTS commands_kind_idx ON commands(kind, created_at);
 
 CREATE TABLE IF NOT EXISTS resource_claims (
     claim_id    TEXT PRIMARY KEY,
@@ -306,16 +291,9 @@ CREATE TABLE IF NOT EXISTS resource_claims (
     kind        TEXT NOT NULL,
     state       TEXT NOT NULL,
     created_at  TEXT NOT NULL,
-    released_at TEXT,
     UNIQUE(task_id, resource)
 );
 CREATE INDEX IF NOT EXISTS resource_claims_state_idx ON resource_claims(state, kind);
-
-CREATE TABLE IF NOT EXISTS cursors (
-    consumer   TEXT PRIMARY KEY,
-    seq        INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
-);
 
 -- One bounded latest activity projection per attempt. It is a projection, not a
 -- history: a native controller publishes phase/tool/waiting observations through
@@ -366,14 +344,6 @@ CREATE TABLE IF NOT EXISTS model_service_notes (
     text       TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (harness, provider, model)
-);
-""",
-    """
-CREATE TABLE IF NOT EXISTS evaluation_state (
-    id                      INTEGER PRIMARY KEY CHECK (id = 1),
-    decision_buddy_id     TEXT,
-    created_at              TEXT NOT NULL,
-    updated_at              TEXT NOT NULL
 );
 """,
     """
@@ -479,28 +449,6 @@ CREATE TABLE IF NOT EXISTS model_service_concurrency (
     concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK (concurrency_limit BETWEEN 1 AND 32),
     created_at        TEXT NOT NULL,
     updated_at        TEXT NOT NULL,
-    PRIMARY KEY (harness, provider, model)
-);
-""",
-    # Program-owned model facts snapshots (ADR-021 decision 12), one durable dated
-    # snapshot per model service extracted from the public models.dev catalog. Facts
-    # belong to the model, never to a buddy, and are never user-editable. A
-    # ``current`` row carries the extracted facts with their exact source, payload
-    # hash and fetch date; an ``unknown`` row records a completed fetch with no
-    # resolvable entry for this model service. A failed fetch writes nothing, so the
-    # previous snapshot is retained untouched.
-    """
-CREATE TABLE IF NOT EXISTS model_facts (
-    harness          TEXT NOT NULL,
-    provider         TEXT NOT NULL,
-    model            TEXT NOT NULL,
-    status           TEXT NOT NULL CHECK (status IN ('current','unknown')),
-    facts_json       TEXT NOT NULL DEFAULT '{}',
-    identity_json    TEXT NOT NULL DEFAULT '{}',
-    source           TEXT NOT NULL,
-    payload_sha256   TEXT NOT NULL,
-    fetched_at       TEXT NOT NULL,
-    reason           TEXT,
     PRIMARY KEY (harness, provider, model)
 );
 """,
@@ -626,9 +574,6 @@ CREATE INDEX IF NOT EXISTS workflow_routes_run_idx ON workflow_routes(run_id);
     # validated structured outcome. Access is the frozen permission of this
     # turn; a full-access note belongs only to that explicit choice.
     WORKFLOW_TURNS_DDL,
-    """
-CREATE INDEX IF NOT EXISTS workflow_turns_run_idx ON workflow_turns(run_id, turn_index);
-""",
     """
 CREATE INDEX IF NOT EXISTS workflow_turns_attempt_idx ON workflow_turns(attempt_id);
 """,
@@ -763,9 +708,6 @@ CREATE TABLE IF NOT EXISTS workflow_scope_versions (
     PRIMARY KEY (run_id, scope_version),
     CHECK (actor_role IN ('host','lead','console','service','workflow','bridge'))
 );
-""",
-    """
-CREATE INDEX IF NOT EXISTS workflow_scope_versions_run_idx ON workflow_scope_versions(run_id, scope_version);
 """,
     # Durable evidence of a failed seal that found managed changes outside the
     # authorized write scope, plus the Host's later restore/adopt/abandon decision.
@@ -1275,10 +1217,6 @@ class Database:
                     except BaseException:
                         connection.execute("ROLLBACK")
                         raise
-                connection.execute(
-                    "INSERT OR IGNORE INTO evaluation_state(id, created_at, updated_at) VALUES(1, ?, ?)",
-                    (utc_now(), utc_now()),
-                )
                 if fresh:
                     from ..routing.router import initialize_configuration
                     initialize_configuration(connection)

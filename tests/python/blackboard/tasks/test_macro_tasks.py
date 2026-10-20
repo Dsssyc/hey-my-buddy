@@ -92,8 +92,8 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO macro_task_deletions"
-                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
-                " VALUES('standalone-deletion','micro-task-tree',?,'deleting',?,1)",
+                " (deletion_id,target_kind,target_id,started_at,micro_task_count)"
+                " VALUES('standalone-deletion','micro-task-tree',?,?,1)",
                 ("run:" + run["runId"], board.store.now()),
             )
         with self.assertRaises(BoardError) as continued:
@@ -115,8 +115,8 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO macro_task_deletions"
-                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
-                " VALUES('deletion-1','macro-task',?,'deleting',?,1)",
+                " (deletion_id,target_kind,target_id,started_at,micro_task_count)"
+                " VALUES('deletion-1','macro-task',?,?,1)",
                 (identifier, board.store.now()),
             )
         for presentation in ({"macroTaskId": identifier}, {"macroTaskOf": first["runId"]}):
@@ -145,8 +145,8 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO macro_task_deletions"
-                " (deletion_id,target_kind,target_id,state,started_at,micro_task_count)"
-                " VALUES('recovery-deletion','macro-task',?,'deleting',?,1)",
+                " (deletion_id,target_kind,target_id,started_at,micro_task_count)"
+                " VALUES('recovery-deletion','macro-task',?,?,1)",
                 (run["macroTaskId"],board.store.now()),
             )
         with self.assertRaises(BoardError) as caught:

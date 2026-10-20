@@ -85,10 +85,10 @@ def _reserve(board, snapshot, identity, kind):
         board._require_effective_attempt(connection, attempt)
         # A retry may gain stronger native-stop evidence before it has a result.
         # The interruption record and the eventual result must name that same fact.
-        connection.execute("INSERT INTO attempt_interruptions VALUES(?,?,?,'sealing',NULL)"
-                           " ON CONFLICT(attempt_id) DO UPDATE SET evidence_kind=excluded.evidence_kind,"
-                           "observed_at=excluded.observed_at",
-                           (attempt['attempt_id'], kind, board.now()))
+        connection.execute("INSERT INTO attempt_interruptions(attempt_id,evidence_kind,state,seal_error)"
+                           " VALUES(?,?,'sealing',NULL)"
+                           " ON CONFLICT(attempt_id) DO UPDATE SET evidence_kind=excluded.evidence_kind",
+                           (attempt['attempt_id'], kind))
     return True
 
 

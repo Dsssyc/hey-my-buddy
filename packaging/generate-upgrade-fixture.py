@@ -117,7 +117,7 @@ def populate(args):
     from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
     from hey_my_buddy.blackboard.store.store import BoardStore
     from hey_my_buddy.blackboard.catalog import catalog_store, catalog as catalog_module
-    from hey_my_buddy.blackboard.tasks import workspace
+    from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion
     from hey_my_buddy.blackboard.evaluation import model_facts
     from hey_my_buddy.protocol.execution import RECEIPT, execution_directory, fsync_json, receipt_reference
     from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence
@@ -170,6 +170,7 @@ def populate(args):
         stack.enter_context(patch.object(health_module, "_discover", return_value={
             "harness": "codex", "status": "ready", "version": "0.157.0", "command": ["fixture-codex"], "accountStatus": "confirmed", "fixture": True}))
         stack.enter_context(patch.object(CodexAdapter, "discover_models", return_value=catalog))
+        refresh_model_services = model_facts.refresh_model_services
         stack.enter_context(patch.object(model_facts, "refresh_model_services", return_value=None))
         stack.enter_context(patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=None))
         store = BoardStore(work / "state", clock=lambda: AT)
@@ -337,8 +338,39 @@ def populate(args):
         operations.append({"operation": "coordinate_catalog_reread", "params": {"adapter": "codex"}, "response": "window-written"})
         publish(buddySettings=[{"buddyId": PROFILES[1], "enabled": False}],
                 preferenceChanges=[{"buddyId": PROFILES[0], "mode": "pin", "note": "fixture pinned buddy"}])
+        # Stock for every form pruned by the pending 26 -> 27 upgrade. Facts
+        # use the base writer with synthetic local source input, never the web.
+        facts_source = json_text({"openai": {"models": {"fixture-alpha": {
+            "cost": {"input": 1, "output": 2}, "limit": {"context": 4096}}}}}).encode()
+        facts = refresh_model_services(store.evaluation,
+            [("codex", "openai", "fixture-alpha"), ("codex", "openai", "fixture-missing")],
+            source=lambda: (facts_source, "fixture:local-model-facts"), now=AT)
+        assert facts["ok"] and facts["refreshed"] and facts["unknown"]
+        # A physical-phase failure leaves the OLD deletion fence, task rows and
+        # command receipts intact. No native deletion or directory removal runs.
+        with store.db.read() as connection:
+            pending_target = connection.execute("SELECT macro_task_id FROM workflow_runs WHERE run_id=?",
+                                                (ids["cancelled"],)).fetchone()[0]
+        with patch.object(macro_task_deletion, "_delete_sessions",
+                          side_effect=BoardError("FIXTURE_STOP", "Retain in-progress deletion stock")):
+            pending = call("macro_task_delete", {"macroTaskId": pending_target,
+                           "confirm": True, "microTaskCount": 4}, human=True)
+        assert pending["state"] == "deleting"
+        # These retired projections have no public writer left in the base.
+        # Explicit synthetic old-format stock verifies that pruning handles data,
+        # not only empty tables/NULL columns. No sealed content is rewritten.
+        with store.db.write() as connection:
+            connection.execute("INSERT INTO cursors(consumer,seq,updated_at) VALUES(?,?,?)",
+                               ("fixture-retired-consumer", 1, AT))
+            connection.execute("UPDATE evaluation_state SET decision_buddy_id=? WHERE id=1", (PROFILES[0],))
+            connection.execute("UPDATE tasks SET queue_position=7 WHERE task_id=?", (ids["cancelled"],))
+            attempt_id = connection.execute("SELECT selected_attempt_id FROM tasks WHERE task_id=?",
+                                            (ids["accepted"],)).fetchone()[0]
+            connection.execute("INSERT INTO attempt_interruptions(attempt_id,evidence_kind,observed_at,state)"
+                               " VALUES(?,'identity-absent',?,'settled')", (attempt_id, AT))
         hashing.close()
-        # All rows were created by base public operations. Export templates keep
+        # Base operations and the explicitly marked synthetic retired stock above
+        # created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
         # graph before the data-preservation baseline is taken.
         with store.db.read() as connection:
@@ -375,7 +407,8 @@ def populate(args):
             "stableIds": ids,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService named operations in process; synthetic native discovery and execution result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
+            "syntheticRetiredStock": ["cursors", "evaluation_state.decision_buddy_id", "tasks.queue_position", "attempt_interruptions"],
+            "boundary": "Base BoardService named operations in process and base model-facts writer with synthetic local source; explicit synthetic retired stock is listed separately; synthetic native discovery and execution result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
@@ -468,6 +501,10 @@ def verify(output, restored):
         assert connection.execute("SELECT COUNT(*) FROM provider_cooling").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE state='deleted'").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM commands WHERE deletion_id IS NOT NULL").fetchone()[0] > 0
+        assert connection.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE state='deleting'").fetchone()[0] == 1
+        for table in ("cursors", "evaluation_state", "model_facts", "attempt_interruptions"):
+            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] > 0
+        assert connection.execute("SELECT COUNT(*) FROM tasks WHERE queue_position IS NOT NULL").fetchone()[0] > 0
         assert connection.execute("SELECT COUNT(*) FROM messages WHERE reason_code IS NOT NULL").fetchone()[0] > 0
         assert connection.execute("SELECT COUNT(*) FROM evaluation_preferences WHERE note IS NOT NULL").fetchone()[0] == 2
         assert connection.execute("SELECT COUNT(*) FROM router_claims").fetchone()[0] == 2

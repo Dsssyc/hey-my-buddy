@@ -116,7 +116,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
     preferences = _changes(params, 'preferenceChanges', {'buddyId', 'mode', 'note'})
     annotations = _model_service_changes(params, 'modelServiceNoteChanges', {*MODEL_SERVICE_FIELDS, 'text'})
     model_limits = _model_service_concurrency_changes(params)
-    enabled_model_services: list[tuple[str, str, str]] = []
     buddies = {}
     for entry in settings + preferences:
         buddy_id = entry['buddyId']
@@ -126,14 +125,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
                 raise BoardError('NOT_FOUND', 'Unknown buddyId', buddyId=buddy_id)
             buddies[buddy_id] = dict(row)
             buddies[buddy_id]['available'] = bool(row['available']) and read_health(connection, row['harness'])['available']
-    touched_model_services = {tuple(buddies[entry["buddyId"]][name] for name in MODEL_SERVICE_FIELDS) for entry in settings}
-    initially_enabled = {
-        model_service: connection.execute(
-            "SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
-            model_service,
-        ).fetchone() is not None
-        for model_service in touched_model_services
-    }
     for entry in settings:
         if type(entry.get('enabled')) is not bool:
             raise BoardError('INVALID_ARGUMENT', 'enabled must be a boolean')
@@ -142,14 +133,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             raise BoardError('BUDDY_UNAVAILABLE', 'This buddy is not currently available', buddyId=entry['buddyId'])
         buddy['enabled'] = int(entry['enabled'])
         connection.execute('UPDATE buddies SET enabled=? WHERE buddy_id=?', (buddy['enabled'], entry['buddyId']))
-    # Compare the whole publication's before/after state. Moving the enabled
-    # effort within one model must not make a transient disable trigger a fetch.
-    for model_service in sorted(touched_model_services):
-        if not initially_enabled[model_service] and connection.execute(
-            "SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? AND enabled=1 LIMIT 1",
-            model_service,
-        ).fetchone() is not None:
-            enabled_model_services.append(model_service)
     for entry in annotations:
         model_service = _model_service(entry)
         if connection.execute('SELECT 1 FROM buddies WHERE harness=? AND provider=? AND model=? LIMIT 1',
@@ -231,9 +214,4 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
         'modelServiceConcurrency': len(model_limits),
         'provided': sorted(provided),
     }
-    connection.execute('UPDATE evaluation_state SET updated_at=? WHERE id=1', (now,))
-    # ``enabledModelServices`` is an internal caller value, never a published response
-    # field: the facts refresh runs after the publication transaction commits and is
-    # not part of the idempotent receipt.
-    return {'counts': counts,
-            'enabledModelServices': enabled_model_services}
+    return {'counts': counts}
