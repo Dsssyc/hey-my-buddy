@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Generate schema-26 upgrade stock using the frozen installed base source.
+"""Generate schema-27 upgrade stock using the frozen installed base source.
 
 No product installation, daemon, native harness or model is started. The base
-named service operations run in process; native discovery, execution receipts
-and explicitly listed old-format stock are synthetic. All work directories are retained. The export includes
+named service operations and current store writers run in process; native
+discovery, execution receipts and absent-process evidence are synthetic. All work directories are retained. The export includes
 fixed Git objects, workspace sidecars and the hash preimages needed for private
 path binding. Tests restore that text stock; they never execute this generator.
 """
@@ -26,9 +26,9 @@ import tarfile
 import tempfile
 import uuid
 
-BASE = "d9e8df5d039708654f098015fbc8fc76f9fbd11d"
-BASE_VERSION = "0.48.0"
-BASE_SCHEMA = 26
+BASE = "ea7ff3a4967154b2d2bf258aa2412f744d252b59"
+BASE_VERSION = "0.49.0"
+BASE_SCHEMA = 27
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
@@ -117,8 +117,8 @@ def populate(args):
     from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
     from hey_my_buddy.blackboard.store.store import BoardStore
     from hey_my_buddy.blackboard.catalog import catalog_store, catalog as catalog_module
-    from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion
-    from hey_my_buddy.blackboard.evaluation import model_facts
+    from hey_my_buddy.blackboard.routing import quota_routing
+    from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion, reminders
     from hey_my_buddy.protocol.execution import RECEIPT, execution_directory, fsync_json, receipt_reference
     from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence
     from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
@@ -143,7 +143,7 @@ def populate(args):
     native_sha256 = hashlib.sha256
 
     def recorded_sha256(data=b"", **kwargs):
-        # Observe the real old digest; do not alter any hash or its validation.
+        # Observe the real base digest; do not alter any hash or its validation.
         result = native_sha256(data, **kwargs)
         caller = sys._getframe(1)
         ascii_json = caller.f_globals.get("__name__") in {"hey_my_buddy.blackboard.tasks.workspace", "hey_my_buddy.blackboard.tasks.workspace_identity"}
@@ -159,13 +159,13 @@ def populate(args):
         stack.enter_context(patch("tempfile.TemporaryDirectory", retained_directory))
         hashing = stack.enter_context(ExitStack())
         hashing.enter_context(patch.object(hashlib, "sha256", recorded_sha256))
-        # Stable fake secrets and IDs are inputs to the OLD public operations.
+        # Stable fake secrets and IDs are inputs to the base public operations.
         stack.enter_context(patch("uuid.uuid4", side_effect=lambda: uuid.UUID(int=next(counter))))
         stack.enter_context(patch("secrets.token_hex", side_effect=lambda n=32: "ab" * n))
         stack.enter_context(patch.object(db_module, "utc_now", return_value=AT))
         stack.enter_context(patch.object(health_module, "utc_now", return_value=AT))
         stack.enter_context(patch.object(health_module, "_later", return_value="2026-01-01T01:00:00.000Z"))
-        # Replace external native discovery only. The old health/catalog writers,
+        # Replace external native discovery only. The base health/catalog writers,
         # validators and certificate lookup remain the real implementations.
         stack.enter_context(patch.object(health_module, "_snapshot", side_effect=lambda name, manual, environment:
             {"harness": name, "manualPath": None, "managerRecords": [], "candidates": [], "fixture": True}))
@@ -173,10 +173,9 @@ def populate(args):
             {"harness": name, "status": "ready", "available": True, "version": "0.157.0",
              "command": ["fixture-" + name], "accountStatus": "confirmed", "fixture": True}))
         stack.enter_context(patch.object(CodexAdapter, "discover_models", return_value=catalog))
-        refresh_model_services = model_facts.refresh_model_services
-        stack.enter_context(patch.object(model_facts, "refresh_model_services", return_value=None))
         stack.enter_context(patch("hey_my_buddy.buddy.harnesses.codex.account_probe.read", return_value=None))
-        store = BoardStore(work / "state", clock=lambda: AT)
+        clock = [AT]
+        store = BoardStore(work / "state", clock=lambda: clock[0])
         store.initialize()
         service = BoardService(store, token="fixture-service-token", control={},
                                on_stop=lambda p: p, on_restart=lambda p: p, live_registry=LiveRegistry())
@@ -237,6 +236,22 @@ def populate(args):
                                    "nativeThreadId": "fixture-session-" + label, "nativeTurnId": "fixture-turn-" + label,
                                    "finalItemId": "fixture-item", "eventSeq": 2}}
 
+        def answer_router(claim, outcome):
+            document = claim["decisionInput"]
+            identity = {"sessionId": "fixture-router-" + outcome}
+            binding = {"harness": "codex", "taskId": claim["task"]["taskId"],
+                       "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"]}
+            result = {"status": "ok", "operation": "select", "nativeIdentity": identity,
+                      "toolEvidence": ToolEventEvidence(binding).finish([identity], True),
+                      "usage": {"elapsedMs": 100, "toolCalls": 0},
+                      "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                      "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
+                          "manifestSha256": (document.get("executionWorkspace") or {}).get("manifestSha256")},
+                      "decision": {"buddyId": PROFILES[0], "note": "fixture routing answer", "evidence": []}}
+            if outcome == "no_answer":
+                result.update(status="error", code="fixture-router-no-answer")
+            report(claim, nonce, status="ok" if outcome == "answered" else "failed", result=result)
+
         call("harness_set", {"harness": "codex", "path": None})
         call("model_catalog_refresh", {"requestId": "fixture-catalog"})
         publish(buddySettings=[{"buddyId": profile, "enabled": True} for profile in PROFILES])
@@ -257,20 +272,7 @@ def populate(args):
             selected = call("selection_request", {"requestId": "fixture-routing-" + outcome,
                                                  "task": "fixture routing " + outcome})
             claim = admit(nonce, selected["runId"])
-            document = claim["decisionInput"]
-            identity = {"sessionId": "fixture-router-" + outcome}
-            binding = {"harness": "codex", "taskId": claim["task"]["taskId"],
-                       "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"]}
-            result = {"status": "ok", "operation": "select", "nativeIdentity": identity,
-                      "toolEvidence": ToolEventEvidence(binding).finish([identity], True),
-                      "usage": {"elapsedMs": 100, "toolCalls": 0},
-                      "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
-                      "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
-                          "manifestSha256": (document.get("executionWorkspace") or {}).get("manifestSha256")},
-                      "decision": {"buddyId": PROFILES[0], "note": "fixture routing answer", "evidence": []}}
-            if outcome == "no_answer":
-                result.update(status="error", code="fixture-router-no-answer")
-            report(claim, nonce, status="ok" if outcome == "answered" else "failed", result=result)
+            answer_router(claim, outcome)
         publish(preferenceChanges=[{"buddyId": PROFILES[1], "mode": "exclude", "note": "fixture exclusion"}],
                 configuration={"routerBuddyIds": PROFILES})
         for label in ("delivered", "accepted", "failed", "cancelled"):
@@ -331,7 +333,7 @@ def populate(args):
             elif label == "delivered":
                 call("workflow_conclude", {"runId": run_id, "note": "Fixture Host concluded the delivered work", **control})
 
-        # Additional old-writer stock for the three forms absent from the first
+        # Additional base-writer stock for the three forms absent from the first
         # four runs. These IDs are deliberately separate from stableIds.
         stock_ids = {}
         adopted = call("workflow_submit", {"requestId": "fixture-adopted", "hostId": "fixture-host",
@@ -453,11 +455,26 @@ def populate(args):
             "helpers": [{"requestId": "fixture-helper-task", "task": "Review the fixture task",
                 "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
                 "cwd": str(work / "workspaces" / "failed"),
-                "executionWorkspace": {"kind": "existing", "access": "read"}}],
+                "executionWorkspace": {"kind": "existing", "access": "read"}, "expectedSeconds": 60}],
             **helper_parent["control"]})
         helper_id = approved["children"][0]["taskId"]
         stock_ids["helper"] = helper_id
         helper_claim = admit(nonce, helper_id)
+        # Current writers produce both suggestion identities, monotone native
+        # activity and both reminder forms while this attempt is active.
+        activity = {"phase": "tool-running", "observedAt": AT, "eventSeq": 3,
+                    "lastNativeActivityAt": AT, "toolName": "fixture-tool"}
+        call("execution_progress", {"attemptId": helper_claim["attempt"]["attemptId"],
+            "generation": helper_claim["attempt"]["generation"], "nonce": nonce,
+            "data": {"activity": activity}})
+        suggestion = {"runId": helper_id, "body": "Fixture Worker suggestion"}
+        response = store.workflow.suggest(suggestion, scope={"attemptId": helper_claim["attempt"]["attemptId"]})
+        operations.append({"operation": "workflow.suggest", "params": suggestion, "response": response})
+        call("workflow_suggest", {"runId": helper_parent["runId"], "body": "Fixture agent suggestion"})
+        call("reminder_settings_set", {"silenceSeconds": 60}, human=True)
+        clock[0] = "2026-01-01T00:01:00.000Z"
+        response = reminders.collect(store)
+        operations.append({"operation": "reminders.collect", "params": {"now": clock[0]}, "response": response})
         helper_manifest = helper_claim["turn"]["input"]["executionWorkspace"]
         helper_seal = workspace.seal(work / "state", helper_manifest,
                                      helper_id, helper_claim["attempt"]["attemptId"])
@@ -469,6 +486,30 @@ def populate(args):
             "artifactId": helper_view["finalArtifactId"], "note": "Fixture Host accepts helper result",
             "notRequired": "Read-only helper has no integration target", "keepCheckout": True,
             **helper_parent["control"]})
+        call("quota_redetect", {"requestId": "fixture-quota-redetect", "harness": "codex", "provider": "openai"})
+        # A real continuation requests routing, consumes its input, then uses
+        # the recovery writer with synthetic proof that no execution exists.
+        # No process is started or signalled.
+        publish(preferenceChanges=[{"buddyId": PROFILES[1], "mode": None}],
+                configuration={"routerBuddyIds": [PROFILES[1]]})
+        parent_view = call("workflow_get", {"runId": helper_parent["runId"]})
+        continued = call("workflow_continue", {"runId": helper_parent["runId"],
+            "commandId": "continue-fixture-parent", "expectedRevision": parent_view["revision"],
+            "input": "Continue with the accepted helper result", "reroute": True,
+            **helper_parent["control"]})
+        route_claim = admit(nonce, continued["routing"]["taskId"])
+        answer_router(route_claim, "answered")
+        store.workflow.prepare_continuation_workspace({"runId": helper_parent["runId"]})
+        resumed = admit(nonce, helper_parent["runId"])
+        identity = {"bootId": "macos:00000000-0000-0000-0000-000000000000", "pid": 2147483647,
+                    "startedAt": 1, "processGroupId": 2147483647, "jobName": None}
+        response = store.recover_executions(resumed["attempt"]["attemptId"], process_identity=identity,
+                                           stopped_evidence={"kind": "identity-absent"})
+        assert response and response[0]["attempt"]["shutdownConfirmed"], response
+        operations.append({"operation": "store.recover_executions", "params": {"attemptId": resumed["attempt"]["attemptId"],
+            "processIdentity": identity, "stoppedEvidence": {"kind": "identity-absent"}}, "response": response})
+        publish(preferenceChanges=[{"buddyId": PROFILES[1], "mode": "exclude", "note": "fixture exclusion"}],
+                configuration={"routerBuddyIds": PROFILES})
         call("workflow_cancel", {"runId": helper_parent["runId"],
             "commandId": "close-helper-parent-fixture", "note": "Fixture helper stock is settled",
             **helper_parent["control"]})
@@ -476,9 +517,15 @@ def populate(args):
             "note": "Fixture Host concluded helper parent", **helper_parent["control"]})
         call("inquiry_observe", {"runId": ids["delivered"], "inquiryId": "fixture-inquiry",
                               "question": "fixture question after the execution ended"})
-        # The failed execution above recorded a native quota refusal through
-        # execution_result. Re-detection keeps its rejection count as stock.
-        call("quota_redetect", {"requestId": "fixture-quota-redetect", "harness": "codex", "provider": "openai"})
+        # A successful routed call ended the earlier refusal sequence. Retain a
+        # fresh synthetic refusal through the base's transaction writer, then
+        # exercise the named re-detection operation on it.
+        with store.db.write() as connection:
+            quota_routing.record_rejection(connection, "codex", "openai", {"code": "quota-exceeded"}, now=clock[0])
+        operations.append({"operation": "quota_routing.record_rejection",
+                           "params": {"harness": "codex", "provider": "openai", "failure": {"code": "quota-exceeded"}},
+                           "response": "recorded"})
+        call("quota_redetect", {"requestId": "fixture-final-quota-redetect", "harness": "codex", "provider": "openai"})
         deleted = call("workflow_submit", {"requestId": "fixture-deleted", "hostId": "fixture-host",
             "submissionToken": "fixture-submission-token-deleted", "task": "fixture deleted macro task",
             "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
@@ -495,15 +542,7 @@ def populate(args):
         operations.append({"operation": "coordinate_catalog_reread", "params": {"adapter": "codex"}, "response": "window-written"})
         publish(buddySettings=[{"buddyId": PROFILES[1], "enabled": False}],
                 preferenceChanges=[{"buddyId": PROFILES[0], "mode": "pin", "note": "fixture pinned buddy"}])
-        # Stock for every form pruned by the pending 26 -> 27 upgrade. Facts
-        # use the base writer with synthetic local source input, never the web.
-        facts_source = json_text({"openai": {"models": {"fixture-alpha": {
-            "cost": {"input": 1, "output": 2}, "limit": {"context": 4096}}}}}).encode()
-        facts = refresh_model_services(store.evaluation,
-            [("codex", "openai", "fixture-alpha"), ("codex", "openai", "fixture-missing")],
-            source=lambda: (facts_source, "fixture:local-model-facts"), now=AT)
-        assert facts["ok"] and facts["refreshed"] and facts["unknown"]
-        # A physical-phase failure leaves the OLD deletion fence, task rows and
+        # A physical-phase failure leaves the current deletion fence, task rows and
         # command receipts intact. No native deletion or directory removal runs.
         with store.db.read() as connection:
             pending_target = connection.execute("SELECT macro_task_id FROM workflow_runs WHERE run_id=?",
@@ -532,78 +571,16 @@ def populate(args):
         operations.append({"operation": "catalog_store.begin",
                            "params": {"requestId": "fixture-pending-observation"},
                            "response": pending_observation})
-        # These retired projections have no public writer left in the base.
-        # Explicit synthetic old-format stock verifies that pruning handles data,
-        # not only empty tables/NULL columns. No sealed content is rewritten.
-        with store.db.write() as connection:
-            connection.execute("INSERT INTO cursors(consumer,seq,updated_at) VALUES(?,?,?)",
-                               ("fixture-retired-consumer", 1, AT))
-            connection.execute("UPDATE evaluation_state SET decision_buddy_id=? WHERE id=1", (PROFILES[0],))
-            connection.execute("UPDATE tasks SET queue_position=7 WHERE task_id=?", (ids["cancelled"],))
-            attempt_id = connection.execute("SELECT selected_attempt_id FROM tasks WHERE task_id=?",
-                                            (stock_ids["helper"],)).fetchone()[0]
-            connection.execute("INSERT INTO attempt_interruptions(attempt_id,evidence_kind,observed_at,state)"
-                               " VALUES(?,'identity-absent',?,'settled')", (attempt_id, AT))
-            # These 0.48.0 tables have no row in the ordinary fixture history.
-            # Add explicit old-format stock without altering a sealed snapshot,
-            # turn input, checkpoint, receipt or physical seal.
-            parent_run_id, child_run_id = stock_ids["helperParent"], stock_ids["helper"]
-            connection.execute(
-                "INSERT INTO workflow_suggestions(suggestion_id,run_id,attempt_id,author,body,created_at)"
-                " VALUES(?,?,?,?,?,?)",
-                ("fixture-synthetic-worker-suggestion", child_run_id, attempt_id,
-                 f"attempt:{attempt_id}", "Synthetic worker suggestion", AT),
-            )
-            connection.execute(
-                "INSERT INTO workflow_suggestions(suggestion_id,run_id,attempt_id,author,body,created_at)"
-                " VALUES(?,?,NULL,'agent',?,?)",
-                ("fixture-synthetic-agent-suggestion", parent_run_id,
-                 "Synthetic agent suggestion", AT),
-            )
-            activity = {"phase": "tool-running", "observedAt": AT, "eventSeq": 3,
-                        "lastNativeActivityAt": AT, "toolName": "fixture-tool"}
-            connection.execute(
-                "INSERT INTO attempt_activity(attempt_id,task_id,generation,event_seq,observed_at,"
-                "activity_json,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?)",
-                (attempt_id, child_run_id, 1, 3, AT, json_text(activity), AT, AT, 2),
-            )
-            later = "2026-01-01T00:00:10.000Z"
-            connection.execute(
-                "INSERT INTO attempt_reminders(task_id,attempt_id,kind,expected_multiple,"
-                "elapsed_seconds,tool_in_progress,created_at)"
-                " VALUES(?,?,'expected-duration',1,10.0,1,?)",
-                (child_run_id, attempt_id, later),
-            )
-            connection.execute(
-                "INSERT INTO attempt_reminders(task_id,attempt_id,kind,silence_started_at,"
-                "elapsed_seconds,last_native_event_at,tool_in_progress,created_at)"
-                " VALUES(?,?,'native-silence',?,10.0,?,1,?)",
-                (child_run_id, attempt_id, AT, AT, later),
-            )
-            decision_id = connection.execute(
-                "SELECT decision_id FROM decision_requests ORDER BY decision_id LIMIT 1"
-            ).fetchone()[0]
-            connection.execute(
-                "INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
-                " VALUES(?,?,1,'resolved',?,?)",
-                (decision_id, child_run_id, AT, later),
-            )
-            connection.execute(
-                "INSERT INTO workflow_continuations(continuation_id,run_id,kind,expected_revision,"
-                "input_text,input_bytes,state,created_at,consumed_at)"
-                " VALUES(?,?,'manual',1,?,?,'consumed',?,?)",
-                ("fixture-synthetic-continuation", child_run_id,
-                 "Synthetic continuation", len("Synthetic continuation".encode()), AT, later),
-            )
         hashing.close()
-        # Base operations and the explicitly marked synthetic retired stock above
-        # created these rows. Export templates keep
+        # Base operations created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
         # graph before the data-preservation baseline is taken.
         with store.db.read() as connection:
             raw_sql = "\n".join(connection.iterdump()) + "\n"
             assert connection.execute("SELECT COUNT(*) FROM catalog_pending").fetchone()[0] > 0
             source_schema = list(connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"))
+            row_counts = {row[1]: connection.execute(f'SELECT COUNT(*) FROM "{row[1]}"').fetchone()[0]
+                          for row in source_schema if row[0] == "table" and row[1] != "sqlite_sequence"}
         (work / "raw.sql").write_text(raw_sql)
         redactions = [(str(work), "<fixture-root>")]
         sql = raw_sql
@@ -631,14 +608,12 @@ def populate(args):
             "sourceFiles": {str(p.relative_to(source)): digest(p.read_bytes()) for p in
                             [*sorted((source / "src/hey_my_buddy").rglob("*.py")), source / "pyproject.toml",
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
-            "stableIds": ids, "stockIds": stock_ids,
+            "stableIds": ids, "stockIds": stock_ids, "tableRowCounts": row_counts,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "syntheticRetiredStock": ["cursors", "evaluation_state.decision_buddy_id", "tasks.queue_position", "attempt_interruptions",
-                                      "workflow_suggestions.worker", "workflow_suggestions.agent",
-                                      "attempt_activity", "attempt_reminders.expected-duration", "attempt_reminders.native-silence",
-                                      "workflow_routes", "workflow_continuations"],
-            "boundary": "Base BoardService named operations in process and base model-facts writer with synthetic local source; explicit synthetic retired stock is listed separately; synthetic native discovery and execution result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
+            "boundary": "Base BoardService operations and current store writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. No SQL stock writes. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+            "pythonVersion": sys.version.split()[0],
+            "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
@@ -736,103 +711,25 @@ def verify(output, restored):
         assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == str(BASE_SCHEMA)
         assert connection.execute("SELECT COUNT(*) FROM macro_tasks").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM provider_cooling").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE state='deleted'").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM commands WHERE deletion_id IS NOT NULL").fetchone()[0] > 0
-        assert connection.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE state='deleting'").fetchone()[0] == 1
-        for table in ("cursors", "evaluation_state", "model_facts", "attempt_interruptions"):
-            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] > 0
-        assert connection.execute("SELECT COUNT(*) FROM tasks WHERE queue_position IS NOT NULL").fetchone()[0] > 0
-        assert connection.execute("SELECT COUNT(*) FROM messages WHERE reason_code IS NOT NULL").fetchone()[0] > 0
-        assert connection.execute("SELECT COUNT(*) FROM evaluation_preferences WHERE note IS NOT NULL").fetchone()[0] == 2
-        assert connection.execute("SELECT COUNT(*) FROM router_claims").fetchone()[0] == 2
-        assert set(connection.execute("SELECT plane,outcome FROM router_outcomes")) == {
-            ("routing", "answered"), ("routing", "no_answer")}
-        assert connection.execute("SELECT COUNT(*) FROM workflow_workspace_conflicts").fetchone()[0] == 2
-        assert connection.execute("SELECT COUNT(*) FROM workflow_workspace_conflicts WHERE delivery_json IS NOT NULL").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM workflow_workspace_conflicts WHERE action='adopt'"
-                                  " AND artifact_id IS NOT NULL AND output_commit IS NOT NULL"
-                                  " AND output_tree IS NOT NULL AND delivery_json IS NOT NULL").fetchone()[0] == 1
-        for table, expected in (("workflow_children", 1), ("workflow_suggestions", 2),
-                                ("attempt_activity", 1), ("attempt_reminders", 2),
-                                ("workflow_routes", 1), ("workflow_continuations", 1),
-                                ("workflow_integrations", 4)):
-            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == expected
-        assert connection.execute("SELECT COUNT(*) FROM workflow_integrations WHERE state='verified'"
-                                  " AND json_array_length(json_extract(verification_json,'$.adjustments'))>0"
-                                  " AND json_array_length(json_extract(verification_json,'$.hostPaths'))>0").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM workspace_cleanup_plans WHERE state='planned'"
-                                  " AND result_json IS NULL AND actor_role='host' AND actor_id='fixture-host'"
-                                  " AND json_extract(retention_json,'$.commandReceipts')=1").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM workspace_cleanup_plans WHERE state='applied'"
-                                  " AND result_json IS NOT NULL AND actor_role='host' AND actor_id='fixture-host'"
-                                  " AND json_extract(retention_json,'$.commandReceipts')=1").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM agent_credentials WHERE expires_at IS NOT NULL").fetchone()[0] == 0
-        assert set(connection.execute("SELECT author FROM workflow_suggestions")) == {
-            ("agent",), (f"attempt:{connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (metadata['stockIds']['helper'],)).fetchone()[0]}",)}
-        assert set(connection.execute("SELECT kind,elapsed_seconds FROM attempt_reminders")) == {
-            ("expected-duration", 10.0), ("native-silence", 10.0)}
-        assert connection.execute(
-            "SELECT COUNT(*) FROM workflow_children WHERE workspace_manifest_sha256="
-            "json_extract(workspace_manifest_json,'$.manifestSha256')"
-        ).fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM workflow_children c JOIN workflow_requests q ON q.request_id=c.request_id"
-            " JOIN workflow_runs p ON p.run_id=c.parent_run_id JOIN workflow_runs h ON h.run_id=c.child_task_id"
-            " JOIN commands d ON d.command_id=c.decision_command_id"
-            " WHERE q.run_id=p.run_id AND q.state='approved' AND h.state='accepted'"
-            " AND c.state='succeeded' AND c.auto_continue=0"
-            " AND c.workspace_intent_json=h.execution_workspace_json"
-        ).fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM model_service_concurrency"
-                                  " WHERE concurrency_limit=3 AND created_at IS NOT NULL AND updated_at IS NOT NULL").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM catalog_observations"
-                                  " WHERE created_at IS NOT NULL AND completed_at IS NOT NULL").fetchone()[0] > 0
-        assert connection.execute("SELECT COUNT(*) FROM evaluation_catalog"
-                                  " WHERE source=json_extract(payload_json,'$.source')"
-                                  " AND harness_version=json_extract(payload_json,'$.harnessVersion')"
-                                  " AND provider_version=json_extract(payload_json,'$.providerVersion')"
-                                  " AND discovered_at IS NOT NULL AND created_at IS NOT NULL").fetchone()[0] > 0
-        assert connection.execute("SELECT COUNT(*) FROM catalog_observations"
-                                  " WHERE request_id='fixture-pending-observation' AND completed_at IS NULL"
-                                  " AND response_json IS NULL").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM decision_requests"
-                                  " WHERE kind='select' AND created_at IS NOT NULL").fetchone()[0] > 0
-        assert connection.execute("SELECT COUNT(*) FROM router_outcomes"
-                                  " WHERE recorded_at IS NOT NULL").fetchone()[0] == 2
-        assert connection.execute("SELECT COUNT(*) FROM harness_health"
-                                  " WHERE status='unknown' AND json_type(record_json,'$.reason')='object'"
-                                  " AND json_type(record_json,'$.status') IS NULL").fetchone()[0] == 2
-        assert connection.execute("SELECT COUNT(*) FROM harness_health"
-                                  " WHERE status='unhealthy' AND json_extract(record_json,'$.status')='ready'"
-                                  " AND json_extract(record_json,'$.available')=0").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM harness_health"
-                                  " WHERE harness='codex' AND status='ready'"
-                                  " AND json_extract(record_json,'$.harness')='codex'"
-                                  " AND json_extract(record_json,'$.status')='ready'"
-                                  " AND json_extract(record_json,'$.available')=1").fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM attempt_activity a JOIN attempts t ON t.attempt_id=a.attempt_id"
-            " WHERE a.generation=t.generation AND a.event_seq=json_extract(a.activity_json,'$.eventSeq')"
-            " AND a.observed_at=json_extract(a.activity_json,'$.observedAt')"
-        ).fetchone()[0] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) FROM workflow_continuations WHERE input_bytes=length(CAST(input_text AS BLOB))"
-        ).fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM macro_task_deletions").fetchone()[0] == 1
+        for table in ("attempt_interruptions", "attempt_process_identities", "attempt_shutdown_evidence",
+                      "workflow_suggestions", "attempt_activity", "attempt_reminders", "workflow_routes",
+                      "workflow_continuations", "workflow_workspace_conflicts", "workflow_integrations",
+                      "workspace_cleanup_plans", "agent_credentials", "model_service_concurrency",
+                      "evaluation_catalog", "catalog_current", "catalog_pending", "catalog_observations"):
+            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] > 0, table
+        assert set(connection.execute("SELECT kind FROM attempt_reminders")) == {
+            ("expected-duration",), ("native-silence",)}
+        assert set(connection.execute("SELECT attempt_id IS NULL FROM workflow_suggestions")) == {(0,), (1,)}
+        assert set(connection.execute("SELECT state FROM workspace_cleanup_plans")) == {("planned",), ("applied",), ("blocked",)}
+        assert connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE state='consumed'").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM attempt_interruptions WHERE state='settled'").fetchone()[0] == 1
+        assert set(dict(connection.execute("SELECT key,value FROM meta"))) == {"schema_version", "capability_secret"}
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
         assert states == {**{metadata["stableIds"][key]: value for key, value in
                             (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))},
                           **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified", "helper")},
                           metadata["stockIds"]["helperParent"]: "concluded"}
-        keys = dict(connection.execute("SELECT key,value FROM meta"))
-        assert set(keys) == {"schema_version", "created_at", "capability_secret"}
-        assert keys["created_at"] == AT
-        assert list(connection.execute("SELECT buddy_id FROM router_buddies ORDER BY position")) == [(item,) for item in PROFILES]
-        assert list(connection.execute("SELECT default_mode,budget_preset,retry_interval_seconds FROM router_settings")) == [("review", "deep", 47)]
-        assert keys["capability_secret"] == "ab" * 32
-        for table in ("model_service_notes", "evaluation_preferences", "evaluation_catalog", "catalog_current"):
-            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] >= 1
-        assert connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?", (metadata["stableIds"]["delivered"],)).fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions WHERE run_id=?", (metadata["stableIds"]["failed"],)).fetchone()[0] == 1
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
         assert digest(json_text(schema).encode()) == metadata["schemaSha256"]
         assert "<fixture-root>" in (output / "board.sql").read_text()

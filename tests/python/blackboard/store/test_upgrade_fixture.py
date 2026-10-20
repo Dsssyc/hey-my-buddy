@@ -1,4 +1,4 @@
-"""The fixed schema-26 stock exercises the pending schema-27 upgrade."""
+"""The fixed schema-27 stock is the accepted current upgrade base."""
 from __future__ import annotations
 
 import hashlib
@@ -11,7 +11,6 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
-from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.tasks import workspace
@@ -25,10 +24,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix='upgrade-base-fixture-'))
 
 
-    def restored(self, name='state', *, convert=True):
+    def restored(self, name='state'):
         fixture = load_fixture(self.root / name)
-        if convert:
-            schema_upgrade.upgrade(fixture['state'])
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
@@ -112,16 +109,16 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
-        fixture, connection = self.restored(convert=False)
-        self.assertEqual(fixture['sourceCommit'], 'd9e8df5d039708654f098015fbc8fc76f9fbd11d')
-        self.assertEqual(fixture['sourceVersion'], '0.48.0')
-        self.assertEqual(fixture['schemaVersion'], schema_upgrade.BASE_SCHEMA_VERSION)
+        fixture, connection = self.restored()
+        self.assertEqual(fixture['sourceCommit'], 'ea7ff3a4967154b2d2bf258aa2412f744d252b59')
+        self.assertEqual(fixture['sourceVersion'], '0.49.0')
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                         str(schema_upgrade.BASE_SCHEMA_VERSION))
+                         str(SCHEMA_VERSION))
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
-                         {'schema_version', 'created_at', 'capability_secret'})
+                         {'schema_version', 'capability_secret'})
         schema = [list(row) for row in connection.execute('SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name')]
         encoded = json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
         self.assertEqual(hashlib.sha256(encoded).hexdigest(), fixture['schemaSha256'])
@@ -193,55 +190,30 @@ class UpgradeFixtureTests(unittest.TestCase):
             load_fixture(first['state'])
 
 
-    def test_upgrade_matches_fresh_structure_and_preserves_every_retained_value(self):
-        fixture, connection = self.restored(convert=False)
+    def test_base_is_accepted_unchanged_and_matches_fresh_structure(self):
+        fixture, connection = self.restored()
         state = fixture['state']
-        before = list(connection.iterdump())
-        with self.assertRaises(Corruption):
-            Database(state).initialize()
-        self.assertEqual(list(connection.iterdump()), before)
-        self.assertEqual(upgrade.idle_snapshot(state)['schema'], 26)
-        self.assertEqual(upgrade.preflight(state, contract_changed=True)['schema'], 26)
-        with self.assertRaises(BoardError):
-            upgrade.preflight(state, contract_changed=False)
+        stock = list(connection.iterdump())
         files = {p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                  if p.is_file() and not p.name.startswith('board.sqlite3')}
-        old_tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        removed = {'cursors', 'evaluation_state', 'model_facts'}
-        saved = {}
         fresh = Database(self.root / 'fresh')
         fresh.initialize()
         self.addCleanup(fresh.close)
-        with fresh.read() as baseline:
-            for table in old_tables - removed:
-                converted_json = {
-                    'workflow_workspace_conflicts': {'delivery_json'},
-                    'workflow_integrations': {'verification_json'},
-                    'workspace_cleanup_plans': {'retention_json', 'result_json'},
-                    'harness_health': {'record_json'},
-                }.get(table, set())
-                columns = ','.join('"' + row[1] + '"' for row in baseline.execute(f'PRAGMA table_info("{table}")')
-                                   if row[1] not in converted_json)
-                predicate = {"meta": " WHERE key NOT IN ('schema_version','created_at')",
-                             "macro_task_deletions": " WHERE state='deleting'",
-                             "commands": " WHERE deletion_id IS NULL",
-                             "events": " WHERE kind!='macro_task.deleted'"}.get(table, '')
-                saved[table] = (columns, sorted((tuple(row) for row in connection.execute(f'SELECT {columns} FROM "{table}"{predicate}')), key=repr))
-            schema_upgrade.upgrade(state)
-            query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
-            self.assertEqual([tuple(row) for row in connection.execute(query)],
-                             [tuple(row) for row in baseline.execute(query)])
-            for table, (columns, rows) in saved.items():
-                predicate = " WHERE key!='schema_version'" if table == 'meta' else ''
-                self.assertEqual(sorted((tuple(row) for row in connection.execute(f'SELECT {columns} FROM "{table}"{predicate}')), key=repr), rows, table)
         current = Database(state)
         current.initialize()
         self.addCleanup(current.close)
+        with fresh.read() as baseline:
+            query = 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name'
+            self.assertEqual([tuple(row) for row in connection.execute(query)],
+                             [tuple(row) for row in baseline.execute(query)])
+        self.assertEqual(upgrade.idle_snapshot(state)['schema'], SCHEMA_VERSION)
+        for changed in (False, True):
+            self.assertEqual(upgrade.preflight(state, contract_changed=changed)['schema'], SCHEMA_VERSION)
+        self.assertEqual(list(connection.iterdump()), stock)
         self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
-        self.assertEqual(upgrade.preflight(state, contract_changed=False)['schema'], SCHEMA_VERSION)
 
-    def test_upgraded_in_progress_deletion_removes_its_commands_events_and_fence(self):
+    def test_in_progress_deletion_removes_its_commands_events_and_fence(self):
         from hey_my_buddy.blackboard.tasks import macro_task_deletion
 
         fixture, connection = self.restored()
@@ -271,86 +243,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                 operation(store, target)
             self.assertEqual(caught.exception.code, 'NOT_FOUND')
 
-    def test_pruned_json_keeps_public_facts_and_frozen_evidence(self):
-        fixture, connection = self.restored(convert=False)
-        coordinator = BoardStore(fixture['state']).workflow
-        old = {table: [dict(row) for row in connection.execute(f'SELECT * FROM {table}')]
-               for table in ('workflow_workspace_conflicts', 'workflow_integrations', 'workspace_cleanup_plans')}
-        schema_upgrade.upgrade(fixture['state'])
-        for row in old['workflow_workspace_conflicts']:
-            current = connection.execute('SELECT * FROM workflow_workspace_conflicts WHERE conflict_id=?',
-                                         (row['conflict_id'],)).fetchone()
-            view = coordinator._conflict_view(connection, current)
-            self.assertEqual(current['evidence_json'], row['evidence_json'])
-            self.assertEqual(view['manifestSha256'], row['manifest_sha256'])
-            self.assertEqual(view['blockingPaths'], json.loads(row['blocking_paths_json']))
-            self.assertEqual((view['outputCommit'], view['outputTree']), (row['output_commit'], row['output_tree']))
-            self.assertEqual(view['delivery'], json.loads(row['delivery_json']) if row['delivery_json'] else None)
-            if current['delivery_json']:
-                self.assertEqual(set(json.loads(current['delivery_json'])), {'resolvedFingerprint', 'deliveredAt'})
-        for row in old['workflow_integrations']:
-            current = connection.execute('SELECT * FROM workflow_integrations WHERE integration_id=?',
-                                         (row['integration_id'],)).fetchone()
-            view = coordinator._integration_view(connection, current)
-            self.assertEqual(current['binding_sha256'], row['binding_sha256'])
-            self.assertEqual(view['verification'], WorkflowCoordinator._bounded_path_fields(
-                json.loads(row['verification_json']),
-                ('matchingPaths', 'differingPaths', 'missingPaths', 'adjustments', 'hostPaths', 'unrecordedPaths')))
-            self.assertEqual((view['attemptId'], view['state']), (row['attempt_id'], row['state']))
-            self.assertFalse({'verified', 'strategy', 'target', 'sourceCommit', 'sourceTree', 'beforeCommit',
-                              'afterCommit', 'beforeTree', 'afterTree', 'artifactAncestor', 'adjustments',
-                              'unrecordedPaths', 'summary'} & set(json.loads(current['verification_json'])))
-        for row in old['workspace_cleanup_plans']:
-            current = connection.execute('SELECT * FROM workspace_cleanup_plans WHERE plan_id=?',
-                                         (row['plan_id'],)).fetchone()
-            view = WorkflowCoordinator._plan_view(current)
-            self.assertEqual(current['evidence_json'], row['evidence_json'])
-            self.assertEqual(view['retention'], json.loads(row['retention_json']))
-            self.assertEqual(view['result'], json.loads(row['result_json']) if row['result_json'] else None)
-            self.assertNotIn('commandReceipts', json.loads(current['retention_json']))
-            if current['result_json']:
-                self.assertEqual(set(json.loads(current['result_json'])), {'alreadyRemoved'})
 
-    def test_catalog_router_and_health_pruning_preserves_public_facts(self):
-        from hey_my_buddy.blackboard.service.harness_health import HARNESSES, read_health
-        from hey_my_buddy.blackboard.routing.router_history import _fact_entries
-
-        fixture, connection = self.restored(convert=False)
-        health = {name: read_health(connection, name) for name in HARNESSES}
-        records = {row['harness']: json.loads(row['record_json'])
-                   for row in connection.execute('SELECT * FROM harness_health')}
-        outcomes = [dict(row) for row in connection.execute('SELECT * FROM router_outcomes')]
-        schema_upgrade.upgrade(fixture['state'])
-        self.assertEqual({name: read_health(connection, name) for name in HARNESSES}, health)
-        for row in connection.execute('SELECT * FROM harness_health'):
-            expected = {key: value for key, value in records[row['harness']].items()
-                        if key not in {'harness', 'status', 'available'}}
-            self.assertEqual(json.loads(row['record_json']), expected)
-        for outcome in outcomes:
-            entry = next(item for item in _fact_entries(connection, outcome['buddy_id'])
-                         if item['seq'] == outcome['event_seq'])
-            self.assertEqual(entry['at'], outcome['recorded_at'])
-        self.assertEqual(set(dict(connection.execute('SELECT key,value FROM meta'))),
-                         {'schema_version', 'capability_secret'})
-
-    def test_health_pruning_keeps_column_authority_for_stale_native_status(self):
-        from hey_my_buddy.blackboard.service.harness_health import read_health
-
-        fixture, connection = self.restored(convert=False)
-        # The base invalidate writer keeps the native JSON status but changes
-        # the authoritative column and available flag. That is valid old stock.
-        raw = json.loads(connection.execute("SELECT record_json FROM harness_health WHERE harness='codex'").fetchone()[0])
-        self.assertEqual(raw['status'], 'ready')
-        raw.update(available=False, reason={'code': 'harness.not-checked', 'params': {'operation': 'probe'}})
-        connection.execute("UPDATE harness_health SET status='unhealthy',record_json=? WHERE harness='codex'", (_json(raw),))
-        connection.commit()
-        before = read_health(connection, 'codex')
-        self.assertEqual(before['status'], 'unhealthy')
-        self.assertFalse(before['available'])
-        schema_upgrade.upgrade(fixture['state'])
-        self.assertEqual(read_health(connection, 'codex'), before)
-
-    def test_upgraded_credentials_require_a_real_attempt(self):
+    def test_credentials_require_a_real_attempt(self):
         _fixture, connection = self.restored()
         connection.execute('PRAGMA foreign_keys=ON')
         credential = connection.execute('SELECT credential_id FROM agent_credentials LIMIT 1').fetchone()[0]
@@ -360,146 +254,70 @@ class UpgradeFixtureTests(unittest.TestCase):
                                    (attempt, credential))
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
 
-    def test_every_rebuilt_sequence_keeps_deleted_high_water_mark(self):
-        fixture, connection = self.restored(convert=False)
-        connection.execute("UPDATE sqlite_sequence SET seq=seq+100")
-        previous = dict(connection.execute('SELECT name,seq FROM sqlite_sequence'))
-        connection.commit()
-        schema_upgrade.upgrade(fixture['state'])
-        self.assertEqual(dict(connection.execute('SELECT name,seq FROM sqlite_sequence')), previous)
-
-    def test_empty_rebuilt_table_preserves_sequence_presence_and_high_water_mark(self):
-        for consumed in (None, 100):
-            with self.subTest(consumed=consumed):
-                fixture, connection = self.restored('empty-sequence-' + str(consumed), convert=False)
-                connection.execute('DELETE FROM attempt_reminders')
-                connection.execute("DELETE FROM sqlite_sequence WHERE name='attempt_reminders'")
-                if consumed is not None:
-                    connection.execute("INSERT INTO sqlite_sequence VALUES('attempt_reminders',?)", (consumed,))
-                previous = dict(connection.execute('SELECT name,seq FROM sqlite_sequence'))
-                connection.commit()
-                schema_upgrade.upgrade(fixture['state'])
-                self.assertEqual(dict(connection.execute('SELECT name,seq FROM sqlite_sequence')), previous)
-
-    def test_failed_conversion_rolls_back_all_rows_and_ddl(self):
-        fixture, connection = self.restored(convert=False)
-        before = list(connection.iterdump())
-        convert = schema_upgrade._convert
-        def fail(db):
-            convert(db)
-            raise RuntimeError('injected after DDL and data conversion')
-        with mock.patch.object(schema_upgrade, '_convert', side_effect=fail):
-            with self.assertRaisesRegex(RuntimeError, 'injected'):
-                schema_upgrade.upgrade(fixture['state'])
-        self.assertEqual(list(connection.iterdump()), before)
-        self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
-
-    def test_inconsistent_redundant_values_are_rejected_without_changes(self):
-        for name, mutation in (
-            ('catalog-source', "UPDATE evaluation_catalog SET source='different'"),
-            ('catalog-harness-version', "UPDATE evaluation_catalog SET harness_version='different'"),
-            ('catalog-provider-version', "UPDATE evaluation_catalog SET provider_version='different'"),
-            ('decision-created', "UPDATE decision_requests SET created_at='different'"),
-            ('outcome-time', "UPDATE router_outcomes SET recorded_at='different'"),
-            ('credential-missing-attempt', "UPDATE agent_credentials SET attempt_id=NULL"),
-            ('credential-orphan-attempt', "UPDATE agent_credentials SET attempt_id='missing-attempt'"),
-            ('acceptance', "UPDATE tasks SET acceptance_verdict=NULL WHERE accepted_at IS NOT NULL"),
-            ('correlation', "UPDATE messages SET correlation_id='different'"),
-            ('body-bytes', "UPDATE messages SET body_bytes=body_bytes+1"),
-            ('run-spec', "UPDATE workflow_runs SET micro_task_json='{}'"),
-            ('run-fingerprint', "UPDATE workflow_runs SET micro_task_fingerprint='different'"),
-            ('run-workspace', "UPDATE workflow_runs SET workspace_id='different'"),
-            ('run-manifest', "UPDATE workflow_runs SET workspace_manifest_sha256='different'"),
-            ('child-manifest', "UPDATE workflow_children SET workspace_manifest_sha256='different'"),
-            ('child-auto', "UPDATE workflow_children SET auto_continue=1"),
-            ('credential-task', "UPDATE agent_credentials SET task_id='different'"),
-            ('credential-generation', "UPDATE agent_credentials SET generation=generation+1"),
-            ('credential-expiry', "UPDATE agent_credentials SET expires_at='2026-01-02T00:00:00Z'"),
-            ('artifact-source', "UPDATE workflow_artifacts SET source_task_id='different'"),
-            ('suggestion-author', "UPDATE workflow_suggestions SET author='different'"),
-            ('conclusion-evidence', "UPDATE workflow_host_conclusions SET evidence_json='{\"references\":[\"different\"]}'"),
-            ('conclusion-integration', "UPDATE workflow_host_conclusions SET integration_id=(SELECT integration_id FROM workflow_integrations LIMIT 1)"),
-            ('reminder-elapsed', "UPDATE attempt_reminders SET elapsed_seconds=elapsed_seconds+1"),
-            ('conflict-manifest', "UPDATE workflow_workspace_conflicts SET manifest_sha256='different'"),
-            ('conflict-blocking', "UPDATE workflow_workspace_conflicts SET blocking_paths_json='[]'"),
-            ('conflict-output', "UPDATE workflow_workspace_conflicts SET output_commit='different'"),
-            ('conflict-delivery', "UPDATE workflow_workspace_conflicts SET delivery_json=json_set(delivery_json,'$.artifactId','different') WHERE delivery_json IS NOT NULL"),
-            ('integration-attempt', "UPDATE workflow_integrations SET attempt_id=NULL WHERE attempt_id IS NOT NULL"),
-            ('integration-state', "UPDATE workflow_integrations SET state='conflict'"),
-            ('integration-kind', "UPDATE workflow_integrations SET target_kind='different'"),
-            ('integration-copy', "UPDATE workflow_integrations SET verification_json=json_set(verification_json,'$.beforeCommit','different') WHERE state='verified'"),
-            ('integration-adjustments', "UPDATE workflow_integrations SET verification_json=json_set(verification_json,'$.adjustments',json('[]')) WHERE state='verified'"),
-            ('integration-summary', "UPDATE workflow_integrations SET verification_json=json_set(verification_json,'$.summary','different') WHERE state='verified'"),
-            ('cleanup-retention', "UPDATE workspace_cleanup_plans SET retention_json=json_set(retention_json,'$.commandReceipts',json('false'))"),
-            ('cleanup-result', "UPDATE workspace_cleanup_plans SET result_json=json_set(result_json,'$.path','different') WHERE result_json IS NOT NULL"),
-            ('cleanup-result-retention', "UPDATE workspace_cleanup_plans SET result_json=json_set(result_json,'$.retention',json('{}')) WHERE result_json IS NOT NULL"),
-        ):
-            with self.subTest(form=name):
-                fixture, connection = self.restored(name, convert=False)
-                changed = connection.execute(mutation).rowcount
-                self.assertGreater(changed, 0)
-                connection.commit()
-                before = list(connection.iterdump())
-                with self.assertRaisesRegex(ValueError, 'Inconsistent'):
-                    schema_upgrade.upgrade(fixture['state'])
-                self.assertEqual(list(connection.iterdump()), before)
 
     def test_unknown_shutdown_stays_unknown_and_blocks_installation(self):
-        fixture, connection = self.restored(convert=False)
+        fixture, connection = self.restored()
         attempt = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?',
                                      (fixture['stableIds']['accepted'],)).fetchone()[0]
         connection.execute("UPDATE attempts SET execution_state='uncertain',shutdown_confirmed=0 WHERE attempt_id=?", (attempt,))
         connection.commit()
-        schema_upgrade.upgrade(fixture['state'])
         self.assertEqual(tuple(connection.execute('SELECT execution_state,shutdown_confirmed FROM attempts WHERE attempt_id=?', (attempt,)).fetchone()), ('uncertain', 0))
         with self.assertRaises(BoardError) as caught:
             upgrade.preflight(fixture['state'], contract_changed=True)
         self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
 
-    def test_base_contains_every_pruned_form_and_in_progress_deletion(self):
-        _fixture, connection = self.restored(convert=False)
+    def test_base_contains_current_stored_forms_and_in_progress_deletion(self):
+        fixture, connection = self.restored()
         cooling = connection.execute('SELECT harness,provider,consecutive_rejections,cooling_until '
                                      'FROM provider_cooling').fetchone()
         self.assertEqual(tuple(cooling), ('codex', 'openai', 1, None))
-        deletion = connection.execute("SELECT deletion_id,state,micro_task_count FROM macro_task_deletions WHERE state='deleted'").fetchone()
-        self.assertEqual(tuple(deletion)[1:], ('deleted', 1))
-        self.assertEqual(connection.execute("SELECT COUNT(*) FROM macro_task_deletions WHERE state='deleting'").fetchone()[0], 1)
-        for table in ('cursors', 'evaluation_state', 'model_facts', 'attempt_interruptions'):
-            self.assertGreater(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0], 0, table)
-        self.assertGreater(connection.execute('SELECT COUNT(*) FROM tasks WHERE queue_position IS NOT NULL').fetchone()[0], 0)
+        self.assertEqual(connection.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0], 1)
         for table in ('workflow_runs', 'workflow_children', 'agent_credentials', 'workflow_artifacts',
                       'workflow_suggestions', 'workflow_host_conclusions', 'attempt_activity',
-                      'attempt_reminders', 'workflow_routes', 'workflow_continuations', 'workspace_reservations'):
+                      'attempt_reminders', 'workflow_routes', 'workflow_continuations', 'workspace_reservations',
+                      'attempt_interruptions', 'attempt_shutdown_evidence', 'attempt_process_identities'):
             self.assertGreater(connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0], 0, table)
         self.assertEqual({row[0] for row in connection.execute('SELECT kind FROM attempt_reminders')},
                          {'expected-duration', 'native-silence'})
         self.assertEqual({row[0] is None for row in connection.execute('SELECT attempt_id FROM workflow_suggestions')},
                          {True, False})
-        self.assertEqual(connection.execute('SELECT COUNT(*) FROM agent_credentials WHERE expires_at IS NOT NULL').fetchone()[0], 0)
-        self.assertGreater(connection.execute('SELECT COUNT(*) FROM workflow_workspace_conflicts WHERE delivery_json IS NOT NULL').fetchone()[0], 0)
-        self.assertEqual({row[0] for row in connection.execute('SELECT state FROM workflow_integrations')},
-                         {'verified', 'not-required'})
-        self.assertTrue(any(json.loads(row[0])['adjustments'] for row in connection.execute(
-            "SELECT verification_json FROM workflow_integrations WHERE state='verified'")))
-        self.assertGreater(connection.execute('SELECT COUNT(*) FROM workspace_cleanup_plans WHERE result_json IS NOT NULL').fetchone()[0], 0)
-
-
-        self.assertGreater(connection.execute('SELECT COUNT(*) FROM commands WHERE deletion_id=?',
-                                             (deletion['deletion_id'],)).fetchone()[0], 0)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempt_interruptions WHERE state='settled'").fetchone()[0], 1)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE state='consumed'").fetchone()[0], 1)
+        self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_workspace_conflicts WHERE delivery_json IS NOT NULL').fetchone()[0], 1)
+        self.assertEqual({row[0] for row in connection.execute('SELECT strategy FROM workflow_integrations')},
+                         {'patch', 'not-required'})
+        self.assertEqual({row[0] for row in connection.execute('SELECT state FROM workspace_cleanup_plans')},
+                         {'planned', 'applied', 'blocked'})
+        verification = json.loads(connection.execute(
+            "SELECT verification_json FROM workflow_integrations WHERE strategy='patch'").fetchone()[0])
+        self.assertEqual([item['path'] for item in verification['differingPaths']], ['README.md'])
+        self.assertEqual(verification['hostPaths'], ['fixture-host.txt'])
+        delivery = json.loads(connection.execute(
+            "SELECT delivery_json FROM workflow_workspace_conflicts WHERE state='adopted'").fetchone()[0])
+        self.assertEqual(set(delivery), {'resolvedFingerprint', 'deliveredAt'})
+        for row in connection.execute('SELECT retention_json,result_json FROM workspace_cleanup_plans'):
+            self.assertNotIn('commandReceipts', json.loads(row[0]))
+            if row[1] is not None:
+                self.assertEqual(set(json.loads(row[1])), {'alreadyRemoved'})
+        route = connection.execute('SELECT run_id,state FROM workflow_routes').fetchone()
+        self.assertEqual(tuple(route), (fixture['stockIds']['helperParent'], 'resolved'))
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         inquiry = connection.execute('SELECT reason_code,reason_params_json FROM messages').fetchone()
         self.assertEqual(tuple(inquiry), ('inquiry-no-live-agent', '{}'))
-        self.assertEqual({tuple(row) for row in connection.execute(
-            'SELECT mode,note FROM evaluation_preferences')},
-            {('pin', 'fixture pinned buddy'), ('exclude', 'fixture exclusion')})
-        self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind='quota.redetect'").fetchone()[0], 1)
+        self.assertEqual({tuple(row) for row in connection.execute('SELECT mode,note FROM evaluation_preferences')},
+                         {('pin', 'fixture pinned buddy'), ('exclude', 'fixture exclusion')})
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind='quota.redetect'").fetchone()[0], 2)
+        for row in connection.execute('SELECT activity_json FROM attempt_activity'):
+            self.assertEqual(json.loads(row[0])['eventSeq'], 3)
+        for row in connection.execute('SELECT record_json FROM harness_health'):
+            self.assertFalse({'harness', 'status', 'available'} & json.loads(row[0]).keys())
 
     def test_router_stock_binds_claims_dispatches_and_current_outcomes(self):
         fixture, connection = self.restored()
         self.assertEqual([row['name'] for row in connection.execute('PRAGMA table_info(router_claims)')],
                          ['attempt_id', 'task_id', 'generation'])
         claims = connection.execute('SELECT * FROM router_claims').fetchall()
-        self.assertEqual(len(claims), 2)
+        self.assertEqual(len(claims), 3)
         for claim in claims:
             attempt = connection.execute('SELECT task_id,generation FROM attempts WHERE attempt_id=?',
                                          (claim['attempt_id'],)).fetchone()
@@ -520,7 +338,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                       outcome['router_index'], outcome['phase'], outcome['task_id'],
                       outcome['attempt_id'], outcome['outcome']]
             self.assertEqual(_sha(_json(fields).encode()), outcome['receipt_id'])
-        self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='router.claimed'").fetchone()[0], 2)
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='router.claimed'").fetchone()[0], 3)
 
     def test_current_file_stock_and_stored_evidence_are_not_empty(self):
         from hey_my_buddy.protocol.execution import read_execution_receipt
@@ -528,7 +346,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         references = [entry['params']['receipt'] for entry in fixture['operations']
                       if entry['operation'] == 'execution_result']
-        self.assertEqual(len(references), 9)
+        self.assertEqual(len(references), 10)
         for reference in references:
             receipt = read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'])
             self.assertIsNotNone(receipt)
@@ -536,7 +354,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                                          (receipt['attemptId'],)).fetchone()
             self.assertEqual(tuple(attempt), (receipt['taskId'], receipt['generation']))
         sessions = list((fixture['state'] / 'sessions').rglob('*.jsonl'))
-        self.assertEqual(len(sessions), 7)
+        self.assertEqual(len(sessions), 8)
         for path in sessions:
             lines = path.read_text().splitlines()
             format = SessionFormat.model_validate_json(lines[0])
@@ -568,7 +386,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_every_other_schema_is_refused_without_writes(self):
         fixture, connection = self.restored()
-        for version in ('24', '25', '0', '999', '026', '26.0', '027', '27.0', 'unrecognized'):
+        for version in ('24', '25', '26', '0', '999', '026', '26.0', '027', '27.0', 'unrecognized'):
             with self.subTest(schema=version):
                 connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))
                 connection.commit()

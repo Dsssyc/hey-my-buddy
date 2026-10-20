@@ -9,7 +9,7 @@ import stat
 import unittest
 from unittest import mock
 
-from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
+from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
@@ -21,14 +21,12 @@ STATE_FILES = ('console-settings.json',)
 
 
 class BackupTests(BoardTestCase):
-    def test_fixture_backup_trials_upgrade_and_retains_base_schema_and_exact_bytes(self):
-        import gzip
-
+    def test_fixture_backup_retains_current_schema_and_exact_bytes(self):
         fixture = load_fixture(self.directory)
         before = (self.directory / 'board.sqlite3').read_bytes()
         current = Path(backup.create(self.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
-        self.assertEqual(backup.verify(current)['schema'], schema_upgrade.BASE_SCHEMA_VERSION)
-        self.assertEqual(fixture['schemaVersion'], schema_upgrade.BASE_SCHEMA_VERSION)
+        self.assertEqual(backup.verify(current)['schema'], SCHEMA_VERSION)
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
 
@@ -142,7 +140,7 @@ class BackupTests(BoardTestCase):
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text())
-        for version in (21, 23, 24, 25, 28):
+        for version in (21, 23, 24, 25, 26, 28):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest))
@@ -150,6 +148,34 @@ class BackupTests(BoardTestCase):
                     backup.verify(current)
                 self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
                 self.assertEqual(caught.exception.message, 'Unsupported backup format or schema')
+
+    def test_verify_reports_compressed_payload_corruption_with_matching_digest(self):
+        board = self.board()
+        board.store.db.close()
+        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None,
+                                     contract_version=CONTRACT_VERSION)['path'])
+        manifest_path = current / 'manifest.json'
+        payload_path = current / 'board.sqlite3.gz'
+        original_manifest = json.loads(manifest_path.read_text())
+        original_payload = payload_path.read_bytes()
+        cases = {
+            'truncated': original_payload[:-8],
+            'crc': original_payload[:-8] + bytes([original_payload[-8] ^ 1]) + original_payload[-7:],
+            'magic': bytes([original_payload[0] ^ 1]) + original_payload[1:],
+            'deflate': original_payload[:10] + bytes([(original_payload[10] & ~6) | 6]) + original_payload[11:],
+        }
+        for kind, payload in cases.items():
+            with self.subTest(kind=kind):
+                manifest = json.loads(json.dumps(original_manifest))
+                manifest['files']['board.sqlite3.gz'] = {
+                    'bytes': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}
+                payload_path.write_bytes(payload)
+                manifest_path.write_text(json.dumps(manifest))
+                with self.assertRaises(BoardError) as caught:
+                    backup.verify(current)
+                self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
+                self.assertEqual(caught.exception.message, 'Backup compressed database is invalid')
+                self.assertTrue(caught.exception.details['reason'])
 
     def test_offline_archive_refuses_an_uncheckpointed_wal_without_publication(self):
         board = self.board()
