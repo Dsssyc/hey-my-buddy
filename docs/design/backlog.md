@@ -14,7 +14,7 @@
 
 开发者于 2026-10-15 调整第 3 步的余下部分：先做一小批可靠性修复，同时写“每次执行一个进程”的 ADR，再做第 3 步里日常用得到的部分；Router 的几个面放到首次发版之后，开发者认为三个面的设计还不够完善，以后另行讨论。各步的微任务见[执行计划](reliability-and-step3/plan.md)。
 
-开发者于 2026-10-20 与 Host 讨论 Router 之后定：三个面各由自己的 buddy 担任（ADR-021 第 2、8、14、16 条的修订）；三个面的实现仍在首次发版之后，先让路由面拿到价格与按 buddy 的本机结果统计，再做维护面、二维表、探索与画像面；DSH 与 ZCode 担任审阅模式的 Router（ADR-021 的 L6）提前到发版之前做（2026-10-20 按 ADR-023 共用档位做完，在源码 0.48.0 里，尚未安装；[验收记录](../acceptance/adr023/shared-levels.md)）。
+开发者于 2026-10-20 与 Host 讨论 Router 之后定：三个面各由自己的 buddy 担任（ADR-021 第 2、8、14、16 条的修订）；三个面的实现仍在首次发版之后，先让路由面拿到价格与按 buddy 的本机结果统计，再做维护面、二维表、探索与画像面；DSH 与 ZCode 担任审阅模式的 Router（ADR-021 的 L6）提前到发版之前做（2026-10-20 按 ADR-023 共用档位做完，同日随 0.48.0 安装；[验收记录](../acceptance/adr023/shared-levels.md)）。
 
 开发者于 2026-10-18 把 [ADR-024](../decisions/024-console-session-view.md) 的会话视图排在第 4 步批次三装好之后、首次发版之前：先做 Codex，再补其余三个 harness（2026-10-20 随 0.47.0 装好，[安装记录](../acceptance/installs/0.47.0.md)；记录还没有用真实回合核对过，装后用日常的头几个回合核对）；同时要的 harness [接入要点](../reference/harness-integration.md)与检查套件里的一致性检查已于同日写成，在批次二里（[验收记录](../acceptance/harness-integration-guide.md)）。
 
