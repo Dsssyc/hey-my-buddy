@@ -121,7 +121,7 @@ Output artifacts may include `cumulativePatch` with its original micro task inpu
 
 | Command | Parameters | Behavior |
 | --- | --- | --- |
-| `macro-task-list` | optional `limit` 1–100 (default 50), `before`, `projectId`, `hostId`, `query` (≤200), `filter` (`all`, `active`, `host`, `review`) | Macro task and standalone micro task summaries ordered by latest recorded activity, with `total`, `nextCursor`, the event `cursor` and `changed` |
+| `macro-task-list` | optional `limit` 1–100 (default 50), `before`, `projectId`, `hostId`, `query` (≤200), `filter` (`all`, `active`, `host`, `review`), `sort` (`activity-desc` by default, `activity-asc`, `created-desc`, `created-asc`) | Macro task and standalone micro task summaries in the requested order, with `total`, `nextCursor`, the event `cursor` and `changed` |
 | `macro-task-timeline` | `macroTaskId` (`macro-…` or `run:<rootRunId>`), optional `limit` 1–200 (default 100), `query`, `filter` | One group's rows, spans (≤800) and Host markers (≤800) with totals, per-collection truncation flags, `filtered` and `scopeComplete` |
 
 Both are Host/user reads with no model call or publication, refused to attempt-scoped credentials; the [macro tasks reference](macro-tasks.md) owns their shapes. Deletion preview and deletion are console-only operations, with no Host or Worker CLI command; [operations](operations.md#worker-session-history) owns their gates, native-session removal and deletion receipts. Their responses are bounded and printed without a brief projection.
