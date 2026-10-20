@@ -120,6 +120,7 @@
    - 公开视图里由别的字段推出的 `acceptanceVerdict` 与 `correlationId` 从接口删掉，控制台里 `acceptanceVerdict === "failed"` 的死分支一并删；
    - 合成预览按新的删除契约回答：删完之后预览与再删都是 `NOT_FOUND`，`test_host_preview.py` 里钉着旧行为的断言随之改；
    - 两个浏览器同时删除时，后一个得到 `NOT_FOUND`，按已删完处理，不显示成错误。
+5. **剪枝二的验收与审查分来的几条**（[审查记录](../schema-audit/review-m2.md)，Host 核实过）：公开视图里恒为常量的字段从接口删掉——helper 视图的 `autoContinue`（恒为 false），Host 结论的 `evidence`（恒为空）与 `integrationId`（恒为 null）；审计视图的 `spec` 与 `microTask` 读的是同一份，删 `spec` 与只为它留着、还吞掉解析异常的 `_original_spec`。
 
 写入范围与检查在 A 合入之后定。
 
