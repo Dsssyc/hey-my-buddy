@@ -11,6 +11,7 @@
 
 - 首次发版之前做完；
 - 只写不读的列算没用，一起删。
+- `meta.created_at` 也删：宏任务按创建时刻排序用的是 `macro_tasks.created_at`，它没有用处。
 
 本文只安排实现，不表示已经实现。
 
@@ -29,7 +30,7 @@
   - `attempts.error/exit_code/signal/token_usage_json`；
   - buddy 当前投影与目录的重叠；
   - `activity_seq/activity_at`。
-- **清点“看似冗余但要留的”一节里的各项照留。**
+- **清点“看似冗余但要留的”一节里的各项照留**，只有 `meta.created_at` 例外：它只在建库时写，没有读者，开发者 2026-10-20 定删掉，放在微任务 4。
 
 ## 微任务 1：删除的残留、死表、重复索引与核心表的死列
 
@@ -94,6 +95,7 @@
 - `model_service_concurrency.created_at/updated_at`（27）。
 - `router_outcomes.recorded_at`（53）：时间按 `event_seq` 联结事件取。
 - `harness_health.record_json` 里与列重复的 `harness/status/available`（46）。
+- `meta.created_at`（3）：之后 `meta` 只有 schema 版本与密钥两项。
 
 ## 检查与验收
 
