@@ -1,6 +1,6 @@
 # schema 26 → 27 的冗余剪枝：验收记录
 
-[执行计划](../../design/schema-audit/plan.md)的实现，依据是[清点](../../design/schema-audit/inventory.md)与 AGENTS.md 的存储规则。四个微任务依次扩展同一次待做的升级，都在宏任务“schema 冗余清点”里；合入整合分支，尚未安装。
+[执行计划](../../design/schema-audit/plan.md)的实现，依据是[清点](../../design/schema-audit/inventory.md)与 AGENTS.md 的存储规则。四个微任务依次扩展同一次待做的升级，都在宏任务“schema 冗余清点”里；2026-10-20 随 0.49.0 安装（[安装记录](../installs/0.49.0.md)）。
 
 ## 微任务 1：删除的残留、死表、重复索引与核心表的死列
 
