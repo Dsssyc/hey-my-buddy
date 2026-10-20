@@ -340,9 +340,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         conflict = view["workspaceConflicts"][0]
         self.assertEqual(conflict["blockingPathsCount"], len(paths))
         with board.store.db.read() as connection:
-            raw = connection.execute("SELECT blocking_paths_json FROM workflow_workspace_conflicts WHERE conflict_id=?",
+            raw = connection.execute("SELECT evidence_json FROM workflow_workspace_conflicts WHERE conflict_id=?",
                                      (conflict["conflictId"],)).fetchone()[0]
-        self.assertEqual(json.loads(raw), paths)
+        self.assertEqual(json.loads(raw)["blockingPaths"], paths)
         restored = self.resolve(board, view, conflict, "restore")
         self.assertTrue(restored["resolved"])
         self.assertEqual(restored["resolvedPathsCount"], len(paths))
@@ -652,8 +652,8 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(payload["status"], "failed")
         self.assertIn("workspaceSealError", payload["result"])
         self.assertIn("turn", payload["result"])
-        self.assertEqual(delivery["state"], "delivered")
-        self.assertEqual(delivery["artifactId"], resolved["artifactId"])
+        self.assertEqual(set(delivery), {"resolvedFingerprint", "deliveredAt"})
+        self.assertEqual(delivery["resolvedFingerprint"], resolved["resolvedFingerprint"])
         self.assertEqual(resolved["workspaceConflicts"][0]["delivery"]["state"], "delivered")
         # Acceptance needs no further model turn. The resolved artifact is verified
         # against a real target checkout that actually received it.

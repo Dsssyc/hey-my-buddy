@@ -141,7 +141,7 @@ class UpgradeCutoverTests(BoardTestCase):
         result = self.cutover(self.previous, target, fail_target=True)
         self.assertFalse(result["upgraded"], result)
         self.assertEqual(result["error"]["details"]["reason"]["code"], "INJECTED_START")
-        self.assertEqual(result["error"]["message"], "Upgrade failed; the previous runtime and backup were restored")
+        self.assertEqual(result["error"]["message"], "Installation failed; the previous runtime and backup were restored")
         self.assertEqual(result["rollback"]["runtimeContentId"], self.previous.name)
         self.assertEqual(self.started_runtimes, [target, self.previous])
         self.assert_history_preserved()

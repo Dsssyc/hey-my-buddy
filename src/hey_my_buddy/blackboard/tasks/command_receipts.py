@@ -99,7 +99,7 @@ def replay_response(coordinator, connection, kind: str, stored: dict) -> dict:
         ).fetchone()
         result.update(verdict="accepted", targetRunId=stored["runId"],
                       targetRevision=run["revision"], integrationId=stored["integrationId"],
-                      integration=coordinator._integration_view(integration))
+                      integration=coordinator._integration_view(connection, integration))
         if "resolutionConflictId" in stored:
             conflict = connection.execute(
                 "SELECT * FROM workflow_workspace_conflicts WHERE conflict_id=?",
@@ -168,5 +168,5 @@ def replay_response(coordinator, connection, kind: str, stored: dict) -> dict:
         result.update(plan=coordinator._plan_view(plan),
                       targetRunId=stored["targetRunId"], targetRevision=run["revision"])
         if kind == "workflow.cleanup_apply":
-            result.update(removed=True, retention=json.loads(plan["result_json"])["retention"])
+            result.update(removed=True, retention=coordinator._plan_view(plan)["retention"])
     return result

@@ -157,11 +157,10 @@ def _private_copy(source: Path, target: Path) -> None:
         os.fsync(dst.fileno())
 
 
-def database_snapshot(connection, *, event_head: int | None = None, exact: bool = False) -> dict:
+def database_snapshot(connection, *, event_head: int | None = None) -> dict:
     """Hash the historical sorted JSON format with SQLite's bounded sorter.
 
-    Python retains one row at a time. ``exact`` adds the lifecycle rows normally
-    exempted by backup without changing ordinary backup metadata.
+    Python retains one row at a time.
     """
     tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
     counts = {name:connection.execute('SELECT COUNT(*) FROM "'+name.replace('"','""')+'"').fetchone()[0]
@@ -169,7 +168,7 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
     if event_head is None:
         event_head = connection.execute('SELECT COALESCE(MAX(seq),0) FROM events').fetchone()[0]
 
-    def fingerprint(name, *, exempt=False):
+    def fingerprint(name):
         if not counts[name]:
             return hashlib.sha256(b'').hexdigest()
 
@@ -197,7 +196,7 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
         sql, args = 'SELECT ' + arguments + ' AS encoded FROM ' + quoted, ()
         if name == 'events':
             sql += ' WHERE seq<=?'; args = (event_head,)
-        elif name == 'sqlite_sequence' and not exempt:
+        elif name == 'sqlite_sequence':
             sql += " WHERE name NOT IN ('events')"
         sql += ' ORDER BY encoded COLLATE BINARY'
         connection.create_function('hey_my_buddy_snapshot_row', -1, encode)
@@ -216,11 +215,7 @@ def database_snapshot(connection, *, event_head: int | None = None, exact: bool 
                 connection.create_function('hey_my_buddy_snapshot_part', -1, None)
 
     fingerprints = {name:fingerprint(name) for name in tables}
-    result = {'tables':counts, 'fingerprints':fingerprints, 'eventHead':event_head}
-    if exact:
-        result['exemptFingerprints'] = {name:fingerprint(name, exempt=True)
-                                      for name in ('sqlite_sequence',) if name in tables}
-    return result
+    return {'tables':counts, 'fingerprints':fingerprints, 'eventHead':event_head}
 
 
 def verify(directory: Path) -> dict:
@@ -233,8 +228,15 @@ def verify(directory: Path) -> dict:
 
 def _verify(directory: Path) -> dict:
     _guard(directory)
-    with _open(directory / 'manifest.json', 'rb') as stream:
-        manifest = json.load(stream)
+    try:
+        with _open(directory / 'manifest.json', 'rb') as stream:
+            manifest = json.load(stream)
+    except (OSError, ValueError) as error:
+        raise BoardError('BACKUP_INVALID', 'Backup manifest is unreadable') from error
+    required = {'format', 'createdAt', 'schema', 'contract', 'backupToolContract',
+                'databaseSnapshot', 'runtime', 'pluginCommit', 'pluginCommitStatus', 'files'}
+    if not isinstance(manifest, dict) or not required <= manifest.keys() or not isinstance(manifest['files'], dict):
+        raise BoardError('BACKUP_INVALID', 'Backup manifest is incomplete')
     if manifest.get('format') != 1 or manifest.get('schema') not in (BASE_SCHEMA_VERSION, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
@@ -244,6 +246,8 @@ def _verify(directory: Path) -> dict:
     if actual != set(manifest['files']):
         raise BoardError('BACKUP_INVALID', 'Backup inventory mismatch')
     for relative, row in manifest['files'].items():
+        if not isinstance(row, dict) or not {'bytes', 'sha256'} <= row.keys():
+            raise BoardError('BACKUP_INVALID', 'Backup manifest is incomplete')
         path = directory / relative
         _guard(path)
         if path.lstat().st_size != row['bytes'] or digest(path) != row['sha256']:
@@ -255,16 +259,19 @@ def _verify(directory: Path) -> dict:
             with gzip.GzipFile(fileobj=compressed, mode='rb') as source:
                 shutil.copyfileobj(source, destination)
         _guard(trial / 'board.sqlite3')
-        with closing(sqlite3.connect(trial / 'board.sqlite3')) as connection:
-            schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if schema is None or schema[0] != str(manifest['schema']):
-                raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
-            if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
-                raise BoardError('BACKUP_INVALID', 'SQLite integrity check failed')
-            if connection.execute('PRAGMA foreign_key_check').fetchall():
-                raise BoardError('BACKUP_INVALID', 'SQLite foreign key check failed')
-            if manifest.get('databaseSnapshot') is not None and database_snapshot(connection) != manifest['databaseSnapshot']:
-                raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
+        try:
+            with closing(sqlite3.connect(trial / 'board.sqlite3')) as connection:
+                schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+                if schema is None or schema[0] != str(manifest['schema']):
+                    raise BoardError('BACKUP_INVALID', 'Backup schema does not match its manifest')
+                if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)]:
+                    raise BoardError('BACKUP_INVALID', 'SQLite integrity check failed')
+                if connection.execute('PRAGMA foreign_key_check').fetchall():
+                    raise BoardError('BACKUP_INVALID', 'SQLite foreign key check failed')
+                if database_snapshot(connection) != manifest['databaseSnapshot']:
+                    raise BoardError('BACKUP_INVALID', 'Backup database fingerprint metadata does not match')
+        except sqlite3.DatabaseError as error:
+            raise BoardError('BACKUP_INVALID', 'Backup database is invalid') from error
         if manifest['schema'] == BASE_SCHEMA_VERSION:
             upgrade_schema(trial)
     return manifest
@@ -382,8 +389,7 @@ def _recover_publication(root: Path) -> None:
 def recover(state: Path) -> Path:
     """Recover an interrupted publication before reading backups/current.
 
-    Call this before resolving a restore path or comparing it with an upgrade
-    journal. Only fixed entries below state/backups are ever renamed/deleted.
+    Only fixed entries below state/backups are ever renamed/deleted.
     """
     root = Path(state) / 'backups'
     _backup_paths(root)

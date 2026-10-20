@@ -1,5 +1,6 @@
 """Private backup publication, inventory, and recovery tests."""
 import hashlib
+import gzip
 import json
 import os
 from pathlib import Path
@@ -78,8 +79,6 @@ class BackupTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
 
     def test_verify_refuses_database_schema_that_disagrees_with_manifest(self):
-        import gzip
-
         board = self.board()
         board.store.db.close()
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None,
@@ -103,6 +102,39 @@ class BackupTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
         self.assertEqual(caught.exception.message, 'Backup schema does not match its manifest')
         self.assertEqual({file: file.read_bytes() for file in current.rglob('*') if file.is_file()}, before)
+
+    def test_verify_reports_incomplete_manifest_and_invalid_sqlite_as_backup_invalid(self):
+        board = self.board()
+        board.store.db.close()
+        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None,
+                                     contract_version=CONTRACT_VERSION)['path'])
+        manifest_path = current / 'manifest.json'
+        payload_path = current / 'board.sqlite3.gz'
+        original_manifest = json.loads(manifest_path.read_text())
+        original_payload = payload_path.read_bytes()
+        empty_sqlite = self.directory / 'empty.sqlite3'
+        with sqlite3.connect(empty_sqlite):
+            pass
+        cases = ('missing_files', 'missing_hash', 'missing_meta', 'not_sqlite')
+        for case in cases:
+            with self.subTest(case=case):
+                manifest = json.loads(json.dumps(original_manifest))
+                payload = original_payload
+                if case == 'missing_files':
+                    del manifest['files']
+                elif case == 'missing_hash':
+                    del manifest['files']['board.sqlite3.gz']['sha256']
+                else:
+                    payload = gzip.compress(empty_sqlite.read_bytes() if case == 'missing_meta' else b'not a database')
+                    manifest['files']['board.sqlite3.gz'] = {
+                        'bytes': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}
+                payload_path.write_bytes(payload)
+                manifest_path.write_text(json.dumps(manifest))
+                with self.assertRaises(BoardError) as caught:
+                    backup.verify(current)
+                self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
+        payload_path.write_bytes(original_payload)
+        manifest_path.write_text(json.dumps(original_manifest))
 
     def test_verify_refuses_unsupported_schema(self):
         board = self.board()

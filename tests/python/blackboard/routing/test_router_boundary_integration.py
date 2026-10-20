@@ -687,9 +687,9 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         chosen = view["routing"]["routingBoundary"]["commands"]["continue"]["choices"][0]["params"]
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,path,kind,state,"
-                       "evidence_json,retention_json,actor_role,actor_id,created_at,expires_at) "
+                       "evidence_json,retention_json,created_at,expires_at) "
                        "VALUES('private-cleanup',?,'workspace','checkout','/private-fixture','existing','applying',"
-                       "'{}','{}','host','private-test',?,?)", (view["runId"], T0, T0))
+                       "'{}','{}',?,?)", (view["runId"], T0, T0))
         latest = self.board_.call("workflow_get", {"runId": view["runId"]})
         for command in latest["routing"]["routingBoundary"]["commands"].values():
             self.assertTrue(command["blocked"])

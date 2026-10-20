@@ -20,7 +20,7 @@ class SchemaUpgradeInstallTests(BoardTestCase):
         self.state = self.directory / 'state'
         load_fixture(self.state)
         self.original = (self.state / 'board.sqlite3').read_bytes()
-        self.before = upgrade.idle_snapshot(self.state, exact=True)
+        self.before = upgrade.idle_snapshot(self.state)
         self.root = self.directory / 'runtimes'
         self.previous = self.root / ('a' * 32)
         self.target = self.root / ('b' * 32)
@@ -84,7 +84,7 @@ class SchemaUpgradeInstallTests(BoardTestCase):
         self.assertEqual(result['error']['code'], 'UPGRADE_ROLLED_BACK')
         self.assertEqual(result['rollback']['schemaVersion'], 26)
         self.assertEqual((self.state / 'board.sqlite3').read_bytes(), self.original)
-        self.assertEqual(upgrade.idle_snapshot(self.state, exact=True), self.before)
+        self.assertEqual(upgrade.idle_snapshot(self.state), self.before)
         self.assertEqual(self.started, [self.previous])
 
     def test_interrupted_conversion_is_recovered_from_backup_before_old_start(self):

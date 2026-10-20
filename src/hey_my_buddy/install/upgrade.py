@@ -57,40 +57,49 @@ def file_lock(path: Path, *, timeout: float = 0):
         os.close(fd)
 
 
-def idle_snapshot(state: Path, *, event_head: int | None = None, exact: bool = False) -> dict:
+def _idle_board(connection: sqlite3.Connection) -> int:
+    schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
+    if schema is None or schema[0] not in (str(schema_upgrade.BASE_SCHEMA_VERSION), str(SCHEMA_VERSION)):
+        raise BoardError('UNSUPPORTED_SCHEMA',
+                         f'Upgrade accepts schema {schema_upgrade.BASE_SCHEMA_VERSION} or {SCHEMA_VERSION} only')
+    # A micro-task Host boundary has no autonomous next turn. A recorded or
+    # queued continuation still has work to prepare/claim, even if the run
+    # currently reports a Host boundary. Routing and helper tasks are checked
+    # independently below through the complete task inventory.
+    active = connection.execute(
+        "SELECT t.task_id,t.state FROM tasks t"
+        " WHERE t.state IN ('queued','running','cancelling','reconciliation-needed')"
+        " AND NOT (t.state='queued' AND EXISTS ("
+        " SELECT 1 FROM workflow_runs r WHERE r.run_id=t.task_id AND r.state='awaiting-host'"
+        " AND NOT EXISTS (SELECT 1 FROM workflow_continuations c WHERE c.run_id=r.run_id"
+        " AND c.state IN ('recorded','queued'))))"
+    ).fetchall()
+    unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
+    if active or unresolved:
+        raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',
+                         active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
+    return int(schema[0])
+
+
+def ensure_idle(state: Path) -> int:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
-        schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-        if schema is None or schema[0] not in (str(schema_upgrade.BASE_SCHEMA_VERSION), str(SCHEMA_VERSION)):
-            raise BoardError('UNSUPPORTED_SCHEMA',
-                             f'Upgrade accepts schema {schema_upgrade.BASE_SCHEMA_VERSION} or {SCHEMA_VERSION} only')
-        # A micro-task Host boundary has no autonomous next turn. A recorded or
-        # queued continuation still has work to prepare/claim, even if the run
-        # currently reports a Host boundary. Routing and helper tasks are checked
-        # independently below through the complete task inventory.
-        active = connection.execute(
-            "SELECT t.task_id,t.state FROM tasks t"
-            " WHERE t.state IN ('queued','running','cancelling','reconciliation-needed')"
-            " AND NOT (t.state='queued' AND EXISTS ("
-            " SELECT 1 FROM workflow_runs r WHERE r.run_id=t.task_id AND r.state='awaiting-host'"
-            " AND NOT EXISTS (SELECT 1 FROM workflow_continuations c WHERE c.run_id=r.run_id"
-            " AND c.state IN ('recorded','queued'))))"
-        ).fetchall()
-        unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchall()
-        if active or unresolved:
-            raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',
-                             active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
+        return _idle_board(connection)
+
+
+def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
+    with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
+        connection.execute('BEGIN')
+        schema = _idle_board(connection)
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
-        snapshot = {**backup.database_snapshot(connection, event_head=event_head, exact=exact),
-                    'schema': int(schema[0])}
-        return snapshot
+        return {**backup.database_snapshot(connection, event_head=event_head), 'schema': schema}
 
 
 def preflight(state: Path, *, contract_changed: bool) -> dict:
     """The contract boundary decides whether the board must stop changing."""
     if contract_changed:
-        return idle_snapshot(state)
+        return {'schema': ensure_idle(state)}
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     if schema is None or schema[0] != str(SCHEMA_VERSION):
@@ -181,7 +190,7 @@ def detach(state: Path, target: Path, *, contract_changed: bool = True) -> None:
         # Reject work admitted in the small window before an old-version daemon
         # detached. The caller then restores that runtime without touching work.
         if contract_changed:
-            idle_snapshot(state)
+            ensure_idle(state)
 
 
 def start(state: Path, target: Path) -> dict:
@@ -233,15 +242,14 @@ def _restore_guard(path: Path, *, regular: bool = False) -> None:
 def restore(state: Path, current: Path) -> None:
     # Keep lexical paths until every component has been checked; resolve() would
     # erase the evidence of a linked state or backup parent.
-    if '..' in Path(state).parts or '..' in Path(current).parts:
-        raise BoardError('UPGRADE_UNSAFE', 'Restore path contains a parent traversal')
-    state, current = Path(state).absolute(), Path(current).absolute()
+    state, current = Path(state), Path(current)
+    for path in (state, current):
+        _restore_guard(path)
+    state, current = state.absolute(), current.absolute()
     snapshot = state / '.restore.sqlite3'
     board = state / 'board.sqlite3'
     sidecars = tuple(state / ('board.sqlite3' + suffix) for suffix in ('-wal', '-shm'))
     compressed = current / 'board.sqlite3.gz'
-    for path in (state, current):
-        _restore_guard(path)
     for path in (snapshot, board, *sidecars):
         _restore_guard(path, regular=True)
     backup.verify(current)
@@ -295,9 +303,9 @@ def restore(state: Path, current: Path) -> None:
 
 
 def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
-    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != before.get('schema', SCHEMA_VERSION):
+    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != before['schema']:
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match',
-                         tables=['meta'] if health.get('schemaVersion') != before.get('schema', SCHEMA_VERSION) else [])
+                         tables=['meta'] if health.get('schemaVersion') != before['schema'] else [])
     settings = before.get('runtimeSettings', {})
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
@@ -312,7 +320,7 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
     inspected = command(state, target, 'runtime')
     if inspected.get('leaks'):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Runtime still depends on replaceable source paths')
-    return {'runtimeContentId': target.name, 'schemaVersion': before.get('schema', SCHEMA_VERSION),
+    return {'runtimeContentId': target.name, 'schemaVersion': before['schema'],
             **({'retainedDataFingerprints': True} if contract_changed else {}), 'sourceLeaks': []}
 
 
@@ -485,18 +493,12 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
         active = previous
         detached = False
         try:
-            # Recheck after fencing; an upgrade backs up only once the old
-            # service is gone. A same-contract installation preserves live work.
-            if contract_changed:
-                before = idle_snapshot(state)
-                before['runtimeSettings'] = runtime_settings
-                journal['before'] = before
-                write_journal(marker, journal)
+            # A same-contract installation preserves live work.
             detach(state, previous, contract_changed=contract_changed)
             detached = True
             with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
                 if contract_changed:
-                    before = idle_snapshot(state, exact=True)
+                    before = idle_snapshot(state)
                     before['runtimeSettings'] = runtime_settings
                     journal['before'] = before
                     backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
@@ -507,7 +509,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                     journal.update(phase='converting')
                     write_journal(marker, journal)
                     schema_upgrade.upgrade(state)
-                    expected = idle_snapshot(state, exact=True)
+                    expected = idle_snapshot(state)
                     expected['runtimeSettings'] = runtime_settings
                 journal.update(phase='prepared', expected=expected)
                 write_journal(marker, journal)
@@ -550,7 +552,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
                 if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
                     detach(state, active, contract_changed=contract_changed)
-                if backed_up is not None and journal['phase'] != 'preflight':
+                if backed_up is not None:
                     with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
                          file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
                         restore(state, Path(backed_up['path']))
@@ -566,7 +568,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 if backed_up is None and isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE':
                     error = failure.payload()
                 else:
-                    restored = 'Upgrade failed; the previous runtime and backup were restored' if backed_up is not None else 'Installation failed; the previous runtime was restored'
+                    restored = 'Installation failed; the previous runtime and backup were restored' if backed_up is not None else 'Installation failed; the previous runtime was restored'
                     error = {'code':'UPGRADE_ROLLED_BACK', 'message':restored}
                 error.setdefault('details', {})['reason'] = reason
                 return {'upgraded':False, 'error':error,
@@ -593,7 +595,7 @@ def recover(state: Path, root: Path) -> dict:
     target_health = probe(state, target)
     previous_health = probe(state, previous)
     if journal.get('phase') == 'verified' and target_health is not None:
-        evidence = verify_started(state, target, target_health, journal.get('expected', journal['before']),
+        evidence = verify_started(state, target, target_health, journal['expected'],
                                   contract_changed=contract_changed)
         _verify_skill_generation(journal, target, target_health)
         write_active_runtime(state, target, journal.get('environment'))
@@ -628,7 +630,7 @@ def recover(state: Path, root: Path) -> dict:
         clear_journal(marker)
         return {'upgraded':False, 'recoveredJournal':True, 'rollback':evidence}
     if contract_changed and (target_health is not None or previous_health is not None):
-        idle_snapshot(state)
+        ensure_idle(state)
     if target_health is not None:
         detach(state, target, contract_changed=contract_changed)
     elif previous_health is not None:
