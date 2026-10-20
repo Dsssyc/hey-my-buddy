@@ -1,0 +1,123 @@
+name: Checks
+
+on:
+  push:
+    branches: ['ci/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Disable Git line-ending conversion
+        # Run before checkout so the working tree is byte-identical on every system.
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/console/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.19'
+          python-version: '3.12'
+      - name: Prepare log directory and console dependencies
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          npm --prefix apps/console ci
+      - name: Install headless Chromium for the browser checks
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            PLAYWRIGHT_SKIP_BROWSER_GC=1 npm --prefix apps/console exec -- playwright install --with-deps --only-shell chromium
+          else
+            PLAYWRIGHT_SKIP_BROWSER_GC=1 npm --prefix apps/console exec -- playwright install --only-shell chromium
+          fi
+      - name: Console typecheck
+        id: typecheck
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          npm --prefix apps/console run typecheck 2>&1 | tee "$RUNNER_TEMP/logs/console-typecheck.log"
+      - name: Console unit tests
+        id: console-tests
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          npm --prefix apps/console test 2>&1 | tee "$RUNNER_TEMP/logs/console-tests.log"
+      - name: Console browser checks
+        id: browser-checks
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          set -o pipefail
+          npm --prefix apps/console run test:browser 2>&1 | tee "$RUNNER_TEMP/logs/console-browser-checks.log"
+      - name: Full check suite
+        id: full-check
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          # Keeps the runner's private root (and any retained evidence) under a
+          # known location the artifact upload below can read.
+          HMB_CHECKS_TMPDIR: ${{ runner.temp }}
+        run: |
+          set -o pipefail
+          uv run --frozen python -m hey_my_buddy.cli.checks 2>&1 | tee "$RUNNER_TEMP/logs/full-check.log"
+          code=$?
+          echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+      - name: Upload step logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/logs
+          if-no-files-found: error
+      - name: Upload logs from the retained private root
+        # Exit 3 means the suite passed but the runner kept its private root.
+        if: ${{ !cancelled() && steps.full-check.outputs.exit-code == '3' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: retained-root-logs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/hey-my-buddy-checks-*/teardown-evidence.json
+            ${{ runner.temp }}/hey-my-buddy-checks-*/**/*.log
+          if-no-files-found: error
+      - name: Result overview
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          full_check="${{ steps.full-check.outcome }}"
+          if [ -n "${{ steps.full-check.outputs.exit-code }}" ]; then
+            full_check="$full_check (exit ${{ steps.full-check.outputs.exit-code }})"
+          fi
+          {
+            echo "## Checks on ${{ matrix.os }}"
+            echo ""
+            echo "| Step | Result |"
+            echo "| --- | --- |"
+            echo "| Console typecheck | ${{ steps.typecheck.outcome }} |"
+            echo "| Console unit tests | ${{ steps.console-tests.outcome }} |"
+            echo "| Console browser checks | ${{ steps.browser-checks.outcome }} |"
+            echo "| Full check suite | $full_check |"
+            echo ""
+            echo "Artifacts: check-logs-${{ matrix.os }}; retained-root-logs-${{ matrix.os }} only when the full check exits 3."
+          } >> "$GITHUB_STEP_SUMMARY"
