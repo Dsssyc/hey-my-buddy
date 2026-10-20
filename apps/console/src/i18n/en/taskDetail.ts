@@ -31,6 +31,9 @@ export default {
   },
   tabs: { label: "Step content", overview: "Overview" },
   sessionView: {
+    searchPattern: "“{{pattern}}”", resultValue: "Result",
+    markers: { subAgentActivity: "Subagent activity", contextCompaction: "Context compaction" },
+    markerCount_one: "{{name}} {{count}} time", markerCount_other: "{{name}} {{count}} times",
     turnChanges: "Changes in this turn", nativeMarker: "Marker · {{type}}",
     routingTask: { fast: "Choose a buddy for this micro task", review: "Choose a buddy for this micro task (review mode)" },
     routerAnswer: { buddyId: "Selected buddy", note: "Explanation", evidence: "Evidence" },
@@ -38,7 +41,7 @@ export default {
     moreLines: "Show remaining {{count}} lines", collapseOutput: "Collapse output", groupSeparator: " · ", failures_one: "{{count}} failure", failures_other: "{{count}} failures",
     scrollEnd: "Scroll to latest content", scrollStart: "Scroll to start",
     blackboard: { checkpoint: "Check Host questions", answer_inquiry: "Answer Host questions", finish_turn: "Return result" },
-    counts: { read_one: "Read {{count}} file", read_other: "Read {{count}} files", edit_one: "Edited {{count}} file", edit_other: "Edited {{count}} files", delete_one: "Deleted {{count}} file", delete_other: "Deleted {{count}} files", move_one: "Moved {{count}} file", move_other: "Moved {{count}} files", search_one: "Searched {{count}} time", search_other: "Searched {{count}} times", execute_one: "Ran {{count}} command", execute_other: "Ran {{count}} commands", fetch_one: "Fetched {{count}} URL", fetch_other: "Fetched {{count}} URLs", think_one: "Reasoned {{count}} time", think_other: "Reasoned {{count}} times", switch_mode_one: "Switched mode {{count}} time", switch_mode_other: "Switched mode {{count}} times", other_one: "Made {{count}} call", other_other: "Made {{count}} calls", marker_one: "{{count}} activity marker", marker_other: "{{count}} activity markers" },
+    counts: { read_one: "Read {{count}} file", read_other: "Read {{count}} files", edit_one: "Edited {{count}} file", edit_other: "Edited {{count}} files", delete_one: "Deleted {{count}} file", delete_other: "Deleted {{count}} files", move_one: "Moved {{count}} file", move_other: "Moved {{count}} files", search_one: "Searched {{count}} time", search_other: "Searched {{count}} times", execute_one: "Ran {{count}} command", execute_other: "Ran {{count}} commands", fetch_one: "Fetched {{count}} URL", fetch_other: "Fetched {{count}} URLs", think_one: "Reasoned {{count}} time", think_other: "Reasoned {{count}} times", switch_mode_one: "Switched mode {{count}} time", switch_mode_other: "Switched mode {{count}} times", other_one: "Made {{count}} call", other_other: "Made {{count}} calls" },
     highlightFailed: "Code highlighting could not be loaded",
     title: "Session", content: "Session content", loading: "Reading session…",
     earlier: "Load earlier content", loadingEarlier: "Reading earlier content…", empty: "This execution has no session content yet", newContent: "New content",

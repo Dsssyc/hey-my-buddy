@@ -30,6 +30,9 @@ export default {
   },
   tabs: { label: "步骤内容", overview: "概述" },
   sessionView: {
+    searchPattern: "“{{pattern}}”", resultValue: "结果",
+    markers: { subAgentActivity: "子代理活动", contextCompaction: "上下文压缩" },
+    markerCount_one: "{{name}} {{count}} 次", markerCount_other: "{{name}} {{count}} 次",
     turnChanges: "本回合的改动", nativeMarker: "标记 · {{type}}",
     routingTask: { fast: "为这个微任务选择 buddy", review: "为这个微任务选择 buddy（审阅模式）" },
     routerAnswer: { buddyId: "选中的 buddy", note: "说明", evidence: "依据" },
@@ -37,7 +40,7 @@ export default {
     moreLines: "展开其余 {{count}} 行", collapseOutput: "收起输出", groupSeparator: " · ", failures_one: "{{count}} 次失败", failures_other: "{{count}} 次失败",
     scrollEnd: "滚动到最新内容", scrollStart: "滚动到开头",
     blackboard: { checkpoint: "查看 Host 的问题", answer_inquiry: "回答 Host 的问题", finish_turn: "交回结果" },
-    counts: { read_one: "读取 {{count}} 个文件", read_other: "读取 {{count}} 个文件", edit_one: "修改 {{count}} 个文件", edit_other: "修改 {{count}} 个文件", delete_one: "删除 {{count}} 个文件", delete_other: "删除 {{count}} 个文件", move_one: "移动 {{count}} 个文件", move_other: "移动 {{count}} 个文件", search_one: "搜索 {{count}} 次", search_other: "搜索 {{count}} 次", execute_one: "执行 {{count}} 条命令", execute_other: "执行 {{count}} 条命令", fetch_one: "获取 {{count}} 次", fetch_other: "获取 {{count}} 次", think_one: "推理 {{count}} 次", think_other: "推理 {{count}} 次", switch_mode_one: "切换模式 {{count}} 次", switch_mode_other: "切换模式 {{count}} 次", other_one: "调用 {{count}} 次", other_other: "调用 {{count}} 次", marker_one: "活动标记 {{count}} 次", marker_other: "活动标记 {{count}} 次" },
+    counts: { read_one: "读取 {{count}} 个文件", read_other: "读取 {{count}} 个文件", edit_one: "修改 {{count}} 个文件", edit_other: "修改 {{count}} 个文件", delete_one: "删除 {{count}} 个文件", delete_other: "删除 {{count}} 个文件", move_one: "移动 {{count}} 个文件", move_other: "移动 {{count}} 个文件", search_one: "搜索 {{count}} 次", search_other: "搜索 {{count}} 次", execute_one: "执行 {{count}} 条命令", execute_other: "执行 {{count}} 条命令", fetch_one: "获取 {{count}} 次", fetch_other: "获取 {{count}} 次", think_one: "推理 {{count}} 次", think_other: "推理 {{count}} 次", switch_mode_one: "切换模式 {{count}} 次", switch_mode_other: "切换模式 {{count}} 次", other_one: "调用 {{count}} 次", other_other: "调用 {{count}} 次" },
     highlightFailed: "代码高亮加载失败",
     title: "会话", content: "会话内容", loading: "正在读取会话…",
     earlier: "加载更早内容", loadingEarlier: "正在读取更早内容…", empty: "此执行尚无会话内容", newContent: "有新内容",

@@ -11,7 +11,7 @@ import { MessageResponse } from "./Markdown";
 import { HighlightedCode } from "./MarkdownCode";
 import { parseSession, records } from "./types";
 import { sessionBlocks } from "./blocks";
-import { sessionRows, toolObject, displayPath, unwrappedCommand, taskExcerpt, answerContent, markerBody } from "./rows";
+import { sessionRows, toolObject, displayPath, unwrappedCommand, taskExcerpt, answerContent, markerBody, commandFirstLine, groupStatus } from "./rows";
 
 const project = "/home/worker/project";
 const tool = (id: string, kind = "read", extra = {}) => ({ sessionUpdate: "tool_call", toolCallId: id, title: id, kind, status: "completed", ...extra });
@@ -31,7 +31,7 @@ describe("session rows", () => {
     const result = rows([tool("first"), tool("second")]);
     const view = () => <TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(expanded), toggle: (key, open) => { if (open) expanded.add(key); else expanded.delete(key); rerender(view()); } }}/></MessageScrollerProvider></TooltipProvider>;
     const { rerender } = render(view());
-    const group = screen.getByRole("button", { name: "读取 2 个文件" });
+    const group = screen.getByRole("button", { name: "读取 2 个文件已完成" });
     fireEvent.click(group);
     const first = screen.getByRole("button", { name: /^first/ });
     expect(first.getAttribute("aria-expanded")).toBe("false");
@@ -80,6 +80,69 @@ describe("session rows", () => {
     expect(container.textContent).not.toContain("cwd");
     expect(container.querySelector("dl")).toBeNull();
   });
+  for (const [shape, kind, rawOutput] of [
+    ["Claude string", "read", "unique result"],
+    ["Codex command", "execute", { aggregatedOutput: "unique result", exitCode: 0, durationMs: 12 }],
+    ["Codex edit", "edit", { changes: [{ path: "main.py", diff: "unique result" }] }],
+    ["ZCode content", "read", { content: "unique result", lineCount: 1, truncated: false }],
+  ] as const) it(`renders only the body for ${shape} results`, () => {
+    const result = rows([tool("one", kind, { rawOutput, content: [{ type: "content", content: { type: "text", text: "unique result" } }] })]);
+    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:one"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    expect(container.querySelectorAll('[data-slot="session-output"]')).toHaveLength(1);
+    expect(container.querySelector('[data-slot="session-output"]')?.textContent).toBe("unique result");
+    expect(container.querySelector('[data-slot="session-result"]')).toBeNull();
+  });
+  it("shows non-null result fields only when a command has no body, preserving zero and false", () => {
+    const result = rows([tool("empty", "execute", { rawInput: { command: "true" }, rawOutput: { aggregatedOutput: null, exitCode: 0, durationMs: 17, truncated: false, error: null } })]);
+    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:empty"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    expect(container.querySelector('[data-slot="session-output"]')).toBeNull();
+    expect([...container.querySelectorAll('[data-slot="session-result"] dt')].map(node => node.textContent)).toEqual(["exitCode", "durationMs", "truncated"]);
+    expect([...container.querySelectorAll('[data-slot="session-result"] dd')].map(node => node.textContent)).toEqual(["0", "17", "false"]);
+  });
+  it("unwraps the full multiline command while showing only its first line in the row", () => {
+    const command = "/bin/zsh -lc 'printf first\nprintf second'";
+    expect(unwrappedCommand(command)).toBe("printf first\nprintf second");
+    expect(commandFirstLine(command)).toBe("printf first");
+    expect(commandFirstLine("first\r\nsecond")).toBe("first");
+    expect(unwrappedCommand("sh -cl 'echo '\\''quoted'\\'''" )).toBe("echo 'quoted'");
+    const result = rows([tool("multiline", "execute", { rawInput: { command } })]);
+    const { container } = render(<TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set(["tool:multiline"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider>);
+    expect(screen.getByRole("button", { name: "printf first已完成" }).textContent).toBe("printf first");
+    expect(container.textContent).toContain("$ printf first\nprintf second");
+    expect(container.textContent).not.toContain("/bin/zsh");
+  });
+  for (const language of ["zh", "en"]) it(`names and separately counts markers and quotes search objects in ${language}`, async () => {
+    const i18n = createInstance(); await i18n.init({ lng: language, resources: { zh: { taskDetail: zh }, en: { taskDetail: en } } });
+    const marker = (type: string, id: number, text = `[${type}]`) => message(text, { _meta: { nativeItemId: `${id}`, contentSegment: "main", marker: true, nativeType: type } });
+    const result = rows([tool("a"), marker("subAgentActivity", 1), tool("b", "search", { rawInput: { pattern: "0\\.48\\.0|no-tools", glob: "!src/assets/**" } }), marker("subAgentActivity", 2), marker("contextCompaction", 3), marker("newNativeType", 4), message("Next"), tool("single"), marker("subAgentActivity", 5), marker("contextCompaction", 6, "[contextCompaction]\nRetained body")]);
+    const { container } = render(<I18nextProvider i18n={i18n}><TooltipProvider><MessageScrollerProvider><SessionBlocks rows={result} taskText="Task" checkoutRoot={project} expansion={{ expanded: new Set([result[0].key, "tool:single"]), toggle: () => {} }}/></MessageScrollerProvider></TooltipProvider></I18nextProvider>);
+    const names = language === "zh" ? ["子代理活动", "上下文压缩", "标记 · newNativeType"] : ["Subagent activity", "Context compaction", "Marker · newNativeType"];
+    const summary = container.querySelector('[data-session-row="calls"] button')!;
+    expect(summary.textContent).toContain(`${names[0]} 2 ${language === "zh" ? "次" : "times"}`);
+    expect(summary.textContent).toContain(`${names[1]} 1 ${language === "zh" ? "次" : "time"}`);
+    expect(summary.textContent).toContain(names[2]);
+    for (const name of names) expect(container.querySelector('[data-slot="session-call-group"]')?.textContent).toContain(name);
+    expect(container.querySelector('[data-session-row="tool"]')?.textContent).toContain(names[0]);
+    expect(container.querySelector('[data-session-row="marker"] button')?.textContent).toBe(names[1]);
+    expect(container.textContent).not.toContain("[subAgentActivity]");
+    expect(container.textContent).not.toContain("[contextCompaction]");
+    expect(container.textContent).toContain("“0\\.48\\.0|no-tools” !src/assets/**");
+  });
+  for (const [statuses, expected] of [
+    [["completed", "completed"], "completed"], [["completed", "failed"], "failed"],
+    [["completed", "in_progress"], "in_progress"], [["failed", "in_progress"], "in_progress"],
+    [["completed", "pending"], "pending"], [["completed", undefined], undefined],
+  ] as const) it(`shares the row status icon for group states ${statuses.join(",")}`, () => {
+    const result = rows(statuses.map((status, index) => tool(`${index}`, "read", { status })));
+    const group = result[0]; if (group.type !== "calls") throw Error("Expected calls");
+    expect(groupStatus(group)).toBe(expected);
+    const { container } = render(<TooltipProvider><CallSummary group={group}/></TooltipProvider>);
+    const status = container.querySelector('[data-slot="session-call-status"]')!;
+    expect(status.getAttribute("data-status")).toBe(expected ?? "unrecorded");
+    if (expected === "in_progress") expect(status.querySelector(".motion-safe\\:animate-spin")).not.toBeNull();
+    if (expected === "failed") expect(status.classList.contains("text-fail")).toBe(true);
+    if (expected === "completed") expect(status.classList.contains("text-ink3")).toBe(true);
+  });
   it("labels a review Router task separately and lays its JSON answer out in buddy, note, evidence order", () => {
     const prompt = "ROLE: Router buddy\nPick within the review constraints.";
     const result = rows([{ ...message(prompt), sessionUpdate: "user_message_chunk" }, message(JSON.stringify({ evidence: ["Allowed"], note: "Fits", buddyId: "chosen", extra: { empty: [], other: {} } }))]);
@@ -107,7 +170,7 @@ describe("session rows", () => {
       tool("Old title", "read"),
     ];
     const blocks = sessionBlocks(records(parseSession({ state: "ended", stopped: null, omitted: [], before: 0, after: 1, hasEarlier: false, events: objects.map(update => ({ sessionId: "x", update })) })));
-    expect(blocks.map(block => block.type === "tool" && toolObject(block.update, project))).toEqual(["src/main.py", "~/notes.ipynb", "rg main", "main · src/**", "https://example.com", "README.md", "Old title"]);
+    expect(blocks.map(block => block.type === "tool" && toolObject(block.update, project, pattern => `“${pattern}”`))).toEqual(["src/main.py", "~/notes.ipynb", "rg main", "“main” src/**", "https://example.com", "README.md", "Old title"]);
     expect(displayPath(project + "-other/src", project)).toBe("~/project-other/src");
     expect(displayPath("C:\\Users\\worker\\notes.txt", project)).toBe("~\\notes.txt");
     expect(unwrappedCommand('bash -c "echo test"')).toBe("echo test");
@@ -116,7 +179,7 @@ describe("session rows", () => {
     const i18n = createInstance(); await i18n.init({ lng: language, resources: { zh: { taskDetail: zh }, en: { taskDetail: en } } });
     const group = rows([tool("a"), tool("b"), tool("c", "execute", { status: "failed" })])[0];
     if (group.type !== "calls") throw Error("Expected calls");
-    const { container } = render(<I18nextProvider i18n={i18n}><CallSummary group={group}/></I18nextProvider>);
+    const { container } = render(<I18nextProvider i18n={i18n}><TooltipProvider><CallSummary group={group}/></TooltipProvider></I18nextProvider>);
     expect(container.textContent).toBe(expected);
   });
   it("renders one disclosure per call with direct fields and a lossless output preview", async () => {

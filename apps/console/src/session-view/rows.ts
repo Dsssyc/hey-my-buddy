@@ -1,5 +1,6 @@
 import type { SessionBlock } from "./blocks";
 import type { JsonValue, ToolUpdate } from "./types";
+import type { TFunction } from "i18next";
 
 export type ToolBlock = Extract<SessionBlock, { type: "tool" }>;
 export type MessageBlock = Extract<SessionBlock, { type: "message" }>;
@@ -25,6 +26,11 @@ export function markerBody(message: MessageBlock): string {
   const text = message.update.content.text;
   const prefix = `[${message.update._meta?.nativeType}]`;
   return text.startsWith(prefix + "\n") || text.startsWith(prefix + "\r\n") ? text.slice(prefix.length).replace(/^\r?\n/, "") : text;
+}
+export function markerName(nativeType: string | undefined, t: TFunction<"taskDetail">): string {
+  if (nativeType === "subAgentActivity" || nativeType === "contextCompaction") return t(`sessionView.markers.${nativeType}`);
+  if (nativeType === "turn/diff/updated") return t("sessionView.turnChanges");
+  return t("sessionView.nativeMarker", { type: nativeType ?? t("unknown") });
 }
 
 const blackboardActions = ["checkpoint", "answer_inquiry", "finish_turn"] as const;
@@ -89,9 +95,19 @@ export function displayPath(path: string, checkoutRoot: string): string {
 }
 export function unwrappedCommand(command: string): string {
   const shell = command.match(/^(?:\S*\/)?(?:bash|zsh|sh)\s+-(?:l?c|cl)\s+(['"])([\s\S]*)\1$/);
-  return (shell ? shell[2].replace(/'\\''/g, "'") : command).split(/\r?\n/, 1)[0];
+  return shell ? shell[2].replace(/'\\''/g, "'") : command;
 }
-export function toolObject(tool: ToolUpdate, checkoutRoot: string): string | undefined {
+export function commandFirstLine(command: string): string {
+  return unwrappedCommand(command).split(/\r?\n/, 1)[0];
+}
+export function groupStatus(group: CallGroup): ToolUpdate["status"] {
+  const statuses = group.items.flatMap(item => item.type === "tool" ? [item.update.status] : []);
+  if (statuses.includes("in_progress")) return "in_progress";
+  if (statuses.includes("failed")) return "failed";
+  if (statuses.includes("pending")) return "pending";
+  return statuses.length && statuses.every(status => status === "completed") ? "completed" : undefined;
+}
+export function toolObject(tool: ToolUpdate, checkoutRoot: string, quote: (pattern: string) => string): string | undefined {
   const input = toolInput(tool);
   const text = (key: string) => typeof input[key] === "string" ? input[key] as string : undefined;
   switch (tool.kind) {
@@ -100,8 +116,8 @@ export function toolObject(tool: ToolUpdate, checkoutRoot: string): string | und
       if (path) return displayPath(path, checkoutRoot);
       break;
     }
-    case "execute": if (text("command")) return unwrappedCommand(text("command")!); break;
-    case "search": if (text("pattern")) return [text("pattern"), text("glob")].filter(Boolean).join(" · "); break;
+    case "execute": if (text("command")) return commandFirstLine(text("command")!); break;
+    case "search": if (text("pattern")) return [quote(text("pattern")!), text("glob")].filter(Boolean).join(" "); break;
     case "fetch": if (text("url")) return text("url"); break;
   }
   return tool.locations?.[0] ? displayPath(tool.locations[0].path, checkoutRoot) : tool.title;
