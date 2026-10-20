@@ -104,9 +104,13 @@ class TestNamedContract(BoardTestCase):
                 )
                 self.assertEqual(reply["task"]["status"], "queued")
                 task_id = reply["task"]["runId"]
-                deadline = time.monotonic() + 5
+                # The attempt becomes `executing` only when its process reports in,
+                # in the same transaction that appends attempt.progress; waiting for
+                # that state leaves the cancellation below as the only later event of
+                # this task, so nothing else can end the scoped wait.
+                deadline = time.monotonic() + 10
                 while json.loads(board.task_get(json.dumps({"token": endpoint["token"],
-                                                           "runId": task_id})))["task"]["status"] == "queued":
+                                                           "runId": task_id})))["task"].get("attemptState") != "executing":
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(0.02)
                 cursor = json.loads(board.events_read(json.dumps({"token": endpoint["token"]})))["cursor"]
