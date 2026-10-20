@@ -347,7 +347,7 @@ class WorkflowCancellationTests(WorkflowTestCase):
                 run_id, attempt_id, now = child["runId"], str(uuid.uuid4()), board.store.now()
                 connection.execute(
                     "INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,decision_command_id,state,"
-                    "workspace_intent_json,created_at,updated_at) VALUES(?,?,?,'summary-fixture','active','{}',?,?)",
+                    "created_at,updated_at) VALUES(?,?,?,'summary-fixture','active',?,?)",
                     (run_id, parent["runId"], child["requestId"], now, now),
                 )
                 connection.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,adapter,execution_state,created_at,updated_at) VALUES(?,?,1,'fixture','dsh','uncertain',?,?)", (attempt_id, run_id, now, now))

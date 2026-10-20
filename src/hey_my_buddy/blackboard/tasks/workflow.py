@@ -291,6 +291,13 @@ class WorkflowCoordinator:
     def _run_optional(self, connection, run_id: str):
         return connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone()
 
+    @staticmethod
+    def _micro_task(connection, run_id: str) -> tuple[dict, str]:
+        task = connection.execute(
+            "SELECT spec_json,input_fingerprint FROM tasks WHERE task_id=?", (run_id,)
+        ).fetchone()
+        return json.loads(task["spec_json"]), task["input_fingerprint"]
+
     def _request_row(self, connection, run_id: str, request_id: str):
         row = connection.execute(
             "SELECT * FROM workflow_requests WHERE run_id=? AND request_id=?", (run_id, request_id)
@@ -450,9 +457,10 @@ class WorkflowCoordinator:
             "role": row["role"],
             "state": row["state"],
             "integrator": bool(row["integrator"]),
-            "autoContinue": bool(row["auto_continue"]),
+            "autoContinue": False,
             "requestId": row["request_id"],
-            "workspaceManifestSha256": row["workspace_manifest_sha256"],
+            "workspaceManifestSha256": (json.loads(row["workspace_manifest_json"]).get("manifestSha256")
+                                        if row["workspace_manifest_json"] else None),
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
@@ -496,7 +504,7 @@ class WorkflowCoordinator:
             "kind": row["kind"],
             "attemptId": row["attempt_id"],
             "turnId": row["turn_id"],
-            "sourceTaskId": row["source_task_id"],
+            "sourceTaskId": None if row["kind"] == "input" else row["run_id"],
             # For an output this is the sealed snapshot identity; for an input or a
             # pinned turn manifest it is that manifest's own digest.
             "manifestSha256": row["manifest_sha256"],
@@ -540,7 +548,7 @@ class WorkflowCoordinator:
             return None
         manifest = json.loads(run_row["workspace_manifest_json"])
         view = {
-            "workspaceId": run_row["workspace_id"],
+            "workspaceId": manifest.get("workspaceId"),
             "path": manifest.get("path"),
             "kind": manifest.get("kind"),
             "checkoutId": manifest.get("checkoutId"),
@@ -548,7 +556,7 @@ class WorkflowCoordinator:
             "access": manifest.get("access"),
             "baseCommit": manifest.get("baseCommit"),
             "inputCommit": manifest.get("inputCommit"),
-            "manifestSha256": run_row["workspace_manifest_sha256"],
+            "manifestSha256": manifest.get("manifestSha256"),
         }
         return view
 
@@ -769,7 +777,7 @@ class WorkflowCoordinator:
         active = self._open_boundary(connection, run_row)
         projection_now = self.now()
         active_request = self._request_view(active, connection=connection, now=projection_now) if active is not None else None
-        micro_task = json.loads(run_row["micro_task_json"])
+        micro_task, micro_task_fingerprint = self._micro_task(connection, run_row["run_id"])
         state = run_row["state"]
         from ..routing.quota_routing import cooling
         view = {
@@ -783,7 +791,7 @@ class WorkflowCoordinator:
             "status": task_row["state"],
             "queueReason": task_row["queue_reason"],
             "awaitingHost": state == "awaiting-host",
-            "microTask": self._micro_task_view(micro_task, run_row["micro_task_fingerprint"]),
+            "microTask": self._micro_task_view(micro_task, micro_task_fingerprint),
             "revision": run_row["revision"],
             "continuationCount": run_row["continuation_count"],
             "resumeRecovery": self._resume_recovery(connection, run_row["run_id"]),
@@ -996,7 +1004,8 @@ class WorkflowCoordinator:
         verifier = self.db.agent_token_verifier(token)
         with self.db.read() as connection:
             row = connection.execute(
-                "SELECT c.*, r.delegation_authority FROM agent_credentials c"
+                "SELECT c.*, a.generation, r.delegation_authority FROM agent_credentials c"
+                " JOIN attempts a ON a.attempt_id=c.attempt_id"
                 " JOIN workflow_runs r ON r.run_id=c.run_id"
                 " WHERE c.token_verifier=? AND c.state='active'", (verifier,)
             ).fetchone()
@@ -1006,13 +1015,11 @@ class WorkflowCoordinator:
                 "This attempt-scoped credential is unknown or revoked; the service never substitutes the "
                 "administrator token for an invalid scoped credential",
             )
-        if row["expires_at"] and row["expires_at"] < self.now():
-            raise BoardError("UNAUTHORIZED", "This attempt-scoped credential has expired")
         return {
             "kind": AGENT_KIND,
             "credentialId": row["credential_id"],
             "runId": row["run_id"],
-            "taskId": row["task_id"],
+            "taskId": row["run_id"],
             "attemptId": row["attempt_id"],
             "generation": row["generation"],
             "turnId": row["turn_id"],
@@ -1181,8 +1188,8 @@ class WorkflowCoordinator:
             if writer is not None and writer["holder_task_id"] != holder_task_id:
                 if transfer_from is not None and writer["holder_task_id"] == transfer_from:
                     connection.execute(
-                        "UPDATE workspace_reservations SET state='transferred', updated_at=? WHERE reservation_id=?",
-                        (now, writer["reservation_id"]),
+                        "UPDATE workspace_reservations SET state='transferred' WHERE reservation_id=?",
+                        (writer["reservation_id"],),
                     )
                 else:
                     raise BoardError(
@@ -1213,8 +1220,8 @@ class WorkflowCoordinator:
             return
         connection.execute(
             "INSERT INTO workspace_reservations(reservation_id, workspace_id, checkout_id, repository_id, path,"
-            " access, holder_task_id, holder_kind, parent_run_id, manifest_sha256, state, created_at, updated_at,"
-            " released_at) VALUES(?,?,?,?,?,?,?,?,?,?,'held',?,?,NULL)",
+            " access, holder_task_id, holder_kind, parent_run_id, manifest_sha256, state, created_at,"
+            " released_at) VALUES(?,?,?,?,?,?,?,?,?,?,'held',?,NULL)",
             (
                 str(uuid.uuid4()),
                 manifest.get("workspaceId") or checkout_id,
@@ -1227,7 +1234,6 @@ class WorkflowCoordinator:
                 parent_run_id,
                 manifest_sha,
                 now,
-                now,
             ),
         )
 
@@ -1235,9 +1241,9 @@ class WorkflowCoordinator:
         # A transferred reservation is still this task's logical ownership: cancelling
         # or accepting the micro task releases it too, so no writer claim leaks forever.
         connection.execute(
-            "UPDATE workspace_reservations SET state=?, updated_at=?, released_at=? WHERE holder_task_id=?"
+            "UPDATE workspace_reservations SET state=?, released_at=? WHERE holder_task_id=?"
             " AND state IN ('held','transferred')",
-            (state, now, now if state == "released" else None, holder_task_id),
+            (state, now if state == "released" else None, holder_task_id),
         )
 
     def _reclaim_manual_workspace(self, connection, task, run_row, now: str) -> None:
@@ -1293,7 +1299,6 @@ class WorkflowCoordinator:
         manifest: dict,
         attempt_id: str | None,
         turn_id: str | None,
-        source_task_id: str | None,
         now: str,
     ) -> str | None:
         # A sealed output is identified by the snapshot it produced; the input
@@ -1314,14 +1319,13 @@ class WorkflowCoordinator:
             return row["artifact_id"]
         artifact_id = str(uuid.uuid4())
         connection.execute(
-            "INSERT INTO workflow_artifacts(artifact_id, run_id, turn_id, attempt_id, source_task_id, kind,"
-            " manifest_json, manifest_sha256, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO workflow_artifacts(artifact_id, run_id, turn_id, attempt_id, kind,"
+            " manifest_json, manifest_sha256, created_at) VALUES(?,?,?,?,?,?,?,?)",
             (
                 artifact_id,
                 run_id,
                 turn_id,
                 attempt_id,
-                source_task_id,
                 kind,
                 canonical_json(manifest),
                 manifest_sha,
@@ -1391,7 +1395,7 @@ class WorkflowCoordinator:
 
     def _routing_view(self, connection, run, *, now=None) -> dict:
         from ..routing.router import selection_source
-        micro_task = json.loads(run["micro_task_json"])
+        micro_task, _ = self._micro_task(connection, run["run_id"])
         if not run["current_routing_id"]:
             request = self._open_boundary(connection, run)
             needs_host = request is not None and json.loads(request["payload_json"]).get("source") == "routing"
@@ -1441,7 +1445,7 @@ class WorkflowCoordinator:
     def _start_routing(self, connection, run_id: str, now: str) -> None:
         run = self._run_row(connection, run_id)
         sequence = connection.execute("SELECT COUNT(*) FROM workflow_routes WHERE run_id=?", (run_id,)).fetchone()[0] + 1
-        micro_task = json.loads(run["micro_task_json"])
+        micro_task, _ = self._micro_task(connection, run_id)
         if run["continuation_count"] and not run["buddy_locked"]:
             micro_task = {key: value for key, value in micro_task.items() if key not in schemas.BUDDY_FIELDS}
         response = self.board.decisions.route_workflow(
@@ -1450,8 +1454,8 @@ class WorkflowCoordinator:
         )
         decision_id = response["decisionId"]
         connection.execute(
-            "INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
-            " VALUES(?,?,?,'pending',?,?)", (decision_id, run_id, run["owner_generation"], now, now),
+            "INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
+            " VALUES(?,?,?,'pending',?)", (decision_id, run_id, run["owner_generation"], now),
         )
         connection.execute(
             "UPDATE workflow_runs SET current_routing_id=?, buddy_json=NULL,"
@@ -1463,20 +1467,6 @@ class WorkflowCoordinator:
                                  payload={"decisionId": decision_id, "routingTaskId": response["runId"],
                                           "ownerGeneration": run["owner_generation"]})
         self.routing_settled(connection, decision_id=decision_id, now=now)
-
-    def routing_dispatched(self, connection, *, decision_id: str, task_id: str, now: str) -> None:
-        """Record that one pending route's internal dispatch task moved.
-
-        The route's internal task pointer is the decision request's current task,
-        which the dispatch step itself re-points; a pending route only records the
-        movement. The micro task keeps waiting for routing — no business Worker
-        turn opens here, and a link that does not exist yet (first routing of a
-        Micro task) is not fabricated.
-        """
-        connection.execute(
-            "UPDATE workflow_routes SET updated_at=? WHERE decision_id=? AND state='pending'",
-            (now, decision_id),
-        )
 
     def routing_settled(self, connection, *, decision_id: str, now: str) -> None:
         """Adopt a frozen recommendation with its result, under owner/lineage fencing."""
@@ -1490,18 +1480,19 @@ class WorkflowCoordinator:
             return
         if (run["current_routing_id"] != decision_id or run["owner_generation"] != link["owner_generation"]
                 or run["state"] != "executing" or self._terminal_ancestor(connection, run["run_id"]) is not None):
-            connection.execute("UPDATE workflow_routes SET state='fenced',updated_at=? WHERE decision_id=?", (now, decision_id))
+            connection.execute("UPDATE workflow_routes SET state='fenced' WHERE decision_id=?", (decision_id,))
             return
         selected = json.loads(decision["selected_json"]) if decision["selected_json"] else None
         if decision["status"] == "completed" and selected is not None:
             buddy = schemas.buddy_constraints(selected)
-            constraints = (schemas.buddy_constraints(json.loads(run["micro_task_json"]))
+            micro_task, _ = self._micro_task(connection, run["run_id"])
+            constraints = (schemas.buddy_constraints(micro_task)
                            if run["buddy_locked"] or not run["continuation_count"] else {})
             if (len(buddy) == len(schemas.BUDDY_FIELDS)
                     and buddy.get("harness") in schemas.CODING_HARNESSES
                     and all(buddy.get(key) == value for key, value in constraints.items())):
-                connection.execute("UPDATE workflow_routes SET state='resolved',updated_at=? WHERE decision_id=?",
-                                   (now, decision_id))
+                connection.execute("UPDATE workflow_routes SET state='resolved' WHERE decision_id=?",
+                                   (decision_id,))
                 connection.execute(
                     "UPDATE workflow_runs SET buddy_json=?, buddy_revision=buddy_revision+1,"
                     " validated_buddy_revision=NULL,updated_at=?,revision=revision+1 WHERE run_id=?",
@@ -1520,8 +1511,8 @@ class WorkflowCoordinator:
     def _routing_attention(self, connection, run, now: str, reason: dict | None = None) -> None:
         """A service boundary, with no invented agent turn or completed Micro task."""
         if run["current_routing_id"]:
-            connection.execute("UPDATE workflow_routes SET state='needs-host',updated_at=? WHERE decision_id=?",
-                               (now, run["current_routing_id"]))
+            connection.execute("UPDATE workflow_routes SET state='needs-host' WHERE decision_id=?",
+                               (run["current_routing_id"],))
         request_id = f"routing-{uuid.uuid4()}"
         decision_id = run["current_routing_id"]
         payload = {"source": "routing"}
@@ -1637,22 +1628,18 @@ class WorkflowCoordinator:
                          attach_macro_task(connection, presentation, spec=spec, host_id=hostId,
                                            manifest=manifest, now=now, fixed_run=fixed_run))
         connection.execute(
-            "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
-            " micro_task_fingerprint, request_fingerprint, submission_verifier, execution_workspace_json,"
-            " workspace_manifest_json, workspace_id, workspace_manifest_sha256, state, revision, created_at,"
-            " updated_at) VALUES(?,?,1,?,?,?,?,?,?,?,?,?,'executing',1,?,?)",
+            "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier,"
+            " request_fingerprint, submission_verifier, execution_workspace_json,"
+            " workspace_manifest_json, state, revision, created_at,"
+            " updated_at) VALUES(?,?,1,?,?,?,?,?,'executing',1,?,?)",
             (
                 run_id,
                 hostId,
                 self.db.control_token_verifier(self.db.control_token(run_id, 1)),
-                canonical_json(spec),
-                microTaskFingerprint,
                 requestFingerprint,
                 self.db.agent_token_verifier(submissionToken) if submissionToken else None,
                 canonical_json(executionWorkspace),
                 canonical_json(manifest) if manifest else None,
-                manifest.get("workspaceId") if manifest else None,
-                manifest.get("manifestSha256") if manifest else None,
                 now,
                 now,
             ),
@@ -1715,7 +1702,6 @@ class WorkflowCoordinator:
                 manifest=manifest,
                 attempt_id=None,
                 turn_id=None,
-                source_task_id=None,
                 now=now,
             )
         if buddy is None:
@@ -2114,6 +2100,7 @@ class WorkflowCoordinator:
             "SELECT * FROM workflow_suggestions WHERE run_id=? ORDER BY created_at LIMIT 50", (run_row["run_id"],)
         ).fetchall()
         conclusions = connection.execute("SELECT * FROM workflow_host_conclusions WHERE run_id=? ORDER BY rowid DESC LIMIT 51", (run_row["run_id"],)).fetchall()
+        micro_task, micro_task_fingerprint = self._micro_task(connection, run_row["run_id"])
         return {
             "hostConclusions": [host_conclusions.view(row) for row in conclusions[:50]],
             "hostConclusionsTruncated": len(conclusions) > 50,
@@ -2157,15 +2144,15 @@ class WorkflowCoordinator:
                 {
                     "suggestionId": row["suggestion_id"],
                     "attemptId": row["attempt_id"],
-                    "author": row["author"],
+                    "author": f"attempt:{row['attempt_id']}" if row["attempt_id"] else "agent",
                     "body": row["body"],
                     "createdAt": row["created_at"],
                 }
                 for row in suggestions
             ],
             "ownerGeneration": run_row["owner_generation"],
-            "microTaskFingerprint": run_row["micro_task_fingerprint"],
-            "microTask": json.loads(run_row["micro_task_json"]),
+            "microTaskFingerprint": micro_task_fingerprint,
+            "microTask": micro_task,
             "spec": _original_spec(connection, run_row["run_id"]),
         }
 
@@ -2326,8 +2313,8 @@ class WorkflowCoordinator:
                         )
                         connection.execute(
                             "INSERT INTO workflow_continuations(continuation_id, run_id, command_id,"
-                            " kind, request_id, expected_revision, input_text, input_bytes, note, helper_policy,"
-                            " helper_outcomes_json, state, created_at) VALUES(?,?,?,'helper',?,?,?,?,?, 'keep','[]','recorded',?)",
+                            " kind, request_id, expected_revision, input_text, note, helper_policy,"
+                            " helper_outcomes_json, state, created_at) VALUES(?,?,?,'helper',?,?,?,?,'keep','[]','recorded',?)",
                             (
                                 approve_continuation,
                                 run_id,
@@ -2335,7 +2322,6 @@ class WorkflowCoordinator:
                                 request_id,
                                 run_row["revision"],
                                 approval_input,
-                                len(approval_input.encode()),
                                 note or None,
                                 now,
                             ),
@@ -2380,8 +2366,8 @@ class WorkflowCoordinator:
                         decline_continuation = str(uuid.uuid4())
                         connection.execute(
                             "INSERT INTO workflow_continuations(continuation_id, run_id, command_id,"
-                            " kind, request_id, expected_revision, input_text, input_bytes, note, helper_policy,"
-                            " helper_outcomes_json, state, created_at) VALUES(?,?,?,'helper',?,?,?,?,?, 'keep','[]','recorded',?)",
+                            " kind, request_id, expected_revision, input_text, note, helper_policy,"
+                            " helper_outcomes_json, state, created_at) VALUES(?,?,?,'helper',?,?,?,?,'keep','[]','recorded',?)",
                             (
                                 decline_continuation,
                                 run_id,
@@ -2389,7 +2375,6 @@ class WorkflowCoordinator:
                                 request_id,
                                 run_row["revision"],
                                 input_text,
-                                len(input_text.encode()),
                                 note or None,
                                 now,
                             ),
@@ -2563,7 +2548,7 @@ class WorkflowCoordinator:
             source = self._request_row(connection, parent["run_id"], request_id)
             if source["state"] != "open":
                 return  # A superseded proxy is not reopened by a delayed callback.
-            connection.execute("UPDATE workflow_children SET state='attention', updated_at=?, revision=revision+1 WHERE child_task_id=?", (now, child["child_task_id"]))
+            connection.execute("UPDATE workflow_children SET state='attention', updated_at=? WHERE child_task_id=?", (now, child["child_task_id"]))
             self._sync_boundary(connection, parent["run_id"], now)
 
     def _attention_chain(self, connection, run, request):
@@ -2639,10 +2624,10 @@ class WorkflowCoordinator:
         continuation_id = str(uuid.uuid4())
         connection.execute(
             "INSERT INTO workflow_continuations(continuation_id,run_id,command_id,kind,request_id,"
-            "expected_revision,input_text,input_bytes,note,helper_policy,helper_outcomes_json,state,created_at)"
-            " VALUES(?,?,?,'helper',?,?,?,?,?,'keep','[]','recorded',?)",
+            "expected_revision,input_text,note,helper_policy,helper_outcomes_json,state,created_at)"
+            " VALUES(?,?,?,'helper',?,?,?,?,'keep','[]','recorded',?)",
             (continuation_id, child_task_id, command_id, source_request["request_id"], child_run["revision"],
-             input_text, len(input_text.encode()), note or None, now),
+             input_text, note or None, now),
         )
         extra = self._create_helpers(connection, child_run, child_task, source_request, prepared, command_id, now,
                                      source_host_id=parent_run["host_id"], actor=actor) if decision == "approve" and prepared else []
@@ -2659,7 +2644,7 @@ class WorkflowCoordinator:
                 self._sync_boundary(connection, owner["run_id"], now, default_state="waiting-helpers")
             current = self._run_row(connection, owner["run_id"])
             connection.execute(
-                "UPDATE workflow_children SET state=?, updated_at=?, revision=revision+1 WHERE child_task_id=?",
+                "UPDATE workflow_children SET state=?, updated_at=? WHERE child_task_id=?",
                 ("attention" if self._open_boundary(connection, current) is not None else "active", now, owner["run_id"]),
             )
         self.board._append_event(
@@ -2721,14 +2706,13 @@ class WorkflowCoordinator:
                 manifest=manifest,
                 attempt_id=None,
                 turn_id=None,
-                source_task_id=None,
                 now=now,
             )
             child_run = self._run_optional(connection, helper_task_id)
             connection.execute(
                 "INSERT INTO workflow_children(child_task_id, parent_run_id, request_id, decision_command_id, role,"
-                " integrator, state, auto_continue, workspace_intent_json, workspace_manifest_json,"
-                " workspace_manifest_sha256, created_at, updated_at) VALUES(?,?,?,?,?,?,'active',0,?,?,?,?,?)",
+                " integrator, state, workspace_manifest_json,"
+                " created_at, updated_at) VALUES(?,?,?,?,?,?,'active',?,?,?)",
                 (
                     helper_task_id,
                     run_row["run_id"],
@@ -2736,9 +2720,7 @@ class WorkflowCoordinator:
                     command_id,
                     item["role"],
                     1 if item["integrator"] else 0,
-                    canonical_json(item["executionWorkspace"]),
                     canonical_json(manifest),
-                    manifest.get("manifestSha256"),
                     now,
                     now,
                 ),
@@ -2807,21 +2789,17 @@ class WorkflowCoordinator:
         # its Host is the parent's Host and it can never be reached by a Host control
         # capability of its own (only the parent run is addressed by workflow ops).
         connection.execute(
-            "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier, micro_task_json,"
-            " micro_task_fingerprint, request_fingerprint, execution_workspace_json, workspace_manifest_json, workspace_id,"
-            " workspace_manifest_sha256, state, revision, created_at, updated_at)"
-            " VALUES(?,?,1,?,?,?,?,?,?,?,?,'executing',1,?,?)",
+            "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier,"
+            " request_fingerprint, execution_workspace_json, workspace_manifest_json,"
+            " state, revision, created_at, updated_at)"
+            " VALUES(?,?,1,?,?,?,?,'executing',1,?,?)",
             (
                 helper_task_id,
                 run_row["host_id"],
                 self.db.control_token_verifier(self.db.control_token(helper_task_id, 1)),
-                canonical_json(spec),
-                fingerprint,
                 schemas.workflow_request_fingerprint(spec, item["executionWorkspace"], run_row["host_id"]),
                 canonical_json(item["executionWorkspace"]),
                 canonical_json(manifest),
-                manifest.get("workspaceId"),
-                manifest.get("manifestSha256"),
                 now,
                 now,
             ),
@@ -2868,10 +2846,11 @@ class WorkflowCoordinator:
         return self._target_run(connection, owner, target_id)
 
     @staticmethod
-    def _buddy_matches_micro_task(run, buddy: dict | None) -> None:
+    def _buddy_matches_micro_task(connection, run, buddy: dict | None) -> None:
         if buddy is None or not run["buddy_locked"]:
             return
-        constraints = schemas.buddy_constraints(json.loads(run["micro_task_json"]))
+        micro_task, _ = WorkflowCoordinator._micro_task(connection, run["run_id"])
+        constraints = schemas.buddy_constraints(micro_task)
         mismatches = [key for key, value in constraints.items() if buddy.get(key) != value]
         if mismatches:
             raise BoardError("BUDDY_CONFLICT", "buddy must preserve the original Micro task's hard constraints; submit a new Micro task to change them",
@@ -2939,7 +2918,7 @@ class WorkflowCoordinator:
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         command_id = schemas.required_string(params, "commandId", max_length=128)
         expected = schemas.require_expected_revision(params)
-        input_text, input_bytes = _bounded_input(params)
+        input_text = _bounded_input(params)
         policy = schemas.optional_string(params, "helperPolicy")
         if policy is not None and policy not in ("cancel", "keep"):
             raise BoardError("INVALID_ARGUMENT", "helperPolicy must be 'cancel' or 'keep'")
@@ -2974,7 +2953,7 @@ class WorkflowCoordinator:
                 return {**receipt, "duplicate": True}
             self._expect_revision(run, expected)
             target_snapshot = self._continuation_target(connection, run, target_id)
-            self._buddy_matches_micro_task(target_snapshot, supplied_buddy)
+            self._buddy_matches_micro_task(connection, target_snapshot, supplied_buddy)
             current_choice = json.loads(target_snapshot["execution_workspace_json"])
             if target_snapshot["delegation_authority"]:
                 if reroute:
@@ -3002,7 +2981,7 @@ class WorkflowCoordinator:
             self._expect_revision(owner, expected)
             run_row = self._continuation_target(connection, owner, target_id)
             self._expect_revision(run_row, target_snapshot["revision"])
-            self._buddy_matches_micro_task(run_row, buddy)
+            self._buddy_matches_micro_task(connection, run_row, buddy)
             self._require_enabled_buddy(connection, buddy)
             current_workspace = json.loads(run_row["execution_workspace_json"])
             next_access, next_note = access_selection or (current_workspace["access"], current_workspace.get("accessNote"))
@@ -3060,15 +3039,14 @@ class WorkflowCoordinator:
                 self._close_proxy_ancestors(connection, self._request_row(connection, run_id, request["request_id"]), now)
             connection.execute(
                 "INSERT INTO workflow_continuations(continuation_id, run_id, command_id,"
-                " kind, expected_revision, input_text, input_bytes, note, helper_policy, helper_outcomes_json, state,"
-                " created_at) VALUES(?,?,?,'manual',?,?,?,?,?,?, 'queued', ?)",
+                " kind, expected_revision, input_text, note, helper_policy, helper_outcomes_json, state,"
+                " created_at) VALUES(?,?,?,'manual',?,?,?,?,?, 'queued', ?)",
                 (
                     continuation_id,
                     run_id,
                     command_id,
                     run_row["revision"],
                     input_text,
-                    input_bytes,
                     note or None,
                     policy,
                     canonical_json(helper_outcomes),
@@ -3134,7 +3112,7 @@ class WorkflowCoordinator:
                                    " WHERE task_id=?", (run_id,))
             if run_id != owner_run_id:
                 target = self._run_row(connection, run_id)
-                connection.execute("UPDATE workflow_children SET state=?,updated_at=?,revision=revision+1 WHERE child_task_id=?",
+                connection.execute("UPDATE workflow_children SET state=?,updated_at=? WHERE child_task_id=?",
                                    ("attention" if self._open_boundary(connection, target) is not None else "active", now, run_id))
             self.board._append_event(
                 connection,
@@ -3206,7 +3184,8 @@ class WorkflowCoordinator:
                 else [],
                 "attemptId": attempt_id,
                 "generation": turn["generation"] if turn is not None else None,
-                "workspaceManifestSha256": row["workspace_manifest_sha256"],
+                "workspaceManifestSha256": (json.loads(row["workspace_manifest_json"]).get("manifestSha256")
+                                            if row["workspace_manifest_json"] else None),
             }
             manifest = json.loads(turn["input_json"]).get("executionWorkspace") if turn is not None else None
             if manifest is None and child_run is not None and child_run["workspace_manifest_json"]:
@@ -3710,8 +3689,8 @@ class WorkflowCoordinator:
             if link["state"] != "pending" and not unconfirmed:
                 continue
             fenced = True
-            connection.execute("UPDATE workflow_routes SET state='fenced',updated_at=? WHERE decision_id=?",
-                               (now, link["decision_id"]))
+            connection.execute("UPDATE workflow_routes SET state='fenced' WHERE decision_id=?",
+                               (link["decision_id"],))
             if task is not None:
                 if task["state"] not in ("completed", "failed", "cancelled", "cancelling"):
                     self.board._transition_task(connection, task, "cancelling" if unconfirmed else "cancelled")
@@ -3806,7 +3785,7 @@ class WorkflowCoordinator:
         connection.execute(
             "UPDATE workflow_continuations SET state='cancelled' WHERE run_id=? AND state IN ('recorded','queued')", (run_id,),
         )
-        self._revoke_credentials(connection, run_id, now)
+        self._revoke_credentials(connection, run_id)
         self._cancel_routes(connection, run_id, make_reason("micro-task-cancelled"), now, actor=actor,
                             initiator=initiator)
         if cancel_micro_task:
@@ -3815,7 +3794,7 @@ class WorkflowCoordinator:
                 (now, run_id),
             )
             connection.execute(
-                "UPDATE workflow_children SET state='cancelled', updated_at=?, revision=revision+1"
+                "UPDATE workflow_children SET state='cancelled', updated_at=?"
                 " WHERE child_task_id=? AND state IN ('active','attention')", (now, run_id),
             )
         elif run_row["active_request_id"]:
@@ -3851,7 +3830,7 @@ class WorkflowCoordinator:
             self._pin_result_artifacts(connection, run_row, attempt, payload, turn_row["turn_id"], now)
         else:
             connection.execute("UPDATE workflow_turns SET state='failed', updated_at=? WHERE turn_id=?", (now, turn_row["turn_id"]))
-        self._revoke_credentials(connection, run_row["run_id"], now)
+        self._revoke_credentials(connection, run_row["run_id"])
         self.board._append_event(
             connection, "workflow.late_turn", task_id=run_row["run_id"], attempt_id=attempt["attempt_id"],
             revision=run_row["revision"], payload={"turnId": turn_row["turn_id"], "state": run_row["state"], "disposition": disposition},
@@ -3869,13 +3848,13 @@ class WorkflowCoordinator:
                             seal_stash=seal_stash)
         self.child_settled(connection, task=task, attempt=attempt, payload=None, task_state=task["state"], now=now)
         self._release_reservations(connection, task["task_id"], now)
-        self._revoke_credentials(connection, task["task_id"], now)
+        self._revoke_credentials(connection, task["task_id"])
 
-    def _revoke_credentials(self, connection, run_id: str, now: str) -> None:
+    def _revoke_credentials(self, connection, run_id: str) -> None:
         connection.execute(
-            "UPDATE agent_credentials SET state='revoked', revoked_at=?, revision=revision+1"
+            "UPDATE agent_credentials SET state='revoked'"
             " WHERE run_id=? AND state='active'",
-            (now, run_id),
+            (run_id,),
         )
 
     # -- acknowledge ---------------------------------------------------------
@@ -4719,17 +4698,16 @@ class WorkflowCoordinator:
             partial_artifact_id = self._pin_artifact(
                 connection, run_id=run_id, kind="partial-output", manifest=sealed_record,
                 attempt_id=attempt_id, turn_id=turn["turn_id"] if turn is not None else None,
-                source_task_id=run_id, now=now,
+                now=now,
             )
         identifier = "conclusion-" + str(uuid.uuid4())
         connection.execute(
             "INSERT INTO workflow_host_conclusions(conclusion_id,run_id,attempt_id,run_revision,owner_generation,"
-            "execution_status,note,reason_code,reason_params_json,evidence_json,artifact_id,integration_id,actor_role,actor_id,command_id,created_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "execution_status,note,reason_code,reason_params_json,artifact_id,actor_role,actor_id,command_id,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (identifier, run_id, attempt_id, run_row["revision"] + 1, run_row["owner_generation"], run_row["state"],
              note, reason["code"] if reason else None, canonical_json(reason["params"]) if reason else None,
-             canonical_json({"references": []}),
-             partial_artifact_id, None, actor["role"], actor["id"], command_id, now),
+             partial_artifact_id, actor["role"], actor["id"], command_id, now),
         )
         if sealed_record is not None:
             self.board._append_event(
@@ -5259,7 +5237,7 @@ class WorkflowCoordinator:
                     connection, run_id=run_id,
                     kind="abandoned-site" if action == "abandon" else "resolved-output",
                     manifest=record, attempt_id=current["attempt_id"], turn_id=current["turn_id"],
-                    source_task_id=run_id, now=now,
+                    now=now,
                 )
             proof = (self._resolution_native_completion(connection, run_row, current)
                      if result["state"] in ("restored", "adopted") else None)
@@ -5908,9 +5886,9 @@ class WorkflowCoordinator:
             self._run_row(connection, run_id)
             suggestion_id = f"sug-{uuid.uuid4()}"
             connection.execute(
-                "INSERT INTO workflow_suggestions(suggestion_id, run_id, attempt_id, author, body, created_at)"
-                " VALUES(?,?,?,?,?,?)",
-                (suggestion_id, run_id, attempt_id, f"attempt:{attempt_id}" if attempt_id else "agent", body, now),
+                "INSERT INTO workflow_suggestions(suggestion_id, run_id, attempt_id, body, created_at)"
+                " VALUES(?,?,?,?,?)",
+                (suggestion_id, run_id, attempt_id, body, now),
             )
             self.board._append_event(
                 connection,
@@ -6444,7 +6422,7 @@ class WorkflowCoordinator:
                 " WHERE continuation_id=?",
                 (attempt_id, turn_id, now, continuation["continuation_id"]),
             )
-        credential = self._issue_credential(connection, run_row, attempt_id, generation, turn_id, now)
+        credential = self._issue_credential(connection, run_row, attempt_id, generation, turn_id)
         return {
             "turnId": turn_id,
             "turnIndex": turn_index,
@@ -6736,14 +6714,14 @@ class WorkflowCoordinator:
                     frozen = canonical_json(manifest)
                     connection.execute("UPDATE workflow_continuations SET workspace_manifest_json=? WHERE continuation_id=?", (frozen, row["continuation_id"]))
                     connection.execute(
-                        "UPDATE workflow_runs SET workspace_manifest_json=?, workspace_id=?, workspace_manifest_sha256=?,"
+                        "UPDATE workflow_runs SET workspace_manifest_json=?,"
                         " updated_at=?, revision=revision+1 WHERE run_id=?",
-                        (frozen, manifest["workspaceId"], manifest["manifestSha256"], now, row["run_id"]),
+                        (frozen, now, row["run_id"]),
                     )
                     connection.execute(
-                        "UPDATE workspace_reservations SET workspace_id=?, manifest_sha256=?, updated_at=?, access=?"
+                        "UPDATE workspace_reservations SET workspace_id=?, manifest_sha256=?, access=?"
                         " WHERE holder_task_id=? AND checkout_id=? AND state='held'",
-                        (manifest["workspaceId"], manifest["manifestSha256"], now, "read" if manifest["access"] == "read" else "write", row["run_id"], manifest["checkoutId"]),
+                        (manifest["workspaceId"], manifest["manifestSha256"], "read" if manifest["access"] == "read" else "write", row["run_id"], manifest["checkoutId"]),
                     )
                     kind = "workflow.workspace_prepared"
                     event = {"continuationId": row["continuation_id"], "manifestSha256": manifest["manifestSha256"], "checkoutId": manifest["checkoutId"]}
@@ -6760,25 +6738,22 @@ class WorkflowCoordinator:
                 head = self.board._head_of(connection)
             self.board._notify(head)
 
-    def _issue_credential(self, connection, run_row, attempt_id, generation, turn_id, now) -> str:
+    def _issue_credential(self, connection, run_row, attempt_id, generation, turn_id) -> str:
         token = self.db.agent_token(run_row["run_id"], attempt_id, generation)
         connection.execute(
-            "UPDATE agent_credentials SET state='revoked', revoked_at=?, revision=revision+1"
+            "UPDATE agent_credentials SET state='revoked'"
             " WHERE attempt_id=? AND state='active'",
-            (now, attempt_id),
+            (attempt_id,),
         )
         connection.execute(
-            "INSERT INTO agent_credentials(credential_id, run_id, task_id, attempt_id, generation, turn_id,"
-            " token_verifier, state, created_at) VALUES(?,?,?,?,?,?,?,'active',?)",
+            "INSERT INTO agent_credentials(credential_id, run_id, attempt_id, turn_id,"
+            " token_verifier, state) VALUES(?,?,?,?,?,'active')",
             (
                 f"cred-{attempt_id}",
                 run_row["run_id"],
-                run_row["run_id"],
                 attempt_id,
-                generation,
                 turn_id,
                 self.db.agent_token_verifier(token),
-                now,
             ),
         )
         return token
@@ -6825,10 +6800,10 @@ class WorkflowCoordinator:
         text = "An owned micro task reached a boundary. Review the current ownedMicroTasks in this turn input."
         connection.execute(
             "INSERT INTO workflow_continuations(continuation_id,run_id,kind,trigger_event_json,"
-            " expected_revision,input_text,input_bytes,note,state,created_at)"
-            " VALUES(?,?,'lead-wakeup',?,?,?,?,?,'recorded',?)",
+            " expected_revision,input_text,note,state,created_at)"
+            " VALUES(?,?,'lead-wakeup',?,?,?,?,'recorded',?)",
             (continuation_id, lead["run_id"], canonical_json(trigger), lead["revision"], text,
-             len(text.encode()), None, now),
+             None, now),
         )
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (lead["run_id"],)).fetchone()
         try:
@@ -6875,7 +6850,7 @@ class WorkflowCoordinator:
                 "ownedMicroTasksTruncated": total - len(facts)}
 
     def _turn_context(self, connection, run_row, task, spec, continuation, previous, turn_index) -> dict:
-        micro_task = json.loads(run_row["micro_task_json"])
+        micro_task = json.loads(task["spec_json"])
         task_text = micro_task.get("task") if isinstance(micro_task.get("task"), str) else ""
         context: dict[str, Any] = {
             # Bounded on purpose: the immutable full text stays in the task record.
@@ -7119,7 +7094,7 @@ class WorkflowCoordinator:
                 "UPDATE workflow_turns SET state=?, updated_at=? WHERE turn_id=?",
                 ("interrupted" if interrupted else "failed", now, turn_row["turn_id"]),
             )
-            self._revoke_credentials(connection, run_row["run_id"], now)
+            self._revoke_credentials(connection, run_row["run_id"])
             terminal = "cancelled" if task_state == "cancelled" else "failed" if task_state == "failed" else None
             conflict_ids = (
                 self._record_scope_conflicts(connection, run_row, turn_row, attempt, now)
@@ -7204,7 +7179,7 @@ class WorkflowCoordinator:
             connection.execute(
                 "UPDATE workflow_turns SET state='failed', updated_at=? WHERE turn_id=?", (now, turn_row["turn_id"])
             )
-            self._revoke_credentials(connection, run_row["run_id"], now)
+            self._revoke_credentials(connection, run_row["run_id"])
             connection.execute(
                 "UPDATE workflow_runs SET state='failed', updated_at=?, revision=revision+1 WHERE run_id=?",
                 (now, run_row["run_id"]),
@@ -7239,7 +7214,7 @@ class WorkflowCoordinator:
                 turn_row["turn_id"],
             ),
         )
-        self._revoke_credentials(connection, run_row["run_id"], now)
+        self._revoke_credentials(connection, run_row["run_id"])
         # Every accepted turn pins the manifest it executed on and the output it
         # sealed; a later continuation prepares from that sealed commit rather than
         # from the original baseline. Only a completed turn becomes the final artifact.
@@ -7623,7 +7598,6 @@ class WorkflowCoordinator:
             manifest=record,
             attempt_id=attempt["attempt_id"],
             turn_id=turn_row["turn_id"],
-            source_task_id=run_row["run_id"],
             now=now,
         )
         return record
@@ -7697,7 +7671,6 @@ class WorkflowCoordinator:
                 manifest=effective,
                 attempt_id=attempt["attempt_id"],
                 turn_id=turn_id,
-                source_task_id=run_row["run_id"],
                 now=now,
             )
         partial = result.get("partialWorkspaceSeal")
@@ -7711,7 +7684,6 @@ class WorkflowCoordinator:
             manifest=seal,
             attempt_id=attempt["attempt_id"],
             turn_id=turn_id,
-            source_task_id=run_row["run_id"],
             now=now,
         )
 
@@ -7750,7 +7722,7 @@ class WorkflowCoordinator:
         else:
             state = "failed"
         connection.execute(
-            "UPDATE workflow_children SET state=?, updated_at=?, revision=revision+1 WHERE child_task_id=?",
+            "UPDATE workflow_children SET state=?, updated_at=? WHERE child_task_id=?",
             (state, now, task["task_id"]),
         )
         if state != "attention":
@@ -7868,8 +7840,8 @@ class WorkflowCoordinator:
                 # several generations. Never reclaim it before that owner stops.
                 if parent_reservation is not None and self._held_writer(connection, reservation["checkout_id"]) is None:
                     connection.execute(
-                        "UPDATE workspace_reservations SET state='held', updated_at=?, released_at=NULL WHERE reservation_id=?",
-                        (now, parent_reservation["reservation_id"]),
+                        "UPDATE workspace_reservations SET state='held', released_at=NULL WHERE reservation_id=?",
+                        (parent_reservation["reservation_id"],),
                     )
                 break
 
@@ -7912,7 +7884,7 @@ def _original_spec(connection, run_id: str) -> dict | None:
         return None
 
 
-def _bounded_input(params: dict) -> tuple[str, int]:
+def _bounded_input(params: dict) -> str:
     value = params.get("input")
     if isinstance(value, str):
         text = value
@@ -7927,7 +7899,7 @@ def _bounded_input(params: dict) -> tuple[str, int]:
         raise BoardError(
             "INVALID_ARGUMENT", f"input must be at most {schemas.MAX_WORKFLOW_INPUT_BYTES} UTF-8 bytes"
         )
-    return text, size
+    return text
 
 
 def _head(value, limit: int):

@@ -719,11 +719,12 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         view = self.routed()
         original = view["routing"]["routingBoundary"]
         with self.board_.store.db.write() as db:
-            row = db.execute("SELECT micro_task_json FROM workflow_runs WHERE run_id=?", (view["runId"],)).fetchone()
+            row = db.execute("SELECT spec_json FROM tasks WHERE task_id=?", (view["runId"],)).fetchone()
             micro_task = json.loads(row[0])
             micro_task.update({"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"})
-            db.execute("UPDATE workflow_runs SET micro_task_json=?,buddy_locked=1 WHERE run_id=?",
+            db.execute("UPDATE tasks SET spec_json=? WHERE task_id=?",
                        (canonical_json(micro_task), view["runId"]))
+            db.execute("UPDATE workflow_runs SET buddy_locked=1 WHERE run_id=?", (view["runId"],))
         latest = self.board_.call("workflow_get", {"runId": view["runId"]})["routing"]["routingBoundary"]
         self.assertEqual(latest["candidates"], original["candidates"])
         other = next(item for item in latest["commands"]["continue"]["choices"] if item["buddyId"] == B)
@@ -739,8 +740,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         root, leaf = self.routed("root", kind="worktree"), self.routed("leaf", kind="worktree")
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,decision_command_id,state,"
-                       "workspace_intent_json,created_at,updated_at) VALUES(?,?, 'private-request','private-authorization',"
-                       "'attention','{}',?,?)", (leaf["runId"], root["runId"], T0, T0))
+                       "created_at,updated_at) VALUES(?,?, 'private-request','private-authorization',"
+                       "'attention',?,?)", (leaf["runId"], root["runId"], T0, T0))
             source = self.board_.store.workflow._request_row(db, leaf["runId"], leaf["activeRequest"]["requestId"])
             self.board_.store.workflow._propagate_boundary(db, source, T0)
         root = self.board_.call("workflow_get", {"runId": root["runId"]})
@@ -782,8 +783,8 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         root, leaf = self.routed("root", kind="worktree"), self.routed("leaf", kind="worktree")
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,decision_command_id,state,"
-                       "workspace_intent_json,created_at,updated_at) VALUES(?,?, 'private-request','private-authorization',"
-                       "'attention','{}',?,?)", (leaf["runId"], root["runId"], T0, T0))
+                       "created_at,updated_at) VALUES(?,?, 'private-request','private-authorization',"
+                       "'attention',?,?)", (leaf["runId"], root["runId"], T0, T0))
         before = self.board_.call("workflow_get", {"runId": leaf["runId"]})
         chosen = before["routing"]["routingBoundary"]["commands"]["continue"]["choices"][0]["params"]
         for terminal in ("cancelled", "concluded", "accepted"):

@@ -50,7 +50,7 @@ class HostAdmissionTests(WorkflowTestCase):
         self.assertEqual(continued["buddy"], changed)
         self.assertFalse(continued["buddyLocked"])
         with board.store.db.read() as db:
-            original = json.loads(db.execute("SELECT micro_task_json FROM workflow_runs").fetchone()[0])
+            original = json.loads(db.execute("SELECT spec_json FROM tasks").fetchone()[0])
             self.assertEqual(original["effort"], "off")
             event = db.execute("SELECT payload_json FROM events WHERE kind='workflow.buddy_overridden'").fetchone()
             self.assertEqual(json.loads(event[0])["buddy"], changed)

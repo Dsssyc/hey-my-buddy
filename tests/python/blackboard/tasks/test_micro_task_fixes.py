@@ -91,7 +91,7 @@ class MicroTaskFixTests(WorkflowTestCase):
                 "SELECT run_id,fixed_run_id FROM workflow_fixes ORDER BY created_at,rowid")],
                 [(first["runId"], original["runId"]), (second["runId"], original["runId"])])
             self.assertNotIn("fixes", json.loads(db.execute(
-                "SELECT micro_task_json FROM workflow_runs WHERE run_id=?", (first["runId"],)).fetchone()[0]))
+                "SELECT spec_json FROM tasks WHERE task_id=?", (first["runId"],)).fetchone()[0]))
             self.assertNotIn("fixes", json.loads(db.execute(
                 "SELECT spec_json FROM tasks WHERE task_id=?", (first["runId"],)).fetchone()[0]))
 

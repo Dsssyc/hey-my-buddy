@@ -249,7 +249,7 @@ class PreparationTests(WorkflowTestCase):
         self.assertNotIn("tests/cache/state.json", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
         after = self.rows(board, helper_id, continued["continuationId"])
         self.assertEqual(after[3]["state"], "held")
-        for key in ("micro_task_json", "micro_task_fingerprint", "request_fingerprint", "execution_workspace_json"):
+        for key in ("request_fingerprint", "execution_workspace_json"):
             self.assertEqual(after[0][key], original[key])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT state FROM workflow_turns WHERE attempt_id=?", (failed["claim"]["attempt"]["attemptId"],)).fetchone()[0], "failed")
@@ -345,11 +345,11 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(manifest["checkoutId"], json.loads(before[0]["workspace_manifest_json"])["checkoutId"])
         self.assertEqual(after[3]["manifest_sha256"], manifest["manifestSha256"])
         self.assertEqual(after[3]["workspace_id"], manifest["workspaceId"])
-        for key in ("micro_task_json", "micro_task_fingerprint", "request_fingerprint", "execution_workspace_json"):
+        for key in ("request_fingerprint", "execution_workspace_json"):
             self.assertEqual(after[0][key], before[0][key])
         self.assertEqual(after[1]["cwd"], before[1]["cwd"])
         self.assertEqual(after[1]["spec_json"], before[1]["spec_json"])
-        for key in ("input_text", "input_bytes", "helper_outcomes_json", "expected_revision"):
+        for key in ("input_text", "helper_outcomes_json", "expected_revision"):
             self.assertEqual(after[2][key], before[2][key])
         with board.store.db.read() as connection:
             saved = connection.execute("SELECT input_json FROM workflow_turns WHERE attempt_id=?", (first["claim"]["attempt"]["attemptId"],)).fetchone()[0]
@@ -479,7 +479,7 @@ class PreparationTests(WorkflowTestCase):
                 # A coordinator allocation replacement, including its reservation.
                 # Deliberately retain revision to require actual manifest comparison.
                 with board.store.db.write() as connection:
-                    connection.execute("UPDATE workflow_runs SET workspace_manifest_json=?, workspace_id=?, workspace_manifest_sha256=? WHERE run_id=?", (canonical_json(replacement), replacement["workspaceId"], replacement["manifestSha256"], run_id))
+                    connection.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?", (canonical_json(replacement), run_id))
                     connection.execute("UPDATE tasks SET cwd=? WHERE task_id=?", (replacement["path"], run_id))
                     connection.execute("UPDATE workspace_reservations SET workspace_id=?, checkout_id=?, repository_id=?, path=?, manifest_sha256=? WHERE holder_task_id=? AND state='held'", (replacement["workspaceId"], replacement["checkoutId"], replacement["repositoryId"], replacement["path"], replacement["manifestSha256"], run_id))
             return manifest
@@ -491,7 +491,7 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(after[0]["workspace_manifest_json"], canonical_json(replacement) if replacement else before[0]["workspace_manifest_json"])
         self.assertEqual(after[1]["cwd"], replacement["path"] if replacement else before[1]["cwd"])
         self.assertEqual(after[2]["input_text"], before[2]["input_text"])
-        self.assertEqual(after[0]["micro_task_json"], before[0]["micro_task_json"])
+        self.assertEqual(after[1]["spec_json"], before[1]["spec_json"])
         self.assertTrue((self.directory / "workspaces" / prepared[0]["workspaceId"] / "manifest.json").exists(), "fenced preparation remains recoverable")
         with board.store.db.read() as connection:
             self.assertIsNotNone(board.store.workflow.claim_blocker(connection, connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()))
@@ -581,10 +581,10 @@ class PreparationTests(WorkflowTestCase):
         attempt_id = first["claim"]["attempt"]["attemptId"]
         seal = workspace.seal(self.directory, other, run_id, attempt_id)
         with board.store.db.write() as connection:
-            board.store.workflow._pin_artifact(connection, run_id=run_id, kind="output", manifest=seal, attempt_id=attempt_id, turn_id=first["claim"]["turn"]["turnId"], source_task_id=run_id, now=board.store.now())
+            board.store.workflow._pin_artifact(connection, run_id=run_id, kind="output", manifest=seal, attempt_id=attempt_id, turn_id=first["claim"]["turn"]["turnId"], now=board.store.now())
         with board.store.db.read() as connection:
             chosen = board.store.workflow._latest_handoff(connection, original, json.loads(original["workspace_manifest_json"]))
-        self.assertEqual(chosen["manifestSha256"], original["workspace_manifest_sha256"])
+        self.assertEqual(chosen["manifestSha256"], json.loads(original["workspace_manifest_json"])["manifestSha256"])
         self.assertNotEqual(chosen["manifestSha256"], other["manifestSha256"])
 
     def test_authorized_helper_seal_becomes_the_same_checkout_handoff(self):

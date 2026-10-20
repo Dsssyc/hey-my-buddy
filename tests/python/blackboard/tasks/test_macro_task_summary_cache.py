@@ -403,11 +403,13 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.sql("UPDATE workflow_runs SET macro_task_id=NULL WHERE run_id=?", (root,))
         corrections = (
             ("UPDATE workflow_runs SET title=? WHERE run_id=?", "title"),
-            ("UPDATE workflow_runs SET title=NULL,micro_task_json=json_set(micro_task_json,'$.task',?) WHERE run_id=?", "title"),
+            ("UPDATE tasks SET spec_json=json_set(spec_json,'$.task',?) WHERE task_id=?", "title"),
             ("UPDATE workflow_turns SET outcome_json=json_set(outcome_json,'$.summary',?) WHERE run_id=?", "summary"),
         )
         for statement, field in corrections:
             with self.subTest(field=field, statement=statement):
+                if statement.startswith("UPDATE tasks"):
+                    self.sql("UPDATE workflow_runs SET title=NULL WHERE run_id=?", (root,))
                 self.sql(statement, ("fixed\0old", root))
                 self.assertEqual(self.rows()[group][field], "fixed\0old")
                 self.sql(statement, ("fixed\0new", root))
@@ -437,7 +439,8 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             initial = self.rows()[group]
             counter.reset_mock()
-            self.sql("UPDATE workflow_runs SET title=NULL,micro_task_json=json_set(micro_task_json,'$.task',?) WHERE run_id=?", ("Fictional task fallback\nmore", root))
+            self.sql("UPDATE workflow_runs SET title=NULL WHERE run_id=?", (root,))
+            self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task',?) WHERE task_id=?", ("Fictional task fallback\nmore", root))
             self.assertEqual(self.rows()[group]["title"], "Fictional task fallback")
             self.assert_recomputed(counter, [group])
             self.sql("UPDATE workflow_turns SET outcome_json=json_set(outcome_json,'$.summary',?) WHERE run_id=?", ("  Fictional  corrected summary\nsecond line", root))
@@ -477,9 +480,9 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         second = self.read(limit=1,before=first["nextCursor"])
         self.assertNotEqual(first["macroTasks"][0]["macroTaskId"], second["macroTasks"][0]["macroTaskId"])
         self.assertEqual(self.read(query="needle-fictional")["totals"]["all"],0)
-        self.sql("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','needle-fictional') WHERE run_id=?", (root,))
+        self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','needle-fictional') WHERE task_id=?", (root,))
         self.assertEqual(self.read(query="needle-fictional")["macroTasks"][0]["matchingRuns"],1)
-        self.sql("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','other-fictional') WHERE run_id=?", (root,))
+        self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','other-fictional') WHERE task_id=?", (root,))
         self.assertEqual(self.read(query="needle-fictional")["totals"]["all"],0)
         self.sql("UPDATE macro_tasks SET activity_seq=999999 WHERE macro_task_id=?", (group,))
         self.assertEqual(self.read(limit=1)["macroTasks"][0]["macroTaskId"],group)
@@ -510,10 +513,10 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
     def test_matching_count_changes_in_cached_group_and_metadata_queries(self):
         group = self.fixture.macros[1]
         root = self.root_for(group)
-        self.sql("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','fictional-count-needle') WHERE macro_task_id=?", (group,))
+        self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','fictional-count-needle') WHERE task_id IN (SELECT run_id FROM workflow_runs WHERE macro_task_id=?)", (group,))
         initial = self.rows(query="fictional-count-needle")[group]["matchingRuns"]
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
-            self.sql("UPDATE workflow_runs SET micro_task_json=json_set(micro_task_json,'$.task','fictional-other') WHERE run_id=?", (root,))
+            self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','fictional-other') WHERE task_id=?", (root,))
             self.assertEqual(self.rows(query="fictional-count-needle")[group]["matchingRuns"], initial-1)
             self.assert_recomputed(counter,[group])
             self.sql("UPDATE workflow_runs SET buddy_json=json_set(buddy_json,'$.model','fictional-model') WHERE run_id=?", (root,))

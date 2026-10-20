@@ -273,11 +273,11 @@ class StorageOrphanTests(WorkflowTestCase):
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workspace_reservations
                 (reservation_id,workspace_id,checkout_id,repository_id,path,access,holder_task_id,
-                 holder_kind,parent_run_id,manifest_sha256,state,created_at,updated_at)
-                VALUES (?,?,?,?,?,'read',?,'parent',?,?,'released',?,?)''',
+                 holder_kind,parent_run_id,manifest_sha256,state,created_at)
+                VALUES (?,?,?,?,?,'read',?,'parent',?,?,'released',?)''',
                 ('retained-reservation', manifest['workspaceId'], manifest['checkoutId'], manifest['repositoryId'],
                  str(checkout), parent['runId'], parent['runId'], manifest['manifestSha256'],
-                 '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'))
+                 '2026-01-01T00:00:00Z'))
         self.assert_retained(checkout, planned)
 
     def test_invalidated_continuation_still_protects_original_input(self):
@@ -285,9 +285,9 @@ class StorageOrphanTests(WorkflowTestCase):
         parent = self.submit(self.board_instance, request_id='other-run', cwd=str(self.repo), kind='existing')
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_continuations
-                (continuation_id,run_id,kind,expected_revision,input_text,input_bytes,
+                (continuation_id,run_id,kind,expected_revision,input_text,
                  workspace_manifest_json,state,created_at)
-                VALUES (?,?,'manual',1,'input',5,?,'invalidated',?)''',
+                VALUES (?,?,'manual',1,'input',?,'invalidated',?)''',
                 ('retained-continuation', parent['runId'], json.dumps(manifest), '2026-01-01T00:00:00Z'))
         self.assert_retained(checkout, planned)
 

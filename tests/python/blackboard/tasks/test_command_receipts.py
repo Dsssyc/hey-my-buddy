@@ -308,9 +308,9 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO macro_task_deletions"
-                " (deletion_id,target_kind,target_id,started_at,micro_task_count)"
-                " VALUES('gone-deletion','micro-task-tree',?,?,1)",
-                ('run:' + run_id,board.store.now()),
+                " (deletion_id,target_kind,target_id)"
+                " VALUES('gone-deletion','micro-task-tree',?)",
+                ('run:' + run_id,),
             )
         expected = applied['targetRevision']
         operations = (

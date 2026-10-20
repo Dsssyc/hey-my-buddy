@@ -947,19 +947,13 @@ class BoardStore:
             return False
         now = self.now()
         connection.execute(
-            "INSERT INTO attempt_activity(attempt_id, task_id, generation, event_seq, observed_at, activity_json,"
-            " created_at, updated_at, revision) VALUES(?,?,?,?,?,?,?,?,1)"
-            " ON CONFLICT(attempt_id) DO UPDATE SET generation=excluded.generation, event_seq=excluded.event_seq,"
-            " observed_at=excluded.observed_at, activity_json=excluded.activity_json, updated_at=excluded.updated_at,"
-            " revision=revision+1",
+            "INSERT INTO attempt_activity(attempt_id, task_id, activity_json, updated_at) VALUES(?,?,?,?)"
+            " ON CONFLICT(attempt_id) DO UPDATE SET activity_json=excluded.activity_json,"
+            " updated_at=excluded.updated_at",
             (
                 attempt["attempt_id"],
                 attempt["task_id"],
-                attempt["generation"],
-                activity.get("eventSeq"),
-                activity.get("observedAt"),
                 canonical_json(activity),
-                now,
                 now,
             ),
         )

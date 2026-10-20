@@ -146,7 +146,7 @@ def dependencies(connection, members):
              " FROM workflow_host_conclusions WHERE run_id IN ({}) ORDER BY run_id"),
             ("request", "SELECT run_id,request_id,turn_id,attempt_id,child_task_id,kind,state,expected_revision,decided_at"
              " FROM workflow_requests WHERE run_id IN ({}) ORDER BY run_id,request_id"),
-            ("child", "SELECT child_task_id,parent_run_id,request_id,state,role,integrator,auto_continue"
+            ("child", "SELECT child_task_id,parent_run_id,request_id,state,role,integrator"
              " FROM workflow_children WHERE child_task_id IN ({}) ORDER BY child_task_id"),
             ("route", "SELECT route.run_id,route.decision_id,decision.task_id,route.state,route.owner_generation"
              " FROM workflow_routes route JOIN decision_requests decision USING(decision_id)"
@@ -189,13 +189,13 @@ def dependencies(connection, members):
 
         else:
             row = connection.execute(
-                "SELECT " + _bounded("r.title") + "," + _bounded("json_extract(r.micro_task_json,'$.task')",
-                    kind="json_type(r.micro_task_json,'$.task')") + ","
+                "SELECT " + _bounded("r.title") + "," + _bounded("json_extract(t.spec_json,'$.task')",
+                    kind="json_type(t.spec_json,'$.task')") + ","
                 + _bounded("(SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
                            " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
                            " WHERE t.run_id=r.run_id AND t.state='returned' AND t.outcome_json IS NOT NULL"
                            " ORDER BY t.turn_index DESC LIMIT 1)") +
-                " FROM workflow_runs r WHERE r.run_id=?", (group[4:],),
+                " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id WHERE r.run_id=?", (group[4:],),
             ).fetchone()
             groups[group].append(("presentation", *tuple(row)))
             reusable[group] = all(length is None or length <= TEXT_BOUND for length in (row[1], row[4], row[7]))

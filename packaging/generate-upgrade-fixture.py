@@ -2,8 +2,8 @@
 """Generate schema-26 upgrade stock using the frozen installed base source.
 
 No product installation, daemon, native harness or model is started. The base
-named service operations run in process; only native discovery and execution
-receipts are synthetic. All work directories are retained. The export includes
+named service operations run in process; native discovery, execution receipts
+and explicitly listed old-format stock are synthetic. All work directories are retained. The export includes
 fixed Git objects, workspace sidecars and the hash preimages needed for private
 path binding. Tests restore that text stock; they never execute this generator.
 """
@@ -368,6 +368,69 @@ def populate(args):
                                             (ids["accepted"],)).fetchone()[0]
             connection.execute("INSERT INTO attempt_interruptions(attempt_id,evidence_kind,observed_at,state)"
                                " VALUES(?,'identity-absent',?,'settled')", (attempt_id, AT))
+            # These 0.48.0 tables have no row in the ordinary fixture history.
+            # Add explicit old-format stock without altering a sealed snapshot,
+            # turn input, checkpoint, receipt or physical seal.
+            parent_run_id, child_run_id = ids["delivered"], ids["accepted"]
+            child = connection.execute(
+                "SELECT execution_workspace_json,workspace_manifest_json,workspace_manifest_sha256"
+                " FROM workflow_runs WHERE run_id=?", (child_run_id,)
+            ).fetchone()
+            connection.execute(
+                "INSERT INTO workflow_children(child_task_id,parent_run_id,request_id,decision_command_id,"
+                "role,integrator,state,auto_continue,workspace_intent_json,workspace_manifest_json,"
+                "workspace_manifest_sha256,created_at,updated_at,revision)"
+                " VALUES(?,?,?,?,'helper',0,'succeeded',0,?,?,?,?,?,2)",
+                (child_run_id, parent_run_id, "fixture-synthetic-child-request",
+                 "fixture-synthetic-child-decision", child[0], child[1], child[2], AT, AT),
+            )
+            connection.execute(
+                "INSERT INTO workflow_suggestions(suggestion_id,run_id,attempt_id,author,body,created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                ("fixture-synthetic-worker-suggestion", child_run_id, attempt_id,
+                 f"attempt:{attempt_id}", "Synthetic worker suggestion", AT),
+            )
+            connection.execute(
+                "INSERT INTO workflow_suggestions(suggestion_id,run_id,attempt_id,author,body,created_at)"
+                " VALUES(?,?,NULL,'agent',?,?)",
+                ("fixture-synthetic-agent-suggestion", parent_run_id,
+                 "Synthetic agent suggestion", AT),
+            )
+            activity = {"phase": "tool-running", "observedAt": AT, "eventSeq": 3,
+                        "lastNativeActivityAt": AT, "toolName": "fixture-tool"}
+            connection.execute(
+                "INSERT INTO attempt_activity(attempt_id,task_id,generation,event_seq,observed_at,"
+                "activity_json,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?)",
+                (attempt_id, child_run_id, 1, 3, AT, json_text(activity), AT, AT, 2),
+            )
+            later = "2026-01-01T00:00:10.000Z"
+            connection.execute(
+                "INSERT INTO attempt_reminders(task_id,attempt_id,kind,expected_multiple,"
+                "elapsed_seconds,tool_in_progress,created_at)"
+                " VALUES(?,?,'expected-duration',1,10.0,1,?)",
+                (child_run_id, attempt_id, later),
+            )
+            connection.execute(
+                "INSERT INTO attempt_reminders(task_id,attempt_id,kind,silence_started_at,"
+                "elapsed_seconds,last_native_event_at,tool_in_progress,created_at)"
+                " VALUES(?,?,'native-silence',?,10.0,?,1,?)",
+                (child_run_id, attempt_id, AT, AT, later),
+            )
+            decision_id = connection.execute(
+                "SELECT decision_id FROM decision_requests ORDER BY decision_id LIMIT 1"
+            ).fetchone()[0]
+            connection.execute(
+                "INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at,updated_at)"
+                " VALUES(?,?,1,'resolved',?,?)",
+                (decision_id, child_run_id, AT, later),
+            )
+            connection.execute(
+                "INSERT INTO workflow_continuations(continuation_id,run_id,kind,expected_revision,"
+                "input_text,input_bytes,state,created_at,consumed_at)"
+                " VALUES(?,?,'manual',1,?,?,'consumed',?,?)",
+                ("fixture-synthetic-continuation", child_run_id,
+                 "Synthetic continuation", len("Synthetic continuation".encode()), AT, later),
+            )
         hashing.close()
         # Base operations and the explicitly marked synthetic retired stock above
         # created these rows. Export templates keep
@@ -407,7 +470,10 @@ def populate(args):
             "stableIds": ids,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "syntheticRetiredStock": ["cursors", "evaluation_state.decision_buddy_id", "tasks.queue_position", "attempt_interruptions"],
+            "syntheticRetiredStock": ["cursors", "evaluation_state.decision_buddy_id", "tasks.queue_position", "attempt_interruptions",
+                                      "workflow_children", "workflow_suggestions.worker", "workflow_suggestions.agent",
+                                      "attempt_activity", "attempt_reminders.expected-duration", "attempt_reminders.native-silence",
+                                      "workflow_routes", "workflow_continuations"],
             "boundary": "Base BoardService named operations in process and base model-facts writer with synthetic local source; explicit synthetic retired stock is listed separately; synthetic native discovery and execution result input; no daemon/IPC/model/account read. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution. Host conclusions are base history only; real host_seal is tested separately.",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
             "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
@@ -511,6 +577,28 @@ def verify(output, restored):
         assert set(connection.execute("SELECT plane,outcome FROM router_outcomes")) == {
             ("routing", "answered"), ("routing", "no_answer")}
         assert connection.execute("SELECT COUNT(*) FROM workflow_workspace_conflicts").fetchone()[0] == 1
+        for table, expected in (("workflow_children", 1), ("workflow_suggestions", 2),
+                                ("attempt_activity", 1), ("attempt_reminders", 2),
+                                ("workflow_routes", 1), ("workflow_continuations", 1),
+                                ("workflow_integrations", 1)):
+            assert connection.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] == expected
+        assert connection.execute("SELECT COUNT(*) FROM agent_credentials WHERE expires_at IS NOT NULL").fetchone()[0] == 0
+        assert set(connection.execute("SELECT author FROM workflow_suggestions")) == {
+            ("agent",), (f"attempt:{connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (metadata['stableIds']['accepted'],)).fetchone()[0]}",)}
+        assert set(connection.execute("SELECT kind,elapsed_seconds FROM attempt_reminders")) == {
+            ("expected-duration", 10.0), ("native-silence", 10.0)}
+        assert connection.execute(
+            "SELECT COUNT(*) FROM workflow_children WHERE workspace_manifest_sha256="
+            "json_extract(workspace_manifest_json,'$.manifestSha256')"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM attempt_activity a JOIN attempts t ON t.attempt_id=a.attempt_id"
+            " WHERE a.generation=t.generation AND a.event_seq=json_extract(a.activity_json,'$.eventSeq')"
+            " AND a.observed_at=json_extract(a.activity_json,'$.observedAt')"
+        ).fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM workflow_continuations WHERE input_bytes=length(CAST(input_text AS BLOB))"
+        ).fetchone()[0] == 1
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
         assert states == {metadata["stableIds"][key]: value for key, value in
                           (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))}

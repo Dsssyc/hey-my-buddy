@@ -264,8 +264,8 @@ def _run_presentation(connection, run_id: str) -> tuple[str | None, str, str | N
         "  THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
         "  WHERE t.run_id=r.run_id AND t.state='returned' AND t.outcome_json IS NOT NULL"
         "  ORDER BY t.turn_index DESC LIMIT 1) AS summary,"
-        " json_extract(r.micro_task_json,'$.task') AS task"
-        " FROM workflow_runs r WHERE r.run_id=?",
+        " json_extract(t.spec_json,'$.task') AS task"
+        " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id WHERE r.run_id=?",
         (run_id,),
     ).fetchone()
     if row is None:
@@ -591,7 +591,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         fixes_title, fixes_title_source, _ = _run_presentation(connection, fix_relation["fixes"])
         fix_relation["fixesTitle"] = fixes_title
         fix_relation["fixesTitleSource"] = fixes_title_source
-    task_text = connection.execute("SELECT json_extract(micro_task_json,'$.task') FROM workflow_runs WHERE run_id=?", (row["task_id"],)).fetchone()
+    task_text = connection.execute("SELECT json_extract(spec_json,'$.task') FROM tasks WHERE task_id=?", (row["task_id"],)).fetchone()
     shutdown = connection.execute(
         "SELECT COUNT(*) AS attempts,"
         " SUM(CASE WHEN execution_state='finished' AND shutdown_confirmed=1 THEN 1 ELSE 0 END) AS confirmed"

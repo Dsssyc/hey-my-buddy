@@ -907,7 +907,7 @@ class IdempotencyTests(WorkflowTestCase):
         board = self.board()
         first = self.submit(board)
         with board.store.db.read() as connection:
-            spec = json.loads(connection.execute("SELECT micro_task_json FROM workflow_runs WHERE run_id=?",
+            spec = json.loads(connection.execute("SELECT spec_json FROM tasks WHERE task_id=?",
                                                 (first["runId"],)).fetchone()[0])
         ordinary = {"requestId": first["requestId"], "adapter": "command", "argv": ["/bin/true"], "task": spec["task"], "cwd": spec["cwd"]}
         with board.store.db.write() as connection:
