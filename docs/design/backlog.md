@@ -83,7 +83,23 @@
 
 **备份只为升级的回滚而存在。**（开发者 2026-10-16 同意；同日做完并随 0.41.0 安装，[验收记录](../acceptance/backup-for-rollback/backup-for-rollback.md)；留下的小事见下一条） 2026-10-16 讨论中间号不变的安装时查到：`hey-my-buddy backup` 做的手动在线备份没有任何命令能用，唯一的还原是中间号变的安装失败时的自动回滚，用的是安装自己在服务停下、看板空闲之后做的离线备份；产品里与 Host 的演练都不调用手动备份。安装的备份又把执行证据与受管检出的封存产物整份复制一遍，而升级从不改动它们：日常看板这一份 98 MB，其中 86 MB 是封存产物的副本、6 MB 是执行证据，看板压缩后 5 MB。存储页把它列为受保护的一行“备份”，只有大小，看不出是哪天的、做什么用。做法：去掉手动 `backup`（CLI 命令与服务操作）；安装的备份只装回滚需要的东西，也就是看板与安装会改动的状态文件；存储页把这一行写明是“上次升级之前的看板”。备份不再复制证据之后，`backup-preflight` 命令、`health.backupPreflight`、控制台存储页的“备份预检”与只为备份而存在的证据清单（`protocol/attempt_evidence.py`）都没有东西可查，同一批一并删掉（开发者同日同意），skill 里安装那一句随之去掉备份预检。随这一批删掉的还有 M5 验收时看到的 `test_backup_has_no_upgrade_token_parameter`：它为一个已删的参数留着测试。哪天真有了“看板坏了要恢复”的需要，再把完整备份与还原一起设计。
 
-**备份那一批验收时留下的几件小事。** 2026-10-16 验收时 Opus 盲审指出、Host 核对过，随下一批动安装或备份时做：安装在停服之后才因不安全的状态文件失败时，回复仍说“备份已还原”，而这时没有备份，要按有没有备份区分措辞；回滚清单可以收窄到 `console-settings.json`，另外三个状态文件的还原要么随即被回滚重写，要么回滚之前根本不会变；`test_private_adapter_invariants.py` 删掉证据清单的断言之后，没有测试再守着“原生状态不写进执行证据目录”，补一条反向断言；钉着已删名字的测试（`test_console_reads_http.py` 里 `/api/backup-preflight` 的 404、`test_service.py`、`test_ctwo_service.py`、`test_backup.py` 里各一处）删掉；`console/reads.py` 模块说明里断成半句的那一句；`backup.py` 里没有调用者的 `scope` 参数、过时的注释与 `pluginCommitStatus` 的旧名字，以及安装与备份里边界之内重复的核对（同一份备份校验两次、同一个 schema 判断两次）。下一次装中间号变了的版本之前，Host 先确认日常看板的 `backups/` 里只有 `current` 与 `.lock`、状态目录里没有安装日志：0.40.0 留下的那一代备份过不了新的校验，只在恢复旧的发布或旧的日志时才会读到它。
+**备份那一批验收时留下的几件小事。**（2026-10-20 随微任务“把升级基点挪到 0.48.0”做完，合入为 `2fcc50fd`，在源码里，尚未安装；[记录](../acceptance/installs/0.48.0.md)） 2026-10-16 验收时 Opus 盲审指出、Host 核对过，随下一批动安装或备份时做：安装在停服之后才因不安全的状态文件失败时，回复仍说“备份已还原”，而这时没有备份，要按有没有备份区分措辞；回滚清单可以收窄到 `console-settings.json`，另外三个状态文件的还原要么随即被回滚重写，要么回滚之前根本不会变；`test_private_adapter_invariants.py` 删掉证据清单的断言之后，没有测试再守着“原生状态不写进执行证据目录”，补一条反向断言；钉着已删名字的测试（`test_console_reads_http.py` 里 `/api/backup-preflight` 的 404、`test_service.py`、`test_ctwo_service.py`、`test_backup.py` 里各一处）删掉；`console/reads.py` 模块说明里断成半句的那一句；`backup.py` 里没有调用者的 `scope` 参数、过时的注释与 `pluginCommitStatus` 的旧名字，以及安装与备份里边界之内重复的核对（同一份备份校验两次、同一个 schema 判断两次）。下一次装中间号变了的版本之前，Host 先确认日常看板的 `backups/` 里只有 `current` 与 `.lock`、状态目录里没有安装日志：0.40.0 留下的那一代备份过不了新的校验，只在恢复旧的发布或旧的日志时才会读到它。
+
+**安装与备份里还剩的几处。** 2026-10-20 验收“把升级基点挪到 0.48.0”时 Opus 独立审查指出，Host 在源码里逐条核实，随下一批动安装或备份时顺带做：
+
+- **转换删掉之后留下的：**
+  - `idle_snapshot(..., exact=True)` 算出的 `exemptFingerprints` 没有读者；
+  - 日志里的 `expected` 恒等于 `before`，恢复时还用 `journal.get('expected', journal['before'])` 两套读法；
+  - `verify_started` 里 `before.get('schema', SCHEMA_VERSION)` 的默认值用不到；
+  - 回滚里 `journal['phase'] != 'preflight'` 恒为真。
+- **重复的全表扫描：** `idle_snapshot` 把“是否空闲”与全表指纹放在一起。detach 里的那次与紧接着取基准的那次，落在同一段没人能写的窗口里，各扫一遍全表。空闲检查与快照应分开。
+- **其余重复：** `restore` 先查一次 `..`，每条路径的守卫又各查一次。
+- **边界上的错误：** 备份校验遇到没有 `meta` 表或不是 SQLite 的载荷，抛原始的 sqlite3 错误；清单缺字段时抛 `KeyError`。都应归成 `BACKUP_INVALID`。
+- **措辞与说明：**
+  - 回滚的两句失败消息，一句用 “Upgrade failed”，一句用 “Installation failed”；
+  - `backup.recover` 的说明还要求在与日志比较之前调用，现在已经没有这样的调用者。
+
+**样板看板只覆盖一部分存储形式。** 同一次审查指出，Host 核实：样板看板里有 11 张表一行也没有，如 `workflow_children`、`workflow_routes`、`workflow_continuations`、`workflow_lead_tasks`、`attempt_process_identities`、`attempt_shutdown_evidence`、`attempt_activity`、`model_facts`、`execution_issues`、`service_issues`、`artifacts`；生成器也只用了 Codex。这个缺口在旧的样板看板上就有。下一次改这些表的存储形式时，升级在样板上测不到它们。
 
 **受管检出的封存产物永久保留，一直在涨。** 2026-10-16 量：1,154 个微任务的封存产物共 102 MB，平均每个约 90 KB；它们作为长期证据从不回收，存储页也删不掉。开发者于 2026-10-16 定下：封存产物跟着宏任务走，随删除宏任务一起删，不设期限，验收之后也不自动删（[ADR-028](../decisions/028-macro-task-deletion.md) 的补充）；删除宏任务排进第 4 步。
 
