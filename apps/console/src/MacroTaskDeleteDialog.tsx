@@ -18,7 +18,7 @@ function blockerKind(blocker: DeletionBlocker): DeletionBlockerKind {
 }
 function blockerTone(blocker: DeletionBlocker) {
   const kind = blockerKind(blocker);
-  return ["awaiting-host", "review", "stop-unconfirmed"].includes(kind) ? "text-hand" : kind === "queued" ? "text-ink3" : "text-live";
+  return ["awaiting-host", "review", "stop-unconfirmed"].includes(kind) ? "text-hand" : kind === "queued" ? "text-ink3" : "text-foreground state-breathe";
 }
 
 function DeletionBlockers({ blockers }: { blockers: DeletionBlocker[] }) {
@@ -101,7 +101,7 @@ export function MacroTaskDeleteDialog({ summary, open, returnFocus, onClose, ...
             </dl>
             <p className="pt-3 text-xs leading-relaxed text-ink3">{t("deletion.backup")}</p>
           </>)}
-          {busy && <p role="status" className="pt-3 text-live">{t("deletion.submitting")}</p>}
+          {busy && <p role="status" className="pt-3 text-foreground state-breathe">{t("deletion.submitting")}</p>}
           {unresolved && <p role="status" className="pt-3 text-hand">{t(phase === "unknown" ? "deletion.unknown" : "deletion.incomplete")}</p>}
           {failure && phase !== "submitting" && <p className="pt-2 text-xs text-ink2">{t("deletion.physicalFailure", { kind: t(`deletion.objects.${failure.objectKind}`), code: failure.reason.params.errorCode })}</p>}
           {error && <p role="alert" className="pt-3 text-fail">{error}</p>}

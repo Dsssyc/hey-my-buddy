@@ -16,30 +16,33 @@ const setup = (overrides: Partial<TaskWorkProps> = {}) => {
   const timeline = macroTaskTimelineFixture();
   const props: TaskWorkProps = { summary: timeline.macroTask, timeline, displayObservedAt: timeline.observedAt, loading: false, error: "", stale: false,
     newRunIds: new Set(["r4"]), active: true, openedRunId: null, detail: () => <p>Detail</p>, onOpen: vi.fn(), onClose: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn(), ...overrides };
-  const view = render(<TooltipProvider><TaskWork {...props}/></TooltipProvider>);
+  const view = render(<TooltipProvider delayDuration={0}><TaskWork {...props}/></TooltipProvider>);
   return { ...view, props, timeline };
 };
 const row = (id: string) => document.querySelector<HTMLButtonElement>(`[data-slot=timeline-row-name][data-key="row:${id}"]`)!;
-const status = () => document.querySelector('[data-slot=timeline-status]')!.textContent;
+const status = () => document.querySelector('[data-slot=timeline-status] [role=status]')!.textContent;
 
 describe("the lanes and the detail workspace", () => {
   it("replaces the lanes with the detail workspace: a plain micro task list beside the detail", () => {
     const { rerender, props } = setup();
     expect(document.querySelector("[data-slot=timeline-tracks]")).toBeTruthy();
     expect(document.querySelector('[data-slot=task-names]')).toBeNull();
-    rerender(<TooltipProvider><TaskWork {...props} openedRunId="r1"/></TooltipProvider>);
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r1"/></TooltipProvider>);
     expect(document.querySelector("[data-slot=timeline-tracks]")).toBeNull();
     const list = document.querySelector('[data-slot=task-names]')!;
     expect([...list.querySelectorAll("[data-slot=timeline-row-name]")].map(node => node.getAttribute("data-run-id"))).toEqual(props.timeline!.rows.map(entry => entry.runId));
     expect(row("r1").getAttribute("aria-current")).toBe("true");
     expect(screen.getByText("Detail")).toBeTruthy();
-    expect(document.querySelector("[data-slot=timeline-status]")).toBeNull();
+    expect(document.querySelector("[data-slot=timeline-status]")).toBeTruthy();
+    expect(status()).toBe("");
+    expect(document.querySelector("[data-slot=timeline-status] [data-slot=legend-trigger]")).toBeTruthy();
+    expect(document.querySelector("[data-slot=timeline-legend-footer]")).toBeNull();
     fireEvent.click(row("r2"));
     expect(props.onOpen).toHaveBeenLastCalledWith("r2");
-    rerender(<TooltipProvider><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
     expect(document.querySelector("[data-slot=timeline-tracks]")).toBeTruthy();
-    expect(row("r1").className).not.toContain("bg-live-wash");
-    expect(row("r2").className).toContain("bg-live-wash");
+    expect(row("r1").className).toContain("bg-selected-row"); // Keyboard focus has its own wash.
+    expect(row("r2").className).toContain("bg-selected-row");
     expect(document.querySelector('[data-slot=timeline-row][data-run-id="r2"] [data-slot=selected-row]')).toBeTruthy();
     expect(document.querySelectorAll('[data-slot=selected-item]')).toHaveLength(0);
     expect(props.onClose).not.toHaveBeenCalled();
@@ -48,12 +51,13 @@ describe("the lanes and the detail workspace", () => {
     const { props } = setup();
     fireEvent.click(row("r1"));
     expect(props.onOpen).toHaveBeenCalledWith("r1");
-    expect(row("r1").className).toContain("bg-live-wash");
+    expect(row("r1").className).toContain("bg-selected-row");
     fireEvent.click(document.querySelector('[data-key="span:s-r2-e1"]')!);
     expect(document.querySelector('[data-key="span:s-r2-e1"] [data-slot=selected-item]')).toBeTruthy();
     expect(document.querySelectorAll('[data-slot=selected-item]')).toHaveLength(1);
-    expect(props.onOpen).toHaveBeenCalledTimes(1);
+    expect(props.onOpen).toHaveBeenCalledTimes(2);
     fireEvent.doubleClick(document.querySelector('[data-key="span:s-r2-e1"]')!);
+    expect(props.onOpen).toHaveBeenCalledTimes(2);
     expect(props.onOpen).toHaveBeenLastCalledWith("r2", "span:s-r2-e1");
     row("r1").focus();
     fireEvent.keyDown(row("r1"), { key: "ArrowDown" });
@@ -95,10 +99,10 @@ describe("the lanes and the detail workspace", () => {
   });
   it("fades the model-and-effort line one step below the state word, and restores it on the current row", () => {
     const { props, rerender } = setup();
-    const secondLine = (id: string) => row(id).querySelector(":scope > span + span")!;
+    const secondLine = (id: string) => row(id).querySelector(":scope > span:last-child")!;
     expect(secondLine("r2").className).toContain("text-ink4");
-    rerender(<TooltipProvider><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
-    rerender(<TooltipProvider><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
     expect(secondLine("r2").className).toContain("text-ink3");
   });
   it("shows range by default, row state/wait/turns on row focus, and exact span facts on hover or focus", () => {
@@ -141,7 +145,7 @@ describe("the lanes and the detail workspace", () => {
     await userEvent.hover(row("r2"));
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain(target);
-    expect(tooltip.textContent).toContain("codex · openai · gpt-5-codex · max");
+    expect(tooltip.textContent).toContain("codex / openai / gpt-5-codex / max");
   });
   it("explains incomplete reads and retains frozen source facts with retry", () => {
     const timeline = macroTaskTimelineFixture({ filtered: true });
@@ -183,6 +187,36 @@ describe("Lead lanes from recorded ownership", () => {
     expect(document.querySelectorAll('[data-slot=timeline-row] [data-run-id="r1"], [data-slot=timeline-row] [data-run-id="r4"], [data-slot=timeline-row] [data-run-id="r5"]')).toHaveLength(3);
     expect(document.querySelectorAll("[data-slot=timeline-row-name]")).toHaveLength(6);
     expect(document.body.textContent).toContain("其他微任务");
+  });
+  it("includes the Lead's own helpers in its totals and keeps both helper trees beside the detail", () => {
+    const timeline = laneFixture();
+    const lead = timeline.rows.find(row => row.runId === "r2")!;
+    const ownHelper = timeline.rows.find(row => row.runId === "r3")!;
+    ownHelper.rootLeadRunId = null;
+    const owned = timeline.rows.find(row => row.runId === "r6")!;
+    const childHelper = { ...ownHelper, runId: "r6-helper", parentRunId: owned.runId, rootRunId: owned.runId, rootLeadRunId: lead.runId, depth: 1 };
+    timeline.rows.push(childHelper);
+    const source = timeline.spans.find(span => span.runId === ownHelper.runId && span.kind === "execution")!;
+    timeline.spans.push({ ...source, runId: childHelper.runId, spanId: "owned-helper-execution", startAt: "2026-09-26T07:00:00Z", endAt: "2026-09-26T07:01:00Z",
+      tokenUsage: { inputTokens: 67, cachedInputTokens: 5, outputTokens: 7, source: "codex-native", scope: "attempt", inputBasis: "includes-cached" } });
+    const lane = groupLanes(timeline.rows).lanes[0]!;
+    expect(lane.members.map(row => row.runId)).toEqual(["r3", "r6", "r6-helper"]);
+    expect(laneSummary(lane, timeline).usage).toEqual({ input: 217, cached: 45, output: 22, partial: true });
+    expect(laneSummary(lane, timeline).executionMs! - laneSummary({ ...lane, members: [owned] }, timeline).executionMs!).toBe((22 + 26 + 1) * 60_000);
+    const { props, rerender } = setup({ timeline });
+    const hierarchy = () => {
+      expect(row("r3").style.paddingLeft).toBe("31px");
+      expect(row("r6").style.paddingLeft).toBe("31px");
+      expect(row("r6-helper").style.paddingLeft).toBe("49px");
+      expect(within(row("r3")).getByText("└")).toBeTruthy();
+      expect(within(row("r6")).queryByText("└")).toBeNull();
+      expect(within(row("r6-helper")).getByText("└")).toBeTruthy();
+      expect(row("r6-helper").querySelector<HTMLElement>('[data-slot=row-state-edge]')?.style.left).toBe("30.5px");
+      expect(row("r6-helper").querySelectorAll('[data-slot=lane-guide]')).toHaveLength(2);
+    };
+    hierarchy();
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
+    hierarchy();
   });
   it("summarizes the lane on the Lead row's hover: members, elapsed, execution and split usage", async () => {
     const user = userEvent.setup();
@@ -259,13 +293,13 @@ describe("Lead lanes from recorded ownership", () => {
     expect(row("r3").className).toContain("h-[52px]");
     // The Lead row ends in a divider that crosses the whole row; its members sit one indent step inside it.
     const header = document.querySelector<HTMLElement>('[data-slot=timeline-lane-lead]')!;
-    expect(header.className).toContain("border-b-2 border-ink2");
+    expect(header.className).toContain("border-b border-line");
     expect(leadName.style.paddingLeft).toBe("13px");
-    expect(row("r3").style.paddingLeft).toBe("49px");
+    expect(row("r3").style.paddingLeft).toBe("31px");
     expect(row("r6").style.paddingLeft).toBe("31px");
     await userEvent.hover(leadName);
     const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain("codex · openai · gpt-5-codex · max");
+    expect(tooltip.textContent).toContain("codex / openai / gpt-5-codex / max");
     // One keyboard path walks the Lead, its members and the ordinary rows in order.
     leadName.focus();
     fireEvent.keyDown(leadName, { key: "ArrowDown" });
@@ -313,6 +347,35 @@ describe("Lead lanes from recorded ownership", () => {
     expect(document.activeElement).toBe(row("r2"));
   });
 
+  it("keeps the Lead lanes, collapse state, and visible arrow order beside a detail", async () => {
+    const timeline = laneFixture();
+    const { props, rerender } = setup({ timeline });
+    const user = userEvent.setup();
+    await user.click(document.querySelector<HTMLElement>('[data-slot=lane-toggle][aria-controls="lane-r2"]')!);
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
+    const list = document.querySelector('[data-slot=task-names]')!;
+    const names = () => [...list.querySelectorAll('[data-slot=timeline-row-name]')].map(node => node.getAttribute("data-run-id"));
+    expect(names()).toEqual(["r2", "r1", "r5", "r4"]);
+    expect(list.querySelectorAll('[data-slot=detail-lane]')).toHaveLength(1);
+    expect(list.querySelector('[data-slot=lane-toggle]')?.getAttribute("aria-expanded")).toBe("false");
+    row("r2").focus();
+    fireEvent.keyDown(row("r2"), { key: "ArrowDown" });
+    expect(props.onOpen).toHaveBeenLastCalledWith("r1");
+    await user.click(list.querySelector<HTMLElement>('[data-slot=lane-toggle]')!);
+    expect(names()).toEqual(["r2", "r3", "r6", "r1", "r5", "r4"]);
+    expect(row("r3").querySelector('[data-slot=lane-guide]')).toBeTruthy();
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
+    expect(document.querySelector('[data-slot=lane-toggle]')?.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("places the Lead state stripe before its disclosure and member stripes after their guide", () => {
+    const timeline = laneFixture();
+    setup({ timeline });
+    expect(row("r2").querySelector<HTMLElement>('[data-slot=row-state-edge]')?.style.left).toBe("-28px");
+    expect(row("r3").querySelector<HTMLElement>('[data-slot=row-state-edge]')?.style.left).toBe("12.5px");
+    expect(row("r3").querySelector('[data-slot=lane-guide]')).toBeTruthy();
+  });
+
   it("derives a Lead's waits for owned micro tasks only from a recorded waiting disposition and the next wakeup", () => {
     const timeline = laneFixture();
     const lead = timeline.rows.find(entry => entry.runId === "r2")!;
@@ -347,12 +410,16 @@ describe("timeline keyboard and screen reader navigation", () => {
     await user.keyboard("{ArrowDown}{ArrowRight}");
     expect(document.activeElement).toBe(fragments("r2")[0]);
     expect(tabbable()).toEqual([document.activeElement]);
+    await user.tab(); expect(document.activeElement?.getAttribute("data-slot")).toBe("timeline-name-divider");
+    await user.tab(); expect(document.activeElement?.getAttribute("data-slot")).toBe("legend-trigger");
     await user.tab(); expect(document.activeElement).toBe(after);
-    await user.tab({ shift: true }); expect(document.activeElement).toBe(row("r1"));
-    rerender(<TooltipProvider><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
-    rerender(<TooltipProvider><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
+    for (let index = 0; index < 3; index++) await user.tab({ shift: true });
+    expect(document.activeElement).toBe(row("r1"));
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
     after.focus();
-    await user.tab({ shift: true }); expect(document.activeElement).toBe(row("r2"));
+    for (let index = 0; index < 3; index++) await user.tab({ shift: true });
+    expect(document.activeElement).toBe(row("r2"));
     expect(tabbable()).toEqual([row("r2")]);
     after.remove();
   });
@@ -394,7 +461,7 @@ describe("timeline keyboard and screen reader navigation", () => {
     function Harness() {
       const [openedRunId, setOpened] = useState<string | null>("r2");
       const timeline = macroTaskTimelineFixture();
-      return <TooltipProvider><TaskWork summary={timeline.macroTask} timeline={timeline} displayObservedAt={timeline.observedAt}
+      return <TooltipProvider delayDuration={0}><TaskWork summary={timeline.macroTask} timeline={timeline} displayObservedAt={timeline.observedAt}
         loading={false} error="" stale={false} newRunIds={new Set()} active openedRunId={openedRunId}
         detail={() => <button>Detail control</button>} onOpen={setOpened} onClose={() => setOpened(null)} onRetry={() => {}} onBackToList={() => {}}/></TooltipProvider>;
     }
@@ -409,24 +476,39 @@ describe("timeline keyboard and screen reader navigation", () => {
   });
 });
 
-it("gives each name a three-pixel state edge, with no queue edge or hand/queue symbol", () => {
+it("gives each settled or active name a three-pixel state edge, with no queue edge or hand/queue symbol", () => {
   setup();
   for (const id of ["r1", "r2", "r3", "r4", "r5", "r6"]) {
     const name = row(id);
-    if (name.dataset.stateTone === "queued") expect(name.style.boxShadow).toBe("");
-    else expect(name.style.boxShadow).toContain("inset 3px 0 var(--");
+    if (name.dataset.stateTone === "queued") expect(name.querySelector('[data-slot=row-state-edge]')).toBeNull();
+    else expect(name.querySelector('[data-slot=row-state-edge]')?.className).toContain("w-[3px]");
     expect(name.querySelector('[data-slot=row-state][data-kind=hand], [data-slot=row-state][data-kind=idle]')).toBeNull();
   }
 });
 
-it("selects empty track space without opening, and opens it on a double click", () => {
+it("selects empty track space without opening on either click or double click", () => {
   const { props } = setup();
   const track = document.querySelector('[data-slot=timeline-row][data-run-id="r2"]')!;
   fireEvent.click(track);
   expect(props.onOpen).not.toHaveBeenCalled();
-  expect(row("r2").className).toContain("bg-live-wash");
+  expect(row("r2").className).toContain("bg-selected-row");
   fireEvent.doubleClick(track);
-  expect(props.onOpen).toHaveBeenCalledWith("r2");
+  expect(props.onOpen).not.toHaveBeenCalled();
+});
+
+it("uses the same display name in the row and on a wide execution bar", () => {
+  const timeline = macroTaskTimelineFixture();
+  const source = timeline.spans.find(span => span.kind === "execution")!;
+  const buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
+  timeline.rows = [{ ...timeline.rows.find(row => row.runId === source.runId)!, buddy, acceptedAt: null, createdAt: source.startAt! }];
+  timeline.spans = [{ ...source, buddy }];
+  timeline.events = [];
+  timeline.observedAt = source.endAt!;
+  setup({ timeline, buddies: [{ ...buddy, label: "GPT-6.1-Sol · high" }] });
+  expect(row(source.runId).textContent).toContain("GPT-6.1-Sol · high");
+  const labels = [...document.querySelectorAll('[data-slot=track-label]')].map(node => node.textContent);
+  expect(labels.some(label => label?.startsWith("GPT-6.1-Sol ·"))).toBe(true);
+  expect(labels.some(label => label?.includes("gpt-6.1-sol") || label?.includes("high"))).toBe(false);
 });
 
 it("assigns colours by the buddy's full identity and keeps them across a later poll", () => {  const timeline = macroTaskTimelineFixture();
@@ -437,28 +519,23 @@ it("assigns colours by the buddy's full identity and keeps them across a later p
   // The same full identity shares one colour; the same model under another effort is a different buddy.
   const identities = [buddy({}), buddy({ effort: "low" }), buddy({})];
   timeline.spans = identities.map((identity, index) => ({ ...source, spanId: `identity-${index}`, startAt: new Date(start + index * 120000).toISOString(), endAt: new Date(start + index * 120000 + 60000).toISOString(), state: "finished", uncertain: false, shutdownConfirmed: true, resultStatus: "ok", buddy: identity }));
-  // One registry per macro task: a fresh id keeps this test's assignment independent of the file's earlier renders.
   timeline.macroTask = { ...timeline.macroTask, macroTaskId: "macro-colours" };
   const { props, rerender } = setup({ timeline });
   const colors = () => [...document.querySelectorAll<SVGElement>('[data-slot=execution-bar]')].map(bar => bar.style.fill);
-  expect(colors()).toEqual(["var(--model-1)", "var(--model-2)", "var(--model-1)"]);
+  const first = colors();
+  expect(first[0]).not.toBe(first[1]);
+  expect(first[0]).toBe(first[2]);
   const next = { ...timeline, spans: [...timeline.spans, { ...timeline.spans[2]!, spanId: "later-buddy", startAt: new Date(start + 360000).toISOString(), endAt: new Date(start + 420000).toISOString(), buddy: buddy({ harness: "codex" }) }] };
-  rerender(<TooltipProvider><TaskWork {...props} timeline={next}/></TooltipProvider>);
-  expect(colors()).toEqual(["var(--model-1)", "var(--model-2)", "var(--model-1)", "var(--model-3)"]);
-  // A poll that drops the first record keeps every remaining colour where it was; the freed colour is not reassigned.
-  const filtered = { ...next, spans: next.spans.filter(span => span.spanId !== "identity-0"), filtered: true };
-  rerender(<TooltipProvider><TaskWork {...props} timeline={filtered}/></TooltipProvider>);
-  expect(colors()).toEqual(["var(--model-2)", "var(--model-1)", "var(--model-3)"]);
+  rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} timeline={next}/></TooltipProvider>);
+  const added = colors();
+  expect(added.slice(0, 3)).toEqual(first);
+  expect(first).not.toContain(added[3]);
+  // Rendering another view before returning does not change the palette.
+  rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} timeline={timeline}/></TooltipProvider>);
+  expect(colors()).toEqual(first);
 });
 
-it("shares one zoom control group with the detail, in the fixed order", () => {
-  setup();
-  const zoom = document.querySelector('[data-slot=timeline-zoom]')!;
-  const labels = [...zoom.querySelectorAll("button")].map(button => button.getAttribute("aria-label"));
-  expect(labels).toEqual(["缩小（-）", "放大（+）", "适应窗口（0）"]);
-});
-
-it("retains an inquiry's own readout after selecting it without opening", () => {
+it("retains an opened inquiry's own readout after the pointer leaves", () => {
   const timeline = macroTaskTimelineFixture();
   const span = timeline.spans.find(span => span.kind === "execution")!;
   span.inquiries = [{ inquiryId: "selected-question", createdAt: span.endAt!, author: "host-select", state: "answered" }];
@@ -468,10 +545,10 @@ it("retains an inquiry's own readout after selecting it without opening", () => 
   const hovered = status();
   fireEvent.click(mark);
   fireEvent.pointerLeave(mark);
-  expect(props.onOpen).not.toHaveBeenCalled();
+  expect(props.onOpen).toHaveBeenCalledWith(span.runId, "inquiry:selected-question");
   expect(status()).toBe(hovered);
   expect(status()).toContain("host-select");
-  expect(row(span.runId).className).toContain("bg-live-wash");
+  expect(row(span.runId).className).toContain("bg-selected-row");
 });
 
 it("resolves a selected inquiry inside its own micro task when another task uses the same inquiry id", () => {
@@ -503,7 +580,7 @@ describe("one shared scroll area", () => {
 
   it("carries no lanes viewport while a detail is open", () => {
     const { props, rerender } = setup();
-    rerender(<TooltipProvider><TaskWork {...props} openedRunId="r1"/></TooltipProvider>);
+    rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r1"/></TooltipProvider>);
     expect(document.querySelector('[data-slot=timeline-tracks]')).toBeNull();
     expect(document.querySelector('[data-slot=task-names] [data-slot=timeline-row-name]')).toBeTruthy();
   });
@@ -517,7 +594,7 @@ it("reveals the complete author title on hover when the shown one is cut", async
     { ...timeline.rows[1]!, runId: "r9", titleSource: "task" as const, title: fromTask },
     { ...timeline.rows[1]!, runId: "r10", title: longAuthor },
   ];
-  render(<TooltipProvider><RowName row={rows[0]!} rows={rows} tabIndex={0} current={false} fresh={false}
+  render(<TooltipProvider delayDuration={0}><RowName row={rows[0]!} rows={rows} tabIndex={0} current={false} fresh={false}
     onClick={() => {}} onEnter={() => {}} onLeave={() => {}} onFocus={() => {}} onBlur={() => {}}/></TooltipProvider>);
   await userEvent.hover(document.querySelector('[data-slot=timeline-row-name]')!);
   let tooltip = await screen.findByRole("tooltip");
@@ -528,7 +605,7 @@ it("reveals the complete author title on hover when the shown one is cut", async
   const described = Object.getOwnPropertyDescriptor(Element.prototype, "scrollWidth")!;
   Object.defineProperty(Element.prototype, "scrollWidth", { configurable: true, get() { return 600; } });
   try {
-    render(<TooltipProvider><RowName row={rows[1]!} rows={rows} tabIndex={0} current={false} fresh={false}
+    render(<TooltipProvider delayDuration={0}><RowName row={rows[1]!} rows={rows} tabIndex={0} current={false} fresh={false}
       onClick={() => {}} onEnter={() => {}} onLeave={() => {}} onFocus={() => {}} onBlur={() => {}}/></TooltipProvider>);
     await userEvent.hover(document.querySelector('[data-slot=timeline-row-name]')!);
     tooltip = await screen.findByRole("tooltip");
@@ -543,7 +620,7 @@ it("marks the row's harness beside its model and effort, and names the full iden
   const named = timeline.rows[1]!;
   const unnamed = { ...timeline.rows[1]!, runId: "r9", buddy: { harness: null, provider: null, model: null, effort: null } };
   for (const subject of [named, unnamed]) {
-    render(<TooltipProvider><RowName row={subject} rows={timeline.rows} tabIndex={0} current={false} fresh={false}
+    render(<TooltipProvider delayDuration={0}><RowName row={subject} rows={timeline.rows} tabIndex={0} current={false} fresh={false}
       onClick={() => {}} onEnter={() => {}} onLeave={() => {}} onFocus={() => {}} onBlur={() => {}}/></TooltipProvider>);
     const button = document.querySelector('[data-slot=timeline-row-name]')!;
     expect(Boolean(button.querySelector("img, [data-slot=harness-logo]"))).toBe(Boolean(subject.buddy!.harness));
@@ -551,8 +628,8 @@ it("marks the row's harness beside its model and effort, and names the full iden
     await userEvent.hover(button);
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toContain(subject.buddy!.harness
-      ? "codex · openai · gpt-5-codex · max"
-      : "未记录 · 未记录 · 未记录 · 未记录");
+      ? "codex / openai / gpt-5-codex / max"
+      : "未记录 / 未记录 / 未记录 / 未记录");
     cleanup();
   }
 });
@@ -567,8 +644,8 @@ it("returns to the lanes where the reader left them: scroll and zoom survive a d
   before.scrollLeft = 130;
   before.scrollTop = 40;
   fireEvent.scroll(before);
-  rerender(<TooltipProvider><TaskWork {...props} openedRunId="r1"/></TooltipProvider>);
-  rerender(<TooltipProvider><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
+  rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r1"/></TooltipProvider>);
+  rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId={null}/></TooltipProvider>);
   const back = document.querySelector<HTMLElement>('[data-slot="timeline-tracks"]')!;
   expect(back).toBeTruthy();
   expect(back.scrollLeft).toBe(130);

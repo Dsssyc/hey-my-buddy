@@ -3,7 +3,7 @@ import { parseSession, records } from "./types";
 import { sessionBlocks } from "./blocks";
 
 const message = (text: string, replace = false, segment = "answer") => ({ sessionId: "attempt", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text }, _meta: { nativeItemId: "item", contentSegment: segment, replace } } });
-const page = (events: unknown[]) => parseSession({ state: "ended", omitted: [], events, before: 10, after: 100, hasEarlier: false });
+const page = (events: unknown[]) => parseSession({ state: "ended", stopped: null, omitted: [], events, before: 10, after: 100, hasEarlier: false });
 
 describe("session projection blocks", () => {
   it("reconstructs a message across page boundaries and replaces its revised snapshot without changing its position", () => {

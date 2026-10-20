@@ -6,8 +6,8 @@ test("shows both shared scrollbars while hovering or scrolling and hides them wi
   await open(page, "#tasks/macro-22222222-2222-4222-8222-222222222222");
   const viewport = page.locator('[data-slot=timeline-tracks]');
   const area = viewport.locator("xpath=..");
-  const zoom = page.getByRole("button", { name: "放大（+）", exact: true });
-  await zoom.click(); await zoom.click();
+  const ruler = page.locator('[data-slot=zoom-ruler]:visible');
+  await ruler.press("+"); await ruler.press("+");
   await viewport.hover();
   const vertical = area.locator(':scope > [data-slot=scroll-area-scrollbar][data-orientation=vertical]');
   const horizontal = area.locator(':scope > [data-slot=scroll-area-scrollbar][data-orientation=horizontal]');

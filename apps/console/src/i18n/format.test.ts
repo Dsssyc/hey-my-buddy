@@ -1,7 +1,19 @@
-import { describe, expect, it } from "vitest";
-import { formatCoolingTime, formatClockMinutes, formatCompact, formatDuration, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
+import { afterEach, describe, expect, it } from "vitest";
+import { setLanguageChoice } from "./index";
+import { formatCoolingTime, formatClockMinutes, formatCompact, formatDuration, formatList, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
+
+afterEach(() => setLanguageChoice("browser"));
 
 describe("the numbers and the times the detail writes", () => {
+  it("lists two and three names with the language's separators", () => {
+    setLanguageChoice("zh");
+    expect(formatList(["Codex", "DSH"])).toBe("Codex、DSH");
+    expect(formatList(["Codex", "DSH", "Claude"])).toBe("Codex、DSH、Claude");
+    expect(formatList(["~/state", "~/runtime"])).toBe("~/state、~/runtime");
+    setLanguageChoice("en");
+    expect(formatList(["Codex", "DSH"])).toBe("Codex and DSH");
+    expect(formatList(["Codex", "DSH", "Claude"])).toBe("Codex, DSH, and Claude");
+  });
   it("writes a length of time in the units that matter, with the seconds only when asked for", () => {
     expect(formatDuration(12_000)).toBe("12 秒");
     expect(formatDuration(106_000)).toBe("1 分 46 秒");

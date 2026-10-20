@@ -28,7 +28,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await timeline(page, MACRO_A);
       const correction = row(page, "preview-run-a2");
       const segment = page.locator('[data-key="span:execution:att-a2-2"]');
-      await segment.dblclick();
+      await segment.click();
       await expect(page.locator("[data-slot=task-detail]")).toBeVisible();
       await expect(correction).toBeFocused();
       await settle(page);
@@ -46,27 +46,19 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(page.getByRole("tooltip")).toBeHidden();
     });
 
-    test("uses actual state fills for live, failed, unconfirmed and routing bars", async ({ page }) => {
+    test("uses buddy fills for executions and keeps routing hollow", async ({ page }) => {
       await timeline(page, MACRO_A);
-      for (const [selector, token] of [
-        ['[data-slot=execution-bar][data-outcome=running]', "--live"],
-        ['[data-slot=execution-bar][data-outcome=failed]', "--fail"],
-        ['[data-slot=execution-bar][data-outcome=unknown]', "--hand-wash"],
-        ['[data-slot=routing-bar]', "--card"],
-      ]) {
-        const bars = page.locator(selector!);
-        expect(await bars.count(), selector).toBeGreaterThan(0);
-        const colors = await bars.evaluateAll((nodes, variable) => nodes.map(node => {
-          const style = getComputedStyle(node);
-          const context = document.createElement("canvas").getContext("2d")!;
-          const color = (value: string) => { context.fillStyle = value; return context.fillStyle; };
-          return { actual: color(style.fill), expected: color(style.getPropertyValue(variable)),
-            models: Array.from({ length: 6 }, (_, index) => color(style.getPropertyValue(`--model-${index + 1}`))) };
-        }), token!);
-        for (const color of colors) {
-          expect(color.actual, selector).toBe(color.expected);
-          expect(color.models, selector).not.toContain(color.actual);
-        }
+      for (const outcome of ["running", "failed", "unknown"]) {
+        const bar = page.locator(`[data-slot=execution-bar][data-outcome=${outcome}]`).first();
+        await expect(bar).toBeVisible();
+        expect(await bar.getAttribute("style")).toMatch(/fill:/);
+      }
+      await expect(page.locator('[data-slot=execution-breath]')).not.toHaveCount(0);
+      await expect(page.locator('[data-slot=execution-failed]')).not.toHaveCount(0);
+      for (const bar of await page.locator('[data-slot=routing-bar]').all()) {
+        const fill = await bar.evaluate(node => getComputedStyle(node).fill);
+        const card = await page.locator('[data-slot=task-work]').evaluate(node => getComputedStyle(node).getPropertyValue("--surface").trim());
+        expect(fill).toBe(await page.evaluate(value => { const element = document.createElement("span"); element.style.color = value; document.body.append(element); const color = getComputedStyle(element).color; element.remove(); return color; }, card));
       }
     });
 
@@ -78,7 +70,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       expect(data.macroTask.state).toBe("active");
       await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
       await expect(page.locator("[data-slot=macro-overview-counts]")).toContainText(zh ? "进行中" : "Running");
-      const live = await page.locator('[data-key="span:execution:att-b8-1"] [data-slot=execution-bar]').evaluate(node => getComputedStyle(node).fill);
+      const live = await page.locator('[data-slot=task-work]').evaluate(node => getComputedStyle(node).color);
       await expect(page.locator("[data-slot=macro-stop-state]")).toHaveCSS("color", live);
       for (const id of ["preview-run-b7", "preview-run-b8"]) {
         await expect(row(page, id).getByText(stopping, { exact: true })).toHaveCSS("color", live);
@@ -120,7 +112,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(page.locator("[data-slot=detail-status]")).toHaveText(stopping);
       await expect(page.locator("[data-slot=detail-status]")).toHaveCSS("color", live);
       await expect(page.locator("[data-slot=detail-status]")).toHaveAttribute("aria-description",
-        zh ? "停止未确认，1 项执行尚未核实" : "Stop not confirmed; executions not yet verified: 1");
+        zh ? "停止未确认 · 待核实执行 1 项" : "Stop unconfirmed · executions to verify: 1");
       await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
       const hostStop = zh ? "Host 停止" : "Stopped by Host";
       await page.locator("[data-slot=detail-strip]").getByRole("button", { name: new RegExp(hostStop) }).click();

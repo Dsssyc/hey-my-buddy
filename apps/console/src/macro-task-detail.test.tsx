@@ -258,7 +258,7 @@ describe("the detail of a micro task in its macro task", () => {
     harness();
     await screen.findByRole("region", { name: "微任务详情" });
     expect(document.querySelector("[data-slot=detail-strip]")).toBeNull();
-    expect(detailOf().textContent).toContain("没有这个微任务的一行");
+    await waitFor(() => expect(detailOf().textContent).toContain("没有这个微任务的一行"));
   });
 
   it("keeps the detail mounted while a list refresh temporarily drops the selected row", async () => {

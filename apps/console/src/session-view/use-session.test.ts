@@ -2,14 +2,15 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "./use-session";
 
-const page = (before: number, count: number) => ({ state: "running", omitted: [], before, after: before + count, hasEarlier: before > 10, events: Array.from({ length: count }, (_, index) => ({ sessionId: "attempt", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${before + index}` } } })) });
+const page = (before: number, count: number) => ({ state: "running", stopped: null, omitted: [], before, after: before + count, hasEarlier: before > 10, events: Array.from({ length: count }, (_, index) => ({ sessionId: "attempt", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `${before + index}` } } })) });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.useRealTimers(); });
 async function flush() { await act(async () => { await Promise.resolve(); }); }
 
 describe("a visible session's read lifetime", () => {
   it("reads the latest page first and drains every full after page without waiting another interval", async () => {
     vi.useFakeTimers();
-    const session = vi.fn().mockResolvedValueOnce(page(10, 100)).mockResolvedValueOnce(page(110, 100)).mockResolvedValueOnce(page(210, 1));
+    const failure = { code: "session-record-write-failed", params: { category: "write", message: "disk full" } };
+    const session = vi.fn().mockResolvedValueOnce(page(10, 100)).mockResolvedValueOnce(page(110, 100)).mockResolvedValueOnce({ ...page(210, 1), state: "ended", stopped: failure });
     const client = { session };
     const { result, unmount } = renderHook(() => useSession(client, "task", "attempt", true));
     await flush();
@@ -18,6 +19,7 @@ describe("a visible session's read lifetime", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
     expect(session.mock.calls.map(call => call[2])).toEqual([{ limit: 100 }, { after: 110, limit: 100 }, { after: 210, limit: 100 }]);
     expect(result.current.data?.events).toHaveLength(201);
+    expect(result.current.data?.stopped).toEqual(failure);
     unmount();
     await act(async () => { await vi.advanceTimersByTimeAsync(9000); });
     expect(session).toHaveBeenCalledTimes(3);

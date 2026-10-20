@@ -1,10 +1,12 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as baseRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import i18n from "i18next";
 import { CopyableIdentifier } from "./CopyableIdentifier";
+import { TooltipProvider } from "./ui/tooltip";
 
 afterEach(async () => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); await i18n.changeLanguage("zh"); });
+const render = (ui: React.ReactElement) => baseRender(ui, { wrapper: ({ children }: { children: React.ReactNode }) => <TooltipProvider delayDuration={0}>{children}</TooltipProvider> });
 
 const id = "macro-79771ce9-890b-4cab-867b-4e05c68791da";
 
@@ -15,6 +17,7 @@ describe("copyable identifiers", () => {
     render(<CopyableIdentifier value={id} />);
     expect(screen.getByText("macro-79771ce9…91da").getAttribute("title")).toBeNull();
     const button = screen.getByRole("button", { name: `复制标识 ${id}` });
+    expect(button.className).toContain("-ml-2");
     await user.hover(button);
     expect((await screen.findByRole("tooltip")).textContent).toBe(id);
     await user.tab();

@@ -61,7 +61,7 @@ describe("macro task list", () => {
     render(<MacroTaskList {...p}/>);
     const rows = [...document.querySelectorAll('[data-slot="macro-entry"]')];
     expect(rows.map(row => row.classList.contains("before:bg-hand-mark"))).toEqual([true, false, false, false, false]);
-    expect(rows.map(row => row.classList.contains("before:bg-live"))).toEqual([false, true, false, false, false]);
+    expect(rows.map(row => row.classList.contains("before:bg-foreground"))).toEqual([false, true, false, false, false]);
     expect(rows.map(row => row.classList.contains("before:w-[3px]"))).toEqual([true, true, false, false, false]);
     expect(rows.every(row => !row.querySelector(":scope > [data-slot=state-mark]"))).toBe(true);
     for (const [index, status] of ["等待接手", "进行中", "失败", "已验收", "已结束"].entries()) {
@@ -86,8 +86,8 @@ describe("macro task list", () => {
     const edge = [...row.classList].filter(name => name.startsWith("before:"));
     view.rerender(<MacroTaskList {...p} selected={p.rows[0].macroTaskId}/>);
     expect(row.getAttribute("aria-pressed")).toBe("true");
-    expect(row.classList.contains("bg-live-wash")).toBe(true);
-    expect(row.classList.contains("aria-pressed:hover:bg-live-wash")).toBe(true);
+    expect(row.classList.contains("bg-selection")).toBe(true);
+    expect(row.classList.contains("aria-pressed:hover:bg-selection-hover")).toBe(true);
     expect([...row.classList].filter(name => name.startsWith("before:"))).toEqual(edge);
     expect(row.classList.contains("transition-colors")).toBe(true);
     expect(row.classList.contains("motion-reduce:transition-none")).toBe(true);

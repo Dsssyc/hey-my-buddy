@@ -3,7 +3,6 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
-import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { StateMark } from "@/components/ui/state-mark";
 import { CopyableIdentifier } from "../components/CopyableIdentifier";
@@ -11,7 +10,7 @@ import { reasonText } from "../i18n/reason";
 import { formatDuration, formatRelative } from "../i18n/format";
 import { Ask } from "./ask";
 import { endingText, Origin, sessionHint } from "./facts";
-import { Band, Facts, Fold, Lines, Moment, Pane, PaneTitle } from "./parts";
+import { Band, Facts, Fold, Lines, MomentRange, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
 import type { Step } from "./steps";
 import { Node, Quote, Thread } from "./thread";
@@ -39,7 +38,7 @@ function Seal({ artifact, ctx }: { artifact: Artifact; ctx: Context }) {
   const files = artifact.changedPaths.length;
   const unknown = t("unrecorded");
   return <Collapsible open={open} onOpenChange={setOpen} className="border-t">
-    <CollapsibleTrigger className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-baseline gap-x-2.5 gap-y-1 bg-sunk px-6 py-2.5 text-left text-xs outline-none transition-colors duration-150 hover:bg-live-wash focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none">
+    <CollapsibleTrigger className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-baseline gap-x-2.5 gap-y-1 bg-sunk px-6 py-2.5 text-left text-xs">
       <span className="flex items-center gap-1 text-ink2"><Disclosure open={open} />{t("seal.name")}</span>
       <span className="min-w-0 font-mono wrap-anywhere">{short(artifact.outputCommit) ?? unknown}</span>
       <span className="whitespace-nowrap font-mono text-ink2">{patch?.baseCommit && artifact.outputCommit ? `${short(patch.baseCommit)} → ${short(artifact.outputCommit)}` : null}</span>
@@ -90,7 +89,7 @@ function Live({ activity, stuck, nowMs }: { activity: Activity | null; stuck: bo
   ].filter(Boolean).join(" · ") : t("activity.basis.unknown");
   return <div data-slot="detail-live" className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t px-6 py-2.5 text-xs">
     <StateMark kind={doing ? "live" : "idle"} />
-    <Hint text={ground}><span tabIndex={0} className={cn("rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", doing ? "text-live" : "text-ink3")}>{phase}</span></Hint>
+    <Hint text={ground}><span tabIndex={0} className={cn("rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", doing ? "text-ink state-breathe" : "text-ink3")}>{phase}</span></Hint>
     {activity?.toolName && !heartbeat && <span className="min-w-0 font-mono text-ink2 wrap-anywhere">{activity.toolName}</span>}
     <span className={cn("ml-auto whitespace-nowrap tabular-nums", stuck ? "text-hand" : "text-ink3")}>
       {Number.isFinite(at) ? t("activity.reported", { when: formatRelative(at, nowMs) }) : t("activity.notReported")}
@@ -139,13 +138,10 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
       tone={running ? "live" : rejected ? "past" : failed ? "fail" : unknown ? "hand" : "past"}
       warnings={[...(reminders.overdue ? [shell("reminders.overdue")] : []), ...(reminders.possiblyStuck ? [shell("reminders.possiblyStuck")] : [])]}
       note={note || undefined}>
-      <span className="font-mono tabular-nums">
-        {step.at !== null ? <Moment at={step.at} /> : t("unrecorded")} – {span.endAt ? <Moment at={span.endAt} /> : null}
-      </span>
+      <MomentRange start={step.at} end={span.endAt}/>
       {expected !== null && <span className="tabular-nums text-ink3">{t("turn.expected", { time: formatDuration(expected * 1000) })}</span>}
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>
-    {ctx.openSession && <div className="px-6 pb-3"><Button data-session-entry={attemptId} variant="outline" size="sm" onClick={() => ctx.openSession!(ctx.view.task.runId, attemptId)}>{t("sessionView.open")}</Button></div>}
     <Band role="Worker" identity={quad(buddy) ?? <span className="font-sans text-ink3">{t("unrecorded")}</span>}
       end={!turn?.routing ? <span className="text-ink3">{t("origin.unrecorded")}</span>
         : <Origin basis={basisOf(ctx, attemptId, turn.routing.decisionId)}>{

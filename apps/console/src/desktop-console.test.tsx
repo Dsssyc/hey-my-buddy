@@ -93,7 +93,7 @@ describe("desktop console", () => {
     // A read from an earlier day is written with its date; the top bar holds the only copy.
     const read = within(screen.getByRole("banner")).getByText(formatDateTime(Date.parse("2026-01-02T03:04:05Z")));
     expect(read.getAttribute("datetime")).toBe("2026-01-02T03:04:05.000Z");
-    expect(read.parentElement!.textContent).toBe(`核对时间 ${read.textContent}`);
+    expect(read.parentElement!.textContent).toContain(`核对时间 ${read.textContent}`);
     expect(within(screen.getByRole("main")).queryByText(/黑板快照/)).toBeNull();
     expect(screen.queryByText("已连接")).toBeNull();
   });

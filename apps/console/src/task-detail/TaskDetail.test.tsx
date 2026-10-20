@@ -9,6 +9,20 @@ import type { Artifact, Integration } from "./types";
 afterEach(cleanup);
 
 describe("opening the detail of a micro task", () => {
+  it("offers overview and session only for routing and execution steps", async () => {
+    const f = open({ step: 1 });
+    await ready();
+    expect(screen.queryByRole("tablist")).toBeNull();
+    for (const executionStep of [2, 3]) {
+      f.atStep(executionStep);
+      expect(screen.getByRole("tab", { name: "概述" }).getAttribute("aria-selected")).toBe("true");
+      expect(screen.getByRole("tab", { name: "会话" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "查看会话" })).toBeNull();
+    }
+    f.atStep(4);
+    expect(screen.queryByRole("tablist")).toBeNull();
+  });
+
   it("reads the micro task, then chooses the step: the last turn of a delivered micro task, and says so to the address", async () => {
     const f = open();
     await ready();
@@ -715,7 +729,7 @@ describe("the acceptance", () => {
     open({ step: 8, replies: { workflow: unconfirmed, task: task({ acceptanceVerdict: "accepted" }) } });
     await ready();
     expect(pane().textContent).toContain("例外");
-    expect(pane().textContent).toContain("停止未确认，1 项执行尚未核实");
+    expect(pane().textContent).toContain("停止未确认 · 待核实执行 1 项");
     cleanup();
     open({ step: 8, replies: { task: task({ selectedAttempt: { attemptId: "att-2", result: { terminationReason: "grace-expired" } } }) } });
     await ready();

@@ -141,10 +141,11 @@ for (const { locale, account, settings, fold } of languages) {
       await expect(block).toBeVisible();
       const blockStyle = await block.locator("xpath=ancestor::*[@data-slot='collapsible-content'][1]").evaluate(node => {
         const style = getComputedStyle(node);
-        return { name: style.animationName, duration: style.animationDuration, overflow: style.overflow };
+        return { name: style.animationName, duration: style.animationDuration, overflowX: style.overflowX, overflowY: style.overflowY };
       });
       expect(blockStyle.duration).toBe("0.2s");
-      expect(blockStyle.overflow).toBe("hidden");
+      expect(blockStyle.overflowX).toBe("visible");
+      expect(blockStyle.overflowY).toBe("clip");
       await page.getByRole("button", { name: CODEX, exact: true }).click();
       const drawer = page.getByRole("region", { name: CODEX, exact: true });
       await expect(drawer).toBeVisible();

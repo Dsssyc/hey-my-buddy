@@ -35,7 +35,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
       if (locale === "zh-CN" && width !== 800) await page.screenshot({ path: `${shots}/timeline-${theme}-${width}.png` });
       // At the intermediate width the fitted marks can cover a short turn.
       // Zoom once to expose its own pointer target, then exercise the readout.
-      if (width === 800) await page.getByRole("button", { name: locale === "zh-CN" ? "放大（+）" : "Zoom in (+)", exact: true }).click();
+      if (width === 800) await page.locator('[data-slot=zoom-ruler]:visible').press("+");
       const segment = page.locator('[data-key="span:execution:att-a1-2"]');
       await segment.hover();
       await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "回合" : "Turn");
@@ -52,7 +52,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) 
         expect(after!.height).toBeCloseTo(before!.height, 0);
         expect(after!.x).toBeCloseTo(before!.x, 0);
         const selectedColor = await row(page, waiting).evaluate(node => getComputedStyle(node).backgroundColor);
-        expect(selectedColor).toBe(theme === "light" ? "rgb(220, 237, 226)" : "rgb(29, 59, 43)");
+        expect(selectedColor).toBe(theme === "light" ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.05)");
         await row(page, waiting).hover();
         expect(await row(page, waiting).evaluate(node => getComputedStyle(node).backgroundColor)).toBe(selectedColor);
       }
@@ -150,9 +150,9 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) test.d
     const fragment = (key: string) => page.locator(`[data-slot=timeline-track] [data-key="${key}"]`);
     await page.keyboard.press("ArrowRight");
     await expect(fragment(keys[0])).toBeFocused();
-    const readout = await page.locator('[data-slot=timeline-status]').innerText();
+    const readout = await page.locator('[data-slot=timeline-status] [role=status]').innerText();
     await expect(page.getByRole("button", { name: readout, exact: true })).toBeFocused();
-    await expect(fragment(keys[0]).locator('[data-slot=fragment-focus]')).toHaveCSS("opacity", "1");
+    await expect(fragment(keys[0]).locator('[data-slot=selected-item]')).toHaveCount(1);
     await page.screenshot({ path: `${shots}/fragment-focus.png` });
     await page.keyboard.press("ArrowLeft");
     await expect(selected).toBeFocused();

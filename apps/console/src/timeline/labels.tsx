@@ -57,12 +57,21 @@ export function useTextMeasure(candidates: readonly string[]) {
     const measure = () => {
       if (disposed) return;
       const next: Record<string, number> = {};
-      for (const text of ref.current!.querySelectorAll("text")) next[text.textContent!] = text.getComputedTextLength();
+      for (const text of ref.current!.querySelectorAll("text")) {
+        const value = text.textContent!, width = text.getComputedTextLength();
+        // display:none yields zero for nonempty SVG text. It is unmeasured,
+        // not free to fit into any interval.
+        if (!value || width > 0) next[value] = width;
+      }
       setWidths(next);
     };
+    // The SVG's size changes when an enclosing page is hidden or revealed,
+    // even when neither its candidate strings nor its recorded scale changes.
+    const observer = new ResizeObserver(measure);
+    observer.observe(ref.current!.ownerSVGElement!);
     measure();
     document.fonts?.ready.then(measure);
-    return () => { disposed = true; };
+    return () => { disposed = true; observer.disconnect(); };
   }, [key]);
   return {
     measure: (text: string) => widths[text] ?? Infinity,

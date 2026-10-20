@@ -13,7 +13,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     });
 
-    test("fills a named row through idle breaks and outlines only the clicked item", async ({ page }) => {
+    test("fills a named row through idle breaks and outlines hovered and focused items", async ({ page }) => {
       await open(page, `#tasks/${MACRO_B}`);
       const name = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b1"]:visible');
       const track = selectedRow(page, "preview-run-b1");
@@ -45,9 +45,9 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       if (locale === "zh-CN") await page.screenshot({ path: `${shots}/name-selected-${theme}-${width}.png` });
 
       // At the narrow fit scale, adjacent short queue and execution hit areas overlap.
-      if (width === 390) for (let n = 0; n < 2; n++) await page.locator('[data-slot=timeline-zoom] button').nth(1).click();
+      if (width === 390) for (let n = 0; n < 2; n++) await page.locator('[data-slot=zoom-ruler]:visible').press("+");
       const item = track.locator('[data-key="span:execution:att-b1-2"]');
-      await item.click();
+      await item.hover();
       await expect(track.locator("[data-slot=selected-row]")).toHaveCount(1);
       await expect(track.locator("[data-slot=selected-item]")).toHaveCount(1);
       await expect(item.locator("[data-slot=selected-item]")).toHaveCount(1);
@@ -58,16 +58,15 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       if (locale === "zh-CN") await page.screenshot({ path: `${shots}/span-selected-${theme}-${width}.png` });
 
       const wait = track.locator('[data-key="span:queue:att-b1-1"]');
-      await wait.click();
+      await item.evaluate(node => (node as SVGElement).blur());
+      await wait.hover();
       await expect(track.locator("[data-slot=selected-item]")).toHaveCount(1);
       await expect(wait.locator("[data-slot=selected-item]")).toHaveCount(1);
-      await page.locator('[data-slot=timeline-legend]').hover();
       await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "排队" : "Queue");
       const marker = track.locator(`[data-key^="event:"][aria-label*="${locale === "zh-CN" ? "续接" : "Continuation"}"]`);
-      await marker.click();
+      await marker.hover();
       await expect(track.locator("[data-slot=selected-item]")).toHaveCount(1);
       await expect(marker.locator("[data-slot=selected-item]")).toHaveCount(1);
-      await page.locator('[data-slot=timeline-legend]').hover();
       await expect(page.locator('[data-slot=timeline-status]')).toContainText(locale === "zh-CN" ? "续接" : "Continuation");
     });
 
@@ -99,19 +98,18 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       const leftBox = (await leftLabel.boundingBox())!;
       const dotBox = (await page.locator('[data-key="event:9003"] [data-slot=event-mark]').boundingBox())!;
       expect(leftBox.x + leftBox.width).toBeLessThan(dotBox.x);
+      await page.locator('[data-slot=legend-trigger]').click();
       const legend = page.locator("[data-slot=timeline-legend]");
       await expect(legend).toContainText(locale === "zh-CN" ? "已验收" : "Accepted");
-      await expect(legend).toContainText(locale === "zh-CN" ? "结论为失败" : "Failed conclusion");
+      await expect(legend).toContainText(locale === "zh-CN" ? "失败" : "Failed");
+      await page.keyboard.press("Escape");
       const hiddenName = page.locator('[data-key="event:9002"]');
       const status = page.locator('[data-slot=timeline-status]');
       const continuationName = locale === "zh-CN" ? "续接" : "Continuation";
       await hiddenName.hover();
       await expect(status).toContainText(continuationName);
-      await legend.hover();
+      await page.locator('[data-slot=legend-trigger]').hover();
       await hiddenName.focus();
-      await expect(status).toContainText(continuationName);
-      await hiddenName.click();
-      await legend.hover();
       await expect(status).toContainText(continuationName);
       await expect(hiddenName.locator('[data-slot=selected-item]')).toHaveCount(1);
       const accepted = page.locator("[data-slot=accept-mark]");
@@ -154,8 +152,8 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
       expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
       await page.locator('[data-slot=detail-header]').getByRole("button", { name: locale === "zh-CN" ? "收起详情" : "Close detail" }).click();
-      if (width === 390) for (let n = 0; n < 2; n++) await page.locator('[data-slot=timeline-zoom] button').nth(1).click();
-      await page.locator('[data-key="span:routing:att-router-a1"]').dblclick();
+      if (width === 390) for (let n = 0; n < 2; n++) await page.locator('[data-slot=zoom-ruler]:visible').press("+");
+      await page.locator('[data-key="span:routing:att-router-a1"]').click();
       expect(await page.evaluate(() => window.getSelection()?.toString() ?? "")).toBe("");
 
       await page.goto(`#tasks/${MACRO_B}`);

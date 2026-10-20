@@ -22,13 +22,13 @@ export function ModelLine({ row, harnessState, data, recorded, expanded, onSelec
     || modelServiceNoteText(data, member) !== modelServiceNoteText(recorded, member)
     || !Object.is(row.limit, concurrencyEntryFor(recorded.modelServiceConcurrency, member)?.limit ?? MODEL_SERVICE_CONCURRENCY_DEFAULT);
   const occupancy = row.occupancy === null ? t("models.occupancyUnknown") : t("models.occupancy", { active: row.occupancy, limit: row.limit });
-  // The open row keeps its tint under the pointer: hover only deepens it.
-  return <div data-slot="model-row" className={cn("border-t border-l-2 border-l-transparent transition-colors duration-150 motion-reduce:transition-none", expanded && "border-l-live bg-live-wash")}>
+  // The open row keeps its neutral tint under the pointer: hover deepens it.
+  return <div data-slot="model-row" className={cn("border-t border-l-2 border-l-transparent transition-colors duration-150 motion-reduce:transition-none", expanded && "border-l-foreground bg-selection")}>
     <CollapsibleTrigger asChild>
-      <button type="button" aria-label={modelIdentity(row.modelService)} onClick={onSelect}
-        className="grid min-h-10 w-full grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-3 py-2 text-left outline-none transition-colors duration-150 hover:bg-sunk aria-expanded:hover:bg-live/15 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none sm:grid-cols-[16px_20px_minmax(0,1fr)_minmax(0,1.5fr)_64px] sm:px-4">
+      <button type="button" aria-label={modelIdentity(row.modelService)} aria-description={enabled.length > 0 ? t("models.enabled") : undefined} onClick={onSelect}
+        className="disclosure-trigger grid min-h-10 w-full grid-cols-[16px_20px_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 px-3 py-2 text-left motion-reduce:transition-none sm:grid-cols-[16px_20px_minmax(0,1fr)_minmax(0,1.5fr)_64px] sm:px-4">
         <Disclosure open={expanded} />
-        <span className={cn("mx-auto size-2 rounded-full", enabled.length > 0 && "bg-live")} aria-hidden="true" />
+        {enabled.length > 0 ? <Hint text={t("models.enabled")}><span className="mx-auto size-2 rounded-full bg-foreground" aria-hidden="true" /></Hint> : <span className="mx-auto size-2" aria-hidden="true" />}
         <span className={cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1", !enabled.length && "text-ink3")}>
           <span className="wrap-anywhere font-medium">{member.model}</span>
           {!row.available && !harnessState && <Hint text={reasonTexts(row.reasons, t).join(" · ") || undefined}>

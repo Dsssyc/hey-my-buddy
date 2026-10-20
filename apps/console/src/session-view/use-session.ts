@@ -51,13 +51,13 @@ export function useSession(client: SessionClient, taskId: string, attemptId: str
             if (controller.signal.aborted) return;
             events.push(...records(tail));
           }
-          update(() => ({ ...page, state: tail.state, omitted: tail.omitted, after: tail.after, events, change: "initial" }));
+          update(() => ({ ...page, state: tail.state, stopped: tail.stopped, omitted: tail.omitted, after: tail.after, events, change: "initial" }));
           return;
         }
         while (!controller.signal.aborted) {
           const page = await read({ after: cursor }, controller);
           if (controller.signal.aborted) return;
-          update(previous => ({ ...previous!, state: page.state, omitted: page.omitted, after: page.after,
+          update(previous => ({ ...previous!, state: page.state, stopped: page.stopped, omitted: page.omitted, after: page.after,
             events: page.events.length ? [...previous!.events, ...records(page)] : previous!.events, change: "later" }));
           cursor = page.after;
           if (page.events.length < SESSION_PAGE_SIZE) break;
@@ -100,7 +100,7 @@ export function useSession(client: SessionClient, taskId: string, attemptId: str
     requests.current.add(controller);
     try {
       const page = await read({ before: latest.current.before }, controller);
-      if (!controller.signal.aborted) update(previous => ({ ...previous!, state: page.state, omitted: page.omitted, before: page.before, hasEarlier: page.hasEarlier,
+      if (!controller.signal.aborted) update(previous => ({ ...previous!, state: page.state, stopped: page.stopped, omitted: page.omitted, before: page.before, hasEarlier: page.hasEarlier,
         events: [...records(page), ...previous!.events], change: "earlier" }));
     } catch (failure) {
       if (!controller.signal.aborted && !isAbortError(failure)) setError(failure);

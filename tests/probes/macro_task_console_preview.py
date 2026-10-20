@@ -77,6 +77,7 @@ import hashlib
 import json
 import re
 import signal
+import socket
 import sys
 import threading
 import time
@@ -2392,6 +2393,9 @@ def endpoint_lines(port: int) -> tuple[str, ...]:
 class PreviewHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    # Parallel browsers reactivate several read panels together. Use the OS
+    # listen capacity instead of TCPServer's five-connection pending queue.
+    request_queue_size = socket.SOMAXCONN
     server_version = "hey-my-buddy-console-preview"
     sys_version = ""
 

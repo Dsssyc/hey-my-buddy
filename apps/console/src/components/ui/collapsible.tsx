@@ -7,8 +7,8 @@ function Collapsible(props: React.ComponentProps<typeof CollapsiblePrimitive.Roo
   return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />
 }
 
-function CollapsibleTrigger(props: React.ComponentProps<typeof CollapsiblePrimitive.Trigger>) {
-  return <CollapsiblePrimitive.Trigger data-slot="collapsible-trigger" {...props} />
+function CollapsibleTrigger({ className, ...props }: React.ComponentProps<typeof CollapsiblePrimitive.Trigger>) {
+  return <CollapsiblePrimitive.Trigger data-slot="collapsible-trigger" className={cn("disclosure-trigger", className)} {...props} />
 }
 
 // Opening and closing run on the height Radix measures and publishes as
@@ -22,7 +22,7 @@ function CollapsibleContent({
     <CollapsiblePrimitive.Content
       data-slot="collapsible-content"
       className={cn(
-        "overflow-hidden animation-duration-200 motion-safe:data-[state=closed]:animate-collapsible-up motion-safe:data-[state=open]:animate-collapsible-down",
+        "overflow-y-clip animation-duration-200 motion-safe:data-[state=closed]:animate-collapsible-up motion-safe:data-[state=open]:animate-collapsible-down",
         className
       )}
       {...props}
@@ -35,7 +35,7 @@ function Disclosure({ open, className }: { open: boolean; className?: string }) 
   return (
     <ChevronRightIcon data-slot="disclosure" data-state={open ? "open" : "closed"}
       size={16} strokeWidth={1.5} aria-hidden="true"
-      className={cn("shrink-0 text-ink2 transition-[transform,color] duration-[200ms,150ms] group-hover:text-foreground motion-reduce:transition-none", open && "rotate-90", className)} />
+      className={cn("shrink-0 text-foreground transition-transform duration-200 motion-reduce:transition-none", open && "rotate-90", className)} />
   )
 }
 

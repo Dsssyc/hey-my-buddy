@@ -5,7 +5,6 @@ import { errorText, type ConsoleApi } from "../api";
 import type { RuntimeVersionInfo, VersionFacts } from "../types";
 import { formatDateTime, formatNumber } from "../i18n/format";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "../components/ui/collapsible";
-import { Button } from "../components/ui/button";
 import { StateMark } from "../components/ui/state-mark";
 import { Section } from "./Section";
 
@@ -17,7 +16,7 @@ function Facts({ value }: { value: VersionFacts }) {
     <Collapsible open={open} onOpenChange={setOpen}>
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-ink2">
         <dl className="flex flex-wrap gap-x-2"><dt>{t("version.installedAt")}</dt><dd className="tabular-nums">{value.installedAt ? formatDateTime(Date.parse(value.installedAt)) : t("version.unrecorded")}</dd></dl>
-        <CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="group -ml-2.5 text-xs text-ink2"><Disclosure open={open} />{t("version.details")}</Button></CollapsibleTrigger>
+        <CollapsibleTrigger className="group -ml-2.5 inline-flex h-7 items-center gap-2 rounded-md px-2.5 text-xs"><Disclosure open={open} />{t("version.details")}</CollapsibleTrigger>
       </div>
       <CollapsibleContent>
         <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-5 gap-y-2 py-2 text-xs">

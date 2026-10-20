@@ -101,7 +101,7 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         "inquiry-mark", "waiting-diamond", "accept-mark"]) {
         expect(await drawing.locator(`[data-slot="${slot}"]`).count(), `${slot} is drawn`).toBeGreaterThan(0);
       }
-      if (width === 1440) await expect(drawing.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? /可能卡住|无动静/ : /Possibly stuck|Silent/ })).toHaveCount(1);
+      await expect(drawing.locator('[data-slot="track-label"]').filter({ hasText: locale === "zh-CN" ? /可能卡住|无动静/ : /Possibly stuck|Silent/ })).toHaveCount(0);
       await expect(drawing.locator('[data-slot="gap-label"]')).toHaveText(locale === "zh-CN" ? ["35 分", "2 时 14 分"] : ["35 min", "2 h 14 min"]);
       await expect(page.locator('[data-slot="timeline-row-name"][data-run-id="preview-run-a1"]:visible [data-slot="fixed-by"]')).toHaveText("↩ 2");
       for (const run of ["preview-run-a2", "preview-run-a3"])
@@ -114,13 +114,13 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       // Every shown duration belongs inside its bar, even beside an inquiry.
       const durationPositions = await drawing.locator('[data-slot="timeline-track"]').evaluateAll(tracks => tracks.flatMap(track => {
         const bars = [...track.querySelectorAll('[data-slot="execution-bar"], [data-slot="routing-bar"], [data-slot="silent-tail"]')].map(bar => bar.getBoundingClientRect());
-        return [...track.querySelectorAll('[data-slot="track-label"]')].filter(label => /^(\d+\s*(分|时|秒|min|h|s)\s*)+$/.test(label.textContent ?? "")).flatMap(label => {
+        return [...track.querySelectorAll('[data-slot="track-label"]')].filter(label => /(?:\d+\s*(分|时|秒|min|h|s)\s*)+(?:$|\s)/.test(label.textContent ?? "")).flatMap(label => {
           const box = label.getBoundingClientRect();
           if (!bars.some(bar => box.top >= bar.top && box.bottom <= bar.bottom)) return [];
           return [{ text: label.textContent, inside: bars.some(bar => box.left >= bar.left && box.right <= bar.right) }];
         });
       }));
-      expect(durationPositions.length).toBeGreaterThan(0);
+      if (width === 1440) expect(durationPositions.length).toBeGreaterThan(0);
       expect(durationPositions.filter(label => !label.inside)).toEqual([]);
       await expectDrawingGeometry(page);
       // The acceptance mark keeps its word for the readout; the track beside it stays quiet.

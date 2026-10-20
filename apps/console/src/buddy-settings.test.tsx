@@ -256,7 +256,7 @@ describe("the harness directory", () => {
     expect(within(state).getByText("未找到")).toBeTruthy();
     expect(state.getAttribute("aria-description")).toContain(reasonText({ code: "harness.not-found", params: {} }));
     await user.hover(state);
-    expect((await screen.findByRole("tooltip")).textContent).toContain(reasonText({ code: "harness.not-found", params: {} }));
+    expect((await screen.findByRole("tooltip", undefined, { timeout: 2000 })).textContent).toContain(reasonText({ code: "harness.not-found", params: {} }));
     // A folded harness hides its models; unfolded, the model says nothing the harness already said.
     expect(queryModel(GLM)).toBeNull();
     await user.click(zcode);
@@ -384,7 +384,7 @@ describe("the settings page", () => {
     await user.click(await screen.findByRole("link", { name: "设置" }));
     const themes = screen.getByRole("radiogroup", { name: "主题" });
     const settings = screen.getByRole("heading", { name: "主题" }).closest("[data-slot=settings-page]")!;
-    expect(settings.querySelectorAll("[data-slot=settings-section]")).toHaveLength(7);
+    expect(settings.querySelectorAll("[data-slot=settings-section]")).toHaveLength(6);
     expect(screen.getByRole("region", { name: "存储" }).getAttribute("data-slot")).toBe("settings-section");
     expect(within(themes).getAllByRole("radio").map(radio => radio.textContent))
       .toEqual(["浅色", "深色", "跟随系统"]);

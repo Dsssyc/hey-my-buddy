@@ -1,16 +1,24 @@
 import type { tasks as zh } from "../zh/tasks";
 export const tasks = {
-  zoomOut: "Zoom out (-)", zoomIn: "Zoom in (+)", zoomFit: "Fit to window (0)",
+  legendLabel: "Legend",
+  resizeNames: "Drag to resize names; use arrow keys to adjust, or double-click to reset.",
+  zoomFit: "Fit to window (0)",
+  zoomRulerHint: "Scroll to zoom · Shift+scroll to pan · Double-click to fit · Keys + − 0",
   drawing: {
-    acceptedLegend: "Accepted", failedConclusionLegend: "Failed conclusion",
+    acceptedLegend: "Accepted", failedConclusionLegend: "Failed",
     eventLegend: "Event", clusterLegend: "Clustered markers", idleLegend: "Idle",
     eventCluster: "{{count}} markers",
     stopUnconfirmed: "Stop unconfirmed",
-    running: "Running {{duration}}", failed: "{{duration}} failed", queue: "Queued {{duration}}",
-    expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silence: "Silent {{duration}}", silentLegend: "Possibly stuck",
+    queue: "Queued {{duration}}",
+    expected: "Expected {{duration}}", silent: "Possibly stuck · silent {{duration}}", silentLegend: "Possibly stuck",
     waiting: "{{kind}} {{duration}}", inquiry: "Inquiry", inquiryReadout: "Inquiry · {{author}} · {{at}} · {{state}}",
     gap: "Idle {{start}}–{{end}} · {{duration}}", routingMode: "Routing · {{mode}}",
     events: { dispatch: "Dispatched", decide: "Decision", continue: "Continuation", integrate: "Integration", accept: "Accepted", reject: "Rejected", conclude: "Conclusion", takeover: "Takeover" },
+  },
+  legendMeaning: {
+    execution: "Time a buddy spent working; colours distinguish buddies.", wait: "Time between two activities.", waiting: "Time waiting for the Host or Lead to decide or accept the work.",
+    silent: "Execution continues, but no native activity was seen for a while.", inquiry: "A question from the Host to a running turn.", event: "A recorded decision or other action.",
+    accepted: "This micro task passed acceptance.", failed: "This micro task ended with a failed conclusion.", cluster: "Nearby marks are merged; the number counts them. Click to list each.", idle: "A long inactive stretch folded on the timeline.",
   },
 
   waiting: "Waiting on someone", failed: "Failed",

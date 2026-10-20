@@ -19,12 +19,17 @@ export function groupLanes(rows: readonly TimelineRow[]): LaneLayout {
   const leadIds = new Set(leads.map(row => row.runId));
   const owned = new Set<string>();
   const lanes = leads.map(lead => {
-    const members = rows.filter(row => row.rootLeadRunId === lead.runId && row.runId !== lead.runId);
+    const members = rows.filter(row => row.runId !== lead.runId && (row.rootLeadRunId === lead.runId || row.rootRunId === lead.runId));
     for (const member of members) owned.add(member.runId);
     return { lead, members };
   });
   const ordinary = rows.filter(row => !leadIds.has(row.runId) && !owned.has(row.runId));
   return { lanes, ordinary };
+}
+
+/** Depth is relative to a root: owned roots start one level inside the Lead. */
+export function laneLevel(lead: TimelineRow, row: TimelineRow): number {
+  return row.depth + (row.rootRunId === lead.runId ? 0 : 1);
 }
 
 export type LaneSummary = {

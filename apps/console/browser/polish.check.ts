@@ -4,7 +4,7 @@ import { screenshots as shots, expectNoSidewaysScroll, open, test } from "./prev
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.describe(`trial polish ${theme} ${width}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 1000 }, reducedMotion: "reduce" });
-  test("opens a micro task with one click, keeps spans on single-click selection, and switches details", async ({ page }) => {
+  test("opens a micro task with one click, frames spans on hover, and switches details", async ({ page }) => {
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await open(page, `#tasks/${macro}`);
     const row = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]:visible');
@@ -14,24 +14,23 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
     await expect(page.locator('[data-slot=timeline-tracks]')).toBeVisible();
     await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
-    await expect(row).toHaveCSS("background-color", theme === "dark" ? "rgb(29, 59, 43)" : "rgb(220, 237, 226)");
+    await expect(row).toHaveCSS("background-color", theme === "dark" ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.04)");
     await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-row]')).toBeAttached();
     await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-item]')).toHaveCount(0);
-    if (width === 390) await page.getByRole("button", { name: "放大（+）", exact: true }).click();
+    if (width === 390) await page.locator('[data-slot=zoom-ruler]:visible').press("+");
     const slice = page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-key="span:execution:att-a1-1"]');
-    await slice.click();
+    await slice.hover();
     await expect(slice.locator('[data-slot=selected-item]')).toBeAttached();
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
     await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
     await row.hover();
-    await expect(row).toHaveCSS("background-color", theme === "dark" ? "rgb(29, 59, 43)" : "rgb(220, 237, 226)");
+    await expect(row).toHaveCSS("background-color", theme === "dark" ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.04)");
     await page.screenshot({ path: `${shots}/selected-${theme}-${width}.png` });
     const edges = await page.locator('[data-slot=timeline-row-name]:visible').evaluateAll(nodes => nodes.map(node => {
-      const css = getComputedStyle(node);
-      return { tone: node.getAttribute("data-state-tone"), shadow: css.boxShadow };
+      return { tone: node.getAttribute("data-state-tone"), width: node.querySelector('[data-slot=row-state-edge]')?.getBoundingClientRect().width ?? 0 };
     }));
     expect(edges.length).toBeGreaterThan(0);
-    for (const edge of edges) expect(edge.shadow).toMatch(edge.tone === "queued" ? /^none$/ : /3px/);
+    for (const edge of edges) expect(edge.width).toBe(edge.tone === "queued" ? 0 : 3);
     await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]:visible').click();
     await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
     await page.screenshot({ path: `${shots}/micro-task-${theme}-${width}.png` });
@@ -69,8 +68,8 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await page.mouse.move(box.x + 28, box.y + 15);
     await expect(page.locator('[data-slot=pointer-clock]')).toHaveText(/^\d{2}:\d{2}$/);
     await page.screenshot({ path: `${shots}/pointer-minutes-${theme}-${width}.png` });
-    const zoom = page.getByRole("button", { name: "放大（+）", exact: true });
-    for (let i = 0; i < 12 && Number(await page.locator('[data-slot=timeline-canvas]').getAttribute("data-ppm")) <= 30; i++) await zoom.click();
+    const ruler = page.locator('[data-slot=zoom-ruler]:visible');
+    for (let i = 0; i < 12 && Number(await page.locator('[data-slot=timeline-canvas]').getAttribute("data-ppm")) <= 30; i++) await ruler.press("+");
     box = (await axis.boundingBox())!;
     const viewport = (await page.locator('[data-slot=timeline-tracks]').boundingBox())!;
     await page.mouse.move(viewport.x + (width > 760 ? 272 : 0) + 40, box.y + 15);
@@ -79,7 +78,7 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     const clockBox = (await page.locator('[data-slot=pointer-clock]').boundingBox())!;
     expect(clockBox.x + clockBox.width).toBeLessThanOrEqual(viewport.x + viewport.width);
     await page.screenshot({ path: `${shots}/pointer-seconds-${theme}-${width}.png` });
-    await page.getByRole("button", { name: "适应窗口（0）", exact: true }).click();
+    await ruler.press("0");
     const gap = page.locator('[data-slot=timeline-break]').first();
     if (await gap.count()) {
       await gap.scrollIntoViewIfNeeded();
@@ -92,16 +91,17 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     }
     const inquiry = page.locator('[data-key="inquiry:inq-a3-1"]');
     await inquiry.scrollIntoViewIfNeeded();
-    await inquiry.click();
+    await inquiry.hover();
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
     const readout = await inquiry.getAttribute("aria-label");
     await page.mouse.move(5, 5);
-    await expect(page.locator('[data-slot=timeline-status]')).toHaveText(readout!);
+    await inquiry.focus();
+    await expect(page.locator('[data-slot=timeline-status] [role=status]')).toHaveText(readout!);
     await page.screenshot({ path: `${shots}/inquiry-selected-${theme}-${width}.png` });
     const before = (await inquiry.boundingBox())!.x;
-    await zoom.click();
+    await page.keyboard.press("+");
     expect(Math.abs((await inquiry.boundingBox())!.x - before)).toBeLessThanOrEqual(1);
-    await inquiry.dblclick();
+    await inquiry.click();
     const highlighted = page.locator('[data-inquiry-id="inq-a3-1"][data-highlighted=true]');
     await expect(highlighted).toBeInViewport();
     await expect(page.locator('[data-slot=detail-strip] [aria-pressed=true]')).toHaveAccessibleName(/回合 1/);
@@ -142,7 +142,7 @@ for (const theme of ["light", "dark"]) test.describe(`shared scroll bars ${theme
   test("shows one vertical bar at the tracks' right edge on hover, and the names column never shows its own", async ({ page }) => {
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await open(page, `#tasks/${macro}`);
-    await page.getByRole("button", { name: "放大（+）", exact: true }).click();
+    await page.locator('[data-slot=zoom-ruler]:visible').press("+");
     const tracksRoot = page.locator('[data-slot=timeline-tracks]').locator("xpath=..");
     await page.mouse.move(5, 5);
     for (const bar of await tracksRoot.locator('[data-slot=scroll-area-scrollbar]').all()) await expect(bar).toHaveCSS("opacity", "0");
@@ -180,6 +180,7 @@ for (const theme of ["light", "dark"]) test.describe(`model order ${theme}`, () 
       await route.fulfill({ response, json: data });
     });
     await open(page, `#tasks/${macro}`);
+    await page.locator('[data-slot=legend-trigger]').click();
     await expect(page.locator('[data-slot=timeline-legend]')).toContainText("Possibly stuck");
     const bars = page.locator('[data-slot=execution-bar]');
     await expect(bars).toHaveCount(2);

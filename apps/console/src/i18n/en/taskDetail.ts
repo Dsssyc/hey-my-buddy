@@ -14,7 +14,7 @@ export default {
   header: { started: "Started", elapsed: "Elapsed", turns: "Turns" },
   state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
   wait: { host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
-  strip: { label: "The steps of this micro task", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
+  strip: { label: "The steps of this micro task", position: "Step {{current}} / {{total}}", previous: "Previous step", next: "Next step", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {
     delegation: "Delegate", routing: "Route", turn: "Turn {{n}}", handoff: "Handoff", decision: "Decision", continue: "Continue",
     takeover: "Takeover", acceptance: "Acceptance",
@@ -29,12 +29,13 @@ export default {
     partial: "Only the part that was reported", partialRecord: "Partial record", unrecorded: "Usage not recorded",
     scope: "This execution only; cache is counted in the input", inputBesideCache: "Input {{n}} (cache {{cached}} counted apart)", scopeApart: "This execution only; cache is not in the input",
   },
+  tabs: { label: "Step content", overview: "Overview" },
   sessionView: {
     collapseCode: "Collapse code", highlightFailed: "Code highlighting could not be loaded", code: "Code", expandCode: "Expand code",
-    open: "View session", title: "Session", execution: "Execution", back: "Back", content: "Session content", loading: "Reading session…",
+    title: "Session", content: "Session content", loading: "Reading session…",
     earlier: "Load earlier content", loadingEarlier: "Reading earlier content…", start: "Start of session", empty: "This execution has no session content yet", newContent: "New content",
     omitted: "Not provided: {{content}}", separator: "; ", user: "Input", assistant: "Response", reasoning: "Reasoning", plan: "Plan", marker: "Type marker · {{type}}",
-    copy: "Copy full text", copied: "Copied", copyFailed: "Copy failed", input: "Tool input", output: "Tool output", result: "Tool result",
+    copy: "Copy full text", copied: "Copied", copyFailed: "Copy failed", input: "Tool input", output: "Output text", result: "Result data", recordingStopped: "Session recording stopped: {{reason}}",
     state: { running: "Running", ended: "Ended" },
     errors: { SESSION_NOT_INTEGRATED: "Session view is not implemented for this harness.", SESSION_NOT_RECORDED: "Session was not recorded for this execution.", SESSION_DELETED: "This execution’s session was deleted.", SESSION_INVALID_RECORD: "The session record is damaged and cannot be displayed.", SESSION_UNREADABLE: "The session could not be read. Try again." },
     planStatus: { pending: "Pending", in_progress: "In progress", completed: "Completed" }, priority: { high: "High", medium: "Medium", low: "Low" },
@@ -62,7 +63,7 @@ export default {
     head: "Inquiry · {{who}}", queued: "Queued", claimed: "Being delivered", delivered: "Delivered, awaiting answer", answered: "Answered",
     discarded: "Discarded", unavailable: "Could not be delivered", truncated: "The answer is cut short", more: "Earlier inquiries may not be listed.",
   },
-  ending: { cause: "Ended by: {{cause}}", unrecorded: "Cause not recorded" },
+  ending: { cause: "End cause: {{cause}}", unrecorded: "Cause not recorded" },
   termination: {
     "wrap-up": "Host wrap-up finished", "grace-expired": "Stopped when the wrap-up grace ran out", "forced-stop": "Forced stop",
     "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "Router budget used up", "harness-error": "Harness error",
@@ -106,12 +107,12 @@ export default {
   event: { value: {"approve": "Approved", "decline": "Declined", "approved": "Approved", "declined": "Declined", "accepted": "Accepted", "rejected": "Rejected", "concluded": "Concluded", "completed": "Completed", "failed": "Failed", "cancelled": "Cancelled", "queued": "Queued", "running": "Running", "executing": "Executing", "delivered": "Awaiting acceptance", "awaiting-host": "Awaiting Host", "superseded": "Superseded", "merge": "Merge", "cherry-pick": "Cherry-pick", "patch": "Apply patch", "not-required": "Not required", "verified": "Verified"}, facts: "Record", from: "Earlier buddy", to: "New buddy", stoppedBy: "Stopped by", details: "Details" },
   acceptance: {
     artifact: "Artifact", files: "Files", integration: "Integration", state: "State", verified: "Verified", notRequired: "Not required", why: "Reason",
-    strategy: "Method", target: "Target", commits: "Commits", recordedBy: "Recorded by", noIntegration: "No integration evidence is recorded; the Host has to integrate and accept.",
+    strategy: "Method", target: "Target", commits: "Commits", recordedBy: "Recorded by", noIntegration: "Integration evidence not recorded",
     hostPaths: "Changes added by Host: {{n}}", rejection: "Sent back", rejected: "Sent back", note: "Note",
     conclusion: "Host's conclusion", outcome: "Micro task outcome", notCounted: "not counted as accepted", version: "Micro task version", attempt: "Reviewed execution",
     artifactRef: "Related artifact", integrationRef: "Integration record", evidence: "Evidence",
     status: { failed: "Failed", cancelled: "Cancelled" },
-    exception: "Exceptions", unconfirmed: "Stop not confirmed; executions not yet verified: {{n}}",
+    exception: "Exceptions", unconfirmed: "Stop unconfirmed · executions to verify: {{n}}",
   },
   error: { incomplete: "The reply is incomplete ({{what}}); check the service version." },
 } satisfies typeof zh;

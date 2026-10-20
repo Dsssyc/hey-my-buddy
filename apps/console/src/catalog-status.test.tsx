@@ -156,7 +156,7 @@ describe("a model the catalogue no longer confirms (ADR-027 §6)", () => {
     const mark = within(nameCell("deepseek-flash")).getByText("待确认");
     expect(mark.getAttribute("aria-description")).toBe(`待确认，自 ${early}`);
     await user.hover(mark);
-    expect((await screen.findByRole("tooltip")).textContent).toBe(`待确认，自 ${early}`);
+    expect((await screen.findByRole("tooltip", undefined, { timeout: 2000 })).textContent).toBe(`待确认，自 ${early}`);
     expect(document.body.textContent).not.toContain(late);
   });
 

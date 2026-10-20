@@ -5,7 +5,7 @@ import { excerpt } from "./task-state";
 import { stopActorText } from "./actor";
 import type { TimelineBuddy, TimelineEvent, TimelineRow, TimelineSpan } from "./macro-task-types";
 
-/** Stable identity for the six historical execution colours, assigned by the timeline. */
+/** Stable identity for an execution buddy's palette colour. */
 export function buddyColorKey(buddy: TimelineBuddy | null): string {
   return JSON.stringify([buddy?.harness ?? null, buddy?.provider ?? null, buddy?.model ?? null, buddy?.effort ?? null]);
 }
@@ -146,26 +146,27 @@ const KNOWN_MODEL_NAMES: Record<string, string> = {
 
 /** A snapshot buddy reduced to the fields friendly naming needs. */
 export type FriendlyBuddy = { harness: string; provider: string; model: string; label?: string; effort?: string };
+export type BuddyNameParts = { name: string; effort: string };
 
 /**
  * Builds the friendly-name resolver: a snapshot buddy whose harness,
  * provider and model all match wins with its buddyName; then the fixed
  * known-id map; then the raw model id.
  */
-function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: TimelineBuddy | null | undefined) => string {
+function buddyNamer(buddies?: readonly FriendlyBuddy[] | null): (buddy: TimelineBuddy | null | undefined) => BuddyNameParts {
   const byTuple = new Map<string, FriendlyBuddy>();
   for (const buddy of buddies ?? []) {
     const key = JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]);
     if (!byTuple.has(key)) byTuple.set(key, buddy);
   }
   return (buddy) => {
-    if (!buddy) return i18n.t("console:buddyNotRecorded");
+    if (!buddy) return { name: "", effort: "" };
     const matched = byTuple.get(JSON.stringify([buddy.harness ?? "", buddy.provider ?? "", buddy.model ?? ""]));
     const name = matched
       ? buddyDisplayName(matched)
       : KNOWN_MODEL_NAMES[(buddy.model ?? "").trim()] ?? (buddy.model ?? "").trim();
     const effort = effortDisplay(buddy.effort);
-    return name && effort ? `${name} · ${effort}` : name || effort || i18n.t("console:buddyNotRecorded");
+    return { name, effort };
   };
 }
 
@@ -191,11 +192,15 @@ function effortDisplay(effort: string | null | undefined): string {
 
 const defaultNamer = buddyNamer(null);
 
-/**
- * One consistent friendly name and effort form for task rows and timeline spans.
- */
-export function buddyLabel(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): string {
+/** The shared display name and native effort, available separately for execution bars. */
+export function buddyNameParts(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): BuddyNameParts {
   return (buddies ? buddyNamer(buddies) : defaultNamer)(buddy);
+}
+
+/** One consistent friendly name and effort form for task rows and timeline spans. */
+export function buddyLabel(buddy: TimelineBuddy | null | undefined, buddies?: readonly FriendlyBuddy[] | null): string {
+  const { name, effort } = buddyNameParts(buddy, buddies);
+  return [name, effort].filter(Boolean).join(" · ") || i18n.t("console:buddyNotRecorded");
 }
 
 /* ---- time and duration formatting (display only) ---- */

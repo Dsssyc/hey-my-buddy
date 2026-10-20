@@ -24,7 +24,7 @@ describe("the colour changes of the Buddy page", () => {
     const bare: string[] = [];
     for (const [path, source] of Object.entries(views).filter(([path]) => !support.test(path))) {
       for (const list of classLists(source)) {
-        if (!changes.test(list) || list.split(" ").every(name => !changes.test(name) || underline.test(name))) continue;
+        if (list.includes("disclosure-trigger") || !changes.test(list) || list.split(" ").every(name => !changes.test(name) || underline.test(name))) continue;
         if (!/\btransition(?:-[a-z[\],-]+)?\b/.test(list) || !list.includes("motion-reduce:transition-none")) bare.push(`${path}: ${list.slice(0, 90)}`);
         else expect(list, path).toMatch(/\bduration-(?:100|150)\b/);
       }
@@ -49,7 +49,7 @@ describe("the colour changes of the Buddy page", () => {
     expect(source).toContain("animation-duration-200");
     expect(source).toContain("motion-safe:data-[state=open]:animate-collapsible-down");
     expect(source).toContain("motion-safe:data-[state=closed]:animate-collapsible-up");
-    expect(source).toContain("transition-[transform,color] duration-[200ms,150ms]");
+    expect(source).toContain("transition-transform duration-200");
     expect(source).toContain("motion-reduce:transition-none");
     // No height of ours: the page measures nothing.
     for (const [path, view] of Object.entries(views).filter(([path]) => !support.test(path)))

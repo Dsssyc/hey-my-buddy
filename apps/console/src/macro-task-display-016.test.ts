@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TimelineRow, TimelineSpan } from "./macro-task-types";
-import { acceptanceWaitMs, buddyLabel, rowStateInfo, spanOutcome } from "./macro-task-display";
+import { acceptanceWaitMs, buddyLabel, buddyNameParts, rowStateInfo, spanOutcome } from "./macro-task-display";
 
 describe("0.16 friendly buddy names (0.3)", () => {
   const config = (model: string, effort: string | null = "high") => ({
@@ -20,6 +20,14 @@ describe("0.16 friendly buddy names (0.3)", () => {
     expect(buddyLabel(config("glm-5.3", ""))).toBe("GLM-5.3");
     expect(buddyLabel(config("glm-5.3", null))).toBe("GLM-5.3");
     expect(buddyLabel(config("glm-5.3", "off"))).toBe("GLM-5.3 · off");
+  });
+
+  it("shares a snapshot display name between rows and execution bars without the effort suffix", () => {
+    const buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
+    const buddies = [{ ...buddy, label: "GPT-6.1-Sol · high" }];
+    expect(buddyNameParts(buddy, buddies)).toEqual({ name: "GPT-6.1-Sol", effort: "high" });
+    expect(buddyLabel(buddy, buddies)).toBe("GPT-6.1-Sol · high");
+    expect(buddyNameParts(config("claude-sonnet-5"))).toEqual({ name: "Claude Sonnet 5", effort: "high" });
   });
 
 });

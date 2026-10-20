@@ -361,7 +361,7 @@ describe("the title of a turn that runs", () => {
     cleanup();
     running({ overdue: false, possiblyStuck: false });
     await ready();
-    expect(within(turnTitle()).getByText("进行中").className).toContain("text-live");
+    expect(within(turnTitle()).getByText("进行中").className).toContain("state-breathe");
   });
 
   it("says what backs the report of a running turn in a hint on its phase", async () => {

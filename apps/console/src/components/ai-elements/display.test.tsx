@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodeBlock, MessageResponse, Reasoning, ReasoningContent, ReasoningTrigger, Terminal, Tool, ToolContent, ToolHeader } from ".";
+import { TooltipProvider } from "../ui/tooltip";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); Reflect.deleteProperty(navigator, "clipboard"); });
 
@@ -36,18 +37,22 @@ describe("session transcript display", () => {
     expect(container.querySelector("a")).toBeNull();
   });
 
-  it("keeps fenced Markdown code closed until requested and copies its source", async () => {
+  it("shows fenced Markdown code by default, lets the reader fold it, and copies its source", async () => {
     const write = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: write } });
-    const { container } = render(<MessageResponse>{"```text\nfirst\nsecond\n```"}</MessageResponse>);
-    expect(container.querySelector('[data-slot="session-code"]')).toBeNull();
+    const { container } = render(<TooltipProvider><MessageResponse>{"```text\nfirst\nsecond\n```"}</MessageResponse></TooltipProvider>);
+    expect(container.querySelector('[data-slot="session-code"]')?.textContent).toBe("first\nsecond\n");
     const copy = screen.getByRole("button", { name: "复制全文" });
+    expect(copy.querySelector("svg")).toBeTruthy();
+    expect(copy.textContent).toBe("");
     fireEvent.click(copy);
-    await waitFor(() => expect(screen.getByRole("button", { name: "复制全文" }).textContent).toContain("已复制"));
+    await waitFor(() => expect(copy.querySelector("svg")?.classList.contains("lucide-check")).toBe(true));
     expect(write).toHaveBeenCalledWith("first\nsecond\n");
-    const disclosure = screen.getByRole("button", { name: /展开代码/ });
+    const disclosure = screen.getByRole("button", { name: /收起代码/ });
     fireEvent.click(disclosure);
-    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[data-slot="session-code"]')).toBeNull();
+    fireEvent.click(disclosure);
     expect(container.querySelector('[data-slot="session-code"]')?.textContent).toBe("first\nsecond\n");
   });
 

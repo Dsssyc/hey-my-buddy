@@ -9,7 +9,7 @@ import { TooltipProvider } from "./ui/tooltip";
 afterEach(cleanup);
 
 function Page({ text }: { text?: string }) {
-  return <TooltipProvider><Hint text={text}><button type="button">Check</button></Hint></TooltipProvider>;
+  return <TooltipProvider delayDuration={0}><Hint text={text}><button type="button">Check</button></Hint></TooltipProvider>;
 }
 
 describe("Hint", () => {
@@ -34,7 +34,7 @@ describe("Hint", () => {
   });
 
   it("leaves the control's own data-slot, with or without text", () => {
-    const page = (text?: string) => <TooltipProvider><Hint text={text}><Button>Check</Button></Hint></TooltipProvider>;
+    const page = (text?: string) => <TooltipProvider delayDuration={0}><Hint text={text}><Button>Check</Button></Hint></TooltipProvider>;
     const { rerender } = render(page());
     expect(screen.getByRole("button", { name: "Check" }).getAttribute("data-slot")).toBe("button");
     rerender(page("Busy"));
@@ -43,7 +43,7 @@ describe("Hint", () => {
 
   it("preserves a tab's selected state while its explanation opens and closes", async () => {
     const user = userEvent.setup();
-    render(<TooltipProvider><Tabs defaultValue="host"><TabsList variant="line">
+    render(<TooltipProvider delayDuration={0}><Tabs defaultValue="host"><TabsList variant="line">
       <Hint text="Waiting for Host"><TabsTrigger value="host">Host</TabsTrigger></Hint>
       <TabsTrigger value="all">All</TabsTrigger>
     </TabsList></Tabs></TooltipProvider>);

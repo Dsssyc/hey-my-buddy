@@ -219,13 +219,10 @@ describe("light and dark themes", () => {
     for (const block of [text.slice(0, split), text.slice(split)]) {
       const value = (name: string) => block.match(new RegExp(`--${name}: (#[0-9a-f]{6});`))![1];
       const pairs = [
-        ...["ink", "ink2", "ink3", "live", "hand", "fail", "past"].flatMap(ink => ["paper", "surface", "sunk", "live-wash"].map(ground => [ink, ground])),
-        // ink4, the model-and-effort line's tier, sits on the resting grounds;
-        // the current row keeps ink3, because on live-wash even ink3 is at the floor.
-        ...["ink4"].flatMap(ink => ["paper", "surface", "sunk"].map(ground => [ink, ground])),
+        ...["ink", "ink2", "ink3", "ink4", "hand", "fail", "past"].flatMap(ink => ["paper", "surface", "sunk"].map(ground => [ink, ground])),
+        ...["ink", "ink2", "ink3", "ink4"].flatMap(ink => ["selection", "selection-hover", "popover-ground"].map(ground => [ink, ground])),
         ["ink", "hand-wash"], ["ink2", "hand-wash"], ["ink3", "hand-wash"], ["hand", "hand-wash"],
         ["ink", "fail-wash"], ["ink2", "fail-wash"], ["ink3", "fail-wash"], ["fail", "fail-wash"],
-        ...[1, 2, 3, 4, 5, 6].map(index => ["ink", `model-${index}`]),
         ["surface", "ink"], ["surface", "fail"],
         ["bar-ink", "bar"], ["bar-ink2", "bar"], ["bar-hand", "bar"], ["bar-fail", "bar"], ["bar", "bar-hand"],
       ];

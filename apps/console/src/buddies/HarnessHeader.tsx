@@ -36,17 +36,17 @@ export function HarnessHeader({ block, health, state, accountOpen, onToggleAccou
     </span>
   </>;
   return <div data-slot="harness-header" className="flex min-h-12 items-stretch">
-    <CollapsibleTrigger asChild>
+    <Hint text={t(block.folded ? "models.unfold" : "models.fold", { name: block.name })}><CollapsibleTrigger asChild>
       <button type="button" data-slot="fold-handle" aria-label={t(block.folded ? "models.unfold" : "models.fold", { name: block.name })}
-        className="ml-3 inline-flex size-8 shrink-0 items-center justify-center self-center rounded-md text-ink2 outline-none transition-colors duration-150 hover:bg-sunk hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none sm:ml-4">
+        className="disclosure-trigger ml-3 inline-flex size-8 shrink-0 items-center justify-center self-center rounded-md sm:ml-4">
         <Disclosure open={!block.folded} />
       </button>
-    </CollapsibleTrigger>
+    </CollapsibleTrigger></Hint>
     {health
       ? <Hint text={said || undefined}>
         <button id={`account-summary-${block.harness}`} type="button" data-slot="account-summary" aria-label={t("harness.summaryLabel", { name: block.name })}
           aria-expanded={accountOpen} onClick={onToggleAccount}
-          className={cn(row, "outline-none transition-colors duration-150 hover:bg-sunk focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none")}>
+          className={cn(row, "disclosure-trigger motion-reduce:transition-none")}>
           {content}
         </button>
       </Hint>

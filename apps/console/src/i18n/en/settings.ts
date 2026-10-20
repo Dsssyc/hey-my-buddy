@@ -2,10 +2,10 @@ import type zh from "../zh/settings";
 
 export default {
   title: "Settings", theme: "Theme", language: "Language", light: "Light", dark: "Dark", system: "System", browser: "Browser", chinese: "中文", english: "English",
-  dataFlow: { title: "Session data", detail: "Sessions may contain sensitive command input and output. They are shown only in the local console, excluded from backups and exports, and deleted with their macro task." },
   access: {
     title: "Access", allowAuthorized: "Allow only authorized browsers",
     description: "When enabled, new browsers need the link from hey-my-buddy console to access the console. Enable this when the computer has other accounts or the port is forwarded to another machine.",
+    sessionData: "Sessions may contain sensitive command input and output. They are shown only in the local console, excluded from backups and exports, and deleted with their macro task.",
     browsers: "Authorized browsers", current: "Current", lastSeen: "Last used {{time}}", revoke: "Revoke", revokeBrowser: "Revoke browser {{id}}", revokeCurrent: "Revoke current browser",
     confirmTitle: "Revoke this browser?", confirmBody: "This browser will no longer be able to operate the console. Run hey-my-buddy console and use its link to authorize it again.", cancel: "Cancel", confirm: "Confirm revocation",
     enabled: "Browser authorization enabled. This browser is authorized.", disabled: "Browser authorization disabled. All previous authorizations were revoked.", revoked: "Browser authorization revoked.", loggedOut: "This browser was revoked. Run hey-my-buddy console to authorize it again.",

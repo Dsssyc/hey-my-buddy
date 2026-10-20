@@ -1,15 +1,23 @@
 export const tasks = {
-  zoomOut: "缩小（-）", zoomIn: "放大（+）", zoomFit: "适应窗口（0）",
+  legendLabel: "图例",
+  resizeNames: "拖动调整名称栏宽度；方向键微调，双击恢复。",
+  zoomFit: "适应窗口（0）",
+  zoomRulerHint: "滚轮缩放 · Shift+滚轮平移 · 双击适应宽度 · 键盘 + − 0",
   drawing: {
-    acceptedLegend: "已验收", failedConclusionLegend: "结论为失败",
+    acceptedLegend: "已验收", failedConclusionLegend: "失败",
     eventLegend: "事件", clusterLegend: "成簇的记号", idleLegend: "空闲",
     eventCluster: "{{count}} 个记号",
     stopUnconfirmed: "停止未确认",
-    running: "进行中 {{duration}}", failed: "{{duration}} 失败", queue: "排队 {{duration}}",
-    expected: "预期 {{duration}}", silent: "可能卡住 · 静默 {{duration}}", silence: "静默 {{duration}}", silentLegend: "可能卡住",
+    queue: "排队 {{duration}}",
+    expected: "预期 {{duration}}", silent: "可能卡住 · 静默 {{duration}}", silentLegend: "可能卡住",
     waiting: "{{kind}} {{duration}}", inquiry: "问询", inquiryReadout: "问询 · {{author}} · {{at}} · {{state}}",
     gap: "空闲 {{start}}–{{end}} · {{duration}}", routingMode: "路由 · {{mode}}",
     events: { dispatch: "派发", decide: "决定", continue: "续接", integrate: "整合", accept: "已验收", reject: "打回", conclude: "结论", takeover: "接管" },
+  },
+  legendMeaning: {
+    execution: "buddy 执行工作的时段，颜色区分 buddy。", wait: "两项活动之间的等待时段。", waiting: "等待 Host 或 Lead 决定或验收的时段。",
+    silent: "执行仍在进行，但一段时间没有原生活动。", inquiry: "Host 向运行中的回合提出的问题。", event: "已记录的一次决定或其他动作。",
+    accepted: "这项微任务已通过验收。", failed: "这项微任务以失败结论结束。", cluster: "挨近的记号合成一个，数字是个数，点开看每一项。", idle: "较长的无活动时段在时间轴上折叠显示。",
   },
 
   waiting: "等待接手", failed: "失败",

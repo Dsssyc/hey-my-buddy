@@ -8,7 +8,7 @@ export function Reasoning({ className, defaultOpen = false, ...props }: Componen
 }
 
 export function ReasoningTrigger({ children, className, ...props }: ComponentProps<typeof CollapsibleTrigger>) {
-  return <CollapsibleTrigger className={cn("flex w-full items-center gap-1.5 py-1 text-left text-sm text-ink2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", className)} {...props}>
+  return <CollapsibleTrigger className={cn("flex w-full items-center gap-1.5 py-1 text-left text-sm", className)} {...props}>
     <Disclosure open={false} className="group-data-[state=open]/reasoning:rotate-90" />
     {children}
   </CollapsibleTrigger>;

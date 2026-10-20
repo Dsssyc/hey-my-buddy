@@ -1,9 +1,8 @@
 import { useTranslation } from "react-i18next";
-import { Button } from "@/components/ui/button";
 import { reasonText } from "../i18n/reason";
 import { formatDuration } from "../i18n/format";
 import { BasisFold } from "./facts";
-import { Band, Facts, Fold, Moment, Pane, PaneTitle } from "./parts";
+import { Band, Facts, Fold, MomentRange, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
 import { parseTokenUsage } from "./parse";
 import type { Step } from "./steps";
@@ -35,10 +34,9 @@ export function RoutingPane({ step, ctx }: { step: Step; ctx: Context }) {
     : step.outcome === "abstention" ? t("routing.abstained") : t("state.ended");
   return <Pane>
     <PaneTitle title={t("step.routing")} state={state} tone={running ? "live" : failed ? "fail" : step.outcome === "unknown" ? "hand" : "past"} note={failed && span.error ? span.error : undefined}>
-      <span className="font-mono tabular-nums">{step.at !== null ? <Moment at={step.at} /> : unrecorded} – {span.endAt ? <Moment at={span.endAt} /> : null}</span>
+      <MomentRange start={step.at} end={span.endAt}/>
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>
-    {ctx.openSession && span.attemptId && <div className="px-6 pb-3"><Button data-session-entry={span.attemptId} variant="outline" size="sm" onClick={() => ctx.openSession!(span.decisionTaskId!, span.attemptId!)}>{t("sessionView.open")}</Button></div>}
     <Band role="Router" identity={notCalled ? undefined : quad(entry?.routerBuddy) ?? <span className="font-sans text-ink3">{unrecorded}</span>}
       end={notCalled ? t("routing.notCalled") : mode ? t(`routing.mode.${mode}`) : unrecorded}
       second={<span className="inline-flex flex-wrap gap-x-3.5">

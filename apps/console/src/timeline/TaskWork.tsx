@@ -1,10 +1,9 @@
 import { cn } from "cn";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ChevronRight } from "lucide-react";
 import { Button } from "../components/ui/button";
-import { Collapsible, CollapsibleContent } from "../components/ui/collapsible";
+import { Collapsible, CollapsibleContent, Disclosure } from "../components/ui/collapsible";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { MacroTaskOverview } from "../MacroTaskOverview";
 import { buddyLabel, clockTime, displayTitle, rowStateInfo } from "../macro-task-display";
@@ -17,11 +16,15 @@ import { timelineScaleInput } from "./scale";
 import { useTimelineZoom } from "./useTimelineZoom";
 import { useViewport } from "./useViewport";
 import { RowName } from "./RowName";
-import { ZoomControls } from "./ZoomControls";
-import { buddyColorRegistry } from "./buddyColors";
-import { groupLanes, laneSummary, ownedWaits } from "./lanes";
+import { Legend } from "./Legend";
+import { NameDivider, useNameWidth } from "./NameDivider";
+import { Hint } from "../components/hint";
+import { ZoomRuler } from "./ZoomRuler";
+import { useTimelineGestures } from "./useTimelineGestures";
+import { buddyColorsFor } from "./buddyColors";
+import { groupLanes, laneLevel, laneSummary, ownedWaits } from "./lanes";
 import type { LaneGroup } from "./lanes";
-import { markerAt } from "./MarkerCluster";
+import { markerAt, markerKey } from "./MarkerCluster";
 import type { TimelineMarker } from "./MarkerCluster";
 import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
 
@@ -31,11 +34,9 @@ export type TaskWorkProps = {
   openedRunId: string | null; detail: (runId: string) => ReactNode;
   headerActions?: ReactNode; listToggle?: ReactNode; buddies?: readonly FriendlyBuddy[] | null;
   onOpen: (runId: string, key?: string) => void; onClose: () => void;
-  onSession?: (taskId: string, attemptId: string) => void;
   onRetry: () => void; onBackToList: () => void;
 };
 
-const NAME_PX = 272;
 const SLACK_PX = 8;
 const LEAD_PX = 60;
 
@@ -49,7 +50,7 @@ const LEAD_PX = 60;
 export function TaskWork(props: TaskWorkProps) {
   const { t } = useTranslation(["tasks", "taskDetail"]);
   const { timeline, openedRunId, displayObservedAt } = props;
-  const lastPointerAt = useRef<number | null>(null);
+  const [nameWidth, setNameWidth] = useNameWidth();
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState(openedRunId);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -57,12 +58,17 @@ export function TaskWork(props: TaskWorkProps) {
   const [hoveredRow, setHoveredRow] = useState<TimelineRow | null>(null);
   const [focusedRow, setFocusedRow] = useState<TimelineRow | null>(null);
   const [focusedSpan, setFocusedSpan] = useState<TimelineSpan | null>(null);
-  const [pointerX, setPointerX] = useState<number | null>(null);
-  const [activeMarker, setActiveMarker] = useState<TimelineMarker | null>(null);
+  const [pointerScreenX, setPointerScreenX] = useState<number | null>(null);
+  const [scrollLeft, setScrollLeft] = useState(0);
+  const [hoveredMarker, setHoveredMarker] = useState<TimelineMarker | null>(null);
+  const [focusedMarker, setFocusedMarker] = useState<TimelineMarker | null>(null);
   const [hoveredSpan, setHoveredSpan] = useState<TimelineSpan | null>(null);
+  const activeMarker = hoveredMarker ?? (hoveredSpan || hoveredRow ? null : focusedMarker);
   const [collapsedLanes, setCollapsedLanes] = useState<ReadonlySet<string>>(() => new Set());
   const { viewport: workspace, setViewport: setWorkspace, width } = useViewport<HTMLElement>(1088);
   const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const [detailViewport, setDetailViewport] = useState<HTMLDivElement | null>(null);
+  const [ruler, setRuler] = useState<HTMLDivElement | null>(null);
   const narrow = width <= 760;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   viewportRef.current = viewport;
@@ -80,13 +86,26 @@ export function TaskWork(props: TaskWorkProps) {
     : selectedInquiry && inquirySpan ? { kind: "inquiry", inquiry: selectedInquiry, span: inquirySpan, x: 0 } : null;
   const selectedSpan = inquirySpan ?? timeline?.spans.find(span => `span:${span.spanId}` === selectedKey);
   const selectedAt = selectedMarker ? instant(markerAt(selectedMarker)) : selectedSpan ? instant(selectedSpan.startAt) : selectedRunId ? Math.min(...(timeline?.spans.filter(span => span.runId === selectedRunId).map(span => instant(span.startAt)).filter((at): at is number => at !== null) ?? []), ...(timeline?.events.filter(event => event.runId === selectedRunId).map(event => instant(event.at)).filter((at): at is number => at !== null) ?? [])) : null;
+  const pointingSpan = hoveredSpan ?? (hoveredRow ? null : focusedSpan);
+  const pointingRow = hoveredRow ?? focusedRow;
+  const pointingAt = activeMarker ? instant(markerAt(activeMarker)) : pointingSpan ? instant(pointingSpan.startAt)
+    : pointingRow ? Math.min(...(timeline?.spans.filter(span => span.runId === pointingRow.runId).map(span => instant(span.startAt)).filter((at): at is number => at !== null) ?? []), ...(timeline?.events.filter(event => event.runId === pointingRow.runId).map(event => instant(event.at)).filter((at): at is number => at !== null) ?? [])) : null;
+  const anchorAt = pointingAt !== null && Number.isFinite(pointingAt) ? pointingAt : selectedAt !== null && Number.isFinite(selectedAt) ? selectedAt : null;
+  const highlightedRunId = activeMarker ? (activeMarker.kind === "event" ? activeMarker.event.runId : activeMarker.span.runId) : pointingSpan?.runId ?? pointingRow?.runId ?? selectedRunId;
+  const highlightedKey = activeMarker ? markerKey(activeMarker) : pointingSpan ? `span:${pointingSpan.spanId}` : pointingRow ? null : selectedKey;
   const macroId = timeline?.macroTask.macroTaskId;
-  const buddyColors = useMemo(() => buddyColorRegistry(macroId, timeline?.spans ?? []), [macroId, timeline]);
+  const buddyColors = useMemo(() => buddyColorsFor(timeline?.spans ?? []), [timeline]);
   // The scale may fill the whole viewport beside the sticky name column.
-  const originX = narrow ? SLACK_PX : NAME_PX + SLACK_PX;
-  const available = Math.max(1, width - (narrow ? SLACK_PX * 2 : NAME_PX + SLACK_PX * 2));
-  const { scale, change: zoom, atMinimum, atMaximum } = useTimelineZoom(input, available, macroId, viewportRef, selectedAt !== null && Number.isFinite(selectedAt) ? selectedAt : null, lastPointerAt, nowMs, originX);
-  useEffect(() => { setSelectedRunId(openedRunId); setSelectedKey(null); lastPointerAt.current = null; setPointerX(null); }, [macroId]);
+  const originX = narrow ? SLACK_PX : nameWidth + SLACK_PX;
+  const available = Math.max(1, width - (narrow ? SLACK_PX * 2 : nameWidth + SLACK_PX * 2));
+  const { scale, change: zoom, zoomAt, atMinimum } = useTimelineZoom(input, available, macroId, viewportRef, anchorAt, nowMs, originX);
+  // Keep the pointer in viewport coordinates: zoom and scrolling move the
+  // content beneath it, never the pointer itself.
+  const pointerX = pointerScreenX === null || !scale || !narrow && pointerScreenX < nameWidth ? null
+    : Math.max(0, Math.min(scale.widthPx, pointerScreenX + scrollLeft - originX));
+  useLayoutEffect(() => { if (viewport) setScrollLeft(viewport.scrollLeft); }, [scale, viewport]);
+  useTimelineGestures(viewport, ruler, zoomAt, () => zoom(0));
+  useEffect(() => { setSelectedRunId(openedRunId); setSelectedKey(null); setPointerScreenX(null); }, [macroId]);
   useEffect(() => {
     const previous = wasOpen.current;
     if (openedRunId !== previous || open && narrow) {
@@ -129,39 +148,39 @@ export function TaskWork(props: TaskWorkProps) {
   const marker = activeMarker ?? (!hoveredRow && !hoveredSpan && !focusedRow && !focusedSpan ? selectedMarker : null);
   const facts = marker ? markerReadout(marker) : activeSpan ? t("segment", { label: spanReadout(activeSpan, nowMs, props.buddies, rows.find(row => row.runId === activeSpan.runId)) }) : activeRow ? rowLine(activeRow)
     : input?.domain ? t("range", { start: clockTime(input.domain.startMs), end: clockTime(input.domain.endMs), n: rows.length }) : t("noTime");
-  const readout = pointerLine ?? facts;
+  const readout = activeMarker || hoveredSpan || focusedSpan ? facts : pointerLine ?? facts;
   const incomplete = timeline && (timeline.filtered || !timeline.scopeComplete || Object.values(timeline.truncated).some(Boolean));
   const select = (runId: string, key?: string) => {
     setSelectedRunId(runId); setSelectedKey(key ?? null);
-    setPointerX(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredRow(null); setFocusedRow(null); setActiveMarker(null);
+    setPointerScreenX(null); setHoveredSpan(null); setFocusedSpan(null); setHoveredRow(null); setFocusedRow(null); setHoveredMarker(null); setFocusedMarker(null);
   };
-  const renderName = (row: TimelineRow, options: { list?: boolean; tall?: boolean; indent?: boolean; ariaPrefix?: string; hoverExtra?: ReactNode } = {}) => <RowName
+  const renderName = (row: TimelineRow, options: { list?: boolean; tall?: boolean; laneLevel?: number; lead?: boolean; ariaPrefix?: string; hoverExtra?: ReactNode } = {}) => <RowName
     key={row.runId}
     ref={element => { if (element) rowsRef.current.set(row.runId, element); else rowsRef.current.delete(row.runId); }}
-    row={row} rows={rows} list={options.list} tall={options.tall} indent={options.indent} ariaPrefix={options.ariaPrefix} hoverExtra={options.hoverExtra}
-    tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} current={(options.list ? openedRunId : selectedRunId) === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
+    row={row} rows={rows} list={options.list} tall={options.tall} laneLevel={options.laneLevel} lead={options.lead} ariaPrefix={options.ariaPrefix} hoverExtra={options.hoverExtra}
+    tabIndex={tabKey === `row:${row.runId}` ? 0 : -1} current={options.list ? openedRunId === row.runId : selectedRunId === row.runId || highlightedRunId === row.runId} fresh={props.newRunIds.has(row.runId)} buddies={props.buddies}
     onClick={() => { select(row.runId); props.onOpen(row.runId); }}
-    onEnter={() => { setPointerX(null); setActiveMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>;
+    onEnter={() => { setPointerScreenX(null); setHoveredMarker(null); setHoveredSpan(null); setHoveredRow(row); }} onLeave={() => setHoveredRow(null)} onFocus={event => { if (movingDetailFocus.current) event.preventDefault(); setPointerScreenX(null); setHoveredRow(null); setHoveredSpan(null); setFocusedMarker(null); setFocusedRow(row); }} onBlur={() => setFocusedRow(null)}/>;
   const trackProps = (row: TimelineRow) => ({
-    boundary: viewport, tabKey, selected: selectedRunId === row.runId, row, spans: spansByRow.get(row.runId) ?? [],
+    boundary: viewport, tabKey, selected: selectedRunId === row.runId || highlightedRunId === row.runId, row, spans: spansByRow.get(row.runId) ?? [],
     selectedKey: selectedRunId === row.runId ? selectedKey : null,
+    highlightedKey: highlightedRunId === row.runId ? highlightedKey : null,
     events: timeline!.events.filter(event => event.runId === row.runId),
-    onMarker: (marker: TimelineMarker | null) => { setActiveMarker(marker); if (marker) setHoveredSpan(null); },
+    onMarker: (marker: TimelineMarker | null, source: "hover" | "focus") => { if (source === "hover") { setHoveredMarker(marker); if (marker) setHoveredSpan(null); } else setFocusedMarker(marker); },
     buddyColors, scale: scale!, nowMs, ongoing: input!.nowAtEnd, buddies: props.buddies, onOpen: props.onOpen, onSelect: select,
-    onFocusSpan: (span: TimelineSpan | null) => { setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); setFocusedSpan(span); },
-    onHover: (span: TimelineSpan | null) => { setActiveMarker(null); setHoveredSpan(span); if (span) setHoveredRow(null); },
+    onFocusSpan: (span: TimelineSpan | null) => { setPointerScreenX(null); setHoveredRow(null); setHoveredSpan(null); setFocusedMarker(null); setFocusedSpan(span); },
+    onHover: (span: TimelineSpan | null) => { setHoveredMarker(null); setHoveredSpan(span); if (span) setHoveredRow(null); },
   });
-  const trackRow = (row: TimelineRow, inLane: boolean) => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId}
+  const trackRow = (row: TimelineRow, lead?: TimelineRow) => <div key={row.runId} data-slot="timeline-row" data-run-id={row.runId}
     onClick={event => { if (!(event.target as Element).closest("[data-key]")) select(row.runId); }}
-    onDoubleClick={event => { if (!(event.target as Element).closest("[data-key]")) props.onOpen(row.runId); }}
-    className={cn("relative", inLane ? "bg-card" : "bg-background")}>
+    className={cn("relative", lead ? "bg-card" : "bg-background")}>
     {narrow
-      ? <><div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")} style={{ width: Math.max(1, width - 2) }}>{renderName(row, { indent: inLane })}</div>
+      ? <><div className={cn("sticky left-0 z-10", lead ? "bg-card" : "bg-background")} style={{ width: Math.max(1, width - 2) }}>{renderName(row, { laneLevel: lead ? laneLevel(lead, row) : undefined })}</div>
         <Track {...trackProps(row)}/></>
-      : <div className="grid items-stretch" style={{ gridTemplateColumns: `${NAME_PX}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
-        <div className={cn("sticky left-0 z-10", inLane ? "bg-card" : "bg-background")}>{renderName(row, { indent: inLane })}</div>
+      : <div className="grid items-stretch" style={{ gridTemplateColumns: `${nameWidth}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
+        <div className={cn("sticky left-0 z-10", lead ? "bg-card" : "bg-background")}>{renderName(row, { laneLevel: lead ? laneLevel(lead, row) : undefined })}</div>
         <Track {...trackProps(row)}/>
-        <div className={cn("border-t", selectedRunId === row.runId && "bg-selected-row")}/>
+        <div className={cn("border-t", (selectedRunId === row.runId || highlightedRunId === row.runId) && "bg-selected-row")}/>
       </div>}
   </div>;
   const toggleLane = (leadRunId: string) => setCollapsedLanes(previous => {
@@ -169,17 +188,16 @@ export function TaskWork(props: TaskWorkProps) {
     if (next.has(leadRunId)) next.delete(leadRunId); else next.add(leadRunId);
     return next;
   });
-  const laneToggle = (lead: TimelineRow, collapsed: boolean) => <button type="button" data-slot="lane-toggle" aria-expanded={!collapsed} aria-controls={`lane-${lead.runId}`}
+  const laneToggle = (lead: TimelineRow, collapsed: boolean) => <Hint text={t("laneToggle", { title: displayTitle(lead.titleSource, lead.title).fullText })}><button type="button" data-slot="lane-toggle" aria-expanded={!collapsed} aria-controls={`lane-${lead.runId}`}
     aria-label={t("laneToggle", { title: displayTitle(lead.titleSource, lead.title).fullText })} onClick={() => toggleLane(lead.runId)}
-    className="flex size-7 shrink-0 self-center items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-live">
-    <ChevronRight size={16} strokeWidth={1.5} className={cn("text-ink2 transition-[rotate] duration-150 motion-reduce:transition-none", !collapsed && "rotate-90")}/>
-  </button>;
-  const laneHeader = (lane: LaneGroup, index: number) => {
-    const lead = lane.lead;
-    const collapsed = collapsedLanes.has(lead.runId);
+    className="flex size-7 shrink-0 self-center items-center justify-center outline-none focus-visible:ring-2 focus-visible:ring-focus">
+    <Disclosure open={!collapsed}/>
+  </button></Hint>;
+  const laneFacts = (index: number) => {
+    const lane = layout.lanes[index]!;
     const summary = summaries[index]!;
     // The lane's own numbers ride on the Lead row's hover, where the reader asks for them.
-    const summaryLines = <span className="block text-xs text-ink3 tabular-nums">
+    return <span className="block text-xs text-ink3 tabular-nums">
       <span className="block">{[
         t("laneMicroTasks", { n: lane.members.length + 1 }),
         `${t("elapsed")}${summary.elapsedMs !== null ? formatDuration(summary.elapsedMs) : t("unknown")}`,
@@ -187,71 +205,98 @@ export function TaskWork(props: TaskWorkProps) {
       ].join(" · ")}</span>
       <span className="block">{usageTotalsLabel(summary.usage)}</span>
     </span>;
+  };
+  const laneHeader = (lane: LaneGroup, index: number) => {
+    const lead = lane.lead;
+    const collapsed = collapsedLanes.has(lead.runId);
     const leadName = () => <div className="flex min-w-0 flex-1 items-stretch">
-      {renderName(lead, { tall: true, ariaPrefix: t("leadBadge"), hoverExtra: summaryLines })}
+      {renderName(lead, { tall: true, lead: true, ariaPrefix: t("leadBadge"), hoverExtra: laneFacts(index) })}
     </div>;
     // The divider under a Lead runs across the whole row; the members below it sit one indent step in.
-    return <header data-slot="timeline-lane-lead" data-run-id={lead.runId} className={cn("border-b-2 border-ink2", narrow ? "block" : "grid items-stretch")} style={{ gridTemplateColumns: narrow ? undefined : `${NAME_PX}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
+    return <header data-slot="timeline-lane-lead" data-run-id={lead.runId} onClick={event => { if (!(event.target as Element).closest("[data-key], button")) select(lead.runId); }} className={cn("border-b border-line", narrow ? "block" : "grid items-stretch")} style={{ gridTemplateColumns: narrow ? undefined : `${nameWidth}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
       {narrow
         ? <div className="sticky left-0 z-10 bg-card" style={{ width: Math.max(1, width - 2) }}>
-          <div className="flex items-stretch">{laneToggle(lead, collapsed)}<span className="flex shrink-0 items-center text-xs text-ink2">{t("leadBadge")}</span>{leadName()}</div>
+          <div className="flex items-stretch">{laneToggle(lead, collapsed)}{leadName()}</div>
         </div>
         : <div className="sticky left-0 z-20 flex items-stretch bg-card">
           {laneToggle(lead, collapsed)}
-          <span className="flex shrink-0 items-center text-xs text-ink2">{t("leadBadge")}</span>
           {leadName()}
         </div>}
       {scale && input && <div className={narrow ? "block" : "flex items-center"}>
         <Track {...trackProps(lead)} ownedWaits={ownedWaits(lead, timeline!.spans, nowMs)} height={LEAD_PX}/>
       </div>}
-      {!narrow && <div className={cn(selectedRunId === lead.runId && "bg-selected-row")}/>}
+      {!narrow && <div className={cn((selectedRunId === lead.runId || highlightedRunId === lead.runId) && "bg-selected-row")}/>}
     </header>;
   };
   const trackWidth = scale ? scale.widthPx + SLACK_PX * 2 : 0;
-  const lanesScroll = useRef<{ left: number; top: number } | null>(null);
-  useEffect(() => {
-    if (open || !viewport || !lanesScroll.current) return;
-    viewport.scrollLeft = lanesScroll.current.left;
-    viewport.scrollTop = lanesScroll.current.top;
-  }, [open, viewport]);
+  const lanesScrollLeft = useRef(0);
+  const namesScrollTop = useRef(0);
+  useLayoutEffect(() => {
+    const target = open ? detailViewport : viewport;
+    if (!target) return;
+    target.scrollTop = namesScrollTop.current;
+    if (!open) target.scrollLeft = lanesScrollLeft.current;
+  }, [open, viewport, detailViewport]);
   const laneOrder = useMemo(() => [
     ...layout.lanes.flatMap(lane => collapsedLanes.has(lane.lead.runId) ? [lane.lead] : [lane.lead, ...lane.members]),
     ...layout.ordinary,
   ], [layout, collapsedLanes]);
-  const lanesView = <ScrollArea className="min-h-0 min-w-0 flex-1 bg-background" orientation="both"
+  const detailNames = <>
+    {layout.lanes.map((lane, index) => {
+      const lead = lane.lead;
+      const collapsed = collapsedLanes.has(lead.runId);
+      return <section key={lead.runId} data-slot="detail-lane" className={cn("border-t border-line bg-card", index > 0 && "mt-6")}>
+        <div data-slot="detail-lane-lead" data-run-id={lead.runId} className="flex items-stretch border-b border-line">
+          {laneToggle(lead, collapsed)}
+          <div className="min-w-0 flex-1">{renderName(lead, { list: true, tall: true, lead: true, ariaPrefix: t("leadBadge"), hoverExtra: laneFacts(index) })}</div>
+        </div>
+        <Collapsible open={!collapsed}><CollapsibleContent><div id={`lane-${lead.runId}`}>
+          {lane.members.map(row => renderName(row, { list: true, laneLevel: laneLevel(lead, row) }))}
+        </div></CollapsibleContent></Collapsible>
+      </section>;
+    })}
+    {layout.lanes.length > 0 && layout.ordinary.length > 0 && <div className="mt-6 flex h-9 items-center px-4 text-xs text-ink3">{t("otherMicroTasks")}</div>}
+    {layout.ordinary.map(row => renderName(row, { list: true }))}
+  </>;
+  const lanesView = <div data-slot="timeline-viewport" className="relative flex min-h-0 min-w-0 flex-1"><ScrollArea className="min-h-0 min-w-0 flex-1 bg-background" orientation="both"
     viewportProps={{ ref: setViewport, "data-slot": "timeline-tracks",
-      onScroll: event => { lanesScroll.current = { left: event.currentTarget.scrollLeft, top: event.currentTarget.scrollTop }; },
+      onScroll: event => { lanesScrollLeft.current = event.currentTarget.scrollLeft; namesScrollTop.current = event.currentTarget.scrollTop; setScrollLeft(event.currentTarget.scrollLeft); },
       onPointerMove: event => {
         if (!scale) return;
-        const target = (event.target as Element).closest("svg");
-        if (!target || !["timeline-track", "timeline-axis"].includes(target.getAttribute("data-slot") ?? "")) return;
-        const x = Math.max(0, Math.min(scale.widthPx, event.clientX - target.getBoundingClientRect().left - SLACK_PX));
-        setPointerX(x); lastPointerAt.current = scale.toTime(x);
+        const view = event.currentTarget;
+        const localX = event.clientX - view.getBoundingClientRect().left;
+        if (!narrow && localX < nameWidth) { setPointerScreenX(null); return; }
+        const target = (event.target as Element);
+        setPointerScreenX(localX);
         const runId = target.closest("[data-run-id]")?.getAttribute("data-run-id");
         setHoveredRow(rows.find(row => row.runId === runId) ?? null);
       },
-      onPointerLeave: () => { setPointerX(null); setHoveredSpan(null); setHoveredRow(null); setActiveMarker(null); } }}>
-    {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative" style={{ width: narrow ? trackWidth : `max(100%, ${NAME_PX + trackWidth}px)`, minWidth: "100%" }}>
-      <div data-slot="timeline-ruler" className="sticky top-0 z-30 border-b border-line bg-card" style={narrow ? undefined : { display: "grid", gridTemplateColumns: `${NAME_PX}px ${trackWidth}px minmax(0,1fr)` }}>
+      onPointerLeave: () => { setPointerScreenX(null); setHoveredSpan(null); setHoveredRow(null); setHoveredMarker(null); } }}>
+    {scale && input && <div data-slot="timeline-canvas" data-ppm={scale.pixelsPerMinute} className="relative min-h-full pb-8" style={{ width: narrow ? trackWidth : `max(100%, ${nameWidth + trackWidth}px)`, minWidth: "100%" }}>
+      <div data-slot="timeline-ruler" className="sticky top-0 z-30 border-b border-line">
+        <ZoomRuler ref={setRuler} viewportWidth={width} atMinimum={atMinimum} onChange={zoom} style={narrow ? undefined : { display: "grid", gridTemplateColumns: `${nameWidth}px ${trackWidth}px minmax(0,1fr)` }}>
         {narrow
-          ? <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, (viewport?.scrollLeft ?? 0) - originX), right: Math.min(scale.widthPx, (viewport?.scrollLeft ?? 0) - originX + width) }}/>
-          : <><div className="sticky left-0 z-40 flex h-9 items-center justify-between bg-card pl-4 pr-3 text-xs text-ink3"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
-            <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, (viewport?.scrollLeft ?? 0) - originX), right: Math.min(scale.widthPx, (viewport?.scrollLeft ?? 0) - originX + width) }}/>
-            <div className="bg-card"/></>}
+          ? <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, scrollLeft - originX), right: Math.min(scale.widthPx, scrollLeft - originX + width) }}/>
+          : <><div className="sticky left-0 z-40 flex h-9 items-center justify-between bg-ruler pl-4 pr-3 text-xs text-ink3"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
+            <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs} pointerX={pointerX} pointerBounds={{ left: Math.max(0, scrollLeft - originX), right: Math.min(scale.widthPx, scrollLeft - originX + width) }}/>
+            <div className="bg-ruler"/></>}
+        </ZoomRuler>
       </div>
-      {layout.lanes.map((lane, index) => <section key={lane.lead.runId} data-slot="timeline-lane" className={cn("border-t-2 border-ink2 bg-card", index > 0 && "mt-6")}>
+      {layout.lanes.map((lane, index) => <section key={lane.lead.runId} data-slot="timeline-lane" className={cn("border-t border-line bg-card", index > 0 && "mt-6")}>
         {laneHeader(lane, index)}
         <Collapsible open={!collapsedLanes.has(lane.lead.runId)}>
           <CollapsibleContent>
-            <div id={`lane-${lane.lead.runId}`}>{lane.members.map(row => trackRow(row, true))}</div>
+            <div id={`lane-${lane.lead.runId}`}>{lane.members.map(row => trackRow(row, lane.lead))}</div>
           </CollapsibleContent>
         </Collapsible>
       </section>)}
       {layout.lanes.length > 0 && layout.ordinary.length > 0 && <div className="sticky left-0 mt-6 flex h-9 w-max items-center bg-background px-4 text-xs text-ink3">{t("otherMicroTasks")}</div>}
-      {layout.ordinary.map(row => trackRow(row, false))}
-      {pointerX !== null && <div data-slot="timeline-pointer" aria-hidden="true" className="pointer-events-none absolute top-9 bottom-0 z-20" style={{ left: pointerX + (narrow ? 0 : NAME_PX), borderLeft: "1px solid var(--ink3)" }}/>}
+      {layout.ordinary.map(row => trackRow(row))}
     </div>}
-  </ScrollArea>;
+  </ScrollArea>
+    {!narrow && <NameDivider width={nameWidth} onChange={setNameWidth}/>}
+    {pointerX !== null && <div data-slot="timeline-pointer" aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-40 border-l border-ink3" style={{ left: pointerScreenX! }}/>}
+  </div>;
 
   return <section ref={setWorkspace} data-slot="task-work" onKeyDownCapture={event => {
     // A title tooltip must not consume the detail's close gesture first.
@@ -260,10 +305,11 @@ export function TaskWork(props: TaskWorkProps) {
     }
   }} onFocusCapture={event => {
     const key = (event.target as Element).closest("[data-key]")?.getAttribute("data-key");
-    if (key) { setFocusKey(key); setPointerX(null); setHoveredRow(null); setHoveredSpan(null); setActiveMarker(null); }
+    if (key) { setFocusKey(key); setPointerScreenX(null); setHoveredRow(null); setHoveredSpan(null); setHoveredMarker(null); }
   }} onBlurCapture={event => {
     if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusKey(null);
   }} onKeyDown={event => {
+    if (event.defaultPrevented) return;
     if (!open && ["+", "=", "-", "0"].includes(event.key) && !(event.target as Element).closest("input, textarea, select, [role=dialog]")) {
       event.preventDefault(); zoom(event.key === "0" ? 0 : event.key === "-" ? -1 : 1); return;
     }
@@ -274,9 +320,11 @@ export function TaskWork(props: TaskWorkProps) {
     if (!runId) return;
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      const order = open ? rows : laneOrder;
+      const order = laneOrder;
       const index = order.findIndex(row => row.runId === runId);
-      const next = order[Math.max(0, Math.min(order.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))];
+      const hiddenLead = index < 0 ? rows.find(row => row.runId === runId)?.rootLeadRunId : null;
+      const position = index < 0 && hiddenLead ? order.findIndex(row => row.runId === hiddenLead) : index;
+      const next = order[Math.max(0, Math.min(order.length - 1, position + (event.key === "ArrowDown" ? 1 : -1)))];
       if (next) { if (open && next.runId !== openedRunId) props.onOpen(next.runId); else focusRow(next.runId); }
     } else if (!open && ["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
       event.preventDefault();
@@ -292,26 +340,23 @@ export function TaskWork(props: TaskWorkProps) {
     {props.stale && !props.error && <p role="status" className="border-b bg-hand-wash px-4 py-2 text-xs text-hand">{t("staleTimeline")}</p>}
     {!timeline && props.loading ? <div role="status" className="flex flex-1 animate-pulse items-center justify-center motion-reduce:animate-none">{t("loading")}</div>
       : timeline && rows.length === 0 && !open ? <p className="p-6 text-sm text-ink2">{t("noMicroTasks")}</p> : <>
-        {!open && <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2 text-xs text-ink2 sm:px-6">
-          <div data-slot="timeline-legend" className="flex flex-wrap gap-4"><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-line2 bg-past-wash"/>{t("execution")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t border-ink3"/>{t("wait")}</span><span className="flex items-center gap-1.5"><i className="w-4 border-t-2 border-dashed border-hand-mark"/>{t("waiting")}</span><span className="flex items-center gap-1.5"><i className="h-2 w-4 border border-hand-mark bg-hand-wash"/>{t("drawing.silentLegend")}</span><span className="flex items-center gap-1.5"><i className="size-2 rotate-45 border border-ink2"/>{t("drawing.inquiry")}</span><span className="flex items-center gap-1.5"><i className="size-1.5 rounded-full bg-past"/>{t("drawing.eventLegend")}</span><span className="flex items-center gap-1.5"><i aria-hidden="true" className="flex size-4 items-center justify-center rounded-full border border-past text-past">✓</i>{t("drawing.acceptedLegend")}</span><span className="flex items-center gap-1.5"><i aria-hidden="true" className="flex size-4 items-center justify-center rounded-full border border-past text-fail">✕</i>{t("drawing.failedConclusionLegend")}</span><span className="flex items-center gap-1.5"><i className="flex size-4 items-center justify-center rounded-full border border-past">2</i>{t("drawing.clusterLegend")}</span><span className="flex items-center gap-1.5"><i className="h-3 w-4 bg-[repeating-linear-gradient(135deg,var(--sunk)_0_3px,var(--idle-stripe)_3px_4px)]"/>{t("drawing.idleLegend")}</span></div>
-          <ZoomControls className="ml-auto" onChange={zoom} atMinimum={atMinimum} atMaximum={atMaximum}/>
-        </div>}
         {open
-          ? <div data-slot="timeline-detail-stage" className={cn("grid min-h-0 min-w-0 flex-1", narrow ? "grid-cols-1" : "grid-cols-[272px_minmax(0,1fr)]")}>
+          ? <div data-slot="timeline-detail-stage" className="relative grid min-h-0 min-w-0 flex-1" style={{ gridTemplateColumns: narrow ? "minmax(0,1fr)" : `${nameWidth}px minmax(0,1fr)` }}>
             <ScrollArea className={cn("min-h-0 min-w-0 bg-card", narrow && "hidden")}
-              viewportProps={{ "data-slot": "task-names" }}>
+              viewportProps={{ ref: setDetailViewport, "data-slot": "task-names", onScroll: event => { namesScrollTop.current = event.currentTarget.scrollTop; } }}>
               <div className="w-0 min-w-full">
-              <div className="flex h-9 shrink-0 items-center justify-between px-3 text-xs text-ink3"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
-              {rows.map(row => renderName(row, { list: true }))}
+              <div className="sticky top-0 z-30 flex h-[37px] shrink-0 items-center justify-between border-b border-line bg-ruler pl-4 pr-3 text-xs text-ink3"><span>{t("microTasks")}</span><span>{rows.length}</span></div>
+              {detailNames}
               {!rows.some(row => row.runId === openedRunId) && <Button variant="ghost" size="sm" className="mt-2" onClick={props.onClose}>{t("closeDetail")}</Button>}
               </div>
             </ScrollArea>
+            {!narrow && <NameDivider width={nameWidth} onChange={setNameWidth}/>}
             <div className={cn("flex min-h-0 min-w-0 flex-col bg-card", !narrow && "border-l")}>
               {openedRunId !== null && props.detail(openedRunId)}
             </div>
           </div>
           : <div role="region" aria-label={t("laneRegion")} className="flex min-h-0 min-w-0 flex-1 flex-col">{lanesView}</div>}
-        {!open && <div data-slot="timeline-status" className="flex min-h-9 shrink-0 items-center gap-2 border-t bg-card px-4 text-xs text-ink2 sm:px-6"><span role="status" className="min-w-0 flex-1 truncate">{readout}{incomplete ? ` · ${t("uncompressed")}` : ""}</span>{!marker && !pointerLine && props.onSession && activeSpan?.attemptId && (activeSpan.kind === "execution" || activeSpan.kind === "routing") && <Button data-session-origin={`span:${activeSpan.spanId}`} onFocus={() => select(activeSpan.runId, `span:${activeSpan.spanId}`)} variant="ghost" size="sm" onClick={() => props.onSession!(activeSpan.kind === "routing" ? activeSpan.decisionTaskId! : activeSpan.runId, activeSpan.attemptId!)}>{t("taskDetail:sessionView.open")}</Button>}</div>}
+        <div data-slot="timeline-status" className="flex min-h-9 shrink-0 items-center gap-2 border-t bg-card px-4 text-xs text-ink2 sm:px-6"><span role="status" className="min-w-0 flex-1 truncate">{!open && <>{readout}{incomplete ? ` · ${t("uncompressed")}` : ""}</>}</span><Legend/></div>
       </>}
   </section>;
 }

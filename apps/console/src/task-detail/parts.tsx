@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Hint } from "@/components/hint";
-import { formatMoment } from "../i18n/format";
+import { formatClock, formatMoment } from "../i18n/format";
 
 /** A recorded instant in the reader's clock; one that was not recorded is said so. */
 export function Moment({ at, className }: { at: string | number | null | undefined; className?: string }) {
@@ -15,13 +15,26 @@ export function Moment({ at, className }: { at: string | number | null | undefin
   return <time dateTime={new Date(ms).toISOString()} className={cn("tabular-nums", className)}>{formatMoment(ms, Date.now())}</time>;
 }
 
+/** A recorded interval names its local date once when both ends share that date. */
+export function MomentRange({ start, end }: { start: number | null; end: string | null }) {
+  const { t } = useTranslation("taskDetail");
+  const endMs = end === null ? NaN : Date.parse(end);
+  const sameDay = start !== null && Number.isFinite(start) && Number.isFinite(endMs)
+    && new Date(start).toDateString() === new Date(endMs).toDateString();
+  return <span className="font-mono tabular-nums">
+    {start !== null ? <Moment at={start} /> : t("unrecorded")} – {end !== null
+      ? sameDay ? <time dateTime={new Date(endMs).toISOString()}>{formatClock(endMs)}</time> : <Moment at={end} />
+      : null}
+  </span>;
+}
+
 /** The name of a pane, its state in words, and its moment on the right. */
 export function PaneTitle({ title, state, tone = "past", warnings = [], note, children }: {
   title: string; state?: string; tone?: "past" | "live" | "hand" | "fail"; warnings?: string[]; note?: ReactNode; children?: ReactNode;
 }) {
-  return <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 px-6 pt-4 pb-3.5">
+  return <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 px-6 pt-6 pb-3.5">
     <h3 className="text-base font-semibold">{title}</h3>
-    {state && <span className={cn("text-xs", tone === "past" ? "text-ink2" : tone === "live" ? "text-live" : tone === "hand" ? "text-hand" : "text-fail")}>{state}</span>}
+    {state && <span className={cn("text-xs", tone === "past" ? "text-ink2" : tone === "live" ? "text-ink state-breathe" : tone === "hand" ? "text-hand" : "text-fail")}>{state}</span>}
     {warnings.map(word => <span key={word} className="text-xs text-hand">{word}</span>)}
     {children && <span className="ml-auto flex flex-wrap items-baseline gap-x-3.5 gap-y-1 text-xs text-ink2">{children}</span>}
     {note && <p className="basis-full text-xs text-ink2 wrap-anywhere">{note}</p>}
@@ -77,7 +90,7 @@ export function Fold({ text, limit = 280, className }: { text: string; limit?: n
   if (first === null) return <p className={paragraph}>{text}</p>;
   return <Collapsible open={open} onOpenChange={setOpen}>
     <p className={paragraph}>{open ? text : `${first}…`}</p>
-    <CollapsibleTrigger className="mt-1 inline-flex items-center gap-1 rounded-sm text-xs text-ink2 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none">
+    <CollapsibleTrigger className="mt-1 inline-flex items-center gap-1 rounded-sm text-xs">
       <Disclosure open={open} />{open ? t("fold.less") : t("fold.more")}
     </CollapsibleTrigger>
   </Collapsible>;

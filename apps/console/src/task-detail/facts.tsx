@@ -78,7 +78,7 @@ export function BasisFold({ basis }: { basis: Basis }) {
   const lines = basisLines(basis, t);
   if (lines.length === 0) return null;
   return <Collapsible open={open} onOpenChange={setOpen} className="mt-2">
-    <CollapsibleTrigger className="inline-flex items-center gap-1 rounded-sm text-xs text-ink2 outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none">
+    <CollapsibleTrigger className="inline-flex items-center gap-1 rounded-sm text-xs">
       <Disclosure open={open} />{t("basis.name")}
     </CollapsibleTrigger>
     <CollapsibleContent><Lines items={lines} className="mt-1.5 text-ink2" /></CollapsibleContent>

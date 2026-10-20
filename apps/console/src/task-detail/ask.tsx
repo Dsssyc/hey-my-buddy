@@ -15,7 +15,7 @@ export function Ask({ inquiry, highlighted = false }: { inquiry: Inquiry; highli
   const { t } = useTranslation("taskDetail");
   const explanation = [inquiry.reason ? reasonText(inquiry.reason) : null, inquiry.note].filter(Boolean).join("\n");
   const word = <span className="whitespace-nowrap">{t(`inquiry.${inquiry.state}`)}</span>;
-  return <div ref={ref} data-inquiry-id={inquiry.inquiryId} data-highlighted={highlighted} className="transition-colors duration-150 data-[highlighted=true]:bg-live-wash data-[highlighted=true]:ring-1 data-[highlighted=true]:ring-live motion-reduce:transition-none">
+  return <div ref={ref} data-inquiry-id={inquiry.inquiryId} data-highlighted={highlighted} className="transition-colors duration-150 data-[highlighted=true]:bg-selected-row data-[highlighted=true]:ring-1 data-[highlighted=true]:ring-ring motion-reduce:transition-none">
     <Node mark="ask">
       <Quote>
         <div className="flex items-baseline gap-2 text-xs text-ink3">

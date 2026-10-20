@@ -45,7 +45,7 @@ for (const { locale, language } of [
     await second.locator('[data-slot=fix-link]').hover();
     await expect(page.getByRole("tooltip").getByText(target, { exact: true })).toBeVisible();
     const buddy = timeline.rows.find(item => item.runId === "preview-run-a2")!.buddy!;
-    await expect(page.getByRole("tooltip")).toContainText([buddy.harness, buddy.provider, buddy.model, buddy.effort].join(" · "));
+    await expect(page.getByRole("tooltip")).toContainText([buddy.harness, buddy.provider, buddy.model, buddy.effort].join(" / "));
     await expect(page.getByRole("tooltip")).toBeInViewport();
     await expect(page.locator("html")).toHaveAttribute("lang", language);
     for (const label of [first, second, third]) {

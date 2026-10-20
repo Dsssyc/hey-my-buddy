@@ -26,10 +26,10 @@ describe("the step strip along the top of a micro task's detail", () => {
     const f = open({ origin: "span:r1" });
     await ready();
     const fitted = Number(trackSvg().getAttribute("width"));
-    const buttonOf = (label: string) => strip().querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
-    await f.user.click(buttonOf("放大（+）"));
+    const ruler = strip().querySelector<HTMLElement>('[data-slot="zoom-ruler"]')!;
+    fireEvent.wheel(ruler, { deltaY: -300, clientX: 220 });
     expect(Number(trackSvg().getAttribute("width"))).toBeGreaterThan(fitted);
-    await f.user.click(buttonOf("适应窗口（0）"));
+    await f.user.click(strip().querySelector<HTMLButtonElement>('[data-slot="zoom-fit"]')!);
     expect(Number(trackSvg().getAttribute("width"))).toBe(fitted);
     fireEvent.keyDown(strip(), { key: "+" });
     expect(Number(trackSvg().getAttribute("width"))).toBeGreaterThan(fitted);
@@ -53,10 +53,35 @@ describe("the step strip along the top of a micro task's detail", () => {
     const delegation = strip().querySelector('[data-key="delegation"]')!;
     expect(delegation.getAttribute("aria-pressed")).toBe("false");
     // Keyboard-focusable overlay marks keep a clear focus outline on their hit rect.
-    expect(delegation.getAttribute("class")).toContain("focus-visible:[&_.hit]:stroke-live");
+    expect(delegation.getAttribute("class")).toContain("focus-visible:[&_.hit]:stroke-ring");
     fireEvent.click(delegation as unknown as Element);
     expect(pane().textContent).toContain("实现微任务详情");
     expect(strip().querySelector('[data-key="delegation"]')!.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("moves one step at a time from the leading controls and disables the endpoint controls", async () => {
+    const f = open({ step: 1 });
+    await ready();
+    const previous = () => strip().querySelector<HTMLButtonElement>('[aria-label="上一步"]')!;
+    const next = () => strip().querySelector<HTMLButtonElement>('[aria-label="下一步"]')!;
+    const counter = () => strip().querySelector<HTMLElement>('[data-slot="step-counter"]')!;
+    const total = counter().textContent!.match(/^步骤 1 \/ (\d+)$/)?.[1];
+    expect(Number(total)).toBeGreaterThan(1);
+    expect(counter().className).toContain("tabular-nums");
+    expect(previous().getAttribute("data-variant")).toBe("outline");
+    expect(next().getAttribute("data-variant")).toBe("outline");
+    expect(previous().getAttribute("data-size")).toBe("icon-sm");
+    expect(previous().disabled).toBe(true);
+    expect(next().disabled).toBe(false);
+    await f.user.click(next());
+    expect(pane().textContent).toContain("路由");
+    expect(counter().textContent).toBe(`步骤 2 / ${total}`);
+    expect(previous().disabled).toBe(false);
+    await f.user.click(previous());
+    expect(pane().textContent).toContain("实现微任务详情");
+    expect(previous().disabled).toBe(true);
+    fireEvent.click(strip().querySelector('[data-key="acceptance-wait"]')!);
+    expect(next().disabled).toBe(true);
   });
 
   it("offers a delivered micro task's open acceptance as its own slice at the end of the record", async () => {

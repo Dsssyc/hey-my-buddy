@@ -1,27 +1,25 @@
-/* The console's one palette (ADR-029 clause 8). Settled execution bars identify
-   models; every other colour has one meaning.
-   Selected-row marks only the selected timeline row.
-   Live is what runs, is current or is selected outside the timeline tracks. Hand is what waits for someone:
-   a Host's decision or acceptance, unsaved changes. Fail
-   is failure and nothing else. Ink and past are the record. The top bar keeps
-   the logo's ink in both themes, so what sits on it has its own colours.
-   ink4 is the faintest text tier, for the model-and-effort line: it keeps 4.5:1
-   on the resting grounds (paper, surface, sunk); on the selected ground
-   (live-wash) even ink3 is at that floor, so the current row keeps ink3. */
+/* The console's one palette (ADR-029 clause 8). Green belongs to the now ruler.
+   Active facts use body ink and motion; selection and keyboard focus are neutral.
+   Hand marks waiting for a person, and fail marks failure. */
 :root {
   color-scheme: light;
   --paper: #f3f1ea;
   --surface: #ffffff;
+  --ruler-ground: #e5e2d8;
   --sunk: #f8f7f2;
   --ink: #1f2a24;
   --ink2: #56645c;
-  --ink3: #606b64;
-  --ink4: #657068;
+  --ink3: #536057;
+  --ink4: #566159;
   --line: #e4e2d9;
   --line2: #cfcdc3;
   --live: #24654d;
-  --live-wash: #dcede2;
   --selected-row: rgb(0 0 0 / 4%);
+  --selection: #e5e8e3;
+  --selection-hover: #d9ded7;
+  --focus: #59666d;
+  --popover-ground: #ffffff;
+  --execution-ink: #101017;
   --hand: #b2461e;
   --hand-mark: #d85a30;
   --hand-wash: #fbede5;
@@ -29,18 +27,11 @@
   --fail-wash: #fbe9ed;
   --past: #5b6a62;
   --past-wash: #e1e6e2;
-  --model-1: #d6deea;
-  --model-2: #e1d8ea;
-  --model-3: #d3e5e0;
-  --model-4: #eadfce;
-  --model-5: #ead6e0;
-  --model-6: #dde6ce;
-  --idle-stripe: #cfcdc3;
   --overlay: rgb(0 0 0 / 35%);
   --bar: #1f2a24;
   --bar-ink: #f1efe8;
   --bar-ink2: #a9b3ac;
-  --bar-live: #7cc79f;
+  --brand-mark: #7cc79f;
   --bar-hand: #f0997b;
   --bar-fail: #f2899c;
 }
@@ -50,16 +41,21 @@
   color-scheme: dark;
   --paper: #0e0f10;
   --surface: #16171a;
+  --ruler-ground: #292c31;
   --sunk: #121315;
   --ink: #eceae2;
   --ink2: #a9aeb4;
-  --ink3: #9aa0a6;
-  --ink4: #8b9196;
+  --ink3: #a3a8ae;
+  --ink4: #a0a5ab;
   --line: #26282c;
   --line2: #363940;
   --live: #7cc79f;
-  --live-wash: #1d3b2b;
   --selected-row: rgb(255 255 255 / 5%);
+  --selection: #292c30;
+  --selection-hover: #34383d;
+  --focus: #c4c8ce;
+  --popover-ground: #24262a;
+  --execution-ink: #101017;
   --hand: #f0997b;
   --hand-mark: #f0997b;
   --hand-wash: #33231c;
@@ -67,18 +63,11 @@
   --fail-wash: #351c23;
   --past: #9aa0a6;
   --past-wash: #2b2e33;
-  --model-1: #34465e;
-  --model-2: #4a3d5c;
-  --model-3: #2f504b;
-  --model-4: #57452f;
-  --model-5: #553a4b;
-  --model-6: #44512f;
-  --idle-stripe: #363940;
   --overlay: rgb(0 0 0 / 60%);
   --bar: #0b0c0d;
   --bar-ink: #f1efe8;
   --bar-ink2: #8f9993;
-  --bar-live: #7cc79f;
+  --brand-mark: #7cc79f;
   --bar-hand: #f0997b;
   --bar-fail: #f2899c;
 }

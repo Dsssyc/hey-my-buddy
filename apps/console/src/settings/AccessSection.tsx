@@ -53,12 +53,13 @@ export function AccessSection({ api, csrfToken, access, refresh, unavailable }: 
           <span>{t("access.allowAuthorized")}</span>
         </label>
         <p className="max-w-[560px] text-xs leading-relaxed text-ink2">{t("access.description")}</p>
+        <p className="max-w-[560px] text-xs leading-relaxed text-ink2">{t("access.sessionData")}</p>
         {current.requireLogin && <div className="max-w-[560px]">
           <h3 className="mb-1 text-xs text-ink2">{t("access.browsers")}</h3>
           <ul aria-label={t("access.browsers")} className="divide-y border-t">
             {current.sessions.map(session => <li key={session.id} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-x-3 gap-y-2 py-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_96px] sm:gap-x-5">
               <span className="inline-flex items-center gap-2 font-mono tabular-nums">{session.id.slice(0, 8)}
-                {session.current && <span className="inline-flex items-center gap-1 font-sans text-xs text-live"><StateMark kind="live" />{t("access.current")}</span>}
+                {session.current && <span className="inline-flex items-center gap-1 font-sans text-xs text-ink"><StateMark kind="live" />{t("access.current")}</span>}
               </span>
               <Hint text={t("access.lastSeen", { time: formatDateTime(session.lastSeen * 1000) })}>
                 <time tabIndex={0} dateTime={new Date(session.lastSeen * 1000).toISOString()} className="text-xs text-ink2 tabular-nums">{formatShortDateTime(session.lastSeen * 1000)}</time>

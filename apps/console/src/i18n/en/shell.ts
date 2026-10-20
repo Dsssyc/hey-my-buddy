@@ -1,7 +1,7 @@
 import type zh from "../zh/shell";
 
 export default {
-  reasonFact: "{{name}}: {{value}}.",
+  reasonFact: "{{name}}: {{value}}",
   reasonParam: {
     "access": "Access",
     "adapter": "Execution adapter",

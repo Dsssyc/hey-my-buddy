@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
-import { Fold, Moment } from "./parts";
+import { Fold, Moment, MomentRange } from "./parts";
 
 afterEach(cleanup);
 
@@ -57,5 +57,18 @@ describe("a recorded instant", () => {
     expect(recent).toMatch(/^(\d{4}-)?\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
     expect(old).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
     expect(old!.startsWith(String(longAgo.getFullYear()))).toBe(true);
+  });
+});
+
+describe("a recorded interval", () => {
+  it("writes the date once within a local day and at both ends across local days", () => {
+    const first = new Date(2026, 8, 25, 23, 58, 4);
+    const same = new Date(2026, 8, 25, 23, 59, 5);
+    const next = new Date(2026, 8, 26, 0, 1, 6);
+    const view = render(<><MomentRange start={first.getTime()} end={same.toISOString()}/><MomentRange start={first.getTime()} end={next.toISOString()}/></>);
+    const [withinDay, acrossDays] = [...view.container.querySelectorAll("span.font-mono")];
+    expect(withinDay?.textContent).toMatch(/09-25 23:58:04 – 23:59:05/);
+    expect(acrossDays?.textContent).toMatch(/09-25 23:58:04 – 09-26 00:01:06/);
+    expect(withinDay?.querySelectorAll("time")).toHaveLength(2);
   });
 });

@@ -1,6 +1,6 @@
 import { expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, test } from "./preview";
+import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
 
 // The detail of a micro task on the synthetic preview. Macro task A holds a1 (accepted, two turns, a change
 // of buddy, an answered inquiry and one that could not be delivered), a2 (waiting for its Host), a3 (running,
@@ -90,7 +90,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         // Opened from a span of the timeline, the detail opens on the turn that span belongs to.
         const span = page.locator('[data-slot=timeline-tracks] [data-key="span:execution:att-a1-2"]');
         await span.waitFor();
-        await span.dblclick();
+        await span.click();
         await expect(detail(page)).toBeVisible();
         await expect(page).toHaveURL(new RegExp(`#tasks/${A}/preview-run-a1/7$`));
         await expect(chosen(page)).toHaveAccessibleName(new RegExp(turn(2)));
@@ -272,7 +272,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         // A decision that was made says what, by whom and when.
         // Enlarge the shared scale until the decision and its nearby continuation are separate marks.
         for (let count = 0; count < 5 && await step(page, locale === "zh-CN" ? "决定" : "Decision").count() === 0; count++) {
-          await strip(page).getByRole("button", { name: locale === "zh-CN" ? "放大（+）" : "Zoom in (+)", exact: true }).click();
+          await strip(page).locator('[data-slot=zoom-ruler]:visible').press("+");
         }
         await step(page, locale === "zh-CN" ? "决定" : "Decision").first().click();
         await expect(pane(page)).toContainText(locale === "zh-CN" ? "拒绝" : "Declined");
@@ -353,9 +353,11 @@ test.describe("the detail of a micro task in the dark theme", () => {
     await open(page, `#tasks/${A}/preview-run-a3`);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(detail(page)).toBeVisible();
-    for (const text of await page.locator("[data-slot=task-detail] h2, [data-slot=task-detail] h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-strip] text").all()) {
+    await page.evaluate(() => document.fonts.ready);
+    await settle(page);
+    for (const text of await page.locator("[data-slot=task-detail] h2, [data-slot=task-detail] h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-strip] text").elementHandles()) {
       const label = (await text.textContent())?.trim();
-      if (!(await text.locator("*").count()) && label) expect(await contrastOf(text), label).toBeGreaterThanOrEqual(4.5);
+      if (!(await text.evaluate(node => (node as Element).childElementCount)) && label) expect(await contrastOf(text), label).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

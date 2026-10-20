@@ -34,16 +34,14 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
 
     test("zooms time twice while the axis and tracks scroll together and names stay fixed", async ({ page }) => {
       await openMacro(page, theme);
-      const zoomIn = page.getByRole("button", { name: locale === "zh-CN" ? "放大（+）" : "Zoom in (+)", exact: true });
-      const zoomOut = page.getByRole("button", { name: locale === "zh-CN" ? "缩小（-）" : "Zoom out (-)", exact: true });
-      const fit = page.getByRole("button", { name: locale === "zh-CN" ? "适应窗口（0）" : "Fit to window (0)", exact: true });
-      await expect(zoomIn).toBeVisible(); await expect(zoomOut).toBeVisible(); await expect(fit).toBeVisible();
+      const ruler = page.locator('[data-slot=zoom-ruler]:visible');
+      await expect(ruler).toHaveAttribute("tabindex", "0");
       const initial = Number(await canvas(page).getAttribute("data-ppm"));
       expect(initial).toBeGreaterThan(0);
-      await zoomIn.click();
+      await ruler.press("+");
       await expect.poll(async () => Number(await canvas(page).getAttribute("data-ppm"))).toBeGreaterThan(initial);
       const once = Number(await canvas(page).getAttribute("data-ppm"));
-      await zoomIn.click();
+      await ruler.press("+");
       await expect.poll(async () => Number(await canvas(page).getAttribute("data-ppm"))).toBeGreaterThan(once);
       const twice = Number(await canvas(page).getAttribute("data-ppm"));
       expect(await tracks(page).evaluate(node => node.scrollWidth > node.clientWidth)).toBe(true);
@@ -65,9 +63,9 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       expect(afterAxis!.x).toBeLessThan(beforeAxis!.x);
       expect(afterAxis!.x - beforeAxis!.x).toBeCloseTo(afterTrack!.x - beforeTrack!.x, 0);
       expect(afterName!.x).toBeCloseTo(beforeName!.x, 0);
-      await zoomOut.click();
+      await ruler.press("-");
       await expect.poll(async () => Number(await canvas(page).getAttribute("data-ppm"))).toBeLessThan(twice);
-      await fit.click();
+      await ruler.press("0");
       await expect.poll(async () => Number(await canvas(page).getAttribute("data-ppm"))).toBeCloseTo(initial, 5);
       const selected = page.locator('[data-slot="timeline-row-name"][data-run-id="preview-run-a2"]:visible');
       await selected.click();
@@ -76,9 +74,9 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       await page.keyboard.press("Escape");
       await expect(page.locator('[data-slot=timeline-tracks]')).toBeVisible();
       const keys = await page.locator('[data-slot="timeline-row"][data-run-id="preview-run-a2"] [data-slot="timeline-track"] [data-key]').evaluateAll(elements => elements.sort((a, b) => Number(a.getAttribute("data-at")) - Number(b.getAttribute("data-at"))).map(element => element.getAttribute("data-key")!));
-      const anchored = page.locator(`[data-slot="timeline-track"] [data-key="${keys[0]}"]`);
+      const anchored = page.locator(`[data-slot="timeline-track"] [data-key="${keys[0]}"]`).locator('[data-slot$="-bar"], [data-slot$="-wait"]').first();
       const beforeAnchor = await anchored.boundingBox();
-      await zoomIn.click();
+      await ruler.press("+");
       const afterAnchor = await anchored.boundingBox();
       expect(Math.abs(afterAnchor!.x - beforeAnchor!.x)).toBeLessThanOrEqual(1);
       await expectNoSidewaysScroll(page);

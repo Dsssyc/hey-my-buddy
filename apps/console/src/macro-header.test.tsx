@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render as baseRender, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTaskOverview } from "./MacroTaskOverview";
@@ -6,6 +6,7 @@ import { macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { TooltipProvider } from "./components/ui/tooltip";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+const render = (ui: React.ReactElement) => baseRender(ui, { wrapper: ({ children }: { children: React.ReactNode }) => <TooltipProvider delayDuration={0}>{children}</TooltipProvider> });
 
 describe("the macro task header", () => {
   it("shows the title, context and state counts, with recorded details under elapsed time", async () => {
@@ -29,13 +30,13 @@ describe("the macro task header", () => {
     await user.click(within(head).getByRole("button", { name: "时间统计" }));
     const details = screen.getByRole("dialog", { name: "时间统计" });
     expect(details.textContent).toContain(timeline.macroTask.description);
-    expect(details.textContent).toContain("从开始到最近一次活动");
+    expect(details.textContent).toContain("跨度");
   });
 
   it("keeps fallback title provenance in an accessible hint without a browser title tooltip", async () => {
     const summary = { ...macroTaskTimelineFixture().macroTask, titleSource: "task" as const };
-    render(<TooltipProvider><MacroTaskOverview summary={summary} timeline={null} loading={false}
-      stale={false} onBackToList={() => {}} /></TooltipProvider>);
+    render(<MacroTaskOverview summary={summary} timeline={null} loading={false}
+      stale={false} onBackToList={() => {}} />);
     const title = screen.getByRole("heading", { name: summary.title! });
     expect(title.hasAttribute("title")).toBe(false);
     await userEvent.setup().hover(title);

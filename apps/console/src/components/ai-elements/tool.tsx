@@ -7,7 +7,7 @@ export function Tool({ className, defaultOpen = true, ...props }: ComponentProps
 }
 
 export function ToolHeader({ title, category, status, className, ...props }: Omit<ComponentProps<typeof CollapsibleTrigger>, "children" | "title"> & { title: string; category: string; status: string }) {
-  return <CollapsibleTrigger className={cn("grid w-full min-w-0 grid-cols-[16px_minmax(0,1fr)] items-start gap-2 py-2 text-left text-sm hover:bg-sunk focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", className)} {...props}>
+  return <CollapsibleTrigger className={cn("grid w-full min-w-0 grid-cols-[16px_minmax(0,1fr)] items-start gap-2 py-2 text-left text-sm", className)} {...props}>
     <Disclosure open={false} className="group-data-[state=open]/tool:rotate-90" />
     <span className="min-w-0">
       <span className="block break-words font-medium">{title}</span>

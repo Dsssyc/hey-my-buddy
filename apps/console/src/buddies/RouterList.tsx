@@ -22,7 +22,7 @@ export function routerLineId(buddyId: string): string {
 function LineButton({ label, disabled, reason, className, onClick, children }: {
   label: string; disabled: boolean; reason?: string; className?: string; onClick: () => void; children: ReactNode;
 }) {
-  return <Hint text={reason}>
+  return <Hint text={reason || label}>
     <Button variant="ghost" size="icon-sm" className={cn("text-ink2", className)} aria-label={label} aria-disabled={disabled || undefined}
       onClick={() => { if (!disabled) onClick(); }}>{children}</Button>
   </Hint>;
@@ -38,7 +38,7 @@ function Standing({ status }: { status: RouterStatus }) {
   return <span className="flex items-center gap-1.5 whitespace-nowrap max-sm:col-start-3 max-sm:row-start-2">
     <StateMark kind={status.kind === "current" ? "live" : "idle"} />
     <Hint text={hint}>
-      <span tabIndex={hint ? 0 : undefined} className={cn("rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", status.kind === "current" ? "text-live" : "text-ink2")}>
+      <span tabIndex={hint ? 0 : undefined} className={cn("rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50", status.kind === "current" ? "text-foreground" : "text-ink2")}>
         {t(`roles.list.status.${status.kind}`)}
       </span>
     </Hint>

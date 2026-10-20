@@ -1,19 +1,23 @@
-import { useEffect, useMemo, useRef } from "react";
+import { Hint } from "../components/hint";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReactNode } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Button } from "@/components/ui/button";
 import type { MacroTaskTimeline, TimelineRow } from "../macro-task-types";
-import { buddyColorRegistry } from "../timeline/buddyColors";
+import { buddyColorsFor } from "../timeline/buddyColors";
 import { Axis, Track } from "../timeline/Tracks";
 import { timelineScaleInput } from "../timeline/scale";
 import { useTimelineZoom } from "../timeline/useTimelineZoom";
+import { useTimelineGestures } from "../timeline/useTimelineGestures";
+import { ZoomRuler } from "../timeline/ZoomRuler";
 import { acceptanceInterval } from "../timeline/acceptance";
 import { parseTimelineInstant } from "../timeline/instant";
 import { useViewport } from "../timeline/useViewport";
 import { SETTLING_EVENTS, stepForItem } from "./steps";
 import type { Step, Steps } from "./steps";
 import { modelEffort } from "./names";
-import { ZoomControls } from "../timeline/ZoomControls";
 
 const SLACK = 8;
 const STRIP_PX = 44;
@@ -52,8 +56,10 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
 }) {
   const { t } = useTranslation("taskDetail");
   const { viewport, setViewport, width } = useViewport(640);
+  const [gestureArea, setGestureArea] = useState<HTMLDivElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   viewportRef.current = viewport;
+  const [ruler, setRuler] = useState<HTMLDivElement | null>(null);
   const centered = useRef(false);
   const spans = useMemo(() => timeline.spans.filter(span => span.runId === row.runId), [timeline, row.runId]);
   const events = useMemo(() => timeline.events.filter(event => event.runId === row.runId), [timeline, row.runId]);
@@ -64,9 +70,10 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
   // Fit covers this micro task's own whole record, whichever step is selected.
   const scoped = useMemo(() => ({ ...timeline, rows: [row], spans, events }), [timeline, row, spans, events]);
   const input = useMemo(() => timelineScaleInput(scoped), [scoped]);
-  const buddyColors = useMemo(() => buddyColorRegistry(timeline.macroTask.macroTaskId, spans), [timeline.macroTask.macroTaskId, spans]);
-  const { scale, change: zoom, atMinimum, atMaximum } = useTimelineZoom(input, Math.max(1, width - SLACK * 2), row.runId, viewportRef,
-    steps.steps[selected]?.at ?? null, { current: null }, nowMs, SLACK);
+  const buddyColors = useMemo(() => buddyColorsFor(timeline.spans), [timeline.spans]);
+  const { scale, change: zoom, zoomAt, atMinimum } = useTimelineZoom(input, Math.max(1, width - SLACK * 2), row.runId, viewportRef,
+    steps.steps[selected]?.at ?? null, nowMs, SLACK);
+  useTimelineGestures(gestureArea, ruler, zoomAt, () => zoom(0), true);
   useEffect(() => {
     if (centered.current || !scale || !viewport) return;
     centered.current = true;
@@ -88,25 +95,37 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
   </svg> : null;
   const delegationAt = steps.steps[0]?.at ?? null;
   const acceptanceIndex = steps.steps.findIndex(item => item.kind === "acceptance" && item.pending);
-  const sliceButton = (key: string, index: number, label: string, at: number, mark: ReactNode, hit: { x: number; y: number; w: number; h: number }) => <g
-    key={key} role="button" tabIndex={selected === index ? 0 : -1} data-key={key} aria-pressed={selected === index} aria-label={label}
+  const sliceButton = (key: string, index: number, label: string, at: number, mark: ReactNode, hit: { x: number; y: number; w: number; h: number }) => <Hint key={key} text={label}><g role="button" tabIndex={selected === index ? 0 : -1} data-key={key} aria-pressed={selected === index} aria-label={label}
     onClick={() => onStep(index + 1)}
     onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onStep(index + 1); } }}
-    className={selected === index ? "pointer-events-auto cursor-pointer outline-none" : "pointer-events-auto cursor-pointer outline-none focus-visible:[&_.hit]:stroke-live focus-visible:[&_.hit]:stroke-2"}>
-    <rect className="hit" fill="transparent" x={hit.x} y={hit.y} width={hit.w} height={hit.h}/>
-    {selected === index && <rect data-slot="selected-item" x={at - 8} y={STRIP_PX / 2 - 8} width={16} height={16} fill="none" className="pointer-events-none stroke-ink3"/>}
+    className={selected === index ? "pointer-events-auto outline-none" : "pointer-events-auto outline-none focus-visible:[&_.hit]:stroke-ring focus-visible:[&_.hit]:stroke-2"}>
+    <rect className="hit" fill="transparent" x={Math.max(0, Math.min(scale!.widthPx + SLACK * 2 - hit.w, hit.x))} y={hit.y} width={hit.w} height={hit.h}/>
+    {selected === index && <rect data-slot="selected-item" x={at - 8} y={STRIP_PX / 2 - 8} width={16} height={16} fill="none" className="pointer-events-none stroke-focus"/>}
     {mark}
-  </g>;
+  </g></Hint>;
   const middle = STRIP_PX / 2;
-  return <div data-slot="detail-strip" role="group" aria-label={t("strip.label")} onKeyDown={event => {
+  return <div ref={setGestureArea} data-slot="detail-strip" role="group" aria-label={t("strip.label")} onKeyDown={event => {
     if (event.defaultPrevented || (event.target as Element).closest("input, textarea, select, [role=dialog]")) return;
     if (event.key === "+" || event.key === "=") { event.preventDefault(); zoom(1); }
     else if (event.key === "-") { event.preventDefault(); zoom(-1); }
     else if (event.key === "0") { event.preventDefault(); zoom(0); }
-  }} className="relative flex-none select-none border-b border-line bg-card">
-    <ScrollArea className="mr-28 block" orientation="both" viewportProps={{ ref: setViewport, "data-slot": "detail-strip-scroll" }}>
+  }} className="relative flex flex-none select-none">
+    <div data-slot="step-navigation" className="flex shrink-0 flex-col items-center justify-between border-r border-line px-3 py-2">
+      <span data-slot="step-counter" className="whitespace-nowrap text-xs font-medium tabular-nums text-ink">{t("strip.position", { current: selected + 1, total: steps.steps.length })}</span>
+      <div className="flex gap-1.5">
+        <Hint text={t("strip.previous")}><span className="inline-flex outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={selected === 0 ? 0 : undefined}><Button type="button" variant="outline" size="icon-sm" className="border-line2 text-ink disabled:text-ink3" aria-label={t("strip.previous")} disabled={selected === 0} onClick={() => onStep(selected)}>
+          <ChevronLeft aria-hidden="true" strokeWidth={2.5}/>
+        </Button></span></Hint>
+        <Hint text={t("strip.next")}><span className="inline-flex outline-none focus-visible:ring-2 focus-visible:ring-ring" tabIndex={selected === steps.steps.length - 1 ? 0 : undefined}><Button type="button" variant="outline" size="icon-sm" className="border-line2 text-ink disabled:text-ink3" aria-label={t("strip.next")} disabled={selected === steps.steps.length - 1} onClick={() => onStep(selected + 2)}>
+          <ChevronRight aria-hidden="true" strokeWidth={2.5}/>
+        </Button></span></Hint>
+      </div>
+    </div>
+    <ScrollArea className="min-w-0 flex-1" orientation="both" viewportProps={{ ref: setViewport, "data-slot": "detail-strip-scroll" }}>
       {scale && input && <div className="relative" style={{ width: scale.widthPx + SLACK * 2 }}>
-        <Axis scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/>
+        <ZoomRuler ref={setRuler} className="bg-transparent" atMinimum={atMinimum} onChange={zoom} viewportWidth={width}>
+          <Axis compact scale={scale} ongoing={input.nowAtEnd} nowMs={nowMs}/>
+        </ZoomRuler>
         <div className="relative">
           <Track row={row} spans={spans} events={events} scale={scale} nowMs={nowMs} ongoing={input.nowAtEnd}
             selected={false} selectedKey={selectedKey} tabKey={selectedKey} buddyColors={buddyColors} height={STRIP_PX}
@@ -119,7 +138,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
             {steps.steps.map((item, index) => item.kind === "handoff" && item.at !== null && Number.isFinite(item.at)
               ? sliceButton(item.key, index, [t("step.handoff"), modelEffort(item.from) || t("unknown"), modelEffort(item.to) || t("unknown")].join(" · "), x(item.at!),
                 <path d={`M${x(item.at!)} ${middle - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`} className="fill-ink2"/>,
-                { x: x(item.at!) - 9, y: middle - 11, w: 18, h: 22 })
+                { x: x(item.at!) - 14, y: middle - 14, w: 28, h: 28 })
               : null)}
             {acceptanceIndex >= 0 && wait && sliceButton("acceptance-wait", acceptanceIndex, t("wait.acceptance"), x(wait.startMs),
               <path d={`M${x(wait.startMs)} ${middle - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`} className="fill-hand-mark"/>,
@@ -128,6 +147,5 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs }: {
         </div>
       </div>}
     </ScrollArea>
-    <ZoomControls className="absolute right-2 bottom-2 bg-card/90 p-0.5 shadow-sm" onChange={zoom} atMinimum={atMinimum} atMaximum={atMaximum}/>
   </div>;
 }

@@ -1,6 +1,6 @@
 /** The frame around every page: top bar, connection state and the startup screen. */
 export default {
-  reasonFact: "{{name}}：{{value}}。",
+  reasonFact: "{{name}}：{{value}}",
   reasonParam: {
     "access": "权限",
     "adapter": "执行适配器",

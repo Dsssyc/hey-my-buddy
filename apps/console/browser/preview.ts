@@ -1,4 +1,4 @@
-import { test as base, expect, type Locator, type Page } from "@playwright/test";
+import { test as base, expect, type Locator, type Page, type ElementHandle } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 
 /** All browser captures stay inside the app's own test results, regardless of the runner's cwd. */
@@ -13,7 +13,7 @@ export const test = base.extend({
   page: async ({ page }, use) => {
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(String(error)));
-    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    page.on("console", message => { if (message.type() === "error") errors.push(`${message.text()} (${message.location().url})`); });
     await use(page);
     // Let in-flight synthetic response handlers finish before the page is disposed.
     await page.unrouteAll({ behavior: "wait" });
@@ -26,6 +26,14 @@ export async function open(page: Page, hash: string): Promise<void> {
   const response = await page.goto(hash);
   expect(response?.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
   await page.getByRole("navigation").first().waitFor();
+}
+
+/** Open the timeline key after navigating to a macro task. */
+export async function openLegend(page: Page): Promise<Locator> {
+  await page.locator('[data-slot="legend-trigger"]').click();
+  const legend = page.locator('[data-slot="timeline-legend"]');
+  await expect(legend).toBeVisible();
+  return legend;
 }
 
 type Box = { name: string; left: number; top: number; right: number; bottom: number };
@@ -83,8 +91,9 @@ export async function expectNoSidewaysScroll(page: Page): Promise<void> {
 }
 
 /** The contrast between an element's text colour and the first opaque background behind it. */
-export async function contrastOf(target: Locator): Promise<number> {
-  return target.evaluate(node => {
+export async function contrastOf(target: Locator | ElementHandle<Node>): Promise<number> {
+  const measure = (node: Node) => {
+    const base = node as Element;
     const parse = (value: string) => {
       const parts = value.match(/[\d.]+/g)!.map(Number);
       return { rgb: parts.slice(0, 3), alpha: parts.length > 3 ? parts[3] : 1 };
@@ -97,13 +106,14 @@ export async function contrastOf(target: Locator): Promise<number> {
       return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     };
     let behind = [255, 255, 255];
-    for (let element: Element | null = node; element; element = element.parentElement) {
+    for (let element: Element | null = base; element; element = element.parentElement) {
       const background = parse(getComputedStyle(element).backgroundColor);
       if (background.alpha === 1) { behind = background.rgb; break; }
     }
-    const [lighter, darker] = [luminance(parse(getComputedStyle(node).color).rgb), luminance(behind)].sort((a, b) => b - a);
+    const [lighter, darker] = [luminance(parse(getComputedStyle(base).color).rgb), luminance(behind)].sort((a, b) => b - a);
     return (lighter + 0.05) / (darker + 0.05);
-  });
+  };
+  return "elementHandle" in target ? target.evaluate(measure) : target.evaluate(measure);
 }
 
 /** What the catalogue's toolbar is made of, as items that take room: the sections, the search, the filters, the count and the two actions. */

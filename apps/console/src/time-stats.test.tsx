@@ -1,12 +1,42 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render as baseRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { MacroTaskOverview } from "./MacroTaskOverview";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { setLanguageChoice } from "./i18n";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); setLanguageChoice("browser"); });
+const render = (ui: React.ReactElement) => baseRender(ui, { wrapper: TooltipProvider });
 
 describe("macro task time statistics", () => {
+  it.each([
+    { language: "zh" as const, locale: "zh-CN", title: "时间统计", started: "开始", last: "最后活动", missing: "未记录" },
+    { language: "en" as const, locale: "en", title: "Time statistics", started: "Started", last: "Last activity", missing: "Not recorded" },
+  ])("puts both dated recorded instants first for an active task in $language and names absent records", async ({ language, locale, title, started, last, missing }) => {
+    setLanguageChoice(language);
+    const timeline = macroTaskTimelineFixture();
+    timeline.macroTask.createdAt = new Date(2026, 8, 26, 9, 5, 7).toISOString();
+    timeline.macroTask.lastActivityAt = new Date(2026, 8, 26, 10, 6, 8).toISOString();
+    const nowMs = new Date(2026, 8, 26, 12, 0, 0).getTime();
+    expect(timeline.macroTask.counts.active).toBeGreaterThan(0);
+    const view = render(<MacroTaskOverview timeline={timeline} summary={null} nowMs={nowMs} loading={false} stale={false} onBackToList={() => {}} />);
+    await userEvent.click(screen.getByRole("button", { name: title }));
+    const dialog = screen.getByRole("dialog", { name: title });
+    const first = dialog.querySelector('[data-slot="time-stats-body"] > :first-child')!;
+    expect(first.getAttribute("data-slot")).toBe("time-stats-instants");
+    expect([...first.querySelectorAll("dt")].map(node => node.textContent)).toEqual([started, last]);
+    const recorded = [timeline.macroTask.createdAt, timeline.macroTask.lastActivityAt];
+    const formatter = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" });
+    expect([...first.querySelectorAll("time")].map(node => ({ recorded: node.getAttribute("datetime"), text: node.textContent })))
+      .toEqual(recorded.map(value => ({ recorded: value, text: formatter.format(new Date(value)) })));
+    expect(first.textContent).not.toContain(formatter.format(nowMs));
+    const summary = { ...timeline.macroTask, createdAt: null, lastActivityAt: null };
+    view.rerender(<MacroTaskOverview timeline={null} summary={summary} nowMs={nowMs} loading={false} stale={false} onBackToList={() => {}} />);
+    expect(first.querySelectorAll("time")).toHaveLength(0);
+    expect(within(first as HTMLElement).getAllByText(missing)).toHaveLength(2);
+  });
+
   it("opens recorded metrics from elapsed time and closes with Escape", async () => {
     const timeline = macroTaskTimelineFixture();
     const { container } = render(<section className="timeline-view">
@@ -18,8 +48,11 @@ describe("macro task time statistics", () => {
     await user.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "时间统计" });
     expect(container.contains(dialog)).toBe(false);
-    expect(dialog.textContent).toContain("从开始到最近一次活动：");
-    expect(dialog.textContent).toContain("其间至少有一项在运行的时间：");
+    const values = dialog.querySelector('[data-slot="time-stats-values"]')!;
+    expect([...values.querySelectorAll("dt")].map(node => node.textContent)).toEqual(["跨度", "运行", "累计"]);
+    expect([...values.querySelectorAll("dt")].map(node => node.firstElementChild?.getAttribute("aria-description")))
+      .toEqual(["从开始到最近一次活动：", "其间至少有一项在运行的时间：", "回合累计："]);
+    expect(values.querySelectorAll("dd")).toHaveLength(3);
     expect(dialog.textContent).toContain("结束未确认 1 回合 · 未计入");
     expect(dialog.textContent).toContain("来源 Host codex-desktop");
     await user.keyboard("{Escape}");

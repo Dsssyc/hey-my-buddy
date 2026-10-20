@@ -17,9 +17,10 @@ export type StepHandle = { set: (step: number | null) => void };
 /** The page owns the step and the detail asks it to change: this holds the step as the address would. */
 function Harness({ options, steps, onStep, onBack, onOpenRun }: { options: Options; steps: StepHandle; onStep: (step: number) => void; onBack: () => void; onOpenRun: (runId: string) => void }) {
   const [step, setStep] = useState<number | null>(options.step ?? null);
+  const [tab, setTab] = useState<"overview" | "session">("overview");
   steps.set = setStep;
   const reads = options.client ?? client(options.replies);
-  return <TooltipProvider><TaskDetail client={reads} runId="m1" timeline={options.timeline === undefined ? timeline() : options.timeline}
+  return <TooltipProvider delayDuration={0}><TaskDetail client={reads} sessionClient={{ session: async () => ({}) }} tab={tab} onTab={setTab} runId="m1" timeline={options.timeline === undefined ? timeline() : options.timeline}
     timelineLoading={options.timelineLoading ?? false} nowMs={Date.parse(at("11:30"))} step={step} origin={options.origin ?? null} active={options.active ?? true}
     onStep={next => { onStep(next); setStep(next); }} onBack={onBack} onOpenRun={onOpenRun} /></TooltipProvider>;
 }

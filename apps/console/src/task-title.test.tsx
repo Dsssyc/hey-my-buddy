@@ -1,17 +1,19 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render as baseRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import i18n from "i18next";
 import { afterEach, describe, expect, it } from "vitest";
 import { TaskDetail } from "./task-detail/TaskDetail";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { at, audit, client, result, task, timeline, workflow } from "./task-detail/task-detail.fixtures";
 import type { Replies } from "./task-detail/task-detail.fixtures";
 
 afterEach(cleanup);
+const render = (ui: React.ReactElement) => baseRender(ui, { wrapper: ({ children }: { children: React.ReactNode }) => <TooltipProvider delayDuration={0}>{children}</TooltipProvider> });
 
 /** The detail of `m1`, opened on the delegation step. */
 function detail(replies: Replies, step = 1) {
   const reads = client(replies);
-  const view = render(<TaskDetail client={reads} runId="m1" timeline={timeline()} timelineLoading={false} nowMs={Date.parse(at("11:30"))}
+  const view = render(<TaskDetail sessionClient={{ session: async () => ({}) }} tab="overview" onTab={() => undefined} client={reads} runId="m1" timeline={timeline()} timelineLoading={false} nowMs={Date.parse(at("11:30"))}
     step={step} origin={null} active onStep={() => undefined} onBack={() => undefined} onOpenRun={() => undefined} />);
   return { reads, view };
 }
@@ -72,7 +74,7 @@ describe("the micro task title rule in the detail (0.16 T1)", () => {
 
   it("keeps the explicit title across a refresh of the collaboration record; only the result changes", async () => {
     const reads = client();
-    render(<TaskDetail client={reads} runId="m1" timeline={timeline()} timelineLoading={false} nowMs={Date.parse(at("11:30"))}
+    render(<TaskDetail sessionClient={{ session: async () => ({}) }} tab="overview" onTab={() => undefined} client={reads} runId="m1" timeline={timeline()} timelineLoading={false} nowMs={Date.parse(at("11:30"))}
       step={7} origin={null} active onStep={() => undefined} onBack={() => undefined} onOpenRun={() => undefined} />);
     await ready();
     expect(heading().textContent).toBe("微任务详情");

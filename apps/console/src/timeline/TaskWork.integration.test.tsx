@@ -10,7 +10,7 @@ function setup() {
   vi.stubGlobal("matchMedia", (query: string) => ({ matches: query === "(prefers-reduced-motion: reduce)", addEventListener() {}, removeEventListener() {} }));
   const timeline = macroTaskTimelineFixture();
   const props: TaskWorkProps = { summary: timeline.macroTask, timeline, displayObservedAt: timeline.observedAt, loading: false, error: "", stale: false, newRunIds: new Set(), active: true, openedRunId: null, detail: () => null, onOpen: vi.fn(), onClose: vi.fn(), onRetry: vi.fn(), onBackToList: vi.fn() };
-  return { props, ...render(<TooltipProvider><TaskWork {...props}/></TooltipProvider>) };
+  return { props, ...render(<TooltipProvider delayDuration={0}><TaskWork {...props}/></TooltipProvider>) };
 }
 it("supports zoom shortcuts and resets the scale on macro navigation", () => {
   const { props, rerender } = setup();
@@ -21,9 +21,9 @@ it("supports zoom shortcuts and resets the scale on macro navigation", () => {
   expect(canvas()).toBeGreaterThan(fitted);
   fireEvent.keyDown(row, { key: "0" });
   expect(canvas()).toBe(fitted);
-  fireEvent.click(screen.getByRole("button", { name: "放大（+）" }));
+  fireEvent.keyDown(document.querySelector('[data-slot=zoom-ruler]')!, { key: "+" });
   expect(canvas()).toBeGreaterThan(fitted);
-  rerender(<TooltipProvider><TaskWork {...props} timeline={{ ...props.timeline!, macroTask: { ...props.timeline!.macroTask, macroTaskId: "other" } }}/></TooltipProvider>);
+  rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} timeline={{ ...props.timeline!, macroTask: { ...props.timeline!.macroTask, macroTaskId: "other" } }}/></TooltipProvider>);
   expect(canvas()).toBe(fitted);
 });
 
@@ -33,7 +33,7 @@ it("keeps a correction hint closed when detail moves focus, but opens it for key
   const target = timeline.rows[0]!;
   const correction = { ...timeline.rows[1]!, fixes: target.runId, fixesTitle: target.title, fixesTitleSource: target.titleSource };
   const next = { ...props, timeline: { ...timeline, rows: [target, correction] } };
-  const show = (openedRunId: string | null) => rerender(<TooltipProvider><TaskWork {...next} openedRunId={openedRunId}/></TooltipProvider>);
+  const show = (openedRunId: string | null) => rerender(<TooltipProvider delayDuration={0}><TaskWork {...next} openedRunId={openedRunId}/></TooltipProvider>);
   show(null);
   show(correction.runId);
   // The list beside the detail holds the row; moving focus to it opens no tooltip.

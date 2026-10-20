@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { StorageApplyResult, StorageCategory, StorageOrphanProcess } from "../api";
 import { Hint } from "../components/hint";
-import { Button } from "../components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "../components/ui/collapsible";
 import { StateMark } from "../components/ui/state-mark";
 import { formatList, formatNumber } from "../i18n/format";
@@ -25,7 +24,7 @@ export function StorageTable({ categories }: { categories: StorageCategory[] }) 
     })}><tbody>
       <tr className="border-b">
         <th scope="row" className="py-2.5 font-normal">
-          {category.reasons.length ? <CollapsibleTrigger asChild><button type="button" className="group flex min-h-7 items-center gap-1 text-left text-ink2 transition-colors duration-150 hover:text-foreground motion-reduce:transition-none" aria-label={t("reasonsLabel", { category: categoryText(category.id) })}>
+          {category.reasons.length ? <CollapsibleTrigger asChild><button type="button" className="group flex min-h-7 items-center gap-1 text-left" aria-label={t("reasonsLabel", { category: categoryText(category.id) })}>
             <Disclosure open={open.has(category.id)} />{categoryText(category.id)}
           </button></CollapsibleTrigger> : <span className="block pl-5">{categoryText(category.id)}</span>}
         </th>
@@ -58,12 +57,12 @@ export function StorageOutcome({ result }: { result: StorageApplyResult }) {
   const [skipped, setSkipped] = useState(false);
   return <div role="status" className="space-y-2 text-xs">
     <p className="flex items-center gap-2"><StateMark kind="done" />{t("removed", { bytes: byteText(result.removedBytes), n: formatNumber(result.removed.length) })}</p>
-    {result.removed.length > 0 && <Collapsible open={removed} onOpenChange={setRemoved}><CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="px-0 text-xs"><Disclosure open={removed} />{t(removed ? "hideRemoved" : "showRemoved")}</Button></CollapsibleTrigger>
+    {result.removed.length > 0 && <Collapsible open={removed} onOpenChange={setRemoved}><CollapsibleTrigger className="inline-flex h-7 items-center gap-2 px-0 text-xs"><Disclosure open={removed} />{t(removed ? "hideRemoved" : "showRemoved")}</CollapsibleTrigger>
       <CollapsibleContent><ul className="space-y-2 py-2 font-mono text-ink2">{result.removed.map(item => <li key={item.id} className="break-all"><Hint text={byteHint(item.bytes)}><span tabIndex={0}>{t("item", { path: item.path, detail: byteText(item.bytes) })}</span></Hint></li>)}</ul></CollapsibleContent>
     </Collapsible>}
     {result.skipped.length > 0 && <Collapsible open={skipped} onOpenChange={setSkipped}>
       <p className="flex items-center gap-2"><StateMark kind="hand" />{t("skipped", { n: formatNumber(result.skipped.length) })}</p>
-      <CollapsibleTrigger asChild><Button variant="ghost" size="sm" className="px-0 text-xs"><Disclosure open={skipped} />{t(skipped ? "hideSkipped" : "showSkipped")}</Button></CollapsibleTrigger>
+      <CollapsibleTrigger className="inline-flex h-7 items-center gap-2 px-0 text-xs"><Disclosure open={skipped} />{t(skipped ? "hideSkipped" : "showSkipped")}</CollapsibleTrigger>
       <CollapsibleContent><ul className="space-y-2 py-2 text-ink2">{result.skipped.map(item => <li key={item.id} className="break-all">{t("item", { path: item.path, detail: item.reasons.length ? formatList(item.reasons.map(reasonText)) : t("changed") })}</li>)}</ul></CollapsibleContent>
     </Collapsible>}
   </div>;

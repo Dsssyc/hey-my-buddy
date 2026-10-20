@@ -21,7 +21,7 @@ function HintTarget({ children, "data-state": tooltipState, ...props }: Componen
 export function Hint({ text, children }: { text?: string; children: ReactElement }) {
   return <Tooltip>
     <TooltipPrimitive.Trigger asChild aria-description={text || undefined}
-      onFocus={event => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}><HintTarget>{children}</HintTarget></TooltipPrimitive.Trigger>
+      onFocus={event => { if (!(event.target as Element).matches(":focus-visible")) event.preventDefault(); }}><HintTarget>{children}</HintTarget></TooltipPrimitive.Trigger>
     {text && <TooltipContent>{text}</TooltipContent>}
   </Tooltip>;
 }

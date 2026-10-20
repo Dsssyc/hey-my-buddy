@@ -29,7 +29,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       await name.click();
       const strip = page.locator('[data-slot=detail-strip]');
       await expect(strip).toBeVisible();
-      await expectWholeAndApart(strip, strip.locator(":scope > [data-slot=scroll-area], :scope > [data-slot=timeline-zoom]"));
+      await expectWholeAndApart(strip, strip.locator(":scope > [data-slot=step-navigation], :scope > [data-slot=scroll-area]"));
       await expect(strip.locator('[aria-pressed=true]')).toHaveCount(1);
       await expect(page.locator('[data-slot=detail-pane]')).toContainText("回合 2");
       await settle(page);
@@ -54,7 +54,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       const laneBox = (await lane.boundingBox())!;
       const headerBox = (await header.boundingBox())!;
       expect(Math.abs(headerBox.width - laneBox.width)).toBeLessThanOrEqual(1);
-      expect(await header.evaluate(node => getComputedStyle(node).borderBottomWidth)).toBe("2px");
+      expect(await header.evaluate(node => getComputedStyle(node).borderBottomWidth)).toBe("1px");
       expect(await leadName.evaluate(node => node.style.paddingLeft)).toBe("13px");
       await expect(lane.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b4"]')).toHaveCSS("padding-left", "31px");
       // The lane's own numbers ride on the Lead row's hover: members, times and split usage.

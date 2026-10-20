@@ -1,4 +1,5 @@
-import { cleanup, render, within } from "@testing-library/react";
+import { TooltipProvider } from "../components/ui/tooltip";
+import { cleanup, render as testingRender, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buddyColorKey } from "../macro-task-display";
@@ -8,13 +9,14 @@ import { createTimelineScale } from "./scale";
 import { fitLabel } from "./labels";
 import { Axis, Track, spanReadout } from "./Tracks";
 
+const render = (node: React.ReactNode) => testingRender(<TooltipProvider>{node}</TooltipProvider>);
 afterEach(cleanup);
 const at = (minutes: number) => new Date(Date.UTC(2026, 9, 17, 8, minutes)).toISOString();
 const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 800);
 const base = macroTaskTimelineFixture();
 const execution = (extra: Partial<TimelineSpan> = {}): TimelineSpan => ({ ...base.spans.find(span => span.kind === "execution")!, spanId: "e", startAt: at(5), endAt: at(15), resultStatus: "ok", state: "finished", uncertain: false, shutdownConfirmed: true, expectedSeconds: 600, reminders: null, inquiries: [], ...extra });
-function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; buddyColors?: ReadonlyMap<string, string>; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
-  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} buddyColors={extra.buddyColors ?? new Map([[buddyColorKey(execution().buddy), "var(--model-1)"]])} selected={false} tabKey={extra.tabKey}/>);
+function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; highlightedKey?: string; buddyColors?: ReadonlyMap<string, string>; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
+  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} buddyColors={extra.buddyColors ?? new Map([[buddyColorKey(execution().buddy), "#6d7ec0"]])} selected={false} tabKey={extra.tabKey} highlightedKey={extra.highlightedKey}/>);
 }
 const slot = (name: string) => document.querySelector(`[data-slot=${name}]`);
 
@@ -37,7 +39,7 @@ describe("timeline drawings follow recorded facts", () => {
     const buddy = execution().buddy!;
     const identities = [buddy, { ...buddy, harness: "other-harness" }, { ...buddy, provider: "other-provider" },
       { ...buddy, model: "other-model" }, { ...buddy, effort: "other-effort" }];
-    const buddyColors = new Map(identities.map((identity, index) => [buddyColorKey(identity), "var(--model-" + (index + 1) + ")"]));
+    const buddyColors = new Map(identities.map((identity, index) => [buddyColorKey(identity), ["rgb(109, 126, 192)", "rgb(159, 138, 174)", "rgb(75, 147, 186)", "rgb(140, 135, 180)", "rgb(90, 140, 180)"][index]!]));
     expect(buddyColorKey(null)).toBe("[null,null,null,null]");
     expect(buddyColors.size).toBe(5);
     track(identities.map((identity, index) => execution({ spanId: "historical-" + index, buddy: identity })), { buddyColors });
@@ -46,11 +48,15 @@ describe("timeline drawings follow recorded facts", () => {
 
   it("uses pale settled execution, solid live/failure and a distinct unconfirmed end", () => {
     track([execution()]);
-    expect((slot("execution-bar") as SVGElement).style.fill).toBe("var(--model-1)");
+    expect((slot("execution-bar") as SVGElement).style.fill).toBe("rgb(109, 126, 192)");
     cleanup(); track([execution({ endAt: null, state: "executing", shutdownConfirmed: false, resultStatus: undefined })]);
-    expect(slot("execution-bar")?.getAttribute("class")).toContain("fill-live");
+    expect((slot("execution-bar") as SVGElement).style.fill).not.toBe("rgb(109, 126, 192)");
+    expect(slot("execution-breath")).not.toBeNull();
     cleanup(); track([execution({ resultStatus: "failed" })]);
-    expect(slot("execution-bar")?.getAttribute("class")).toContain("fill-fail");
+    expect(slot("execution-failed")).not.toBeNull();
+    expect(slot("execution-bar")?.getAttribute("class")).toContain("stroke-fail");
+    expect(slot("execution-bar")?.getAttribute("stroke-width")).toBe("2.5");
+    expect((slot("execution-bar") as SVGElement).style.fill).toBe("rgb(109, 126, 192)");
     cleanup(); const unknown = execution({ uncertain: true, shutdownConfirmed: false }); track([unknown]);
     expect(slot("unconfirmed-end")).toBeTruthy();
     expect(spanReadout(unknown, Date.parse(at(40)))).toContain("停止未确认");
@@ -58,12 +64,23 @@ describe("timeline drawings follow recorded facts", () => {
   it("renders full, abbreviated or no bar text using the measured available room", () => {
     const live = execution({ startAt: at(0), endAt: null, state: "executing", shutdownConfirmed: false, expectedSeconds: null, resultStatus: undefined });
     track([live], { width: 200 });
-    expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("进行中 40 分");
+    expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("Claude Opus 5.5 · 40 分");
     cleanup(); track([live], { width: 70 });
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("40 分");
     cleanup(); track([live], { width: 25 });
     expect(document.querySelector('[data-slot=track-label]')).toBeNull();
     expect(document.querySelector('[data-key="span:e"]')?.getAttribute("aria-label")).toContain("40 分");
+    expect(document.querySelector('[data-key="span:e"]')?.getAttribute("aria-label")).toContain("执行中");
+  });
+  it("opens a clicked execution and draws a transient frame without changing selection", async () => {
+    const onOpen = vi.fn(), onSelect = vi.fn();
+    track([execution()], { onOpen, onSelect, highlightedKey: "span:e" });
+    const fragment = document.querySelector<SVGGElement>('[data-key="span:e"]')!;
+    expect(fragment.querySelector('[data-slot=selected-item]')).not.toBeNull();
+    expect(fragment.getAttribute("aria-pressed")).toBe("false");
+    await userEvent.setup().click(fragment);
+    expect(onSelect).toHaveBeenCalledWith(base.rows[0]!.runId, "span:e");
+    expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "span:e");
   });
   it("draws silence only for the reminder and turns a passed expected mark orange", () => {
     track([execution({ endAt: null, state: "executing", shutdownConfirmed: false, resultStatus: undefined, reminders: { overdue: true, possiblyStuck: true, lastNativeEventAt: at(20), toolInProgress: false } })]);
@@ -93,8 +110,10 @@ describe("timeline drawings follow recorded facts", () => {
   it("marks open human waits and keeps settled waits and queues thin", () => {
     track([execution()], { state: "delivered" });
     expect(slot("acceptance-wait")?.getAttribute("stroke-dasharray")).toBe("5 4"); expect(slot("waiting-diamond")).toBeTruthy();
-    cleanup(); track([execution({ kind: "host", state: "open", endAt: null, expectedSeconds: null, inquiries: null })]);
+    expect(slot("execution-bar")!.compareDocumentPosition(slot("waiting-diamond")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    cleanup(); track([execution(), execution({ spanId: "h", kind: "host", state: "open", endAt: null, expectedSeconds: null, inquiries: null })]);
     expect(slot("host-wait")?.getAttribute("stroke-dasharray")).toBe("5 4"); expect(slot("waiting-diamond")).toBeTruthy();
+    expect(slot("execution-bar")!.compareDocumentPosition(slot("waiting-diamond")!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     cleanup(); track([execution({ kind: "queue", state: "queued", endAt: null, expectedSeconds: null, inquiries: null })]);
     expect(slot("queue-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toContain("排队");
@@ -129,6 +148,8 @@ describe("timeline drawings follow recorded facts", () => {
     const cluster = document.querySelector<SVGGElement>('[data-slot=event-cluster]')!;
     expect(cluster.getAttribute("data-key")).toBe("cluster:event:0");
     expect(cluster.getAttribute("tabindex")).toBe("0");
+    expect(cluster.querySelector('[data-slot="cluster-mark"] circle')?.getAttribute("r")).toBe("8");
+    expect(cluster.querySelector('[data-slot="cluster-mark"] text')?.textContent).toBe("3");
     await userEvent.setup().click(cluster);
     const content = document.querySelector<HTMLElement>('[data-slot=popover-content]')!;
     expect(within(content).getAllByRole("button")).toHaveLength(3);
@@ -157,7 +178,7 @@ describe("timeline drawings follow recorded facts", () => {
     await user.keyboard("{ArrowDown}{Enter}");
     expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "inquiry:q");
   });
-  it("selects a single inquiry without opening, then opens it with a double click or Enter", async () => {
+  it("selects and opens a single inquiry on click or Enter", async () => {
     const onOpen = vi.fn();
     const onSelect = vi.fn();
     track([execution({ inquiries: [{ inquiryId: "q", createdAt: at(20), author: "host-1", state: "answered" }] })], { onOpen, onSelect, tabKey: "inquiry:q" });
@@ -165,8 +186,6 @@ describe("timeline drawings follow recorded facts", () => {
     expect(inquiry.getAttribute("tabindex")).toBe("0");
     await userEvent.setup().click(inquiry);
     expect(onSelect).toHaveBeenCalledWith(base.rows[0]!.runId, "inquiry:q");
-    expect(onOpen).not.toHaveBeenCalled();
-    await userEvent.setup().dblClick(inquiry);
     expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "inquiry:q");
     inquiry.focus();
     await userEvent.setup().keyboard("{Enter}");
@@ -178,7 +197,7 @@ describe("timeline drawings follow recorded facts", () => {
     track([], { events, onOpen, width: 400 });
     expect(document.querySelectorAll('[data-slot=event-cluster]')).toHaveLength(1);
     expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(1);
-    await userEvent.setup().dblClick(document.querySelector('[data-key="event:2"]')!);
+    await userEvent.setup().click(document.querySelector('[data-key="event:2"]')!);
     expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "event:2");
   });
   it("hides ticks and breaks from screen readers", () => {
@@ -189,6 +208,13 @@ describe("timeline drawings follow recorded facts", () => {
     const folded = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [{ startMs: Date.parse(at(0)), endMs: Date.parse(at(2)) }, { startMs: Date.parse(at(38)), endMs: Date.parse(at(40)) }], instants: [Date.parse(at(2)), Date.parse(at(38))], canFold: true, nowAtEnd: true }, 800);
     render(<Axis scale={folded} ongoing nowMs={Date.parse(at(40))}/>);
     expect(slot("axis-break-mark")).toBeTruthy(); expect(slot("gap-label")?.textContent).toBe("36 分");
+    const axis = slot("timeline-axis")!;
+    expect(axis.querySelectorAll("pattern, rect")).toHaveLength(0);
+    const baseline = axis.querySelector('[data-slot="axis-baseline"]')!;
+    expect(baseline.getAttribute("x1")).toBe("0");
+    expect(baseline.getAttribute("x2")).toBe(String(folded.widthPx));
+    expect(Number(baseline.getAttribute("x1"))).toBeLessThan(folded.breaks[0]!.startX);
+    expect(Number(baseline.getAttribute("x2"))).toBeGreaterThan(folded.breaks[0]!.endX);
   });
   it("keeps the shared hour-and-minute spacing in a centered break label", () => {
     const folded = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(138)) }, busy: [{ startMs: Date.parse(at(0)), endMs: Date.parse(at(2)) }, { startMs: Date.parse(at(136)), endMs: Date.parse(at(138)) }], instants: [Date.parse(at(2)), Date.parse(at(136))], canFold: true, nowAtEnd: true }, 800);

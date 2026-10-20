@@ -8,7 +8,7 @@ const DURATION = 180;
 
 /** Zoom the actual time scale while keeping the chosen time at its screen coordinate. */
 export function useTimelineZoom(input: ScaleInput | null, available: number, macroId: string | undefined,
-  viewport: RefObject<HTMLDivElement | null>, selectedAt: number | null, pointerAt: RefObject<number | null>, nowMs: number,
+  viewport: RefObject<HTMLDivElement | null>, anchorAt: number | null, nowMs: number,
   /** Where scale x=0 sits in the viewport's own coordinates, so anchors hold beside sticky columns. */
   originX = 24) {
   const fit = useMemo(() => input ? createTimelineScale(input, Math.max(1, available)) : null, [input, available]);
@@ -35,7 +35,7 @@ export function useTimelineZoom(input: ScaleInput | null, available: number, mac
     if (!scale || !viewport.current) return;
     const next = direction === 0 ? minimum : Math.max(minimum, Math.min(MAX_PPM, (target.current ?? ppm) * (direction === 1 ? 2 : .5)));
     cancel(); target.current = next;
-    const at = selectedAt ?? pointerAt.current ?? nowMs;
+    const at = anchorAt ?? nowMs;
     anchor.current = { at, screenX: scale.toX(at)! + originX - viewport.current.scrollLeft };
     if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches || next === ppm) {
       target.current = null;
@@ -52,5 +52,18 @@ export function useTimelineZoom(input: ScaleInput | null, available: number, mac
     };
     frame.current = requestAnimationFrame(animate);
   };
-  return { scale, change, atMinimum: ppm <= minimum, atMaximum: ppm >= MAX_PPM };
+  /** Keep the instant under a wheel or pinch gesture at that screen coordinate. */
+  const zoomAt = (factor: number, clientX: number) => {
+    if (!scale || !viewport.current || !Number.isFinite(factor) || factor <= 0) return;
+    const view = viewport.current;
+    const screenX = clientX - view.getBoundingClientRect().left;
+    const at = scale.toTime(screenX + view.scrollLeft - originX);
+    if (at === null) return;
+    const next = Math.max(minimum, Math.min(MAX_PPM, (target.current ?? ppm) * factor));
+    if (next === ppm) return;
+    cancel(); target.current = null;
+    anchor.current = { at, screenX };
+    setZoom({ macroId, ppm: next === minimum ? null : next });
+  };
+  return { scale, change, zoomAt, atMinimum: ppm <= minimum, atMaximum: ppm >= MAX_PPM };
 }

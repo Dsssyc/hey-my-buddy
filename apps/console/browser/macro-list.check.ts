@@ -423,7 +423,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
         };
         return { content: edge.content, width: edge.width, colour: edge.backgroundColor,
           background: style.backgroundColor, border: style.borderLeftWidth,
-          hand: token("--hand-mark"), live: token("--live"), wash: token("--live-wash"), transition: style.transitionProperty };
+          hand: token("--hand-mark"), live: token("--ink"), wash: token("--selection"), hover: token("--selection-hover"), transition: style.transitionProperty };
       }));
       let measured = await styles();
       expect(measured[0]).toMatchObject({ width: "3px", colour: measured[0].hand });
@@ -439,7 +439,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       await expect(rows.nth(1)).toHaveAttribute("aria-pressed", "true");
       await rows.nth(1).hover(); await settle(page);
       measured = await styles();
-      expect(measured[1]).toMatchObject({ width: "3px", colour: measured[1].live, background: measured[1].wash, border: "0px" });
+      expect(measured[1]).toMatchObject({ width: "3px", colour: measured[1].live, background: measured[1].hover, border: "0px" });
       await photograph(page, "edges-selected-live", "zh-CN", width, theme);
       await expectNoSidewaysScroll(page);
     });

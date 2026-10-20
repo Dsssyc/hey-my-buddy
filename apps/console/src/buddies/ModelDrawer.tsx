@@ -73,7 +73,7 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
       <div className="flex items-center gap-2.5 max-[600px]:justify-between">
         {name(t("models.enabled"), enableUnsaved, { htmlFor: `${id}-enabled` })}
         <Hint text={enableLock}><Switch id={`${id}-enabled`} checked={buddy.enabled} aria-label={t("pane.enable", { effort })}
-          className="h-8 w-[34px] bg-transparent px-0.5 before:inset-x-0 before:inset-y-0 after:absolute after:inset-x-0.5 after:inset-y-2 after:rounded-full after:bg-line2 after:transition-colors after:duration-150 after:motion-reduce:transition-none aria-checked:bg-transparent aria-checked:after:bg-live [&_[data-slot=switch-thumb]]:relative [&_[data-slot=switch-thumb]]:z-10"
+          className="h-8 w-[34px] bg-transparent px-0.5 before:inset-x-0 before:inset-y-0 after:absolute after:inset-x-0.5 after:inset-y-2 after:rounded-full after:bg-line2 after:transition-colors after:duration-150 after:motion-reduce:transition-none aria-checked:bg-transparent aria-checked:after:bg-foreground [&_[data-slot=switch-thumb]]:relative [&_[data-slot=switch-thumb]]:z-10"
           aria-disabled={!canToggle || undefined} onCheckedChange={enabled => {
             if (canToggle) editor.update(draft => ({ ...draft, buddies: draft.buddies.map(entry => entry.buddyId === buddy.buddyId ? { ...entry, enabled } : entry) }));
           }} /></Hint>
@@ -130,7 +130,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
     </div>;
 
   return <section role="region" aria-label={modelIdentity(modelService)} data-slot="model-drawer"
-    className="border-t border-l-2 border-t-line border-l-live bg-sunk p-4 min-[900px]:pl-14">
+    className="border-t border-l-2 border-t-line border-l-foreground bg-sunk p-4 min-[900px]:pl-14">
     {blocking.length > 0 && <p className="mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert">{blocking.map(issue => issue.message).join(" ")}</p>}
     {attention.length > 0 && <p className="mb-3 border-l-2 border-hand-mark pl-3 text-xs text-hand" role="status">{attention.map(issue => issue.message).join(" ")}</p>}
     <div className="grid grid-cols-[minmax(0,1fr)] gap-y-4 min-[900px]:grid-cols-[minmax(0,0.8fr)_minmax(0,1.7fr)]">
@@ -138,7 +138,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2 text-xs text-ink2">
           <h3 className="text-xs font-medium text-ink2">{t("pane.model")}</h3>
           <Hint text={!row.available ? reasons : undefined}><span className="flex flex-wrap items-center gap-1.5">
-            <StateMark kind={row.available ? "live" : "idle"} />{t(`pane.${state}`)}
+            <StateMark kind={row.available ? "live" : "idle"} className="!animate-none" />{t(`pane.${state}`)}
             {row.pending && row.pendingSince && <time dateTime={row.pendingSince}>{formatDateTime(Date.parse(row.pendingSince))}</time>}
           </span></Hint>
         </div>
@@ -180,7 +180,7 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
             <button type="button" aria-pressed={chip.buddy.buddyId === selectedBuddyId} data-slot="buddy-stop"
             aria-label={chip.effort} onClick={() => onSelectBuddy(chip.buddy.buddyId)}
             className={cn("peer relative flex h-full w-full min-w-0 flex-col justify-center gap-0.5 px-3 text-left text-xs text-ink3 outline-none transition-[color,background-color,box-shadow] duration-150 hover:bg-foreground/5 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset motion-reduce:transition-none aria-pressed:z-10 aria-pressed:ring-[1.5px] aria-pressed:ring-foreground aria-pressed:ring-inset",
-              chip.buddy.enabled && "bg-card font-medium text-foreground before:absolute before:-top-px before:right-0 before:left-0 before:h-[3px] before:bg-live")}>
+              chip.buddy.enabled && "bg-card font-medium text-foreground before:absolute before:-top-px before:right-0 before:left-0 before:h-[3px] before:bg-foreground")}>
             <span>{chip.effort}</span>
             <span className="min-h-4 font-normal text-ink2">{chip.buddy.enabled ? chip.preference ? t(`preference.${chip.preference}`) : t("models.enabled") : ""}</span>
             {chip.unsaved && <UnsavedMark label={t("unsaved")} className="absolute top-1.5 right-1.5" />}

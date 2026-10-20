@@ -16,6 +16,19 @@ afterEach(() => {
 });
 
 describe("the console's language", () => {
+  it("presents acceptance and reason facts as labels in both languages", async () => {
+    const current = await load(["zh-CN"]);
+    expect(current.i18n.t("taskDetail:acceptance.noIntegration")).toBe("整合证明未记录");
+    expect(current.i18n.t("taskDetail:acceptance.unconfirmed", { n: 2 })).toBe("停止未确认 · 待核实执行 2 项");
+    expect(current.i18n.t("taskDetail:ending.cause", { cause: "正常完成" })).toBe("终止原因：正常完成");
+    expect(current.i18n.t("shell:reasonFact", { name: "原因", value: "超时" })).toBe("原因：超时");
+    current.language.setLanguageChoice("en");
+    expect(current.i18n.t("taskDetail:acceptance.noIntegration")).toBe("Integration evidence not recorded");
+    expect(current.i18n.t("taskDetail:acceptance.unconfirmed", { n: 2 })).toBe("Stop unconfirmed · executions to verify: 2");
+    expect(current.i18n.t("taskDetail:ending.cause", { cause: "Completed" })).toBe("End cause: Completed");
+    expect(current.i18n.t("shell:reasonFact", { name: "Reason", value: "Timeout" })).toBe("Reason: Timeout");
+  });
+
   it("follows the first supported browser language by default", async () => {
     const english = await load(["fr-FR", "en-GB", "zh-CN"]);
     expect([english.locale, english.tasks, english.lang, english.language.getLanguageChoice()]).toEqual(["en-GB", "Tasks", "en", "browser"]);

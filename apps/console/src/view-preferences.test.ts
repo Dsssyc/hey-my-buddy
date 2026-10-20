@@ -1,6 +1,6 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import { readViewPreference, storeViewPreference, useViewPreference, VIEW_PREFERENCE_PREFIX } from "./view-preferences";
+import { readViewPreference, readNumberViewPreference, storeViewPreference, useViewPreference, useNumberViewPreference, VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); localStorage.clear(); });
 it("only restores standard stored booleans; absent and damaged values are unchecked", () => {
@@ -45,4 +45,21 @@ it("keeps navigation overrides local while manual choices survive remount", () =
   view.unmount();
   view = renderHook(() => useViewPreference("example"));
   expect(view.result.current[0]).toBe(false);
+});
+
+
+it("restores finite number preferences and keeps their local value if storage access is denied", () => {
+  expect(readNumberViewPreference("width", 272)).toBe(272);
+  for (const value of ["", "  ", "NaN", "Infinity", "{}", "invalid"]) {
+    localStorage.setItem(VIEW_PREFERENCE_PREFIX + "width", value);
+    expect(readNumberViewPreference("width", 272)).toBe(272);
+  }
+  storeViewPreference("width", 342);
+  expect(readNumberViewPreference("width", 272)).toBe(342);
+  vi.spyOn(window, "localStorage", "get").mockImplementation(() => { throw new DOMException("blocked", "SecurityError"); });
+  const { result } = renderHook(() => useNumberViewPreference("width", 272));
+  expect(result.current[0]).toBe(272);
+  act(() => result.current[1](320));
+  expect(result.current[0]).toBe(320);
+  expect(readNumberViewPreference("width", 272)).toBe(272);
 });

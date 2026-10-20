@@ -1,9 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowDown, ArrowLeft } from "lucide-react";
+import { ArrowDown } from "lucide-react";
 import { ApiError } from "../api";
 import { Button } from "../components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../components/ui/dialog";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { reasonText } from "../i18n/reason";
 import { sessionBlocks } from "./blocks";
@@ -12,20 +11,18 @@ import { useSession } from "./use-session";
 import type { SessionClient } from "./use-session";
 import type { SessionPosition } from "./types";
 
-export type SessionDialogProps = {
-  client: SessionClient; taskId: string; attemptId: string; label: string; harness: string;
-  active: boolean; position?: SessionPosition; onPosition: (position: SessionPosition) => void; onClose: () => void; onReturnFocus?: () => boolean;
+export type SessionPanelProps = {
+  client: SessionClient; taskId: string; attemptId: string; harness: string;
+  active: boolean; position?: SessionPosition; onPosition: (position: SessionPosition) => void;
 };
 
 /** One read-only attempt. Navigation and persistence are owned by the enclosing shell. */
-export default function SessionDialog({ client, taskId, attemptId, label, harness, active, position, onPosition, onClose, onReturnFocus }: SessionDialogProps) {
+export default function SessionPanel({ client, taskId, attemptId, harness, active, position, onPosition }: SessionPanelProps) {
   const { t } = useTranslation("taskDetail");
   const { data, error, earlierBusy, earlier, retry } = useSession(client, taskId, attemptId, active, position?.before);
   const viewport = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
-  const closeButton = useRef<HTMLButtonElement>(null);
-  const returnFocus = useRef<HTMLElement | SVGElement | null>(null);
   const atBottom = useRef(position?.atBottom ?? true);
   const anchor = useRef<{ height: number; top: number } | null>(null);
   const [newContent, setNewContent] = useState(false);
@@ -34,28 +31,40 @@ export default function SessionDialog({ client, taskId, attemptId, label, harnes
   const focus = useRef<HTMLElement | null>(null);
   const initial = useRef(false);
   const previousAfter = useRef<number | null>(null);
+  const wasActive = useRef(false);
+  const savedPosition = useRef(position);
   const blocks = useMemo(() => sessionBlocks(data?.events ?? []), [data?.events]);
   const persist = () => {
-    if (!data || !viewport.current) return;
+    if (!active || !data || !viewport.current || viewport.current.clientHeight === 0) return;
     const node = viewport.current;
     // A page can begin between native items. The loaded suffix has stable
     // control order even when its read-page boundaries change on restoration.
     const targets = [...(panel.current?.querySelectorAll<HTMLElement>("[data-session-focus]") ?? [])];
     const focused = focus.current === null ? -1 : targets.indexOf(focus.current);
-    onPosition({ before: data.before, scrollTop: node.scrollTop, atBottom: node.scrollHeight - node.scrollTop - node.clientHeight < 48, focus: focused < 0 ? null : focused, expanded: [...expandedRef.current] });
+    savedPosition.current = { before: data.before, scrollTop: node.scrollTop, atBottom: node.scrollHeight - node.scrollTop - node.clientHeight < 48, focus: focused < 0 ? null : focused, expanded: [...expandedRef.current] };
+    onPosition(savedPosition.current);
   };
   useEffect(() => {
     window.addEventListener("pagehide", persist);
     return () => window.removeEventListener("pagehide", persist);
-  }, [data, onPosition]);
+  }, [active, data, onPosition]);
   useLayoutEffect(() => {
     const node = viewport.current;
+    if (!active) { wasActive.current = false; return; }
     if (!node || !data) return;
     if (!initial.current) {
       initial.current = true;
       node.scrollTop = atBottom.current ? node.scrollHeight : position?.scrollTop ?? 0;
       const target = position?.focus == null ? null : panel.current?.querySelectorAll<HTMLElement>("[data-session-focus]")[position.focus];
       target?.focus({ preventScroll: true });
+    } else if (!wasActive.current && savedPosition.current) {
+      atBottom.current = savedPosition.current.atBottom;
+      node.scrollTop = atBottom.current ? node.scrollHeight : savedPosition.current.scrollTop;
+      // History can reveal a previously focused reading control. A tab click
+      // keeps focus on its tab instead of moving the reader into the content.
+      if (document.activeElement === document.body && savedPosition.current.focus !== null) {
+        panel.current?.querySelectorAll<HTMLElement>("[data-session-focus]")[savedPosition.current.focus]?.focus({ preventScroll: true });
+      }
     } else if (data.change === "earlier" && anchor.current) {
       node.scrollTop = anchor.current.top + node.scrollHeight - anchor.current.height;
       anchor.current = null;
@@ -63,45 +72,36 @@ export default function SessionDialog({ client, taskId, attemptId, label, harnes
       if (atBottom.current) node.scrollTop = node.scrollHeight;
       else setNewContent(true);
     }
+    wasActive.current = true;
     previousAfter.current = data.after;
     persist();
-  }, [data]);
+  }, [data, active]);
   useEffect(() => {
     const node = content.current;
-    if (!node) return;
+    if (!node || !active) return;
     const observer = new ResizeObserver(() => {
       if (atBottom.current && viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
     });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [data !== null && !error]);
+  }, [data !== null && !error, active]);
 
   const errors = ["SESSION_NOT_INTEGRATED", "SESSION_NOT_RECORDED", "SESSION_DELETED", "SESSION_INVALID_RECORD", "SESSION_UNREADABLE"] as const;
   const failure = errors.find(code => error instanceof ApiError && code === error.code) ?? "SESSION_UNREADABLE";
-  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
-    <DialogContent ref={panel} data-slot="session-view" aria-describedby="session-description" className="flex h-dvh max-h-dvh w-full max-w-full flex-col gap-0 border-0 p-0 sm:h-[min(90dvh,960px)] sm:max-w-[min(1100px,calc(100%-3rem))] sm:border"
-      onFocusCapture={event => {
-        const target = (event.target as HTMLElement).closest<HTMLElement>("[data-session-focus]");
-        // Closing is navigation; keep the last reading control for a return.
-        if (target === closeButton.current) return;
-        focus.current = target;
-        persist();
-      }}
-      onOpenAutoFocus={event => { event.preventDefault(); const current = document.activeElement; returnFocus.current = current instanceof HTMLElement || current instanceof SVGElement ? current : null; closeButton.current?.focus(); }}
-      onCloseAutoFocus={event => { event.preventDefault(); if (!onReturnFocus?.() && returnFocus.current?.isConnected) returnFocus.current.focus({ preventScroll: true }); }}>
-      <header className="shrink-0 border-b bg-card px-4 py-3 sm:px-6">
-        <div className="flex items-start gap-3">
-          <Button ref={closeButton} size="sm" variant="ghost" data-session-focus="close" aria-label={t("sessionView.back")} onClick={onClose}><ArrowLeft size={16} aria-hidden/>{t("sessionView.back")}</Button>
-          <div className="min-w-0 flex-1"><DialogTitle className="text-base leading-7">{label} · {t("sessionView.title")}</DialogTitle>
-            <DialogDescription id="session-description" className="flex flex-wrap items-baseline gap-x-3 text-xs text-ink2"><span className="font-mono wrap-anywhere">{harness}</span>{data && <span className={data.state === "running" ? "text-live" : "text-ink2"}>{t(`sessionView.state.${data.state}`)}</span>}</DialogDescription>
-          </div>
-        </div>
+  return <section ref={panel} data-slot="session-view" aria-label={t("sessionView.title")} className="flex min-h-0 min-w-0 flex-1 flex-col"
+    onFocusCapture={event => {
+      focus.current = (event.target as HTMLElement).closest<HTMLElement>("[data-session-focus]");
+      persist();
+    }}>
+      <header className="shrink-0 border-b bg-card px-6 py-3">
+        <p className="flex flex-wrap items-baseline gap-x-3 text-xs text-ink2"><span className="font-mono wrap-anywhere">{harness}</span>{data && <span className={data.state === "running" ? "text-ink state-breathe" : "text-ink2"}>{t(`sessionView.state.${data.state}`)}</span>}</p>
         {data && data.omitted.length > 0 && <p className="mt-2 text-xs leading-relaxed text-ink2">{t("sessionView.omitted", { content: data.omitted.map(reasonText).join(t("sessionView.separator")) })}</p>}
       </header>
       {error ? <div className="flex min-h-0 flex-1 flex-col items-start gap-4 p-6" role="alert"><p>{t(`sessionView.errors.${failure}`)}</p><Button variant="outline" onClick={retry}>{t("retry")}</Button></div>
         : !data ? <p className="p-6 text-sm text-ink2" role="status">{t("sessionView.loading")}</p>
           : <div className="relative flex min-h-0 flex-1 flex-col">
             <ScrollArea className="min-h-0 flex-1" viewportProps={{ ref: viewport, tabIndex: 0, "data-session-focus": "viewport", "aria-label": t("sessionView.content"), className: "[overflow-anchor:none]", onScroll: () => {
+              if (!active) return;
               const node = viewport.current!;
               atBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 48;
               if (atBottom.current) setNewContent(false);
@@ -121,12 +121,12 @@ export default function SessionDialog({ client, taskId, attemptId, label, harnes
                   atBottom.current = false;
                   queueMicrotask(persist);
                 } }}/> : <p className="text-sm text-ink2">{t("sessionView.empty")}</p>}
+                {data.stopped && <p data-slot="session-stopped" role="status" className="mt-6 border-t pt-3 text-xs leading-relaxed text-fail">{t("sessionView.recordingStopped", { reason: reasonText(data.stopped) })}</p>}
               </div>
             </ScrollArea>
             {newContent && <Button data-slot="session-new-content" aria-live="polite" className="absolute bottom-4 left-1/2 -translate-x-1/2 shadow-sm" onClick={() => {
               atBottom.current = true; viewport.current!.scrollTop = viewport.current!.scrollHeight; setNewContent(false); persist(); viewport.current?.focus({ preventScroll: true });
             }}><ArrowDown size={14} aria-hidden/>{t("sessionView.newContent")}</Button>}
           </div>}
-    </DialogContent>
-  </Dialog>;
+  </section>;
 }

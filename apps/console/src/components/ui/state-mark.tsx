@@ -8,7 +8,7 @@ import { cn } from "cn"
  * the same mark in a list, on the timeline and in a detail.
  */
 const marks = {
-  live: <circle cx="6" cy="6" r="4.5" className="fill-live" />,
+  live: <circle cx="6" cy="6" r="4.5" className="fill-foreground" />,
   hand: <path d="M6 .8 11.2 6 6 11.2.8 6Z" className="fill-hand-mark" />,
   done: <path d="M2 6.4 4.8 9 10 3.2" fill="none" strokeWidth="1.8" className="stroke-past" />,
   fail: <path d="M2.5 2.5 9.5 9.5M9.5 2.5 2.5 9.5" fill="none" strokeWidth="1.8" className="stroke-fail" />,
@@ -26,7 +26,7 @@ function StateMark({
       data-kind={kind}
       viewBox="0 0 12 12"
       aria-hidden="true"
-      className={cn("size-3 shrink-0 overflow-visible", className)}
+      className={cn("size-3 shrink-0 overflow-visible", kind === "live" && "state-breathe", className)}
       {...props}
     >
       {marks[kind]}

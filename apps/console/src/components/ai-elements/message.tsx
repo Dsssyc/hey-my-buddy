@@ -11,7 +11,7 @@ export function Message({ from, className, ...props }: MessageProps) {
 }
 
 export function MessageContent({ className, ...props }: ComponentProps<"div">) {
-  return <div data-slot="session-message-content" className={cn("min-w-0 max-w-full break-words text-sm leading-relaxed", "group-data-[from=user]:bg-sunk group-data-[from=user]:px-3 group-data-[from=user]:py-2", className)} {...props} />;
+  return <div data-slot="session-message-content" className={cn("relative min-w-0 max-w-full break-words text-sm leading-relaxed", "group-data-[from=user]:bg-sunk group-data-[from=user]:px-3 group-data-[from=user]:py-2", "group-data-[from=assistant]:border-l-2 group-data-[from=assistant]:border-line2 group-data-[from=assistant]:pl-3", className)} {...props} />;
 }
 
 // The transcript is model output. Only web links are active; local paths and

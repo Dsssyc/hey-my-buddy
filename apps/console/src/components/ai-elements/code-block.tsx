@@ -1,6 +1,6 @@
 import { cn } from "cn";
 import type { ComponentProps, CSSProperties } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { HighlighterCore, ThemedToken } from "shiki/core";
 
@@ -66,10 +66,21 @@ function TokenLines({ lines, className }: { lines: ThemedToken[][]; className: s
 export function CodeBlock({ code, language, className, ...props }: Omit<ComponentProps<"div">, "children"> & { code: string; language?: string }) {
   const { t } = useTranslation("taskDetail");
   const [highlighted, setHighlighted] = useState<Highlighted | null>(null);
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
+  const container = useRef<HTMLDivElement>(null);
   const grammar = canonicalLanguage(language);
 
   useEffect(() => {
-    if (!grammar) return;
+    if (!container.current || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) { setVisible(true); observer.disconnect(); }
+    });
+    observer.observe(container.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!grammar || !visible) return;
     let active = true;
     highlight(code, grammar).then(tokens => {
       if (active) setHighlighted({ code, language: grammar, tokens });
@@ -77,10 +88,10 @@ export function CodeBlock({ code, language, className, ...props }: Omit<Componen
       if (active) setHighlighted({ code, language: grammar, failed: true });
     });
     return () => { active = false; };
-  }, [code, grammar]);
+  }, [code, grammar, visible]);
 
   const current = highlighted?.code === code && highlighted.language === grammar ? highlighted : null;
-  return <div data-slot="session-code" data-language={language} className={cn("min-w-0 overflow-x-auto bg-sunk p-3 text-foreground", className)} {...props}>
+  return <div ref={container} data-slot="session-code" data-language={language} className={cn("min-w-0 overflow-x-auto bg-sunk p-3 text-foreground", className)} {...props}>
     {current?.failed && <p role="alert" className="mb-2 text-xs text-fail">{t("sessionView.highlightFailed")}</p>}
     {current?.tokens ? <><TokenLines lines={current.tokens.light} className="dark:hidden" /><TokenLines lines={current.tokens.dark} className="hidden dark:block" /></> : <pre className="m-0 font-mono text-xs leading-relaxed"><code>{code}</code></pre>}
   </div>;

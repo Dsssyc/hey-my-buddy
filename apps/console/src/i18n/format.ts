@@ -34,9 +34,9 @@ export function formatShortDateTime(ms: number): string {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
-/** Several names as the language lists them: "Codex and DSH", "Codex和DSH". */
+/** Several names as the language lists them: "Codex and DSH", "Codex、DSH". */
 export function formatList(names: string[]): string {
-  return formatters().list.format(names);
+  return locale.startsWith("zh") ? names.join("、") : formatters().list.format(names);
 }
 
 /** A full local date and time, with the month written out where the locale's numeric order is ambiguous. */

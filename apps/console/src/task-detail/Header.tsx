@@ -1,10 +1,12 @@
 import { cn } from "cn";
+import { useEffect, useState } from "react";
 import { ArrowLeft, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Hint } from "@/components/hint";
 import { useTextClipped } from "@/components/use-text-clipped";
 import { Button } from "@/components/ui/button";
 import { StateMark } from "@/components/ui/state-mark";
+import { CopyableIdentifier } from "@/components/CopyableIdentifier";
 import { formatClock, formatDuration, formatMomentMinutes } from "../i18n/format";
 import { taskStatus, taskTitle } from "../task-state";
 import type { Task } from "../types";
@@ -12,7 +14,7 @@ import type { TaskView, Workflow } from "./types";
 
 export function DetailBack({ onBack }: { onBack: () => void }) {
   const { t } = useTranslation("taskDetail");
-  return <Button variant="ghost" size="icon-sm" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true" strokeWidth={1.5}/></Button>;
+  return <Hint text={t("back")}><Button variant="ghost" size="icon-sm" data-slot="detail-back" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true" strokeWidth={1.5}/></Button></Hint>;
 }
 
 export type StateWord = { key: "running" | "stopping" | "queued" | "host" | "lead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
@@ -46,6 +48,17 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
 }) {
   const { t } = useTranslation("taskDetail");
   const shell = useTranslation("shell").t;
+  const [turning, setTurning] = useState(false);
+  useEffect(() => {
+    if (!turning) return;
+    const preference = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    const stopForReducedMotion = () => { if (preference?.matches) setTurning(false); };
+    stopForReducedMotion();
+    preference?.addEventListener("change", stopForReducedMotion);
+    return () => preference?.removeEventListener("change", stopForReducedMotion);
+  }, [turning]);
+  const refreshing = busy || turning;
+  const refresh = () => { setTurning(true); onRefresh(); };
   const title = taskTitle(view.task);
   const text = title.source === "none" ? t("untitled") : title.text;
   const word = stateWord(view.task, view.lead, workflow?.state ?? null);
@@ -53,13 +66,14 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
   const start = Date.parse(view.task.createdAt);
   const [titleRef, clipped] = useTextClipped<HTMLHeadingElement>(text);
   const titleHint = title.source === "task" ? t("title.fromTask", { title: title.fullText }) : clipped && title.source !== "none" ? title.fullText : undefined;
-  return <header data-slot="detail-header" className="shrink-0 border-b bg-card">
-    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 px-4 py-2 sm:px-6">
+  return <header data-slot="detail-header" className="shrink-0 bg-card">
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 py-2 pl-1.5 pr-4 sm:pr-6">
       <div className="flex min-w-0 flex-1 items-center gap-2.5 @max-[650px]:order-1 @max-[650px]:basis-full">
         <DetailBack onBack={onBack}/>
         <Hint text={titleHint}>
           <h2 ref={titleRef} tabIndex={0} className="min-w-0 truncate rounded-sm text-base font-semibold outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{text}</h2>
         </Hint>
+        <CopyableIdentifier value={view.task.runId}/>
       </div>
       <div className="ml-auto flex shrink-0 items-center gap-x-4 @max-[650px]:order-2 @max-[650px]:w-full @max-[650px]:flex-wrap @max-[650px]:gap-2">
         <dl className="flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums @max-[650px]:basis-full">
@@ -69,13 +83,15 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
         </dl>
         <div className="flex shrink-0 items-center gap-2 @max-[650px]:ml-auto">
           <Hint text={word.key === "stopping" && workflow?.shutdown ? t("acceptance.unconfirmed", { n: workflow.shutdown.unconfirmedCount }) : undefined}>
-            <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-live" : word.mark === "fail" ? "text-fail" : "text-ink2")}>{t(`state.${word.key}`)}</span>
+            <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-ink state-breathe" : word.mark === "fail" ? "text-fail" : "text-ink2")}>{t(`state.${word.key}`)}</span>
           </Hint>
           {reminders.overdue && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.overdue")}</span>}
           {reminders.possiblyStuck && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.possiblyStuck")}</span>}
           <Hint text={verifiedAtMs !== null ? t("refresh.verified", { time: formatClock(verifiedAtMs) }) : t("refresh.unverified")}>
-            <Button variant="outline" size="icon-sm" aria-label={t("refresh.label")} aria-busy={busy} aria-disabled={busy} onClick={onRefresh}>
-              <RefreshCw strokeWidth={1.5} aria-hidden="true" className={cn(busy && "animate-spin motion-reduce:animate-none")} />
+            <Button variant="outline" size="icon-sm" aria-label={t("refresh.label")} data-slot="detail-refresh" aria-busy={busy} disabled={refreshing} onClick={refresh}>
+              <RefreshCw data-slot="detail-refresh-icon" strokeWidth={1.5} aria-hidden="true"
+                className={cn(turning && "detail-refresh-turn", busy && "motion-reduce:opacity-50")}
+                onAnimationIteration={() => { if (!busy) setTurning(false); }} />
             </Button>
           </Hint>
         </div>
@@ -83,7 +99,7 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
     </div>
     {error && <div role="alert" className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t bg-fail-wash px-4 py-2 text-fail sm:px-6">
       <StateMark kind="fail" /><span className="min-w-0 wrap-anywhere">{error}</span>
-      <Button variant="outline" size="sm" aria-disabled={busy} onClick={onRefresh}>{t("retry")}</Button>
+      <Button variant="outline" size="sm" disabled={refreshing} onClick={refresh}>{t("retry")}</Button>
     </div>}
   </header>;
 }

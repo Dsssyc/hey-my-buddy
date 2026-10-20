@@ -41,8 +41,8 @@ function readTime(ms: number): string {
 /** The logo on the top bar, in the bar's own colours: the bar is dark in both themes. */
 function BrandMark() {
   return <svg viewBox="3 3 58 58" className="size-[22px] shrink-0" aria-hidden="true">
-    <polygon className="fill-bar-live" points="12,13 22,13 22,61 12,54" />
-    <polygon className="fill-bar-live" points="22,32 30,28 30,38 22,42" />
+    <polygon className="fill-brand-mark" points="12,13 22,13 22,61 12,54" />
+    <polygon className="fill-brand-mark" points="22,32 30,28 30,38 22,42" />
     <polygon className="fill-bar-ink" points="42,3 52,10 52,51 42,51" />
     <polygon className="fill-bar-ink" points="34,26 42,22 42,32 34,36" />
     <polygon className="fill-bar-hand" points="30,28 34,26 34,36 30,38" />
@@ -143,11 +143,11 @@ function Connected({ api, snapshot, refresh, connectionError }: {
     tasks: pending > 0 ? t("nav.pendingHost") : undefined,
     buddies: editor.dirty ? t("nav.unsaved") : waiting.roles,
   };
-  return <TooltipProvider delayDuration={300}><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
+  return <TooltipProvider><div className="flex h-dvh min-h-0 flex-col overflow-hidden">
     <a className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-primary focus:px-3 focus:py-2 focus:text-primary-foreground"
       href="#main" onClick={event => { event.preventDefault(); document.getElementById("main")?.focus(); }}>{t("skipToContent")}</a>
     <header className="flex h-11 shrink-0 items-center gap-2 bg-bar px-3 text-bar-ink sm:gap-7 sm:px-4">
-      <a className="flex shrink-0 items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-bar-live/60"
+      <a className="flex shrink-0 items-center gap-2 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-bar-ink/60"
         href={tasksAddress} aria-label="Hey my buddy" onClick={() => select("tasks")}>
         <BrandMark />
         <span className="font-semibold tracking-tight max-sm:hidden">Hey my buddy</span>
@@ -156,7 +156,7 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         {tabs.map(key => {
           const hint = tabHints[key];
           const link = <a key={key} href={key === "tasks" ? tasksAddress : "#" + key} onClick={() => select(key)} aria-current={tab === key ? "page" : undefined}
-            className="relative flex items-center gap-[7px] px-3.5 whitespace-nowrap text-bar-ink2 outline-none transition-colors duration-150 hover:text-bar-ink focus-visible:bg-bar-ink/10 motion-reduce:transition-none aria-[current=page]:font-medium aria-[current=page]:text-bar-ink aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3.5 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-bar-live">
+            className="relative flex items-center gap-[7px] px-3.5 whitespace-nowrap text-bar-ink2 outline-none transition-colors duration-150 hover:text-bar-ink focus-visible:bg-bar-ink/10 motion-reduce:transition-none aria-[current=page]:font-medium aria-[current=page]:text-bar-ink aria-[current=page]:after:absolute aria-[current=page]:after:inset-x-3.5 aria-[current=page]:after:bottom-0 aria-[current=page]:after:h-0.5 aria-[current=page]:after:bg-bar-ink">
             {t(`nav.${key}`)}
             {key === "tasks" && pending > 0 && <span className="min-w-[18px] rounded-sm bg-bar-hand px-[5px] text-center text-xs leading-[18px] font-semibold text-bar tabular-nums">{pending}</span>}
             {key === "buddies" && hint && <span className="size-1.5 rounded-full bg-bar-hand" aria-hidden="true" />}
@@ -170,9 +170,10 @@ function Connected({ api, snapshot, refresh, connectionError }: {
         <p className={connectionError && tab !== "tasks" ? "truncate text-bar-fail" : "truncate"}>
           {connectionError && tab !== "tasks" && <span className="max-sm:hidden">{t("connection.lost")} · </span>}
           {verifiedAt !== null
-            ? <Tooltip><TooltipTrigger asChild><span><span className="sr-only">{t("common:snapshot.verified")} </span>
-              <time className="font-mono tabular-nums" dateTime={new Date(verifiedAt).toISOString()}>{readTime(verifiedAt)}</time></span></TooltipTrigger>
-              <TooltipContent>{t("common:snapshot.verified")}</TooltipContent></Tooltip>
+            ? <Tooltip><TooltipTrigger asChild><span tabIndex={0} className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"><span className="sr-only">{t("common:snapshot.verified")} </span>
+              <time className="font-mono tabular-nums max-sm:hidden" dateTime={new Date(verifiedAt).toISOString()}>{readTime(verifiedAt)}</time>
+              <time className="hidden font-mono tabular-nums max-sm:inline" dateTime={new Date(verifiedAt).toISOString()}>{formatClock(verifiedAt)}</time></span></TooltipTrigger>
+              <TooltipContent>{t("common:snapshot.verified")} {formatDateTime(verifiedAt)}</TooltipContent></Tooltip>
             : t("common:snapshot.unverified")}
         </p>
       </div>
