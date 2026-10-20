@@ -88,6 +88,8 @@
 
 **备份里的 gzip 本身损坏时，解压异常不是 `BACKUP_INVALID`。** 2026-10-20 剪枝三做完“安装与备份里还剩的几处”时留下（[验收记录](../acceptance/schema-audit/pruning.md)）：清单缺字段、没有 `meta`、不是 SQLite 的载荷都已归成 `BACKUP_INVALID`，但哈希相符而 gzip 本身损坏时，解压抛出的异常还是原样。随下一批动备份时归成同一个错误码。
 
+**剪枝三、四的独立审查留下的几件小事。** 2026-10-20（[审查记录](schema-audit/review-m34.md)，Host 核实过），随下一批动到这几处时做：`workspace.integration_verify` 的 `adjusted_paths` 参数没有调用者，连同它的分支删掉，让 `adjustments` 的推导没有例外；备份校验里试转换失败抛原始异常，归成 `BACKUP_INVALID` 并在细节里保留原因；`routing/decision.py` 里讲 `kind` 过滤“在 SQL 里先于 limit”的说明已过时，`selection.list` 的 `kind` 参数只接受 `select`、什么也不筛，随下一次改契约删掉；`CatalogView` 的 `recorded_at` 参数与 `self.recorded_at or self.payload.get("discoveredAt")` 是同一个值的两种读法；`_conflict_view` 对可信证据还留着 `isinstance` 与 `or []`，`_resolution_delivery_result` 对键已固定的字典用 `.get`。
+
 **样板看板只覆盖一部分存储形式。** 同一次审查指出，Host 核实：样板看板里有 11 张表一行也没有，如 `workflow_children`、`workflow_routes`、`workflow_continuations`、`workflow_lead_tasks`、`attempt_process_identities`、`attempt_shutdown_evidence`、`attempt_activity`、`model_facts`、`execution_issues`、`service_issues`、`artifacts`；生成器也只用了 Codex。这个缺口在旧的样板看板上就有。下一次改这些表的存储形式时，升级在样板上测不到它们。
 
 **受管检出的封存产物永久保留，一直在涨。** 2026-10-16 量：1,154 个微任务的封存产物共 102 MB，平均每个约 90 KB；它们作为长期证据从不回收，存储页也删不掉。开发者于 2026-10-16 定下：封存产物跟着宏任务走，随删除宏任务一起删，不设期限，验收之后也不自动删（[ADR-028](../decisions/028-macro-task-deletion.md) 的补充）；删除宏任务排进第 4 步。
