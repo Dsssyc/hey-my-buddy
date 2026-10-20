@@ -1003,7 +1003,7 @@ def build_runs() -> dict[str, dict]:
             created=instant(7, 14), updated=instant(7, 18), state="accepted", status="completed",
             category="ended", buddy=CFG_FLASH, result=True, accepted=instant(7, 18),
             routing=ROUTING_B9,
-            spans=[span("execution:att-b9-1", "execution", instant(7, 15), instant(7, 15, 10), "finished",
+            spans=[span("execution:att-b9-1", "execution", instant(7, 15), instant(7, 15, 10), "rejected",
                         attempt_id="att-b9-1", buddy=CFG_GLM, confirmed=True, generation=1, turn_index=1,
                         error=QUOTA_ERROR, result_status="failed"),
                    span("routing:att-router-b9-reassign", "routing", instant(7, 15, 10), instant(7, 15, 20), "finished",
@@ -2059,17 +2059,24 @@ def group_matching(group: str, applied: dict) -> set[str]:
 def macro_task_page(params: dict, state: PreviewState | None = None) -> dict:
     limit = parse_limit(params, 50, 100)
     applied = applied_filters(params)
+    sort = params.get("sort", "activity-desc")
+    if sort not in ("activity-desc", "activity-asc", "created-desc", "created-asc"):
+        raise PreviewError("INVALID_ARGUMENT", "sort must be one of: activity-desc, activity-asc, created-desc, created-asc")
     base_scope = {key: value for key, value in applied.items() if key != "filter"}
     groups = [group for group in FIXTURES["groups"] if state is None or group not in state.deleted]
     totals = {name: sum(bool(group_matching(group, {**base_scope, "filter": name}))
                         for group in groups)
               for name in ("all", "active", "host", "review")}
-    rows = [(FIXTURES["group_activity"][group][0], group)
-            for group in groups if group_matching(group, applied)]
-    rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    rows = [group for group in groups if group_matching(group, applied)]
+    if sort.startswith("activity"):
+        rows.sort(key=lambda group: (FIXTURES["group_activity"][group][0], group),
+                  reverse=sort.endswith("desc"))
+    else:
+        rows.sort(key=lambda group: (macro_task_summary(group, group_matching(group, applied))["createdAt"] or "", group),
+                  reverse=sort.endswith("desc"))
     return {
         "macroTasks": [macro_task_summary(group, group_matching(group, applied))
-                       for _seq, group in rows[:limit]],
+                       for group in rows[:limit]],
         "totals": totals, "nextCursor": None, "cursor": state.cursor if state is not None else FIXTURES["head"], "changed": False,
     }
 
@@ -2661,7 +2668,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             if path == "/api/console":
                 return self._json(200, console_snapshot(self.server.scenario, self._assets_ready(), self.server.state))
             if path == "/api/macro-tasks":
-                params = parse_query(query, frozenset({"limit", "projectId", "hostId", "query", "filter"}))
+                params = parse_query(query, frozenset({"limit", "projectId", "hostId", "query", "filter", "sort"}))
                 return self._json(200, macro_task_page(params, self.server.state))
             if path == "/api/runtime-version":
                 return self._json(200, runtime_version_report())

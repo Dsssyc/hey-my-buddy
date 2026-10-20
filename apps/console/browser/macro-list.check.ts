@@ -8,8 +8,8 @@ const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
 
 const words = [
-  { locale: "zh-CN", list: "宏任务列表", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目、Host 或编号", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，按最近活动排序" },
-  { locale: "en-US", list: "Macro task list", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search title, project, Host or ID", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity, sort by latest activity" },
+  { locale: "zh-CN", list: "宏任务列表", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目、Host 或编号", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
+  { locale: "en-US", list: "Macro task list", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search title, project, Host or ID", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity; update order" },
 ] as const;
 
 async function photograph(page: Page, name: string, locale: string, width: number, theme: string) {
@@ -100,9 +100,10 @@ async function assertListGeometry(page: Page, width: number) {
   const search = list.locator("[data-slot=macro-search]");
   expect(await search.evaluate(node => getComputedStyle(node).fontSize)).toBe("14px");
   expect((await search.boundingBox())!.height).toBeGreaterThanOrEqual(32);
-  const controls = await list.locator("[data-slot=macro-list-heading], [data-slot=macro-search], [data-slot=macro-filter-tabs]").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
+  const controls = await list.locator("[data-slot=macro-list-heading], [data-slot=macro-sort], [data-slot=macro-search], [data-slot=macro-filter-tabs]").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect()));
   expect(controls[0]!.bottom).toBeLessThanOrEqual(controls[1]!.top + 1);
   expect(controls[1]!.bottom).toBeLessThanOrEqual(controls[2]!.top + 1);
+  expect(controls[2]!.bottom).toBeLessThanOrEqual(controls[3]!.top + 1);
   const metrics = await list.evaluate(node => {
     const measure = (selector: string) => {
       const item = node.querySelector<HTMLElement>(selector)!;

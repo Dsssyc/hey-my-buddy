@@ -8,6 +8,7 @@ import { listFixture } from "./macro-task-fixtures";
 import type { MacroTaskListProps } from "./MacroTaskList";
 
 const props = (): MacroTaskListProps => ({
+  sort: "activity-desc", onSortChange: vi.fn(),
   rows: listFixture(), totals: { all: 12, active: 2, host: 1, review: 3 }, loading: false, error: "", nextCursor: null, reorder: null,
   filter: "all", query: "", selected: null, listNavigation: <span>宏任务</span>,
   onCollapse: vi.fn(), onFilterChange: vi.fn(), onQueryChange: vi.fn(), onSelect: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
@@ -123,7 +124,7 @@ describe("macro task list", () => {
     const p=props(); const f=render(<MacroTaskList {...p}/>); const region=screen.getByRole("region", {name:"宏任务列表"});
     fireEvent.pointerEnter(region);
     f.rerender(<MacroTaskList {...p} reorder={{count:1}}/>); expect(p.onApplyReorder).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", {name:"有新的活动，按最近活动排序"})); expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", {name:"有新的活动，更新排序"})); expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
     fireEvent.pointerLeave(region); expect(p.onApplyReorder).toHaveBeenCalledTimes(1);
   });
   it("defers while scrolled, invisible or inactive; reaching top applies when pointer is outside", () => {

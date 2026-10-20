@@ -33,13 +33,14 @@ MAX_SPANS = 800
 MAX_MARKERS = 800
 SUMMARY_LIMIT = 300
 TITLE_LIMIT = 200
-CURSOR_VERSION = 1
+CURSOR_VERSION = 2
+LIST_SORTS = frozenset({"activity-desc", "activity-asc", "created-desc", "created-asc"})
 
 MACRO_TASK_PATTERN = re.compile(r"^macro-[A-Za-z0-9-]{1,120}$")
 STANDALONE_PATTERN = re.compile(r"^run:([A-Za-z0-9._:-]{1,128})$")
 _CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,512}$")
 
-LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter"})
+LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter", "sort"})
 TIMELINE_PARAMETERS = frozenset({"macroTaskId", "limit", "query", "filter"})
 
 #: Group ownership follows helpers and Lead-owned runs to their outermost owner.
@@ -216,13 +217,14 @@ def _fingerprint(applied: dict) -> str:
     return hashlib.sha256(json.dumps(applied, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
-def _encode_cursor(seq: int, group_id: str, applied: dict, head: int) -> str:
-    payload = json.dumps({"v": CURSOR_VERSION, "s": seq, "g": group_id, "f": _fingerprint(applied), "h": head},
+def _encode_cursor(key: int | str, group_id: str, applied: dict, head: int, sort: str) -> str:
+    payload = json.dumps({"v": CURSOR_VERSION, "k": key, "g": group_id, "f": _fingerprint(applied),
+                          "h": head, "o": sort},
                          separators=(",", ":"), sort_keys=True)
     return base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
 
 
-def _decode_cursor(value: str, applied: dict) -> tuple[int, str, int]:
+def _decode_cursor(value: str, applied: dict, sort: str) -> tuple[int | str, str, int]:
     invalid = BoardError("INVALID_ARGUMENT", "before must be the nextCursor of macro_task_list; read the first page again")
     if not isinstance(value, str) or not _CURSOR_PATTERN.match(value):
         raise invalid
@@ -230,10 +232,18 @@ def _decode_cursor(value: str, applied: dict) -> tuple[int, str, int]:
         payload = json.loads(base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True))
     except (binascii.Error, ValueError, UnicodeDecodeError):
         raise invalid from None
-    if not isinstance(payload, dict) or set(payload) != {"v", "s", "g", "f", "h"} or payload["v"] != CURSOR_VERSION:
+    if not isinstance(payload, dict) or set(payload) != {"v", "k", "g", "f", "h", "o"} or payload["v"] != CURSOR_VERSION:
         raise invalid
-    seq, group_id, head = payload["s"], payload["g"], payload["h"]
-    if any(isinstance(item, bool) or not isinstance(item, int) or item < 0 for item in (seq, head)):
+    if payload["o"] != sort:
+        raise BoardError("INVALID_ARGUMENT", "This cursor was issued for a different sort; read the first page again",
+                         field="before")
+    key, group_id, head = payload["k"], payload["g"], payload["h"]
+    if isinstance(head, bool) or not isinstance(head, int) or head < 0:
+        raise invalid
+    if sort.startswith("activity-"):
+        if isinstance(key, bool) or not isinstance(key, int) or key < 0:
+            raise invalid
+    elif not isinstance(key, str) or not micro_task._TIMESTAMP_PATTERN.match(key) or not any(c.isdigit() for c in key):
         raise invalid
     if not isinstance(group_id, str) or not (MACRO_TASK_PATTERN.match(group_id) or STANDALONE_PATTERN.match(group_id)):
         raise invalid
@@ -242,7 +252,7 @@ def _decode_cursor(value: str, applied: dict) -> tuple[int, str, int]:
             "INVALID_ARGUMENT", "This cursor was issued for different filters; read the first page again",
             field="before",
         )
-    return seq, group_id, head
+    return key, group_id, head
 
 
 def _head(connection) -> int:
@@ -304,16 +314,23 @@ def _state(row) -> str:
 
 
 def macro_task_list(store, params: dict) -> dict:
-    """Bounded work-macro-task summaries ordered by latest recorded activity."""
+    """Bounded work-macro-task summaries ordered by activity or creation."""
     schemas.reject_unknown(params, LIST_PARAMETERS, "macro_task.list")
     limit = schemas.optional_int(params, "limit", LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT)
+    sort = schemas.optional_string(params, "sort", max_length=32) or "activity-desc"
+    if sort not in LIST_SORTS:
+        raise BoardError("INVALID_ARGUMENT", "sort must be one of: activity-desc, activity-asc, created-desc, created-asc",
+                         field="sort")
+    sort_column, direction = sort.split("-")
+    order_column = "activity_seq" if sort_column == "activity" else "created_at"
+    ordering = f"{order_column} {direction.upper()}, group_id {direction.upper()}"
     applied, clauses, values = _filters(params)
     common_clauses, common_values = micro_task.history_where(
         project_id=applied.get("projectId"), host_id=applied.get("hostId"),
         query=applied.get("query"),
     )
     before_value = schemas.optional_string(params, "before", max_length=512)
-    before = _decode_cursor(before_value, applied) if before_value is not None else None
+    before = _decode_cursor(before_value, applied, sort) if before_value is not None else None
     base_match = " AND ".join(["micro_task_run_id IS NOT NULL", *common_clauses])
     selected_filter = micro_task.FILTER_SQL[applied.get("filter", "all")]
     selected_match = (
@@ -330,9 +347,11 @@ def macro_task_list(store, params: dict) -> dict:
     page_values = []
     page_where = ""
     if before is not None:
-        seq, group_id, _issued_head = before
-        page_where = "WHERE (activity_seq < ? OR (activity_seq = ? AND group_id < ?))"
-        page_values.extend([seq, seq, group_id])
+        key, group_id, _issued_head = before
+        comparison = "<" if direction == "desc" else ">"
+        page_where = (f"WHERE ({order_column} {comparison} ? OR "
+                      f"({order_column} = ? AND group_id {comparison} ?))")
+        page_values.extend([key, key, group_id])
     groups_sql = f"""
 WITH members AS MATERIALIZED (
     SELECT base.*, {selected_match} AS matching
@@ -350,7 +369,8 @@ matched AS (
       FROM members GROUP BY group_id
 ),
 groups AS (
-    SELECT matched.group_id, COALESCE(o.activity_seq, root.activity_seq) AS activity_seq
+    SELECT matched.group_id, COALESCE(o.activity_seq, root.activity_seq) AS activity_seq,
+           COALESCE(o.created_at, root.created_at) AS created_at
       FROM matched
       LEFT JOIN macro_tasks o ON o.macro_task_id=matched.group_id
       LEFT JOIN workflow_runs root ON o.macro_task_id IS NULL
@@ -358,15 +378,16 @@ groups AS (
      WHERE matched.selected_match=1
 ),
 page AS (SELECT * FROM groups {page_where}
-          ORDER BY activity_seq DESC, group_id DESC LIMIT ?),
+          ORDER BY {ordering} LIMIT ?),
 stats AS (SELECT COALESCE(SUM(all_match),0) AS all_total,
                 COALESCE(SUM(active_match),0) AS active_total,
                 COALESCE(SUM(host_match),0) AS host_total,
                 COALESCE(SUM(review_match),0) AS review_total FROM matched),
 latest AS (SELECT COALESCE(MAX(activity_seq),0) AS latest FROM groups)
-SELECT stats.*,latest.latest,page.group_id AS page_group_id,page.activity_seq,members.*
+SELECT stats.*,latest.latest,page.group_id AS page_group_id,page.activity_seq,
+       page.created_at AS page_created_at,members.*
   FROM stats CROSS JOIN latest LEFT JOIN page ON 1=1 LEFT JOIN members ON members.group_id=page.group_id
- ORDER BY page.activity_seq DESC,page.group_id DESC,members.task_id
+ ORDER BY page.{order_column} {direction.upper()},page.group_id {direction.upper()},members.task_id
 """
     cache = memo.for_store(store)
     # Lock precedes the read transaction so concurrent list calls serialize
@@ -393,7 +414,8 @@ SELECT stats.*,latest.latest,page.group_id AS page_group_id,page.activity_seq,me
         ) for group in page]
         issued_head = before[2] if before is not None else head
         next_cursor = (
-            _encode_cursor(int(groups[page[-1]][0]["activity_seq"] or 0), page[-1], applied, issued_head)
+            _encode_cursor(groups[page[-1]][0]["activity_seq" if sort_column == "activity" else "page_created_at"],
+                           page[-1], applied, issued_head, sort)
             if len(groups) > limit else None
         )
     return {"macroTasks": summaries, "totals": totals, "nextCursor": next_cursor, "cursor": head, "changed": changed}
@@ -702,7 +724,8 @@ def _run_spans(store, connection, row) -> list[dict]:
     spans: list[dict] = []
     attempts = connection.execute(
         "SELECT a.*, json_extract(a.result_json,'$.status') AS result_status,"
-        " t.turn_id, t.turn_index, t.input_json, t.disposition, t.expected_seconds AS turn_expected_seconds"
+        " t.turn_id, t.turn_index, t.input_json, t.state AS turn_state, t.disposition,"
+        " t.expected_seconds AS turn_expected_seconds"
         " FROM attempts a LEFT JOIN workflow_turns t ON t.attempt_id = a.attempt_id"
         " WHERE a.task_id=? ORDER BY a.generation, a.created_at",
         (run_id,),
@@ -745,7 +768,8 @@ def _run_spans(store, connection, row) -> list[dict]:
         spans.append(_span(
             "execution", f"execution:{attempt['attempt_id']}", run_id,
             attempt["started_at"] or attempt["created_at"], attempt["finished_at"] if state == "finished" else None,
-            state, attempt_id=attempt["attempt_id"], turn_id=attempt["turn_id"], turn_index=attempt["turn_index"],
+            "rejected" if attempt["turn_state"] == "rejected" else state,
+            attempt_id=attempt["attempt_id"], turn_id=attempt["turn_id"], turn_index=attempt["turn_index"],
             buddy=buddy, shutdown_confirmed=confirmed, uncertain=uncertain,
             expected_seconds=attempt["turn_expected_seconds"], reminder_status=reminder_status,
             inquiries=inquiries_by_attempt.get(attempt["attempt_id"], []),

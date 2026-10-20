@@ -62,6 +62,22 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       }
     });
 
+    test("shows the quota-refused execution as rerouted in the timeline and detail", async ({ page }) => {
+      const data = await timeline(page, MACRO_B);
+      const rejected = data.spans.find(span => span.spanId === "execution:att-b9-1");
+      expect(rejected?.state).toBe("rejected");
+      expect(rejected?.resultStatus).toBe("failed");
+      const segment = page.locator('[data-key="span:execution:att-b9-1"]');
+      await expect(segment).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "已改派" : "Refused for quota; rerouted"));
+      await expect(segment.locator('[data-slot=execution-bar]')).toHaveAttribute("data-outcome", "rejected");
+      await expect(segment.locator('[data-slot=execution-failed]')).toHaveCount(0);
+      await segment.focus();
+      await segment.press("Enter");
+      const pane = page.locator('[data-slot=task-detail] [data-slot=detail-pane]');
+      await expect(pane).toContainText(locale === "zh-CN" ? "已改派" : "Rerouted");
+      await expect(page.locator('[data-slot=detail-status]')).toHaveText(locale === "zh-CN" ? "已验收" : "Accepted");
+    });
+
     test("shows Lead stop actors and retains a stopping Lead until owned shutdown is confirmed", async ({ page }) => {
       const data = await timeline(page, MACRO_B);
       const zh = locale === "zh-CN";

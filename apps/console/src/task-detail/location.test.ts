@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { TASKS_ROOT, tasksHash, tasksLocation } from "./location";
 
 describe("the address of the tasks page", () => {
+  it("keeps the chosen list order in root, macro task and session addresses", () => {
+    for (const sort of ["activity-asc", "created-desc", "created-asc"] as const) {
+      for (const location of [TASKS_ROOT, { macroTaskId: "macro", runId: "run", step: 2, tab: "session" as const }]) {
+        expect(tasksLocation(tasksHash({ ...location, sort }))).toEqual({ ...location, sort });
+      }
+    }
+    expect(tasksHash({ ...TASKS_ROOT, sort: "activity-desc" })).toBe("#tasks");
+    expect(tasksLocation("#tasks?sort=unsupported")).toEqual(TASKS_ROOT);
+  });
+
   it("names the session tab of the selected detail step", () => {
     for (const location of [
       { macroTaskId: "macro", runId: "run", step: 7, tab: "session" as const },

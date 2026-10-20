@@ -38,6 +38,27 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); setHidden(false); });
 
 describe("work macro task list hook", () => {
+  it("keeps creation order when later activity changes, then resets paging on a sort change", async () => {
+    const f = harness();
+    const sortedQuery: MacroTaskQuery = { ...query, sort: "created-asc" };
+    f.rerender({ query: sortedQuery, active: true });
+    await startRead();
+    const older = summary("older", 2, { createdAt: "2026-09-25T01:00:00Z" });
+    const newer = summary("newer", 10);
+    await act(async () => f.requests[0]!.resolve(page([older, newer], "created-cursor")));
+    expect(f.requests[0]!.query.sort).toBe("created-asc");
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[1]!.resolve(page([{ ...older, lastActivitySeq: 11 }, newer])));
+    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["older", "newer"]);
+    expect(f.result.current.reorder).toBeNull();
+    f.rerender({ query: { ...query, sort: "activity-asc" }, active: true });
+    await startRead();
+    expect(f.requests[2]!.query).toMatchObject({ sort: "activity-asc" });
+    expect(f.requests[2]!.query).not.toHaveProperty("before");
+    await act(async () => f.requests[2]!.resolve(page([newer, { ...older, lastActivitySeq: 11 }])));
+    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["newer", "older"]);
+  });
+
   it("keeps committed order and defers newcomers even when a poll returns the complete scope", async () => {
     const f = harness();
     await startRead();

@@ -9,7 +9,7 @@ afterEach(() => cleanup());
 describe("macro task list keyboard scrolling", () => {
   it("keeps the rendered list viewport focusable for keyboard scrolling", () => {
     const rows = listFixture();
-    render(<MacroTaskList
+    render(<MacroTaskList sort="activity-desc" onSortChange={vi.fn()}
       rows={rows} totals={{all:rows.length,active:1,host:1,review:1}} onCollapse={vi.fn()} loading={false} error="" nextCursor={null} reorder={null}
       filter="all" query=""
       selected={null}

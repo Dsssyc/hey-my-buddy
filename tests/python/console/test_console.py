@@ -802,6 +802,9 @@ class ConsoleMacroTaskTests(ConsoleTestCase, WorkflowTestCase):
         self.assertNotIn("total", page)
         self.assertEqual({item["macroTaskId"] for item in page["macroTasks"]},
                          {first["macroTaskId"], f"run:{loose['runId']}"})
+        status, _headers, body = browser.get("/api/macro-tasks?limit=5&sort=created-asc")
+        self.assertEqual(status, 200, body[:300])
+        self.assertEqual(json.loads(body), board.call("macro_task_list", {"limit": 5, "sort": "created-asc"}))
         status, _headers, body = browser.get(f"/api/macro-tasks/{first['macroTaskId']}/timeline?limit=10")
         self.assertEqual(status, 200, body[:300])
         timeline = json.loads(body)
@@ -811,6 +814,7 @@ class ConsoleMacroTaskTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(status, 200, body[:300])
         self.assertEqual(json.loads(body)["rows"][0]["runId"], loose["runId"])
         for path, code in (("/api/macro-tasks?unknown=1", 400), ("/api/macro-tasks?limit=1&limit=2", 400),
+                           ("/api/macro-tasks?sort=created", 400),
                            ("/api/macro-tasks/macro-missing/timeline", 404), ("/api/macro-tasks/bad%20id/timeline", 404),
                            ("/api/macro-tasks/macro-x/timeline?before=1", 400)):
             with self.subTest(path=path):

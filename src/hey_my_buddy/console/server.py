@@ -56,7 +56,7 @@ SESSION_STAMP_SECONDS = 60
 _QUERY_INTEGER = re.compile(r"^[0-9]{1,7}$")
 #: Exact parameter whitelists of the read-only macro task routes; they reach the
 #: same named ``macro_task_list``/``macro_task_timeline`` operations as the CLI.
-MACRO_TASK_LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter"})
+MACRO_TASK_LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter", "sort"})
 MACRO_TASK_TIMELINE_PARAMETERS = frozenset({"limit", "query", "filter"})
 _MACRO_TASK_ID = re.compile(r"^(macro-[A-Za-z0-9-]{1,120}|run:[A-Za-z0-9._:-]{1,128})$")
 
