@@ -107,27 +107,39 @@
 
 **检查：** 检查运行器跑 `tests/python/buddy/harnesses/zcode/` 与 `tests/python/buddy/harnesses/test_harness_conformance.py`。
 
-## 微任务 C：宏任务列表的排序与时间轴上被改派的尝试（A 合入之后）
+## 批次 C：契约 0.50.0（0.49.0 装好之后）
+
+0.49.0 装好之后，原来的微任务 C 拆成两个依次做的微任务：C1 收掉剪枝各步留下的公开字段并改删除的错误码，C2 做列表排序、时间轴与叫法。两者都改 Host 可见的契约，一起装成 0.50.0；C2 在 C1 封存的输出上开工。两个都不改存储形式：列表的查询本来就先物化全部分组再分页，按创建时刻排序不需要新的索引。
+
+### 微任务 C1：接口剪枝与删除契约
+
+1. **删除中的错误码。** `MACRO_TASK_DELETED` 现在只在删除进行中出现：改名为 `MACRO_TASK_DELETING`，细节里去掉恒为常量的 `state` 与 `deletedAt`；HTTP 映射与控制台的文字随之改。
+2. **公开视图里恒定、重复或能推出的字段，从接口删掉**（剪枝各步的审查与交接列出，Host 核实过；[剪枝一的审查](../schema-audit/review-m1.md)、[剪枝二的审查](../schema-audit/review-m2.md)、[验收记录](../../acceptance/schema-audit/pruning.md)）：
+   - 微任务的 `acceptanceVerdict`（由 `acceptedAt` 推出），消息的 `correlationId`（恒等于 `inquiryId`）；
+   - helper 视图的 `autoContinue`（恒为 false），Host 结论的 `evidence`（恒为空）与 `integrationId`（恒为 null），审计视图的 `spec`（与 `microTask` 读同一份），连同只为它留着、还吞掉解析异常的 `_original_spec`；
+   - 冲突的 `delivery`：`state`、`kind`、`turnOutcome` 恒定，`action/artifactId/attemptId/turnId/commandId` 与外层字段重复；
+   - 整合：`notRequired` 由 `strategy` 推出；`verification` 里 `verified`、`unrecordedPaths`、`summary` 恒定，`artifactAncestor` 由 `strategy` 推出，`adjustments` 由 `differingPaths` 与 `missingPaths` 推出，`strategy/target/source…/before…/after…` 与外层字段重复；
+   - 清理：`retention.commandReceipts` 恒定（回收与清理的回答里同样），`result` 的 `removed` 恒为 true，`path/repositoryId/checkoutId/retention` 与外层字段重复；
+   - 选择记录的 `kind`（恒为 `select`）与 `selection.list` 只接受 `select`、什么也不筛的 `kind` 输入；
+   - harness 视图的 `available`（等于 `status` 为 `ready`）。Router 健康里的 `available` 是另一回事，不动。
+   列表里用来认出一条记录的身份字段不算重复。控制台读到的（例如 `parseIntegration` 读 `summary`）与合成预览随之改。
+3. **删除的契约在预览与控制台里一致：** 合成预览删完之后，预览与再删都回答 `NOT_FOUND`，`test_host_preview.py` 里钉着旧行为的断言随之改；两个浏览器同时删除时，后一个得到 `NOT_FOUND`，按已删完处理，不显示成错误。
+4. **顺带**（待办“剪枝三、四的独立审查留下的几件小事”里属于这一块的）：`workspace.integration_verify` 没有调用者的 `adjusted_paths` 参数连同分支删掉；`routing/decision.py` 讲 `kind` 过滤的过时说明随 `kind` 一起去掉；`CatalogView` 的 `recorded_at` 参数与两种读法收成一种；`_conflict_view` 对可信证据的 `isinstance` 与 `or []`、`_resolution_delivery_result` 对固定键用的 `.get` 删掉。
+5. **版本：** `CONTRACT_VERSION`、钉着它的签名表、`pyproject.toml` 与 `uv.lock` 改为 0.50.0；README 由 Host 改。
+
+**写入范围：** `src/hey_my_buddy/`（不含 `install/`），`apps/console/`，`tests/probes/macro_task_console_preview.py`，`tests/python/`，`pyproject.toml`，`uv.lock`。
+
+**检查：** `npm --prefix apps/console run typecheck`、`npm --prefix apps/console test`、`npm --prefix apps/console run test:browser`；检查运行器跑 `tests/python/blackboard/`、`tests/python/console/`、`tests/python/protocol/`、`tests/python/cli/`、`tests/python/buddy/roles/`。`tests/python/install/test_first_install.py` 核对 README 里的版本，README 由 Host 改，它在 Host 改之前不过。
+
+### 微任务 C2：宏任务列表的排序、时间轴上被改派的尝试与“适应宽度”
 
 1. **排序。** 开发者 2026-10-20 提出：宏任务列表可以按最近更新或创建时间排序，各有升序与降序；默认照旧，按最近更新降序。
-   - 排序在服务里做：`macro_task_list` 加排序的键与方向，分页的游标跟着排序走。宏任务的创建时刻已经存在 `macro_tasks.created_at`。
-   - 控制台在列表头上放一个排序控件。
-   - 这改了 Host 可见的方法参数，契约随之移动。
+   - 排序在服务里做：`macro_task_list` 加排序的键与方向，分页的游标带着排序，换了排序的游标拒绝。宏任务的创建时刻已经存在 `macro_tasks.created_at`，单独的微任务分组用它的 run 的创建时刻。
+   - 控制台在列表头上放一个排序控件，选择跟着地址走。
 2. **被改派的尝试：** 由服务的宏任务时间轴在片段上标出 `rejected`，删掉微任务页 `TaskDetail.tsx` 里那段前端拼接（待办“宏任务时间轴把被改派的那次尝试画成失败”）。
 3. **“适应宽度”：** 统一成一种叫法（待办同名一条）。
-4. **剪枝一的审查分来的几条**（[审查记录](../schema-audit/review-m1.md)，Host 核实过）：
-   - 错误码 `MACRO_TASK_DELETED` 现在只在删除进行中出现：改名为表达“删除中”的码，去掉细节里恒为常量的 `state` 与 `deletedAt`，HTTP 映射与控制台文字随之改；
-   - 公开视图里由别的字段推出的 `acceptanceVerdict` 与 `correlationId` 从接口删掉，控制台里 `acceptanceVerdict === "failed"` 的死分支一并删；
-   - 合成预览按新的删除契约回答：删完之后预览与再删都是 `NOT_FOUND`，`test_host_preview.py` 里钉着旧行为的断言随之改；
-   - 两个浏览器同时删除时，后一个得到 `NOT_FOUND`，按已删完处理，不显示成错误。
-5. **剪枝二的验收与审查分来的几条**（[审查记录](../schema-audit/review-m2.md)，Host 核实过）：公开视图里恒为常量的字段从接口删掉——helper 视图的 `autoContinue`（恒为 false），Host 结论的 `evidence`（恒为空）与 `integrationId`（恒为 null）；审计视图的 `spec` 与 `microTask` 读的是同一份，删 `spec` 与只为它留着、还吞掉解析异常的 `_original_spec`。
-6. **剪枝三分来的几条**（[验收记录](../../acceptance/schema-audit/pruning.md)）：冲突、整合与清理视图里恒定或重复的公开字段，从接口删——
-   - 冲突：`delivery` 的 `state`、`kind`、`turnOutcome` 恒定，`action/artifactId/attemptId/turnId/commandId` 与外层字段重复；
-   - 整合：`verification` 的 `verified`、`unrecordedPaths`、`summary` 恒定，`artifactAncestor` 由 `strategy` 推出，`adjustments` 由 `differingPaths` 与 `missingPaths` 推出，`strategy/target/source…/before…/after…` 与外层字段重复，`notRequired` 由 `strategy` 推出；
-   - 清理：`retention.commandReceipts` 恒定，`result` 的 `removed` 恒为 true，`path/repositoryId/checkoutId/retention` 与外层字段重复。
-   控制台读到的（例如 `parseIntegration` 读 `summary`）随之改。
 
-写入范围与检查在 A 合入之后定。
+写入范围与检查在 C1 合入之后定。
 
 ## A 的修正（开发者 2026-10-20 定，先于 C）
 
