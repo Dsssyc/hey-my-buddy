@@ -121,6 +121,11 @@
    - 合成预览按新的删除契约回答：删完之后预览与再删都是 `NOT_FOUND`，`test_host_preview.py` 里钉着旧行为的断言随之改；
    - 两个浏览器同时删除时，后一个得到 `NOT_FOUND`，按已删完处理，不显示成错误。
 5. **剪枝二的验收与审查分来的几条**（[审查记录](../schema-audit/review-m2.md)，Host 核实过）：公开视图里恒为常量的字段从接口删掉——helper 视图的 `autoContinue`（恒为 false），Host 结论的 `evidence`（恒为空）与 `integrationId`（恒为 null）；审计视图的 `spec` 与 `microTask` 读的是同一份，删 `spec` 与只为它留着、还吞掉解析异常的 `_original_spec`。
+6. **剪枝三分来的几条**（[验收记录](../../acceptance/schema-audit/pruning.md)）：冲突、整合与清理视图里恒定或重复的公开字段，从接口删——
+   - 冲突：`delivery` 的 `state`、`kind`、`turnOutcome` 恒定，`action/artifactId/attemptId/turnId/commandId` 与外层字段重复；
+   - 整合：`verification` 的 `verified`、`unrecordedPaths`、`summary` 恒定，`artifactAncestor` 由 `strategy` 推出，`adjustments` 由 `differingPaths` 与 `missingPaths` 推出，`strategy/target/source…/before…/after…` 与外层字段重复，`notRequired` 由 `strategy` 推出；
+   - 清理：`retention.commandReceipts` 恒定，`result` 的 `removed` 恒为 true，`path/repositoryId/checkoutId/retention` 与外层字段重复。
+   控制台读到的（例如 `parseIntegration` 读 `summary`）随之改。
 
 写入范围与检查在 A 合入之后定。
 
