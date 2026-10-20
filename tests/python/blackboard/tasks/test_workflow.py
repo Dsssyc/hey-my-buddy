@@ -378,7 +378,8 @@ class LifecycleTests(WorkflowTestCase):
 
         accepted = self.accept_run(board, delivered)
         self.assertEqual(accepted["state"], "accepted")
-        self.assertEqual(accepted["task"]["acceptanceVerdict"], "accepted")
+        self.assertIsNotNone(accepted["task"]["acceptedAt"])
+        self.assertNotIn("acceptanceVerdict", accepted["task"])
         self.assertIsNone(accepted["task"]["reviewRejectedAt"])
         self.assertIsNone(accepted["task"]["reviewRejectionNote"])
         self.assertIsNotNone(accepted["finalArtifactId"])
@@ -1598,7 +1599,7 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         archived = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         # The delivered outcome is recorded as rejected, never silently carried
         # into the continuation as an acceptance.
-        self.assertIsNone(archived["task"]["acceptanceVerdict"])
+        self.assertNotIn("acceptanceVerdict", archived["task"])
         self.assertIsNone(archived["task"]["acceptedAt"])
         self.assertIsNone(archived["task"]["acceptanceNote"])
         self.assertIsNotNone(archived["task"]["reviewRejectedAt"])
@@ -1629,7 +1630,8 @@ class AcknowledgementBoundaryTests(WorkflowTestCase):
         accepted = self.accept_run(board, delivered, note="now it is good")
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["finalArtifactId"], new_output["artifactId"])
-        self.assertEqual(accepted["task"]["acceptanceVerdict"], "accepted")
+        self.assertIsNotNone(accepted["task"]["acceptedAt"])
+        self.assertNotIn("acceptanceVerdict", accepted["task"])
         self.assertIsNone(accepted["task"]["reviewRejectedAt"])
         self.assertIsNone(accepted["task"]["reviewRejectionNote"])
 
@@ -1856,7 +1858,7 @@ class CompactReadBoundTests(WorkflowTestCase):
         self.assertNotIn("spec", view["task"])
         self.assertNotIn(big_task, serialized)
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
-        self.assertEqual(audit["audit"]["spec"]["task"], big_task)
+        self.assertNotIn("spec", audit["audit"])
         self.assertEqual(audit["audit"]["microTask"]["task"], big_task)
         self.assertIn(big_task[:8000], audit["audit"]["turns"][0]["input"]["context"]["task"])
         self.assertTrue(audit["audit"]["turns"][0]["input"]["context"]["taskTruncated"])

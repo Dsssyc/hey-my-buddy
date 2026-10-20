@@ -32,7 +32,7 @@ const FLASH = "dsh / deepseek-official / deepseek-flash";
 
 function microTask(runId: string, task: string, extra: Partial<Task> = {}): Task {
   return { runId, task, status: "queued", owner: "worker:fixture", cwd: `/worktrees/${runId}`,
-    revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    revision: 1, createdAt: "2026-09-24T10:00:00Z", updatedAt: "2026-09-24T10:00:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
     workflow: { state: "executing", awaitingHost: false, hostId: "current-host", ownerGeneration: 2, revision: 1 },
     lineage: { kind: "micro-task", sourceHostId: "codex-source", currentHostId: "current-host", parentRunId: null, rootRunId: runId, rootLeadRunId: null, routingTask: null,
       project: { id: "fixture-project", label: "fixture-project", path: "/source/fixture-project" },
@@ -107,7 +107,7 @@ function fixture(options: {
       return { buddies: [], modelServiceNotes: [], preferences: [], modelServiceConcurrency: [], nextCursor: null };
     }
     if (operation === "selection_get") {
-      return { decision: { decisionId: String(params.decisionId), kind: "select", status: "completed",
+      return { decision: { decisionId: String(params.decisionId), status: "completed",
         task: "路由计算", buddyId: flashOff, reason: "记录的选择依据",
         evidence: [], createdAt: "2026-09-25T10:00:00Z" } };
     }

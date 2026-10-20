@@ -57,7 +57,7 @@ def read_health(connection, harness):
     account = account_view(connection, harness)
     row = connection.execute('SELECT * FROM harness_health WHERE harness=?', (harness,)).fetchone()
     if row is None:
-        record = {'harness': harness, 'status': 'unknown', 'available': False, 'revision': 0,
+        record = {'harness': harness, 'status': 'unknown', 'revision': 0,
                 'manualPath': None, 'reason': _not_checked()}
         return {**record, 'providers': [], 'account': account, 'permissions': permissions}
     from ..routing.quota_routing import providers
@@ -76,7 +76,7 @@ def read_health(connection, harness):
                        for entry in entries if entry.get("harness") == harness and isinstance(entry.get("provider"), str)}
     status = row['status']
     record = {**record, "billingByProvider": billing, "providers": providers(connection, harness), 'harness': harness,
-            'available': status == 'ready', 'status': status, 'account': account, 'revision': row['revision'], 'manualPath': row['manual_path'],
+            'status': status, 'account': account, 'revision': row['revision'], 'manualPath': row['manual_path'],
             'checkedAt': row['checked_at'], 'expiresAt': row['expires_at'], 'scanAfter': row['scan_after']}
     return {**record, 'permissions': permissions}
 
@@ -199,7 +199,7 @@ class HarnessHealth:
                     self._codex_account_read(old)
                 if stale_catalog_due:
                     current = self.get(name)
-                    if current['available']:
+                    if current['status'] == 'ready':
                         self._shared_stale_catalog_read(name, current)
                 return self.get(name)
             with self.board.db.write() as db:

@@ -121,7 +121,7 @@ export default {
     strategy: "Method", target: "Target", commits: "Commits", recordedBy: "Recorded by", noIntegration: "Integration evidence not recorded",
     hostPaths: "Changes added by Host: {{n}}", rejection: "Sent back", rejected: "Sent back", note: "Note",
     conclusion: "Host's conclusion", outcome: "Micro task outcome", notCounted: "not counted as accepted", version: "Micro task version", attempt: "Reviewed execution",
-    artifactRef: "Related artifact", integrationRef: "Integration record", evidence: "Evidence",
+    artifactRef: "Related artifact",
     status: { failed: "Failed", cancelled: "Cancelled" },
     exception: "Exceptions", unconfirmed: "Stop unconfirmed · executions to verify: {{n}}",
   },

@@ -51,7 +51,7 @@ describe("the integration and the acceptance", () => {
   const output: Artifact = { artifactId: "art-final", kind: "output", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
     diffPath: null, changedPaths: ["a.ts"], partial: false, verified: null, final: null, cumulativePatch: null };
   const verified: Integration = { integrationId: "int-1", artifactId: "art-final", state: "verified", strategy: "merge", target: { path: "~/p", ref: "main" },
-    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", verificationSummary: "全量通过", hostPaths: [], note: null, actor: HOST, createdAt: at("11:03") };
+    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", hostPaths: ["new-integration.ts"], note: null, actor: HOST, createdAt: at("11:03") };
   const integrated = () => {
     const found = timeline();
     found.events.push(event(4, "integrate", at("11:03")));
@@ -63,20 +63,20 @@ describe("the integration and the acceptance", () => {
     await ready();
     expect(pane().textContent).toContain("等待验收");
     expect(pane().textContent).not.toContain("已结束");
-    expect(pane().textContent).toContain("全量通过");
+    expect(pane().textContent).toContain("new-integration.ts");
     expect(strip().querySelector('[data-key="acceptance-wait"]')!.getAttribute("aria-label")).toContain("等待验收");
     expect(head().textContent).toContain("等待验收");
   });
 
   it("takes the latest integration of the final artifact, and a partial output is never the final one", async () => {
-    const older: Integration = { ...verified, integrationId: "int-old", afterCommit: "0000000000", verificationSummary: "旧的整合" };
+    const older: Integration = { ...verified, integrationId: "int-old", afterCommit: "0000000000", hostPaths: ["old-integration.ts"] };
     const resolved: Artifact = { ...output, artifactId: "art-resolved", kind: "resolved-output" };
     const partial: Artifact = { ...output, artifactId: "art-partial", kind: "partial-output", partial: true, verified: false, final: false };
     open({ step: 8, timeline: integrated(), replies: { workflow: workflow({ artifacts: [partial, resolved, output], finalArtifactId: "art-resolved",
       integrations: [{ ...verified, artifactId: "art-resolved" }, { ...older, artifactId: "art-resolved" }] }) } });
     await ready();
-    expect(pane().textContent).toContain("全量通过");
-    expect(pane().textContent).not.toContain("旧的整合");
+    expect(pane().textContent).toContain("new-integration.ts");
+    expect(pane().textContent).not.toContain("old-integration.ts");
     cleanup();
     open({ step: 8, timeline: integrated(), replies: { workflow: workflow({ artifacts: [partial], finalArtifactId: "art-partial", integrations: [] }) } });
     await ready();

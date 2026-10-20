@@ -22,7 +22,6 @@ export type HarnessCandidate = {
 export type HarnessHealth = {
   harness: string;
   status: HarnessStatus;
-  available: boolean;
   revision: number;
   manualPath: string | null;
   command?: string[];
@@ -162,7 +161,6 @@ export type Task = {
   revision: number;
   createdAt: string;
   acceptedAt: string | null;
-  acceptanceVerdict: string | null;
   reviewRejectedAt: string | null;
   reviewRejectionNote: string | null;
   queueReason?: string | null;

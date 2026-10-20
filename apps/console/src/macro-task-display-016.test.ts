@@ -51,7 +51,7 @@ describe("0.16 acceptance wait (P1.8)", () => {
     runId: "r1", parentRunId: null, rootRunId: "r1", rootLeadRunId: null, delegationAuthority: false, title: "修复标题错位", titleSource: "title", taskSummary: null,
     summary: null, createdAt: "2026-09-26T01:00:00Z", state: "accepted", status: "completed", category: "ended",
     shutdownConfirmed: true, depth: 0, kind: "micro-task", buddy: null,
-    acceptedAt: "2026-09-26T07:25:00Z", acceptanceVerdict: "accepted", reviewRejectedAt: null, reviewRejectionNote: null,
+    acceptedAt: "2026-09-26T07:25:00Z", reviewRejectedAt: null, reviewRejectionNote: null,
   };
   const execution = (startAt: string, endAt: string | null, overrides: Partial<TimelineSpan> = {}): TimelineSpan => ({
     spanId: "e", runId: "r1", kind: "execution", startAt, endAt, state: "finished",

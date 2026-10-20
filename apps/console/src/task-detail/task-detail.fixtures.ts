@@ -24,7 +24,7 @@ export function task(overrides: Record<string, unknown> = {}): Task {
   return {
     runId: "m1", task: "实现微任务详情，左边是步骤，右边是这一步的内容。", status: "completed", owner: null, cwd: "/work/m1",
     spec: {},
-    revision: 5, createdAt: at("10:00"), updatedAt: at("11:00"), acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null,
+    revision: 5, createdAt: at("10:00"), updatedAt: at("11:00"), acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
     activeAttemptId: null, selectedAttemptId: "att-2", resultAvailable: true, shutdownConfirmed: true,
     lineage: { kind: "micro-task", sourceHostId: "codex-desktop", currentHostId: "codex-desktop", parentRunId: null, rootRunId: "m1", rootLeadRunId: null,
       project: { id: "p1", label: "hey-my-buddy", path: "~/projects/hey-my-buddy" }, buddy: OPUS },
@@ -106,7 +106,7 @@ export function event(seq: number, kind: string, when: string, overrides: Partia
 export function row(overrides: Partial<TimelineRow> = {}): TimelineRow {
   return { runId: "m1", parentRunId: null, rootRunId: "m1", title: "微任务详情", titleSource: "title", taskSummary: null, summary: null,
     createdAt: at("10:00"), state: "delivered", status: "completed", category: "review", shutdownConfirmed: true, depth: 0, kind: "micro-task",
-    rootLeadRunId: null, delegationAuthority: false, buddy: tb(OPUS), acceptedAt: null, acceptanceVerdict: null, reviewRejectedAt: null, reviewRejectionNote: null, ...overrides };
+    rootLeadRunId: null, delegationAuthority: false, buddy: tb(OPUS), acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null, ...overrides };
 }
 
 /** The spans and events of the standard `m1`: routed, two turns of two buddies, a Host wait between them, delivered. */

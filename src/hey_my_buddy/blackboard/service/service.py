@@ -364,7 +364,7 @@ class BoardService(_BaseResource):
                 report, capabilities = capability_report(), local_capabilities()
             for record in records:
                 if self.automatic_discovery or record['revision']:
-                    report[record['harness']].update(available=record['available'], reason=record.get('reason'), harness=record)
+                    report[record['harness']].update(available=record['status'] == 'ready', reason=record.get('reason'), harness=record)
 
             return {
                 "adapters": report,
@@ -611,7 +611,7 @@ class BoardService(_BaseResource):
             specs.extend(helper.get('spec', helper) for helper in params['helpers'] if isinstance(helper, dict))
         names = {spec.get('harness') for spec in specs if isinstance(spec, dict) and isinstance(spec.get('harness'), str)}
         for name in sorted(names):
-            if explicit and name in ('dsh', 'zcode', 'codex', 'claude') and not self.harnesses.get(name)['available']:
+            if explicit and name in ('dsh', 'zcode', 'codex', 'claude') and self.harnesses.get(name)['status'] != 'ready':
                 self.harnesses.refresh(name, force=True)
         self.harnesses.kick()
 

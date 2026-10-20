@@ -44,7 +44,7 @@ export const RowName = forwardRef<HTMLButtonElement, {
   const repair = row.fixes ? t("fixes", { title: repairTitle }) : null;
   const [titleRef, titleClipped] = useTextClipped<HTMLSpanElement>(title.text);
   const tone = row.status === "queued" ? null : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
-    : state.tone === "green" || row.category === "active" ? "live" : row.state === "failed" || row.status === "failed" || row.acceptanceVerdict === "failed" ? "fail" : "past";
+    : state.tone === "green" || row.category === "active" ? "live" : row.state === "failed" || row.status === "failed" ? "fail" : "past";
   const mark = tone === "live" ? "live" : null;
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
     tabIndex={tabIndex} aria-current={list && current ? "true" : undefined} aria-label={[ariaPrefix, title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick}

@@ -545,7 +545,7 @@ def validate_buddy(buddy: dict, *, directory: Path) -> dict:
             recorded = catalog_store.current(db)
             read_at = catalog_read_at(db, selected["harness"])
             pending_efforts = pending_model_efforts(db, selected["harness"], selected["provider"], selected["model"])
-        if not health["available"]:
+        if health["status"] != "ready":
             raise BoardError("HARNESS_UNAVAILABLE", "The harness is unavailable", harness=health,
                              reason=health["reason"])
         if recorded is None:
@@ -614,13 +614,13 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
 
 
 class CatalogView:
-    def __init__(self, payload: dict, *, discovery_id: str | None = None, recorded_at: str | None = None):
-        self.payload, self.discovery_id, self.recorded_at = payload, discovery_id, recorded_at
+    def __init__(self, payload: dict, *, discovery_id: str | None = None):
+        self.payload, self.discovery_id = payload, discovery_id
 
     @classmethod
     def from_payload(cls, payload: Any) -> "CatalogView":
         canonical = canonical_payload(payload)
-        return cls(canonical, recorded_at=canonical.get("discoveredAt"))
+        return cls(canonical)
 
     @property
     def source(self) -> str:
@@ -648,7 +648,7 @@ class CatalogView:
 
     def metadata(self) -> dict:
         return {**self.payload, "discoveryId": self.discovery_id,
-                "discoveredAt": self.recorded_at or self.payload.get("discoveredAt")}
+                "discoveredAt": self.payload.get("discoveredAt")}
 
     def proposed_buddies(self) -> list[dict]:
         proposals = []

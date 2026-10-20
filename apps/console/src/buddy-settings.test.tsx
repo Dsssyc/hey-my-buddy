@@ -68,10 +68,10 @@ type Options = { configurationUnavailable?: boolean; routerBuddyId?: string | nu
  */
 function harnesses(): HarnessHealth[] {
   return [
-    { harness: "claude", status: "ready", available: true, revision: 2, manualPath: null,
+    { harness: "claude", status: "ready", revision: 2, manualPath: null,
       executable: "/Users/fixture/.local/bin/claude", version: "2.0.1",
       source: "版本管理器（nvm 默认版本）", checkedAt: "2026-09-28T09:30:00.000Z", candidates: [] },
-    { harness: "zcode", status: "missing", available: false, revision: 1, manualPath: null,
+    { harness: "zcode", status: "missing", revision: 1, manualPath: null,
       reason: { code: "harness.not-found", params: {} },
       checkedAt: "2026-09-28T09:30:00.000Z",
       candidates: [{ path: "/opt/homebrew/bin/zcode", source: "Homebrew", status: "missing" }] },

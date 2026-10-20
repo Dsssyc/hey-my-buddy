@@ -257,7 +257,7 @@ def service(root):
         service.automatic_discovery = False
         enable_fixture_buddy(daemon.store, BUDDY)
         # Discovery is synthetic; service, task and live RPCs are real.
-        record = {"harness": "dsh", "available": True, "status": "ready", "revision": 0,
+        record = {"harness": "dsh", "status": "ready", "revision": 0,
                   "command": [sys.executable], "version": "model-free-fixture", "reason": None}
         with daemon.store.db.write() as db:
             db.execute("INSERT INTO harness_health(harness,status,record_json) VALUES('dsh','ready',?) "

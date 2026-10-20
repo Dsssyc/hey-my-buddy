@@ -60,6 +60,12 @@ class WorkspaceOutputViewTests(unittest.TestCase):
         self.assertEqual(view["verification"]["matchingPaths"], [path[:500] for path in self.paths[:32]])
         self.assertEqual(view["verification"]["matchingPathsCount"], 3000)
         self.assertTrue(view["verification"]["matchingPathsTruncated"])
+        self.assertEqual(set(view["verification"]),
+                         {"matchingPaths", "matchingPathsCount", "matchingPathsTruncated",
+                          "matchingPathsSamplesShortened", "differingPaths", "differingPathsCount",
+                          "differingPathsTruncated", "missingPaths", "missingPathsCount", "missingPathsTruncated",
+                          "hostPaths", "hostPathsCount", "hostPathsTruncated", "note"})
+        self.assertNotIn("notRequired", view)
         # Both get.integrations and accept.integration use this same projection.
         self.assert_bounded({"integrations": [view] * 8, "integration": view})
 

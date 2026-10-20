@@ -243,7 +243,7 @@ def _unavailable_harnesses(connection, scope):
     unavailable = []
     for harness in sorted(involved):
         health = read_health(connection, harness)
-        if not health['available']:
+        if health['status'] != 'ready':
             unavailable.append({'harness': harness, 'reason': health['reason'],
                                 'microTaskIds': sorted(involved[harness])})
     return unavailable

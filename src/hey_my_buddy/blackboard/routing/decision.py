@@ -34,7 +34,7 @@ TERMINAL_DECISION_STATUSES = frozenset({"completed", "needs-host", "failed", "ca
 
 SELECT_FIELDS = frozenset({"requestId", "task", "requiredCapabilities"})
 GET_FIELDS = frozenset({"decisionId", "includeAudit"})
-LIST_FIELDS = frozenset({"kind", "limit", "before"})
+LIST_FIELDS = frozenset({"limit", "before"})
 DEFAULT_LIST_LIMIT = 20
 MAX_LIST_LIMIT = 100
 
@@ -205,7 +205,7 @@ class DecisionCoordinator:
             " LEFT JOIN evaluation_preferences f ON f.buddy_id=p.buddy_id WHERE "
             + " AND ".join(clauses) + " ORDER BY p.rowid", values):
             if row['harness'] not in health_available:
-                health_available[row['harness']] = read_health(connection, row['harness'])['available']
+                health_available[row['harness']] = read_health(connection, row['harness'])['status'] == 'ready'
             if not health_available[row['harness']]:
                 continue
             state = cooling(connection, row, now=now)
@@ -960,7 +960,6 @@ class DecisionCoordinator:
             )
             return {
                 "decisionId": row["decision_id"],
-                "kind": row["kind"],
                 "status": "needs-host",
                 "reason": failure_reason,
             }
@@ -978,7 +977,6 @@ class DecisionCoordinator:
             )
             return {
                 "decisionId": row["decision_id"],
-                "kind": row["kind"],
                 "status": "failed",
                 "reason": make_reason("decision-publication-failed"),
             }
@@ -998,7 +996,7 @@ class DecisionCoordinator:
                                  payload={"stage": "decision-publication", "code": code, "message": message[:4000]})
 
     def _complete(self, connection: sqlite3.Connection, *, row: sqlite3.Row, task: sqlite3.Row, attempt: sqlite3.Row, status: str, result: Any, shutdown_confirmed: bool, error: str | None, now: str, release_stopped: bool = False, released: bool = False) -> dict[str, Any]:
-        summary: dict[str, Any] = {"decisionId": row["decision_id"], "kind": row["kind"], "status": row["status"]}
+        summary: dict[str, Any] = {"decisionId": row["decision_id"], "status": row["status"]}
         stored = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt["attempt_id"],)).fetchone()
         if (row["decision_task_id"] != task["task_id"] or attempt["task_id"] != task["task_id"]
                 or row["decision_attempt_id"] != attempt["attempt_id"]
@@ -1570,18 +1568,14 @@ class DecisionCoordinator:
     def list_decisions(self, params: dict) -> dict:
         """One bounded newest-first page of decision history.
 
-        This is a read: it calls no model
-        and persists nothing. The ``kind`` filter is applied in SQL *before* the
-        limit and the cursor is ``decision_requests.rowid``, the immutable insertion
+        This read calls no model and persists nothing.
+        The cursor is ``decision_requests.rowid``, the immutable insertion
         order, so a newer decision never pushes an older one out of reach and a page
         never shifts, repeats or skips. ``total`` is the complete matching count,
         independent of the cursor; decisions that never acquired a run and older
         pages are returned exactly like any other.
         """
         schemas.reject_unknown(params, LIST_FIELDS, "selection.list")
-        kind = schemas.optional_string(params, "kind")
-        if kind is not None and kind not in DECISION_KINDS:
-            raise BoardError("INVALID_ARGUMENT", "kind must be 'select'", field="kind")
         limit = schemas.optional_int(params, "limit", DEFAULT_LIST_LIMIT, 1, MAX_LIST_LIMIT)
         before = schemas.optional_positive_int(params, "before")
         with self.board.db.read() as connection:
@@ -1629,7 +1623,6 @@ class DecisionCoordinator:
         view: dict[str, Any] = {
             "decisionId": row["decision_id"],
             "requestId": row["request_id"],
-            "kind": row["kind"],
             "status": row["status"],
             "task": row["task"],
             "runId": row["decision_task_id"],

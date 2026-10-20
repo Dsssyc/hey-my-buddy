@@ -164,7 +164,7 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str, *, now=No
         cause = reason_from_json(row["unavailable_code"], row["unavailable_params_json"])
         return unavailable("router-catalog-unavailable", **({"cause": cause} if cause else {}))
     health = read_health(connection, row["harness"])
-    if not health["available"]:
+    if health["status"] != "ready":
         return unavailable("router-harness-unavailable", **({"cause": health["reason"]} if health.get("reason") else {}))
     from .quota_routing import cooling
     cooldown = cooling(connection, row, now=now)

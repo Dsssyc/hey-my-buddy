@@ -1987,7 +1987,7 @@ def verify_sealed_output(original_input: dict, final_input: dict, artifact: dict
 def integration_verify(artifact: dict, *, original_input: dict, final_input: dict,
                        path: str, ref: str, strategy: str, before_commit: str | None = None,
                        repository_id: str | None = None, checkout_id: str | None = None,
-                       adjusted_paths=None, host_paths=None, note: str | None = None,
+                       host_paths=None, note: str | None = None,
                        _confirm_adjustments: bool = False) -> dict:
     """Verify that one immutable artifact is actually present in a real target.
 
@@ -2009,12 +2009,6 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         _repository, changed = _artifact_binding(original_input, final_input, artifact)
         if before_commit is not None and (not isinstance(before_commit, str) or not before_commit):
             raise BoardError("INVALID_WORKSPACE", "beforeCommit must name the target commit before the integration")
-        adjustments = sorted({_relative(value) for value in (adjusted_paths or [])})
-        unknown_adjustments = [value for value in adjustments if value not in changed]
-        if unknown_adjustments:
-            raise BoardError("INVALID_WORKSPACE", "Adjusted paths must be artifact output paths", paths=unknown_adjustments[:32])
-        if adjustments and not (isinstance(note, str) and note.strip()):
-            raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit note")
         host_paths = sorted({_relative(value) for value in (host_paths or [])})
         overlap = sorted(set(host_paths) & set(changed))
         if overlap:
@@ -2065,10 +2059,9 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
             else:
                 differing.append({"path": name, "artifactMode": expected[0], "artifactOid": expected[1],
                                   "targetMode": actual["mode"], "targetOid": actual["oid"]})
-        if _confirm_adjustments:
-            adjustments = sorted({item["path"] for item in differing} | set(missing))
-            if adjustments and not (isinstance(note, str) and note.strip()):
-                raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit note")
+        adjustments = sorted({item["path"] for item in differing} | set(missing)) if _confirm_adjustments else []
+        if adjustments and not (isinstance(note, str) and note.strip()):
+            raise BoardError("INVALID_WORKSPACE", "An adjusted integration requires an explicit note")
         unrecorded = sorted({item["path"] for item in differing} - set(adjustments)) + sorted(set(missing) - set(adjustments))
         verification = {
             "verified": bool((before is None or _is_ancestor(root, before, after)) and not unrecorded),

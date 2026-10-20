@@ -98,8 +98,9 @@ class HostCompletionTests(WorkflowTestCase):
             "target": {"path": str(blank), "ref": "HEAD"}, **self.control(parent)})
         self.assertEqual(accepted["state"], "accepted")
         self.assertEqual(accepted["counts"]["turns"], 1)
-        self.assertEqual(accepted["integration"]["verification"]["adjustments"],
-                         raised.exception.details["paths"])
+        self.assertEqual(accepted["integration"]["verification"]["differingPaths"][0]["path"],
+                         raised.exception.details["paths"][0])
+        self.assertNotIn("adjustments", accepted["integration"]["verification"])
         replay = board.call("workflow_accept", {"runId": parent["runId"], "artifactId": delivered["finalArtifactId"],
             "note": "Host applied its own adjustment to the sealed output", "adjusted": True,
             "target": {"path": str(blank), "ref": "HEAD"}, **self.control(parent)})
@@ -138,6 +139,8 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertEqual(concluded["state"], "concluded")
         self.assertFalse(concluded["awaitingHost"])
         self.assertIsNotNone(concluded["hostConclusion"])
+        self.assertNotIn("evidence", concluded["hostConclusion"])
+        self.assertNotIn("integrationId", concluded["hostConclusion"])
         # A later read keeps the terminal state and the same conclusion.
         current = board.call("workflow_get", {"runId": delivered["runId"]})
         self.assertEqual(current["hostConclusion"], concluded["hostConclusion"])
@@ -327,8 +330,9 @@ class HostCompletionTests(WorkflowTestCase):
         continued = self.continue_run(board, delivered, input="Address review", note="Needs work")
         self.assertIsNotNone(continued["task"]["reviewRejectedAt"])
         self.assertEqual(continued["task"]["reviewRejectionNote"], "Needs work")
-        for key in ("acceptedAt", "acceptanceNote", "acceptanceVerdict"):
+        for key in ("acceptedAt", "acceptanceNote"):
             self.assertIsNone(continued["task"][key])
+        self.assertNotIn("acceptanceVerdict", continued["task"])
         self.finish_turn(board, self.claim(board, claim_request_id="failed-after-review"),
                          runner_status="failed", exit_code=1, seal=False, session_id="failed-2")
         current = board.call("workflow_get", {"runId": submitted["runId"]})

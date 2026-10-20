@@ -197,7 +197,6 @@ function parseIntegration(value: unknown): Integration {
   const integration = rec(value, "integration");
   const target = recOrNull(integration.target, "integration.target");
   const verification = recOrNull(integration.verification, "integration.verification") ?? {};
-  const summary = strOrNull(verification.summary, "integration.verification")?.trim() || null;
   return {
     integrationId: str(integration.integrationId, "integration.integrationId"),
     artifactId: str(integration.artifactId, "integration.artifactId"),
@@ -205,7 +204,7 @@ function parseIntegration(value: unknown): Integration {
     target: target && { path: strOrNull(target.path, "integration.target"), ref: strOrNull(target.ref, "integration.target") },
     beforeCommit: strOrNull(integration.beforeCommit, "integration.beforeCommit"),
     afterCommit: strOrNull(integration.afterCommit, "integration.afterCommit"),
-    verificationSummary: summary, hostPaths: strings(verification.hostPaths, "integration.verification"),
+    hostPaths: strings(verification.hostPaths, "integration.verification"),
     note: strOrNull(integration.note, "integration.note"),
     actor: actorOrNull(integration.actor, "integration.actor"), createdAt: str(integration.createdAt, "integration.createdAt"),
   };
@@ -216,9 +215,8 @@ function parseConclusion(value: unknown): HostConclusion {
   return {
     conclusionId: str(conclusion.conclusionId, "hostConclusion.conclusionId"),
     executionStatus: str(conclusion.executionStatus, "hostConclusion.executionStatus"),
-    note: strOrNull(conclusion.note, "hostConclusion.note"), reason: reasonOrNull(conclusion.reason, "hostConclusion.reason"), evidence: strings(conclusion.evidence, "hostConclusion.evidence"),
+    note: strOrNull(conclusion.note, "hostConclusion.note"), reason: reasonOrNull(conclusion.reason, "hostConclusion.reason"),
     artifactId: strOrNull(conclusion.artifactId, "hostConclusion.artifactId"),
-    integrationId: strOrNull(conclusion.integrationId, "hostConclusion.integrationId"),
     attemptId: strOrNull(conclusion.attemptId, "hostConclusion.attemptId"),
     actor: actor(conclusion.actor, "hostConclusion.actor"), createdAt: str(conclusion.createdAt, "hostConclusion.createdAt"),
     runRevision: intOrNull(conclusion.runRevision, "hostConclusion.runRevision"),

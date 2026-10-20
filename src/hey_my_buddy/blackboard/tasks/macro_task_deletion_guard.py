@@ -13,9 +13,8 @@ def reject_macro_task(connection, macro_task_id: str) -> None:
     ).fetchone()
     if deletion is not None:
         raise BoardError(
-            "MACRO_TASK_DELETED", "This macro task cannot accept more micro tasks",
-            macroTaskId=macro_task_id, state="deleting",
-            deletedAt=None, resolution="create-new-macro-task",
+            "MACRO_TASK_DELETING", "This macro task cannot accept more micro tasks",
+            macroTaskId=macro_task_id, resolution="create-new-macro-task",
         )
 
 

@@ -68,7 +68,7 @@ class EvaluationStore:
             decisions = [
                 self._decision_view(row)
                 for row in connection.execute(
-                    "SELECT d.*, CASE WHEN r.decision_id IS NOT NULL THEN 'select' END AS kind,"
+                    "SELECT d.*,"
                     " r.task_id AS run_id, r.updated_at AS updated_at"
                     " FROM evaluation_decisions d LEFT JOIN decision_requests r ON r.decision_id = d.decision_id"
                     " ORDER BY d.created_at DESC, d.decision_id DESC LIMIT ?",
@@ -187,8 +187,6 @@ class EvaluationStore:
             "note": row["note"],
             "createdAt": row["created_at"],
         }
-        if "kind" in keys and row["kind"] is not None:
-            view["kind"] = row["kind"]
         if "run_id" in keys:
             view["runId"] = row["run_id"]
         if "updated_at" in keys and row["updated_at"] is not None:

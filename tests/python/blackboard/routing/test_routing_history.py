@@ -259,15 +259,15 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
         board = self.board()
         self.seed(board)
         decisions = [self.select_decision(board, f"tidy-{index}")["decisionId"] for index in range(1, 6)]
-        first = board.call("selection_list", {"kind": "select", "limit": 2})
+        first = board.call("selection_list", {"limit": 2})
         self.assertEqual([item["decisionId"] for item in first["decisions"]], [decisions[4], decisions[3]])
         self.assertEqual(first["total"], 5)
         cursor = first["nextCursor"]
 
         # Newer selection rows arrive between page reads; the cursor never shifts.
         newer = [self.select_decision(board, f"tidy-new-{index}")["decisionId"] for index in range(1, 3)]
-        second = board.call("selection_list", {"kind": "select", "limit": 2, "before": cursor})
-        third = board.call("selection_list", {"kind": "select", "limit": 2, "before": second["nextCursor"]})
+        second = board.call("selection_list", {"limit": 2, "before": cursor})
+        third = board.call("selection_list", {"limit": 2, "before": second["nextCursor"]})
         self.assertEqual([item["decisionId"] for item in second["decisions"]], [decisions[2], decisions[1]])
         self.assertEqual([item["decisionId"] for item in third["decisions"]], [decisions[0]])
         self.assertIsNone(third["nextCursor"])
@@ -278,11 +278,11 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
         self.assertEqual(collected, list(reversed(decisions)))
         self.assertFalse(set(newer) & set(collected))
 
-        fresh = board.call("selection_list", {"kind": "select", "limit": 2})
+        fresh = board.call("selection_list", {"limit": 2})
         self.assertEqual([item["decisionId"] for item in fresh["decisions"]], [newer[1], newer[0]])
         self.assertEqual(fresh["total"], 7)
         # A full final page is not misreported as having another page.
-        exact = board.call("selection_list", {"kind": "select", "limit": 7})
+        exact = board.call("selection_list", {"limit": 7})
         self.assertEqual(len(exact["decisions"]), 7)
         self.assertIsNone(exact["nextCursor"])
 
@@ -291,6 +291,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
         self.seed(board)
         self.select_decision(board, "tidy-invalid")
         for params in (
+            {"kind": "select"},
             {"kind": "audit"},
             {"kind": 5},
             {"limit": 0},
@@ -307,7 +308,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
             with self.subTest(params=params):
                 self.assert_code("INVALID_ARGUMENT", board.call, "selection_list", params)
         # A cursor below every row is an honest empty page, not an error.
-        page = board.call("selection_list", {"kind": "select", "before": 1})
+        page = board.call("selection_list", {"before": 1})
         self.assertEqual(page["decisions"], [])
         self.assertIsNone(page["nextCursor"])
         self.assertEqual(page["total"], 1)
@@ -323,7 +324,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
             "hey_my_buddy.protocol.execution.launch_execution"
         ) as worker_run:
             self.history(board, submitted["runId"], limit=5)
-            board.call("selection_list", {"kind": "select", "limit": 5})
+            board.call("selection_list", {"limit": 5})
             board.call("selection_list", {})
             board.call("workflow_get", {"runId": submitted["runId"], "routingHistory": {"before": 1}})
             self.assertEqual(self.state_fingerprint(board), before)
@@ -350,7 +351,7 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
         board = self.board()
         self.seed(board)
         created = self.select_decision(board, "named-operation")
-        listed = board.console.command("selection_list", {"kind": "select"})
+        listed = board.console.command("selection_list", {})
         self.assertEqual(listed["total"], 1)
         self.assertEqual(listed["decisions"][0]["decisionId"], created["decisionId"])
         self.assert_code("METHOD_NOT_FOUND", board.console.command, "selection-list", {})

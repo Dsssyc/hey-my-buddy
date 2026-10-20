@@ -31,10 +31,10 @@ class ControlWaitTests(unittest.TestCase):
                                                self.directory, {})
 
     def test_unknown_health_waits_without_using_the_failure_retry(self):
-        unknown = {'status': 'unknown', 'available': False, 'revision': 1}
-        ready = {'status': 'ready', 'available': True, 'revision': 2,
+        unknown = {'status': 'unknown', 'revision': 1}
+        ready = {'status': 'ready', 'revision': 2,
                  'harness': 'codex', 'command': ['fixture-codex']}
-        old_failure_with_unknown_probe = {'status': 'unhealthy', 'available': False, 'revision': 2,
+        old_failure_with_unknown_probe = {'status': 'unhealthy', 'revision': 2,
                                           'lastProbe': {'status': 'unknown', 'reasonCode': 'scan-timeout'}}
         self.client.call.side_effect = [{'harness': unknown},
                                         {'harness': old_failure_with_unknown_probe}, {'harness': ready}]
@@ -47,7 +47,7 @@ class ControlWaitTests(unittest.TestCase):
         self.execution._execute_selected.assert_called_once()
 
     def test_transport_wait_expiry_replays_the_same_control_request(self):
-        ready = {'status': 'ready', 'available': True, 'revision': 1,
+        ready = {'status': 'ready', 'revision': 1,
                  'harness': 'codex', 'command': ['fixture-codex']}
         self.client.call.side_effect = [BoardError('SERVICE_UNAVAILABLE', 'wait expired'),
                                         {'harness': ready}]
@@ -56,7 +56,7 @@ class ControlWaitTests(unittest.TestCase):
         self.assertEqual(first.args, second.args)
 
     def test_stop_between_unknown_health_and_next_prepare_is_cancelled(self):
-        self.client.call.return_value = {'harness': {'status': 'unknown', 'available': False,
+        self.client.call.return_value = {'harness': {'status': 'unknown',
                                                       'revision': 1}}
         self.backoff.side_effect = lambda seconds: self.execution.request_stop('console')
         result = self.guarded()
@@ -75,7 +75,7 @@ class ControlWaitTests(unittest.TestCase):
             self.assertEqual(operation, 'harness_prepare')
             entered.set()
             self.assertTrue(release.wait(3))
-            return {'harness': {'status': 'ready', 'available': True, 'revision': 1,
+            return {'harness': {'status': 'ready', 'revision': 1,
                                 'harness': 'codex', 'command': ['fixture-codex']}}
 
         self.client.call.side_effect = prepare

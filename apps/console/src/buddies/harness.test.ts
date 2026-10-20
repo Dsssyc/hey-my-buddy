@@ -22,7 +22,7 @@ const clock = (iso: string) => {
 };
 
 function row(entry: Partial<HarnessHealth> = {}): HarnessHealth {
-  return { harness: "dsh", status: "ready", available: true, revision: 1, manualPath: null, ...entry };
+  return { harness: "dsh", status: "ready", revision: 1, manualPath: null, ...entry };
 }
 const account: HarnessAccount = { harness: "dsh", status: "ready",
   accountType: null, checkedAt: null, reason: null };
@@ -90,7 +90,7 @@ describe("harness details", () => {
   });
 
   it("adds the reason, the remedy and the places tried only for a harness that is not found", () => {
-    const view = harnessDetailsView(row({ status: "missing", available: false, reason: { code: "harness.not-found", params: { operation: "probe" } },
+    const view = harnessDetailsView(row({ status: "missing", reason: { code: "harness.not-found", params: { operation: "probe" } },
       candidates: [
         { path: "/a/zcode", source: "应用包", status: "missing", reason: { code: "harness.not-found", params: { operation: "probe" } } },
         { path: "/b/zcode", source: "Homebrew", status: "failed", reason: { code: "harness.probe-failed", params: { operation: "probe" } } },
@@ -104,10 +104,10 @@ describe("harness details", () => {
   });
 
   it("takes the program reason from the current reply without inventing a second cause", () => {
-    const view = harnessDetailsView(row({ status: "unknown", available: false,
+    const view = harnessDetailsView(row({ status: "unknown",
       reason: { code: "harness.not-checked", params: { operation: "probe" } } }), t).location.exception!;
     expect(view.reason).toBe(reasonText({ code: "harness.not-checked", params: { operation: "probe" } }));
-    expect(harnessDetailsView(row({ status: "unhealthy", available: false }), t).location.exception!.reason).toBeNull();
+    expect(harnessDetailsView(row({ status: "unhealthy" }), t).location.exception!.reason).toBeNull();
   });
 
   it("writes the account's status, type and check, the billing of each provider and the guidance", () => {

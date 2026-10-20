@@ -231,7 +231,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         def stamp(delta):
             return datetime.fromtimestamp(now[0] + delta, timezone.utc).isoformat()
 
-        health = [{"harness": "codex", "status": "ready", "available": True,
+        health = [{"harness": "codex", "status": "ready",
                    "scanAfter": stamp(180), "expiresAt": stamp(3600)}]
         board.service.automatic_discovery = True
         with mock.patch.object(board.service.harnesses, "all", return_value=health), \
@@ -270,7 +270,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         now = [time.time()]
         board.console._clock = lambda: now[0]
         board.console.read_cache._clock = lambda: now[0]
-        health = [{"harness": "codex", "status": "unknown", "available": False,
+        health = [{"harness": "codex", "status": "unknown",
                    "scanAfter": None, "expiresAt": None}]
         board.service.automatic_discovery = True
         with mock.patch.object(board.service.harnesses, "all", return_value=health), \

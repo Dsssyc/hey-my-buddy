@@ -623,7 +623,6 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "rootLeadRunId": metadata["rootLeadRunId"],
         "buddy": _full_buddy(metadata["buddy"]),
         "acceptedAt": row["accepted_at"],
-        "acceptanceVerdict": "accepted" if row["accepted_at"] else None,
         "reviewRejectedAt": row["review_rejected_at"],
         "reviewRejectionNote": row["review_rejection_note"],
     }

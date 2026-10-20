@@ -148,18 +148,15 @@ _PLAN_BRIEF = ("planId", "state", "eligible", "reasons", "path", "kind", "expire
 def _integration_brief(row: Any) -> dict:
     if not isinstance(row, dict):
         return row
-    brief = _pick(row, ("integrationId", "artifactId", "state", "strategy", "notRequired", "note", "afterCommit"))
+    brief = _pick(row, ("integrationId", "artifactId", "state", "strategy", "note", "afterCommit"))
     target = row.get("target")
     if isinstance(target, dict):
         brief["target"] = _pick(target, ("path", "ref"))
     verification = row.get("verification")
     if isinstance(verification, dict) and verification:
         # The verification record can be large; its outcome fields are enough to act on.
-        brief["verification"] = _pick(
-            verification, ("state", "status", "verified", "ok", "method", "note", "errors", "mismatches",
-                           "matchingPathsCount", "differingPathsCount", "missingPathsCount",
-                           "adjustmentsCount", "hostPathsCount", "unrecordedPathsCount", "hostPaths")
-        ) or {"recorded": True}
+        brief["verification"] = _pick(verification, ("matchingPathsCount", "differingPathsCount",
+                                                     "missingPathsCount", "hostPathsCount", "hostPaths", "note"))
     return brief
 
 
@@ -176,7 +173,7 @@ def _plan_brief(plan: Any) -> Any:
         }
     result = plan.get("result")
     if isinstance(result, dict):
-        brief["result"] = _pick(result, ("removed", "alreadyRemoved", "path"))
+        brief["result"] = _pick(result, ("alreadyRemoved",))
     return brief
 
 
@@ -282,7 +279,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
         brief["finalArtifactId"] = view["finalArtifactId"]
     task = view.get("task")
     if isinstance(task, dict):
-        brief.update(_pick(task, ("acceptedAt", "acceptanceVerdict", "terminationReason", "interruptionEvidence")))
+        brief.update(_pick(task, ("acceptedAt", "terminationReason", "interruptionEvidence")))
     if "shutdown" in view:
         brief["shutdown"] = _shutdown(view["shutdown"])
     if counts:
@@ -420,7 +417,6 @@ _TASK_BRIEF = (
     "interruptionEvidence",
     "cancelRequestedAt",
     "acceptedAt",
-    "acceptanceVerdict",
     "reviewRejectedAt",
     "reviewRejectionNote",
     "artifactCount",

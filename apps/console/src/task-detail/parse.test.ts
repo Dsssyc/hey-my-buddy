@@ -53,7 +53,7 @@ describe("the compact collaboration record", () => {
   it("reads a system request and an automatic conclusion with null authored text", () => {
     const reason = { code: "lead.result-refused", params: { disposition: "completed", unfinished: [{ runId: "child", state: "executing" }], total: 1 } };
     const conclusion = { conclusionId: "c", executionStatus: "failed", note: null, reason: { code: "lead.owned-concluded", params: { leadRunId: "lead" } },
-      evidence: [], artifactId: null, integrationId: null, attemptId: null, actor: HOST, createdAt: "t", runRevision: 1 };
+      artifactId: null, attemptId: null, actor: HOST, createdAt: "t", runRevision: 1 };
     const parsed = parseWorkflow(reply({ activeRequest: { requestId: "r", kind: "attention", state: "open", createdAt: "t", decidedAt: null,
       childTaskId: null, routing: false, summary: null, reason, attempted: null, neededWork: [], expectedArtifacts: [], acceptance: null, preparationError: null },
       hostConclusion: conclusion }), "m1");
@@ -98,7 +98,7 @@ describe("the compact collaboration record", () => {
   });
 
   it("refuses a Host conclusion without its actor, and an actor that is not one", () => {
-    const conclusion = { conclusionId: "c", attemptId: null, executionStatus: "failed", note: "n", evidence: [], artifactId: null, integrationId: null,
+    const conclusion = { conclusionId: "c", attemptId: null, executionStatus: "failed", note: "n", artifactId: null,
       actor: { role: "host", id: "codex-desktop" }, createdAt: "t", ownerGeneration: 1, runRevision: 3 };
     expect(parseWorkflow(reply({ hostConclusion: conclusion }), "m1").hostConclusion?.actor).toEqual({ role: "host", id: "codex-desktop" });
     for (const actor of [null, { role: "robot", id: "x" }, { role: "host", id: "" }]) {
@@ -110,10 +110,10 @@ describe("the compact collaboration record", () => {
     const base = { integrationId: "i", artifactId: "o1", attemptId: "a1", state: "not-required", strategy: "not-required", target: null, beforeCommit: null, afterCommit: null,
       verification: {}, note: "只读", actor: { role: "host", id: "h" }, createdAt: "t" };
     const verified = { ...base, state: "verified", strategy: "merge", target: { kind: "checkout", path: "~/p", ref: "main" }, afterCommit: "c3",
-      verification: { summary: "通过", hostPaths: ["docs/a.md"] } };
+      verification: { hostPaths: ["docs/a.md"] } };
     const [first, second] = parseWorkflow(reply({ integrations: [base, verified] }), "m1").integrations;
-    expect(first).toMatchObject({ state: "not-required", target: null, verificationSummary: null, hostPaths: [], note: "只读" });
-    expect(second).toMatchObject({ target: { path: "~/p", ref: "main" }, afterCommit: "c3", verificationSummary: "通过", hostPaths: ["docs/a.md"] });
+    expect(first).toMatchObject({ state: "not-required", target: null, hostPaths: [], note: "只读" });
+    expect(second).toMatchObject({ target: { path: "~/p", ref: "main" }, afterCommit: "c3", hostPaths: ["docs/a.md"] });
   });
 });
 

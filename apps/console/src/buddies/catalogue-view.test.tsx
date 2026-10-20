@@ -37,8 +37,8 @@ function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: Harnes
  modelServiceConcurrency: [{ ...sonnet, limit: 2, active: 0 }],
     tasks: { pendingCount: 0 }, capabilities: {},
     harnesses: [
-      { harness: "claude", status: "ready", available: true, revision: 1, manualPath: null },
-      { harness: "codex", status: "ready", available: true, revision: 1, manualPath: null },
+      { harness: "claude", status: "ready", revision: 1, manualPath: null },
+      { harness: "codex", status: "ready", revision: 1, manualPath: null },
     ],
     ...extra,
   };
@@ -111,7 +111,7 @@ describe("the harness sections", () => {
     const state = snapshot();
     state.buddies = state.buddies.map(entry => entry.harness === "claude"
       ? { ...entry, available: false, unavailableReason: { code: "harness.probe-failed", params: {} } } : entry);
-    state.harnesses[0] = { ...state.harnesses[0], status: "login-required", available: false };
+    state.harnesses[0] = { ...state.harnesses[0], status: "login-required" };
     const f = fixture(state, { buddy_list: () => page(state.buddies.filter(entry => !entry.available), state) });
     const user = userEvent.setup();
     open(f);

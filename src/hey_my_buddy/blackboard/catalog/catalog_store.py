@@ -40,7 +40,7 @@ def current(db):
         if row['payload_json']:
             from ..service.harness_health import read_health
             health = read_health(db, row['harness'])
-            healthy = health['available']
+            healthy = health['status'] == 'ready'
             providers.extend({**p, 'models': [{**m, 'available': bool(m.get('available', True)) and healthy,
                               'unavailableReason': m.get('unavailableReason') if healthy or not m.get('available', True) else health['reason'],
                               'unavailableContent': m.get('unavailableContent') if healthy or not m.get('available', True) else None} for m in p['models']]}
@@ -202,7 +202,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
             for p in entries:
                 from ..service.harness_health import read_health
                 health = read_health(db, name)
-                if p['available'] and not health['available']:
+                if p['available'] and health['status'] != 'ready':
                     p = {**p, 'available': False, 'unavailableReason': health['reason'],
                          'unavailableContent': None}
                 existing_row = db.execute('SELECT harness,provider,model,effort FROM buddies WHERE buddy_id=?', (p['buddyId'],)).fetchone()

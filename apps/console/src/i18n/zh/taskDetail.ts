@@ -120,7 +120,7 @@ export default {
     strategy: "方式", target: "目标", commits: "提交", recordedBy: "记录人", noIntegration: "整合证明未记录",
     hostPaths: "Host 补充的改动 {{n}}", rejection: "打回", rejected: "已打回", note: "说明",
     conclusion: "Host 的结论", outcome: "微任务结果", notCounted: "不计入验收", version: "微任务版本", attempt: "被审查的执行",
-    artifactRef: "关联的产物", integrationRef: "整合记录", evidence: "依据",
+    artifactRef: "关联的产物",
     status: { failed: "失败", cancelled: "已取消" },
     exception: "例外", unconfirmed: "停止未确认 · 待核实执行 {{n}} 项",
   },

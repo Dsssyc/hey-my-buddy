@@ -342,7 +342,7 @@ describe("a turn", () => {
     const artifact: Artifact = { artifactId: "art-1", kind: "output", attemptId: "att-1", manifestSha256: "f".repeat(64), outputCommit: "3f9a2c1d00", diffPath: "/diffs/1.diff",
       changedPaths: ["a.ts", "b.ts"], partial: false, verified: null, final: null, cumulativePatch: { baseCommit: "d286db0aa", outputCommit: "3f9a2c1d00", path: "/p.patch", sha256: "a".repeat(64), changedPaths: ["a.ts"] } };
     const integration: Integration = { integrationId: "int-1", artifactId: "art-1", state: "not-required", strategy: "none", target: null, beforeCommit: null, afterCommit: null,
-      verificationSummary: null, hostPaths: ["docs/console.md"], note: "未整合", actor: HOST, createdAt: at("11:05") };
+      hostPaths: ["docs/console.md"], note: "未整合", actor: HOST, createdAt: at("11:05") };
     const f = open({ step: 3, replies: { workflow: workflow({ artifacts: [artifact], integrations: [integration] }), inquiries: { items: [
       inquiry({ messageId: "q1", question: "读到哪里了？", state: "answered", answer: { text: "读到第二个文件。", at: at("10:21"), truncated: false } }),
       inquiry({ messageId: "q2", question: "收到请回复", state: "unavailable", reason: { code: "inquiry-no-live-agent", params: {} }, answer: null, createdAt: at("10:31") }),
@@ -492,7 +492,7 @@ describe("a turn", () => {
       routing: { routingMode: "fast", selectedBuddy: OPUS, reason: null, note: null } }),
     span("e2", "execution", at("10:06"), at("10:30"), { turnIndex: 2, attemptId: "att-2", turnId: "turn-2", buddy: OPUS, shutdownConfirmed: true, resultStatus: "ok" }));
     first.events = first.events.filter(item => item.kind === "dispatch");
-    first.rows = [row({ state: "accepted", status: "completed", acceptedAt: at("10:31"), acceptanceVerdict: "accepted" })];
+    first.rows = [row({ state: "accepted", status: "completed", acceptedAt: at("10:31") })];
     const base = workflow({ state: "accepted" });
     // Older rejected turns are outside the compact record and still present in the audit.
     base.turns = base.turns.filter(item => item.turnIndex !== 1);
@@ -636,16 +636,16 @@ describe("the acceptance", () => {
   const settled = () => {
     const found = timeline();
     found.events.push(event(4, "integrate", at("11:03")), event(5, "accept", at("11:05")));
-    found.rows = [row({ state: "accepted", acceptedAt: at("11:05"), acceptanceVerdict: "accepted" })];
+    found.rows = [row({ state: "accepted", acceptedAt: at("11:05") })];
     return found;
   };
   const artifact: Artifact = { artifactId: "art-final", kind: "output", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
     diffPath: null, changedPaths: Array.from({ length: 14 }, (_, index) => `f${index}.ts`), partial: false, verified: null, final: null, cumulativePatch: null };
   const verified: Integration = { integrationId: "int-1", artifactId: "art-final", state: "verified", strategy: "merge", target: { path: "~/projects/hey-my-buddy", ref: "socu/console" },
-    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", verificationSummary: "前端全量通过；构建可复现。", hostPaths: ["apps/console/src/tokens.css", "apps/console/src/button.tsx"], note: null, actor: HOST, createdAt: at("11:03") };
+    beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", hostPaths: ["apps/console/src/tokens.css", "apps/console/src/button.tsx"], note: null, actor: HOST, createdAt: at("11:03") };
 
   it("is the final artifact and the evidence that it was integrated, as the Host recorded it", async () => {
-    open({ timeline: settled(), step: 8, replies: { workflow: workflow({ state: "accepted", artifacts: [artifact], finalArtifactId: "art-final", integrations: [verified] }), task: task({ acceptedAt: at("11:05"), acceptanceVerdict: "accepted" }) } });
+    open({ timeline: settled(), step: 8, replies: { workflow: workflow({ state: "accepted", artifacts: [artifact], finalArtifactId: "art-final", integrations: [verified] }), task: task({ acceptedAt: at("11:05") }) } });
     await ready();
     const text = pane().textContent!;
     expect(within(pane()).getByRole("heading", { name: "验收" })).toBeTruthy();
@@ -657,7 +657,6 @@ describe("the acceptance", () => {
     expect(text).toContain("merge");
     expect(text).toContain("~/projects/hey-my-buddy @ socu/console");
     expect(text).toContain("b7285470 → f6dfd59c");
-    expect(text).toContain("前端全量通过；构建可复现。");
     expect(text).toContain("Host 补充的改动 2");
     expect(text).toContain("apps/console/src/tokens.css");
     expect(text).toContain("codex-desktop");
@@ -704,8 +703,8 @@ describe("the acceptance", () => {
     const failed = timeline();
     failed.events.push(event(4, "conclude", at("11:07")));
     failed.rows = [row({ state: "failed", status: "failed" })];
-    const conclusion = { conclusionId: "c1", reason: null, executionStatus: "failed", note: "额度耗尽前把改动提取为部分成果", evidence: ["部分成果已封存", "检出内容已保留"],
-      artifactId: "art-partial", integrationId: null, attemptId: "att-2", actor: { role: "host" as const, id: "host-a" }, createdAt: at("11:07"), runRevision: 7 };
+    const conclusion = { conclusionId: "c1", reason: null, executionStatus: "failed", note: "额度耗尽前把改动提取为部分成果",
+      artifactId: "art-partial", attemptId: "att-2", actor: { role: "host" as const, id: "host-a" }, createdAt: at("11:07"), runRevision: 7 };
     open({ timeline: failed, step: 8, replies: { workflow: workflow({ state: "failed", hostConclusion: conclusion }), task: task({ status: "failed", workflow: { ...task().workflow, state: "failed" } }) } });
     await ready();
     const text = pane().textContent!;
@@ -716,7 +715,6 @@ describe("the acceptance", () => {
     expect(text).toContain("att-2");
     expect(text).toContain("art-partial");
     expect(text).toContain("额度耗尽前把改动提取为部分成果");
-    expect(text).toContain("部分成果已封存");
     expect(text).not.toContain("已验收");
     cleanup();
     open({ timeline: failed, step: 8, replies: { workflow: workflow({ state: "cancelled", hostConclusion: { ...conclusion, executionStatus: "cancelled" } }) } });
@@ -726,7 +724,7 @@ describe("the acceptance", () => {
 
   it("writes only exceptions: a stop that is not confirmed, an ending that was not the normal one", async () => {
     const unconfirmed = workflow({ shutdown: { selfConfirmed: true, descendantsConfirmed: false, unconfirmedCount: 1 } });
-    open({ step: 8, replies: { workflow: unconfirmed, task: task({ acceptanceVerdict: "accepted" }) } });
+    open({ step: 8, replies: { workflow: unconfirmed, task: task() } });
     await ready();
     expect(pane().textContent).toContain("例外");
     expect(pane().textContent).toContain("停止未确认 · 待核实执行 1 项");

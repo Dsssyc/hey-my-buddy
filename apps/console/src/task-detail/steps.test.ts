@@ -71,7 +71,7 @@ describe("the steps of a micro task", () => {
   it("collects the integration, the acceptance, the review and the Host's conclusion into the last step", () => {
     const settled = timeline();
     settled.events.push(event(4, "integrate", at("11:03")), event(5, "accept", at("11:05")), event(6, "reject", at("11:06")), event(7, "conclude", at("11:07")));
-    settled.rows = [row({ state: "accepted", acceptedAt: at("11:05"), acceptanceVerdict: "accepted" })];
+    settled.rows = [row({ state: "accepted", acceptedAt: at("11:05") })];
     const result = buildSteps(settled, "m1", NOW);
     const acceptance = result.steps.at(-1)!;
     expect(acceptance.kind).toBe("acceptance");

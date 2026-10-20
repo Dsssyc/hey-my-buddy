@@ -255,7 +255,7 @@ class TestConcurrency(BoardTestCase):
         rejected = board.call("task_acknowledge", params)
         self.assertFalse(rejected["duplicate"])
         self.assertIsNone(rejected["task"]["acceptedAt"])
-        self.assertIsNone(rejected["task"]["acceptanceVerdict"])
+        self.assertIsNone(rejected["task"]["acceptedAt"])
         self.assertIsNotNone(rejected["task"]["reviewRejectedAt"])
         self.assertEqual(rejected["task"]["reviewRejectionNote"], "output needs revision")
         self.assertTrue(board.call("task_acknowledge", params)["duplicate"])
@@ -276,7 +276,7 @@ class TestConcurrency(BoardTestCase):
         second = admit_execution(client, "b" * 32)["claim"]["attempt"]
         client.submit_result(second["attemptId"], second["generation"], "b" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         accepted = board.call("task_acknowledge", {"runId": task["runId"], "note": "revised output"})["task"]
-        self.assertEqual(accepted["acceptanceVerdict"], "accepted")
+        self.assertIsNotNone(accepted["acceptedAt"])
         self.assertIsNotNone(accepted["acceptedAt"])
         self.assertIsNone(accepted["reviewRejectedAt"])
 
@@ -291,7 +291,7 @@ class TestCrashWindows(BoardTestCase):
         client = SimpleNamespace(
             progress=lambda *_args, **_kwargs: None,
             call=lambda *_args, **_kwargs: {
-                "harness": {"harness": native_harness, "available": True, "revision": 1, "command": ["mock"]}
+                "harness": {"harness": native_harness, "status": "ready", "revision": 1, "command": ["mock"]}
             },
         )
         claim = {

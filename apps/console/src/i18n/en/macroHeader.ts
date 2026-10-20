@@ -108,7 +108,7 @@ export default {
       MACRO_TASK_STORAGE_IN_USE: "Other micro tasks still hold this storage. Settle those dependencies first.",
       MACRO_TASK_HARNESS_UNAVAILABLE: "A harness with stored sessions is unavailable. Restore it before deleting.",
       NOT_FOUND: "This macro task was not found. Read the list again.",
-      MACRO_TASK_DELETED: "Deletion has started for this macro task. Read again to confirm the result.",
+      MACRO_TASK_DELETING: "Deletion has started for this macro task. Read again to confirm the result.",
       other: "The deletion request did not complete ({{code}}). Read again before retrying.",
     },
   },

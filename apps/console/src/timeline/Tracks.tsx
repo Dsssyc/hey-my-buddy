@@ -185,7 +185,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   const wait = acceptanceInterval(row, spans, nowMs);
   const acceptanceOpen = wait?.open ?? false;
   const acceptance = wait ? { start: scale.toX(wait.startMs)!, end: scale.toX(wait.endMs)!, duration: formatDuration(wait.endMs - wait.startMs, "minutes") } : null;
-  const isConclusion = (event: TimelineEvent) => event.kind === "accept" || event.kind === "conclude" && (row.state === "failed" || row.status === "failed" || row.acceptanceVerdict === "failed");
+  const isConclusion = (event: TimelineEvent) => event.kind === "accept" || event.kind === "conclude" && (row.state === "failed" || row.status === "failed");
   const markers = events.filter(event => event.kind !== "dispatch" && event.kind !== "integrate").map(event => ({ event, x: scale.toX(instant(event.at)!)! }));
   const inquiries = positioned.flatMap(({ span }) => (span.inquiries ?? []).map(inquiry => ({ inquiry, span, x: scale.toX(instant(inquiry.createdAt)!)! })));
   const allMarkers: TimelineMarker[] = [

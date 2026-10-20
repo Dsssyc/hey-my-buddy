@@ -26,7 +26,7 @@ class HarnessStartupTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         self.client = Mock(state_dir=self.directory / 'state')
-        self.record = {'harness': 'codex', 'status': 'ready', 'available': True, 'revision': 1, 'command': ['/native/codex']}
+        self.record = {'harness': 'codex', 'status': 'ready', 'revision': 1, 'command': ['/native/codex']}
         self.client.call.return_value = {'harness': self.record}
         self.attempt = {'attemptId': 'attempt-1', 'generation': 1}
         self.claim = {'attempt': self.attempt,

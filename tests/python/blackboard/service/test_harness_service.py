@@ -18,10 +18,10 @@ class HarnessServiceTests(BoardTestCase):
             db.execute("UPDATE attempts SET model_harness='codex' WHERE attempt_id=?", (attempt['attemptId'],))
         params = {'attemptId': attempt['attemptId'],
                   'generation': attempt['generation'], 'nonce': 'n' * 32}
-        unknown = {'harness': 'codex', 'status': 'unknown', 'available': False,
+        unknown = {'harness': 'codex', 'status': 'unknown',
                    'reason': {'code': 'harness.timeout', 'params': {'operation': 'probe'}},
                    'lastProbe': {'status': 'unknown', 'reason': {'code': 'harness.timeout', 'params': {'operation': 'probe'}}}}
-        ready = {'harness': 'codex', 'status': 'ready', 'available': True,
+        ready = {'harness': 'codex', 'status': 'ready',
                  'reason': None, 'lastProbe': {'status': 'complete'}}
         with patch.object(self.service.harnesses, 'refresh', side_effect=[unknown, ready]):
             self.assertNotIn('error', self.call('harness_prepare', **params, commandId='unknown-read'))
@@ -72,6 +72,7 @@ class HarnessServiceTests(BoardTestCase):
         self.assertNotIn('error', result)
         self.assertFalse(result['adapters']['codex']['available'])
         self.assertEqual(result['adapters']['codex']['harness']['status'], 'unknown')
+        self.assertNotIn('available', result['adapters']['codex']['harness'])
         native.assert_not_called()
         self.service.harnesses.kick.assert_called_once()
 
@@ -94,6 +95,7 @@ class HarnessServiceTests(BoardTestCase):
         self.assertNotIn('error', result)
         self.assertTrue(result['adapters']['codex']['available'])
         self.assertEqual(result['adapters']['codex']['harness']['version'], '1.2.3')
+        self.assertNotIn('available', result['adapters']['codex']['harness'])
         native.assert_called_once()
 
     def test_manual_refresh_ignores_the_bounded_reread_window(self):
