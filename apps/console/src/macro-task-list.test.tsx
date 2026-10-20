@@ -49,6 +49,15 @@ describe("macro task list", () => {
     expect(within(row).getByText("已验收 2", { selector: ".sr-only" })).toBeTruthy();
     await userEvent.click(row); expect(p.onSelect).toHaveBeenCalledWith(p.rows[0].macroTaskId);
   });
+  it("shows the creation time under created sorts and the activity time otherwise, naming it for readers", () => {
+    const p = props(); const view = render(<MacroTaskList {...p}/>);
+    const row = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
+    expect(row.querySelector("time")?.getAttribute("datetime")).toBe(p.rows[0].lastActivityAt);
+    expect(within(row).getByText("最近更新", { selector: ".sr-only" })).toBeTruthy();
+    view.rerender(<MacroTaskList {...p} sort="created-desc"/>);
+    expect(row.querySelector("time")?.getAttribute("datetime")).toBe(p.rows[0].createdAt);
+    expect(within(row).getByText("创建时间", { selector: ".sr-only" })).toBeTruthy();
+  });
   it("draws only actionable state edges, names the state and keeps the count marks", () => {
     const p = props();
     const variants = [
@@ -110,8 +119,10 @@ describe("macro task list", () => {
   it("renders the nullable fields the service can return without inventing a time", async () => {
     const p=props(); p.rows=[{...p.rows[0],kind:"standalone",project:null,createdAt:null,lastActivityAt:null}];
     render(<MacroTaskList {...p}/>); await userEvent.click(screen.getByRole("button",{name:/独立微任务/}));
-    expect(document.querySelector('[data-slot="macro-entry"] time')?.textContent).toBe("未记录");
-    expect(document.querySelector('[data-slot="macro-entry"] time')?.hasAttribute("datetime")).toBe(false);
+    const time = document.querySelector('[data-slot="macro-entry"] time')!;
+    expect([...time.childNodes].at(-1)?.textContent).toBe("未记录");
+    expect(time.querySelector(".sr-only")?.textContent).toBe("最近更新");
+    expect(time.hasAttribute("datetime")).toBe(false);
   });
   it("loads earlier only when available and idle, and collapses through one button", async () => {
     const p=props(); const f=render(<MacroTaskList {...p} nextCursor="older"/>);
