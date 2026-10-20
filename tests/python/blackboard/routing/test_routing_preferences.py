@@ -168,38 +168,17 @@ class RetiredSubmissionInputTests(unittest.TestCase):
 
 
 class DecisionCapabilityTests(unittest.TestCase):
-    def test_fast_capability_and_native_readiness_are_distinct_from_review_eligibility(self):
-        class Native(Adapter):
-            name = 'fixture'
-            read_only_structured = True
-            def available(self):
-                return self.ready, None
-        native = Native()
-        for implemented, ready, expected in ((False, True, False), (True, False, False), (True, True, True)):
-            native.no_tool_structured, native.ready = implemented, ready
-            with mock.patch('hey_my_buddy.buddy.harnesses.registry.adapters', return_value={'fixture': native}):
+    def test_a_declared_level_and_native_readiness_are_both_required(self):
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
+        native = SimpleNamespace(name="dsh", available=lambda: (True, None))
+        for levels, ready, expected in (({}, True, False), ({"none": "enforced"}, False, False), ({"none": "enforced"}, True, True)):
+            native.available = lambda: (ready, None)
+            with mock.patch.dict(PERMISSION_LEVELS, {"dsh": levels}), mock.patch('hey_my_buddy.buddy.harnesses.registry.adapters', return_value={"dsh": native}):
                 self.assertEqual(DecisionAdapter().available()[0], expected)
-
-    def test_unimplemented_review_is_ineligible_without_certificate_attributes(self):
-        for native in (Adapter, DshAdapter, CodexAdapter, ClaudeAdapter, ZcodeAdapter):
-            with self.subTest(native=native.name):
-                self.assertFalse(hasattr(native(), 'read_only_structured_verified'))
-        self.assertFalse(Adapter().local_read_only_check()['eligible'])
-        self.assertFalse(DshAdapter().local_read_only_check()['eligible'])
-        self.assertFalse(ZcodeAdapter().local_read_only_check()['eligible'])
-        self.assertFalse(DshAdapter.read_only_structured)
-        self.assertTrue(CodexAdapter.read_only_structured)
-        self.assertTrue(ClaudeAdapter.read_only_structured)
-        self.assertTrue(DshAdapter.no_tool_structured)
-        self.assertTrue(ZcodeAdapter.no_tool_structured)
-        self.assertFalse(ClaudeAdapter.no_tool_structured)
 
     def test_decision_dispatches_generic_request_with_frozen_input_and_no_agent_authority(self):
         class Native(Adapter):
             name = "codex"
-            read_only_structured = True
-            def local_read_only_check(self):
-                return {'eligible': True}
 
         calls = []
         def start(_name, context, request):
@@ -243,21 +222,6 @@ class DecisionCapabilityTests(unittest.TestCase):
             self.assertIsNone(child.agent_credential)
             self.assertEqual(child.spec["model"], "fixture-model")
             self.assertEqual(handle.router_input, (manifest, frozen, "digest"))
-
-    def test_ineligible_capability_is_rejected_before_input_preparation_or_spawn(self):
-        context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
-                                   spec={}, directory=Path("/tmp/unused"), runtime={}, environment={},
-                                       decision_input={"buddy": {"harness": "codex"}, "budget": router.budget("brief")}, session_record_path=None)
-        with mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=CodexAdapter()), mock.patch(
-            "hey_my_buddy.buddy.roles.router_input.prepare"
-        ) as prepare, mock.patch.object(CodexAdapter, 'local_read_only_check', return_value={
-            'eligible': False, 'reason': {'code': 'harness.readonly-resource-missing', 'params': {}}}), \
-                mock.patch("hey_my_buddy.buddy.roles.controller.start_router_preparation") as start:
-            with self.assertRaises(BoardError) as raised:
-                DecisionAdapter().prepare(context)
-        self.assertEqual(raised.exception.code, "router-review-unsupported")
-        prepare.assert_not_called()
-        start.assert_not_called()
 
     def test_router_prompt_carries_no_task_preference_slot(self):
         prompt = router.render_prompt({"routingMode": "review", "task": "choose", "buddies": [],
@@ -357,7 +321,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         note = document["annotations"][0]
         self.assertEqual({key: note[key] for key in ("harness", "provider", "model", "text")},
                          {**model_service_key(CATALOG_BUDDY), "text": "Human preference for this workflow"})
-        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim']), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'zeroToolVerified': True, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
+        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim']), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["source"], "model-selection")
         self.assertNotIn("routingPreferences", routed["routing"])
@@ -384,7 +348,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         document = owned["claim"]["decisionInput"]
         self.assertEqual(sorted(entry["buddyId"] for entry in document["buddies"]),
                          sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
-        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim']), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'zeroToolVerified': True, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': SECOND_BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
+        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim']), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': SECOND_BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["status"], "completed")
         decision = board.call("selection_get", {"decisionId": view["routing"]["decisionId"]})["decision"]

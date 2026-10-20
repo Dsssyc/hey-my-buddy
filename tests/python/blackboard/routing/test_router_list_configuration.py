@@ -9,7 +9,6 @@ from copy import deepcopy
 import unittest
 
 from support import BoardTestCase
-from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -32,7 +31,7 @@ class RouterListConfigurationTests(BoardTestCase):
                            "available,enabled,capabilities_json)"
                            " VALUES(?,?,?,?,?,?,1,1,?)",
                            (buddy_id, buddy_id, "dsh", "fixture", buddy_id, "max",
-                            canonical_json(permission_capabilities("dsh"))))
+                            canonical_json([])))
 
     def stored(self):
         with self.board_.store.db.read() as db:
@@ -131,7 +130,7 @@ class RouterListConfigurationTests(BoardTestCase):
             db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES('incomplete','incomplete','dsh','fixture','','',1,1,?)",
-                       (canonical_json(permission_capabilities("dsh")),))
+                       (canonical_json([]),))
         with self.assertRaises(BoardError) as caught:
             self.publish({"routerBuddyIds": ["incomplete"]})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
@@ -142,18 +141,18 @@ class RouterListConfigurationTests(BoardTestCase):
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,1,?)",
                        ("disabled", "disabled", "dsh", "fixture", "disabled", "max", 1,
-                        canonical_json(permission_capabilities("dsh"))))
+                        canonical_json([])))
             db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='disabled'")
             db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,0,1,?)",
                        ("offline", "offline", "dsh", "fixture", "offline", "max",
-                        canonical_json(permission_capabilities("dsh"))))
+                        canonical_json([])))
             db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,1,1,?)",
                        ("reviewonly", "reviewonly", "zcode", "fixture", "reviewonly", "max",
-                        canonical_json(permission_capabilities("zcode"))))
+                        canonical_json([])))
         self.publish({"routerBuddyIds": [A, "disabled", "offline", "reviewonly"], "defaultRoutingMode": "review"})
         self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerBuddyIds"],
                          [A, "disabled", "offline", "reviewonly"])
@@ -164,7 +163,7 @@ class RouterListConfigurationTests(BoardTestCase):
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,0,1,?)",
                        ("offline", "offline", "dsh", "fixture", "offline", "max",
-                        canonical_json(permission_capabilities("dsh"))))
+                        canonical_json([])))
         self.publish({"routerBuddyIds": ["offline"]})
         self.publish({"routerRetryIntervalSeconds": 1, "routingBudget": "brief", "defaultRoutingMode": "review"})
         configuration = self.board_.call("console_snapshot", {})["configuration"]

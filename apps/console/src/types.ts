@@ -34,19 +34,12 @@ export type HarnessHealth = {
   checkedAt?: string | null;
   expiresAt?: string | null;
   providers?: ProviderCooling[];
-  readOnlyStructured?: ReadOnlyStructured;
-  systemSandbox?: boolean;
+  permissions?: PermissionLevels;
   billingByProvider?: Record<string, BillingFact>;
   account?: import("./harness-account").HarnessAccount;
 };
 
-type ReadOnlyStructured = {
-  eligible: boolean;
-  systemSandbox: boolean;
-  reason: Reason | null;
-  sameAttemptContinuation: boolean;
-  implemented?: boolean;
-};
+export type PermissionLevels = Partial<Record<"none" | "read" | "write" | "full", "enforced" | "convention">>;
 
 type BillingFact = {
   kind: "subscription" | "metered" | "unknown";

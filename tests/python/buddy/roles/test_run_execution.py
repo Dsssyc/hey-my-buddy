@@ -179,9 +179,9 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
 
-    def _request(self, tool_scope: str) -> rc.RunRequest:
+    def _request(self, permission: str) -> rc.RunRequest:
         fields = full_request(Path(self.base)).to_payload()
-        fields.update(harness="codex", toolScope=tool_scope, sessionServices=[])
+        fields.update(harness="codex", permission=permission, sessionServices=[])
         return RunRequest.from_payload(fields)
 
     def _result(self, request: rc.RunRequest, *, with_ref: bool, status: str = "error") -> rc.RunResult:

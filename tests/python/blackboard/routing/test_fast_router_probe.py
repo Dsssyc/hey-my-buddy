@@ -36,7 +36,7 @@ class FastRouterProbeTests(unittest.TestCase):
         handle = Mock()
         handle.wait.return_value = 0
         handle.shutdown_confirmed.return_value = True
-        outcome = AdapterOutcome(status='ok', result={'zeroToolVerified': True}, shutdown_confirmed=True)
+        outcome = AdapterOutcome(status='ok', result={}, shutdown_confirmed=True)
         with patch.object(probe.DecisionAdapter, 'start', return_value=handle) as start, \
                 patch.object(probe.DecisionAdapter, 'collect', return_value=outcome):
             self.assertEqual(probe.run(self.args)['status'], 'passed')

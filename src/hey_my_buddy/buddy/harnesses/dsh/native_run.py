@@ -106,11 +106,11 @@ from .session_records import (
     session_record_facts,
 )
 
-#: Worker permission levels select DSH's native preset on every process launch.
+#: Shared permission levels select DSH's native preset on every process launch.
 PERMISSION_MODE_ENV = "DSH_PERMISSION_MODE"
 READ_ONLY_MODE = "read-only"
-WORKER_PERMISSION_MODES = {"read": READ_ONLY_MODE, "write": "workspace-write",
-                           "full": "danger-full-access"}
+PERMISSION_MODES = {"read": READ_ONLY_MODE, "write": "workspace-write",
+                    "full": "danger-full-access"}
 #: The mode-control tool row the none-scope probe disables together with the
 #: tool rows, so no plan-mode tool survives either.
 PLAN_MODE_ROW = "plan-mode"
@@ -166,36 +166,19 @@ UNREAD_SHAPE_KINDS = ("initialize", "agentInfo", "configOptions",
 #: scope declares but the launch patch cannot confirm. Whether the model and
 #: effort readback confirmed the selection is read from the result's own
 #: checked buddy, never from a second unconfirmed name.
-UNCONFIRMED_TOOL_SCOPE = "tool-scope"
 #: The discovery read that could not recognize the session's configuration
 #: options: the catalog stays unknown with this reason instead of a complete
 #: empty reading.
 UNREAD_CATALOG_REASON = "config-options-shape-unreadable"
 
 
-def tool_scope_launch(scope: str) -> tuple[list[dict], dict[str, str]]:
-    """The public launch configuration of one tool scope: patch rows and child env.
-
-    The scope is a declaration this harness satisfies with DSH's own public
-    switches and reports as facts (ADR-025 decision 4): ``none`` disables the
-    confirmed tool rows plus plan-mode, ``read`` selects the read-only
-    permission preset, and ``write`` keeps the default preset — the scope never
-    claims a restriction the launch configuration does not make.
-    """
-    if scope == "write":
-        return [], {}
-    if scope == "read":
-        return [], {PERMISSION_MODE_ENV: READ_ONLY_MODE}
-    rows = [{"id": name, "disabled": True}
-            for name in (*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW)]
-    return rows, {}
-
-
 def _launch_policy(request: RunRequest) -> tuple[list[dict], dict[str, str]]:
-    """Worker presets are independent of the Router's tool-scope configuration."""
-    if request.worker_permission is not None:
-        return [], {PERMISSION_MODE_ENV: WORKER_PERMISSION_MODES[request.worker_permission.level]}
-    return tool_scope_launch(request.tool_scope)
+    """Map the shared permission to DSH's native launch configuration."""
+    if request.permission == "none":
+        rows = [{"id": name, "disabled": True}
+                for name in (*NONE_SCOPE_DISABLED_ROWS, PLAN_MODE_ROW)]
+        return rows, {}
+    return [], {PERMISSION_MODE_ENV: PERMISSION_MODES[request.permission]}
 
 
 # -- the role-facing service binding ---------------------------------------------
@@ -937,11 +920,9 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         raise BoardError("INVALID_ARGUMENT", "this run module drives dsh", harness=request.harness)
     if services is not None and not isinstance(services, SessionServices):
         raise BoardError("INVALID_ARGUMENT", "dsh accepts its own narrow session service binding")
-    micro_task = request.worker_permission is not None
-    if micro_task != (services is not None):
-        raise BoardError("INVALID_ARGUMENT", "dsh Worker permission and session services must be supplied together")
-    if not micro_task and request.tool_scope == "full":
-        raise BoardError("INVALID_ARGUMENT", "dsh full tool scope requires a Worker permission level")
+    micro_task = services is not None
+    if micro_task and request.permission == "none":
+        raise BoardError("INVALID_ARGUMENT", "dsh Worker session services require a tool-capable permission")
     if not micro_task and request.session_services:
         raise BoardError("INVALID_ARGUMENT",
                          "the request describes session services but this run mounts none")
@@ -1063,10 +1044,6 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             scope_rows, extra_env = _launch_policy(request)
             state.scope_rows = scope_rows
             state.permission_mode = extra_env.get(PERMISSION_MODE_ENV)
-            if request.tool_scope == "none" and not NONE_SCOPE_DISABLED_ROWS:
-                state.native_facts["toolScope"] = {"status": "unknown",
-                                                   "reason": "scope-configuration-unconfirmed",
-                                                   "disabledRows": [row["id"] for row in scope_rows]}
             policy = (_AttentionPolicy(services.mount.bridge, state, inquiry_bridge)
                       if micro_task else PermissionPolicy())
             client = _launch_agent(cwd=request.cwd, launch_root=launch_root,
@@ -1581,15 +1558,13 @@ _activity_package = shape_guard(ActivityPackage)
 
 
 def _native_evidence_facts(state: _RunState) -> NativeEvidence | None:
-    """This run's unread shapes, unknown notifications and unconfirmed requests.
+    """This run's unread shapes and unknown notifications.
 
     Only the run's own recorded facts are projected: every unrecognized shape
     fact of :func:`_note_native_shape` — the readbacks included — and every
     unknown notification kind the update pump counted become bounded kind
-    counts, and a tool scope the launch patch could not confirm becomes
-    ``tool-scope``. The union keeps the shared distinct-kind bound through the
-    one fold rule and loses no event from the total. A run with neither fact
-    carries no outlet.
+    counts. The fold keeps the shared distinct-kind bound through the one rule and
+    loses no event from the total. A run with no fact carries no outlet.
     """
     counts: dict[str, int] = {}
     for kind in UNREAD_SHAPE_KINDS:
@@ -1598,16 +1573,10 @@ def _native_evidence_facts(state: _RunState) -> NativeEvidence | None:
             counts[kind] = fact["count"]
     for name, count in state.unknown_counts.items():
         fold_unknown_events(counts, name, count)
-    unconfirmed = []
-    scope = state.native_facts.get("toolScope")
-    if isinstance(scope, dict) and scope.get("status") == "unknown":
-        unconfirmed.append(UNCONFIRMED_TOOL_SCOPE)
-    if not counts and not unconfirmed:
+    if not counts:
         return None
     return NativeEvidence(
-        unknown_events=(UnknownEvents(counts_by_type=counts, total=sum(counts.values()))
-                        if counts else None),
-        unconfirmed=tuple(unconfirmed))
+        unknown_events=UnknownEvents(counts_by_type=counts, total=sum(counts.values())))
 
 
 def _build_result(request: RunRequest, *, state: _RunState,
@@ -1733,13 +1702,13 @@ def _value_and_completion(evidence: RootTurnEvidence | None,
 
 
 def _effective_policy(request: RunRequest, state: _RunState) -> EffectivePolicy:
-    """The scope's own launch configuration, reported as the fact it is."""
-    if state.permission_mode is not None and (request.worker_permission is not None or state.session_opened):
+    """The permission's native launch configuration, reported as a fact."""
+    if state.permission_mode is not None:
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package({"permissionMode": state.permission_mode})))
     if not state.session_opened:
         return EffectivePolicy()
-    if request.tool_scope == "none":
+    if request.permission == "none":
         requested = {"disabledRows": [row["id"] for row in state.scope_rows]}
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package(requested)))
@@ -1981,5 +1950,5 @@ __all__ = [
     "NONE_SCOPE_DISABLED_ROWS", "SessionServiceMount", "SessionServices",
     "check_preparation", "execution_deadline", "make_inquiry_bridge",
     "native_evidence", "prepare_services", "prepare_session_service", "run", "run_discovery",
-    "session_facts", "session_record_facts", "tool_scope_launch", "validate_turn_provenance",
+    "session_facts", "session_record_facts", "validate_turn_provenance",
 ]

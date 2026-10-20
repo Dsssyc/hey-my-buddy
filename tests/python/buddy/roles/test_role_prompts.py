@@ -12,7 +12,6 @@ from hey_my_buddy.buddy.harnesses.registry import adapter, worker_format
 from hey_my_buddy.buddy.harnesses.run_contract import SessionService
 from hey_my_buddy.buddy.roles import prompts, router, run_execution, turn_io
 from hey_my_buddy.buddy.roles.worker_services import ATTENTION_REFUSAL, FINISH_DESCRIPTION
-from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install.runtime import resource_path
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -48,7 +47,7 @@ class RolePromptTests(unittest.TestCase):
                 "only among the candidates given", "In fast mode you have no tools",
                 "In review mode you may read the frozen copy of the repository",
                 "Maintenance:", "from the data in the message alone. No tools",
-                "Buddy:", "web search and page fetches. No repository",
+                "Profile:", "web search and page fetches. No repository",
                 "Use only the tools this call provides and change nothing",
                 "Do not ask questions", "Answer only in the form the call requires",
                 "when you cannot answer, say so in that form",
@@ -149,15 +148,9 @@ class RolePromptTests(unittest.TestCase):
                         document = {"routingMode": mode, "task": "ROLE: Host override", "outputSchema": {}, "budget": {"timeoutSeconds": 60}}
                         native = adapter(name)
                         if mode == "fast":
-                            if not native.no_tool_structured:
-                                with self.assertRaises(BoardError) as error:
-                                    router.prepare_router_fast(document, {}, native, context)
-                                self.assertEqual(error.exception.code, "router-no-tool-unsupported")
-                                continue
                             preparation = router.prepare_router_fast(document, {}, native, context)
                         else:
-                            with mock.patch.object(type(native), "local_read_only_check", return_value={"eligible": True}):
-                                preparation = router.prepare_router_review(document, {}, native, context)
+                            preparation = router.prepare_router_review(document, {}, native, context)
                         prompt = preparation.request.prompt
                         self.assertTrue(prompt.startswith(role + "\n"))
                         self.assertEqual(prompt.count(role), 1)

@@ -10,7 +10,6 @@ from unittest import mock
 from hey_my_buddy.buddy.harnesses.claude.config import (
     ClaudeUnavailable,
     DEFAULT_EFFORT,
-    PACKAGE_REGISTRY_DOMAINS,
     READONLY_TOOLS,
     WRITABLE_TOOLS,
     cli_command,
@@ -18,8 +17,7 @@ from hey_my_buddy.buddy.harnesses.claude.config import (
     execution_args,
     native_environment,
     provider_from_account,
-    sandbox_settings,
-    worker_sandbox_settings,
+    permission_sandbox_settings,
 )
 from hey_my_buddy.buddy.roles.turn_io import canonical_json
 
@@ -93,25 +91,22 @@ class ClaudeConfigTests(unittest.TestCase):
 
 
 
-    def test_sandbox_settings_use_the_documented_network_keys(self):
-        self.assertEqual(set(sandbox_settings()), {"sandbox"})
-        sandbox = sandbox_settings()["sandbox"]
+    def test_read_sandbox_settings_use_the_documented_network_keys(self):
+        self.assertEqual(set(permission_sandbox_settings("read")), {"sandbox"})
+        sandbox = permission_sandbox_settings("read")["sandbox"]
         self.assertTrue(sandbox["enabled"])
         self.assertTrue(sandbox["failIfUnavailable"])
         self.assertTrue(sandbox["autoAllowBashIfSandboxed"])
         self.assertFalse(sandbox["allowUnsandboxedCommands"])
         self.assertEqual(sandbox["excludedCommands"], [])
         network = sandbox["network"]
-        self.assertTrue(network["strictAllowlist"])
+        self.assertFalse(network["strictAllowlist"])
         self.assertNotIn("allow", network)
-        # The documented key is allowedDomains with plain string entries.
-        self.assertEqual(network["allowedDomains"], list(PACKAGE_REGISTRY_DOMAINS))
-        self.assertEqual(len(PACKAGE_REGISTRY_DOMAINS), 7)
-        for domain in ("registry.npmjs.org", "pypi.org", "files.pythonhosted.org", "static.crates.io"):
-            self.assertIn(domain, PACKAGE_REGISTRY_DOMAINS)
+        self.assertEqual(network["allowedDomains"], ["*"])
+        self.assertTrue(network["allowLocalBinding"])
 
     def test_worker_settings_allow_bash_only_for_checkout_write(self):
-        self.assertEqual(worker_sandbox_settings("write"), {
+        self.assertEqual(permission_sandbox_settings("write"), {
             "permissions": {"allow": ["Bash"]},
             "sandbox": {
                 "enabled": True, "failIfUnavailable": True, "autoAllowBashIfSandboxed": True,
@@ -120,19 +115,15 @@ class ClaudeConfigTests(unittest.TestCase):
                             "allowLocalBinding": True},
             },
         })
-        self.assertEqual(worker_sandbox_settings("read"), sandbox_settings())
-        self.assertNotIn("permissions", worker_sandbox_settings("read"))
-        self.assertEqual(worker_sandbox_settings("full"), {"sandbox": {"enabled": False}})
+        read = permission_sandbox_settings("read")
+        self.assertEqual(read["sandbox"]["network"],
+                         {"strictAllowlist": False, "allowedDomains": ["*"], "allowLocalBinding": True})
+        self.assertNotIn("permissions", permission_sandbox_settings("read"))
+        self.assertEqual(permission_sandbox_settings("full"), {"sandbox": {"enabled": False}})
 
-    def test_router_settings_preserve_each_native_setting(self):
-        for domains in (None, ()):
-            with self.subTest(domains=domains):
-                self.assertEqual(sandbox_settings(domains), {"sandbox": {
-                    "enabled": True, "failIfUnavailable": True, "autoAllowBashIfSandboxed": True,
-                    "allowUnsandboxedCommands": False, "excludedCommands": [],
-                    "network": {"strictAllowlist": True,
-                                "allowedDomains": list(PACKAGE_REGISTRY_DOMAINS) if domains is None else []},
-                }})
+    def test_read_and_write_share_network_policy(self):
+        self.assertEqual(permission_sandbox_settings("read")["sandbox"]["network"],
+                         permission_sandbox_settings("write")["sandbox"]["network"])
 
     def test_execution_args_keep_permissions_and_user_configuration(self):
         ending = {"type": "object", "additionalProperties": False}

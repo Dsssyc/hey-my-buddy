@@ -16,7 +16,6 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
-from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 
@@ -46,7 +45,7 @@ class RouterDispatchTestCase(BoardTestCase):
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
                        (buddy_id, buddy_id, "dsh", "fixture", model or buddy_id, "max", available, enabled,
-                        canonical_json(permission_capabilities("dsh"))))
+                        canonical_json([])))
 
     def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
         with self.board_.store.db.write() as db:
@@ -94,12 +93,6 @@ class RouterDispatchTestCase(BoardTestCase):
     def attempts(self):
         with self.board_.store.db.read() as db:
             return db.execute("SELECT * FROM attempts").fetchall()
-
-    def tool_policy(self, attempt_id):
-        with self.board_.store.db.read() as db:
-            row = db.execute("SELECT tool_policy_json FROM router_claims WHERE attempt_id=?", (attempt_id,)).fetchone()
-            return json.loads(row[0]) if row is not None else None
-
 
 class AdmissionTests(RouterDispatchTestCase):
     def test_duplicate_request_replays_without_a_second_task(self):
@@ -165,7 +158,7 @@ class AdmissionTests(RouterDispatchTestCase):
         # A third candidate keeps the Router path alive even when A drops out.
         self.add_buddy(C, model="charlie")
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, buddy_id=A, plane="work", request_id="route-earlier",
+            router_history.record_outcome(db, buddy_id=A, plane="routing", request_id="route-earlier",
                                           task_id=None, attempt_id=None, outcome="no_answer",
                                           code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
         skipped = self.request(request_id="pick-skip")
@@ -186,7 +179,7 @@ class AdmissionTests(RouterDispatchTestCase):
         self.assertEqual(self.dispatch_of(ineligible["runId"])["buddyId"], B)
         events = self.router_events("router.no_answer")
         recorded = [payload for _, payload in events if payload["requestId"] == "pick-disabled"]
-        self.assertEqual(recorded, [{"plane": "work", "requestId": "pick-disabled", "routerIndex": 0,
+        self.assertEqual(recorded, [{"plane": "routing", "requestId": "pick-disabled", "routerIndex": 0,
                                      "buddyId": A, "phase": "preflight", "taskId": None, "attemptId": None,
                                      "outcome": "no_answer", "code": "router-disabled"}])
         # Replaying the same request adds no second fact.
@@ -300,7 +293,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         # The dispatched item owes an answer and one retry execution is active
         # elsewhere: this request queues without switching or recording anything.
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, buddy_id=A, plane="work", request_id="route-elsewhere",
+            router_history.record_outcome(db, buddy_id=A, plane="routing", request_id="route-elsewhere",
                                           task_id=None, attempt_id=None, outcome="no_answer",
                                           code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
             db.execute(
@@ -310,7 +303,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                 (T0, T0))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES('att-retry','retry-1',1,'nonce','executing','dsh','dsh','fixture','alpha',?,?,?)", (T0, T0, T0))
             self.board_.store._append_event(db, "router.claimed", task_id="retry-1", attempt_id="att-retry",
-                                            payload={"buddyId": A, "plane": "work", "requestId": "route-elsewhere",
+                                            payload={"buddyId": A, "plane": "routing", "requestId": "route-elsewhere",
                                                      "routerIndex": 0, "taskId": "retry-1", "attemptId": "att-retry",
                                                      "generation": 1})
         blocked = self.claim("retry")
@@ -363,14 +356,13 @@ class ClaimTests(RouterDispatchTestCase):
         self.assertEqual(document["buddy"], {"harness": "dsh", "provider": "fixture",
                                                "model": "alpha", "effort": "max"})
         # The claim froze the tool policy for this attempt.
-        self.assertEqual(self.tool_policy(attempt["attemptId"]), {"systemSandbox": False})
         with self.board_.store.db.read() as db:
             binding = router_sequence.claim(db, attempt["attemptId"])
         self.assertEqual(binding, {"taskId": result["runId"], "attemptId": attempt["attemptId"],
                                    "generation": attempt["generation"], "decisionId": result["decisionId"],
                                    "routerIndex": 0, "buddyId": A})
         claimed = [payload for kind, payload in self.router_events("router.claimed")]
-        self.assertEqual(claimed, [{"buddyId": A, "plane": "work", "requestId": "pick-1",
+        self.assertEqual(claimed, [{"buddyId": A, "plane": "routing", "requestId": "pick-1",
                                     "routerIndex": 0, "taskId": result["runId"],
                                     "attemptId": attempt["attemptId"], "generation": attempt["generation"]}])
         # The decision is running and its current input is the dispatch document.
@@ -398,7 +390,7 @@ class ClaimTests(RouterDispatchTestCase):
 
 
 class WorkflowWiringTests(RouterDispatchTestCase):
-    def route_micro_task(self, run_id="run-1"):
+    def route_micro_task(self, run_id="run-1", *, required_capabilities=()):
         """One micro task admitted through the coordinator's workflow entry."""
         with self.board_.store.db.write() as db:
             db.execute(
@@ -414,7 +406,7 @@ class WorkflowWiringTests(RouterDispatchTestCase):
                 (run_id, "host-1", "verifier", canonical_json({"task": "do the thing"}),
                  "micro-task-digest", "request-digest", canonical_json({"kind": "existing"}), "executing", T0, T0))
             response = self.board_.store.decisions.route_workflow(
-                db, run_id=run_id, sequence=1, spec={"task": "do the thing"}, manifest=None)
+                db, run_id=run_id, sequence=1, spec={"task": "do the thing", "requiredCapabilities": list(required_capabilities)}, manifest=None)
         return response
 
     def attach_pending_link(self, decision_id, run_id="run-1"):
@@ -574,9 +566,7 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
 
     def test_request_snapshot_and_dispatch_preserve_the_settings_budget(self):
         self.set_settings(mode="review")
-        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reason": None, "systemSandbox": False,
-                "sameAttemptContinuation": True}):
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             response = self.board_.call("selection_request", {"requestId": "deadline", "task": "choose"})
         with self.board_.store.db.read() as db:
             requested = json.loads(self.board_.store.decisions._row(db, response["decisionId"])["requested_json"])

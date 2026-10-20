@@ -6,9 +6,9 @@ an unavailable adapter reports an honest capability error instead of failing lat
 from __future__ import annotations
 
 from ...errors import BoardError
-from ...protocol.capabilities import WORKER_PERMISSIONS
+from ...protocol.capabilities import PERMISSION_LEVELS
 from .base import Adapter, AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle
-from .run_contract import HARNESS_NAMES, HarnessRun, WorkerPermission
+from .run_contract import HARNESS_NAMES, HarnessRun
 from ..runtime.command import CommandAdapter
 from .claude.adapter import ClaudeAdapter
 from .codex.adapter import CodexAdapter
@@ -78,25 +78,6 @@ def run_seam(name: str) -> HarnessRun | None:
     return RUN_SEAMS.get(name)
 
 
-def review_request_controls(name: str) -> dict:
-    """Bind the existing review posture to a registered name.
-
-    The role consumes these parameters through its single implementation;
-    native tool names belong to this wiring, not to its observation rules.
-    """
-    if name == "claude":
-        return {
-            "network_allowed_domains": (),
-            "additional_denied_tools": ("mcp__*", "WebFetch", "WebSearch", "Agent", "Task"),
-        }
-    return {}
-
-
-def fast_receipt_defaults(name: str) -> dict:
-    """The existing failure receipt's explicit no-tool fact, where supplied."""
-    return {"zeroToolVerified": False} if name in ("codex", "dsh") else {}
-
-
 def fast_evidence_is_top_level(name: str) -> bool:
     return name == "codex"
 
@@ -151,25 +132,6 @@ register_run_seam("codex", codex_run)
 register_run_seam("claude", claude_run)
 register_run_seam("dsh", dsh_run)
 
-# Worker levels name the Host's chosen boundary; each harness declares the
-# native tool scope and enforcement it provides for that level.
-def worker_permission_capabilities(harness: str) -> tuple[str, ...]:
-    """Derive advertised levels from the same declaration used by each turn."""
-    return tuple(f"permission:{level}" for level in WORKER_PERMISSIONS.get(harness, {}))
-
-
-def worker_permission(harness: str, level: str) -> WorkerPermission:
-    """Resolve a declared Worker level to its native scope and strength."""
-    declaration = WORKER_PERMISSIONS.get(harness, {}).get(level)
-    if declaration is None:
-        raise BoardError("UNSUPPORTED_CAPABILITY", "This harness does not declare the Worker permission",
-                         harness=harness, access=level,
-                         requiredCapability=f"permission:{level}",
-                         missingCapabilities=[f"permission:{level}"])
-    tool_scope, enforcement = declaration
-    return WorkerPermission(level=level, tool_scope=tool_scope, enforcement=enforcement)
-
-
 def adapters() -> dict[str, Adapter | ZcodeAdapter]:
     return {adapter.name: adapter() for adapter in BUILT_IN}
 
@@ -201,11 +163,7 @@ def capability_report() -> dict:
             "available": usable,
             "reason": cause,
             "capabilities": list(instance.capabilities),
-            "readOnlyStructured": {
-                "implemented": instance.read_only_structured,
-                **instance.local_read_only_check(),
-            },
-            "noToolStructured": {"implemented": instance.no_tool_structured},
+            "permissionLevels": dict(PERMISSION_LEVELS.get(name, {})),
         }
     return report
 
@@ -258,6 +216,4 @@ __all__ = [
     "register_run_seam",
     "require_permission",
     "run_seam",
-    "worker_permission",
-    "worker_permission_capabilities",
 ]

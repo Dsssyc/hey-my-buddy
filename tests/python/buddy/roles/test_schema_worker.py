@@ -14,7 +14,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
-from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, worker_format, worker_permission
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, worker_format
+from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.run_contract import SessionService
 from hey_my_buddy.buddy.roles import inline_run, run_controller, run_execution
@@ -88,41 +89,35 @@ class CodexSchemaTests(unittest.TestCase):
     def test_worker_permission_capabilities_match_role_paths(self):
         expected = {
             "codex": ("codex", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
-                      "permission:read", "permission:write", "permission:full"),
+                      "permission:none", "permission:read", "permission:write", "permission:full"),
             "claude": ("claude", "inquiry", "workspace", "cancel", "artifacts", "deadline", "permission:read", "permission:write", "permission:full"),
             "dsh": ("dsh", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
-                    "permission:read", "permission:write", "permission:full"),
+                    "permission:none", "permission:read", "permission:write", "permission:full"),
             "zcode": ("zcode", "observe", "inquiry", "workspace", "cancel", "artifacts", "deadline", "native-session",
-                      "permission:read", "permission:write", "permission:full"),
+                      "permission:none", "permission:read", "permission:write", "permission:full"),
         }
         for harness, capabilities in expected.items():
             with self.subTest(harness=harness):
                 self.assertEqual(adapter(harness).capabilities, capabilities)
 
     def test_capabilities_are_derived_from_the_turn_declaration(self):
-        from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS, adapter_capabilities
+        from hey_my_buddy.protocol.capabilities import adapter_capabilities
         for harness in ("codex", "claude", "dsh", "zcode"):
             self.assertEqual(adapter(harness).capabilities, adapter_capabilities(harness))
-            with self.subTest(harness=harness), mock.patch.dict(WORKER_PERMISSIONS, {
-                    harness: {"read": ("read", "enforced")}}):
+            with self.subTest(harness=harness), mock.patch.dict(PERMISSION_LEVELS, {
+                    harness: {"read": "enforced"}}):
                 capabilities = adapter_capabilities(harness)
                 self.assertEqual([value for value in capabilities if value.startswith("permission:")],
                                  ["permission:read"])
 
-    def test_worker_levels_declare_native_scope_and_enforcement(self):
+    def test_permission_levels_declare_enforcement(self):
         expected = {
-            "codex": {"read": ("read", "enforced"), "write": ("write", "enforced"),
-                      "full": ("full", "enforced")},
-            "claude": {"read": ("read", "enforced"), "write": ("write", "enforced"), "full": ("full", "enforced")},
-            "dsh": {"read": ("read", "enforced"), "write": ("write", "enforced"), "full": ("full", "enforced")},
-            "zcode": {"read": ("read", "enforced"), "write": ("write", "convention"), "full": ("full", "enforced")},
+            "codex": {"none": "convention", "read": "enforced", "write": "enforced", "full": "enforced"},
+            "claude": {"read": "enforced", "write": "enforced", "full": "enforced"},
+            "dsh": {"none": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
+            "zcode": {"none": "enforced", "read": "enforced", "write": "convention", "full": "enforced"},
         }
-        for harness, levels in expected.items():
-            for level, (scope, strength) in levels.items():
-                with self.subTest(harness=harness, level=level):
-                    permission = worker_permission(harness, level)
-                    self.assertEqual((permission.level, permission.tool_scope, permission.enforcement),
-                                     (level, scope, strength))
+        self.assertEqual(PERMISSION_LEVELS, expected)
 
     def test_every_worker_path_carries_the_frozen_workspace_access(self):
         for harness in ("codex", "claude", "dsh", "zcode"):
@@ -146,26 +141,7 @@ class CodexSchemaTests(unittest.TestCase):
                                "cwd": str(root), "timeoutSeconds": 10}
                     request, _services, _observer, error = run_execution.worker_request(control, module)
                     self.assertIsNone(error)
-                    declaration = worker_permission(harness, access)
-                    self.assertEqual(request.tool_scope, declaration.tool_scope)
-                    self.assertEqual(request.worker_permission, declaration)
-
-    def test_worker_rejects_an_undeclared_full_permission(self):
-        from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "input.json").write_text(canonical_json({
-                "taskId": "task", "attemptId": "attempt", "generation": 1,
-                "turnId": "turn", "executionWorkspace": {"access": "full"}}))
-            (root / "task.txt").write_text("Task")
-            control = {"harness": "zcode", "privateRoot": str(root), "directory": str(root),
-                       "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt")}
-            with mock.patch.dict(WORKER_PERMISSIONS, {"zcode": {
-                    level: declaration for level, declaration in WORKER_PERMISSIONS["zcode"].items()
-                    if level != "full"}}), self.assertRaises(BoardError) as caught:
-                run_execution.worker_request(control, SimpleNamespace())
-            self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
-            self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
+                    self.assertEqual(request.permission, access)
 
     def test_every_codex_object_has_required_properties_and_rejects_additions(self):
         def check(node):
@@ -224,9 +200,7 @@ class SchemaWorkerTests(NativeRunCase):
         root, turn, control, result, request, verdict, code = self.worker()
         self.assertEqual(code, 0)
         self.assertNotIn("workerError", verdict)
-        self.assertEqual(request.tool_scope, "read")
-        self.assertIsNone(request.network_allowed_domains)
-        self.assertEqual(request.additional_denied_tools, ())
+        self.assertEqual(request.permission, "read")
         self.assertEqual(request.session_services, ())
         self.assertIn("Do this bounded task", request.input_text)
         record = json.loads((root / "output.json").read_bytes())
@@ -304,4 +278,4 @@ class SchemaWorkerTests(NativeRunCase):
                 format = worker_format(name)
                 self.assertEqual(hashlib.sha256(canonical_json(format.schema).encode()).hexdigest(), schema_hash)
                 self.assertEqual(hashlib.sha256(format.prompt("task", {"turn": 1}).encode()).hexdigest(), prompt_hash)
-        self.assertEqual(worker_permission("codex", "read").tool_scope, "read")
+        self.assertEqual(PERMISSION_LEVELS["codex"]["read"], "enforced")

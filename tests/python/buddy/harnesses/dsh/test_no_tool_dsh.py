@@ -91,7 +91,6 @@ class FastRegisteredSeamTests(DshNoToolTests):
         context, handle, outcome = self.invoke()
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertTrue(outcome.result["zeroToolVerified"])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
         self.assertEqual(outcome.result["correctionCount"], 0)
         self.assertEqual(outcome.result["rawAnswer"], '{"choice":"a"}')
@@ -99,7 +98,7 @@ class FastRegisteredSeamTests(DshNoToolTests):
         request = handle.request
         result = handle.result
         self.assertEqual(result.identity, request.identity)
-        self.assertEqual(request.tool_scope, "none")
+        self.assertEqual(request.permission, "none")
         self.assertEqual(request.session_services, ())
         self.assertFalse((context.directory / "no-tool-control.json").exists())
         self.assertEqual(handle.pid, os.getpid())

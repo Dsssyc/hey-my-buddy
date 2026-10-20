@@ -31,7 +31,7 @@ def request_for(control):
         cwd=control["cwd"], session_record_path=control["sessionRecordPath"],
         private_state=rc.PrivateStatePaths(
             invocation_root=str(root), native_root=control["nativeRoot"]),
-        input_text="worker prompt", tool_scope="write", output_schema=rc.FrozenJson({"type": "object"}),
+        input_text="worker prompt", permission="write", output_schema=rc.FrozenJson({"type": "object"}),
         budget=rc.RunBudget(timeout_seconds=control["timeoutSeconds"]),
     )
 
@@ -489,7 +489,7 @@ class RoleStopTests(unittest.TestCase):
             cwd=str(self.root), session_record_path=str(self.root / "session.jsonl"),
             private_state=rc.PrivateStatePaths(
                 invocation_root=str(self.invocation), native_root=control["nativeRoot"]),
-            input_text="original Worker prompt", tool_scope="write",
+            input_text="original Worker prompt", permission="write",
             output_schema=rc.FrozenJson(worker_format("codex").schema),
             budget=rc.RunBudget(timeout_seconds=None))
         facts = {"harness": "codex", "nativeThreadId": "session-complete",

@@ -51,19 +51,17 @@ def _name(name):
 
 
 def read_health(connection, harness):
-    from ...buddy.harnesses.registry import adapter as executor
+    from ...protocol.capabilities import PERMISSION_LEVELS
     from ..catalog.accounts import view as account_view
-    eligibility = executor(harness).local_read_only_check()
+    permissions = dict(PERMISSION_LEVELS[harness])
     account = account_view(connection, harness)
     row = connection.execute('SELECT * FROM harness_health WHERE harness=?', (harness,)).fetchone()
     if row is None:
         record = {'harness': harness, 'status': 'unknown', 'available': False, 'revision': 0,
                 'manualPath': None, 'reason': _not_checked()}
-        return {**record, 'providers': [], 'account': account, 'systemSandbox': eligibility['systemSandbox'],
-                'readOnlyStructured': eligibility}
+        return {**record, 'providers': [], 'account': account, 'permissions': permissions}
     from ..routing.quota_routing import providers
     record = json.loads(row['record_json'])
-    record.pop('reviewVerification', None)
     billing = record.get('billingByProvider') or {}
     if harness == "dsh":
         from ...protocol.billing import fact
@@ -80,7 +78,7 @@ def read_health(connection, harness):
     record = {**record, "billingByProvider": billing, "providers": providers(connection, harness), 'harness': harness,
             'available': status == 'ready', 'status': status, 'account': account, 'revision': row['revision'], 'manualPath': row['manual_path'],
             'checkedAt': row['checked_at'], 'expiresAt': row['expires_at'], 'scanAfter': row['scan_after']}
-    return {**record, 'systemSandbox': eligibility['systemSandbox'], 'readOnlyStructured': eligibility}
+    return {**record, 'permissions': permissions}
 
 
 class HarnessHealth:
@@ -241,8 +239,7 @@ class HarnessHealth:
                 retained.pop("billingByProvider", None)
             record = {**retained, **record, 'locationFingerprint': signature,
                       'lastProbe': {'status': 'complete', 'observedAt': now,
-                                    'reason': record.get('reason')},
-                      'systemSandbox': old['systemSandbox']}
+                                    'reason': record.get('reason')}}
             status = record.get('status')
             native_ready = status == 'ready'
             if native_ready and (record.get('accountReadFailure', {}).get('reason') or {}).get('code') == 'harness.shutdown-unverified':

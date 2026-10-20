@@ -481,7 +481,7 @@ def _delete_rows(store, connection, scope, deletion):
     # Facts refer to events and attempts; preserve their dependency order.
     outcome_events = {x['event_seq'] for x in connection.execute(
         'SELECT event_seq FROM router_outcomes WHERE task_id IN (SELECT value FROM json_each(?))'
-        ' OR attempt_id IN (SELECT value FROM json_each(?)) OR (plane=\'work\' AND request_id IN (SELECT value FROM json_each(?)))',
+        ' OR attempt_id IN (SELECT value FROM json_each(?)) OR (plane=\'routing\' AND request_id IN (SELECT value FROM json_each(?)))',
         (_ids(t),_ids(a),_ids(scope.requests)))}
     remove('router_outcomes',('event_seq',outcome_events))
     for table,conditions in [

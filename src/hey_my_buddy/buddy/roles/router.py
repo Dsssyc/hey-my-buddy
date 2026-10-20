@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from ...errors import BoardError
-from ...protocol.capabilities import adapter_capabilities
+from ...protocol.capabilities import PERMISSION_LEVELS, adapter_capabilities
 from ...private_dirs import context_root, ensure_private_dir
 from ...blackboard.routing import router
 from . import router_input
@@ -26,14 +26,10 @@ def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
                         context: ExecutionContext) -> role_seam.FastPreparation:
     """Everything the fast mode's native call needs, except the start itself.
 
-    The eligibility check only confirms the declared capability exists; the
-    zero-tool verdict stays with the blackboard at publication. The native call
+    The zero-tool verdict stays with the blackboard at publication. The native call
     receives an empty owner-private cwd under its actual harness attempt; its
     no-tool buddy disables project input.
     """
-    if not getattr(native, "no_tool_structured", False):
-        raise BoardError("router-no-tool-unsupported", "The native harness has no structured no-tool call",
-                         harness=native.name)
     root = ensure_private_dir(context_root(context, native.name) / "no-tool-cwd")
     if any(root.iterdir()):
         raise BoardError("CONFLICT", "The private no-tool cwd already contains files")
@@ -46,15 +42,11 @@ def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
 
 def prepare_router_review(document: dict, buddy: dict, native: Adapter,
                           context: ExecutionContext) -> role_seam.ReviewPreparation:
-    """Eligibility, the frozen mirror and the read-only request, before any start.
+    """The frozen mirror and read-only request, before any start.
 
     The mirror is materialized from the immutable input tree before the native
     call exists, and the binding the collection re-verifies is frozen here.
     """
-    eligibility = native.local_read_only_check()
-    if not eligibility["eligible"]:
-        raise BoardError("router-review-unsupported", "The native harness cannot run the review call",
-                         harness=native.name, reason=eligibility["reason"])
     manifest = document.get("executionWorkspace")
     root, digest = router_input.prepare(manifest, ensure_private_dir(context_root(context, native.name)))
     try:
@@ -75,7 +67,7 @@ class DecisionAdapter(Adapter):
     def available(self) -> tuple[bool, str | None]:
         from ..harnesses.registry import adapters
         for native in adapters().values():
-            if (getattr(native, "no_tool_structured", False) or native.local_read_only_check()["eligible"]) and native.available()[0]:
+            if {"none", "read"} & PERMISSION_LEVELS.get(native.name, {}).keys() and native.available()[0]:
                 return True, None
         return False, "No native harness has an eligible structured Router entrypoint"
 
@@ -151,7 +143,6 @@ class DecisionAdapter(Adapter):
             "correctionCount": native_result.get("correctionCount"),
             "budget": document["budget"], "inputVerification": verification,
             **router.routing_facts(document),
-            "zeroToolVerified": native_result.get("zeroToolVerified") if document.get("routingMode") == "fast" else None,
             "stopEvidence": {"shutdownConfirmed": outcome.shutdown_confirmed,
                              "native": native_result.get("processState"),
                              "nativeInterruptRequested": native_result.get("nativeInterruptRequested"),

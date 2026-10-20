@@ -1,5 +1,4 @@
 import type { TFunction } from "i18next";
-import { parseReadOnlyStructured } from "../api";
 import { parseHarnessAccount } from "../harness-account";
 import { formatShortDateTime } from "../i18n/format";
 import type { HarnessAccount } from "../harness-account";
@@ -61,9 +60,8 @@ const PLANS = ["subscription", "metered"] as const;
 const ACCOUNT_TYPES = ["chatgpt", "apiKey", "subscription", "metered"] as const;
 
 export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView {
-  const eligibility = parseReadOnlyStructured(row.readOnlyStructured);
-  const reviewNote = [t("harness.review.note"),
-    eligibility ? t(eligibility.systemSandbox ? "harness.review.sandbox" : "harness.review.noSandbox") : ""].filter(Boolean).join(" ");
+  const permissions = row.permissions;
+  const reviewNote = t("harness.review.note");
   const parsed = parseHarnessAccount(row.account, row.harness);
   const found = row.status === "ready";
   return {
@@ -72,8 +70,8 @@ export function harnessDetailsView(row: HarnessHealth, t: T): HarnessDetailsView
       source: row.manualPath ? t("harness.pane.manual") : row.source?.trim() || t("harness.unrecorded"),
       checked: harnessTime(row.checkedAt),
       review: {
-        text: t(!eligibility ? "harness.review.unknown" : eligibility.eligible ? "harness.review.eligible" : "harness.review.ineligible"),
-        reason: eligibility?.reason ? reasonText(eligibility.reason) : null,
+        text: t(!permissions ? "harness.review.unknown" : permissions.read ? "harness.review.eligible" : "harness.review.ineligible"),
+        reason: null,
         note: reviewNote,
       },
       exception: found ? null : {

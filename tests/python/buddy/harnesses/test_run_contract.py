@@ -46,7 +46,7 @@ def full_request(tmp: Path) -> rc.RunRequest:
         cwd=str(tmp / "checkout"), private_state=rc.PrivateStatePaths(invocation_root=str(tmp / "inv"),
                                                                       native_root=str(tmp / "native")),
         session_record_path=str(tmp / "session.jsonl"),
-        input_text="one bounded role-assembled input", tool_scope="read",
+        input_text="one bounded role-assembled input", permission="read",
         output_schema=rc.FrozenJson({"type": "object", "required": ["answer"],
                                      "properties": {"answer": {"type": "string"}}}),
         budget=rc.RunBudget(timeout_seconds=60),
@@ -154,38 +154,19 @@ class NativeEvidenceContractTests(unittest.TestCase):
 
 
 class CodecRoundtripTests(unittest.TestCase):
-    def test_full_scope_crosses_the_run_contract_and_is_refused_before_native_launch(self):
-        from hey_my_buddy.buddy.harnesses.claude import native_run as claude
-        from hey_my_buddy.buddy.harnesses.codex import native_run as codex
-        from hey_my_buddy.buddy.harnesses.dsh import native_run as dsh
-        from hey_my_buddy.buddy.harnesses.zcode import native_run as zcode
-
-        request = edited(full_request(Path("/private/tmp")), tool_scope="full")
-        self.assertEqual(rc.RunRequest.from_payload(request.to_payload()).tool_scope, "full")
-        for name, module in (("claude", claude), ("codex", codex), ("dsh", dsh), ("zcode", zcode)):
-            with self.subTest(harness=name), mock.patch("subprocess.Popen",
-                                                        side_effect=AssertionError("native launch")) as spawn:
-                with self.assertRaises(BoardError) as caught:
-                    module.run(edited(request, harness=name), observer=lambda _event: None,
-                               services=None, cancelled=lambda: False)
-                self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-                self.assertIn("permission level" if name == "codex" else "Worker permission",
-                              caught.exception.message)
-                spawn.assert_not_called()
-
-    def test_worker_permission_roundtrips_and_keeps_native_scope_consistent(self):
-        permission = rc.WorkerPermission(level="read", tool_scope="write", enforcement="convention")
-        request = edited(full_request(Path("/private/tmp")), tool_scope="write", worker_permission=permission)
-        self.assertEqual(rc.RunRequest.from_payload(request.to_payload()).worker_permission, permission)
+    def test_run_request_carries_one_permission_level(self):
+        request = edited(full_request(Path("/private/tmp")), permission="write")
+        self.assertEqual(rc.RunRequest.from_payload(request.to_payload()).permission, "write")
+        self.assertNotIn("workerPermission", request.to_payload())
+        self.assertNotIn("toolScope", request.to_payload())
         with self.assertRaises(BoardError):
-            edited(request, tool_scope="read")
+            edited(request, permission="unknown")
 
     def test_codex_full_worker_selects_the_worker_carrier(self):
         from hey_my_buddy.buddy.harnesses.codex import native_run as codex
-        from hey_my_buddy.buddy.harnesses.registry import require_permission, worker_permission
-        permission = worker_permission("codex", "full")
+        from hey_my_buddy.buddy.harnesses.registry import require_permission
         request = edited(full_request(Path("/private/tmp")), harness="codex",
-                         tool_scope="full", worker_permission=permission)
+                         permission="full")
         require_permission({"harness": "codex"}, "full")
         with mock.patch.object(codex, "_run", return_value=object()) as native:
             codex.run(request, observer=lambda _event: None, services=None, cancelled=lambda: False)
@@ -193,25 +174,15 @@ class CodecRoundtripTests(unittest.TestCase):
         require_permission({"harness": "claude"}, "full")
 
     def test_undeclared_full_worker_permission_is_refused(self):
-        from hey_my_buddy.buddy.harnesses.registry import require_permission, worker_permission
-        from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS
-        with mock.patch.dict(WORKER_PERMISSIONS, {"claude": {
-                level: declaration for level, declaration in WORKER_PERMISSIONS["claude"].items()
+        from hey_my_buddy.buddy.harnesses.registry import require_permission
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
+        with mock.patch.dict(PERMISSION_LEVELS, {"claude": {
+                level: declaration for level, declaration in PERMISSION_LEVELS["claude"].items()
                 if level != "full"}}):
-            for check in (lambda: require_permission({"harness": "claude"}, "full"),
-                          lambda: worker_permission("claude", "full")):
-                with self.subTest(check=check), self.assertRaises(BoardError) as caught:
-                    check()
-                self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
-                self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
-
-    def test_codex_write_or_full_without_worker_level_is_a_caller_error(self):
-        from hey_my_buddy.buddy.harnesses.codex import native_run as codex
-        for scope in ("write", "full"):
-            with self.subTest(scope=scope), self.assertRaises(BoardError) as caught:
-                codex.run(edited(full_request(Path("/private/tmp")), harness="codex", tool_scope=scope),
-                          observer=lambda _event: None, services=None, cancelled=lambda: False)
-            self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+            with self.assertRaises(BoardError) as caught:
+                require_permission({"harness": "claude"}, "full")
+            self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
+            self.assertEqual(caught.exception.details["requiredCapability"], "permission:full")
 
     def test_a_resume_checkpoint_is_absent_or_carries_all_three_bound_facts(self):
         fields = {"mode": "native-session", "previousSessionId": "previous",
@@ -225,18 +196,10 @@ class CodecRoundtripTests(unittest.TestCase):
             with self.subTest(missing=missing), self.assertRaises(BoardError):
                 rc.RunContinuation.from_payload(fields | {"checkpoint": partial})
 
-    def test_native_default_and_explicit_restrictions_stay_distinct_on_the_wire(self):
+    def test_removed_native_restrictions_are_rejected_on_the_wire(self):
         request = full_request(Path("/private/tmp"))
-        self.assertIsNone(rc.RunRequest.from_payload(request.to_payload()).network_allowed_domains)
-        restricted = rc.RunRequest.from_payload(request.to_payload() | {
-            "networkAllowedDomains": [], "additionalDeniedTools": ["mcp__*", "Agent"],
-        })
-        again = rc.RunRequest.from_payload(restricted.to_payload())
-        self.assertEqual(again.network_allowed_domains, ())
-        self.assertEqual(again.additional_denied_tools, ("mcp__*", "Agent"))
-        for fields in ({"networkAllowedDomains": [False]},
-                       {"additionalDeniedTools": [1]},
-                       {"additionalDeniedTools": "Agent"}):
+        for fields in ({"networkAllowedDomains": []}, {"additionalDeniedTools": ["mcp__*"]},
+                       {"toolScope": "read"}, {"workerPermission": {"level": "read"}}):
             with self.subTest(fields=fields), self.assertRaises(BoardError):
                 rc.RunRequest.from_payload(request.to_payload() | fields)
 
@@ -498,7 +461,7 @@ class FreezingTests(unittest.TestCase):
             private_state=rc.PrivateStatePaths(invocation_root="/tmp/inv", native_root="/tmp/native"),
             session_record_path="/tmp/session.jsonl",
             input_text="x",
-            tool_scope="none",
+            permission="none",
             output_schema=rc.FrozenJson(schema), budget=rc.RunBudget(timeout_seconds=60),
             session_services=(rc.SessionService(tool_names=tools),))
         mutable_identity["attemptId"] = "changed"

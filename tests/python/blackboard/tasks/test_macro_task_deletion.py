@@ -178,13 +178,13 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                            "model,effort,document_json,input_sha256,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                            (task_id, decision_id, index, "fixture", "dsh", "deepseek-official",
                             "deepseek-flash", "off", "{}", "hash", now))
-                db.execute("INSERT INTO router_claims(attempt_id,task_id,generation,tool_policy_json) VALUES(?,?,?,?)",
-                           (attempt_id, task_id, 1, "{}"))
+                db.execute("INSERT INTO router_claims(attempt_id,task_id,generation) VALUES(?,?,?)",
+                           (attempt_id, task_id, 1))
             event = db.execute("INSERT INTO events(kind,payload_json,created_at) VALUES(?,?,?)",
                                ("router.answered", json.dumps({"decisionId": decision_id}), now))
             db.execute("INSERT INTO router_outcomes(receipt_id,plane,request_id,router_index,buddy_id,phase,"
                        "task_id,attempt_id,outcome,event_seq,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                       ("route-outcome", "work", "route-history", 0, "fixture", "review",
+                       ("route-outcome", "routing", "route-history", 0, "fixture", "review",
                         "route-earlier", "route-attempt-0", "answered", event.lastrowid, now))
             db.execute("INSERT INTO commands(command_id,task_id,kind,request_hash,response_json,subject,created_at)"
                        " VALUES(?,?,?,?,?,?,?)", ("route-command", "route-earlier", "fixture", "hash",
@@ -617,15 +617,11 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             if len(calls) == 1:
                 raise OSError("offline adapter interruption")
             return {session_id: "already-gone"}
-        # Deletion eligibility reads harness health, which asks the registry for
-        # the registered read-only capabilities; the stand-in borrows the real one.
-        read_only_check = harness_registry.adapter("codex").local_read_only_check
         with ExitStack() as stack:
             inventory = stack.enter_context(patch.object(worker_sessions,"deletable_sessions",
                                                           wraps=worker_sessions.deletable_sessions))
             stack.enter_context(patch.object(harness_registry, "adapter",
-                                             side_effect=lambda harness: SimpleNamespace(delete_sessions=delete_native,
-                                                                                         local_read_only_check=read_only_check)))
+                                             side_effect=lambda harness: SimpleNamespace(delete_sessions=delete_native)))
             for stage in PHYSICAL_STAGES[1:]:
                 stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
             interrupted = macro_task_deletion.delete(board.store, target, 1)

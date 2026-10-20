@@ -1,4 +1,4 @@
-import { test as base, expect, type Locator, type Page, type ElementHandle } from "@playwright/test";
+import { test as base, expect, type Locator, type Page } from "@playwright/test";
 import { fileURLToPath } from "node:url";
 
 /** All browser captures stay inside the app's own test results, regardless of the runner's cwd. */
@@ -91,7 +91,7 @@ export async function expectNoSidewaysScroll(page: Page): Promise<void> {
 }
 
 /** The contrast between an element's text colour and the first opaque background behind it. */
-export async function contrastOf(target: Locator | ElementHandle<Node>): Promise<number> {
+export async function contrastOf(target: Locator): Promise<number> {
   const measure = (node: Node) => {
     const base = node as Element;
     const parse = (value: string) => {
@@ -113,7 +113,7 @@ export async function contrastOf(target: Locator | ElementHandle<Node>): Promise
     const [lighter, darker] = [luminance(parse(getComputedStyle(base).color).rgb), luminance(behind)].sort((a, b) => b - a);
     return (lighter + 0.05) / (darker + 0.05);
   };
-  return "elementHandle" in target ? target.evaluate(measure) : target.evaluate(measure);
+  return target.evaluate(measure);
 }
 
 /** What the catalogue's toolbar is made of, as items that take room: the sections, the search, the filters, the count and the two actions. */

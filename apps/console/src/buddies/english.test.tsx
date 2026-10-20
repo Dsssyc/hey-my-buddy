@@ -50,7 +50,7 @@ const harnesses = [
     providers: [{ provider: "deepseek-official", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 1 }] },
   { harness: "codex", status: "ready", available: true, revision: 2, manualPath: null, executable: "/opt/bin/codex", version: "0.157.0", source: "PATH", checkedAt: AT, candidates: [],
     account: account("codex"),
-    readOnlyStructured: { implemented: true, eligible: false, systemSandbox: false, sameAttemptContinuation: false, reasonCode: "READ_ONLY_RESOURCE_UNAVAILABLE", reason: "The local read-only resources are unavailable" },
+    permissions: { write: "enforced" },
     providers: [{ provider: "openai", coolingUntil: new Date(Date.now() + 3600000).toISOString(), consecutiveRejections: 2 }] },
   { harness: "claude", status: "login-required", available: false, revision: 3, manualPath: "/home/user/bin/claude", source: "manual", checkedAt: AT,
     reason: { code: "harness.login-required", params: { operation: "probe" } },

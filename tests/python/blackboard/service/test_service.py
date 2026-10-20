@@ -27,8 +27,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
         self.record = self.service.harnesses.get("dsh")
 
     def refresh_catalog(self, account_status, **reading):
-        stub = SimpleNamespace(discover_models=lambda: native_payload(account_status, **reading),
-                               local_read_only_check=lambda: {"eligible": False, "systemSandbox": False})
+        stub = SimpleNamespace(discover_models=lambda: native_payload(account_status, **reading))
         with patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=stub):
             self.service._refresh_harness_catalog("dsh", self.record)
 
@@ -114,8 +113,7 @@ class CatalogRefreshServiceTests(BoardTestCase):
         payload = native_payload("confirmed")
         payload["discoveries"] = []
         payload["providers"] = []
-        stub = SimpleNamespace(discover_models=lambda: payload,
-                               local_read_only_check=lambda: {"eligible": False, "systemSandbox": False})
+        stub = SimpleNamespace(discover_models=lambda: payload)
         with patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=stub), \
              patch.object(catalog_store, "record", wraps=catalog_store.record) as record:
             self.service._refresh_harness_catalog("dsh", self.record)

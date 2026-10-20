@@ -63,11 +63,10 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                 self.assertEqual(package["streamComplete"], complete)
                 self.assertEqual(package["unsettledToolCalls"], int(phases == ("start",)))
                 self.assertEqual({event["category"] for event in package["events"]}, {"other"} if phases else set())
-                for mode in ("fast", "review"):
-                    for sandbox in (False, True):
-                        self.assertEqual(judge_tool_evidence(package, mode, sandbox),
-                                         "router-tool-evidence-unverified" if not complete
-                                         else "router-tools-forbidden" if phases else None)
+                for permission in ("none", "read"):
+                    self.assertEqual(judge_tool_evidence(package, permission),
+                                     "router-tool-evidence-unverified" if not complete
+                                     else "router-tools-forbidden" if phases else None)
 
     def test_typed_function_output_ends_a_correlated_request_without_a_new_start(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -80,8 +79,8 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
                          [("shell", "start"), ("shell", "end")])
-        self.assertIsNone(judge_tool_evidence(package, "review", True))
-        self.assertEqual(judge_tool_evidence(package, "fast", True), "router-tools-forbidden")
+        self.assertIsNone(judge_tool_evidence(package, "read"))
+        self.assertEqual(judge_tool_evidence(package, "none"), "router-tools-forbidden")
 
     def test_raw_tool_search_result_settles_only_its_actual_call(self):
         projector = new_projector()
@@ -106,7 +105,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                 package = projector.finish(True)
                 self.assertEqual(package['toolCalls'], 1)
                 self.assertEqual({event['toolName'] for event in package['events']}, {name, 'commandExecution'})
-                self.assertIsNone(judge_tool_evidence(package, 'review', True))
+                self.assertIsNone(judge_tool_evidence(package, 'read'))
 
     def test_mcp_namespace_cannot_borrow_builtin_execution_classification(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -117,7 +116,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
         projector.observe_notification(raw({'type': 'function_call_output', 'call_id': 'mcp-1'}))
         package = projector.finish(True)
         self.assertEqual({event['category'] for event in package['events']}, {'other'})
-        self.assertEqual(judge_tool_evidence(package, 'review', True), 'router-tools-forbidden')
+        self.assertEqual(judge_tool_evidence(package, 'read'), 'router-tools-forbidden')
 
     def test_two_raw_names_or_conflicting_categories_are_not_execution_aliases(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -130,7 +129,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
                     projector.observe_notification(raw({'type': 'function_call_output', 'call_id': 'call-1'}))
                 package = projector.finish(True)
                 self.assertEqual(package['toolCalls'], 1)
-                self.assertEqual(judge_tool_evidence(package, 'review', True), 'router-tool-evidence-unverified')
+                self.assertEqual(judge_tool_evidence(package, 'read'), 'router-tool-evidence-unverified')
 
     def test_typed_call_projects_start_and_end_over_the_real_identity(self):
         projector = new_projector()
@@ -326,7 +325,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             harness="codex", buddy=RunBuddy(provider="openai", model="m", effort="low"),
             session_record_path="/fixture/session.jsonl",
             cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/i", native_root="/fixture/n"),
-            input_text="prompt", tool_scope="read", output_schema={},
+            input_text="prompt", permission="read", output_schema={},
             budget=RunBudget(timeout_seconds=8))
         frame = request.to_payload()
         decoded = RunRequest.from_payload(frame)
@@ -365,7 +364,7 @@ class UnreadableCodexToolEvidenceTests(unittest.TestCase):
                     projector.observe_notification(frame(method, item))
                     evidence = projector.finish(True)
                     self.assertFalse(evidence["streamComplete"])
-                    self.assertIsNotNone(judge_tool_evidence(evidence, "fast", False))
+                    self.assertIsNotNone(judge_tool_evidence(evidence, "none"))
 
     def test_unknown_connection_and_thread_notifications_preserve_tool_completeness(self):
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
@@ -375,7 +374,7 @@ class UnreadableCodexToolEvidenceTests(unittest.TestCase):
         projector.observe_notification({"method": "thread/futureNotification", "params": {"threadId": "thread-1"}})
         evidence = projector.finish(True)
         self.assertTrue(evidence["streamComplete"])
-        self.assertIsNone(judge_tool_evidence(evidence, "fast", False))
+        self.assertIsNone(judge_tool_evidence(evidence, "none"))
 
 
 class CodexReviewToolEvidenceTests(unittest.TestCase):
@@ -433,7 +432,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                 self.assertEqual(outcome.result["usage"]["toolCalls"], calls)
                 self.assertEqual(tuple(event["phase"] for event in evidence["events"]), phases)
                 self.assertEqual(evidence["streamComplete"], complete)
-                self.assertEqual(judge_tool_evidence(evidence, "review", True),
+                self.assertEqual(judge_tool_evidence(evidence, "read"),
                                  "router-tool-evidence-unverified" if not complete
                                  else "router-tools-forbidden" if phases else None)
 
@@ -467,7 +466,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         self.assertEqual(facts, {("commandExecution", "start"), ("commandExecution", "end"),
                                  ("shell", "start"), ("shell", "end")})
         from hey_my_buddy.protocol.tool_evidence import judge_tool_evidence
-        self.assertIsNone(judge_tool_evidence(evidence, 'review', True))
+        self.assertIsNone(judge_tool_evidence(evidence, 'read'))
 
     def test_foreign_and_old_turn_facts_are_kept_with_their_real_identity(self):
         outcome, _context = self.run_review("readonly-foreign", index=3)

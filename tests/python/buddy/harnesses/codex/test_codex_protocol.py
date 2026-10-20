@@ -80,7 +80,7 @@ class NativeCheckpointTests(unittest.TestCase):
             session_record_path="/fixture/session.jsonl",
             cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/invocation",
                                                             native_root="/fixture/native"),
-            input_text="prompt", tool_scope="write", output_schema={},
+            input_text="prompt", permission="write", output_schema={},
             budget=RunBudget(timeout_seconds=8))
 
     def test_failed_turn_can_retain_only_its_own_completed_assistant_message(self):

@@ -40,11 +40,10 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 )
 from hey_my_buddy.buddy.harnesses.dsh import native_run
 from hey_my_buddy.buddy.harnesses.dsh.acp.connection import AcpConnection
-from hey_my_buddy.buddy.harnesses.registry import worker_permission
 from hey_my_buddy.buddy.harnesses.dsh.native_run import SessionServices, prepare_session_service, run
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
-from hey_my_buddy.buddy.roles.structured_call import no_tool_prompt
+from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from hey_my_buddy.buddy.roles.turn_io import input_hash, validate_outcome
 from hey_my_buddy.errors import BoardError
 
@@ -116,7 +115,7 @@ class NativeRunCase(unittest.TestCase):
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
                 native_root=str(self.root)),
-            input_text=prompt, tool_scope=scope,
+            input_text=prompt, permission=scope,
             output_schema=run_contract.FrozenJson.from_value(schema or {}, "schema",
                                                              maximum=MAX_SCHEMA_BYTES),
             budget=RunBudget(timeout_seconds=timeout))
@@ -162,8 +161,7 @@ class NativeRunCase(unittest.TestCase):
             cwd=str(self.base / "cwd"),
             private_state=PrivateStatePaths(invocation_root=str(invocation),
                                             native_root=str(native_root or self.root)),
-            input_text=prompt, tool_scope=worker_permission("dsh", level).tool_scope,
-            worker_permission=worker_permission("dsh", level),
+            input_text=prompt, permission=level,
             output_schema=run_contract.FrozenJson.from_value(worker_services.OUTCOME_SCHEMA,
                                                              "schema", maximum=MAX_SCHEMA_BYTES),
             budget=RunBudget(timeout_seconds=timeout),
@@ -370,7 +368,7 @@ class FastSeamTests(NativeRunCase):
     def test_one_format_correction_runs_a_second_session_on_the_same_process(self):
         self.extra_agent_args = ["--prompt-mode", "final",
                                  "--final-answer", "not json", "--final-answer", '{"choice":"a"}']
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
                      services=None, cancelled=lambda: False)
@@ -434,14 +432,13 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.raw, '{"choice":"a"}')
-        # The write scope sends no native policy request of its own (the
-        # default workspace preset runs) — the fact reports exactly that
-        # emptiness, and the launch record carries the patch that was sent.
+        # Every write run selects the same native workspace preset.
         self.assertIsNotNone(result.effective_policy.tools)
-        self.assertIsNone(result.effective_policy.tools.requested)
+        self.assertEqual(result.effective_policy.tools.requested.value,
+                         {"permissionMode": "workspace-write"})
         record = self.launch_records()[-1]
         self.assertIn("--patch", record["argv"])
-        self.assertNotIn(native_run.PERMISSION_MODE_ENV, record["envKeys"])
+        self.assertIn(native_run.PERMISSION_MODE_ENV, record["envKeys"])
 
     def test_a_read_scope_reports_the_preset_and_injects_only_its_key(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -794,7 +791,7 @@ class MountTests(NativeRunCase):
     def variant_of(request: RunRequest, **overrides) -> RunRequest:
         fields = {name: getattr(request, name) for name in
                   ("identity", "harness", "buddy", "cwd", "private_state", "session_record_path", "input_text",
-                   "tool_scope", "worker_permission", "output_schema", "budget", "session_services")}
+                   "permission", "output_schema", "budget", "session_services")}
         fields.update(overrides)
         return RunRequest(**fields)
 

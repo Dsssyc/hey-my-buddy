@@ -148,9 +148,7 @@ class SingleRouterRequestTests(BoardTestCase):
     def test_review_ineligible_does_not_fall_back_to_available_fast_capability(self):
         board = self.board()
         self.seed(board)
-        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": False, "systemSandbox": False,
-                "reason": {"code": "harness.readonly-tools-unrestricted", "params": {}}}):
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             view = self.audit(board, self.request(board))
         self.assertEqual(view["status"], "needs-host")
         self.assertEqual(view["routingMode"], "review")
@@ -210,22 +208,13 @@ class SingleRouterRequestTests(BoardTestCase):
             with patch("hey_my_buddy.blackboard.routing.quota_routing.cooling", return_value={"coolingUntil": "2026-01-01T00:30:00.000Z"}):
                 _, code, _ = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-quota-exhausted")
-            with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured", False):
+            with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
                 _, code, _ = router.buddy_problem(connection, BUDDY_ID, "fast")
             self.assertEqual(code, "router-no-tool-unsupported")
-            with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check",
-                       return_value={"eligible": False, "reason": {"code": "harness.readonly-worker-carrier-unimplemented", "params": {"harness": "dsh"}},
-                                     "systemSandbox": False, "sameAttemptContinuation": True}):
+            with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
                 _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
             self.assertEqual(code, "router-review-unsupported")
-            self.assertEqual(facts["cause"]["code"], "harness.readonly-worker-carrier-unimplemented")
-            with patch("hey_my_buddy.blackboard.service.harness_health.read_health",
-                       return_value={"harness": "dsh", "available": True}), patch(
-                           "hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check",
-                           side_effect=BoardError("NATIVE_CHECK_FAILED", "qualification failed")):
-                _, code, facts = router.buddy_problem(connection, BUDDY_ID, "review")
-            self.assertEqual(code, "router-review-unsupported")
-            self.assertEqual(facts, {"errorCode": "NATIVE_CHECK_FAILED"})
+            self.assertEqual(facts, {})
             _, code, _ = router.buddy_problem(connection, "unpublished", "review")
             self.assertEqual(code, "router-not-published")
 

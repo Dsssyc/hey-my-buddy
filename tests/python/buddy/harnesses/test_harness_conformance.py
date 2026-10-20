@@ -31,7 +31,6 @@ from hey_my_buddy.buddy.harnesses.discovery import native_environment
 from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
 from hey_my_buddy.buddy.harnesses.registry import (
     BUILT_IN, RUN_SEAMS, adapters as built_in_adapters, fast_evidence_is_top_level, worker_format,
-    worker_permission,
 )
 from hey_my_buddy.buddy.harnesses.runtime_selection import controller_environment
 from hey_my_buddy.buddy.harnesses.run_contract import (
@@ -39,14 +38,14 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 )
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.private_dirs import ADAPTERS as PRIVATE_STATE_ADAPTERS
-from hey_my_buddy.protocol.capabilities import ADAPTER_CAPABILITIES, WORKER_PERMISSIONS, adapter_capabilities
+from hey_my_buddy.protocol.capabilities import ADAPTER_CAPABILITIES, PERMISSION_LEVELS, adapter_capabilities
 from hey_my_buddy.protocol.schemas import CODING_HARNESSES
 from hey_my_buddy.protocol.tool_evidence import ACP_CATEGORIES, NATIVE_TOOL_CATEGORIES
 
 ROOT = Path(__file__).resolve().parents[4]
 DELIVERY_MODES = ("realtime", "cooperative-checkpoint", "unsupported")
 ENFORCEMENTS = ("enforced", "convention")
-WORKER_LEVELS = ("read", "write", "full")
+PERMISSIONS = ("none", "read", "write", "full")
 #: The surface every coding harness shares; `native-session` is deliberately
 #: not here, because it tracks each adapter's own native-resume declaration.
 SHARED_CAPABILITIES = ("inquiry", "workspace", "cancel", "artifacts", "deadline")
@@ -58,7 +57,7 @@ CONFIGURATION_DIRECTORY_VARIABLES = {"codex": "CODEX_HOME", "claude": "CLAUDE_CO
                                      "zcode": "ZCODE_DATA_BASE_DIR", "dsh": "DSH_HOME"}
 #: The native request controls the role controller may ask a run module about
 #: (buddy/roles/controller.py); a module declares the subset it supports.
-REQUEST_CONTROLS = ("network_allowed_domains", "additional_denied_tools", "resume_checkpoint")
+REQUEST_CONTROLS = ("resume_checkpoint",)
 #: The run-module operations every Worker turn calls unconditionally, with the
 #: positional/keyword shape the role callers use (buddy/roles/run_execution.py).
 UNCONDITIONAL_OPERATIONS = {"run": (1, ("observer", "services", "cancelled")),
@@ -84,7 +83,7 @@ def _request(harness):
         cwd=str(ROOT),
         private_state=PrivateStatePaths(invocation_root=str(ROOT), native_root=str(ROOT)),
         input_text="conformance",
-        tool_scope="read",
+        permission="read",
         output_schema={"type": "object"},
         budget=RunBudget(timeout_seconds=60),
         session_record_path=str(ROOT / "session.jsonl"),
@@ -209,26 +208,19 @@ class HarnessConformanceTests(unittest.TestCase):
                 self.assertEqual(("native-session" in capabilities), instance.native_resume,
                                  f"{name}'s native-session capability and native-resume declaration disagree")
 
-    def test_supported_worker_levels_form_a_subset_and_missing_levels_are_refused(self):
-        self.assertEqual(set(WORKER_PERMISSIONS), set(HARNESS_NAMES))
+    def test_permission_levels_are_shared_by_roles(self):
+        self.assertEqual(set(PERMISSION_LEVELS), set(HARNESS_NAMES))
         for name in HARNESS_NAMES:
             with self.subTest(harness=name):
-                declaration = WORKER_PERMISSIONS[name]
-                self.assertTrue(declaration, f"{name} declares no Worker level at all")
-                self.assertLessEqual(set(declaration), set(WORKER_LEVELS))
+                declaration = PERMISSION_LEVELS[name]
+                self.assertTrue(declaration, f"{name} declares no permission level at all")
+                self.assertLessEqual(set(declaration), set(PERMISSIONS))
                 capabilities = adapter_capabilities(name)
-                for level in WORKER_LEVELS:
-                    mapping = declaration.get(level)
-                    if mapping is None:
-                        with self.assertRaises(BoardError) as caught:
-                            worker_permission(name, level)
-                        self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
-                        self.assertNotIn(f"permission:{level}", capabilities)
-                        continue
-                    self.assertEqual(len(mapping), 2, f"{name} level {level} is not a scope/enforcement pair")
-                    self.assertEqual(mapping[0], level, f"{name} level {level} maps a different native scope")
-                    self.assertIn(mapping[1], ENFORCEMENTS, f"{name} level {level} has an unknown enforcement")
-                    self.assertIn(f"permission:{level}", capabilities)
+                for level in PERMISSIONS:
+                    if level in declaration:
+                        self.assertIn(declaration[level], ENFORCEMENTS)
+                    self.assertEqual(f"permission:{level}" in capabilities, level in declaration)
+                self.assertEqual("none" in declaration, name != "claude")
 
     def test_every_harness_declares_the_no_tool_scope_and_carriers_match(self):
         """The fourth scope ``none`` is a per-harness declaration, not a universal one.
@@ -241,11 +233,7 @@ class HarnessConformanceTests(unittest.TestCase):
         """
         for name in HARNESS_NAMES:
             with self.subTest(harness=name):
-                instance = built_in_adapters()[name]
-                declared = getattr(instance, "no_tool_structured", None)
-                self.assertIsInstance(declared, bool,
-                                      f"{name} does not explicitly declare the 'none' tool scope")
-                if not declared:
+                if "none" not in PERMISSION_LEVELS[name]:
                     continue
                 module = RUN_SEAMS[name]
                 for operation, positionals in (("check_preparation", 2), ("native_evidence", 1)):
@@ -271,32 +259,16 @@ class HarnessConformanceTests(unittest.TestCase):
                                              keywords=INQUIRY_KEYWORDS),
                                       f"{name} cannot bind the schema-delivery inquiry factory")
                 instance = built_in_adapters()[name]
-                if instance.no_tool_structured or fast_evidence_is_top_level(name):
+                if "none" in PERMISSION_LEVELS[name] or fast_evidence_is_top_level(name):
                     self.assertIsNone(_binds("native_evidence", module, positionals=1, keywords=()),
                                       f"{name} can be asked for captured evidence but has no projection")
                 for flag in ("native_resume", "interrupted_resume", "native_resume_permission_change",
-                             "model_discovery", "read_only_structured", "read_only_structured_resume",
-                             "no_tool_structured"):
+                             "model_discovery"):
                     self.assertIsInstance(getattr(instance, flag, None), bool,
                                           f"{name}'s {flag} declaration is not a boolean")
                 if instance.interrupted_resume:
                     self.assertTrue(instance.native_resume,
                                     f"{name} declares interrupted resume without native resume")
-
-    def test_local_read_only_check_reports_a_consistent_shape_without_spawning(self):
-        for name in HARNESS_NAMES:
-            with self.subTest(harness=name):
-                instance = built_in_adapters()[name]
-                with mock.patch("subprocess.Popen", side_effect=AssertionError("native launch")):
-                    result = instance.local_read_only_check()
-                self.assertIsInstance(result, dict)
-                self.assertIsInstance(result.get("eligible"), bool)
-                self.assertIn("reason", result)
-                self.assertIsInstance(result.get("systemSandbox"), bool)
-                self.assertIsInstance(result.get("sameAttemptContinuation"), bool)
-                if not instance.read_only_structured:
-                    self.assertFalse(result["eligible"],
-                                     f"{name} is eligible for review without declaring the capability")
 
     def test_every_harness_declares_its_inquiry_delivery_consistently(self):
         self.assertEqual(set(EXISTING_CAPABILITIES), set(HARNESS_NAMES))

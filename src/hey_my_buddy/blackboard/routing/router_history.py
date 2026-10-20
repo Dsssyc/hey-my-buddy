@@ -1,7 +1,7 @@
 """Router outcome facts: idempotent recording and read-only per-buddy projections.
 
 One entry point records ``router.answered``/``router.no_answer`` facts for every
-Router plane (work, maintenance, portrait); reads project only those receipts.
+Router plane (routing, maintenance, portrait); reads project only those receipts.
 
 Skip windows come from the last recorded no-answer plus the current retry interval;
 a later valid answered (including a valid abstention) removes it. Reads project
@@ -19,7 +19,7 @@ from ..store.db import canonical_json, utc_now
 from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
 
-PLANES = ("work", "maintenance", "portrait")
+PLANES = ("routing", "maintenance", "portrait")
 OUTCOMES = ("answered", "no_answer")
 #: Attempt states that still own capacity: active execution or unconfirmed stop.
 #: Missing PIDs and expired leases never prove a stop, so ``uncertain`` stays here.
@@ -90,7 +90,7 @@ def record_outcome(connection, *, buddy_id: str, plane: str, request_id: str, ta
     if not isinstance(buddy_id, str) or not IDENTIFIER_PATTERN.fullmatch(buddy_id):
         raise BoardError("INVALID_ARGUMENT", "buddy_id must be a buddyId")
     if plane not in PLANES:
-        raise BoardError("INVALID_ARGUMENT", "plane must be work, maintenance or portrait")
+        raise BoardError("INVALID_ARGUMENT", "plane must be routing, maintenance or portrait")
     if outcome not in OUTCOMES:
         raise BoardError("INVALID_ARGUMENT", "outcome must be answered or no_answer")
     _bounded(request_id, "request_id", MAX_CODE)

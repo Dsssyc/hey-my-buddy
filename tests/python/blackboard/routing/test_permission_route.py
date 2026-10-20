@@ -3,10 +3,9 @@ import unittest
 from unittest.mock import Mock, patch
 
 from support import BoardTestCase
-from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
 from hey_my_buddy.blackboard.store.db import canonical_json
-from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS
+from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 
 
 class WorkflowPermissionRouteTests(unittest.TestCase):
@@ -47,7 +46,7 @@ class PermissionCandidateTests(BoardTestCase):
                 'available,enabled,capabilities_json)'
                 ' VALUES(?,?,?,?,?,?,1,1,?)',
                 (codex_id, codex_id, 'codex', 'fixture', 'full', 'high',
-                 canonical_json(permission_capabilities('codex'))),
+                 canonical_json([])),
             )
             connection.execute("UPDATE harness_health SET status='ready' WHERE harness='codex'")
             connection.execute(
@@ -55,7 +54,7 @@ class PermissionCandidateTests(BoardTestCase):
                 'available,enabled,capabilities_json)'
                 ' VALUES(?,?,?,?,?,?,1,1,?)',
                 (zcode_id, zcode_id, 'zcode', 'fixture', 'full', 'high',
-                 canonical_json(permission_capabilities('zcode'))),
+                 canonical_json([])),
             )
             connection.execute("UPDATE harness_health SET status='ready' WHERE harness='zcode'")
         with board.store.db.read() as connection:
@@ -66,14 +65,8 @@ class PermissionCandidateTests(BoardTestCase):
             full, _ = DecisionCoordinator._scan_candidates(connection, ['permission:full'], coding_only=True)
             self.assertCountEqual([row['buddy_id'] for row in full],
                                   [codex_id, zcode_id, BUDDY_ID, SECOND_BUDDY_ID])
-        with patch.dict(WORKER_PERMISSIONS, {'zcode': {
-                level: declaration for level, declaration in WORKER_PERMISSIONS['zcode'].items()
-                if level != 'full'}}):
-            zcode_capabilities = permission_capabilities('zcode')
-        self.assertNotIn('permission:full', zcode_capabilities)
-        with board.store.db.write() as connection:
-            connection.execute('UPDATE buddies SET capabilities_json=? WHERE buddy_id=?',
-                               (canonical_json(zcode_capabilities), zcode_id))
-        with board.store.db.read() as connection:
+        with patch.dict(PERMISSION_LEVELS, {'zcode': {
+                level: declaration for level, declaration in PERMISSION_LEVELS['zcode'].items()
+                if level != 'full'}}), board.store.db.read() as connection:
             full, _ = DecisionCoordinator._scan_candidates(connection, ['permission:full'], coding_only=True)
             self.assertCountEqual([row['buddy_id'] for row in full], [codex_id, BUDDY_ID, SECOND_BUDDY_ID])

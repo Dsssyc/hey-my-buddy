@@ -613,12 +613,6 @@ def _check_recorded(selected: dict, view: "CatalogView", *, pending_efforts: lis
     return selected
 
 
-def permission_capabilities(name: str) -> list[str]:
-    """The permission facts copied into catalog rows from this source's harness."""
-    from ...buddy.harnesses.registry import worker_permission_capabilities
-    return sorted(worker_permission_capabilities(name))
-
-
 class CatalogView:
     def __init__(self, payload: dict, *, discovery_id: str | None = None, recorded_at: str | None = None):
         self.payload, self.discovery_id, self.recorded_at = payload, discovery_id, recorded_at
@@ -658,12 +652,8 @@ class CatalogView:
                 "discoveredAt": self.recorded_at or self.payload.get("discoveredAt")}
 
     def proposed_buddies(self) -> list[dict]:
-        from ...buddy.harnesses.registry import adapters
-        registry = adapters()
         proposals = []
         for entry in self.payload["providers"]:
-            native = registry.get(entry['harness'])
-            review_eligible = native is not None and native.local_read_only_check()['eligible']
             for model in entry["models"]:
                 for effort in model["efforts"]:
                     identity = ":".join((entry["harness"], entry["provider"], model["id"], effort))
@@ -671,10 +661,6 @@ class CatalogView:
                     buddy_id = identity if safe_identity == identity and len(identity) <= 128 else safe_identity[:95] + ":" + hashlib.sha256(identity.encode()).hexdigest()[:32]
                     capabilities = ([f"execution:{entry['harness']}", f"effort:{effort}"]
                                     + [f"input:{item}" for item in model["inputModalities"]][:30])
-                    if native is not None:
-                        if review_eligible:
-                            capabilities.append("decision")
-                        capabilities.extend(permission_capabilities(entry["harness"]))
                     proposals.append({
                         "buddyId": buddy_id, "label": f"{model['name']} · {effort}"[:200],
                         "harness": entry["harness"], "provider": entry["provider"], "model": model["id"], "effort": effort,

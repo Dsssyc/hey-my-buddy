@@ -32,7 +32,7 @@ class FailoverTests(RouterDispatchTestCase):
             result["claim"]["nonce"] = NONCE + suffix
         return result
 
-    def start(self, *, three=False, review=False, micro_task=False):
+    def start(self, *, three=False, review=False, micro_task=False, required_capabilities=()):
         if three:
             self.add_buddy(C, model="charlie")
             self.set_settings(ids=[A, B, C])
@@ -40,13 +40,12 @@ class FailoverTests(RouterDispatchTestCase):
             self.set_settings(mode="review")
             # Review failover tests provide their own private capability for
             # every dispatch; the real DSH review carrier is deferred.
-            self.enterContext(patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reason": None,
-                "systemSandbox": False, "sameAttemptContinuation": True}))
-        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reason": None,
-                "systemSandbox": False, "sameAttemptContinuation": True}):
-            request = (dispatch_fixtures.WorkflowWiringTests.route_micro_task(self) if micro_task else self.request())
+            self.enterContext(patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}))
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
+            if required_capabilities:
+                with self.board_.store.db.write() as db:
+                    db.execute("UPDATE buddies SET capabilities_json=?", (json.dumps(list(required_capabilities)),))
+            request = (dispatch_fixtures.WorkflowWiringTests.route_micro_task(self, required_capabilities=required_capabilities) if micro_task else self.request())
             if micro_task:
                 dispatch_fixtures.WorkflowWiringTests.attach_pending_link(self, request["decisionId"])
             claimed = self.claim("first", task_id=request["runId"])["claim"]
@@ -76,9 +75,7 @@ class FailoverTests(RouterDispatchTestCase):
             return self.board_.store.decisions._row(db, decision_id)["decision_task_id"]
 
     def next_claim(self, request, suffix="next"):
-        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reason": None,
-                "systemSandbox": False, "sameAttemptContinuation": True}):
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             result = self.claim(suffix, task_id=self.current_task(request["decisionId"]))
         self.assertIsNotNone(result["claim"], result)
         return result["claim"]
@@ -228,7 +225,6 @@ class FailoverTests(RouterDispatchTestCase):
         self.assert_switch(request, first, output)
         second = self.next_claim(request)
         self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
-        self.assertEqual(self.tool_policy(second["attempt"]["attemptId"]), {"systemSandbox": False})
         result = self.report(second, self.failure(second, "provider-error"), status="failed")
         self.assertEqual(result["decision"]["status"], "needs-host")
         self.assertEqual(len(self.tasks()), 2)
@@ -333,7 +329,7 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertTrue(duplicate_request["duplicate"])
         with self.board_.store.db.write() as db:
             event = self.outcomes()[0][1]
-            replay = router_history.record_outcome(db, buddy_id=A, plane="work", request_id="pick-1",
+            replay = router_history.record_outcome(db, buddy_id=A, plane="routing", request_id="pick-1",
                 task_id=event["taskId"], attempt_id=event["attemptId"], outcome="no_answer", code=event["code"],
                 phase=event["phase"], facts={"routerIndex": 0}, now=T0)
             self.assertFalse(replay["recorded"])
@@ -342,7 +338,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_preflight_outcomes_on_the_selection_retry_have_distinct_receipts(self):
         with self.board_.store.db.write() as db:
-            arguments = dict(buddy_id=A, plane="work", request_id="selection-retry-fixture",
+            arguments = dict(buddy_id=A, plane="routing", request_id="selection-retry-fixture",
                              task_id=None, attempt_id=None, outcome="no_answer", code="router-disabled",
                              phase="preflight", now=T0)
             original = router_history.record_outcome(db, **arguments, facts={"routerIndex": 0})
@@ -541,7 +537,7 @@ class FailoverTests(RouterDispatchTestCase):
         db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'verifier','executing','dsh','dsh',?,?,?,?,?)", (attempt_id, task_id, provider, model, T0, T0, T0))
         if buddy_id:
             self.board_.store._append_event(db, "router.claimed", task_id=task_id, attempt_id=attempt_id,
-                payload={"buddyId": buddy_id, "plane": "work", "requestId": task_id, "routerIndex": 0,
+                payload={"buddyId": buddy_id, "plane": "routing", "requestId": task_id, "routerIndex": 0,
                          "taskId": task_id, "attemptId": attempt_id, "generation": 1})
 
     def test_next_item_capacity_does_not_bypass_to_third(self):
@@ -560,7 +556,7 @@ class FailoverTests(RouterDispatchTestCase):
         request, first = self.start(three=True)
         self.assert_switch(request, first, self.failure(first))
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, buddy_id=B, plane="work", request_id="elsewhere",
+            router_history.record_outcome(db, buddy_id=B, plane="routing", request_id="elsewhere",
                 task_id=None, attempt_id=None, outcome="no_answer", code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
             self.busy_attempt(db, 1, provider="fixture", model="bravo", buddy_id=B)
         response = self.claim("retry", task_id=self.current_task(request["decisionId"]))
@@ -586,7 +582,7 @@ class FailoverTests(RouterDispatchTestCase):
     def test_new_skip_window_is_observed_without_recording_or_extension(self):
         request, first = self.start(three=True)
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, buddy_id=B, plane="work", request_id="elsewhere",
+            router_history.record_outcome(db, buddy_id=B, plane="routing", request_id="elsewhere",
                 task_id=None, attempt_id=None, outcome="no_answer", code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
             before = router_history.router_state(db, buddy_id=B, interval_seconds=600, now=T0)
         self.report(first, self.failure(first))

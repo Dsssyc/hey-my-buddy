@@ -94,7 +94,7 @@ class NativeRunCase(unittest.TestCase):
         os.environ["HMB_CLAUDE_CLI"] = str(fixture)
 
     def request(self, *, scope: str = "write", schema=None, timeout: int = 10,
-                continuation=None, network=None, denied=()) -> RunRequest:
+                continuation=None) -> RunRequest:
         return RunRequest(
             identity=RunIdentity(task_id="task-1", attempt_id=f"attempt-{uuid.uuid4().hex[:8]}",
                                  generation=1, invocation_id=uuid.uuid4().hex, turn_id="turn-1"),
@@ -105,10 +105,9 @@ class NativeRunCase(unittest.TestCase):
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
                 native_root=str(self.base / f"native-{uuid.uuid4().hex[:8]}")),
-            input_text="fixture micro task prompt", tool_scope=scope,
+            input_text="fixture micro task prompt", permission=scope,
             output_schema=schema if schema is not None else WORKER_SCHEMA,
-            budget=RunBudget(timeout_seconds=timeout), continuation=continuation,
-            network_allowed_domains=network, additional_denied_tools=denied)
+            budget=RunBudget(timeout_seconds=timeout), continuation=continuation)
 
     def execute(self, request: RunRequest, *, observer=None):
         return run(request, observer=observer or (lambda _facts: FEEDBACK_CONTINUE),
@@ -619,55 +618,43 @@ class WorkerCarrierTests(NativeRunCase):
 
 
 class ReadCarrierTests(NativeRunCase):
-    #: The review-read posture the role passes explicitly: offline plus the
-    #: session-wide denials the old review call derived from its schema.
-    REVIEW_DENIALS = ("mcp__*", "WebFetch", "WebSearch", "Agent", "Task")
-
     def argv_and_settings(self, result):
         argv = self.fixture_state()["argv"]
         settings = json.loads(Path(flag_value(argv, "--settings")).read_bytes())
         return argv, settings
 
-    def test_one_review_read_takes_the_role_requested_posture_and_reports_it(self):
-        result = self.execute(self.request(scope="read", schema=READ_SCHEMA,
-                                           network=(), denied=self.REVIEW_DENIALS))
+    def test_one_review_read_takes_the_shared_read_posture_and_reports_it(self):
+        result = self.execute(self.request(scope="read", schema=READ_SCHEMA))
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.parsed.value["buddyId"], "legal")
         policy = result.effective_policy.tools
         self.assertEqual(policy.requested.value["tools"], ["Glob", "Grep", "LS", "Read", "Skill"])
         self.assertEqual(policy.requested.value["permissionMode"], "default")
-        # The denials and the offline allowlist are the request's own values.
         self.assertEqual(policy.requested.value["disallowedTools"],
-                         ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write", *self.REVIEW_DENIALS])
-        self.assertEqual(policy.requested.value["sandboxNetworkAllowedDomains"], [])
+                         ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"])
+        self.assertEqual(policy.requested.value["sandboxNetworkAllowedDomains"], ["*"])
         argv, settings = self.argv_and_settings(result)
-        self.assertEqual(settings["sandbox"]["network"]["allowedDomains"], [])
+        self.assertEqual(settings["sandbox"]["network"],
+                         {"strictAllowlist": False, "allowedDomains": ["*"], "allowLocalBinding": True})
         self.assertEqual(flag_value(argv, "--disallowedTools").split(","),
-                         ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write", *self.REVIEW_DENIALS])
+                         ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"])
 
-    def test_an_ordinary_worker_read_keeps_the_native_default_posture(self):
-        # No controls requested: the read scope alone must not tighten the
-        # network allowlist or add the review denials.
+    def test_an_ordinary_worker_read_uses_the_same_open_network_posture(self):
         result = self.execute(self.request(scope="read"))
         self.assertEqual(result.end.status, "ok", result.end.message)
         policy = result.effective_policy.tools.requested.value
         self.assertEqual(policy["disallowedTools"],
                          ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"])
-        from hey_my_buddy.buddy.harnesses.claude.config import PACKAGE_REGISTRY_DOMAINS
-        self.assertEqual(policy["sandboxNetworkAllowedDomains"], list(PACKAGE_REGISTRY_DOMAINS))
+        self.assertEqual(policy["sandboxNetworkAllowedDomains"], ["*"])
         _argv, settings = self.argv_and_settings(result)
-        self.assertEqual(settings["sandbox"]["network"]["allowedDomains"],
-                         list(PACKAGE_REGISTRY_DOMAINS))
+        self.assertEqual(settings["sandbox"]["network"]["allowedDomains"], ["*"])
 
-    def test_the_unified_postures_match_the_legacy_three_paths_exactly(self):
-        # The unified run's argv/settings must equal what the config derives
-        # for the same posture: worker postures pass the worker schema and no
-        # extra denials, the review posture passes the caller's answer schema
-        # and its explicit denial sequence. Each run's argv is captured from
+    def test_the_unified_postures_match_the_native_permission_mapping(self):
+        # Both read callers use the same native posture. Each run's argv is captured from
         # the fixture state immediately, before the next run overwrites it.
         from hey_my_buddy.buddy.harnesses.claude.config import (
             execution_args,
-            sandbox_settings,
+            permission_sandbox_settings,
         )
 
         def normalized(argv):
@@ -679,17 +666,15 @@ class ReadCarrierTests(NativeRunCase):
             ("worker-write", {}, execution_args(session_id=session, model="m", effort="high",
                                                 settings_path="/s.json", read_only=False,
                                                 output_schema=WORKER_SCHEMA),
-             sandbox_settings()),
+             permission_sandbox_settings("write")),
             ("worker-read", {"scope": "read"},
              execution_args(session_id=session, model="m", effort="high",
                             settings_path="/s.json", read_only=True, output_schema=WORKER_SCHEMA),
-             sandbox_settings()),
-            ("review", {"scope": "read", "schema": READ_SCHEMA, "network": (),
-                        "denied": self.REVIEW_DENIALS},
+             permission_sandbox_settings("read")),
+            ("review", {"scope": "read", "schema": READ_SCHEMA},
              execution_args(session_id=session, model="m", effort="high",
-                            settings_path="/s.json", read_only=True, output_schema=READ_SCHEMA,
-                            additional_denied_tools=self.REVIEW_DENIALS),
-             sandbox_settings(())),
+                            settings_path="/s.json", read_only=True, output_schema=READ_SCHEMA),
+             permission_sandbox_settings("read")),
         )
         for name, request_values, legacy_argv, legacy_settings in postures:
             with self.subTest(posture=name):
@@ -722,9 +707,7 @@ class ReadCarrierTests(NativeRunCase):
 
 
 class RequestGateTests(NativeRunCase):
-    def test_this_harness_declares_no_no_tool_service_or_resume_capability(self):
-        with self.assertRaises(BoardError):
-            self.execute(self.request(scope="none"))
+    def test_this_harness_rejects_unbound_services_and_native_resume(self):
         request = self.request()
         with self.assertRaises(BoardError):
             run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
@@ -745,7 +728,7 @@ class RequestGateTests(NativeRunCase):
 
     def test_the_module_declares_the_request_controls_it_consumes(self):
         self.assertEqual(native_run.supported_request_controls,
-                         ("network_allowed_domains", "additional_denied_tools"))
+                         ())
 
     def test_the_module_carries_the_registered_role_surface(self):
         # 3-B2 delivers the wiring: the one native body also exposes every
@@ -1054,7 +1037,7 @@ class DiscoveryTests(NativeRunCase):
         self.assertIn("--no-session-persistence", state["argv"])
         self.assertEqual(state["seenAnthropicEnv"], [])
         settings = json.loads(Path(flag_value(state["argv"], "--settings")).read_text())
-        self.assertEqual(set(settings), {"sandbox"})
+        self.assertEqual(settings, native_run.permission_sandbox_settings("write"))
 
     def test_unknown_account_does_not_require_a_login_proof_process(self):
         for case in ("empty-account", "invalid-account", "null-account", "missing-account"):
@@ -1260,8 +1243,7 @@ class StructuredDeliveryTests(NativeRunCase):
         return {"buddyId": "legal", "note": "Read-only stream fixture", "evidence": []}
 
     def review_request(self, **kwargs):
-        return self.request(scope="read", schema=READ_SCHEMA, network=(),
-                            denied=ReadCarrierTests.REVIEW_DENIALS, **kwargs)
+        return self.request(scope="read", schema=READ_SCHEMA, **kwargs)
 
     def package_of(self, result):
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -1278,7 +1260,7 @@ class StructuredDeliveryTests(NativeRunCase):
                          [("Read", "start"), ("Read", "end")])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertTrue(package["streamComplete"])
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
         # The verified delivery is excluded from the tool facts by its call
         # identity and delivered as the run's own value.
         self.assertNotIn("StructuredOutput", [event["toolName"] for event in package["events"]])
@@ -1303,7 +1285,7 @@ class StructuredDeliveryTests(NativeRunCase):
         # The role's cumulative count never charged the value carrier.
         self.assertTrue(all(facts["toolCalls"] == 0 for facts in seen))
         self.assertTrue(any(facts["settled"] for facts in seen))
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
     def test_a_zero_budget_unqualified_delivery_stops_the_run_at_settlement(self):
         # The unverified candidate waits for its association mid-run, but the
@@ -1347,7 +1329,7 @@ class StructuredDeliveryTests(NativeRunCase):
         self.assertEqual(review.stop_reason, "readonly-budget-exhausted")
         package = result.tool_evidence.value
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_the_shared_review_observer_accepts_a_legal_zero_budget_delivery(self):
@@ -1359,7 +1341,7 @@ class StructuredDeliveryTests(NativeRunCase):
         self.assertIsNone(review.stop_reason)
         self.assertEqual((package["toolCalls"], package["events"]), (0, []))
         self.assertEqual(result.value.parsed.value, self.delivered())
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
     def test_a_conflicting_full_input_on_one_call_refuses_the_exemption(self):
         for case in ("structured-conflict-ab", "structured-conflict-ba"):
@@ -1371,7 +1353,7 @@ class StructuredDeliveryTests(NativeRunCase):
                 self.assertEqual(package["toolCalls"], 1)
                 self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
                                  [("StructuredOutput", "start"), ("StructuredOutput", "end")])
-                self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                                  tool_evidence.TOOLS_FORBIDDEN)
 
     def test_an_evicted_first_input_still_refuses_a_conflicting_second(self):
@@ -1384,7 +1366,7 @@ class StructuredDeliveryTests(NativeRunCase):
         result = self.execute(self.review_request())
         package = self.package_of(result)
         self.assertEqual(package["toolCalls"], 9)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_an_evicted_input_reproves_the_value_when_the_same_input_returns(self):
@@ -1397,7 +1379,7 @@ class StructuredDeliveryTests(NativeRunCase):
         # re-proved delivery alone is the run's own value.
         self.assertEqual(package["toolCalls"], 8)
         self.assertEqual(result.value.parsed.value, self.delivered())
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_duplicate_stream_and_assistant_projections_exclude_one_call(self):
@@ -1410,7 +1392,7 @@ class StructuredDeliveryTests(NativeRunCase):
         # The one verified delivery is excluded from the facts and delivered
         # as the run's own value.
         self.assertEqual(result.value.parsed.value, self.delivered())
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
     def test_a_bare_name_without_the_value_association_stays_an_ordinary_tool_call(self):
         self.use_fixture(STREAM_FIXTURE)
@@ -1419,7 +1401,7 @@ class StructuredDeliveryTests(NativeRunCase):
         package = self.package_of(result)
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual([event["category"] for event in package["events"]], ["other", "other"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
         # The turn still completed; the call simply proves no delivery.
         self.assertEqual([event["callId"] for event in package["events"]], ["toolu_so_1"] * 2)
@@ -1432,7 +1414,7 @@ class StructuredDeliveryTests(NativeRunCase):
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual([event["toolName"] for event in package["events"]],
                          ["mcp__server__StructuredOutput"] * 2)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_a_subagent_substream_same_name_call_keeps_its_own_facts(self):
@@ -1449,7 +1431,7 @@ class StructuredDeliveryTests(NativeRunCase):
         self.assertTrue(all("callId" in event["nativeIdentity"] for event in subagent_events))
         # The look-alike call settles as a disallowed other call; its foreign
         # identity is kept in the facts on top of that.
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
 

@@ -104,9 +104,6 @@
   "harness.readonly-platform-unsupported": [],
   "harness.readonly-resource-missing": [],
   "harness.readonly-tools-unrestricted": [],
-  "harness.readonly-worker-carrier-unimplemented": [
-    "harness"
-  ],
   "harness.scan-timeout": [
     "operation"
   ],

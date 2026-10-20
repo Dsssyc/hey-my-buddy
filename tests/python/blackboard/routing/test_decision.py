@@ -17,7 +17,6 @@ from unittest.mock import patch
 from pathlib import Path
 
 from support import BoardTestCase, FakeClock, wait_for
-from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 
 
 from hey_my_buddy.errors import BoardError
@@ -37,7 +36,7 @@ CATALOG_BUDDY = {
     "effort": "off",
     "available": True,
     "enabled": True,
-    "capabilities": ["execution:dsh", "effort:off", "context:large", *permission_capabilities("dsh")],
+    "capabilities": ["execution:dsh", "effort:off", "context:large"],
     "contextWindow": 1000000,
     "description": "fixture decision model",
     "source": "manual",
@@ -49,7 +48,7 @@ SECOND_BUDDY = {
     "label": "DeepSeek-V4-Pro · high",
     "model": "deepseek-v4-pro",
     "effort": "high",
-    "capabilities": ["execution:dsh", "effort:high", *permission_capabilities("dsh")],
+    "capabilities": ["execution:dsh", "effort:high"],
 }
 #: A second effort-high buddy, so a test can pin or constrain to `effort:
 #: high` and still leave two legal candidates for the Router path.

@@ -1,4 +1,4 @@
-"""Deferred review carriers are unavailable before any native process starts."""
+"""Review carriers use declarations and reject incomplete native requests."""
 import os
 import importlib.util
 from pathlib import Path
@@ -21,24 +21,11 @@ class DeferredReviewTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[4]
         self.assertFalse((root / 'harnesses/dsh/plugins/read-only-structured.mjs').exists())
 
-    def test_capabilities_and_router_refuse_without_native_start(self):
-        with tempfile.TemporaryDirectory(prefix='deferred-review-') as directory:
-            root = Path(directory)
-            context = ExecutionContext(task_id='micro-task', attempt_id='attempt', generation=1,
-                spec={'cwd': str(root)}, directory=root / 'attempt', environment={}, runtime={}, session_record_path=None)
-            request = ReadOnlyStructuredRequest(str(root), 'read', {'type': 'object'},
-                                               {'timeoutSeconds': 60, 'toolCalls': 8})
-            with patch('subprocess.Popen', side_effect=AssertionError('native process')), \
-                 patch('subprocess.run', side_effect=AssertionError('native process')):
-                for item in (DshAdapter(), ZcodeAdapter()):
-                    self.assertFalse(item.read_only_structured)
-                    self.assertFalse(item.read_only_structured_resume)
-                    self.assertTrue(item.no_tool_structured)
-                    self.assertEqual(item.local_read_only_check()['reason'],
-                                     {'code': 'harness.readonly-worker-carrier-unimplemented',
-                                      'params': {'harness': item.name}})
-                    with self.assertRaises(BoardError):
-                        router_role.prepare_router_review({}, {}, item, context)
+    def test_dsh_and_zcode_declare_review_without_native_calls(self):
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
+        with patch('subprocess.Popen', side_effect=AssertionError('native process')), patch('subprocess.run', side_effect=AssertionError('native process')):
+            for name in ('dsh', 'zcode'):
+                self.assertEqual(PERMISSION_LEVELS[name]['read'], 'enforced')
 
     def test_manually_supplied_controller_review_request_is_refused_before_launch(self):
         with patch('subprocess.Popen', side_effect=AssertionError('native process')), \

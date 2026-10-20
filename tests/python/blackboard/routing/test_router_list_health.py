@@ -12,7 +12,6 @@ import json
 import unittest
 
 from support import BoardTestCase, FakeClock
-from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
@@ -38,7 +37,7 @@ class RouterListHealthTestCase(BoardTestCase):
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
                        (buddy_id, buddy_id, harness, provider, buddy_id, "max", available, enabled,
-                        canonical_json(permission_capabilities(harness))))
+                        canonical_json([])))
 
     def set_settings(self, *, ids, interval=600, mode="fast"):
         with self.db.write() as db:
@@ -58,7 +57,7 @@ class RouterListHealthTestCase(BoardTestCase):
         self.sequence += 1
         with self.db.write() as db:
             return router_history.record_outcome(
-                db, buddy_id=buddy_id, plane="work", request_id=request or f"route-{self.sequence}",
+                db, buddy_id=buddy_id, plane="routing", request_id=request or f"route-{self.sequence}",
                 task_id=task, attempt_id=attempt,
                 outcome=outcome, code=code, phase=phase,
                 facts={"routerIndex": index}, now=now or self.clock.value)

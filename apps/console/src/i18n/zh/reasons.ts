@@ -55,7 +55,6 @@ export default {
   "harness.readonly-platform-unsupported": "当前平台不支持该 harness 的只读调用。",
   "harness.readonly-resource-missing": "只读调用所需的资源缺失。",
   "harness.readonly-tools-unrestricted": "无法限制只读调用所用的工具。",
-  "harness.readonly-worker-carrier-unimplemented": "{{harness}} 尚未实现只读 Worker 执行路径。",
   "harness.scan-timeout": "harness 检测超时，请检查 CLI 后重试。",
   "harness.shutdown-unverified": "尚未确认 harness 进程已停止。",
   "harness.timeout": "harness 响应超时。",

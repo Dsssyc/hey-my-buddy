@@ -116,31 +116,17 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
                 self.args.harness = harness
                 self.args.output_root = Path(self.temp.name) / harness
                 packet = self.prepared()
-                self.assertIs(packet['systemSandbox'], probe.system_sandbox(harness))
+                self.assertEqual(packet['permission'], 'read')
 
-    def test_native_command_reading_requires_the_frozen_system_sandbox_class(self):
-        for harness in ('codex', 'dsh'):
+    def test_commands_are_allowed_by_the_frozen_read_level_for_all_harnesses(self):
+        for harness in probe.HARNESSES:
             with self.subTest(harness=harness):
                 self.args.harness = harness
                 self.args.output_root = Path(self.temp.name) / harness
-                if harness == 'dsh':
-                    self.args.harness = 'codex'
                 packet = self.prepared()
-                packet['buddy']['harness'] = harness
-                packet['systemSandbox'] = probe.system_sandbox(harness)
                 outcome = self.outcome(packet)
                 for event in outcome.result['toolEvidence']['events']:
-                    event.update(toolName='exec_command', category='execute')
-                report = probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)
-                self.assertEqual(report['status'], 'passed' if probe.system_sandbox(harness) else 'failed')
-                packet['systemSandbox'] = not packet['systemSandbox']
+                    event.update(toolName='native-command', category='execute')
+                self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)['status'], 'passed')
+                packet['permission'] = 'none'
                 self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True)['status'], 'failed')
-
-    def test_removed_harnesses_cannot_prepare_or_execute_native_review_probes(self):
-        for harness in ('dsh', 'zcode'):
-            with self.subTest(harness=harness), patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')):
-                self.args.harness = harness
-                for execute in (False, True):
-                    self.args.execute = execute
-                    with self.assertRaises(ValueError):
-                        probe.run(self.args)

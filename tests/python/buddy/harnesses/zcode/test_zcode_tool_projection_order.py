@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import unittest
+import json
+import tempfile
+from pathlib import Path
 
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import ZcodeToolFacts
@@ -55,7 +58,7 @@ class NativeProjectionTests(unittest.TestCase):
         self.canonical("tool.updated", {"kind": "result", "toolCallId": call, "result": {"success": success}})
 
     def judge(self):
-        return tool_evidence.judge_tool_evidence(self.facts.finish(True), "review", False)
+        return tool_evidence.judge_tool_evidence(self.facts.finish(True), "read")
 
     def test_native_order_deduplicates_starts_and_uses_only_canonical_end(self):
         self.scheduled()
@@ -187,6 +190,113 @@ class NativeProjectionTests(unittest.TestCase):
         self.canonical("turn.completed", {"inputId": "input", "resultType": "success", "response": "{}"})
         self.canonical("tool.updated", {"kind": "batch", "toolCallIds": ["read"], "successCount": 1, "errorCount": 0})
         self.assertIsNotNone(self.judge())
+
+
+class NativeDenialTests(unittest.TestCase):
+    def setUp(self):
+        self.private = tempfile.TemporaryDirectory()
+        self.addCleanup(self.private.cleanup)
+        self.log_dir = Path(self.private.name)
+        self.log = self.log_dir / "zcode-2026-10-20.jsonl"
+        self.facts = ZcodeToolFacts(BINDING, native_log_dir=self.log_dir)
+        self.facts.add_root("session", "turn")
+
+    def frame(self, kind, call, name=None, *, session="session", turn="turn", seq=1):
+        payload = {"kind": kind, "toolCallId": call}
+        if name is not None:
+            payload["toolName"] = name
+        self.facts.observe({"method": "session/event", "params": {
+            "sessionId": session, "turnId": turn, "seq": seq,
+            "type": "tool.updated", "payload": payload}})
+
+    def denial(self, call, name, *, session="session", turn="turn", **extra):
+        return {"timestamp": "2026-10-20T07:14:13.941Z", "level": "warn",
+                "event": "tool.permission.denied", "module": "core.tool.executor",
+                "message": "Tool permission denied", "traceId": "trace-placeholder",
+                "spanId": "span-placeholder", "status": "failed",
+                "sessionId": session, "turnId": turn, "toolCallId": call,
+                "context": {"queryId": "input-placeholder", "turnNumber": 0,
+                            "providerId": "provider-placeholder", "modelId": "model-placeholder",
+                            "iteration": 1, "querySource": "main_turn", "toolName": name,
+                            "decision": "deny", "mode": "build",
+                            "reason": "Plan mode only allows read-only, non-destructive tools",
+                            "ruleId": "mode.plan.nonReadOnly", **extra}}
+
+    def append(self, record):
+        with self.log.open("a") as stream:
+            stream.write(json.dumps(record) + "\n")
+
+    def complete(self):
+        self.facts.observe({"method": "session/event", "params": {
+            **ROOT, "type": "turn.completed", "seq": 5}})
+        return self.facts.finish(True)
+
+    def test_native_write_denial_closes_exact_call_and_batch(self):
+        self.frame("scheduled", "write", "Write")
+        self.facts.observe({"method": "session/event", "params": {
+            **ROOT, "type": "tool.updated", "seq": 2,
+            "payload": {"kind": "batch", "toolCallIds": ["write"],
+                        "successCount": 0, "errorCount": 1}}})
+        self.append(self.denial("write", "Write"))
+        package = self.complete()
+        self.assertEqual(package["unsettledToolCalls"], 0)
+        self.assertEqual([(event["callId"], event["toolName"], event["phase"])
+                          for event in package["events"]],
+                         [("write", "Write", "start"), ("write", "Write", "end")])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_native_bash_denial_is_settled_and_allowed_under_read(self):
+        self.frame("scheduled", "bash", "Bash")
+        denial = self.denial("bash", "Bash")
+        self.append(denial)
+        self.append(denial)
+        package = self.complete()
+        self.assertEqual(package["unsettledToolCalls"], 0)
+        self.assertEqual(len(package["events"]), 2)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+
+    def test_incomplete_log_line_waits_for_the_rest(self):
+        self.frame("scheduled", "bash", "Bash")
+        raw = json.dumps(self.denial("bash", "Bash"))
+        self.log.write_text(raw[:20])
+        self.facts.read_denials()
+        self.assertEqual(self.facts.tool_calls, 1)
+        with self.log.open("a") as stream:
+            stream.write(raw[20:] + "\n")
+        self.assertIsNone(tool_evidence.judge_tool_evidence(self.complete(), "read"))
+
+    def test_malformed_native_log_record_remains_unverified(self):
+        for line in ("{broken\n", '"tool.permission.denied"\n'):
+            with self.subTest(line=line):
+                self.setUp()
+                self.frame("scheduled", "bash", "Bash")
+                self.log.write_text(line)
+                package = self.complete()
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_missing_foreign_conflicting_and_late_denials_remain_unverified(self):
+        for record in (
+                self.denial("write", "Write", session="foreign"),
+                {k: v for k, v in self.denial("write", "Write").items() if k != "toolCallId"},
+                self.denial("write", "Bash"),
+                {**self.denial("write", "Write"), "status": "completed"}):
+            with self.subTest(record=record):
+                self.setUp()
+                self.frame("scheduled", "write", "Write")
+                self.append(record)
+                package = self.complete()
+                self.assertNotEqual(package["unsettledToolCalls"], 0)
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+        self.setUp()
+        self.frame("scheduled", "write", "Write")
+        self.complete()
+        self.append(self.denial("write", "Write"))
+        package = self.facts.finish(True)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
 
 if __name__ == "__main__":

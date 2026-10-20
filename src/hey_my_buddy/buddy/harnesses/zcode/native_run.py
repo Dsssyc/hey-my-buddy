@@ -6,7 +6,7 @@ settlement, close, EOF drain and the owned process hold happen exactly once
 here, driven only by the frozen
 :class:`~hey_my_buddy.buddy.harnesses.run_contract.RunRequest`. What differs
 between the Worker turn and the fast structured call is expressed by the
-request (tool scope, schema, continuation, services) and by the role
+request (permission, schema, continuation, services) and by the role
 observer's feedback, never by a second native path.
 
 The driver owns protocol integrity only: root/session/input/call identity and
@@ -918,7 +918,7 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
     """
     session_id = _checked_root_session(snapshot, request.cwd, previous=previous, mode=mode,
                                        require_interactive=require_interactive)
-    if request.worker_permission is not None and mode == "native-session":
+    if mode == "native-session":
         configure_mode(connection, session_id, state.create_params["mode"])
     resolved = configure_session(connection, snapshot, spec, note_unknown=connection.on_unknown)
     if on_configured is not None:
@@ -1064,10 +1064,8 @@ class _CarrierOutcome:
 
 
 def _session_mode(request: RunRequest) -> str:
-    """Map the turn's permission independently of its completion carrier."""
-    if request.worker_permission is not None:
-        return {"read": "plan", "write": "yolo", "full": "yolo"}[request.worker_permission.level]
-    return "yolo"
+    """Map the shared permission independently of its completion carrier."""
+    return {"none": "yolo", "read": "plan", "write": "yolo", "full": "yolo"}[request.permission]
 
 
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
@@ -1075,12 +1073,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     """Run one native ZCode execution: the single native path of this harness."""
     if request.harness != "zcode":
         raise BoardError("INVALID_ARGUMENT", "this run module drives zcode", harness=request.harness)
-    if request.tool_scope == "full" and request.worker_permission is None:
-        raise BoardError("INVALID_ARGUMENT", "zcode full access requires a Worker permission", toolScope=request.tool_scope)
     if services is not None and not isinstance(services, SessionServices):
         raise BoardError("INVALID_ARGUMENT", "zcode accepts its own narrow session service binding")
-    no_tool = request.tool_scope == "none"
-    # The tool scope only decides the native tool settings; the value carrier
+    no_tool = request.permission == "none"
+    # Permission decides the native tool settings; the value carrier
     # follows this run's service binding alone: a bound completion service
     # takes the final value through its completion tool, and a run without one
     # takes it from the final message — under any scope, with the role
@@ -1119,7 +1115,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
     # evidence is the receipt, never a task-tool count of the delivery tool.
     tools = ZcodeToolFacts({"harness": "zcode", "taskId": request.identity.task_id,
                             "attemptId": request.identity.attempt_id,
-                            "generation": request.identity.generation})
+                            "generation": request.identity.generation},
+                           native_log_dir=invocation_root / "native-logs")
     session_record = (SessionRecord(request.session_record_path, request.identity.attempt_id,
                                     failure=request.session_record_failure.to_payload()
                                     if request.session_record_failure is not None else None)
@@ -1325,10 +1322,8 @@ def _final_message_rounds(*, connection: NativeConnection, request: RunRequest, 
                          "mcpServers": [], "offPeakToolEnabled": False,
                          "dynamicWorkflowEnabled": False}
     else:
-        # A read or write scope without a bound service runs the same
-        # final-message carrier over the session's own default tools;
-        # the effective policy reports that honestly and the external
-        # review eligibility is untouched.
+        # A read or write permission without a bound service runs the same
+        # final-message carrier over the user's native tools.
         create_params = {"mode": _session_mode(request), "mcpServers": []}
     state.create_params = create_params
     while True:
@@ -1734,15 +1729,12 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
             completion = CompletionEvidence(stream_end=drained)
     effective = EffectivePolicy()
     if state.session_opened and state.create_params is not None:
-        if request.worker_permission is not None:
+        if request.permission != "none":
             effective = EffectivePolicy(
                 tools=PolicyFact(requested=_json_package({"mode": state.create_params["mode"]})))
-        elif request.tool_scope == "none":
-            effective = EffectivePolicy(
-                tools=PolicyFact(requested=_json_package(state.create_params)))
         else:
             effective = EffectivePolicy(
-                tools=PolicyFact())
+                tools=PolicyFact(requested=_json_package(state.create_params)))
     continuation = None
     if binding_path is not None and session_id is not None:
         continuation = ContinuationFacts(

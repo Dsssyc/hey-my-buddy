@@ -19,7 +19,7 @@ class RoutingModesTests(BoardTestCase):
         self.catalog_fixture()
         from protocol.fixtures import mock_readonly
         mock_readonly.install(self)
-        self.enterContext(patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured', True, create=True))
+        self.enterContext(patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}))
 
     def configure(self, board, **settings):
         return board.console_call('user_policy_publish', {
@@ -89,9 +89,7 @@ class RoutingModesTests(BoardTestCase):
         self.seed(board)
         result = board.call('selection_request', {'requestId': 'later-ineligible', 'task': 'choose'})
         pass  # Admission is owned by the service.
-        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-                'eligible': False, 'reason': {'code': 'harness.readonly-unavailable', 'params': {}},
-                'systemSandbox': False, 'sameAttemptContinuation': False}):
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             claim = admit_execution(board.client(), 'nonce-abcdefghijklmnop', task_id=result['runId'])['claim']
         self.assertIsNone(claim)
         decision = board.call('selection_get', {'decisionId': result['decisionId'], 'includeAudit': True})['decision']
@@ -152,7 +150,7 @@ class RoutingModesTests(BoardTestCase):
             facts = claim_tool_receipt(claim, count if type(count) is int else 0)
             if proof is None:
                 facts.pop('toolEvidence')
-            board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**facts, 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'zeroToolVerified': proof, 'usage': {'elapsedMs': 100, 'toolCalls': count}, 'decision': {'buddyId': BUDDY_ID, 'note': 'candidate match', 'evidence': []}}})
+            board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**facts, 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 100, 'toolCalls': count}, 'decision': {'buddyId': BUDDY_ID, 'note': 'candidate match', 'evidence': []}}})
             decision = board.call('selection_get', {'decisionId': result['decisionId']})['decision']
             self.assertEqual(decision['status'], expected)
             if expected == 'needs-host':

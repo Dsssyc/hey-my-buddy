@@ -213,7 +213,7 @@ for (const { locale, catalog, unsaved, settings, account, check, checked, coolin
         await expectWholeAndApart(page.getByRole("main"), page.locator("[data-slot=harness-feedback]"));
         // Account guidance may be absent; the recorded review word always has a hint.
         const review = codex.locator("[aria-description]").filter({ hasText: /^(可用|Eligible)$/ }).first();
-        await expect(review).toHaveAttribute("aria-description", /本地资格检查不调用模型|The local eligibility check calls no model/);
+        await expect(review).toHaveAttribute("aria-description", /资格来自 harness 的只读档位声明|Eligibility comes from the harness/);
         // Scrolling closes hints: bring the word into view and let scrolling settle before keyboard focus.
         await review.scrollIntoViewIfNeeded();
         await settle(page);

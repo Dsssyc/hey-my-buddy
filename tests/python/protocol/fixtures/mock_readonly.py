@@ -27,7 +27,7 @@ def verify_input(manifest, root, expected):
 
 
 def install(testcase, *, path=None, **options):
-    """Inject locally eligible native capability only within this test process."""
+    """Install an offline native review fixture only within this test process."""
     from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
     testcase._readonly_fixture = Path(path) if path is not None else Path(__file__).resolve()
     testcase._readonly_options = options
@@ -42,11 +42,6 @@ def install(testcase, *, path=None, **options):
         side_effect=lambda harness, context, request: start(
             harness, context, request, testcase._readonly_fixture, testcase._readonly_options),
     ))
-    testcase.enterContext(patch.object(DshAdapter, "read_only_structured", True))
-    testcase.enterContext(patch.object(DshAdapter, "local_read_only_check", return_value={
-        "eligible": True, "reasonCode": None, "reason": None,
-        "systemSandbox": False, "sameAttemptContinuation": False,
-    }))
     testcase.enterContext(patch.object(DshAdapter, "available", side_effect=lambda: (
         testcase._readonly_fixture.is_file(), "mock fixture missing")))
     testcase.input_prepare = testcase.enterContext(patch(

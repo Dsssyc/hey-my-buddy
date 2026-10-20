@@ -18,7 +18,6 @@ from blackboard.routing.test_router_dispatch import RouterDispatchTestCase
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
 from hey_my_buddy.blackboard.routing import router
-from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.protocol.client import BoardClient
@@ -317,7 +316,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                            "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
                            (buddy_id, buddy_id, "dsh", "deepseek-official", model, "max",
-                            canonical_json(permission_capabilities("dsh"))))
+                            canonical_json([])))
             settings = {**router.configuration(db), "routerBuddyIds": [first],
                         "defaultRoutingMode": "fast"}
             router._write_settings(db, settings)

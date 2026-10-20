@@ -30,12 +30,11 @@ TOOL_EVIDENCE_VERSION = 1
 #: and the blackboard invalidates the answer instead of judging a slice.
 MAX_TOOL_EVENTS = 128
 
-ROUTING_MODES = ("fast", "review")
-#: Review mode with a native system sandbox may read, search and execute
-#: commands; without one only read and search are allowed. Fast mode allows no
-#: tool call at all, which the same judge expresses as an empty allowance.
-SANDBOXED_REVIEW_CATEGORIES = frozenset({"read", "search", "execute"})
-UNSANDBOXED_REVIEW_CATEGORIES = frozenset({"read", "search"})
+# Router runs alone are judged; Worker permissions stay native.
+PERMISSION_TOOL_CATEGORIES = {
+    "none": frozenset(),
+    "read": frozenset({"read", "search", "execute", "fetch"}),
+}
 
 TOOL_EVIDENCE_UNVERIFIED = "router-tool-evidence-unverified"
 TOOLS_FORBIDDEN = "router-tools-forbidden"
@@ -52,9 +51,10 @@ EVENT_FIELDS = frozenset({"nativeIdentity", "callId", "toolName", "category", "p
 #: unrecognized name, including one that merely resembles an ACP category —
 #: stays ``other``; it is never promoted to a legal category.
 NATIVE_TOOL_CATEGORIES: dict[str, dict[str, str]] = {
-    "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute"},
+    "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute",
+            "write": "edit", "edit": "edit"},
     "claude": {
-        "Read": "read", "LS": "read",
+        "Read": "read", "LS": "read", "Skill": "read",
         "Glob": "search", "Grep": "search",
         "Bash": "execute",
         "Write": "edit", "Edit": "edit", "MultiEdit": "edit",
@@ -344,11 +344,9 @@ class ToolEventEvidence:
         }
 
 
-def _structural_problem(evidence: Any, mode: Any, has_system_sandbox: Any) -> str | None:
-    if mode not in ROUTING_MODES:
-        return "the routing mode is not fast or review"
-    if type(has_system_sandbox) is not bool:
-        return "the system sandbox fact is not a boolean"
+def _structural_problem(evidence: Any, permission: Any) -> str | None:
+    if not isinstance(permission, str) or permission not in PERMISSION_TOOL_CATEGORIES:
+        return "the permission is not a Router run level"
     if not isinstance(evidence, dict) or set(evidence) != PACKAGE_FIELDS:
         return "the tool evidence package does not carry exactly its fixed fields"
     version = evidence["version"]
@@ -382,21 +380,20 @@ def _consistent_call_facts(harness: str, facts: set) -> bool:
                for name, category in facts)
 
 
-def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> str | None:
+def judge_tool_evidence(evidence: Any, permission: Any) -> str | None:
     """The single publication matrix over one ``toolEvidence`` package.
 
     Returns ``None`` when the evidence is complete, consistent and every
     recorded call is allowed; ``router-tools-forbidden`` when a recorded call is
-    clearly outside the mode's policy (fast mode allows no call at all); and
+    clearly outside the permission's policy (none allows no call at all); and
     ``router-tool-evidence-unverified`` when the package is missing, malformed,
     inconsistent or incomplete. Binding the package to its attempt is the
     caller's job; this function judges the facts a package carries.
     """
-    problem = _structural_problem(evidence, mode, has_system_sandbox)
+    problem = _structural_problem(evidence, permission)
     if problem is not None:
         return TOOL_EVIDENCE_UNVERIFIED
-    allowed = (SANDBOXED_REVIEW_CATEGORIES if has_system_sandbox else UNSANDBOXED_REVIEW_CATEGORIES) \
-        if mode == "review" else frozenset()
+    allowed = PERMISSION_TOOL_CATEGORIES[permission]
     calls: dict[tuple[str, str], dict] = {}
     opened = set()
     end_before_start = False
@@ -414,7 +411,7 @@ def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
     # failed to close: the recorded fact stands on its own. Facts that contradict
     # each other name no clear category, so they stay untrusted here and surface
     # as incompleteness below.
-    if mode == "fast":
+    if permission == "none":
         if evidence["events"]:
             return TOOLS_FORBIDDEN
     else:
@@ -451,8 +448,7 @@ def judge_tool_evidence(evidence: Any, mode: Any, has_system_sandbox: Any) -> st
 
 __all__ = [
     "ACP_CATEGORIES", "BINDING_FIELDS", "EVENT_FIELDS", "MAX_TOOL_EVENTS",
-    "NATIVE_TOOL_CATEGORIES", "NON_TOOL_NAMES", "PACKAGE_FIELDS", "ROUTING_MODES",
-    "SANDBOXED_REVIEW_CATEGORIES", "TOOL_EVIDENCE_UNVERIFIED", "TOOL_EVIDENCE_VERSION",
-    "TOOLS_FORBIDDEN", "UNSANDBOXED_REVIEW_CATEGORIES", "ToolEventEvidence",
+    "NATIVE_TOOL_CATEGORIES", "NON_TOOL_NAMES", "PACKAGE_FIELDS", "PERMISSION_TOOL_CATEGORIES", "TOOL_EVIDENCE_UNVERIFIED", "TOOL_EVIDENCE_VERSION",
+    "TOOLS_FORBIDDEN", "ToolEventEvidence",
     "judge_tool_evidence", "normalize_tool_event",
 ]

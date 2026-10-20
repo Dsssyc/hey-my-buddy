@@ -29,8 +29,9 @@ CONFIG_COLUMNS = {
 
 INSTRUCTIONS = """Router protocol version 13.
 Choose one legal buddy for the delegated work, or abstain with buddyId null.
-Only inspect the supplied frozen checkout with native read, grep and glob tools.
-Do not write files, access the network, inspect other runs, request assistance,
+Inspect the supplied frozen checkout at the read-only permission level.
+You may read, search, execute read-only commands and use network tools.
+Do not modify files, inspect other runs, request assistance,
 publish evaluations, use inquiry, dispatch work or produce artifacts.
 Return exactly buddyId, note and evidence, following the supplied JSON Schema.
 Evidence may cite preferences, model notes or checkout-relative files.
@@ -146,9 +147,7 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str, *, now=No
     checked from cached records only; the caller owns the settings read, so a frozen
     snapshot can keep checking its own list without re-reading shared settings.
     """
-    from ...buddy.harnesses.registry import adapter
     from ..service.harness_health import read_health
-    from ...buddy.harnesses.runtime_selection import bound
     def unavailable(code, **facts):
         return None, code, facts
 
@@ -171,21 +170,11 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str, *, now=No
     cooldown = cooling(connection, row, now=now)
     if cooldown is not None:
         return unavailable("router-quota-exhausted", retryAt=cooldown["coolingUntil"])
-    check = None
-    try:
-        with bound([health]):
-            native = adapter(row["harness"])
-            if routing_mode == "fast":
-                eligible = getattr(native, "no_tool_structured", False)
-            else:
-                check = native.local_read_only_check()
-                eligible = check["eligible"]
-    except BoardError as error:
+    from ...protocol.capabilities import PERMISSION_LEVELS
+    level = "none" if routing_mode == "fast" else "read"
+    if level not in PERMISSION_LEVELS[row["harness"]]:
         code = "router-no-tool-unsupported" if routing_mode == "fast" else "router-review-unsupported"
-        return unavailable(code, errorCode=error.code)
-    if not eligible:
-        code = "router-no-tool-unsupported" if routing_mode == "fast" else "router-review-unsupported"
-        return unavailable(code, **({"cause": check["reason"]} if check and check.get("reason") else {}))
+        return unavailable(code)
     return dict(row), None, {}
 
 

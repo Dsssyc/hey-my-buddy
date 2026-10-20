@@ -103,7 +103,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
         # 生产 start_review 走注册表读本类属性；不用探针可被测试替换的 adapter_for。
-        "canCorrect": registry_adapter(harness).read_only_structured_resume,
+        "canCorrect": registry_adapter(harness).native_resume,
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
                             "budget": request.budget, "captureEvidence": request.capture_evidence},
         # 生产控制文件没有的替身材料：与 5-D1 相同，绝不进入角色读者的键。
@@ -126,8 +126,8 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     else:
         model_answer = answer if answer is not None else {
             "marker": (Path(request.cwd) / "marker.txt").read_text().strip(),
-            "outsideRead": "denied", "insideWrite": "denied", "outsideWrite": "denied",
-            "network": "denied", "observations": "模型自述"}
+            "outsideRead": "succeeded", "insideWrite": "denied", "outsideWrite": "denied",
+            "network": "succeeded", "observations": "模型自述"}
         value = RunValue(schema_status="valid", raw=canonical_json(model_answer), parsed=model_answer,
                          correction_count=correction_count)
     evidence_refs = ()
@@ -204,7 +204,7 @@ class RouterProbeTests(unittest.TestCase):
         resolved 覆写→checked_model，native 账号/凭据/调试/嵌套 JSON→native_receipt
         （经 evidenceRef 被原生 evidence 投影真实读取）。collect 一层从不替换；
         仅本模块自有的收集故障注入测试直接向 collect 注入异常。"""
-        native = Mock(read_only_structured=True)
+        native = Mock()
         self.executed = None
 
         def start(harness, context, request):
@@ -246,7 +246,7 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertFalse(report["started"])
                 self.assertEqual(report["modelCalls"], 0)
                 self.assertFalse(report["probeChecksPassed"])
-                self.assertEqual(report["status"], "prepared" if native.read_only_structured else "refused")
+                self.assertEqual(report["status"], "prepared")
                 self.assertEqual(report["request"]["budget"],
                                  {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8, "bytesRead": 131072})
                 self.assertEqual(report["inputHashesBefore"], report["inputHashesAfter"])
@@ -263,7 +263,8 @@ class RouterProbeTests(unittest.TestCase):
         for harness in ("dsh", "zcode"):
             self.root = Path(self.temporary.name) / harness
             native = probe.adapter_for(harness)
-            with patch.object(native, "read_only_structured", False), \
+            with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS',
+                            {harness: {"none": "enforced"}}), \
                  self.start_guard(native, harness) as start, \
                  patch.object(probe, "adapter_for", return_value=native):
                 report = probe.run(self.args(harness, execute=True))
@@ -271,7 +272,7 @@ class RouterProbeTests(unittest.TestCase):
             start.assert_not_called()
 
     def test_mock_execute_uses_native_entry_once_and_never_auto_passes(self):
-        for harness in ("codex", "claude"):
+        for harness in probe.HARNESSES:
             self.root = Path(self.temporary.name) / harness
             report, native, handle = self.mock_execute(harness=harness)
             native.registered_start.assert_called_once()
@@ -279,12 +280,12 @@ class RouterProbeTests(unittest.TestCase):
             handle.terminate.assert_not_called()
             self.assertEqual(report["status"], "unverified")
             self.assertFalse(report["probeChecksPassed"])
-            for name in ("nativePolicy", "forbiddenTools", "boundaryDenials", "budgetConsistent"):
+            for name in ("nativePolicy", "forbiddenTools", "writeDenials", "budgetConsistent"):
                 self.assertEqual(report["checks"][name]["status"], "unverified")
             for name in ("internalRead", "inputUnchanged", "sentinelUnchanged", "shutdownConfirmed"):
                 self.assertEqual(report["checks"][name]["status"], "passed")
             self.assertIsNone(report["checks"]["budgetConsistent"]["evidence"]["bytesRead"])
-            self.assertEqual(report["cost"]["maxNativeTurns"], 2 if harness == "codex" else 1)
+            self.assertEqual(report["cost"]["maxNativeTurns"], 1 if harness == "claude" else 2)
             _harness, context, request = native.registered_start.call_args.args
             self.assertIsNone(context.turn)
             self.assertIsNone(context.agent_credential)
@@ -348,7 +349,7 @@ class RouterProbeTests(unittest.TestCase):
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["checks"]["budgetConsistent"]["status"], "failed")
 
-    def test_more_than_two_codex_turns_or_identity_mismatch_fails(self):
+    def test_more_than_two_correction_turns_or_identity_mismatch_fails(self):
         report, _, _ = self.mock_execute(correction_count=2)
         self.assertEqual(report["checks"]["budgetConsistent"]["status"], "failed")
         self.root = Path(self.temporary.name) / "identity"
@@ -371,11 +372,17 @@ class RouterProbeTests(unittest.TestCase):
         self.assertNotIn("private-key", log.read_text())
         self.assertNotIn("private-account", log.read_text())
 
-    def test_model_denial_claim_is_unverified_and_success_claim_fails(self):
+    def test_allowed_read_and_network_success_do_not_fail_write_boundary(self):
         report, _, _ = self.mock_execute(answer={
             "marker": None, "outsideRead": "succeeded", "insideWrite": "denied",
-            "outsideWrite": "denied", "network": "denied", "observations": ""})
-        self.assertEqual(report["checks"]["boundaryDenials"]["status"], "failed")
+            "outsideWrite": "denied", "network": "succeeded", "observations": ""})
+        self.assertEqual(report["checks"]["writeDenials"]["status"], "unverified")
+
+    def test_model_write_success_claim_fails_review(self):
+        report, _, _ = self.mock_execute(answer={
+            "marker": None, "outsideRead": "succeeded", "insideWrite": "succeeded",
+            "outsideWrite": "denied", "network": "succeeded", "observations": ""})
+        self.assertEqual(report["checks"]["writeDenials"]["status"], "failed")
 
     def test_redacts_report_and_retained_native_logs(self):
         with patch.dict(os.environ, {"TEST_API_KEY": "super-private-credential-value"}):

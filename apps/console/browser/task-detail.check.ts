@@ -353,11 +353,18 @@ test.describe("the detail of a micro task in the dark theme", () => {
     await open(page, `#tasks/${A}/preview-run-a3`);
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(detail(page)).toBeVisible();
+    await expect(strip(page)).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
     await settle(page);
-    for (const text of await page.locator("[data-slot=task-detail] h2, [data-slot=task-detail] h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-strip] text").elementHandles()) {
-      const label = (await text.textContent())?.trim();
-      if (!(await text.evaluate(node => (node as Element).childElementCount)) && label) expect(await contrastOf(text), label).toBeGreaterThanOrEqual(4.5);
+    const texts = page.locator("[data-slot=task-detail] h2, [data-slot=task-detail] h3, [data-slot=detail-band] span, [data-slot=detail-live] span, [data-slot=detail-strip] text");
+    const count = await texts.count();
+    expect(count, "detail text to check").toBeGreaterThan(0);
+    for (let index = 0; index < count; index++) {
+      const text = texts.nth(index);
+      const { label, hasChildren } = await text.evaluate(node => ({
+        label: node.textContent?.trim(), hasChildren: node.childElementCount > 0,
+      }));
+      if (!hasChildren && label) expect(await contrastOf(text), label).toBeGreaterThanOrEqual(4.5);
     }
   });
 });

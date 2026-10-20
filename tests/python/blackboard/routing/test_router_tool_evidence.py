@@ -1,13 +1,4 @@
-"""The blackboard side of unified tool evidence: claim-frozen toolPolicy and the bound wrapper.
-
-Every test uses the production store and the real claim transaction against a
-private state directory (no model call): the claim path freezes the local
-system-sandbox program fact into this attempt's durable row, and
-``DecisionCoordinator._tool_evidence_problem`` binds a receipt's ``toolEvidence``
-to that frozen attempt before the single judge runs, judging by the toolPolicy
-the publication transaction grafts onto the frozen input document. The suite
-checks the pure wrapper and the real publication boundary.
-"""
+"""Router evidence is judged from the digest-bound routing mode."""
 from admission import admit_execution
 import json
 import uuid
@@ -36,31 +27,26 @@ def settled(category, call_id, identity=None, tool="native-tool"):
 class RouterToolEvidenceTests(DecisionTestCase):
     def test_publication_uses_one_matrix_and_the_claim_policy(self):
         cases = (
-            ('fast', False, None, True, None),
-            ('fast', True, 'read', True, 'router-tools-forbidden'),
-            ('review', True, 'execute', True, None),
-            ('review', False, 'read', True, None),
-            ('review', False, 'search', True, None),
-            ('review', False, 'execute', True, 'router-tools-forbidden'),
-            ('review', True, 'edit', True, 'router-tools-forbidden'),
-            ('review', True, 'fetch', True, 'router-tools-forbidden'),
-            ('review', True, 'other', True, 'router-tools-forbidden'),
-            ('review', False, 'read', False, 'router-tool-evidence-unverified'),
+            ('fast', None, True, None),
+            ('fast', 'read', True, 'router-tools-forbidden'),
+            ('review', 'execute', True, None),
+            ('review', 'read', True, None),
+            ('review', 'search', True, None),
+            ('review', 'edit', True, 'router-tools-forbidden'),
+            ('review', 'fetch', True, None),
+            ('review', 'other', True, 'router-tools-forbidden'),
+            ('review', 'read', False, 'router-tool-evidence-unverified'),
         )
-        for number, (mode, sandbox, category, complete, expected) in enumerate(cases):
-            with self.subTest(mode=mode, sandbox=sandbox, category=category, complete=complete):
+        for number, (mode, category, complete, expected) in enumerate(cases):
+            with self.subTest(mode=mode, category=category, complete=complete):
                 board = InProcessBoard(self.directory / f'publication-{number}')
                 self._stack.append(board)
                 self.seed(board)
                 self.configure(board, defaultRoutingMode=mode)
-                with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-                        'eligible': True, 'reason': None,
-                        'systemSandbox': sandbox, 'sameAttemptContinuation': False}):
-                    requested, claim = self.request_route(board, f'matrix-{number}')
+                requested, claim = self.request_route(board, f'matrix-{number}')
                 events = settled(category, 'call-1') if category else []
                 package = self.package_for(claim, requested, events, stream_complete=complete)
                 output = {**stopped_answer(claim), 'nativeIdentity': ROOT, 'toolEvidence': package,
-                          'toolPolicy': {'systemSandbox': True}, 'zeroToolVerified': False,
                           'usage': {'elapsedMs': 100, 'toolCalls': 1 if category else 0}}
                 board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': output})
                 view = self.decision(board, requested['decisionId'])
@@ -72,27 +58,28 @@ class RouterToolEvidenceTests(DecisionTestCase):
                 board.close()
                 self._stack.remove(board)
 
-    def test_publication_rejects_usage_mismatch_and_missing_frozen_policy(self):
-        for number, missing_policy in enumerate((False, True)):
-            with self.subTest(missing_policy=missing_policy):
-                board = InProcessBoard(self.directory / f'unbound-{number}')
-                self._stack.append(board)
-                self.seed(board)
-                requested, claim = self.request_route(board, f'bad-evidence-{number}')
-                output = stopped_answer(claim)
-                if missing_policy:
-                    with board.store.db.write() as connection:
-                        connection.execute("UPDATE router_claims SET tool_policy_json='null' WHERE attempt_id=?",
-                                           (claim['attempt']['attemptId'],))
-                else:
-                    output['usage']['toolCalls'] = 1
-                board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': output})
-                view = self.decision(board, requested['decisionId'])
-                self.assertEqual(view['status'], 'needs-host')
-                self.assertEqual(view['reason']['code'], 'router-tool-evidence-unverified')
-                self.assertIsNone(view['selectedBuddy'])
-                board.close()
-                self._stack.remove(board)
+    def test_publication_rejects_usage_mismatch(self):
+        board = self.board()
+        self.seed(board)
+        requested, claim = self.request_route(board, 'usage-mismatch')
+        output = stopped_answer(claim)
+        output['usage']['toolCalls'] = 1
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': output})
+        self.assertEqual(self.decision(board, requested['decisionId'])['reason']['code'], 'router-tool-evidence-unverified')
+
+    def test_frozen_routing_mode_defines_the_permission_without_repeated_storage(self):
+        import hashlib
+        board = self.board()
+        self.seed(board)
+        requested, claim = self.request_route(board, 'frozen-mode')
+        row, document = self.frozen(board, requested['decisionId'])
+        with board.store.db.read() as db:
+            original = db.execute('SELECT input_json,input_sha256 FROM decision_requests WHERE decision_id=?', (requested['decisionId'],)).fetchone()
+            self.assertEqual(hashlib.sha256(original['input_json'].encode()).hexdigest(), original['input_sha256'])
+            self.assertEqual(set(db.execute('SELECT * FROM router_claims WHERE attempt_id=?', (claim['attempt']['attemptId'],)).fetchone().keys()), {'attempt_id', 'task_id', 'generation'})
+        self.assertEqual(document['routingMode'], 'review')
+        package = self.package_for(claim, requested, settled('execute', 'read-command'))
+        self.assertIsNone(self.problem(board, requested['decisionId'], {'nativeIdentity': ROOT, 'toolEvidence': package}))
 
     def setUp(self):
         super().setUp()
@@ -113,26 +100,8 @@ class RouterToolEvidenceTests(DecisionTestCase):
             row = board.store.decisions._row(connection, decision_id)
             return row, json.loads(row["input_json"])
 
-    def attempt_policy(self, board, attempt_id):
-        with board.store.db.read() as connection:
-            return board.store.decisions._attempt_tool_policy(connection, attempt_id)
-
-    def wired_document(self, board, decision_id):
-        """The frozen input exactly as the one wiring step will hand the wrapper.
-
-        Publication grafts the attempt's claim-frozen toolPolicy onto the frozen
-        input document; an attempt that froze none — an old or unbound result —
-        contributes nothing and cannot publish.
-        """
-        row, document = self.frozen(board, decision_id)
-        if row["decision_attempt_id"]:
-            policy = self.attempt_policy(board, row["decision_attempt_id"])
-            if policy is not None:
-                document = {**document, "toolPolicy": policy}
-        return row, document
-
     def problem(self, board, decision_id, output):
-        row, document = self.wired_document(board, decision_id)
+        row, document = self.frozen(board, decision_id)
         return board.store.decisions._tool_evidence_problem(row, document, output)
 
     def package_for(self, claim, result, events, roots=None, stream_complete=True):
@@ -145,57 +114,12 @@ class RouterToolEvidenceTests(DecisionTestCase):
         return evidence.finish(list(roots if roots is not None else [ROOT]), stream_complete)
 
     # -- claim-side freezing -------------------------------------------------
-    def test_claim_freezes_the_local_system_sandbox_fact(self):
-        board = self.board()
-        self.seed(board)
-        result, claim = self.request_route(board, "freeze-false")
-        self.assertEqual(self.attempt_policy(board, claim["attempt"]["attemptId"]),
-                         {"systemSandbox": False})
-        # The frozen model-input document itself stays byte-identical to its
-        # admission form: the attempt fact lives in the claim-time row, not in
-        # the input the Router consumed.
-        _row, document = self.frozen(board, result["decisionId"])
-        self.assertNotIn("toolPolicy", document)
-        self.assertNotIn("toolPolicy", claim["decisionInput"])
-
-    def test_the_frozen_fact_follows_the_claim_time_health_only(self):
-        board = self.board()
-        self.seed(board)
-        result, first = self.request_route(board, "freeze-once")
-        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reason": None,
-                "systemSandbox": True, "sameAttemptContinuation": False}):
-            _later, second = self.request_route(board, "freeze-true", worker="router-2")
-            self.assertEqual(self.attempt_policy(board, second["attempt"]["attemptId"]),
-                             {"systemSandbox": True})
-        # The first attempt's frozen fact never changes with later health reads.
-        self.assertEqual(self.attempt_policy(board, first["attempt"]["attemptId"]),
-                         {"systemSandbox": False})
-
-    def test_a_document_without_a_frozen_tool_policy_cannot_publish(self):
-        board = self.board()
-        self.seed(board)
-        result, claim = self.request_route(board, "unfrozen")
-        package = self.package_for(claim, result, settled("read", "call-1", tool="read"))
-        output = {"nativeIdentity": ROOT, "toolEvidence": package}
-        # Grafted exactly as the wiring will, the same output passes.
-        self.assertIsNone(self.problem(board, result["decisionId"], output))
-        # The raw frozen document carries no toolPolicy, so an unbound or old
-        # result — one whose document was never grafted — cannot publish.
-        row, document = self.frozen(board, result["decisionId"])
-        self.assertNotIn("toolPolicy", document)
-        problem = board.store.decisions._tool_evidence_problem(row, document, output)
-        self.assertEqual(problem["code"], "router-tool-evidence-unverified")
-
-    def test_a_pre_claim_document_has_no_frozen_tool_policy(self):
+    def test_a_pre_claim_document_cannot_bind_evidence(self):
         board = self.board()
         self.seed(board)
         result = board.call("selection_request", {"requestId": "pre-claim", "task": "choose"})
         row, document = self.frozen(board, result["decisionId"])
-        self.assertNotIn("toolPolicy", document)
         self.assertIsNone(row["decision_attempt_id"])
-        with board.store.db.read() as connection:
-            self.assertIsNone(board.store.decisions._attempt_tool_policy(connection, "attempt-unbound"))
         problem = board.store.decisions._tool_evidence_problem(
             row, document, {"nativeIdentity": ROOT, "toolEvidence": collect_empty(row, result)})
         self.assertEqual(problem["code"], "router-tool-evidence-unverified")
@@ -252,27 +176,14 @@ class RouterToolEvidenceTests(DecisionTestCase):
                                        {"nativeIdentity": reported, "toolEvidence": evidence})
                 self.assertEqual(problem and problem["code"], expected)
 
-    def test_the_frozen_policy_selects_the_review_matrix(self):
+    def test_read_level_allows_execution_and_network_and_forbids_modification(self):
         board = self.board()
         self.seed(board)
-        result, claim = self.request_route(board, "no-sandbox")
-        read_only = self.package_for(claim, result, settled("read", "call-1", tool="read"))
-        execute = self.package_for(claim, result, settled("execute", "call-1", tool="shell"))
-        output = {"nativeIdentity": ROOT}
-        self.assertIsNone(self.problem(board, result["decisionId"], {**output, "toolEvidence": read_only}))
-        problem = self.problem(board, result["decisionId"], {**output, "toolEvidence": execute})
-        self.assertEqual(problem["code"], "router-tools-forbidden")
-        with patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check", return_value={
-                "eligible": True, "reason": None,
-                "systemSandbox": True, "sameAttemptContinuation": False}):
-            sandboxed, sandboxed_claim = self.request_route(board, "sandbox", worker="router-2")
-            self.assertEqual(self.attempt_policy(board, sandboxed_claim["attempt"]["attemptId"]),
-                             {"systemSandbox": True})
-            allowed = self.package_for(sandboxed_claim, sandboxed, settled("execute", "call-1", tool="shell"))
-            edit = self.package_for(sandboxed_claim, sandboxed, settled("edit", "call-1", tool="Write"))
-            self.assertIsNone(self.problem(board, sandboxed["decisionId"], {**output, "toolEvidence": allowed}))
-            problem = self.problem(board, sandboxed["decisionId"], {**output, "toolEvidence": edit})
-            self.assertEqual(problem["code"], "router-tools-forbidden")
+        result, claim = self.request_route(board, "shared-read")
+        for category in ("read", "search", "execute", "fetch", "edit", "other"):
+            package = self.package_for(claim, result, settled(category, "call-1"))
+            problem = self.problem(board, result["decisionId"], {"nativeIdentity": ROOT, "toolEvidence": package})
+            self.assertEqual(problem, {"code": "router-tools-forbidden"} if category in ("edit", "other") else None)
 
     def test_incomplete_facts_stay_unverified_and_never_become_forbidden(self):
         board = self.board()
@@ -291,7 +202,6 @@ class RouterToolEvidenceTests(DecisionTestCase):
     def test_fast_mode_allows_no_tool_call_through_the_wrapper(self):
         board = self.board()
         self.seed(board)
-        self.enterContext(patch("hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured", True, create=True))
         self.configure(board, routerBuddyIds=[BUDDY_ID], defaultRoutingMode="fast")
         result, claim = self.request_route(board, "fast-zero")
         self.assertEqual(claim["decisionInput"]["routingMode"], "fast")

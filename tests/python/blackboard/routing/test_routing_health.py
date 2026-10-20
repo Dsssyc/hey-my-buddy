@@ -76,7 +76,7 @@ class RoutingHealthTests(BoardTestCase):
                                      note=(output.get("decision") or {}).get("note"),
                                      buddy_id="worker-fixture" if status == "completed" else None)
             if invoked and status == "completed":
-                record_outcome(connection, buddy_id="fixture-router", plane="work", request_id=decision_id,
+                record_outcome(connection, buddy_id="fixture-router", plane="routing", request_id=decision_id,
                                task_id=task_id, attempt_id=attempt_id, outcome="answered", code=None,
                                phase="publication", facts={"routerIndex":0}, now=now)
             self.assertEqual(connection.execute("PRAGMA foreign_key_check").fetchall(), [])

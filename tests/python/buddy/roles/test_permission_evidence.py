@@ -10,7 +10,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import run_contract as rc
-from hey_my_buddy.buddy.harnesses.registry import worker_permission
+from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 from hey_my_buddy.buddy.roles import inline_run, run_execution
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json, decode_strict_json
@@ -27,11 +27,9 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
 
     def request(self, *, permission=True, level="read"):
         fields = full_request(self.root.parent).to_payload()
-        fields.update(harness="codex", toolScope=level if permission else "none", sessionServices=[],
+        fields.update(harness="codex", permission=level if permission else "none", sessionServices=[],
                       captureEvidence=False)
         fields["privateState"]["invocationRoot"] = str(self.root)
-        if permission:
-            fields["workerPermission"] = worker_permission("codex", level).to_payload()
         return rc.RunRequest.from_payload(fields)
 
     def execute(self, request, *, status="ok", operation="worker"):
@@ -75,10 +73,9 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
                 raw = Path(ref.location).read_bytes()
                 self.assertEqual(ref.size_bytes, len(raw))
                 self.assertEqual(ref.sha256, hashlib.sha256(raw).hexdigest())
-                self.assertEqual(run_execution._worker_facts(result)["nativeEvidence"]["workerPermission"], {
-                    "source": "harness-permission-declaration",
-                    "binding": request.identity.to_payload(),
-                    "permission": request.worker_permission.to_payload()})
+                self.assertEqual(run_execution._worker_facts(result)["nativeEvidence"]["permission"],
+                                 {"level": request.permission,
+                                  "enforcement": PERMISSION_LEVELS[request.harness][request.permission]})
 
     def test_changed_content_or_foreign_binding_is_refused(self):
         request = self.request()

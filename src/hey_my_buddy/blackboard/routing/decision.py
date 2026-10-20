@@ -8,6 +8,8 @@ recorded, never used as an additional veto.
 """
 from __future__ import annotations
 
+from ...protocol.capabilities import PERMISSION_LEVELS, buddy_capabilities
+
 from contextlib import nullcontext
 
 import json
@@ -163,8 +165,13 @@ class DecisionCoordinator:
         ]
         values: list[Any] = []
         for capability in sorted(set(required_capabilities or [])):
-            clauses.append("EXISTS(SELECT 1 FROM json_each(p.capabilities_json) WHERE value=?)")
-            values.append(capability)
+            if capability in ("decision", "routing:fast") or capability.startswith("permission:"):
+                harnesses = [name for name in PERMISSION_LEVELS if capability in buddy_capabilities(name, [])]
+                clauses.append("p.harness IN (" + ",".join("?" for _ in harnesses) + ")")
+                values.extend(harnesses)
+            else:
+                clauses.append("EXISTS(SELECT 1 FROM json_each(p.capabilities_json) WHERE value=?)")
+                values.append(capability)
         if coding_only:
             clauses.extend(["p.provider IS NOT NULL AND p.provider!=''", "p.model IS NOT NULL AND p.model!=''", "p.effort IS NOT NULL AND p.effort!=''"])
             clauses.append("p.harness IN (" + ",".join("?" for _ in schemas.CODING_HARNESSES) + ")")
@@ -275,7 +282,7 @@ class DecisionCoordinator:
             "effort": row["effort"],
             "available": bool(row["available"]),
             "enabled": bool(row["enabled"]),
-            "capabilities": json.loads(row["capabilities_json"]),
+            "capabilities": buddy_capabilities(row["harness"], json.loads(row["capabilities_json"])),
             "contextWindow": row["context_window"],
             "description": row["description"],
             "source": row["source"],
@@ -667,7 +674,7 @@ class DecisionCoordinator:
             record_outcome(
                 connection,
                 buddy_id=entry["buddyId"],
-                plane="work",
+                plane="routing",
                 request_id=request_id,
                 task_id=None,
                 attempt_id=None,
@@ -844,14 +851,6 @@ class DecisionCoordinator:
             self._cancel_queued_task(connection, task, now)
             return "decision-closed", None
         document = dispatch["document"]
-        # Freeze the local system-sandbox program fact for this attempt inside
-        # the claim transaction (ADR-021 §4): publication judges tool evidence
-        # against the board's own read_health fact captured here, never a value
-        # the answer claims. The fact lives in this attempt's durable row, beside
-        # its frozen model identity, so the frozen model-input document
-        # itself stays byte-identical from admission to publication.
-        from ..service.harness_health import read_health
-        tool_policy = {"systemSandbox": bool(read_health(connection, dispatch["buddy"]["harness"])["systemSandbox"])}
         self._mark_running(
             connection, row, attempt_id=attempt_id, generation=generation,
             document=document, now=now,
@@ -859,8 +858,7 @@ class DecisionCoordinator:
         # The attempt's Router binding and its ``router.claimed`` fact commit in
         # this same claim transaction: one atomic dispatch-to-attempt binding.
         router_sequence.record_claim(
-            connection, task_id=task["task_id"], attempt_id=attempt_id, generation=generation, now=now,
-            tool_policy=tool_policy)
+            connection, task_id=task["task_id"], attempt_id=attempt_id, generation=generation, now=now)
         return None, document
 
     def _mark_running(self, connection: sqlite3.Connection, row: sqlite3.Row, *, attempt_id: str, generation: int, document: dict, now: str) -> None:
@@ -1066,7 +1064,7 @@ class DecisionCoordinator:
         from .router_history import record_outcome
 
         def record(value):
-            record_outcome(connection, buddy_id=dispatch["buddyId"], plane="work", request_id=row["request_id"],
+            record_outcome(connection, buddy_id=dispatch["buddyId"], plane="routing", request_id=row["request_id"],
                            task_id=task["task_id"], attempt_id=attempt["attempt_id"], outcome=value,
                            code=checked["code"] if value == "no_answer" else None, phase=stage,
                            facts={"routerIndex": dispatch["routerIndex"], "selectionRetry": bool(json.loads(row["requested_json"]).get("selectionRetry"))}, now=now)
@@ -1186,25 +1184,11 @@ class DecisionCoordinator:
         self._record_preflight_walk(connection, row["request_id"], resolution.inspections, now=now, selection_retry=True)
         self._queue_router_dispatch(connection, self._row(connection, row["decision_id"]), resolution=resolution, now=now)
 
-    @staticmethod
-    def _attempt_tool_policy(connection: sqlite3.Connection, attempt_id: str) -> dict | None:
-        """The toolPolicy this attempt froze at claim, or ``None`` before a claim."""
-        row = connection.execute("SELECT tool_policy_json FROM router_claims WHERE attempt_id=?", (attempt_id,)).fetchone()
-        return json.loads(row[0]) if row is not None and row[0] is not None else None
-
     def _tool_evidence_problem(self, row: sqlite3.Row, document: dict, output: dict) -> dict | None:
         """The blackboard wrapper over the unified tool-evidence judgment.
 
-        ``zeroToolVerified`` never substitutes for the event stream. This
-        wrapper binds a receipt's ``toolEvidence`` to the frozen attempt before
-        the pure judge runs: the binding must equal the frozen
-        harness/task/attempt/generation, every root identity the receipt reports
-        must be one the evidence trusts, and the claim-frozen
-        ``toolPolicy.systemSandbox`` boolean — never a receipt claim — selects
-        the review category matrix. The document carries that boolean because
-        the publication caller grafts :meth:`_attempt_tool_policy` onto the
-        frozen input; a document from an attempt that froze no policy — an old
-        or unbound result — cannot publish.
+        Bind native evidence to the frozen attempt; the input's routing mode
+        determines its permission without another stored policy fact.
         """
         unverified = tool_evidence.TOOL_EVIDENCE_UNVERIFIED
         evidence = output.get("toolEvidence") if isinstance(output, dict) else None
@@ -1225,13 +1209,8 @@ class DecisionCoordinator:
         roots = evidence.get("nativeIdentity")
         if not isinstance(roots, list) or any(identity not in roots for identity in reported):
             return {"code": unverified}
-        policy = document.get("toolPolicy")
-        sandbox = policy.get("systemSandbox") if isinstance(policy, dict) else None
-        if not isinstance(sandbox, bool):
-            # A result from before this attempt froze its tool policy — or from a
-            # foreign attempt's document — has no board-owned sandbox fact to judge by.
-            return {"code": unverified}
-        judged = tool_evidence.judge_tool_evidence(evidence, document.get("routingMode"), sandbox)
+        permission = {"fast": "none", "review": "read"}[document["routingMode"]]
+        judged = tool_evidence.judge_tool_evidence(evidence, permission)
         if judged is None:
             return None
         return {"code": judged}
@@ -1282,8 +1261,7 @@ class DecisionCoordinator:
         if (usage["elapsedMs"] > budget["timeoutSeconds"] * 1000
                 or (document.get("routingMode") == "review" and usage["toolCalls"] > budget["toolCalls"])):
             return refuse("router-budget-exhausted")
-        policy = self._attempt_tool_policy(connection, row["decision_attempt_id"])
-        problem = self._tool_evidence_problem(row, {**document, "toolPolicy": policy}, output)
+        problem = self._tool_evidence_problem(row, document, output)
         if problem is None and usage["toolCalls"] != output["toolEvidence"]["toolCalls"]:
             problem = {"code": "router-tool-evidence-unverified"}
         if problem is not None:
@@ -1321,7 +1299,7 @@ class DecisionCoordinator:
                        "disabled" if not current["enabled"] else
                        "unavailable" if not current["available"] else
                        "excluded" if current["preference_mode"] == "exclude" else
-                       "capability-missing" if not set(request.get("requiredCapabilities") or []) <= set(json.loads(current["capabilities_json"])) else
+                       "capability-missing" if not set(request.get("requiredCapabilities") or []) <= set(buddy_capabilities(current["harness"], json.loads(current["capabilities_json"]))) else
                        "constraints-or-quota")
             return refuse("router-out-of-bounds", changed=True, bound=bound)
         expected_facts = selection_policy.policy_facts(
@@ -1467,7 +1445,7 @@ class DecisionCoordinator:
         )
         router_success = (
             "d.status='completed' AND EXISTS(SELECT 1 FROM router_outcomes o"
-            " WHERE o.plane='work' AND o.request_id=r.request_id AND o.outcome='answered'"
+            " WHERE o.plane='routing' AND o.request_id=r.request_id AND o.outcome='answered'"
             " AND o.task_id=r.task_id AND o.attempt_id=r.attempt_id)"
         )
         with self.db.read() as connection:

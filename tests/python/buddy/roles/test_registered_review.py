@@ -11,6 +11,7 @@ from hey_my_buddy.buddy.harnesses.claude import native_run
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.roles import inline_run, run_execution
+from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from hey_my_buddy.buddy.roles.run_observers import ReviewObserver
 from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase, READ_SCHEMA, STREAM_FIXTURE
 
@@ -42,13 +43,13 @@ class RegisteredReviewTests(NativeRunCase):
             payload = run_execution._review_result(result, request, verdict)
         return result, request, payload, code
 
-    def test_a_review_uses_the_stored_request_and_result_and_explicit_posture(self):
+    def test_a_review_uses_the_stored_request_and_shared_read_level(self):
         result, request, payload, code = self.review()
         self.assertEqual(code, 0)
-        self.assertEqual(request.input_text, "Choose")
-        self.assertEqual(request.tool_scope, "read")
-        self.assertEqual(request.network_allowed_domains, ())
-        self.assertEqual(request.additional_denied_tools, ("mcp__*", "WebFetch", "WebSearch", "Agent", "Task"))
+        self.assertEqual(request.input_text, structured_prompt("Choose", READ_SCHEMA))
+        self.assertEqual(request.permission, "read")
+        self.assertNotIn("networkAllowedDomains", request.to_payload())
+        self.assertNotIn("additionalDeniedTools", request.to_payload())
         self.assertEqual(payload["rawAnswer"]["buddyId"], "legal")
         self.assertTrue(payload["answerValid"])
         self.assertEqual(result.identity, request.identity)

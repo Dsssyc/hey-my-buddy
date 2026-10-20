@@ -29,7 +29,6 @@ from unittest import mock
 
 from zcode_native import InstalledZcodeTests
 from buddy.harnesses.zcode.test_native_run import MockNativeCase
-from hey_my_buddy.buddy.harnesses.registry import worker_permission
 from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation
 from hey_my_buddy.buddy.harnesses.zcode import native_run
 from hey_my_buddy.buddy.roles.run_observers import worker_observer
@@ -110,10 +109,9 @@ class ModeProbe(InstalledZcodeTests):
         turn_input = self.context(index=self.turn_index, previous=previous, timeout=timeout).turn["input"]
         continuation = RunContinuation(mode="native-session", previous_session_id=previous) if previous else None
         request, services = MockNativeCase.worker_request(self, turn_input, timeout=timeout, continuation=continuation)
-        permission = worker_permission("zcode", "write")
         request = request.model_copy(update={
             "buddy": request.buddy.model_copy(update={"model": "GLM-5.3-Flash"}),
-            "worker_permission": permission})
+            "permission": "write"})
         finish = next(name for name in request.session_services[0].tool_names if name.endswith("__hey_my_buddy_finish_turn"))
         self.call_prefix = "call_probe_" + request.identity.invocation_id[:12]
         prefix = f"resumed-{self.turn_index}-" if previous else ""

@@ -73,27 +73,20 @@ describe("the harness wire contract", () => {
       .rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
 
-  it("parses free local qualification from snapshots and command replies without retaining certificates", async () => {
-    const readOnlyStructured = { eligible: true, systemSandbox: true, reason: null, sameAttemptContinuation: true };
-    const raw = { ...codexRow, systemSandbox: true, readOnlyStructured: { ...readOnlyStructured, verified: true },
-      reviewVerification: { verified: true }, verified: true };
+  it("parses the same permission declarations from snapshots and command replies", async () => {
+    const permissions = { none: "enforced", read: "enforced", write: "convention", full: "enforced" };
+    const raw = { ...codexRow, permissions };
     const parsed = snapshotHarnesses({ harnesses: [raw] } as unknown as Snapshot)[0];
-    expect(parsed.readOnlyStructured).toEqual(readOnlyStructured);
-    expect(parsed.systemSandbox).toBe(true);
-    expect(parsed).not.toHaveProperty("reviewVerification");
-    expect(parsed).not.toHaveProperty("verified");
+    expect(parsed.permissions).toEqual(permissions);
     await expect(commandApi({ harnesses: [raw] }).api.harnessRefresh("csrf", "codex")).resolves.toEqual([parsed]);
     await expect(commandApi({ harness: raw }).api.harnessSet("codex", null, "csrf")).resolves.toEqual(parsed);
   });
 
-  it("keeps discovery health but treats malformed local qualification as unknown", () => {
-    const valid = { eligible: true, systemSandbox: true, reason: null, sameAttemptContinuation: true };
-    for (const readOnlyStructured of [null, {}, { eligible: true }, { ...valid, systemSandbox: "true" },
-      { ...valid, sameAttemptContinuation: 1 }, { ...valid, reason: { code: "harness.readonly-resource-missing", params: {} } },
-      { ...valid, reason: undefined }, { verified: true }]) {
-      const parsed = snapshotHarnesses({ harnesses: [{ ...codexRow, readOnlyStructured }] } as unknown as Snapshot)[0];
+  it("treats malformed declarations as unknown", () => {
+    for (const permissions of [null, [], { read: true }, { read: "sandbox" }, { review: "enforced" }]) {
+      const parsed = snapshotHarnesses({ harnesses: [{ ...codexRow, permissions }] } as unknown as Snapshot)[0];
       expect(parsed.status).toBe("ready");
-      expect(parsed).not.toHaveProperty("readOnlyStructured");
+      expect(parsed).not.toHaveProperty("permissions");
     }
   });
 

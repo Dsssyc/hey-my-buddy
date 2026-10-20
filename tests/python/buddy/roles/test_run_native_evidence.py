@@ -16,7 +16,7 @@ from buddy.harnesses.test_run_contract import full_request, full_result
 class NativeEvidenceRoleTests(unittest.TestCase):
     def request(self, harness="zcode"):
         fields = full_request(Path("/private/tmp")).to_payload()
-        fields.update(harness=harness, toolScope="none", sessionServices=[], captureEvidence=False)
+        fields.update(harness=harness, permission="none", sessionServices=[], captureEvidence=False)
         return rc.RunRequest.from_payload(fields)
 
     def result(self, harness="zcode", *, evidence=None, status="ok"):
@@ -65,12 +65,12 @@ class NativeEvidenceRoleTests(unittest.TestCase):
     def test_worker_permission_merges_with_the_shared_facts(self):
         result = self.result(evidence=rc.NativeEvidence(unconfirmed=["tool-scope"]))
         declaration = {"source": "harness-permission-declaration", "binding": result.identity.to_payload(),
-                       "permission": {"level": "write", "toolScope": "write", "enforcement": "convention"}}
+                       "permission": {"level": "write", "enforcement": "convention"}}
         with mock.patch.object(run_execution, "_evidence", side_effect=lambda _r, kind:
                                declaration if kind == "worker-permission" else None):
             payload = run_execution._worker_facts(result)
         self.assertEqual(payload["nativeEvidence"], {"unconfirmed": ["tool-scope"],
-                                                    "workerPermission": declaration})
+                                                    "permission": declaration["permission"]})
 
     def test_unknown_worker_end_keeps_facts_and_partial_artifacts_without_delivery(self):
         result = self.result(status="unknown", evidence=rc.NativeEvidence(unconfirmed=["thread-receipt"]))

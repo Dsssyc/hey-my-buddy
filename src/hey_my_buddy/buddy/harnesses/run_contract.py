@@ -63,7 +63,7 @@ NATIVE_ID_KEYS = {"sessionId": "session_id", "threadId": "thread_id", "turnId": 
                   "inputId": "input_id", "callId": "call_id"}
 
 HarnessName = Literal["codex", "claude", "zcode", "dsh"]
-ToolScope = Literal["none", "read", "write", "full"]
+PermissionLevel = Literal["none", "read", "write", "full"]
 EndStatus = Literal["ok", "error", "cancelled", "unknown"]
 SchemaStatus = Literal["valid", "invalid", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]
@@ -199,14 +199,6 @@ class SessionService(InternalModel):
 
 
 
-class WorkerPermission(InternalModel):
-    """One chosen level and the harness declaration that carries it out."""
-
-    level: Literal["read", "write", "full"]
-    tool_scope: ToolScope
-    enforcement: Literal["enforced", "convention"]
-
-
 class SessionRecordFailureParams(InternalModel):
     """Bounded diagnostic facts of a failed display-record operation."""
 
@@ -235,27 +227,12 @@ class RunRequest(InternalModel):
     session_record_path: Optional[AbsolutePath] = None
     session_record_failure: Optional[SessionRecordFailure] = None
     input_text: NonEmptyInputText
-    tool_scope: ToolScope
-    #: None for runs without a micro task Worker permission choice.
-    worker_permission: Optional[WorkerPermission] = None
-    #: None preserves the native default; () explicitly permits no domains.
-    #: Kept separate from file-tool scope because Claude's two existing read
-    #: callers have different network and session-wide tool restrictions.
-    network_allowed_domains: Optional[JsonTuple(Text(256), max_items=64)] = None
-    additional_denied_tools: JsonTuple(Text(256), max_items=64) = ()
+    permission: PermissionLevel
     output_schema: FrozenJsonAt(MAX_SCHEMA_BYTES)
     budget: RunBudget
     continuation: Optional[RunContinuation] = None
     session_services: JsonTuple(SessionService, max_items=MAX_SESSION_SERVICES) = ()
     capture_evidence: bool = False
-
-    @model_validator(mode="after")
-    def _permission_matches_native_scope(self) -> "RunRequest":
-        if self.worker_permission is not None and self.worker_permission.tool_scope != self.tool_scope:
-            raise fail("the Worker permission declaration does not match the native tool scope",
-                       field="workerPermission.toolScope")
-        return self
-
 
 class NativeIdentity(InternalModel):
     """One native-provided root identity; no field is ever fabricated.
@@ -677,7 +654,7 @@ __all__ = [
     "MAX_UNKNOWN_EVENT_TYPES", "MAX_UNCONFIRMED_ITEMS", "MAX_UNCONFIRMED_NAME_CHARS",
     "UNLISTED_NATIVE_EVENTS",
     "ResumeCheckpoint", "RunBudget", "RunBuddy", "RunContinuation", "RunEnd", "RunFeedback", "RunIdentity",
-    "WorkerPermission", "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
+    "PermissionLevel", "RunRequest", "RunResult", "RunValue", "SessionService", "StopEvidence",
     "StopLayer", "canonical_json",
     "fold_unknown_events", "unknown_event_name",
 ]

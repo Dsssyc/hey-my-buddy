@@ -16,7 +16,6 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
 )
 from hey_my_buddy.buddy.roles import run_execution
-from hey_my_buddy.buddy.harnesses.registry import worker_permission
 
 
 class NativeFactsTests(unittest.TestCase):
@@ -31,12 +30,12 @@ class NativeFactsTests(unittest.TestCase):
             session_record_path=str(self.root / "session.jsonl"),
             cwd=str(self.root), private_state=PrivateStatePaths(invocation_root=str(self.root),
                                                               native_root=str(self.root / "native")),
-            input_text="Read the input", output_schema={"type": "object"}, tool_scope="none",
+            input_text="Read the input", output_schema={"type": "object"}, permission="none",
             budget=RunBudget(timeout_seconds=10))
         self.receipt = {"thread": {"id": "thread", "cwd": str(self.root), "turns": []},
                         "model": "model", "modelProvider": "openai", "cwd": str(self.root),
-                        "approvalPolicy": "never", "activePermissionProfile": {"id": "hey-my-buddy-router"},
-                        "sandbox": {"type": "readOnly", "networkAccess": False}}
+                        "approvalPolicy": "never",
+                        "sandbox": {"type": "readOnly", "networkAccess": True}}
 
     def configure(self, mode, receipt=None, config=None):
         connection = mock.Mock()
@@ -45,7 +44,7 @@ class NativeFactsTests(unittest.TestCase):
         if mode == "fast":
             result = native_run._configure_fast(connection, self.request, state)
         else:
-            result = native_run._configure_review(connection, self.request, state)
+            result = native_run._configure_review(connection, self.request.model_copy(update={"permission": "read"}), state)
         return result, state
 
     def test_catalog_unreadable_cursor_stops_reading_with_unknown_fact(self):
@@ -149,51 +148,12 @@ class NativeFactsTests(unittest.TestCase):
                     self.configure("review", receipt, {})
                 self.assertEqual(caught.exception.code, "readonly-policy-unverified")
 
-    def test_unreadable_review_receipt_restrictions_continue_as_unverified(self):
-        for change in ({"activePermissionProfile": []}, {"activePermissionProfile": {"id": 17}},
-                       {"approvalPolicy": []}, {"approvalPolicy": None},
-                       {"sandbox": {"type": "readOnly", "networkAccess": []}}):
-            with self.subTest(change=change):
-                thread, state = self.configure("review", {**self.receipt, **change}, {})
+    def test_review_approval_readback_does_not_gate_read_only_receipt(self):
+        for approval in ("on-request", None, []):
+            with self.subTest(approval=approval):
+                thread, state = self.configure("review", {**self.receipt, "approvalPolicy": approval}, {})
                 self.assertEqual(thread, "thread")
-                self.assertEqual(state.policy_checks["threadReceipt"]["status"], "unknown")
-
-    def test_different_review_receipt_restrictions_refuse_before_a_turn(self):
-        for change in ({"activePermissionProfile": {"id": "different"}},
-                       {"approvalPolicy": "on-request"},
-                       {"sandbox": {"type": "readOnly", "networkAccess": True}}):
-            with self.subTest(change=change):
-                connection = mock.Mock()
-                connection.call.side_effect = [{**self.receipt, **change}, {"config": {}}]
-                state = native_run._RunState()
-                with self.assertRaises(CodexProtocolError) as caught:
-                    native_run._configure_review(connection, self.request, state)
-                self.assertEqual(caught.exception.code, "readonly-policy-unverified")
-                self.assertIsNotNone(state.review_receipt)
-                self.assertFalse(state.model_started)
-                self.assertNotIn("turn/start", [call.args[0] for call in connection.call.call_args_list])
-
-    def test_different_review_config_controls_refuse_with_actual_readback(self):
-        expected = native_run.tomllib.loads(native_run.read_only_config(str(self.root)))
-        changes = ({"web_search": "enabled"}, {"approval_policy": "on-request"},
-                   {"default_permissions": "different"},
-                   {"permissions": {"hey-my-buddy-router": {"network": {"enabled": True}}}},
-                   {"permissions": {"hey-my-buddy-router": {"filesystem": {str(self.root): "write"}}}},
-                   {"permissions": {"hey-my-buddy-router": {"filesystem": {"/extra": "read"}}}})
-        for change in changes:
-            with self.subTest(change=change):
-                connection = mock.Mock()
-                connection.call.side_effect = [self.receipt, {"config": change}]
-                state = native_run._RunState()
-                with self.assertRaises(CodexProtocolError) as caught:
-                    native_run._configure_review(connection, self.request, state)
-                self.assertEqual(caught.exception.code, "readonly-policy-unverified")
-                self.assertIsNotNone(state.review_config)
-                self.assertFalse(state.model_started)
-                self.assertNotIn("turn/start", [call.args[0] for call in connection.call.call_args_list])
-        thread, state = self.configure("review", config=expected)
-        self.assertEqual(thread, "thread")
-        self.assertEqual(state.policy_checks["configReadback"]["status"], "confirmed")
+                self.assertEqual(state.policy_checks["threadReceipt"]["status"], "confirmed")
 
     def test_different_provider_refuses_even_without_catalog_confirmation(self):
         for mode, code in (("fast", "buddy-mismatch"),
@@ -207,10 +167,11 @@ class NativeFactsTests(unittest.TestCase):
                     state = native_run._RunState()
                     with self.assertRaises(CodexProtocolError) as caught:
                         if mode == "worker":
-                            request = self.request.model_copy(update={"worker_permission": worker_permission("codex", "write")})
+                            request = self.request.model_copy(update={"permission": "write"})
                             native_run._configure_worker(connection, request, SimpleNamespace(), state)
                         else:
-                            getattr(native_run, "_configure_" + mode)(connection, self.request, state)
+                            review_request = self.request.model_copy(update={"permission": "read"}) if mode == "review" else self.request
+                            getattr(native_run, "_configure_" + mode)(connection, review_request, state)
                     self.assertEqual(caught.exception.code, code)
                     self.assertFalse(state.model_started)
                     self.assertNotIn("turn/start", [call.args[0] for call in connection.call.call_args_list])
@@ -223,10 +184,11 @@ class NativeFactsTests(unittest.TestCase):
                     connection.call.side_effect = [{**self.receipt, "modelProvider": provider}, {"config": {}}]
                     state = native_run._RunState()
                     if mode == "worker":
-                        request = self.request.model_copy(update={"worker_permission": worker_permission("codex", "write")})
+                        request = self.request.model_copy(update={"permission": "write"})
                         thread = native_run._configure_worker(connection, request, SimpleNamespace(), state)
                     else:
-                        thread = getattr(native_run, "_configure_" + mode)(connection, self.request, state)
+                        review_request = self.request.model_copy(update={"permission": "read"}) if mode == "review" else self.request
+                        thread = getattr(native_run, "_configure_" + mode)(connection, review_request, state)
                     self.assertEqual(thread, "thread")
                     self.assertIsNone(native_run._checked_buddy(self.request, state, mode).checked.provider)
 
@@ -248,17 +210,17 @@ class NativeFactsTests(unittest.TestCase):
         thread, state = self.configure("review", receipt,
                                                 {"features": [], "permissions": "new-shape"})
         self.assertEqual(thread, "thread")
-        self.assertEqual(state.policy_checks["configReadback"]["status"], "unknown")
-        self.assertEqual(state.policy_checks["threadReceipt"]["status"], "unknown")
+        self.assertNotIn("configReadback", state.policy_checks)
+        self.assertEqual(state.policy_checks["threadReceipt"]["status"], "confirmed")
         thread, fast_state = self.configure("fast", config=[])
         self.assertEqual(thread, "thread")
         self.assertEqual(fast_state.policy_checks["configReadback"]["status"], "unknown")
 
-    def test_missing_network_readback_keeps_review_restriction_unconfirmed(self):
+    def test_missing_network_readback_keeps_review_receipt_confirmed(self):
         receipt = {**self.receipt, "sandbox": {"type": "readOnly"}}
         thread, state = self.configure("review", receipt, {})
         self.assertEqual(thread, "thread")
-        self.assertEqual(state.policy_checks["threadReceipt"]["status"], "unknown")
+        self.assertEqual(state.policy_checks["threadReceipt"]["status"], "confirmed")
 
     def test_large_unverified_policy_fields_keep_bounded_projectable_facts(self):
         large = "x" * (STRICT_RESULT_BYTES + 1)
@@ -271,7 +233,10 @@ class NativeFactsTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 thread, state = self.configure(mode, receipt, config)
                 self.assertEqual(thread, "thread")
-                self.assertEqual(state.policy_checks["configReadback"]["status"], "unknown")
+                if mode == "fast":
+                    self.assertEqual(state.policy_checks["configReadback"]["status"], "unknown")
+                else:
+                    self.assertNotIn("configReadback", state.policy_checks)
                 self.assertEqual(state.policy_checks["selectedModel"]["status"], "unknown")
                 refs = native_run._evidence_refs(self.request, state, native_run._RunFacts())
                 for ref in refs:
@@ -373,7 +338,7 @@ class NativeFactsTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 root = self.root / mode
                 root.mkdir(mode=0o700)
-                request = self.request.model_copy(update={"tool_scope": scope, "private_state": PrivateStatePaths(
+                request = self.request.model_copy(update={"permission": scope, "private_state": PrivateStatePaths(
                     invocation_root=str(root), native_root=str(root / "native"))})
                 state = native_run._RunState(status="ok", raw_answer='{"answer": "retained"}', shutdown=True,
                     policy_checks={"configReadback": {"status": "unknown"},

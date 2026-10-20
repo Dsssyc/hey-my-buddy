@@ -99,13 +99,15 @@ class EvaluationPublishTests(EvaluationTestCase):
         self.assertNotIn('reasonCode', account)
         self.assertNotIn('guidance', account)
 
-    def test_catalog_permissions_persist_through_user_publication(self):
+    def test_permissions_are_derived_without_persisting_through_publication(self):
         board = self.board()
         catalog_result = self.seed_catalog(board)
         buddy = next(item for item in catalog_result["buddies"] if item["buddyId"] == BUDDY_ID)
-        expected_permissions = {"permission:read", "permission:write", "permission:full"}
-        self.assertEqual({cap for cap in buddy["capabilities"] if cap.startswith("permission:")},
-                         expected_permissions)
+        expected_permissions = {"permission:none", "permission:read", "permission:write", "permission:full"}
+        self.assertFalse(any(cap.startswith("permission:") or cap in ("decision", "routing:fast") for cap in buddy["capabilities"]))
+        with board.store.db.read() as db:
+            stored = json.loads(db.execute("SELECT capabilities_json FROM buddies WHERE buddy_id=?", (BUDDY_ID,)).fetchone()[0])
+        self.assertFalse(any(cap.startswith("permission:") or cap in ("decision", "routing:fast") for cap in stored))
         self.publish(board, buddySettings=[{"buddyId": BUDDY_ID, "enabled": True}])
         published = next(item for item in self.snapshot(board)["buddies"] if item["buddyId"] == BUDDY_ID)
         self.assertEqual({cap for cap in published["capabilities"] if cap.startswith("permission:")},

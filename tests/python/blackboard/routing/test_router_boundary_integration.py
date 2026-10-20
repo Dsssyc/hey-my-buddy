@@ -10,7 +10,6 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
-from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -362,7 +361,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_skip_is_not_an_execution_or_new_failure_and_retry_time_does_not_roll(self):
         self.add_buddy(C, model="charlie")
         with self.board_.store.db.write() as db:
-            router_history.record_outcome(db, buddy_id=A, plane="work", request_id="earlier", task_id=None,
+            router_history.record_outcome(db, buddy_id=A, plane="routing", request_id="earlier", task_id=None,
                 attempt_id=None, outcome="no_answer", code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
         request = self.request()
         second = self.claim("second", task_id=request["runId"])["claim"]
@@ -386,7 +385,7 @@ class BoundaryReadingTests(RouterDispatchTestCase):
             if ordinal == 3:
                 self.clock.advance(10)
             with self.board_.store.db.write() as db:
-                router_history.record_outcome(db, buddy_id=buddy_id, plane="work", request_id="earlier-" + str(ordinal),
+                router_history.record_outcome(db, buddy_id=buddy_id, plane="routing", request_id="earlier-" + str(ordinal),
                     task_id=None, attempt_id=None, outcome="no_answer", code="timeout", phase="runtime",
                     facts={"routerIndex": 0}, now=self.clock.value)
         request = self.request()
@@ -515,7 +514,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                 db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                            "available,enabled,capabilities_json) "
                            "VALUES(?,?,'dsh','fixture',?,'max',1,1,?)",
-                           (buddy_id, buddy_id, model, canonical_json(permission_capabilities("dsh"))))
+                           (buddy_id, buddy_id, model, canonical_json([])))
             router._write_settings(db, {**router.configuration(db), "routerBuddyIds": []})
 
     def routed(self, request_id="micro-task-1", *, access="write", kind="existing"):

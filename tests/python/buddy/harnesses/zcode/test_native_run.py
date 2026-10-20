@@ -45,7 +45,7 @@ from hey_my_buddy.buddy.harnesses.zcode.native_run import (
 )
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
-from hey_my_buddy.buddy.roles.structured_call import no_tool_prompt
+from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from hey_my_buddy.buddy.roles.turn_io import input_hash, validate_outcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
@@ -163,7 +163,7 @@ class NativeRunCase(FakeAppServerTests):
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
                                             native_root=str(self.base / f"native-{uuid.uuid4().hex[:8]}")),
-            input_text=prompt, tool_scope="none",
+            input_text=prompt, permission="none",
             output_schema=SCHEMA,
             budget=RunBudget(timeout_seconds=timeout))
 
@@ -197,7 +197,7 @@ class MockNativeCase(ZcodeFixtureCase):
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(invocation_root=str(invocation),
                                             native_root=str(self.base / "worker-native")),
-            input_text=prompt, tool_scope="write",
+            input_text=prompt, permission="write",
             output_schema=worker_services.OUTCOME_SCHEMA,
             budget=RunBudget(timeout_seconds=timeout),
             continuation=continuation,
@@ -209,7 +209,7 @@ class MockNativeCase(ZcodeFixtureCase):
 
 class FastSeamTests(NativeRunCase):
     def test_router_quota_phase_uses_current_root_output_tokens(self):
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         for case, expected in (("quota-before", "before-model"),
                                ("usage-quota", "during-model"),
                                ("quota-truncated", "unknown"),
@@ -225,19 +225,17 @@ class FastSeamTests(NativeRunCase):
                 self.assertEqual(failure["nativeCode"], "1310")
                 self.assertIsNone(failure["resetsAt"])
 
-    def test_full_scope_without_worker_permission_is_refused_before_native_launch(self):
-        request = self.fast_request("fixture prompt").model_copy(update={"tool_scope": "full"})
+    def test_full_permission_uses_the_final_message_carrier_without_a_service(self):
+        request = self.fast_request("fixture prompt").model_copy(update={"permission": "full"})
         with mock.patch.object(native_run, "_run") as native:
-            with self.assertRaises(BoardError) as caught:
-                run(request, observer=lambda _facts: RunFeedback(action="continue"),
-                    services=None, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        self.assertEqual(caught.exception.details["toolScope"], "full")
-        native.assert_not_called()
+            run(request, observer=lambda _facts: RunFeedback(action="continue"),
+                services=None, cancelled=lambda: False)
+        self.assertEqual(native.call_args.kwargs["no_tool"], False)
+        self.assertEqual(native.call_args.args[0].permission, "full")
 
     def test_a_settled_answer_is_a_final_message_fact_with_role_checked_schema(self):
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         seen = []
 
@@ -268,7 +266,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_one_format_correction_runs_a_second_session_on_the_same_process(self):
         os.environ["HMB_ZCODE_TEST_CASE"] = "correct"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
                      services=None, cancelled=lambda: False)
@@ -281,7 +279,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_a_tool_fact_stops_the_run_through_the_observer_feedback(self):
         os.environ["HMB_ZCODE_TEST_CASE"] = "tool"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
                      services=None, cancelled=lambda: False)
@@ -299,7 +297,7 @@ class FastSeamTests(NativeRunCase):
         # bounded observer that corrects twice proves the second correction
         # really runs — and terminates — instead of looping or being capped.
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         rounds = {"count": 0}
 
@@ -324,18 +322,28 @@ class FastSeamTests(NativeRunCase):
         # that. No external review eligibility is implied.
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         os.environ["HMB_ZCODE_TEST_CASE"] = "write-final"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
-        scoped = RunRequest.from_payload(request.to_payload() | {"toolScope": "write"})
+        scoped = RunRequest.from_payload(request.to_payload() | {"permission": "write"})
         result = run(scoped, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
         self.assertEqual(result.value.raw, '{"choice":"a"}')
-        # The write scope sends no native policy request of its own (the
-        # session default tools run); the fact reports exactly that emptiness.
+        # Every write run requests the same native yolo mode.
         self.assertIsNotNone(result.effective_policy.tools)
-        self.assertIsNone(result.effective_policy.tools.requested)
+        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "yolo"})
         self.assertNotIn("reported", result.effective_policy.tools.to_payload())
+
+    def test_router_review_uses_the_worker_plan_mode_without_a_service(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        os.environ["HMB_ZCODE_TEST_CASE"] = "write-final"
+        request = self.fast_request(structured_prompt("Choose a buddy", SCHEMA))
+        request = request.model_copy(update={"permission": "read"})
+        result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.raw, '{"choice":"a"}')
+        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "plan"})
 
     def test_a_late_tool_frame_after_settlement_is_the_role_call_not_the_scopes(self):
         # The EOF drain hands a late tool fact to the role observer: a rule that
@@ -344,9 +352,9 @@ class FastSeamTests(NativeRunCase):
         # frame by reading the tool scope itself.
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         os.environ["HMB_ZCODE_TEST_CASE"] = "write-post-close"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
-        scoped = RunRequest.from_payload(request.to_payload() | {"toolScope": "write"})
+        scoped = RunRequest.from_payload(request.to_payload() | {"permission": "write"})
         result = run(scoped, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
@@ -366,7 +374,7 @@ class FastSeamTests(NativeRunCase):
         # never a leaked process behind an invalid-native-result.
         from unittest import mock as _mock
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch("hey_my_buddy.buddy.harnesses.zcode.native_run.NativeConnection",
                          side_effect=OSError("pipe gone")):
@@ -396,7 +404,7 @@ class FastSeamTests(NativeRunCase):
             return False
 
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
             result = run(self.fast_request(prompt), observer=correction.observer,
@@ -424,7 +432,7 @@ class FastSeamTests(NativeRunCase):
         # the same id and records it — and only then does the role's stop take
         # effect on the driver's next boundary, with no settlement behind it.
         os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-request"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
         result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
@@ -443,7 +451,7 @@ class FastSeamTests(NativeRunCase):
 
     def test_a_reverse_request_before_the_rpc_reply_stops_after_the_refusal(self):
         os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-before-send-reply"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         started = time.monotonic()
         result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
@@ -472,7 +480,7 @@ class FastSeamTests(NativeRunCase):
         # reaches the role observer first: the fast rule stops with its own
         # reason instead of the protocol layer's foreign-session code.
         os.environ["HMB_ZCODE_TEST_CASE"] = "post-close-foreign"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         result = run(self.fast_request(prompt), observer=correction.observer,
                      services=None, cancelled=lambda: False)
@@ -485,7 +493,7 @@ class FastSeamTests(NativeRunCase):
     def test_a_failed_close_keeps_the_final_message_facts(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         os.environ["HMB_ZCODE_TEST_CASE"] = "close-fail"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         request = self.fast_request(prompt)
         result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
@@ -505,7 +513,7 @@ class FastSeamTests(NativeRunCase):
         for case in ("reverse-request", "reverse-oauth"):
             with self.subTest(case=case):
                 os.environ["HMB_ZCODE_TEST_CASE"] = case
-                prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+                prompt = structured_prompt("Choose a buddy", SCHEMA)
                 correction = FastCorrection(SCHEMA, prompt)
                 started = time.monotonic()
                 result = run(self.fast_request(prompt, timeout=8), observer=correction.observer,
@@ -526,7 +534,7 @@ class FastSeamTests(NativeRunCase):
         from unittest import mock as _mock
         from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError as _NativeError
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
         with _mock.patch("hey_my_buddy.buddy.harnesses.zcode.native_run._spawn_app_server",
                          side_effect=_NativeError("harness-unavailable", "no native start")):
@@ -600,16 +608,14 @@ class WorkerSeamTests(MockNativeCase):
                                                 "resetsAt", "rejectionPhase"})
 
     def test_worker_levels_keep_the_micro_task_carrier_and_record_the_sent_mode(self):
-        from hey_my_buddy.buddy.harnesses.registry import worker_permission
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         original_open = native_run._open_root
         for level in ("read", "write", "full"):
             with self.subTest(level=level):
                 request, services = self.worker_request(self.turn_input())
-                permission = worker_permission("zcode", level)
-                request = request.model_copy(update={"tool_scope": permission.tool_scope,
-                                                     "worker_permission": permission})
+                request = request.model_copy(update={"permission": level})
                 with mock.patch.object(native_run, "_open_root", wraps=original_open) as opened:
                     result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
                 self.assertEqual(result.end.status, "ok", result.end.message)
@@ -619,22 +625,20 @@ class WorkerSeamTests(MockNativeCase):
                 self.assertEqual(result.effective_policy.tools.requested.value, {"mode": native_mode})
                 self.assertEqual(result.value.schema_status, "valid")
                 self.assertEqual(result.value.parsed.value["summary"], "fixture work completed")
-                self.assertEqual(permission.enforcement, "convention" if level == "write" else "enforced")
+                self.assertEqual(PERMISSION_LEVELS["zcode"][level],
+                                 "convention" if level == "write" else "enforced")
 
     def resume_with_levels(self, first_level, second_level, *, case="ok"):
-        from hey_my_buddy.buddy.harnesses.registry import worker_permission
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         request, services = self.worker_request(self.turn_input())
-        permission = worker_permission("zcode", first_level)
-        request = request.model_copy(update={"tool_scope": permission.tool_scope, "worker_permission": permission})
+        request = request.model_copy(update={"permission": first_level})
         first = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(first.end.status, "ok", first.end.message)
         session = first.native_identity.session_id
         request, services = self.worker_request(self.turn_input(previous=session),
             continuation=RunContinuation(mode="native-session", previous_session_id=session))
-        permission = worker_permission("zcode", second_level)
-        request = request.model_copy(update={"tool_scope": permission.tool_scope, "worker_permission": permission})
+        request = request.model_copy(update={"permission": second_level})
         os.environ["HMB_ZCODE_TEST_CASE"] = case
         calls, mode_readbacks = [], []
         original = native_run.NativeConnection.call
@@ -1039,19 +1043,17 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         self.assertIn("mounted completion contract", caught.exception.message)
 
-    def test_a_read_scope_reports_unrestricted_honestly(self):
+    def test_a_read_permission_uses_plan_mode_with_the_worker_service(self):
         os.environ.update(self.environment)
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         turn_input = self.turn_input()
         request, services = self.worker_request(turn_input)
-        scoped = request.model_copy(update={"tool_scope": "read"})
+        scoped = request.model_copy(update={"permission": "read"})
         result = run(scoped, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok")
-        # The read scope sends no native policy request (the session default
-        # tools run); the fact reports exactly that, with no look-alike
-        # "unrestricted" verdict of its own.
+        # The same plan mode applies to a Worker turn and a Router review.
         self.assertIsNotNone(result.effective_policy.tools)
-        self.assertIsNone(result.effective_policy.tools.requested)
+        self.assertEqual(result.effective_policy.tools.requested.value, {"mode": "plan"})
 
 
 class NoToolReverseRequestTests(unittest.TestCase):

@@ -135,16 +135,8 @@ class EvaluationStore:
     @staticmethod
     def _buddy_view(row: sqlite3.Row, *, pending: dict | None = None,
                     effort_ranks: dict[tuple[str, str, str], dict[str, int]]) -> dict:
-        from ...buddy.harnesses.registry import adapters
-        native = adapters().get(row["harness"])
-        capabilities = json.loads(row["capabilities_json"])
-        if not (native and native.local_read_only_check()["eligible"]):
-            capabilities = [item for item in capabilities if item != "decision"]
-        elif 'decision' not in capabilities:
-            capabilities.append('decision')
-        capabilities = [item for item in capabilities if item != "routing:fast"]
-        if native and getattr(native, "no_tool_structured", False):
-            capabilities.append("routing:fast")
+        from ...protocol.capabilities import buddy_capabilities
+        capabilities = buddy_capabilities(row["harness"], json.loads(row["capabilities_json"]))
         view = {
             "buddyId": row["buddy_id"],
             "label": row["label"],

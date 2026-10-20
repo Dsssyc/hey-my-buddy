@@ -36,7 +36,7 @@ from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.buddy.harnesses.codex.native_run import RunServices, run, run_discovery
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError
-from hey_my_buddy.buddy.harnesses.registry import worker_permission, worker_format
+from hey_my_buddy.buddy.harnesses.registry import worker_format
 from hey_my_buddy.buddy.harnesses.runtime_selection import bound
 from hey_my_buddy.protocol import owned_process as windows_process
 from hey_my_buddy.buddy.harnesses.run_contract import (
@@ -137,15 +137,16 @@ class SeamCase(unittest.TestCase):
 
         return mock.patch.object(native_run, "_halt_owned_group", halt_then_unconfirmed)
 
-    def request(self, *, tool_scope: str, output_schema: dict, prompt: str,
+    def request(self, *, permission: str, output_schema: dict, prompt: str,
                 timeout: int = 8, continuation=None, capture_evidence=False,
                 input_sha256: str | None = None, turn_id: str | None = None,
-                native: str | None = None, permission=None) -> RunRequest:
+                native: str | None = None) -> RunRequest:
         marker = uuid.uuid4().hex[:8]
         return RunRequest(
             identity=RunIdentity(task_id="micro-task-1", attempt_id=f"attempt-{marker}",
                                  generation=1, invocation_id=uuid.uuid4().hex,
-                                 turn_id=turn_id, input_sha256=input_sha256),
+                                 turn_id=turn_id or ("turn-check" if permission in ("write", "full") else None),
+                                 input_sha256=input_sha256),
             harness="codex",
             session_record_path=str(self.base / f"session-{marker}.jsonl"),
             buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),
@@ -153,8 +154,7 @@ class SeamCase(unittest.TestCase):
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{marker}"),
                 native_root=str(self.base / (native or f"native-{marker}"))),
-            input_text=prompt, tool_scope=tool_scope, output_schema=output_schema,
-            worker_permission=permission or (worker_permission("codex", "write") if tool_scope == "write" else None),
+            input_text=prompt, permission=permission, output_schema=output_schema,
             budget=RunBudget(timeout_seconds=timeout), continuation=continuation,
             capture_evidence=capture_evidence)
 
@@ -187,7 +187,7 @@ class SeamCase(unittest.TestCase):
                 self.assertEqual(billing['kind'], 'subscription' if expected == 'openai' else 'unknown')
                 self.assertEqual(trace.read_bytes() if trace.exists() else None, before,
                                  'Discovery and account reads must not create a thread')
-                request = self.request(tool_scope=scope, output_schema=schema, prompt='Choose',
+                request = self.request(permission=scope, output_schema=schema, prompt='Choose',
                                        turn_id='turn-check' if scope == 'write' else None,
                                        input_sha256='a' * 64 if scope == 'write' else None)
                 request = request.model_copy(update={'buddy': RunBuddy(
@@ -224,7 +224,7 @@ class FastSeamTests(SeamCase):
                  observer=None):
         self.set_case(case)
         prompt = "Pick a buddy"
-        return run(self.request(tool_scope="none", output_schema=FAST_SCHEMA,
+        return run(self.request(permission="none", output_schema=FAST_SCHEMA,
                                 prompt=prompt, timeout=timeout),
                    observer=observer or correction.observer, services=None,
                    cancelled=lambda: False)
@@ -328,7 +328,7 @@ class FastSeamTests(SeamCase):
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertEqual(result.usage.value["inputTokens"], input_tokens)
                 self.assertEqual(result.usage.value["completeness"], completeness)
-                request = self.request(tool_scope="none", output_schema=FAST_SCHEMA, prompt="Pick a buddy")
+                request = self.request(permission="none", output_schema=FAST_SCHEMA, prompt="Pick a buddy")
                 receipt = _fast_result(result, request, {"elapsedMs": 1})
                 self.assertEqual(receipt["tokenUsage"]["inputTokens"], input_tokens)
                 self.assertEqual(receipt["tokenUsage"]["completeness"], completeness)
@@ -337,7 +337,7 @@ class FastSeamTests(SeamCase):
                 self.assertNotIn("totalTokens", receipt["tokenUsage"])
 
     def test_user_config_layers_mcp_and_native_home_are_preserved(self):
-        request = self.request(tool_scope="none", output_schema=FAST_SCHEMA, prompt="Pick a buddy")
+        request = self.request(permission="none", output_schema=FAST_SCHEMA, prompt="Pick a buddy")
         (self.home / "config.toml").write_text('[mcp_servers.user]\ncommand = "user-tool"\n')
         self.set_case("ok")
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
@@ -444,7 +444,7 @@ class FastSeamTests(SeamCase):
 
     def test_deadline_stops_reports_interrupt_and_removes_private_auth(self):
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
-        request = self.request(tool_scope="none", output_schema=FAST_SCHEMA,
+        request = self.request(permission="none", output_schema=FAST_SCHEMA,
                                prompt="Pick a buddy", timeout=1)
         self.set_case("hang")
         result = run(request, observer=correction.observer, services=None,
@@ -527,7 +527,7 @@ class FastSeamTests(SeamCase):
                                        observer=lambda _facts: FEEDBACK_CONTINUE)
                 self.assertEqual(result.end.status, "ok", result.end.message)
                 self.assertFalse(result.tool_evidence.value["streamComplete"])
-                self.assertIsNotNone(judge_tool_evidence(result.tool_evidence.value, "fast", False))
+                self.assertIsNotNone(judge_tool_evidence(result.tool_evidence.value, "none"))
                 self.assertIsNotNone(result.native_evidence.unknown_events)
 
     def test_unfamiliar_drain_frame_continues_and_retains_unknown_shape(self):
@@ -543,7 +543,7 @@ class FastSeamTests(SeamCase):
         garbage.write_bytes(b"\x00\x01not an executable")
         garbage.chmod(0o755)
         os.environ["HMB_CODEX_CLI"] = str(garbage)
-        request = self.request(tool_scope="none", output_schema=FAST_SCHEMA,
+        request = self.request(permission="none", output_schema=FAST_SCHEMA,
                                prompt="Pick a buddy", timeout=5)
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = run(request, observer=correction.observer, services=None,
@@ -563,7 +563,7 @@ class FastSeamTests(SeamCase):
         # rejection is the failure; the absence fact stays on the run result.
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         self.set_case("unlisted-model")
-        result = run(self.request(tool_scope="none", output_schema=FAST_SCHEMA,
+        result = run(self.request(permission="none", output_schema=FAST_SCHEMA,
                                   prompt="Pick a buddy", timeout=6),
                      observer=correction.observer, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
@@ -590,11 +590,10 @@ class CodexSeamCase(SeamCase):
 
     def worker_run(self, case: str, *, continuation=None, timeout: int = 12,
                    observer=None, input_text: str = "fixture micro task task", live=None, level="write"):
-        permission = worker_permission("codex", level)
         self.set_case(case)
         turn_input = {"taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
                       "turnId": "turn-check"}
-        return run(self.request(tool_scope=permission.tool_scope, permission=permission, output_schema=OUTCOME_SCHEMA,
+        return run(self.request(permission=level, output_schema=OUTCOME_SCHEMA,
                                 prompt=input_text, timeout=timeout, continuation=continuation,
                                 input_sha256=input_hash(turn_input), turn_id="turn-check",
                                 native="worker-native"),
@@ -603,7 +602,7 @@ class CodexSeamCase(SeamCase):
 
     def review_run(self, case: str, *, observer=None, capture_evidence=False, timeout: int = 8):
         self.set_case(case)
-        return run(self.request(tool_scope="read", output_schema=REVIEW_SCHEMA,
+        return run(self.request(permission="read", output_schema=REVIEW_SCHEMA,
                                 prompt="Select from the frozen packet", timeout=timeout,
                                 capture_evidence=capture_evidence),
                    observer=observer or (lambda _facts: FEEDBACK_CONTINUE),
@@ -686,22 +685,16 @@ class ReviewSeamTests(CodexSeamCase):
     def test_default_and_configured_provider_reach_review_thread_start(self):
         self.assert_discovered_provider_runs('read', REVIEW_SCHEMA)
 
-    def test_review_cli_permission_table_preserves_dots_spaces_and_quotes_in_checkout(self):
-        import tomllib
+    def test_review_uses_worker_read_sandbox_with_unusual_checkout(self):
         self.cwd = self.base / '.managed worktree' / 'space "quote"' / 'checkout'
         self.cwd.mkdir(parents=True)
-        request = self.request(tool_scope="read", output_schema=REVIEW_SCHEMA, prompt="Review")
+        request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt="Review")
         prep = native_run._prepare(request, "review")
-        pairs = [prep.command[index + 1].split("=", 1)
-                 for index, value in enumerate(prep.command[:-1]) if value == "-c"]
-        self.assertEqual({key for key, _ in pairs},
-                         {"web_search", "approval_policy", "default_permissions", "permissions.hey-my-buddy-router"})
-        profile = tomllib.loads("value = " + dict(pairs)["permissions.hey-my-buddy-router"])["value"]
-        expected = tomllib.loads(native_run.read_only_config(str(self.cwd)))["permissions"]["hey-my-buddy-router"]
-        self.assertEqual(profile, expected)
-        self.assertEqual(profile["filesystem"][str(self.cwd.resolve())], "read")
+        self.assertNotIn("-c", prep.command)
         result = self.review_run("ok")
         self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.effective_policy.tools.requested.value["sandboxPolicy"],
+                         {"type": "readOnly", "networkAccess": True})
 
     def test_review_failed_turn_retains_native_error_in_public_evidence(self):
         result = self.review_run("schema-failure")
@@ -711,7 +704,7 @@ class ReviewSeamTests(CodexSeamCase):
     def test_a_fast_native_correction_publishes_the_second_round_final_activity(self):
         self.set_case("readonly-repair")
         prompt = "Select from the frozen packet"
-        request = self.request(tool_scope="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
+        request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt=prompt)
         endpoint = activity_endpoint(request.identity)
         rule = ReviewCorrection(REVIEW_SCHEMA, prompt)
         with mock.patch.object(endpoint, "publish_activity", wraps=endpoint.publish_activity) as publish:
@@ -757,13 +750,10 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.native_identity.session_id,
                          package["nativeIdentity"][0]["sessionId"])
         policy = result.effective_policy.tools
-        self.assertEqual(policy.requested.value, {"permissions": "hey-my-buddy-router", "approvalPolicy": "never"})
-        # The read-back native configuration — the acknowledged state, with its
-        # own filesystem grant for this checkout — is the retained evidence.
+        self.assertEqual(policy.requested.value, {"sandboxPolicy": {"type": "readOnly", "networkAccess": True},
+                                                  "approvalPolicy": "never"})
         retained = {ref.kind: ref for ref in result.evidence_refs}
-        readback = json.loads(Path(retained["review-config-readback"].location).read_text())
-        filesystem = readback["config"]["permissions"]["hey-my-buddy-router"]["filesystem"]
-        self.assertEqual(filesystem[str(self.cwd.resolve())], "read")
+        self.assertNotIn("review-config-readback", retained)
         thread = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())["threads"][result.native_identity.session_id]
         self.assertIs(thread["start"]["ephemeral"], True)
         for name in ("baseInstructions", "environments", "dynamicTools", "selectedCapabilityRoots", "allowProviderModelFallback"):
@@ -802,22 +792,13 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(len(result.tool_evidence.value["nativeIdentity"]), 1)
         self.assertEqual(outside.correction_count, 0)
 
-    def test_review_policy_mismatches_refuse_with_actual_readbacks_before_a_turn(self):
-        for case, check in (("readonly-config-mismatch", "configReadback"),
-                            ("readonly-policy-mismatch", "threadReceipt")):
-            with self.subTest(case=case):
-                result = self.review_run(case)
-                self.assertEqual(result.end.status, "error", result.end.message)
-                self.assertEqual(result.end.reason_code, "readonly-policy-unverified")
-                self.assertIsNone(result.model_started)
-                facts = native_run.native_evidence(result)
-                self.assertEqual(facts["policyCheck"][check]["status"], "unknown")
-                if check == "threadReceipt":
-                    self.assertIs(facts["nativePolicy"]["sandbox"]["networkAccess"], True)
-                else:
-                    self.assertIs(facts["nativeConfigPolicy"]["permissions"]["hey-my-buddy-router"]["network"]["enabled"], True)
-                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
-                self.assertTrue(all("turnRequests" not in thread for thread in trace["threads"].values()))
+    def test_review_network_disabled_receipt_admits_turn(self):
+        result = self.review_run("readonly-network-disabled")
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIs(result.model_started, True)
+        facts = native_run.native_evidence(result)
+        self.assertEqual(facts["policyCheck"]["threadReceipt"]["status"], "confirmed")
+        self.assertIs(facts["nativePolicy"]["sandbox"]["networkAccess"], False)
 
     def test_unreadable_review_model_continues_with_unknown_checked_model(self):
         for case in ("readonly-model-missing", "readonly-model-unreadable"):
@@ -900,7 +881,7 @@ class WorkerSeamTests(CodexSeamCase):
 
     def test_explicit_session_failure_disables_followup_run_without_path_cache(self):
         self.set_case("usage")
-        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA, prompt="fixture micro task task")
+        request = self.request(permission="write", output_schema=OUTCOME_SCHEMA, prompt="fixture micro task task")
         with mock.patch.object(native_run.CodexSessionProjector, "record_input", side_effect=KeyError("first")):
             first = run(request, observer=lambda _: FEEDBACK_CONTINUE,
                         services=self.worker_services(), cancelled=lambda: False)
@@ -927,7 +908,7 @@ class WorkerSeamTests(CodexSeamCase):
 
     def test_no_record_path_skips_projection_and_keeps_result_usage_checkpoint_and_stop(self):
         self.set_case('usage')
-        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA,
+        request = self.request(permission='write', output_schema=OUTCOME_SCHEMA,
                                prompt='fixture micro task task').model_copy(update={'session_record_path': None})
         with mock.patch.object(native_run, 'CodexSessionProjector') as projector:
             result = run(request, observer=lambda _: FEEDBACK_CONTINUE,
@@ -991,7 +972,7 @@ class WorkerSeamTests(CodexSeamCase):
 
         cancelled = self.cancel_after_native_start()
         self.set_case('session-interrupt')
-        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='interrupt input')
+        request = self.request(permission='write', output_schema=OUTCOME_SCHEMA, prompt='interrupt input')
         with mock.patch.object(SessionRecord, '_write', side_effect=fail_agent):
             result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=self.worker_services(), cancelled=cancelled)
@@ -1005,7 +986,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_startup_retry_leaves_no_record_and_the_same_attempt_can_start(self):
 
         self.set_case('ok')
-        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='retry input')
+        request = self.request(permission='write', output_schema=OUTCOME_SCHEMA, prompt='retry input')
         path = Path(request.session_record_path)
         with mock.patch.object(native_run, '_spawn_app_server', side_effect=CodexProtocolError(
                 'harness-unavailable', 'the selected executable moved before spawn')):
@@ -1027,7 +1008,7 @@ class WorkerSeamTests(CodexSeamCase):
         for case in ('session-stream', 'session-stream-disconnect'):
             with self.subTest(case=case):
                 self.set_case(case)
-                request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='actual sent input')
+                request = self.request(permission='write', output_schema=OUTCOME_SCHEMA, prompt='actual sent input')
                 path = Path(request.session_record_path)
                 release = Path(os.environ['HMB_CODEX_FIXTURE_STATE']).with_suffix('.release')
                 release.unlink(missing_ok=True)
@@ -1061,7 +1042,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_rejected_native_turn_retains_the_input_actually_sent(self):
 
         self.set_case('unlisted-model')
-        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='rejected input')
+        request = self.request(permission='write', output_schema=OUTCOME_SCHEMA, prompt='rejected input')
         result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=self.worker_services(), cancelled=lambda: False)
         self.assertEqual(result.end.status, 'error')
@@ -1074,7 +1055,7 @@ class WorkerSeamTests(CodexSeamCase):
 
         cancelled = self.cancel_after_native_start()
         self.set_case('session-interrupt')
-        request = self.request(tool_scope='write', output_schema=OUTCOME_SCHEMA, prompt='interrupt input')
+        request = self.request(permission='write', output_schema=OUTCOME_SCHEMA, prompt='interrupt input')
         result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=self.worker_services(), cancelled=cancelled)
         self.assertEqual(result.end.status, 'cancelled')
@@ -1111,8 +1092,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.set_case("ok")
         for level in ("read", "write", "full"):
             with self.subTest(level=level):
-                permission = worker_permission("codex", level)
-                request = self.request(tool_scope=permission.tool_scope, permission=permission,
+                request = self.request(permission=level,
                                        output_schema=OUTCOME_SCHEMA, prompt="Work",
                                        turn_id="turn-check", input_sha256="a" * 64)
                 root = ensure_private_dir(Path(request.private_state.invocation_root))
@@ -1136,8 +1116,8 @@ class WorkerSeamTests(CodexSeamCase):
                 self.assertEqual(result.effective_policy.tools.requested.value, policy)
                 facts = run_execution._worker_facts(result)
                 self.assertEqual(native_run.native_evidence(result)["nativePolicy"], policy)
-                self.assertEqual(facts["nativeEvidence"]["workerPermission"]["permission"],
-                                 permission.to_payload())
+                self.assertEqual(facts["nativeEvidence"]["permission"],
+                                 {"level": level, "enforcement": "enforced"})
                 trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
                 thread = trace["threads"][result.native_identity.session_id]
                 self.assertEqual(thread["start"]["sandbox"], sandbox)
@@ -1170,8 +1150,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_rejected_turn_keeps_the_policy_sent_to_native(self):
         for level in ("read", "write", "full"):
             with self.subTest(level=level):
-                permission = worker_permission("codex", level)
-                request = self.request(tool_scope=permission.tool_scope, permission=permission,
+                request = self.request(permission=level,
                                        output_schema=OUTCOME_SCHEMA, prompt="Work")
                 connection = mock.Mock()
                 connection.call.side_effect = CodexProtocolError("native-rpc-error", "turn rejected")
@@ -1274,7 +1253,7 @@ class WorkerSeamTests(CodexSeamCase):
         normalized = canonical_payload(catalog)
         self.assertIn(("fixture-provider", "fixture-model", "low"),
                       identities_from_payload(json.dumps(normalized), "codex"))
-        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
+        request = self.request(permission="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
                                turn_id="turn-1", input_sha256="a" * 64, native="worker-native")
         request = request.model_copy(update={"buddy": RunBuddy(
             provider="fixture-provider", model="fixture-model", effort="low")})
@@ -1463,7 +1442,7 @@ class WorkerSeamTests(CodexSeamCase):
 
     def test_native_events_publish_through_the_shared_endpoint_callback(self):
         self.set_case("worker-tool")
-        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
+        request = self.request(permission="write", output_schema=OUTCOME_SCHEMA,
                                prompt="fixture micro task task", timeout=12,
                                input_sha256=input_hash({"fixture": "live"}), turn_id="turn-live",
                                native="worker-native")
@@ -1676,7 +1655,7 @@ class WorkerSeamTests(CodexSeamCase):
         def correcting(_facts):
             return RunFeedback(action="correct", input_text="retry")
 
-        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
+        request = self.request(permission="write", output_schema=OUTCOME_SCHEMA,
                                prompt="fixture micro task task", timeout=12,
                                input_sha256=input_hash({"taskId": "micro-task-1", "attemptId": "x",
                                                         "generation": 1, "turnId": "t"}),
@@ -1712,7 +1691,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_cancelled_run_reports_cancel_and_native_interrupt(self):
         cancel_after_admission = self.cancel_after_native_start()
         self.set_case("hang")
-        result = run(self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
+        result = run(self.request(permission="write", output_schema=OUTCOME_SCHEMA,
                                   prompt="fixture micro task task", timeout=None,
                                   input_sha256=input_hash({"taskId": "micro-task-1", "attemptId": "attempt-check",
                                                            "generation": 7, "turnId": "turn-check"}),
@@ -1729,7 +1708,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_interrupted_terminal_turn_keeps_a_checkpoint_bound_resume(self):
         cancelled = self.cancel_after_native_start()
         self.set_case("interrupt-settled")
-        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
+        request = self.request(permission="write", output_schema=OUTCOME_SCHEMA,
                                prompt="fixture micro task task", timeout=None,
                                input_sha256=input_hash({"taskId": "micro-task-1",
                                                         "attemptId": "attempt-check",
@@ -1760,7 +1739,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_foreign_terminal_turn_does_not_make_an_interrupt_resumable(self):
         cancelled = self.cancel_after_native_start()
         self.set_case("interrupt-foreign")
-        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA,
+        request = self.request(permission="write", output_schema=OUTCOME_SCHEMA,
                                prompt="fixture micro task task", timeout=None,
                                input_sha256=input_hash({"taskId": "micro-task-1",
                                                         "attemptId": "attempt-check",
@@ -2157,8 +2136,7 @@ class CatalogTrustTests(CodexSeamCase):
             private_state=PrivateStatePaths(
                 invocation_root=str(self.base / f"invocation-{marker}"),
                 native_root=str(self.base / "worker-native")),
-            input_text="fixture micro task task", tool_scope="write", output_schema=OUTCOME_SCHEMA,
-            worker_permission=worker_permission("codex", "write"),
+            input_text="fixture micro task task", permission="write", output_schema=OUTCOME_SCHEMA,
             budget=RunBudget(timeout_seconds=12)),
             observer=lambda _facts: FEEDBACK_CONTINUE,
             services=self.worker_services(), cancelled=lambda: False)

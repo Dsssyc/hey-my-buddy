@@ -50,7 +50,7 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         if kind == "quota":
             with self.board_.store.db.write() as db:
                 db.execute("UPDATE buddies SET provider='fixture-b' WHERE buddy_id=?", (B,))
-        request, first = self.start(three=True, micro_task=True)
+        request, first = self.start(three=True, micro_task=True, required_capabilities=("fixture:required",) if kind == "capability" else ())
         old_dispatch = self.dispatch_of(first["task"]["taskId"])
         original_snapshot = self.snapshot_of(request["decisionId"])
         self.invalidate(B, kind)

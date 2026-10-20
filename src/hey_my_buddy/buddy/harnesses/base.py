@@ -6,7 +6,6 @@ deadline when one is supplied, and return a structured result the worker submits
 """
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -148,31 +147,6 @@ class BoundSessionServices:
     services: object
 
 
-def registered_read_only_check(description) -> dict:
-    """Qualification for a description whose execution entries were removed.
-
-    Confirm the project's registered mechanism exists. Native policy readback
-    belongs to the run, and no vendor source is examined here.
-    """
-    from .registry import run_seam
-
-    platforms = description.system_sandbox_platforms
-    sandbox = sys.platform in platforms
-    from ...protocol.reasons import reason
-    result = {"eligible": False, "reason": reason("harness.readonly-not-implemented"), "systemSandbox": sandbox,
-              "sameAttemptContinuation": description.read_only_structured_resume}
-    if not description.read_only_structured:
-        return result
-    if platforms and not sandbox:
-        return {**result, "reason": reason("harness.readonly-platform-unsupported")}
-    categories = getattr(description, "read_only_tool_categories", ())
-    if not sandbox and (not categories or set(categories) - {"read", "search"}):
-        return {**result, "reason": reason("harness.readonly-tools-unrestricted")}
-    if not callable(getattr(run_seam(description.name), "run", None)):
-        return {**result, "reason": reason("harness.readonly-resource-missing")}
-    return {**result, "eligible": True, "reason": None}
-
-
 class Adapter:
     """Base class for the built-in adapters."""
 
@@ -182,18 +156,6 @@ class Adapter:
     interrupted_resume = False
     native_resume_permission_change = False
     model_discovery = False
-    read_only_structured = False
-    read_only_structured_resume = False
-    system_sandbox_platforms: tuple[str, ...] = ()
-    read_only_tool_categories: tuple[str, ...] = ()
-    no_tool_structured = False
-
-    def local_read_only_check(self) -> dict:
-        """Confirm only the registered capability; native enforcement is separate."""
-        return registered_read_only_check(self)
-
-
-
     def discover_models(self) -> dict:
         raise BoardError("CATALOG_UNAVAILABLE", f"{self.name} does not declare model discovery")
 

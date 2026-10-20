@@ -36,18 +36,10 @@ class ClaudeAdapter:
     interrupted_resume = False
     native_resume_permission_change = False
     model_discovery = True
-    read_only_structured = True
-    read_only_structured_resume = False
-    no_tool_structured = False
-    system_sandbox_platforms = ("darwin", "linux")
 
     @property
     def capabilities(self):
         return adapter_capabilities(self.name)
-
-    def local_read_only_check(self) -> dict:
-        from ..base import registered_read_only_check
-        return registered_read_only_check(self)
 
     def available(self) -> tuple[bool, str | None]:
         from ..runtime_selection import selected

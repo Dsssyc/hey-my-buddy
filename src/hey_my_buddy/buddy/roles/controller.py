@@ -7,6 +7,7 @@ import time
 from typing import Callable, Mapping, TYPE_CHECKING
 
 from ...errors import BoardError
+from ...protocol.capabilities import PERMISSION_LEVELS
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.base import (
     Adapter,
@@ -212,8 +213,6 @@ def start_router_preparation(preparation: FastPreparation | ReviewPreparation) -
         from .run_execution import start_fast
         return start_fast(module, preparation.harness, preparation.context, preparation.request)
     from .run_execution import start_review
-    if not preparation.native.read_only_structured:
-        raise BoardError("router-review-unsupported", "Review on this registered harness is not implemented")
     return start_review(preparation.harness, preparation.context, preparation.request)
 
 
@@ -244,14 +243,11 @@ def run_harness(
         raise BoardError("ROLE_RUN_UNREGISTERED",
                          f"the run of {request.harness} must go through its registered run seam",
                          harness=request.harness)
-    requested_controls = {
-        name for name, requested in (
-            ("network_allowed_domains", request.network_allowed_domains is not None),
-            ("additional_denied_tools", bool(request.additional_denied_tools)),
-            ("resume_checkpoint", request.continuation is not None
-             and request.continuation.checkpoint is not None),
-        ) if requested
-    }
+    if request.permission not in PERMISSION_LEVELS.get(request.harness, {}):
+        raise BoardError("UNSUPPORTED_CAPABILITY", "The harness does not declare this permission level",
+                         harness=request.harness, requiredCapability=f"permission:{request.permission}")
+    requested_controls = ({"resume_checkpoint"} if request.continuation is not None
+                          and request.continuation.checkpoint is not None else set())
     unsupported = requested_controls - set(getattr(module, "supported_request_controls", ()))
     if unsupported:
         raise BoardError("ROLE_RUN_UNSUPPORTED_CONTROL",

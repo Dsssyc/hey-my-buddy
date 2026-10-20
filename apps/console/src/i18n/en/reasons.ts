@@ -57,7 +57,6 @@ export default {
   "harness.readonly-platform-unsupported": "This platform does not support read-only calls for this harness.",
   "harness.readonly-resource-missing": "A resource required for read-only calls is missing.",
   "harness.readonly-tools-unrestricted": "The tools used by read-only calls cannot be restricted.",
-  "harness.readonly-worker-carrier-unimplemented": "{{harness}} has not implemented a read-only Worker execution path.",
   "harness.scan-timeout": "The harness scan timed out; check the CLI and retry.",
   "harness.shutdown-unverified": "The harness process's stop has not been confirmed.",
   "harness.timeout": "The harness response timed out.",

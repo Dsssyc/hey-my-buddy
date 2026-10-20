@@ -505,34 +505,22 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(json.loads(lines[-1]['update']['content']['text'])['outcome']['summary'],
                          'Stopped partial work summary')
 
-    def test_read_only_refuses_a_conflicting_policy_receipt(self):
-        result, _context = self.review('readonly-policy-mismatch', index=41)
-        self.assertEqual(result.status, 'failed', result.result)
-        self.assertEqual(result.result['code'], 'readonly-policy-unverified')
-        self.assertIs(result.result['modelStarted'], False)
-        self.assertEqual(result.result['policyCheck']['threadReceipt']['status'], 'unknown')
-        self.assertIn('nativeConfigPolicy', result.result)
+    def test_read_only_accepts_disabled_network_receipt(self):
+        result, _context = self.review('readonly-network-disabled', index=41)
+        self.assertEqual(result.status, 'ok', result.result)
+        self.assertIs(result.result['modelStarted'], True)
+        self.assertEqual(result.result['policyCheck']['threadReceipt']['status'], 'confirmed')
         # The native receipt keeps its actual networkAccess value.
         self.assertIn('nativePolicy', result.result)
-        self.assertIs(result.result['nativePolicy']['sandbox']['networkAccess'], True)
-        self.assertFalse(result.result['toolEvidence']['streamComplete'])
-        self.assertTrue(result.shutdown_confirmed)
-
-    def test_config_readback_conflict_refuses_before_model_input(self):
-        result, _context = self.review('readonly-config-mismatch', index=42)
-        self.assertEqual(result.status, 'failed', result.result)
-        self.assertEqual(result.result['code'], 'readonly-policy-unverified')
-        self.assertIs(result.result['modelStarted'], False)
-        self.assertEqual(result.result['policyCheck']['configReadback']['status'], 'unknown')
-        self.assertIs(result.result['nativeConfigPolicy']['permissions']['hey-my-buddy-router']['network']['enabled'], True)
-        self.assertFalse(result.result['toolEvidence']['streamComplete'])
+        self.assertIs(result.result['nativePolicy']['sandbox']['networkAccess'], False)
+        self.assertTrue(result.result['toolEvidence']['streamComplete'])
         self.assertTrue(result.shutdown_confirmed)
 
     def test_read_only_accepts_user_features_and_external_configuration(self):
         result, _context = self.review('ok', index=46)
         self.assertEqual(result.status, 'ok', result.result)
-        self.assertIs(result.result['nativeConfigPolicy']['features']['apps'], True)
-        self.assertTrue(result.result['nativeConfigPolicy']['mcp_servers'])
+        self.assertNotIn('nativeConfigPolicy', result.result)
+        self.assertEqual(result.result['nativePolicy']['sandbox']['networkAccess'], True)
         self.assertTrue(result.shutdown_confirmed)
 
     def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):

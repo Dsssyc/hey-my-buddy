@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 
 from ....protocol.capabilities import adapter_capabilities
-from ....protocol.reasons import reason
 from . import native_run
 from .config import cli_command, provider_paths
 from .protocol import NativeError
@@ -18,17 +17,10 @@ class ZcodeAdapter:
     interrupted_resume = False
     native_resume_permission_change = True
     model_discovery = True
-    no_tool_structured = True
-    read_only_structured = False
-    read_only_structured_resume = False
 
     @property
     def capabilities(self):
         return adapter_capabilities(self.name)
-
-    def local_read_only_check(self) -> dict:
-        return {"eligible": False, "reason": reason("harness.readonly-worker-carrier-unimplemented", harness=self.name),
-                "systemSandbox": False, "sameAttemptContinuation": self.read_only_structured_resume}
 
     def available(self) -> tuple[bool, str | None]:
         from ..runtime_selection import selected

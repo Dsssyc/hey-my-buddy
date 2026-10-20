@@ -17,17 +17,6 @@ DEFAULT_EFFORT = "default"
 #: model over time.
 DEFAULT_MODEL_ALIAS = "default"
 
-#: The unchanged read/default posture; checkout-write Workers use all domains.
-PACKAGE_REGISTRY_DOMAINS = (
-    "registry.npmjs.org",
-    "registry.yarnpkg.com",
-    "pypi.org",
-    "files.pythonhosted.org",
-    "crates.io",
-    "index.crates.io",
-    "static.crates.io",
-)
-
 #: Explicit built-in tools; native permissions govern file access and the
 #: sandbox governs Bash. Skills and subagents stay available through Skill and the
 #: current ``Agent`` tool and the older ``Task`` spelling, and their models are
@@ -79,52 +68,23 @@ def cli_command(environment: dict | None = None) -> list[str]:
     return [str(path)]
 
 
-def sandbox_settings(network_allowed_domains=None) -> dict:
-    """The read/default sandbox posture and explicit Router domain controls.
-
-    Key names follow the primary sandboxing documentation
-    (code.claude.com/docs/en/sandboxing): the domain list is
-    ``network.allowedDomains`` with plain string entries, and
-    ``strictAllowlist`` rejects unknown domains, while
-    ``allowUnsandboxedCommands: false`` denies fallback out of the sandbox.
-    ``network_allowed_domains`` is None for the existing registry list;
-    an explicit sequence — empty included — is written
-    verbatim, so an offline run is a caller decision, never a scope
-    inference.
-    """
-    domains = list(PACKAGE_REGISTRY_DOMAINS) if network_allowed_domains is None \
-        else list(network_allowed_domains)
-    return {
-        "sandbox": {
-            "enabled": True,
-            "failIfUnavailable": True,
-            "autoAllowBashIfSandboxed": True,
-            "allowUnsandboxedCommands": False,
-            "excludedCommands": [],
-            "network": {
-                "strictAllowlist": True,
-                "allowedDomains": domains,
-            },
-        }
-    }
-
-
 def base_args() -> list[str]:
     return ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
 
 
-def worker_sandbox_settings(level: str) -> dict:
-    """Express this Worker's file scope through native sandbox settings."""
+def permission_sandbox_settings(level: str) -> dict:
+    """Express this run's file permission; read and write both allow networking."""
     if level == "full":
         return {"sandbox": {"enabled": False}}
-    settings = sandbox_settings()
+    settings = {"sandbox": {
+        "enabled": True, "failIfUnavailable": True,
+        "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False,
+        "excludedCommands": [],
+        "network": {"strictAllowlist": False, "allowedDomains": ["*"],
+                    "allowLocalBinding": True},
+    }}
     if level == "write":
         settings["permissions"] = {"allow": ["Bash"]}
-        settings["sandbox"]["network"] = {
-            "strictAllowlist": False,
-            "allowedDomains": ["*"],
-            "allowLocalBinding": True,
-        }
     return settings
 
 
@@ -134,15 +94,13 @@ def discovery_args() -> list[str]:
 
 
 def execution_args(*, session_id: str, model: str, effort: str, settings_path: str, read_only: bool,
-                   output_schema: dict, additional_denied_tools=(), full_access: bool = False,
+                   output_schema: dict, full_access: bool = False,
                    mcp_config_path: str | None = None, inquiry_tools=()) -> list[str]:
     """The native permission invocation; user configuration sources stay enabled.
 
     ``output_schema`` is the run's own ending contract and is always explicit:
     the micro task turn passes the shared worker schema, the read-only call the
-    caller's answer schema. ``additional_denied_tools`` is the caller's
-    explicit sequence of extra session-wide denials — empty by default;
-    nothing is ever derived from the schema's presence or the tool scope.
+    caller's answer schema. Permission alone selects the native tool posture.
     """
     args = [*base_args(),
             "--no-session-persistence",
@@ -171,13 +129,6 @@ def execution_args(*, session_id: str, model: str, effort: str, settings_path: s
         args += ["--effort", effort]
     if mcp_config_path is not None:
         args += ["--mcp-config", mcp_config_path, "--allowedTools", ",".join(inquiry_tools)]
-    if additional_denied_tools:
-        values = list(additional_denied_tools)
-        if "--disallowedTools" in args:
-            index = args.index("--disallowedTools") + 1
-            args[index] += "," + ",".join(values)
-        else:
-            args += ["--disallowedTools", ",".join(values)]
     args += ["--json-schema", canonical_json(output_schema)]
     return args
 

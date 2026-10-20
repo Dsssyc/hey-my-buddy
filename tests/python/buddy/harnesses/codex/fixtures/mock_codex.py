@@ -135,8 +135,6 @@ def main():
             send({"id": ident, "result": {"userAgent": "fixture"}})
         elif method == 'config/read':
             configured = dict(native_config)
-            if case == 'readonly-config-mismatch' and 'permissions' in configured:
-                configured['permissions']['hey-my-buddy-router']['network']['enabled'] = True
             result = {'config': [] if case == 'config-unreadable' else configured}
             if case == 'config-result-unreadable':
                 result = []
@@ -192,12 +190,11 @@ def main():
                                          'codexHome': os.environ.get('CODEX_HOME'),
                                          'sqliteHome': os.environ.get('CODEX_SQLITE_HOME')}
             write_state(state)
-            policy = ({'activePermissionProfile': {'id': params['permissions']},
-                       'sandbox': {'type': 'readOnly', 'networkAccess': False}, 'approvalPolicy': 'never',
+            policy = ({'sandbox': {'type': 'readOnly', 'networkAccess': True}, 'approvalPolicy': 'never',
                        'model': params['model'], 'home': os.environ.get('HOME'), 'start': params, 'argv': sys.argv, 'modelProvider': provider, 'cwd': params['cwd']}
-                      if params.get('permissions') else {})
-            if case == 'readonly-policy-mismatch':
-                policy['sandbox']['networkAccess'] = True
+                      if params.get('sandbox') == 'read-only' else {})
+            if case == 'readonly-network-disabled':
+                policy['sandbox']['networkAccess'] = False
             elif case == 'readonly-sandbox-mismatch':
                 policy['sandbox']['type'] = 'workspaceWrite'
             elif case == 'readonly-sandbox-unreadable':

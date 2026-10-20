@@ -36,7 +36,7 @@ from . import turn_io, worker_services
 from .run_observers import FastCorrection, ReviewObserver, worker_observer
 from .run_controller import NATIVE_OPERATIONS
 from .structured_call import (
-    _NoToolEvidence, no_tool_prompt, valid_answer,
+    _NoToolEvidence, structured_prompt, valid_answer,
 )
 from .turn_io import input_hash, private_json, validate_outcome, guard_private_path, canonical_json
 
@@ -172,9 +172,9 @@ def _merge_native_evidence(result: RunResult, payload: dict) -> None:
 
 
 def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
-    from ..harnesses.registry import fast_evidence_is_top_level, fast_receipt_defaults, run_seam
+    from ..harnesses.registry import fast_evidence_is_top_level, run_seam
 
-    payload = {**_base_result(result), **fast_receipt_defaults(result.harness)}
+    payload = _base_result(result)
     if result.end.reason_code == "observer-interrupt" and verdict.get("stopReason"):
         # The role observer stopped this run; its own recorded reason is the
         # legacy channel code, and the projection keeps the legacy shape of an
@@ -194,7 +194,6 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
         if result.native_identity is not None:
             payload["nativeIdentity"] = result.native_identity.to_payload()
         payload["nativeEventCount"] = result.native_event_count
-        payload["zeroToolVerified"] = calls == 0
     if result.usage is not None:
         payload["tokenUsage"] = usage.normalize_token_usage(result.usage.value)
     top_level = fast_evidence_is_top_level(result.harness)
@@ -214,7 +213,6 @@ def _fast_result(result, request: RunRequest, verdict: dict) -> dict:
 
 def _worker_facts(result, *, delegation_authority: bool = False) -> dict:
     from ..harnesses.registry import worker_format
-    from ..harnesses.run_contract import WorkerPermission
 
     format = worker_format(result.harness)
     if format is not None and delegation_authority:
@@ -236,9 +234,12 @@ def _worker_facts(result, *, delegation_authority: bool = False) -> dict:
                 or declaration["source"] != "harness-permission-declaration"
                 or declaration["binding"] != result.identity.to_payload()):
             raise BoardError("INVALID_ARGUMENT", "The Worker permission declaration does not bind this run")
-        permission = WorkerPermission.from_payload(declaration["permission"])
-        payload.setdefault("nativeEvidence", {})["workerPermission"] = {
-            **declaration, "permission": permission.to_payload()}
+        permission = declaration["permission"]
+        level = permission.get("level") if isinstance(permission, dict) else None
+        if (level not in ("read", "write", "full") or set(permission) != {"level", "enforcement"}
+                or permission["enforcement"] not in ("enforced", "convention")):
+            raise BoardError("INVALID_ARGUMENT", "The Worker permission declaration is invalid")
+        payload.setdefault("nativeEvidence", {})["permission"] = permission
     payload["tokenUsage"] = result.usage.value if result.usage is not None else None
     payload["lastAssistantMessage"] = (result.last_assistant_message.value
                                        if result.last_assistant_message is not None else None)
@@ -382,9 +383,9 @@ def worker_request(control: dict, module):
     inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
     attention_path = Path(control["directory"]) / "attention.json"
     task_text = Path(control["taskFile"]).read_text()
-    from ..harnesses.registry import worker_format, worker_permission
+    from ..harnesses.registry import worker_format
     format = worker_format(control["harness"])
-    permission = worker_permission(control["harness"], turn_input["executionWorkspace"].get("access", "write"))
+    permission = turn_input["executionWorkspace"].get("access", "write")
     if format is None:
         binding = module.prepare_services(
             invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
@@ -400,11 +401,10 @@ def worker_request(control: dict, module):
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool,
             credential_file=credential_file)
         services, descriptions = binding.services, (binding.description,)
-        schema, scope = worker_services.outcome_schema_for(
-            delegation_authority=delegation_authority), permission.tool_scope
+        schema = worker_services.outcome_schema_for(delegation_authority=delegation_authority)
     else:
         format = format.for_turn(turn_input)
-        prompt, schema, scope = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema, permission.tool_scope
+        prompt, schema = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema
         inquiry_services = None
         if inquiry is not None:
             inquiry_services = module.prepare_inquiry_services(
@@ -414,7 +414,7 @@ def worker_request(control: dict, module):
                        f"{inquiry_services.answer_tool}, using its exact "
                        "inquiryId and answer text. Assistant prose does not count as an answer. "
                        "Questions never open a new turn or extend this turn's deadline.\n")
-        services = _native_services(control, module, scope, inquiry=inquiry_services)
+        services = _native_services(control, module, permission, inquiry=inquiry_services)
         descriptions = ()
     mode = turn_input.get("resumeMode")
     previous = turn_input.get("previousSessionId")
@@ -435,7 +435,7 @@ def worker_request(control: dict, module):
         session_record_path=control["sessionRecordPath"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
-        input_text=prompt, tool_scope=scope, worker_permission=permission,
+        input_text=prompt, permission=permission,
         output_schema=schema,
         budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
         continuation=continuation,
@@ -463,7 +463,7 @@ def fast_request(control: dict, module):
     """Project one no-tool control file into the frozen request and observer."""
     invocation_root = Path(control["privateRoot"])
     request_values = control["noToolRequest"]
-    base_prompt = no_tool_prompt(request_values["prompt"], request_values["outputSchema"])
+    base_prompt = structured_prompt(request_values["prompt"], request_values["outputSchema"])
     request = RunRequest(
         identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
                              generation=control["generation"], invocation_id=control["invocationId"]),
@@ -474,7 +474,7 @@ def fast_request(control: dict, module):
         session_record_path=control["sessionRecordPath"],
         private_state=PrivateStatePaths(invocation_root=str(invocation_root),
                                         native_root=control["nativeRoot"]),
-        input_text=base_prompt, tool_scope="none",
+        input_text=base_prompt, permission="none",
         output_schema=request_values["outputSchema"], capture_evidence=request_values.get("captureEvidence") is True,
         budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
     )
@@ -483,9 +483,8 @@ def fast_request(control: dict, module):
 
 
 def review_request(control: dict, module):
-    from ..harnesses.registry import review_request_controls
-
     values = control["readOnlyRequest"]
+    prompt = structured_prompt(values["prompt"], values["outputSchema"])
     request = RunRequest(
         identity=RunIdentity(task_id=control["taskId"], attempt_id=control["attemptId"],
                              generation=control["generation"], invocation_id=control["invocationId"]),
@@ -494,11 +493,10 @@ def review_request(control: dict, module):
         session_record_path=control["sessionRecordPath"],
         private_state=PrivateStatePaths(invocation_root=control["privateRoot"],
                                         native_root=control["nativeRoot"]),
-        input_text=values["prompt"], output_schema=values["outputSchema"], tool_scope="read",
+        input_text=prompt, output_schema=values["outputSchema"], permission="read",
         budget=RunBudget(timeout_seconds=control["timeoutSeconds"]),
-        capture_evidence=values.get("captureEvidence") is True,
-        **review_request_controls(control["harness"]))
-    observer = ReviewObserver(values["budget"]["toolCalls"], values["outputSchema"], values["prompt"],
+        capture_evidence=values.get("captureEvidence") is True)
+    observer = ReviewObserver(values["budget"]["toolCalls"], values["outputSchema"], prompt,
                               can_correct=control["canCorrect"])
     return request, _native_services(control, module, "read"), observer.observer, observer
 
@@ -612,7 +610,7 @@ def start_review(name: str, context: ExecutionContext, request) -> InlineRunHand
         "cwd": request.cwd, "timeoutSeconds": request.budget["timeoutSeconds"],
         "taskId": context.task_id, "attemptId": context.attempt_id, "generation": context.generation,
         "spec": {key: context.spec[key] for key in ("provider", "model", "effort")},
-        "canCorrect": adapter(name).read_only_structured_resume,
+        "canCorrect": adapter(name).native_resume,
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
                             "budget": request.budget, "captureEvidence": request.capture_evidence},
     }

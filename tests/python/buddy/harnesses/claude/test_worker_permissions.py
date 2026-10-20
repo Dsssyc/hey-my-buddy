@@ -8,20 +8,16 @@ from unittest import mock
 from buddy.harnesses.claude.test_native_run import NativeRunCase, READ_SCHEMA, flag_value
 from hey_my_buddy.buddy.harnesses.claude import native_run
 from hey_my_buddy.buddy.harnesses.claude.config import (
-    DENIED_WRITE_TOOLS, READONLY_TOOLS, WRITABLE_TOOLS, sandbox_settings,
+    DENIED_WRITE_TOOLS, READONLY_TOOLS, WRITABLE_TOOLS, permission_sandbox_settings,
 )
-from hey_my_buddy.buddy.harnesses.registry import worker_permission
 from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation
 from hey_my_buddy.buddy.roles.run_execution import worker_delivery
-from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
 
 
 class WorkerPermissionTests(NativeRunCase):
     def worker_request(self, level, **kwargs):
-        permission = worker_permission("claude", level)
-        return self.request(scope=permission.tool_scope, **kwargs).model_copy(
-            update={"worker_permission": permission})
+        return self.request(scope=level, **kwargs)
 
     def observations(self, result):
         return json.loads(Path(next(ref.location for ref in result.evidence_refs
@@ -43,7 +39,7 @@ class WorkerPermissionTests(NativeRunCase):
                 self.assertEqual(policy["permissionMode"], mode)
                 self.assertEqual(policy["sandbox"], settings["sandbox"])
                 if level == "read":
-                    self.assertEqual(settings, sandbox_settings())
+                    self.assertEqual(settings, permission_sandbox_settings("read"))
                     self.assertNotIn("permissions", settings)
                     self.assertNotIn("permissions", policy)
                     self.assertEqual(flag_value(argv, "--disallowedTools"), ",".join(DENIED_WRITE_TOOLS))
@@ -128,19 +124,15 @@ class WorkerPermissionTests(NativeRunCase):
                                  "The owned controller denied the correlated native permission request without granting access: " + summary)
                 self.assertNotIn("not an input summary", summary)
 
-    def test_router_review_argv_and_settings_are_unchanged_and_fast_stays_unsupported(self):
-        denied = ("mcp__*", "WebFetch", "WebSearch", "Agent", "Task")
-        result = self.execute(self.request(scope="read", schema=READ_SCHEMA, network=(), denied=denied))
+    def test_router_review_uses_worker_read_posture(self):
+        result = self.execute(self.request(scope="read", schema=READ_SCHEMA))
         self.assertEqual(result.end.status, "ok", result.end.message)
         argv = self.fixture_state()["argv"]
         self.assertEqual(argv[1:], ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
             "--no-session-persistence", "--tools", ",".join(READONLY_TOOLS),
             "--permission-prompt-tool", "stdio", "--settings", flag_value(argv, "--settings"),
             "--session-id", flag_value(argv, "--session-id"), "--model", "claude-opus-5-5[1m]",
-            "--permission-mode", "default", "--disallowedTools", ",".join((*DENIED_WRITE_TOOLS, *denied)),
+            "--permission-mode", "default", "--disallowedTools", ",".join(DENIED_WRITE_TOOLS),
             "--effort", "high", "--json-schema", canonical_json(READ_SCHEMA)])
-        self.assertEqual(json.loads(Path(flag_value(argv, "--settings")).read_bytes()), sandbox_settings(()))
-        with mock.patch.object(native_run, "_spawn_native") as spawn, self.assertRaises(BoardError) as caught:
-            self.execute(self.request(scope="none", schema=READ_SCHEMA))
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        spawn.assert_not_called()
+        self.assertEqual(json.loads(Path(flag_value(argv, "--settings")).read_bytes()),
+                         permission_sandbox_settings("read"))

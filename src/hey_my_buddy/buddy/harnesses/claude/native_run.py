@@ -25,8 +25,7 @@ validation and the attention assembly — stays with the roles; the delivered
 value travels with its own facts and the role re-validates it.
 
 This harness has no native no-tool run and no native session resume. The role
-request boundary rejects native resume; this module rejects no-tool runs and
-run-contract session services before any process starts. A Worker inquiry uses
+request boundary rejects native resume; a Worker inquiry uses
 one per-execution MCP mount alongside the native schema value carrier.
 Model discovery (:func:`run_discovery`) is a
 separate initialize-only operation that reuses the same spawn and stop
@@ -104,8 +103,7 @@ from .config import (
     execution_args,
     native_environment,
     provider_from_account,
-    sandbox_settings,
-    worker_sandbox_settings,
+    permission_sandbox_settings,
 )
 from .protocol import (
     QUOTA_REJECTED_ERROR,
@@ -129,13 +127,8 @@ _MAX_DENIED_REQUESTS = 32
 _DRAIN_SECONDS = 10.0
 
 
-#: The request controls this run module actually consumes: the sandbox network
-#: allowlist (None keeps the native default, an explicit sequence — empty
-#: included — is written verbatim) and the session-wide extra denied tools.
-#: The common ``run_harness`` refuses a request carrying a control the module
-#: does not declare; declaring one commits the module to reading that field,
-#: never to inferring the policy from the tool scope or the caller's role.
-supported_request_controls = ("network_allowed_domains", "additional_denied_tools")
+#: Claude needs no extra request controls beyond the common permission level.
+supported_request_controls = ()
 
 
 def _unknown_events(connection: Connection | None) -> dict | None:
@@ -279,11 +272,7 @@ def _flag_value(args: list[str], flag: str) -> str | None:
 
 def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Preparation:
     """Gate the request, allocate the session and freeze the native invocation."""
-    if request.tool_scope == "none":
-        raise BoardError("INVALID_ARGUMENT",
-                         "claude has no native no-tool run; the fast structured call is not a capability "
-                         "of this harness")
-    read_only = request.tool_scope == "read"
+    read_only = request.permission == "read"
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
     session_id = str(uuid.uuid4())
@@ -294,10 +283,7 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
     incoming = dict(environment_for())
     command = cli_command(incoming)
     environment = native_environment(incoming)
-    # Worker levels select their native sandbox posture for this turn. Calls
-    # without a Worker level keep the explicit Router controls unchanged.
-    settings = (worker_sandbox_settings(request.worker_permission.level)
-                if request.worker_permission is not None else sandbox_settings(request.network_allowed_domains))
+    settings = permission_sandbox_settings(request.permission)
     private_json(native_root / _SETTINGS_FILE, settings)
     mcp_config_path = None
     inquiry_tools = ()
@@ -309,8 +295,7 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
                           effort=request.buddy.effort,
                           settings_path=str(native_root / _SETTINGS_FILE),
                           read_only=read_only, output_schema=request.output_schema.value,
-                          additional_denied_tools=request.additional_denied_tools,
-                          full_access=request.worker_permission is not None and request.worker_permission.level == "full",
+                          full_access=request.permission == "full",
                           mcp_config_path=mcp_config_path, inquiry_tools=inquiry_tools)
     return _Preparation(session_id=session_id, deadline=deadline, invocation_root=invocation_root,
                         command=command, environment=environment, args=args,
@@ -1097,8 +1082,6 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
     """Run one native Claude Code execution: the single native path of this harness."""
     if request.harness != "claude":
         raise BoardError("INVALID_ARGUMENT", "this run module drives claude", harness=request.harness)
-    if request.tool_scope == "full" and request.worker_permission is None:
-        raise BoardError("INVALID_ARGUMENT", "claude full access requires a Worker permission", toolScope=request.tool_scope)
     if services is not None and not isinstance(services, RunServices):
         raise BoardError("INVALID_ARGUMENT", "claude requires its own run service binding")
     if request.session_services:
@@ -1154,7 +1137,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                 # the tool scope: a run without the flag exempts nothing.
                 native_schema_delivery="--json-schema" in preparation.args,
                 expected_permission_mode=_flag_value(preparation.args, "--permission-mode")
-                if request.worker_permission is not None else None,
+                if request.identity.turn_id is not None else None,
                 inquiry=inquiry, bridge=inquiry_bridge, session=session)
             spawn = _spawn_native(command=preparation.command, args=preparation.args, cwd=request.cwd,
                                   environment=preparation.environment,

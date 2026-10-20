@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from ....errors import BoardError
 from ....protocol.capabilities import adapter_capabilities
-from ....protocol.reasons import reason
 from . import native_run
 
 
@@ -25,17 +24,10 @@ class DshAdapter:
     interrupted_resume = True
     native_resume_permission_change = False
     model_discovery = True
-    no_tool_structured = True
-    read_only_structured = False
-    read_only_structured_resume = False
 
     @property
     def capabilities(self):
         return adapter_capabilities(self.name)
-
-    def local_read_only_check(self) -> dict:
-        return {"eligible": False, "reason": reason("harness.readonly-worker-carrier-unimplemented", harness=self.name),
-                "systemSandbox": False, "sameAttemptContinuation": self.read_only_structured_resume}
 
     def available(self) -> tuple[bool, str | None]:
         """A ready installed dsh command is this harness's only carrier.

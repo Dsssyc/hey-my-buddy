@@ -325,7 +325,8 @@ def _candidate_problem(connection, candidate, request, run, now):
         constraints = {**constraints, **schemas.buddy_constraints(_json(run["micro_task_json"], {}))}
     if any(candidate.get(key) != value for key, value in constraints.items()):
         return problem("constraints")
-    capabilities = set(_json(published["capabilities_json"], []))
+    from ...protocol.capabilities import buddy_capabilities
+    capabilities = set(buddy_capabilities(published["harness"], _json(published["capabilities_json"], [])))
     if not set(request.get("requiredCapabilities") or []) <= capabilities:
         return problem("capability-missing")
     preference = connection.execute("SELECT mode FROM evaluation_preferences WHERE buddy_id=?", (candidate["buddyId"],)).fetchone()

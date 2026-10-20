@@ -41,9 +41,7 @@ export default {
     eligible: "可用",
     ineligible: "不可用",
     unknown: "未知",
-    note: "本地资格检查不调用模型，不代表原生调用已验证。",
-    sandbox: "具有原生系统沙盒；实际策略由每次运行核对。",
-    noSandbox: "无系统沙盒，不能保证阻止副本外读取或外传；黑板的事后判定只覆盖上报的工具事件。",
+    note: "资格来自 harness 的只读档位声明，不代表原生调用已验证。",
   },
   path: {
     title: "{{name}} 路径",

@@ -368,19 +368,13 @@ function parseProviders(value: unknown): ProviderCooling[] | undefined {
   return records;
 }
 
-/** A boolean declaration or retired certificate cannot stand in for local eligibility. */
-export function parseReadOnlyStructured(value: unknown): NonNullable<HarnessHealth["readOnlyStructured"]> | null {
+/** The harness's declared levels, with their native enforcement strength. */
+export function parsePermissionLevels(value: unknown): NonNullable<HarnessHealth["permissions"]> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const record = value as Record<string, unknown>;
-  if (typeof record.eligible !== "boolean" || typeof record.systemSandbox !== "boolean"
-    || typeof record.sameAttemptContinuation !== "boolean") return null;
-  if (record.reason !== null && !isReason(record.reason)) return null;
-  if (record.eligible && record.reason !== null) return null;
-  if (record.implemented !== undefined && typeof record.implemented !== "boolean") return null;
-  return { eligible: record.eligible, systemSandbox: record.systemSandbox,
-    reason: record.reason as NonNullable<HarnessHealth["readOnlyStructured"]>["reason"],
-    sameAttemptContinuation: record.sameAttemptContinuation,
-    ...(typeof record.implemented === "boolean" ? { implemented: record.implemented } : {}) };
+  const entries = Object.entries(value);
+  if (entries.some(([level, enforcement]) => !["none", "read", "write", "full"].includes(level)
+    || !["enforced", "convention"].includes(enforcement as string))) return null;
+  return Object.fromEntries(entries) as NonNullable<HarnessHealth["permissions"]>;
 }
 
 /**
@@ -404,14 +398,12 @@ function harnessRow(value: unknown): HarnessHealth | null {
     !candidate || typeof candidate !== "object" || ["path", "source", "status"].some(key =>
       (candidate as Record<string, unknown>)[key] != null && typeof (candidate as Record<string, unknown>)[key] !== "string")
       || candidate.reason != null && !isReason(candidate.reason)))) return null;
-  const { providers: rawProviders, readOnlyStructured: rawReadOnly, systemSandbox: rawSandbox,
-    reviewVerification: _retiredCertificate, verified: _retiredVerified, ...rest } = row as HarnessHealth & { reviewVerification?: unknown; verified?: unknown };
+  const { providers: rawProviders, permissions: rawPermissions, ...rest } = row;
   const providers = parseProviders(rawProviders);
-  const readOnlyStructured = parseReadOnlyStructured(rawReadOnly);
+  const permissions = parsePermissionLevels(rawPermissions);
   return { ...rest, harness: row.harness.trim(), manualPath: row.manualPath ?? null,
     ...(providers ? { providers } : {}),
-    ...(readOnlyStructured ? { readOnlyStructured } : {}),
-    ...(typeof rawSandbox === "boolean" ? { systemSandbox: rawSandbox } : {}) };
+    ...(permissions ? { permissions } : {}) };
 }
 
 /** Known harnesses first in their fixed order; anything else keeps its own order. */

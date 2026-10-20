@@ -65,7 +65,7 @@ for line in sys.stdin:
         if case == 'discovery' or case == 'native-config' and 'mcpServers' not in p:
             assert p['toolAllowlist'] == []
         elif case in ('write-final', 'write-post-close'):
-            assert p.get('mode') == 'yolo' and p['mcpServers'] == []
+            assert p.get('mode') in ('yolo', 'plan') and p['mcpServers'] == []
         else:
             assert p['toolAllowlist'] == [] and p['mcpServers'] == []
             assert p['offPeakToolEnabled'] is False and p['dynamicWorkflowEnabled'] is False
@@ -239,7 +239,7 @@ class ProjectionTests(unittest.TestCase):
         package = facts.finish(True)
         self.assertEqual(package['toolCalls'], 1)
         self.assertEqual([event['phase'] for event in package['events']], ['start', 'end'])
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, 'review', False))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, 'read'))
 
     def test_unbound_conflicting_and_late_intermediate_frames_stay_incomplete(self):
         for payload in ({'kind': 'started', 'toolCallId': 'foreign'},
@@ -247,17 +247,17 @@ class ProjectionTests(unittest.TestCase):
             facts = self.facts()
             facts.observe(frame({'kind': 'scheduled', 'toolCallId': 'read', 'toolName': 'Read'}))
             facts.observe(frame(payload, seq=3))
-            self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'review', False))
+            self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'read'))
         facts = self.facts()
         facts.observe(frame({'kind': 'scheduled', 'toolCallId': 'read', 'toolName': 'Read'}))
         facts.observe(frame({'kind': 'result', 'toolCallId': 'read'}, seq=3))
         facts.observe(frame({'kind': 'progress', 'toolCallId': 'read'}, seq=4))
-        self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'review', False))
+        self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'read'))
         facts = self.facts()
         facts.observe(frame({'kind': 'scheduled', 'toolCallId': 'read', 'toolName': 'Read'}))
         facts.observe({'method': 'session/event', 'params': {**ROOT, 'type': 'turn.completed'}})
         facts.observe(frame({'kind': 'progress', 'toolCallId': 'read'}, seq=4))
-        self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'review', False))
+        self.assertIsNotNone(tool_evidence.judge_tool_evidence(facts.finish(True), 'read'))
 
     def test_settled_pair_keeps_the_scheduled_name_and_fixed_fields_only(self):
         facts = self.facts()
@@ -276,8 +276,8 @@ class ProjectionTests(unittest.TestCase):
         self.assertFalse(package["truncated"])
         # The blackboard consumes the projection: the recorded read call is a
         # legal review fact, and fast mode's zero-call rule rejects it.
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", False))
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "fast", False),
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "none"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_error_kind_ends_the_call_from_the_scheduled_record(self):
@@ -311,7 +311,7 @@ class ProjectionTests(unittest.TestCase):
              "category": "other", "phase": "end"}])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (0, 0))
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", False),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_missing_call_id_is_retained_and_never_invented(self):
@@ -322,7 +322,7 @@ class ProjectionTests(unittest.TestCase):
             {"nativeIdentity": dict(ROOT), "callId": None, "toolName": "Bash",
              "category": "execute", "phase": "start"}])
         self.assertEqual(package["toolCalls"], 0)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", False),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_missing_turn_or_session_identity_stays_incomplete(self):
@@ -367,7 +367,7 @@ class ProjectionTests(unittest.TestCase):
         package = facts.finish(True)
         self.assertEqual(len(package["events"]), 2)
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", False),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_foreign_child_and_old_turn_frames_are_kept_but_never_trusted(self):
@@ -382,7 +382,7 @@ class ProjectionTests(unittest.TestCase):
                     {"nativeIdentity": {"sessionId": session, "turnId": turn}, "callId": "c-9",
                      "toolName": "Read", "category": "read", "phase": "start"}])
                 self.assertEqual(package["toolCalls"], 1)
-                self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", False),
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_late_frames_after_the_close_leave_the_stream_incomplete(self):
@@ -400,7 +400,7 @@ class ProjectionTests(unittest.TestCase):
         facts.observe(frame({"kind": "scheduled", "toolCallId": "c-1", "toolName": "Read"}))
         package = facts.finish(True)
         self.assertEqual(package["nativeIdentity"], [])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", False),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
         facts.add_root("s-1", "t-1")
         facts.add_root("s-1", "t-1")
@@ -570,9 +570,8 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertEqual(package["events"], [])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], package["truncated"]), (0, 0, False))
         self.assertTrue(package["streamComplete"])
-        self.assertTrue(outcome.result["zeroToolVerified"])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "fast", False))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "none"))
 
     def test_format_correction_accumulates_roots_counts_and_one_stream(self):
         outcome = self.execute("correct")
@@ -584,13 +583,11 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertTrue(package["streamComplete"])
         self.assertEqual(outcome.result["correctionCount"], 1)
         self.assertIn(outcome.result["nativeIdentity"], package["nativeIdentity"])
-        self.assertTrue(outcome.result["zeroToolVerified"])
 
     def test_tool_call_receipt_keeps_the_fact_and_fails_the_judge(self):
         outcome = self.execute("tool")
         self.assertEqual(outcome.status, "failed")
         self.assertEqual(outcome.result["code"], "no-tool-violation")
-        self.assertNotIn("zeroToolVerified", outcome.result)
         package = outcome.result["toolEvidence"]
         # The fixture's frame carries no toolCallId: the fact is kept unnamed
         # and the observed count stays unknown rather than inventing one call.
@@ -600,7 +597,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertEqual(package["toolCalls"], 0)
         self.assertFalse(package["streamComplete"])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "fast", False),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "none"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_foreign_child_call_is_a_kept_foreign_fact(self):
@@ -610,7 +607,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertEqual(package["events"][0]["nativeIdentity"], {"sessionId": "s-child", "turnId": "t-child"})
         self.assertEqual(package["events"][0]["callId"], "c-f")
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", False),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_late_frame_after_the_close_is_recorded_and_incomplete(self):
@@ -631,12 +628,10 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         self.assertEqual(package["events"], [])
         self.assertEqual(package["toolCalls"], 0)
         self.assertFalse(package["streamComplete"])
-        self.assertNotIn("zeroToolVerified", outcome.result)
 
     def test_cancelled_and_timeout_receipts_carry_incomplete_evidence(self):
         outcome = self.execute("timeout", timeout=10, cancel=True)
         self.assertIn(outcome.status, ("failed", "cancelled"))
-        self.assertNotIn("zeroToolVerified", outcome.result)
         package = outcome.result["toolEvidence"]
         self.assertEqual(package["events"], [])
         self.assertFalse(package["streamComplete"])
@@ -648,9 +643,9 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         )
         from hey_my_buddy.buddy.harnesses.zcode import native_run
         from hey_my_buddy.buddy.roles.run_observers import FastCorrection
-        from hey_my_buddy.buddy.roles.structured_call import no_tool_prompt
+        from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 
-        prompt = no_tool_prompt("Choose a buddy", SCHEMA)
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
         request = RunRequest(
             identity=RunIdentity(task_id="task", attempt_id="attempt", generation=1,
                                  invocation_id="timeout-after-prompt"),
@@ -659,7 +654,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
             cwd=str(self.cwd),
             private_state=PrivateStatePaths(invocation_root=str(self.root / "invocation"),
                                             native_root=str(self.root / "native")),
-            input_text=prompt, tool_scope="none", output_schema=SCHEMA,
+            input_text=prompt, permission="none", output_schema=SCHEMA,
             budget=RunBudget(timeout_seconds=None))
         ready = self.root / "prompt-ready"
         expired_at_prompt = []

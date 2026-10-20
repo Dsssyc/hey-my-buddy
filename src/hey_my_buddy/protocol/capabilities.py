@@ -10,20 +10,28 @@ ADAPTER_CAPABILITIES = {
     "claude": ("claude", "inquiry", "workspace", "cancel", "artifacts", "deadline"),
 }
 
-WORKER_PERMISSIONS = {
-    "codex": {"read": ("read", "enforced"), "write": ("write", "enforced"),
-              "full": ("full", "enforced")},
-    "claude": {"read": ("read", "enforced"), "write": ("write", "enforced"),
-               "full": ("full", "enforced")},
-    "dsh": {"read": ("read", "enforced"), "write": ("write", "enforced"),
-            "full": ("full", "enforced")},
-    "zcode": {"read": ("read", "enforced"), "write": ("write", "convention"),
-              "full": ("full", "enforced")},
+PERMISSION_LEVELS = {
+    "codex": {"none": "convention", "read": "enforced", "write": "enforced", "full": "enforced"},
+    "claude": {"read": "enforced", "write": "enforced", "full": "enforced"},
+    "dsh": {"none": "enforced", "read": "enforced", "write": "enforced", "full": "enforced"},
+    "zcode": {"none": "enforced", "read": "enforced", "write": "convention", "full": "enforced"},
 }
 
 
 def adapter_capabilities(name: str) -> tuple[str, ...]:
     return (*ADAPTER_CAPABILITIES[name],
-            *(f"permission:{level}" for level in WORKER_PERMISSIONS.get(name, {})))
+            *(f"permission:{level}" for level in PERMISSION_LEVELS.get(name, {})))
+
+
+def buddy_capabilities(harness: str, stored: list[str]) -> list[str]:
+    """Add the role capabilities derived from this harness's permission levels."""
+    declared = PERMISSION_LEVELS.get(harness, {})
+    derived = []
+    if "read" in declared:
+        derived.append("decision")
+    if "none" in declared:
+        derived.append("routing:fast")
+    derived.extend(f"permission:{level}" for level in declared)
+    return [*stored, *derived]
 
 

@@ -132,13 +132,11 @@ class DescriptionSeamTests(DshRoleCase):
         self.assertIsNone(worker_format("dsh"),
                           "the micro task role rules come from the shared worker services, not a format")
 
-    def test_a_read_only_review_stays_unimplemented(self):
+    def test_the_description_has_no_parallel_read_only_eligibility(self):
         description = adapter("dsh")
-        eligibility = description.local_read_only_check()
-        self.assertFalse(eligibility["eligible"])
-        self.assertEqual(eligibility["reason"], {"code": "harness.readonly-worker-carrier-unimplemented",
-                                                "params": {"harness": "dsh"}})
-        self.assertFalse(description.read_only_structured)
+        self.assertFalse(hasattr(description, "local_read_only_check"))
+        self.assertFalse(hasattr(description, "read_only_structured"))
+        self.assertFalse(hasattr(description, "no_tool_structured"))
 
     def test_check_preparation_refuses_only_without_a_ready_command(self):
         """The restored availability contract, without the retired Node runner gate.
@@ -211,7 +209,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         result = handle.result
         self.assertEqual(request.identity, result.identity)
         self.assertEqual(request.identity, handle.role_run_identity)
-        self.assertEqual(request.tool_scope, "write")
+        self.assertEqual(request.permission, "write")
         self.assertNotIn("frozenAccount", request.to_payload())
         self.assertEqual(request.identity.input_sha256, turn_io.input_hash(context.turn_input))
         turn = outcome.result["turn"]

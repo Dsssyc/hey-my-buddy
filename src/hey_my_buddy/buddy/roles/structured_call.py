@@ -91,7 +91,7 @@ def correction_code(raw, schema: dict) -> str | None:
     return "answer-shape" if errors else None
 
 
-def no_tool_prompt(prompt: str, schema: dict) -> str:
+def structured_prompt(prompt: str, schema: dict) -> str:
     """Python supplies the answer schema for harnesses without a native JSON option."""
     return prompt + "\n\nReturn only one JSON value matching this schema: " + canonical_json(schema)
 

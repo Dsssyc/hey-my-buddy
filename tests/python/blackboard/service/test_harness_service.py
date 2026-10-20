@@ -141,8 +141,7 @@ class HarnessServiceTests(BoardTestCase):
         payload = {'source': 'fixture', 'providers': [{'harness': 'codex', 'provider': 'openai',
             'models': [{'id': 'gpt-6-sol', 'name': 'Sol', 'efforts': ['high']}]}],
             'discoveries': [{'harness': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}]}
-        with patch('hey_my_buddy.buddy.harnesses.base.sys.platform', 'darwin'), \
-             patch('hey_my_buddy.buddy.harnesses.codex.adapter.CodexAdapter.discover_models', return_value=payload), \
+        with patch('hey_my_buddy.buddy.harnesses.codex.adapter.CodexAdapter.discover_models', return_value=payload), \
              patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'harness': 'codex', 'managerRecords': [], 'candidates': []}):
             for version in ('0.157.0', '0.158.0'):
                 with self.subTest(version=version), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value={
@@ -153,7 +152,9 @@ class HarnessServiceTests(BoardTestCase):
                     with self.board.db.read() as db:
                         row = db.execute("SELECT capabilities_json FROM buddies WHERE buddy_id='codex:openai:gpt-6-sol:high'").fetchone()
                     self.assertIsNotNone(row)
-                    self.assertIn('decision', json.loads(row[0]))
+                    self.assertNotIn('decision', json.loads(row[0]))
+                    buddy = next(item for item in self.board.evaluation.console_core()['buddies'] if item['buddyId'] == 'codex:openai:gpt-6-sol:high')
+                    self.assertIn('decision', buddy['capabilities'])
 
     def test_explicit_continuation_and_helper_also_refresh_unavailable_harness(self):
         with patch.object(self.board.workflow, 'continue_run', return_value={}), \

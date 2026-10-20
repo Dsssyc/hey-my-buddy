@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -1027,18 +1027,21 @@ CREATE TABLE IF NOT EXISTS router_dispatches (
     created_at   TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_binding_unique ON attempts(attempt_id, task_id, generation);
+"""
+ROUTER_CLAIMS_DDL = """
 CREATE TABLE IF NOT EXISTS router_claims (
     attempt_id TEXT NOT NULL PRIMARY KEY,
     task_id    TEXT NOT NULL REFERENCES router_dispatches(task_id) ON DELETE RESTRICT,
     generation INTEGER NOT NULL CHECK (generation >= 1),
-    tool_policy_json TEXT NOT NULL,
     FOREIGN KEY (attempt_id, task_id, generation) REFERENCES attempts(attempt_id, task_id, generation) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
     UNIQUE (task_id, generation)
 );
+"""
+ROUTER_OUTCOMES_DDL = """
 CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_outcome_binding_unique ON attempts(attempt_id, task_id);
 CREATE TABLE IF NOT EXISTS router_outcomes (
     receipt_id   TEXT NOT NULL PRIMARY KEY,
-    plane        TEXT NOT NULL CHECK (plane IN ('work','maintenance','portrait')),
+    plane        TEXT NOT NULL CHECK (plane IN ('routing','maintenance','portrait')),
     request_id   TEXT NOT NULL,
     router_index INTEGER NOT NULL CHECK (router_index >= 0),
     buddy_id   TEXT NOT NULL,
@@ -1056,6 +1059,7 @@ CREATE INDEX IF NOT EXISTS router_outcomes_buddy_idx ON router_outcomes(buddy_id
 CREATE INDEX IF NOT EXISTS router_outcomes_task_idx ON router_outcomes(task_id, event_seq);
 CREATE INDEX IF NOT EXISTS router_outcomes_attempt_idx ON router_outcomes(attempt_id);
 """
+ROUTER_SCHEMA += ROUTER_CLAIMS_DDL + ROUTER_OUTCOMES_DDL
 CATALOG_PENDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS catalog_pending (
     harness      TEXT NOT NULL REFERENCES catalog_current(harness) ON DELETE RESTRICT,

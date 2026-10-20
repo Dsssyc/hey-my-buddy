@@ -44,10 +44,7 @@ class SingleRouterConfigurationTests(BoardTestCase):
 
     def test_mode_patch_preserves_temporarily_ineligible_router_and_reports_qualification(self):
         self.configure({'routerBuddyIds': [BUDDY]}, enable=True)
-        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-                'eligible': False, 'reason': {'code': 'harness.readonly-tools-unrestricted', 'params': {}},
-                'systemSandbox': False,
-                'sameAttemptContinuation': False}):
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             self.configure({'defaultRoutingMode': 'review'})
             from hey_my_buddy.blackboard.routing import router
             with self.board_.store.db.read() as db:

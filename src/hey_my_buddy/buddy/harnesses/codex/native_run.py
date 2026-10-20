@@ -5,10 +5,9 @@ Codex harness: evidence-directory preparation, the owned App Server spawn and
 handshake, the account/catalog initialization, the per-carrier thread
 configuration, turn admission and the event pump, the fast EOF drain and the
 conservative group stop each exist exactly once here, driven only by the
-frozen :class:`~hey_my_buddy.buddy.harnesses.run_contract.RunRequest`. What
-differs between the micro task Worker turn (``write`` scope), the fast no-tool
-call (``none``) and the read-only review call (``read``) is expressed by the
-request and by the role observer's feedback — never by a second native path
+frozen :class:`~hey_my_buddy.buddy.harnesses.run_contract.RunRequest`. Native
+policy follows the permission level; turn identity and the role observer's
+feedback determine the completion path — never a second native path
 and never by re-entering the legacy ``runner`` branches.
 
 The driver owns protocol integrity and fact projection only: thread/turn
@@ -40,7 +39,6 @@ import os
 import queue
 import subprocess
 import time
-import tomllib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -105,8 +103,6 @@ from .config import (
     cli_command,
     native_environment,
     native_provider,
-    policy_status,
-    read_only_config,
 )
 from .protocol import (
     CodexProtocolError,
@@ -140,23 +136,22 @@ _BOUND_NOTIFICATIONS = 128
 
 
 def _mode(request: RunRequest) -> str:
-    if request.worker_permission is not None:
+    if request.permission == "none":
+        return "fast"
+    if request.identity.turn_id is not None:
         return "worker"
-    if request.tool_scope not in ("none", "read"):
-        raise BoardError("INVALID_ARGUMENT", "Codex Worker runs require a permission level",
-                         toolScope=request.tool_scope)
-    return {"none": "fast", "read": "review"}[request.tool_scope]
+    return "review"
 
 
-def _worker_sandbox(request: RunRequest) -> tuple[str, dict]:
+def _permission_sandbox(request: RunRequest) -> tuple[str, dict]:
     """One turn's native thread mode and explicit file/network policy."""
-    level = request.worker_permission.level
-    if level == "read":
-        return "read-only", {"type": "readOnly", "networkAccess": True}
-    if level == "write":
-        return "workspace-write", {"type": "workspaceWrite", "writableRoots": [request.cwd],
-                                   "networkAccess": True}
-    return "danger-full-access", {"type": "dangerFullAccess"}
+    level = request.permission
+    return {
+        "read": ("read-only", {"type": "readOnly", "networkAccess": True}),
+        "write": ("workspace-write", {"type": "workspaceWrite", "writableRoots": [request.cwd],
+                                    "networkAccess": True}),
+        "full": ("danger-full-access", {"type": "dangerFullAccess"}),
+    }[level]
 
 
 # -- the cumulative facts the role observer sees ---------------------------------
@@ -373,7 +368,6 @@ class _RunState:
     #: The review thread/start receipt as the native side actually answered it,
     #: retained before any verdict over it.
     review_receipt: dict | None = None
-    review_config: dict | None = None
     #: Whether the on-the-spot native catalog listed the selected model. ADR-027
     #: rule 5: an absent model is handed to the native turn under its own name,
     #: the absence becomes this run's public fact, and the native answer decides.
@@ -461,11 +455,10 @@ def _prepare(request: RunRequest, mode: str) -> _Preparation:
     except CodexUnavailable as error:
         raise BoardError("HARNESS_UNAVAILABLE", str(error), harness="codex") from None
     environment = native_environment(incoming)
-    if mode in ("review", "fast"):
-        policy = (tomllib.loads(read_only_config(request.cwd)) if mode == "review"
-                  else {"web_search": "disabled", "approval_policy": "never"})
-        for key, value in _config_overrides(policy).items():
-            command.extend(("-c", key + "=" + value))
+    if mode == "fast":
+        policy = {"web_search": "disabled", "approval_policy": "never"}
+        for key, value in policy.items():
+            command.extend(("-c", key + "=" + _toml_value(value)))
     return _Preparation(command=command, environment=environment, native_root=native_root,
                         invocation_root=invocation_root,
                         stderr_path=invocation_root / _NATIVE_STDERR_FILE,
@@ -680,7 +673,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     """Worker buddy selection: continuation checks, then one start or resume."""
     mode, previous = _continuation_of(request)
     requested = buddy_spec(request)
-    sandbox, _policy = _worker_sandbox(request)
+    sandbox, _policy = _permission_sandbox(request)
     state.requested = requested
     inquiry_config = {"dynamicTools": inquiry.dynamic_tools} if inquiry is not None else {}
     if mode == "native-session":
@@ -744,41 +737,19 @@ def _toml_value(value) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _config_overrides(config: dict) -> dict[str, str]:
-    """Filesystem paths stay inside whole permission-profile table values."""
-    overrides = {key: _toml_value(value) for key, value in config.items() if key != "permissions"}
-    for name, profile in config.get("permissions", {}).items():
-        overrides["permissions." + name] = _toml_value(profile)
-    return overrides
-
-
 def _configure_review(connection: Connection, request: RunRequest,
                       state: _RunState) -> str:
-    """Review configuration: native readback facts and thread ownership."""
+    """One-shot read configuration with the same sandbox as a read Worker."""
     cwd, spec = request.cwd, buddy_spec(request)
-    expected = tomllib.loads(read_only_config(cwd))
+    sandbox, policy = _permission_sandbox(request)
     response = connection.call("thread/start", {
         "cwd": cwd, "model": spec["model"], "modelProvider": spec["provider"],
-        "approvalPolicy": "never", "permissions": "hey-my-buddy-router", "serviceName": "hey-my-buddy",
+        "approvalPolicy": "never", "sandbox": sandbox, "serviceName": "hey-my-buddy",
         "experimentalRawEvents": True, "ephemeral": True,
     })
-    configured = connection.call("config/read", {"cwd": cwd, "includeLayers": False}).get("config")
-    configured = configured if isinstance(configured, dict) else {}
-    # Retain permission facts and presence, never user MCP arguments or credentials.
-    state.review_config = {key: _readback_fact(configured[key]) for key in
-                           ("web_search", "approval_policy", "default_permissions") if key in configured}
-    state.review_config["mcp_servers"] = bool(configured.get("mcp_servers"))
-    features = configured.get("features")
-    permissions = configured.get("permissions")
-    profile = permissions.get("hey-my-buddy-router") if isinstance(permissions, dict) else None
-    state.review_config["features"] = {"apps": _readback_fact(features.get("apps")) if isinstance(features, dict) else None}
-    state.review_config["permissions"] = {"hey-my-buddy-router": _readback_fact(profile)}
-    config_status = policy_status(configured, expected)
-    state.policy_checks["configReadback"] = {
-        "status": "confirmed" if config_status == "confirmed" else "unknown"}
-    receipt_profile = response.get("activePermissionProfile")
+    state.worker_policy = {"sandboxPolicy": policy, "approvalPolicy": "never"}
     sandbox = response.get("sandbox")
-    acknowledged = {"activePermissionProfile": receipt_profile, "sandbox": sandbox,
+    acknowledged = {"sandbox": sandbox,
                     "approvalPolicy": response.get("approvalPolicy"), "model": response.get("model"),
                     "modelProvider": response.get("modelProvider"), "cwd": response.get("cwd")}
     # The acknowledged receipt is retained before any verdict over it, so a
@@ -786,11 +757,8 @@ def _configure_review(connection: Connection, request: RunRequest,
     # never the requested policy dressed up as the readback.
     state.review_receipt = {key: _readback_fact(value) for key, value in acknowledged.items()}
     state.policy_checks["threadReceipt"] = {
-        "status": "confirmed" if (isinstance(receipt_profile, dict) and isinstance(sandbox, dict)
-                                  and receipt_profile.get("id") == "hey-my-buddy-router"
-                                  and response.get("approvalPolicy") == "never"
-                                  and sandbox.get("type") == "readOnly"
-                                  and sandbox.get("networkAccess") is False) else "unknown"}
+        "status": "confirmed" if (isinstance(sandbox, dict)
+                                  and sandbox.get("type") == "readOnly") else "unknown"}
     state.native_model = _bounded(response.get("model"), 128)
     state.policy_checks["selectedModel"] = {"status": "confirmed" if state.native_model == spec["model"] else "unknown"}
     if not isinstance(sandbox, dict) or sandbox.get("type") != "readOnly":
@@ -802,12 +770,6 @@ def _configure_review(connection: Connection, request: RunRequest,
     if isinstance(response.get("modelProvider"), str) and response["modelProvider"] != spec["provider"]:
         raise CodexProtocolError("readonly-configuration-mismatch",
                                  "Codex acknowledged a different read-only provider")
-    profile_id = receipt_profile.get("id") if isinstance(receipt_profile, dict) else None
-    approval = response.get("approvalPolicy")
-    if config_status == "mismatch" or isinstance(profile_id, str) and profile_id != "hey-my-buddy-router" \
-            or isinstance(approval, str) and approval != "never" or sandbox.get("networkAccess") is True:
-        raise CodexProtocolError("readonly-policy-unverified",
-                                 "Codex acknowledged conflicting read-only restrictions")
     if not isinstance(response.get("cwd"), str) or Path(response["cwd"]).resolve() != Path(cwd).resolve():
         raise CodexProtocolError("readonly-configuration-mismatch",
                                  "Codex acknowledged a different read-only checkout")
@@ -1094,10 +1056,8 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
                     "effort": request.buddy.effort, "approvalPolicy": "never",
                     "input": [{"type": "text", "text": input_text}],
                     "outputSchema": request.output_schema.value}
-    if mode == "worker":
-        _sandbox, params["sandboxPolicy"] = _worker_sandbox(request)
-    elif mode == "review":
-        params["permissions"] = "hey-my-buddy-router"
+    if mode in ("worker", "review"):
+        _sandbox, params["sandboxPolicy"] = _permission_sandbox(request)
     if mode == "worker":
         state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
@@ -1764,7 +1724,7 @@ def _effective_policy(state: _RunState, mode: str) -> EffectivePolicy:
         return EffectivePolicy(
             tools=PolicyFact(requested=_json_package({"sandbox": "read-only", "approvalPolicy": "never"})))
     return EffectivePolicy(
-        tools=PolicyFact(requested=_json_package({"permissions": "hey-my-buddy-router", "approvalPolicy": "never"})))
+        tools=PolicyFact(requested=_json_package(state.worker_policy)) if state.worker_policy else None)
 
 
 def _last_assistant_message(checkpoint: dict | None) -> dict | None:
@@ -1828,9 +1788,6 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
         retain("native-turn-facts", invocation_root / "native-turn-facts.json", state.native_turn_facts)
     if state.inquiry_report is not None:
         retain("inquiry-report", invocation_root / "inquiry-report.json", state.inquiry_report)
-    if state.review_config is not None:
-        retain("review-config-readback", invocation_root / "review-config-readback.json",
-               {"config": state.review_config})
     if state.review_receipt is not None:
         retain("review-thread-receipt", invocation_root / "review-thread-receipt.json",
                state.review_receipt)
@@ -2150,9 +2107,6 @@ def native_evidence(result: RunResult) -> dict:
         requested = policy.requested.value if policy is not None and policy.requested is not None else None
         if isinstance(requested, dict):
             projection["nativePolicy"] = requested
-    config = _read_evidence_ref(result, "review-config-readback")
-    if config is not None and isinstance(config.get("config"), dict):
-        projection["nativeConfigPolicy"] = config["config"]
     capture = _read_evidence_ref(result, "review-captured-events")
     if capture is not None:
         projection["nativeToolEvents"] = capture.get("toolEvents")

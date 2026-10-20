@@ -813,8 +813,7 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
         service = board.service
         record = service.harnesses.get('dsh')
         with patch('hey_my_buddy.buddy.harnesses.registry.adapter',
-                   return_value=SimpleNamespace(discover_models=lambda: [],
-                                                local_read_only_check=lambda: {"eligible": False, "systemSandbox": False})):
+                   return_value=SimpleNamespace(discover_models=lambda: [])):
             service._refresh_harness_catalog('dsh', record)
         self.assertEqual(service.harnesses.get('dsh')['reason'], {
             'code': 'catalog.discovery-failed',
@@ -843,8 +842,7 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
             return good
 
         calls: list[bool] = []
-        stub = SimpleNamespace(discover_models=discover_models,
-                               local_read_only_check=lambda: {"eligible": False, "systemSandbox": False})
+        stub = SimpleNamespace(discover_models=discover_models)
         with patch('hey_my_buddy.buddy.harnesses.registry.adapter', return_value=stub), \
              patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value=snapshot), \
              patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=ready):

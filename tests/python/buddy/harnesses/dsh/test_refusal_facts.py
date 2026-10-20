@@ -203,18 +203,6 @@ class RefusalFactsTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "invalid-buddy")
         self.assertNotIn("session/prompt", self.methods)
 
-    def test_unconfirmed_tool_rows_continue_with_actual_patch_and_unknown_fact(self):
-        with mock.patch.object(native_run, "NONE_SCOPE_DISABLED_ROWS", ()):
-            result = self.run_final()
-        self.assert_continued(result)
-        self.assertEqual(self.launch.call_args.kwargs["scope_rows"],
-                         [{"id": "plan-mode", "disabled": True}])
-        self.assertEqual(result.effective_policy.tools.requested.value,
-                         {"disabledRows": ["plan-mode"]})
-        self.assertEqual(self.native_facts(result)["toolScope"], {
-            "status": "unknown", "reason": "scope-configuration-unconfirmed",
-            "disabledRows": ["plan-mode"]})
-
     def test_final_answer_byte_limit_still_refuses(self):
         self.answer = "x" * (native_run._MAX_ANSWER_BYTES + 1)
         result = self.run_final()
@@ -332,19 +320,6 @@ class RefusalFactsTests(NativeRunCase):
         self.assertEqual(evidence.unconfirmed, (),
                          "a readback that confirmed nothing is not an unconfirmed request fact")
 
-    def test_unconfirmed_tool_scope_reaches_the_shared_outlet(self):
-        with mock.patch.object(native_run, "NONE_SCOPE_DISABLED_ROWS", ()):
-            result = self.run_final()
-        self.assert_continued(result)
-        evidence = result.native_evidence
-        self.assertIsNone(evidence.unknown_events)
-        self.assertEqual(evidence.unconfirmed, (native_run.UNCONFIRMED_TOOL_SCOPE,))
-        # The unknown-event kind names and the unconfirmed names stay the bounded
-        # vocabulary: no payload, path or credential travels in either.
-        rendered = json.dumps(evidence.to_payload())
-        self.assertNotIn("private", rendered)
-        self.assertNotIn("/", rendered)
-
     def test_the_three_role_results_carry_the_shared_native_facts(self):
         from hey_my_buddy.buddy.roles import run_execution
 
@@ -378,7 +353,7 @@ class RefusalFactsTests(NativeRunCase):
     def test_request_boundary_rejects_relative_cwd_and_invalid_scope(self):
         request = self.fast_request("prompt")
         fields = {name: getattr(request, name) for name in type(request).model_fields}
-        for field, invalid in (("cwd", "relative"), ("tool_scope", "invalid")):
+        for field, invalid in (("cwd", "relative"), ("permission", "invalid")):
             with self.subTest(field=field), self.assertRaises(BoardError):
                 type(request)(**{**fields, field: invalid})
         self.launch.assert_not_called()

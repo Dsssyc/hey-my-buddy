@@ -120,7 +120,7 @@ class ProjectionTests(unittest.TestCase):
                          [("Read", "read", "start"), ("Read", "read", "end"),
                           ("Grep", "search", "start"), ("Grep", "search", "end")])
         self.assertTrue(all(event["nativeIdentity"] == ROOT for event in package["events"]))
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
         self.assertEqual(collector.tool_calls, 2)
 
     def test_replays_and_stream_projections_of_one_call_collapse(self):
@@ -130,7 +130,7 @@ class ProjectionTests(unittest.TestCase):
                               stream_start("Read", "toolu_1"),
                               tool_result("toolu_1")])
         self.assertEqual((package["toolCalls"], len(package["events"])), (1, 2))
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
     def test_conflicting_facts_for_one_call_are_kept(self):
         _, package = project([init_frame(),
@@ -139,7 +139,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual(len(package["events"]), 4)
         self.assertEqual({event["toolName"] for event in package["events"]}, {"Read", "Grep"})
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_stream_block_stop_is_never_a_tool_end(self):
@@ -147,7 +147,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 1))
         self.assertEqual([event["phase"] for event in package["events"]], ["start"])
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_subagent_facts_keep_their_parent_identity_and_never_inherit_the_root(self):
@@ -164,7 +164,7 @@ class ProjectionTests(unittest.TestCase):
              "category": "search", "phase": "start"},
             {"nativeIdentity": parent_identity, "callId": "toolu_sub_1", "toolName": "Glob",
              "category": "search", "phase": "end"}])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_foreign_session_is_kept_and_later_session_less_frames_turn_unprovable(self):
@@ -180,7 +180,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(package["events"][2], {"nativeIdentity": {}, "callId": "toolu_2",
                                                 "toolName": "Read", "category": "read", "phase": "start"})
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_handshake_confirmed_single_root_adopts_session_less_root_frames(self):
@@ -191,14 +191,14 @@ class ProjectionTests(unittest.TestCase):
                               tool_result("toolu_1", session=None)])
         self.assertEqual(adopted["nativeIdentity"], [ROOT])
         self.assertEqual([event["nativeIdentity"] for event in adopted["events"]], [ROOT, ROOT])
-        self.assertIsNone(tool_evidence.judge_tool_evidence(adopted, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(adopted, "read"))
 
     def test_session_tagged_facts_stay_foreign_without_a_confirmed_root(self):
         _, package = project([assistant_tool("Read", "toolu_1"), tool_result("toolu_1")])
         self.assertEqual(package["nativeIdentity"], [])
         self.assertEqual([event["nativeIdentity"] for event in package["events"]],
                          [{"sessionId": "session-root"}, {"sessionId": "session-root"}])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_uncorrelatable_and_nameless_facts_are_retained_without_invented_ids(self):
@@ -219,7 +219,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 0))
         self.assertEqual({event["category"] for event in package["events"]}, {"other"})
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_facts_after_the_result_frame_still_project_before_the_close(self):
@@ -239,7 +239,7 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(len(package["events"]), tool_evidence.MAX_TOOL_EVENTS)
         self.assertEqual(package["toolCalls"], 65)
         self.assertTrue(package["truncated"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_the_first_finish_fixes_the_package_and_its_roots_come_from_the_handshake_only(self):
@@ -273,7 +273,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], package["events"]),
                          (0, 0, []))
         self.assertTrue(package["streamComplete"])
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
     def test_the_live_budget_count_holds_the_candidate_before_verification(self):
         armed_collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED)])
@@ -303,7 +303,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
         self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
                          [("StructuredOutput", "start"), ("StructuredOutput", "end")])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN,
                          "an unarmed StructuredOutput call is an ordinary forbidden tool")
 
@@ -344,7 +344,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         package = collector.finish(True)
         self.assertEqual(package["toolCalls"], 1)
         self.assertEqual([event["category"] for event in package["events"]], ["other", "other"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_a_second_different_full_input_refuses_the_exemption_in_either_order(self):
@@ -362,7 +362,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                 self.assertEqual(package["toolCalls"], 1)
                 self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
                                  [("StructuredOutput", "start"), ("StructuredOutput", "end")])
-                self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                                  tool_evidence.TOOLS_FORBIDDEN)
 
     def test_an_incomplete_fact_on_the_call_refuses_the_exemption(self):
@@ -378,7 +378,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         package = collector.finish(True)
         self.assertEqual(package["toolCalls"], 1)
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_subagent_foreign_and_mounted_lookalikes_are_not_candidates(self):
@@ -393,7 +393,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual(collector.tool_calls, 3)
         package = collector.finish(True)
         self.assertEqual(package["toolCalls"], 3)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_a_conflicting_start_name_on_the_same_call_refuses_the_exemption(self):
@@ -403,7 +403,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual(collector.tool_calls, 1)
         package = collector.finish(True)
         self.assertEqual(len(package["events"]), 2)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_candidate_on_an_unconfirmed_root_verifies_nothing(self):
@@ -537,7 +537,7 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"], evidence["truncated"]), (2, 0, False))
         self.assertEqual(len(evidence["events"]), 4)
         self.assertTrue(receipt["answerValid"])
-        self.assertIsNone(tool_evidence.judge_tool_evidence(evidence, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(evidence, "read"))
 
     def test_replayed_and_stream_projected_calls_count_once_in_the_receipt(self):
         # A limit of one allows the one real call: the old per-frame block count
@@ -557,7 +557,7 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertEqual([event["nativeIdentity"] for event in evidence["events"]],
                          [evidence["nativeIdentity"][0], evidence["nativeIdentity"][0],
                           parent_identity, parent_identity])
-        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_block_stop_receipt_keeps_the_call_unsettled(self):
@@ -566,7 +566,7 @@ class RunnerReceiptTests(unittest.TestCase):
         evidence = outcome.result["toolEvidence"]
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (1, 1))
         self.assertTrue(evidence["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_facts_after_the_result_frame_settle_only_after_the_stream_closes(self):
@@ -579,7 +579,7 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertEqual([event["callId"] for event in evidence["events"]],
                          ["toolu_1", "toolu_1", "toolu_2"])
         self.assertFalse(evidence["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_budget_exhaustion_reports_the_unified_count_and_an_unfinished_stream(self):

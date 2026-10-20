@@ -112,7 +112,6 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
             with self.subTest(case=case):
                 outcome = self.execute(case)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
-                self.assertTrue(outcome.result["zeroToolVerified"])
                 self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
                 self.assertEqual(outcome.result["correctionCount"], count)
                 self.assertNotIn("private-test-secret", json.dumps(outcome.to_report()))
@@ -135,7 +134,6 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
                 outcome = self.execute(case)
                 self.assertEqual(outcome.status, "failed")
                 self.assertEqual(outcome.result["code"], code)
-                self.assertNotIn("zeroToolVerified", outcome.result)
                 if code == "no-tool-violation":
                     self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
                     self.assertFalse(outcome.result["toolEvidence"]["streamComplete"])
@@ -151,7 +149,6 @@ class NoToolFakeProtocolTests(FakeAppServerTests):
         outcome = self.execute("timeout", timeout=10, cancel=True)
         self.assertEqual(outcome.status, "cancelled", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertNotIn("zeroToolVerified", outcome.result)
 
 
 if __name__ == "__main__":

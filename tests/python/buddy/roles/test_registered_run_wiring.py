@@ -62,7 +62,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
 
     def project(self, *, policy=None, completion=None, native_identity=None, event_count=None, capture=True):
         fields = full_request(Path("/private/tmp")).to_payload()
-        fields.update(toolScope="none", sessionServices=[], captureEvidence=capture)
+        fields.update(permission="none", sessionServices=[], captureEvidence=capture)
         request = RunRequest.from_payload(fields)
         result = rc.RunResult(
             identity=request.identity, harness="zcode", end=rc.RunEnd(status="ok"),
@@ -105,7 +105,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
 
     def test_codex_policy_survives_without_capture_and_keeps_the_old_receipt_level(self):
         fields = full_request(Path("/private/tmp")).to_payload()
-        fields.update(harness="codex", toolScope="none", sessionServices=[], captureEvidence=False)
+        fields.update(harness="codex", permission="none", sessionServices=[], captureEvidence=False)
         request = RunRequest.from_payload(fields)
         policy = {"sandbox": "read-only", "approvalPolicy": "never"}
         module = SimpleNamespace(native_evidence=lambda _result: {"nativePolicy": policy})
@@ -115,9 +115,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
                 payload = run_execution._fast_result(result, request, {"stopReason": None, "elapsedMs": 1})
                 self.assertEqual(payload["nativePolicy"], policy)
                 self.assertNotIn("nativeEvidence", payload)
-                if status == "error":
-                    self.assertIs(payload["zeroToolVerified"], False)
-            fields["toolScope"] = "read"
+            fields["permission"] = "read"
             review = run_execution._review_result(result, RunRequest.from_payload(fields),
                                                    {"stopReason": None, "elapsedMs": 1})
             self.assertEqual(review["nativePolicy"], policy)
@@ -171,7 +169,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
         result = handle.result
         self.assertEqual(result.identity, request.identity)
         self.assertEqual(result.identity, handle.role_run_identity)
-        self.assertEqual(request.tool_scope, "none")
+        self.assertEqual(request.permission, "none")
         self.assertEqual(request.session_services, ())
         self.assertIsNone(request.identity.turn_id)
         self.assertEqual(result.value.correction_count, 1)
@@ -240,7 +238,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         request_bytes = canonical_json(request.to_payload()).encode()
         result = handle.result
         self.assertEqual(request.identity, result.identity)
-        self.assertEqual(request.tool_scope, "write")
+        self.assertEqual(request.permission, "write")
         self.assertEqual(request.identity.input_sha256, turn_io.input_hash(context.turn_input))
         self.assertEqual(outcome.result["turn"]["outcome"], result.value.parsed.value)
         self.assertEqual(outcome.result["turn"]["provenance"]["nativeTurnId"], result.native_identity.turn_id)

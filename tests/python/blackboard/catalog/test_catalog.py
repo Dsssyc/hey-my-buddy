@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.blackboard.catalog import catalog
 from hey_my_buddy.buddy.harnesses.registry import capability_report, require_permission
-from hey_my_buddy.protocol.capabilities import WORKER_PERMISSIONS
+from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.errors import BoardError
 from support import FIXTURE_CATALOG
@@ -137,9 +137,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_capability_report_uses_health_reason_only_for_harnesses(self):
         def adapter():
-            return SimpleNamespace(available=lambda: (True, None), capabilities=(),
-                                   read_only_structured=False, no_tool_structured=False,
-                                   local_read_only_check=lambda: {})
+            return SimpleNamespace(available=lambda: (True, None), capabilities=())
         stored = {"reason": {"code": "harness.login-required", "params": {"operation": "probe"}}}
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={
                 "codex": adapter(), "dsh": adapter(), "command": adapter()}), \
@@ -235,20 +233,8 @@ class CatalogTests(unittest.TestCase):
             for name in ("claude", "codex", "dsh", "zcode")
         ]}
         buddies = catalog.CatalogView.from_payload(payload).proposed_buddies()
-        permissions = {buddy["harness"]: {cap for cap in buddy["capabilities"]
-                                            if cap.startswith("permission:")} for buddy in buddies}
-        self.assertEqual(permissions, {
-            "claude": {"permission:read", "permission:write", "permission:full"},
-            "codex": {"permission:read", "permission:write", "permission:full"},
-            "dsh": {"permission:read", "permission:write", "permission:full"},
-            "zcode": {"permission:read", "permission:write", "permission:full"},
-        })
-        with patch.dict(WORKER_PERMISSIONS, {"claude": {
-                level: declaration for level, declaration in WORKER_PERMISSIONS["claude"].items()
-                if level != "full"}}):
-            restricted = catalog.CatalogView.from_payload(payload).proposed_buddies()
-        claude = next(buddy for buddy in restricted if buddy["harness"] == "claude")
-        self.assertNotIn("permission:full", claude["capabilities"])
+        for buddy in buddies:
+            self.assertFalse(any(cap.startswith("permission:") or cap in ("decision", "routing:fast") for cap in buddy["capabilities"]))
 
     def test_explicit_permission_gate_uses_harness_declaration(self):
         require_permission(None, "full")
@@ -261,8 +247,8 @@ class CatalogTests(unittest.TestCase):
         require_permission({"harness": "claude"}, "full")
         require_permission({"harness": "dsh"}, "full")
         require_permission({"harness": "zcode"}, "full")
-        with patch.dict(WORKER_PERMISSIONS, {"claude": {
-                level: declaration for level, declaration in WORKER_PERMISSIONS["claude"].items()
+        with patch.dict(PERMISSION_LEVELS, {"claude": {
+                level: declaration for level, declaration in PERMISSION_LEVELS["claude"].items()
                 if level != "full"}}):
             with self.assertRaises(BoardError) as caught:
                 require_permission({"harness": "claude"}, "full")

@@ -3,7 +3,7 @@ from unittest import mock
 
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
-from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
@@ -17,11 +17,9 @@ class UpgradeServiceTests(BoardTestCase):
         fixture = load_fixture(state)
         archived = backup.create(state)
         self.assertEqual(backup.verify(archived["path"])["schema"], fixture["schemaVersion"])
+        schema_upgrade.upgrade(state)
         Database(state).initialize()
-        with mock.patch.object(CodexAdapter, "local_read_only_check", return_value={
-            "eligible": True, "reasonCode": None, "reason": None,
-            "systemSandbox": True, "sameAttemptContinuation": True,
-        }), Database(state).read() as connection:
+        with Database(state).read() as connection:
             resolution = router.current_router(connection, now="2026-01-01T00:00:00.000Z")
         self.assertEqual(resolution.buddy_id, fixture["routerBuddyIds"][0])
         self.assertIsNone(resolution.problem)

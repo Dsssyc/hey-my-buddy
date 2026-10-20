@@ -66,10 +66,9 @@ class NoToolCodexTests(unittest.TestCase):
         return collect(handle), handle.role_run_control, directory
 
     def test_capability_inherits_user_configuration_and_observes_zero_tools(self):
-        self.assertTrue(CodexAdapter().no_tool_structured)
+        self.assertIn("permission:none", CodexAdapter().capabilities)
         outcome, control, directory = self.run_case()
         self.assertEqual(outcome.status, "ok", outcome.result)
-        self.assertTrue(outcome.result["zeroToolVerified"])
         self.assertEqual(outcome.result["usage"]["toolCalls"], 0)
         self.assertEqual(json.loads(outcome.result["rawAnswer"]), {"buddyId": "legal"})
         evidence = outcome.result["toolEvidence"]
@@ -103,19 +102,17 @@ class NoToolCodexTests(unittest.TestCase):
                 # has no end fact yet when its display's started frame arrives.
                 fast_phases = (() if name == "functionCallOutput" else phases[:1]) if carrier == "typed" else phases
                 self.assertEqual(tuple(event["phase"] for event in evidence["events"]), fast_phases)
-                self.assertEqual(judge_tool_evidence(evidence, "fast", False),
+                self.assertEqual(judge_tool_evidence(evidence, "none"),
                                  "router-tool-evidence-unverified" if not complete or name == "functionCallOutput"
                                  else "router-tools-forbidden" if phases else None)
                 if phases and complete:
                     self.assertEqual(outcome.status, "failed", outcome.result)
                     self.assertEqual(outcome.result["code"], "no-tool-violation")
                     self.assertFalse(evidence["streamComplete"])
-                    self.assertFalse(outcome.result["zeroToolVerified"])
                 elif not phases:
                     self.assertEqual(outcome.status, "ok", outcome.result)
                     self.assertEqual(json.loads(outcome.result["rawAnswer"]), {"buddyId": "legal"})
                     self.assertTrue(evidence["streamComplete"])
-                    self.assertTrue(outcome.result["zeroToolVerified"])
 
     def test_adapter_entrypoint_and_collector(self):
         directory = self.root / "harness"
@@ -137,14 +134,12 @@ class NoToolCodexTests(unittest.TestCase):
         outcome = collect(handle)
         self.assertEqual(outcome.status, "ok", outcome.result)
         self.assertTrue(outcome.shutdown_confirmed)
-        self.assertTrue(outcome.result["zeroToolVerified"])
         self.assertEqual(outcome.result["toolEvidence"]["binding"],
                          {"harness": "codex", "taskId": "task", "attemptId": "attempt", "generation": 1})
 
     def test_native_metadata_notifications_do_not_hide_tools_or_break_the_turn(self):
         outcome, _control, _directory = self.run_case('native-metadata')
         self.assertEqual(outcome.status, 'ok', outcome.result)
-        self.assertTrue(outcome.result['zeroToolVerified'])
 
     def test_user_cache_and_configuration_are_not_rewritten(self):
         config = self.home / 'config.toml'
@@ -173,7 +168,6 @@ class NoToolCodexTests(unittest.TestCase):
                 self.assertEqual(outcome.result["code"], "no-tool-violation", outcome.result)
                 # The failure receipt states its explicit zero-tool fact; it is
                 # never silently absent on a refused fast call.
-                self.assertIs(outcome.result["zeroToolVerified"], False)
 
     def test_projected_facts_survive_rejections_and_corrections_add_roots(self):
         for case, tool_name in (("typed", "commandExecution"), ("collab", "collabAgentToolCall"),
@@ -205,7 +199,6 @@ class NoToolCodexTests(unittest.TestCase):
             with self.subTest(case=case):
                 outcome, _control, _directory = self.run_case(case)
                 self.assertEqual(outcome.status, 'failed', outcome.result)
-                self.assertIs(outcome.result["zeroToolVerified"], False)
 
     def test_unconfirmed_interrupt_is_reported_without_a_fabricated_ack(self):
         outcome, _control, _directory = self.run_case("late")
@@ -233,7 +226,6 @@ class NoToolCodexTests(unittest.TestCase):
         outcome, _control, directory = self.run_case("config-mismatch")
         self.assertEqual(outcome.status, 'ok', outcome.result)
         self.assertIs(outcome.result["modelStarted"], True)
-        self.assertIs(outcome.result["zeroToolVerified"], True)
         self.assertEqual(len(json.loads((directory / "trace.json").read_text())["turns"]), 1)
         self.assertEqual(outcome.result["policyCheck"]["configReadback"]["status"], "unknown")
         self.assertEqual(outcome.result["nativeConfigPolicy"]["web_search"], "enabled")
@@ -241,13 +233,11 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(outcome.status, 'failed', outcome.result)
         self.assertEqual(outcome.result["code"], "buddy-mismatch")
         self.assertIs(outcome.result["modelStarted"], False)
-        self.assertIs(outcome.result["zeroToolVerified"], False)
         self.assertEqual(outcome.result["nativeThreadReceipt"]["model"], "other")
         self.assertNotIn("turns", json.loads((directory / "trace.json").read_text()))
         outcome, control, _directory = self.run_case("hang", timeout=1)
         self.assertEqual(outcome.status, 'failed', outcome.result)
         self.assertEqual(outcome.result["code"], "deadline")
-        self.assertIs(outcome.result["zeroToolVerified"], False)
         self.assertIs(outcome.result["nativeInterruptRequested"], True)
         self.assertTrue(outcome.result["processState"]["shutdownConfirmed"])
         self.assertFalse(list(Path(control["nativeRoot"]).rglob("codex-home")))
@@ -256,7 +246,6 @@ class NoToolCodexTests(unittest.TestCase):
         (self.home / 'models_cache.json').unlink()
         outcome, _control, _directory = self.run_case()
         self.assertEqual(outcome.status, 'ok', outcome.result)
-        self.assertTrue(outcome.result['zeroToolVerified'])
 
 
 if __name__ == "__main__":

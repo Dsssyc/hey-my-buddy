@@ -22,7 +22,6 @@ def stopped_answer(claim, *, buddy_id=BUDDY_ID):
     document = claim['decisionInput']
     return {**claim_tool_receipt(claim), 'status': 'ok', 'operation': 'select',
             'requested': document['buddy'], 'usage': {'elapsedMs': 100, 'toolCalls': 0},
-            'zeroToolVerified': True,
             'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
             'inputVerification': {'unchanged': True, 'snapshotSha256': 'private-fixture-digest',
                                   'manifestSha256': (document.get('executionWorkspace') or {}).get('manifestSha256')},
@@ -133,7 +132,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.publish_user_patch(board, request_id='fast', command_id='fast', configuration={'defaultRoutingMode': 'fast'})
         request = self.request(board)
         frozen = self.decision(board, request['decisionId'])
-        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.no_tool_structured', False):
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             self.assert_unclaimed(board, request, 'router-no-tool-unsupported', frozen)
 
     def test_model_service_capacity_is_frozen_and_unknown_stop_keeps_its_slot(self):
@@ -288,23 +287,6 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.report(board, claim, outcome.result)
         self.assertEqual(self.decision(board, request['decisionId'])['status'], 'completed')
 
-    def test_adapter_local_check_failure_never_prepares_input_or_starts_native(self):
-        board = self.board()
-        self.seed(board)
-        request = self.request(board)
-        document = self.decision(board, request['decisionId'])['input']
-        context = ExecutionContext(task_id='task', attempt_id='attempt', generation=1,
-            spec={'adapter': 'decision'}, directory=board.directory / 'blocked-adapter', runtime={},
-            environment={'HMB_STATE_DIR': str(board.directory)}, decision_input=document, session_record_path=None)
-        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-            'eligible': False, 'reason': {'code': 'harness.readonly-worker-carrier-unimplemented',
-                                          'params': {'harness': 'dsh'}}}):
-            with self.assertRaises(BoardError) as failure:
-                DecisionAdapter().prepare(context)
-        self.assertEqual(failure.exception.code, 'router-review-unsupported')
-        self.readonly_start.assert_not_called()
-        self.input_prepare.assert_not_called()
-
     def test_claim_attempt_and_started_event_roll_back_together(self):
         board = self.board()
         self.seed(board)
@@ -355,9 +337,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.seed(board)
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
-        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-                'eligible': False, 'reason': {'code': 'harness.readonly-resource-missing', 'params': {}},
-                'systemSandbox': False, 'sameAttemptContinuation': False}):
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             self.report(board, claim, stopped_answer(claim))
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'completed')

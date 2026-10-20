@@ -12,7 +12,6 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
-from hey_my_buddy.blackboard.catalog.catalog import permission_capabilities
 from hey_my_buddy.blackboard.routing import router, router_history
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
@@ -28,11 +27,8 @@ class CurrentRouterTestCase(BoardTestCase):
         super().setUp()
         self.clock = FakeClock(T0)
         self.board_ = self.board(clock=self.clock)
-        # Ordered-resolution scenarios supply a private review mechanism;
-        # production DSH review is intentionally unavailable in this stage.
-        self.enterContext(patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={
-            'eligible': True, 'reason': None,
-            'systemSandbox': False, 'sameAttemptContinuation': True}))
+        # Ordered-resolution scenarios use only shared capability declarations.
+        self.enterContext(patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}))
 
     # -- fixtures ------------------------------------------------------------
     def add_buddy(self, buddy_id, *, harness="dsh", provider="fixture", available=1, enabled=1, model=None):
@@ -41,7 +37,7 @@ class CurrentRouterTestCase(BoardTestCase):
                        "available,enabled,capabilities_json)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
                        (buddy_id, buddy_id, harness, provider, model or buddy_id, "max",
-                        available, enabled, canonical_json(permission_capabilities(harness))))
+                        available, enabled, canonical_json([])))
 
     def set_settings(self, *, ids=None, mode=None, budget=None, interval=None):
         """Patch the shared version-3 settings the way a publication would."""
@@ -57,7 +53,7 @@ class CurrentRouterTestCase(BoardTestCase):
                 merged["routerRetryIntervalSeconds"] = interval
             router._write_settings(db, merged)
 
-    def record(self, buddy_id, *, outcome="no_answer", plane="work", request="route-1", phase="preflight",
+    def record(self, buddy_id, *, outcome="no_answer", plane="routing", request="route-1", phase="preflight",
                code="timeout", index=0, task=None, attempt=None, now=T0, facts=None):
         with self.board_.store.db.write() as db:
             return router_history.record_outcome(
@@ -185,14 +181,14 @@ class ResolutionTests(CurrentRouterTestCase):
         self.assertEqual(resolution.inspections[0]["code"], "router-quota-exhausted")
         self.assertEqual(resolution.inspections[0]["retryAt"], "2026-01-01T00:30:00.000Z")
 
-    def test_review_mode_requires_the_local_review_mechanism(self):
+    def test_review_mode_accepts_the_shared_zcode_read_declaration(self):
         self.add_buddy(A, harness="zcode")
         self.add_buddy(B)
         self.set_settings(ids=[A, B], mode="review")
         with self.board_.store.db.read() as db:
             resolution = router.current_router(db, now=T0)
-        self.assertEqual(resolution.buddy_id, B)
-        self.assertEqual(resolution.inspections[0]["code"], "router-review-unsupported")
+        self.assertEqual(resolution.buddy_id, A)
+        self.assertIsNone(resolution.inspections[0]["code"])
 
     def test_skip_window_blocks_then_expires_and_reads_never_write(self):
         self.add_buddy(A)
@@ -404,7 +400,7 @@ class OutcomeFactTests(CurrentRouterTestCase):
     def test_receipt_and_event_commit_in_one_transaction(self):
         with self.assertRaises(AssertionError):
             with self.board_.store.db.write() as db:
-                router_history.record_outcome(db, buddy_id=A, plane="work", request_id="route-1", task_id=None,
+                router_history.record_outcome(db, buddy_id=A, plane="routing", request_id="route-1", task_id=None,
                                               attempt_id=None, outcome="no_answer", code="timeout",
                                               phase="preflight", facts={"routerIndex": 0}, now=T0)
                 raise AssertionError("rollback")
@@ -437,7 +433,7 @@ class OutcomeFactTests(CurrentRouterTestCase):
         self.assertEqual(row["task_id"], "task-1")
         self.assertEqual(row["attempt_id"], "att-1")
         self.assertEqual(json.loads(row["payload_json"]),
-                         {"plane": "work", "requestId": "route-1", "routerIndex": 0, "buddyId": A,
+                         {"plane": "routing", "requestId": "route-1", "routerIndex": 0, "buddyId": A,
                           "phase": "preflight", "taskId": "task-1", "attemptId": "att-1",
                           "outcome": "no_answer", "code": "timeout"})
 

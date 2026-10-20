@@ -27,18 +27,8 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructur
 from hey_my_buddy.buddy.roles.turn_io import private_json
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 
-HARNESSES = ('codex', 'claude')
+HARNESSES = ('codex', 'claude', 'dsh', 'zcode')
 CANDIDATES = ('dsh:deepseek-official:deepseek-flash:off', 'codex:openai:gpt-6-sol:high')
-
-
-def system_sandbox(harness):
-    # The same shipped platform declaration used by the free eligibility
-    # contract; native execution still checks the effective policy itself.
-    from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
-    from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
-    platforms = {'codex': CodexAdapter.system_sandbox_platforms,
-                 'claude': ClaudeAdapter.system_sandbox_platforms}
-    return sys.platform in platforms.get(harness, ())
 
 
 def parser():
@@ -70,7 +60,7 @@ def _prepare(root, buddy):
     guide.chmod(0o600)
     packet = {
         'buddy': buddy,
-        'systemSandbox': system_sandbox(buddy['harness']),
+        'permission': 'read',
         'binding': {'harness': buddy['harness'], 'taskId': 'probe-' + uuid.uuid4().hex,
                     'attemptId': str(uuid.uuid4()), 'generation': 1},
         'expected': {'buddyId': CANDIDATES[1], 'marker': marker},
@@ -93,12 +83,11 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
     reported = reported if isinstance(reported, list) else [reported]
     usage = result.get('usage') or {}
     limits = packet['request']['budget']
-    sandbox = system_sandbox(packet['buddy']['harness'])
     try:
         answer = router.validate_answer(result.get('rawAnswer'), list(CANDIDATES), 'review')
     except Exception:
         answer = None
-    tool_problem = tool_evidence.judge_tool_evidence(evidence, 'review', sandbox)
+    tool_problem = tool_evidence.judge_tool_evidence(evidence, packet['permission'])
     counts_match = (isinstance(evidence, dict) and type(usage.get('toolCalls')) is int
                     and usage['toolCalls'] == evidence.get('toolCalls'))
     checks = {
@@ -108,12 +97,10 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
         'buddy': all((result.get('resolved') or {}).get(key) == value
                              for key, value in packet['buddy'].items() if key != 'harness'),
         'binding': isinstance(evidence, dict) and evidence.get('binding') == packet['binding'],
-        'policyClass': type(packet.get('systemSandbox', False)) is bool
-                       and packet.get('systemSandbox', False) is sandbox,
+        'permission': packet.get('permission') == 'read',
         'nativeIdentity': bool(reported) and all(isinstance(item, dict) and item in roots for item in reported),
         'toolEvidence': tool_problem is None,
-        'readCompleted': isinstance(evidence, dict) and any((event.get('category') == 'read'
-                                                           or sandbox and event.get('category') == 'execute')
+        'readCompleted': isinstance(evidence, dict) and any((event.get('category') in ('read', 'execute'))
                                                           and event.get('phase') == 'end'
                                                           for event in evidence.get('events', [])),
         'toolBudget': counts_match and 0 < usage['toolCalls'] <= limits['toolCalls'],
@@ -125,7 +112,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
     }
     return {'status': 'passed' if all(checks.values()) else 'failed', 'checks': checks,
             'toolProblem': tool_problem, 'result': result, 'elapsedMs': elapsed_ms,
-            'bytesRead': usage.get('bytesRead'), 'systemSandbox': sandbox}
+            'bytesRead': usage.get('bytesRead'), 'permission': packet['permission']}
 
 
 def run(args):
@@ -140,7 +127,7 @@ def run(args):
         return {'status': 'prepared', 'modelCalls': 0, 'packetSha256': digest,
                 'packet': str(root / 'prepared.json'), 'budget': packet['request']['budget'],
                 'maxAnswerRounds': 1 if buddy['harness'] == 'claude' else 2,
-                'systemSandbox': system_sandbox(buddy['harness'])}
+                'permission': 'read'}
     if getattr(args, 'expected_packet_sha256', None) != digest:
         raise ValueError('execution requires the exact prepared packet digest covered by approval')
     with (root / 'execution.started').open('x') as stream:
@@ -163,7 +150,7 @@ def run(args):
     handle = None
     started = time.monotonic()
     report = {'status': 'failed', 'packetSha256': digest, 'buddy': buddy,
-              'modelCalls': None, 'systemSandbox': system_sandbox(buddy['harness'])}
+              'modelCalls': None, 'permission': 'read'}
     try:
         handle = start_review(buddy['harness'], context, request)
         if handle.wait(timeout=request.budget['timeoutSeconds'] + 10) is None:

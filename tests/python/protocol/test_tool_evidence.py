@@ -16,9 +16,10 @@ SECOND_IDENTITY = {"sessionId": "session-2", "inputId": "input-2"}
 BINDING = {"harness": "zcode", "taskId": "task-1", "attemptId": "attempt-1", "generation": 2}
 
 CLASSIFICATION = {
-    "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute"},
+    "dsh": {"read": "read", "glob": "search", "grep": "search", "bash": "execute",
+            "write": "edit", "edit": "edit"},
     "claude": {
-        "Read": "read", "LS": "read", "Glob": "search", "Grep": "search", "Bash": "execute",
+        "Read": "read", "LS": "read", "Skill": "read", "Glob": "search", "Grep": "search", "Bash": "execute",
         "Write": "edit", "Edit": "edit", "MultiEdit": "edit", "WebFetch": "fetch", "WebSearch": "fetch",
     },
     "codex": {
@@ -89,7 +90,7 @@ class NormalizeToolEventTests(unittest.TestCase):
                      native_fact("unknown", type="another-unknown")):
             event = tool_evidence.normalize_tool_event("codex", fact)
             self.assertEqual(event["category"], "other")
-            self.assertEqual(tool_evidence.judge_tool_evidence(collect([event]), "fast", True),
+            self.assertEqual(tool_evidence.judge_tool_evidence(collect([event]), "none"),
                              tool_evidence.TOOLS_FORBIDDEN)
 
     def test_name_and_type_disagreement_settles_as_other(self):
@@ -205,7 +206,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
         package = tracker.finish([IDENTITY], True)
         self.assertEqual(package["unsettledToolCalls"], 0)
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_missing_native_ids_are_retained_without_inventing_a_call(self):
@@ -216,7 +217,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
         self.assertEqual(package["events"], [{"nativeIdentity": {}, "callId": None,
                          "toolName": "shell", "category": "execute", "phase": "start"}])
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_live_start_count_and_returned_snapshot_do_not_change_stored_facts(self):
@@ -233,7 +234,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
 
     def test_an_end_before_its_start_never_becomes_complete(self):
         package = collect(list(reversed(settled_events("read"))))
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_package_carries_exactly_the_fixed_fields(self):
@@ -258,7 +259,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
         package = collect(conflicting)
         self.assertEqual(len(package["events"]), 4)
         self.assertEqual(
-            tool_evidence.judge_tool_evidence(package, "review", False),
+            tool_evidence.judge_tool_evidence(package, "read"),
             tool_evidence.TOOL_EVIDENCE_UNVERIFIED,
         )
 
@@ -267,7 +268,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(package["unsettledToolCalls"], 0)
         self.assertEqual(
-            tool_evidence.judge_tool_evidence(package, "review", True),
+            tool_evidence.judge_tool_evidence(package, "read"),
             tool_evidence.TOOL_EVIDENCE_UNVERIFIED,
         )
 
@@ -275,7 +276,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
         package = collect([settled_events("read")[0]])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 1))
         self.assertEqual(
-            tool_evidence.judge_tool_evidence(package, "review", True),
+            tool_evidence.judge_tool_evidence(package, "read"),
             tool_evidence.TOOL_EVIDENCE_UNVERIFIED,
         )
 
@@ -291,7 +292,7 @@ class ToolEventEvidenceTests(unittest.TestCase):
         self.assertEqual(len(refreshed["events"]), 4)
         self.assertFalse(refreshed["streamComplete"])
         self.assertEqual(
-            tool_evidence.judge_tool_evidence(refreshed, "review", True),
+            tool_evidence.judge_tool_evidence(refreshed, "read"),
             tool_evidence.TOOL_EVIDENCE_UNVERIFIED,
         )
 
@@ -303,13 +304,13 @@ class ToolEventEvidenceTests(unittest.TestCase):
         self.assertEqual(len(package["events"]), tool_evidence.MAX_TOOL_EVENTS)
         self.assertEqual(package["toolCalls"], 64)
         self.assertFalse(package["truncated"])
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
         full.extend(settled_events("read", call_id="call-64"))
         overflowing = collect(full)
         self.assertTrue(overflowing["truncated"])
         self.assertEqual(overflowing["toolCalls"], 65)
         self.assertEqual(
-            tool_evidence.judge_tool_evidence(overflowing, "review", True),
+            tool_evidence.judge_tool_evidence(overflowing, "read"),
             tool_evidence.TOOL_EVIDENCE_UNVERIFIED,
         )
 
@@ -324,14 +325,14 @@ class ToolEventEvidenceTests(unittest.TestCase):
             "search", call_id="call-2", identity=SECOND_IDENTITY, tool="grep")
         package = collect(events, roots=[IDENTITY, SECOND_IDENTITY])
         self.assertEqual(package["toolCalls"], 2)
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", False))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
 
     def test_a_foreign_root_is_kept_but_not_trusted(self):
         foreign = settled_events("read", identity=SECOND_IDENTITY)
         package = collect(foreign, roots=[IDENTITY])
         self.assertEqual(len(package["events"]), 2)
         self.assertEqual(
-            tool_evidence.judge_tool_evidence(package, "review", True),
+            tool_evidence.judge_tool_evidence(package, "read"),
             tool_evidence.TOOL_EVIDENCE_UNVERIFIED,
         )
 
@@ -355,35 +356,21 @@ class ToolEventEvidenceTests(unittest.TestCase):
 
 class JudgeToolEvidenceTests(unittest.TestCase):
     def test_fast_mode_requires_complete_zero_tool_evidence(self):
-        self.assertIsNone(tool_evidence.judge_tool_evidence(collect([]), "fast", False))
-        self.assertIsNone(tool_evidence.judge_tool_evidence(collect([]), "fast", True))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(collect([]), "none"))
         forbidden = collect(settled_events("read"))
-        self.assertEqual(tool_evidence.judge_tool_evidence(forbidden, "fast", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(forbidden, "none"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
-    def test_review_with_a_system_sandbox_allows_read_search_and_execute(self):
-        for category in ("read", "search", "execute"):
+    def test_read_level_allows_read_search_execute_and_network(self):
+        for category in ("read", "search", "execute", "fetch"):
             with self.subTest(category=category):
-                package = collect(settled_events(category))
-                self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", True))
+                self.assertIsNone(tool_evidence.judge_tool_evidence(collect(settled_events(category)), "read"))
 
-    def test_review_without_a_system_sandbox_allows_only_read_and_search(self):
-        for category in ("read", "search"):
+    def test_every_other_category_is_forbidden_at_read_level(self):
+        for category in ("edit", "delete", "move", "switch_mode", "think", "other"):
             with self.subTest(category=category):
-                package = collect(settled_events(category))
-                self.assertIsNone(tool_evidence.judge_tool_evidence(package, "review", False))
-        self.assertEqual(
-            tool_evidence.judge_tool_evidence(collect(settled_events("execute")), "review", False),
-            tool_evidence.TOOLS_FORBIDDEN,
-        )
-
-    def test_every_clearly_disallowed_category_is_forbidden_in_review(self):
-        for category in ("edit", "delete", "move", "fetch", "switch_mode", "think", "other"):
-            for sandbox in (True, False):
-                with self.subTest(category=category, sandbox=sandbox):
-                    package = collect(settled_events(category))
-                    self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", sandbox),
-                                     tool_evidence.TOOLS_FORBIDDEN)
+                self.assertEqual(tool_evidence.judge_tool_evidence(collect(settled_events(category)), "read"),
+                                 tool_evidence.TOOLS_FORBIDDEN)
 
     def test_missing_or_malformed_evidence_is_unverified(self):
         broken = [
@@ -396,11 +383,11 @@ class JudgeToolEvidenceTests(unittest.TestCase):
         ]
         for evidence in broken:
             with self.subTest(evidence=evidence):
-                self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "review", True),
+                self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read"),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
-        for mode, sandbox in ((None, True), ("quick", True), ("review", "yes"), ("fast", None)):
-            with self.subTest(mode=mode, sandbox=sandbox):
-                self.assertEqual(tool_evidence.judge_tool_evidence(collect([]), mode, sandbox),
+        for mode in (None, "write", "full", "review", "fast", True, {}):
+            with self.subTest(permission=mode):
+                self.assertEqual(tool_evidence.judge_tool_evidence(collect([]), mode),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_summary_fields_with_wrong_types_or_values_are_unverified(self):
@@ -410,32 +397,32 @@ class JudgeToolEvidenceTests(unittest.TestCase):
                        {"events": settled_events("read")[0]}):
             with self.subTest(change=change):
                 package = {**collect(settled_events("read")), **change}
-                self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_counts_that_disagree_with_the_events_are_unverified(self):
         for change in ({"toolCalls": 2}, {"toolCalls": 0}, {"unsettledToolCalls": 1}):
             with self.subTest(change=change):
                 package = {**collect(settled_events("read")), **change}
-                self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_forbidden_recorded_call_outranks_stream_incompleteness(self):
         unsettled_edit = collect([settled_events("edit")[0]])
-        self.assertEqual(tool_evidence.judge_tool_evidence(unsettled_edit, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(unsettled_edit, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
         truncated_read = collect(settled_events("read"), stream_complete=False)
-        self.assertEqual(tool_evidence.judge_tool_evidence(truncated_read, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(truncated_read, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
         truncated_edit = collect(settled_events("edit"), stream_complete=False)
-        self.assertEqual(tool_evidence.judge_tool_evidence(truncated_edit, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(truncated_edit, "read"),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_an_empty_foreign_identity_list_leaves_no_room_for_events(self):
         package = collect(settled_events("read"), roots=[])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "review", True),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
-        self.assertEqual(tool_evidence.judge_tool_evidence(collect([], roots=[]), "fast", False),
+        self.assertEqual(tool_evidence.judge_tool_evidence(collect([], roots=[]), "none"),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
 

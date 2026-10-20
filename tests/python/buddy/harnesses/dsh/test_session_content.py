@@ -74,7 +74,8 @@ class ProjectorTests(unittest.TestCase):
 
     def test_tool_kinds_use_the_shared_native_name_table(self):
         for index, (title, category) in enumerate((('read', 'read'), ('grep', 'search'),
-                ('glob', 'search'), ('bash', 'execute'), ('mcp__server__tool', 'other'), ('edit', 'other'), ('unknown-' * 1000, 'other'))):
+                ('glob', 'search'), ('bash', 'execute'), ('mcp__server__tool', 'other'),
+                ('write', 'edit'), ('edit', 'edit'), ('unknown-' * 1000, 'other'))):
             self.emit('tool_call', toolCallId=str(index), title=title, kind='edit')
             self.assertEqual(self.record.events[-1]['kind'], category)
             self.assertEqual(self.record.events[-1]['title'], title)

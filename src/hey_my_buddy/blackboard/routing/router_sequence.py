@@ -133,7 +133,7 @@ def claim(connection, attempt_id: str) -> dict | None:
             "decisionId": row["decision_id"], "routerIndex": row["router_index"], "buddyId": row["buddy_id"]}
 
 
-def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, now: str, tool_policy: dict) -> dict:
+def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, now: str) -> dict:
     """Bind one attempt to its dispatch and append the atomic ``router.claimed`` fact.
 
     The binding is immutable per attempt: an identical replay returns the recorded
@@ -152,7 +152,6 @@ def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, 
                                  (dispatch_document["decisionId"],)).fetchone()
     _, created = _store(connection, "router_claims", "attempt_id", {
         "attempt_id": attempt_id, "task_id": task_id, "generation": generation,
-        "tool_policy_json": canonical_json(tool_policy),
     })
     if created:
         from .router_history import _append_event
@@ -163,7 +162,7 @@ def record_claim(connection, *, task_id: str, attempt_id: str, generation: int, 
             attempt_id=attempt_id,
             payload={
                 "buddyId": dispatch_document["buddyId"],
-                "plane": "work",
+                "plane": "routing",
                 "requestId": request["request_id"],
                 "routerIndex": dispatch_document["routerIndex"],
                 "taskId": task_id,

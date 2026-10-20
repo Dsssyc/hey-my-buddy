@@ -12,6 +12,7 @@ from pathlib import Path
 
 from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
+from ...protocol.capabilities import PERMISSION_LEVELS
 from ..harnesses.c_two_live import CTwoLiveEndpoint
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ..harnesses.registry import adapter, run_seam
@@ -137,8 +138,6 @@ def _wrap_up_usage(first: RunResult, summary: RunResult) -> FrozenJson | None:
 
 
 def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, dict, int]:
-    if control["operation"] == "review" and not adapter(control["harness"]).read_only_structured:
-        raise BoardError("INVALID_ARGUMENT", "The harness has no review carrier")
     module = run_seam(control["harness"])
     if module is None:
         raise BoardError("ROLE_RUN_UNREGISTERED", "The role run requires a registered harness")
@@ -179,11 +178,12 @@ def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, 
                     "usage": _wrap_up_usage(first, result),
                     "session_record_failure": first.session_record_failure or result.session_record_failure,
                 })
-    if control["operation"] == "worker" and request.worker_permission is not None:
+    if control["operation"] == "worker":
         path = Path(request.private_state.invocation_root) / "worker-permission.json"
         declaration = {"source": "harness-permission-declaration",
                        "binding": request.identity.to_payload(),
-                       "permission": request.worker_permission.to_payload()}
+                       "permission": {"level": request.permission,
+                                      "enforcement": PERMISSION_LEVELS[request.harness][request.permission]}}
         raw = canonical_json(declaration).encode()
         _private_bytes(path, raw, exclusive=True)
         ref = EvidenceRef(kind="worker-permission", location=str(path),

@@ -64,7 +64,7 @@ function harnesses(): HarnessHealth[] {
     { harness: "codex", status: "ready", available: true, revision: 2, manualPath: null,
       executable: "/opt/bin/codex", version: "0.159.0", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],
-      readOnlyStructured: { implemented: true, eligible: false, systemSandbox: true, sameAttemptContinuation: false, reason: { code: "harness.readonly-resource-missing", params: {} } } },
+      permissions: { write: "enforced" } },
     { harness: "dsh", status: "ready", available: true, revision: 3, manualPath: null,
       executable: "/usr/local/bin/dsh", version: "0.4.2", source: "PATH",
       checkedAt: CHECKED_AT, candidates: [],

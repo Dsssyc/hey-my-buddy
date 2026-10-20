@@ -71,10 +71,10 @@ describe("a harness summary", () => {
 describe("harness details", () => {
   it("says where a harness is, how it was found and whether local review is possible", () => {
     const view = harnessDetailsView(row({ executable: "/usr/local/bin/dsh", source: "PATH", checkedAt: "2026-09-28T09:30:00.000Z",
-      readOnlyStructured: { eligible: true, systemSandbox: true, reason: null, sameAttemptContinuation: true } }), t);
+      permissions: { read: "enforced" } }), t);
     expect(view.location).toMatchObject({ path: "/usr/local/bin/dsh", source: "PATH", checked: clock("2026-09-28T09:30:00.000Z"), exception: null });
     expect(view.location.review).toEqual({ text: "可用", reason: null,
-      note: "本地资格检查不调用模型，不代表原生调用已验证。 具有原生系统沙盒；实际策略由每次运行核对。" });
+      note: "资格来自 harness 的只读档位声明，不代表原生调用已验证。" });
   });
 
   it("calls a manually chosen path manual and keeps what is not recorded unrecorded", () => {
@@ -83,15 +83,10 @@ describe("harness details", () => {
     expect(harnessDetailsView(row(), t).location).toMatchObject({ path: null, source: "未记录" });
   });
 
-  it("words review as eligible, not eligible with its reason, or unknown, and keeps the sandbox boundary", () => {
-    const eligibility = { eligible: false, systemSandbox: false, reason: { code: "harness.readonly-resource-missing", params: {} }, sameAttemptContinuation: true };
-    const view = harnessDetailsView(row({ readOnlyStructured: eligibility }), t);
-    expect(view.location.review).toMatchObject({ text: "不可用", reason: reasonText(eligibility.reason) });
-    expect(view.location.review.note).toContain("本地资格检查不调用模型，不代表原生调用已验证。");
-    expect(view.location.review.note).toContain("无系统沙盒，不能保证阻止副本外读取或外传；黑板的事后判定只覆盖上报的工具事件。");
-    // Without a recorded eligibility nothing is said about the sandbox, and nothing reads as available.
-    const unknown = harnessDetailsView(row(), t).location.review;
-    expect(unknown).toEqual({ text: "未知", reason: null, note: "本地资格检查不调用模型，不代表原生调用已验证。" });
+  it("shows unavailable for an absent read declaration and unknown without declarations", () => {
+    expect(harnessDetailsView(row({ permissions: { write: "enforced" } }), t).location.review)
+      .toMatchObject({ text: "不可用", reason: null });
+    expect(harnessDetailsView(row(), t).location.review.text).toBe("未知");
   });
 
   it("adds the reason, the remedy and the places tried only for a harness that is not found", () => {

@@ -45,7 +45,7 @@ def update(session_id="session-1", call_id="call-1", name="read", kind="tool_cal
 
 class DshToolFactsTests(unittest.TestCase):
     def test_known_names_classify_through_the_fixed_table_and_unknown_stay_other(self):
-        for name, category in (("read", "read"), ("glob", "search"), ("bash", "execute"), ("run-command", "other")):
+        for name, category in (("read", "read"), ("glob", "search"), ("bash", "execute"), ("write", "edit"), ("edit", "edit"), ("run-command", "other")):
             with self.subTest(name=name):
                 collector = DshToolFacts(dict(BINDING))
                 collector.add_root("session-1")
@@ -57,11 +57,13 @@ class DshToolFactsTests(unittest.TestCase):
                 self.assertEqual([event["category"] for event in events], [category, category],
                                  "start and end carry the same fixed category")
                 self.assertEqual(package["toolCalls"], 1)
+                if category in ("edit", "other"):
+                    self.assertEqual(judge_tool_evidence(package, "read"), TOOLS_FORBIDDEN)
                 if name == "bash":
-                    # Native classification does not grant sandbox authority.
+                    # Read permits native command execution as a read-category
+                    # fact; a write or unknown category still voids review.
                     collector.close_root("session-1")
-                    self.assertEqual(judge_tool_evidence(collector.finish(True), "review", False),
-                                     TOOLS_FORBIDDEN)
+                    self.assertIsNone(judge_tool_evidence(collector.finish(True), "read"))
 
     def test_a_one_frame_completed_call_carries_start_and_end(self):
         collector = DshToolFacts(dict(BINDING))
@@ -145,12 +147,12 @@ class DshToolFactsTests(unittest.TestCase):
         collector.observe(update(name="read"))
         collector.observe(update(name="read", kind="tool_call_update", status="completed"))
         package = collector.finish(True)
-        self.assertEqual(judge_tool_evidence(package, "fast", True), TOOLS_FORBIDDEN,
+        self.assertEqual(judge_tool_evidence(package, "none"), TOOLS_FORBIDDEN,
                          "any recorded call refuses a fast answer")
-        self.assertEqual(judge_tool_evidence({**package, "streamComplete": False}, "fast", True),
+        self.assertEqual(judge_tool_evidence({**package, "streamComplete": False}, "none"),
                          TOOLS_FORBIDDEN,
                          "a clearly disallowed call invalidates the answer even on a broken stream")
-        self.assertEqual(judge_tool_evidence({**package, "truncated": True}, "review", True),
+        self.assertEqual(judge_tool_evidence({**package, "truncated": True}, "read"),
                          TOOL_EVIDENCE_UNVERIFIED,
                          "a truncated package is unverified, never silently allowed")
 

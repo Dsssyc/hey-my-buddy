@@ -14,21 +14,10 @@ class CodexAdapter:
     interrupted_resume = True
     native_resume_permission_change = True
     model_discovery = True
-    read_only_structured = True
-    system_sandbox_platforms = ("darwin", "linux", "win32")
-    read_only_structured_resume = True
-    no_tool_structured = True
 
     @property
     def capabilities(self):
         return adapter_capabilities(self.name)
-
-    def local_read_only_check(self) -> dict:
-        # Qualification confirms this project's registered mechanism exists;
-        # the native policy readback belongs to the run itself and no vendor
-        # source is examined here.
-        from ..base import registered_read_only_check
-        return registered_read_only_check(self)
 
     def available(self) -> tuple[bool, str | None]:
         from ..runtime_selection import selected

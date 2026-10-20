@@ -14,6 +14,10 @@ from the observed events. Nothing here judges categories; the blackboard does.
 from __future__ import annotations
 
 from collections.abc import Iterable
+import json
+import os
+from pathlib import Path
+import stat
 
 from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
 
@@ -50,7 +54,7 @@ class ZcodeToolFacts:
     projection cannot name, keeping the receipt's call count at least one.
     """
 
-    def __init__(self, binding: dict):
+    def __init__(self, binding: dict, native_log_dir: Path | None = None):
         self.evidence = ToolEventEvidence(binding)
         self.roots: list[dict] = []
         self.close_pending = False
@@ -63,6 +67,10 @@ class ZcodeToolFacts:
         self._metadata_outcomes = {}
         self._outcomes = {}
         self._batched = set()
+        self._denied = set()
+        self._pending_denial_batches = []
+        self._native_log_dir = native_log_dir
+        self._log_offsets: dict[str, int] = {}
 
     # -- controller receipts ---------------------------------------------------
     def add_root(self, session_id: str, turn_id: str) -> None:
@@ -101,6 +109,7 @@ class ZcodeToolFacts:
         if method != "session/event":
             return
         if isinstance(params, dict) and params.get("type") == "turn.completed":
+            self.read_denials()
             identity = _identity_of(params)
             if identity in self.roots:
                 self.evidence.close_root(identity)
@@ -223,17 +232,82 @@ class ZcodeToolFacts:
                 self._incomplete(params, identity, call_id, None, name)
             self._metadata_outcomes[key] = outcome
 
-    def _batch(self, params: dict, identity: dict | None, payload: dict) -> None:
+    def observe_denial(self, record: dict) -> None:
+        """Close the named call recorded by the native permission executor."""
+        identity = _identity_of(record)
+        call_id = record.get("toolCallId")
+        context = record.get("context")
+        name = context.get("toolName") if isinstance(context, dict) else None
+        call_id = call_id if isinstance(call_id, str) and 0 < len(call_id) <= 512 else None
+        name = name if isinstance(name, str) and 0 < len(name) <= 512 else None
+        key = (identity["sessionId"], identity["turnId"], call_id) if identity and call_id else None
+        if (record.get("event") != "tool.permission.denied" or record.get("status") != "failed"
+                or not isinstance(context, dict) or context.get("decision") != "deny"
+                or identity not in self.roots or key is None or name is None
+                or self._names.get(key) != name or key not in self._canonical_starts
+                or key[:2] in self._closed):
+            self._incomplete(record, identity, call_id, None, name)
+            return
+        if key in self._denied:
+            return
+        if key in self._ended:
+            self._incomplete(record, identity, call_id, None, name)
+            return
+        self._ended.add(key)
+        self._denied.add(key)
+        self._outcomes[key] = False
+        if key in self._metadata_outcomes and self._metadata_outcomes[key] is not False:
+            self._incomplete(record, identity, call_id, "end", name)
+        self.evidence.observe(normalize_tool_event(HARNESS, {
+            "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": "end"}))
+
+    def read_denials(self) -> None:
+        """Project permission refusals from this invocation's native JSONL log."""
+        if self._native_log_dir is None or not self._native_log_dir.exists():
+            return
+        for path in sorted(self._native_log_dir.glob("zcode-*.jsonl")):
+            try:
+                descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                with os.fdopen(descriptor, "rb") as stream:
+                    details = os.fstat(stream.fileno())
+                    if not stat.S_ISREG(details.st_mode):
+                        raise ValueError("native log is not a regular file")
+                    offset = self._log_offsets.get(path.name, 0)
+                    if details.st_size < offset:
+                        raise ValueError("native log was truncated")
+                    stream.seek(offset)
+                    while line := stream.readline():
+                        if not line.endswith(b"\n"):
+                            break
+                        self._log_offsets[path.name] = stream.tell()
+                        try:
+                            record = json.loads(line)
+                        except (UnicodeDecodeError, ValueError):
+                            self._incomplete({}, None, None, None, None)
+                            continue
+                        if not isinstance(record, dict):
+                            self._incomplete({}, None, None, None, None)
+                        elif record.get("event") == "tool.permission.denied":
+                            self.observe_denial(record)
+            except (OSError, ValueError):
+                self._incomplete({}, None, None, None, None)
+
+    def _batch(self, params: dict, identity: dict | None, payload: dict, *, deferred: bool = False) -> None:
         """Validate an aggregate acknowledgment without creating tool events."""
         ids = payload.get("toolCallIds")
         success, error = payload.get("successCount"), payload.get("errorCount")
         valid = (identity in self.roots and identity is not None
-                 and (identity["sessionId"], identity["turnId"]) not in self._closed
+                 and (deferred or (identity["sessionId"], identity["turnId"]) not in self._closed)
                  and isinstance(ids, list) and 0 < len(ids) <= MAX_TOOL_EVENTS
                  and all(isinstance(value, str) and 0 < len(value) <= 512 for value in ids)
                  and len(set(ids)) == len(ids)
                  and type(success) is int and success >= 0 and type(error) is int and error >= 0)
         keys = [(identity["sessionId"], identity["turnId"], value) for value in ids] if valid else []
+        missing = [key for key in keys if key not in self._ended]
+        if (not deferred and valid and missing and error > 0 and len(missing) <= error
+                and all(key in self._canonical_starts and key not in self._batched for key in keys)):
+            self._pending_denial_batches.append((params, identity, payload, frozenset(missing)))
+            return
         if (not valid or any(key not in self._canonical_starts or key not in self._ended
                              or key in self._batched or type(self._outcomes.get(key)) is not bool for key in keys)
                 or success != sum(self._outcomes[key] is True for key in keys)
@@ -271,6 +345,12 @@ class ZcodeToolFacts:
         table, while every unverified, foreign or conflicting fact the
         projection observed stays.
         """
+        self.read_denials()
+        for params, identity, payload, missing in self._pending_denial_batches:
+            if missing <= self._denied:
+                self._batch(params, identity, payload, deferred=True)
+            else:
+                self._incomplete(params, identity, None, None, None)
         for key in self._metadata_starts - self._canonical_starts:
             self._incomplete({"sessionId": key[0], "turnId": key[1]},
                              {"sessionId": key[0], "turnId": key[1]}, key[2], None, self._names.get(key))

@@ -231,7 +231,7 @@ class RouterSessionTests(NativeRunCase):
 
     def test_late_write_failure_keeps_eof_stop_and_completed_value(self):
         os.environ['HMB_ZCODE_TEST_CASE'] = 'write-post-close'
-        request = self.fast_request('Return only one JSON value matching this schema: {}').model_copy(update={'tool_scope': 'write'})
+        request = self.fast_request('Return only one JSON value matching this schema: {}').model_copy(update={'permission': 'write'})
         append = SessionRecord.append
         def failed_late(record, update):
             if getattr(update, 'tool_call_id', None) == 'c-late':

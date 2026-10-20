@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.dsh import native_run
-from hey_my_buddy.buddy.harnesses.registry import adapter, require_permission
+from hey_my_buddy.buddy.harnesses.registry import require_permission
 from hey_my_buddy.buddy.harnesses.run_contract import RunContinuation, RunResult
 from hey_my_buddy.buddy.roles.run_observers import worker_observer
 from hey_my_buddy.errors import BoardError
@@ -78,15 +78,18 @@ class WorkerPermissionTests(NativeRunCase):
         with self.assertRaises(BoardError) as missing_service:
             native_run.run(request, observer=worker_observer, services=None, cancelled=lambda: False)
         self.assertEqual(missing_service.exception.code, "INVALID_ARGUMENT")
-        with self.assertRaises(BoardError) as missing_level:
-            native_run.run(self.fast_request("prompt", scope="read"), observer=worker_observer,
-                           services=bound.services, cancelled=lambda: False)
-        self.assertEqual(missing_level.exception.code, "INVALID_ARGUMENT")
         self.assertEqual(self.agent_log(), [])
 
-    def test_dsh_still_has_no_router_review_mode(self):
-        self.assertEqual(adapter("dsh").local_read_only_check()["reason"],
-                         {"code": "harness.readonly-worker-carrier-unimplemented", "params": {"harness": "dsh"}})
+    def test_router_review_uses_the_worker_read_preset_without_a_service(self):
+        from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
+        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
+        result = native_run.run(self.fast_request("prompt", scope="read"),
+                                observer=lambda _facts: FEEDBACK_CONTINUE,
+                                services=None, cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.value.raw, '{"choice":"a"}')
+        self.assertEqual(result.effective_policy.tools.requested.value,
+                         {"permissionMode": "read-only"})
 
     def test_refused_operation_is_bounded_once_and_shared_by_both_evidence_paths(self):
         for inquiry in (False, True):

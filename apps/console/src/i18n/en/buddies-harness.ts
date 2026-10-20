@@ -41,9 +41,7 @@ export default {
     eligible: "Eligible",
     ineligible: "Not eligible",
     unknown: "Unknown",
-    note: "The local eligibility check calls no model and does not show that a native call is verified.",
-    sandbox: "It has a native system sandbox; each run checks the policy actually in force.",
-    noSandbox: "There is no system sandbox, so reads or exfiltration outside the copy cannot be ruled out; the board's after-the-fact judgment covers only the tool events reported.",
+    note: "Eligibility comes from the harness's read-only level declaration, not verification of a native call.",
   },
   path: {
     title: "Path of {{name}}",

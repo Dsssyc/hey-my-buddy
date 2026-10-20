@@ -604,7 +604,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(flag_value(argv, "--permission-mode"), "default")
         self.assertEqual(flag_value(argv, "--disallowedTools").split(","),
                          ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"])
-        self.assertEqual(self.stored_request(context)["toolScope"], "read")
+        self.assertEqual(self.stored_request(context)["permission"], "read")
 
     def test_attempt_scoped_credential_stays_private_and_out_of_result(self):
         context = self.context()

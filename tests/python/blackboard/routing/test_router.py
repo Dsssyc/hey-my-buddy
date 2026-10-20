@@ -91,7 +91,6 @@ class RouterPublicationTests(WorkflowTestCase):
     def setUp(self):
         super().setUp()
         self.catalog_fixture()
-        self.enterContext(patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.read_only_structured', True))
         from protocol.fixtures import mock_readonly
         mock_readonly.install(self)
         self.enterContext(patch('hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available', return_value=(True, None)))
@@ -187,17 +186,16 @@ class RouterPublicationTests(WorkflowTestCase):
         self.assertEqual(health['cancelledCount'], 1)
         self.assertEqual(health['budgetExhaustedCount'], 0)
 
-    def test_retained_legacy_capability_uses_local_eligibility_not_certificate(self):
+    def test_review_capability_is_derived_from_the_current_declaration(self):
         board = self.board()
         self.seed(board)
-        with patch('hey_my_buddy.buddy.harnesses.dsh.adapter.DshAdapter.local_read_only_check', return_value={'eligible': False, 'reason': {'code': 'harness.readonly-unavailable', 'params': {}},
-                'systemSandbox': False, 'sameAttemptContinuation': False}):
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
             snapshot = board.call('console_snapshot', {})
         buddy = next(p for p in snapshot['buddies'] if p['buddyId'] == BUDDY_ID)
         self.assertNotIn('decision', buddy['capabilities'])
         with board.store.db.read() as connection:
             recorded = json.loads(connection.execute('SELECT capabilities_json FROM buddies WHERE buddy_id=?', (BUDDY_ID,)).fetchone()[0])
-        self.assertIn('decision', recorded)
+        self.assertNotIn('decision', recorded)
         self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
         eligible = board.call('console_snapshot', {})
         self.assertIn('decision', next(p for p in eligible['buddies'] if p['buddyId'] == BUDDY_ID)['capabilities'])

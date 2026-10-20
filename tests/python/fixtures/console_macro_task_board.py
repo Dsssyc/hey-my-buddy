@@ -156,12 +156,6 @@ class SyntheticBoard:
             # Same seam as WorkflowTestCase: synthetic receipts, no native executor.
             executor = SimpleNamespace(native_resume=False, validate_turn_provenance=lambda record: None)
             self.stack.enter_context(patch.object(workflow.WorkflowCoordinator, "_execution_adapter", return_value=executor))
-            # Existing Router tests use these capability-only fixture seams.
-            # There is no start_review/Worker execution in this generator.
-            self.stack.enter_context(patch.object(DshAdapter, "read_only_structured", True))
-            self.stack.enter_context(patch.object(DshAdapter, "local_read_only_check", return_value={
-                "eligible": True, "reasonCode": None, "reason": None,
-                "systemSandbox": False, "sameAttemptContinuation": False}))
             self.stack.enter_context(patch.object(DshAdapter, "available", return_value=(True, "synthetic fixture")))
             # Fail closed if any generation/read path tries launching a process.
             self.launch_guard = self.stack.enter_context(patch("subprocess.Popen", side_effect=AssertionError("No subprocess in synthetic board")))

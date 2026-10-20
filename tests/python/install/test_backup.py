@@ -26,8 +26,8 @@ class BackupTests(BoardTestCase):
         fixture = load_fixture(self.directory)
         before = (self.directory / 'board.sqlite3').read_bytes()
         current = Path(backup.create(self.directory)['path'])
-        self.assertEqual(backup.verify(current)['schema'], SCHEMA_VERSION)
-        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
+        self.assertEqual(backup.verify(current)['schema'], 25)
+        self.assertEqual(fixture['schemaVersion'], 25)
         self.assertEqual(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()), before)
         self.assertEqual((self.directory / 'board.sqlite3').read_bytes(), before)
 
@@ -75,13 +75,13 @@ class BackupTests(BoardTestCase):
             backup.verify(current)
         self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
 
-    def test_verify_refuses_consumed_upgrade_schema(self):
+    def test_verify_refuses_unsupported_schema(self):
         board = self.board()
         board.store.db.close()
         current = Path(backup.create(board.directory)['path'])
         path = current / 'manifest.json'
         manifest = json.loads(path.read_text())
-        for version in (21, 23, 24, 26):
+        for version in (21, 23, 24, 27):
             with self.subTest(schema=version):
                 manifest['schema'] = version
                 path.write_text(json.dumps(manifest))

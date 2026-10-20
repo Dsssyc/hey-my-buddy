@@ -164,13 +164,13 @@ class ClientToolWorkerTests(SeamCase):
         FIXTURE.chmod(0o755)
         os.environ.update(self.environment, HMB_CODEX_CLI=str(FIXTURE),
                           HMB_CODEX_FIXTURE_STATE=str(self.base / "trace.json"))
-        request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
+        request = self.request(permission="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
                                turn_id="buddy-turn-1", input_sha256="a" * 64, native="native")
         inquiry = self.services(request)
         result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=RunServices(inquiry=inquiry), cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        next_request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA, prompt="Continue",
+        next_request = self.request(permission="write", output_schema=OUTCOME_SCHEMA, prompt="Continue",
             turn_id="buddy-turn-2", input_sha256="a" * 64, native="native",
             continuation=RunContinuation(mode="native-session", previous_session_id=result.native_identity.session_id))
         resumed = run(next_request, observer=lambda _facts: FEEDBACK_CONTINUE,
@@ -191,7 +191,7 @@ class ClientToolWorkerTests(SeamCase):
             with self.subTest(case=case):
                 self.set_case(case)
                 os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / f"trace-{case}.json")
-                request = self.request(tool_scope="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
+                request = self.request(permission="write", output_schema=OUTCOME_SCHEMA, prompt="Work",
                                        turn_id="buddy-turn-1", input_sha256="a" * 64, timeout=10)
                 ready, captured, outcomes = threading.Event(), [], []
                 original = native_run.InquiryBridge

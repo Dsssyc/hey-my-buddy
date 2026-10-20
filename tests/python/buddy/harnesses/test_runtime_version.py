@@ -52,10 +52,10 @@ class RuntimeVersionTests(unittest.TestCase):
         if name == "claude":
             request = case.request()
         elif name == "codex":
-            request = case.request(tool_scope="none", output_schema=codex_cases.FAST_SCHEMA,
+            request = case.request(permission="none", output_schema=codex_cases.FAST_SCHEMA,
                                    prompt="Pick a buddy", timeout=10)
         elif name == "zcode":
-            request = case.fast_request(zcode_cases.no_tool_prompt("prompt", zcode_cases.SCHEMA), timeout=10)
+            request = case.fast_request(zcode_cases.structured_prompt("prompt", zcode_cases.SCHEMA), timeout=10)
         else:
             request = case.fast_request("prompt", timeout=10)
         return module.run(request, observer=lambda _facts: FEEDBACK_CONTINUE,

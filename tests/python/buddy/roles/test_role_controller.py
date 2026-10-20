@@ -90,7 +90,7 @@ def run_request(root: Path) -> RunRequest:
         private_state=PrivateStatePaths(invocation_root=str(root / "invocation"),
                                         native_root=str(root / "native")),
         input_text="one bounded input",
-        tool_scope="none",
+        permission="none",
         output_schema=FrozenJson({"type": "object", "additionalProperties": False}),
         budget=RunBudget(timeout_seconds=60),
     )
@@ -198,25 +198,20 @@ class RunCallPointTests(unittest.TestCase):
         result = self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None, cancelled=lambda: True)
         self.assertEqual(result.end.status, "cancelled")
 
-    def test_explicit_native_controls_require_the_modules_support(self):
-        for changes, expected in (
-            ({"networkAllowedDomains": []}, "network_allowed_domains"),
-            ({"additionalDeniedTools": ["mcp__*"]}, "additional_denied_tools"),
-            ({"continuation": {"mode": "native-session", "previousSessionId": "previous",
-                               "checkpoint": {"nativeTurnId": "native-turn", "attemptId": "previous-attempt",
-                                              "inputSha256": "a" * 64}}}, "resume_checkpoint"),
-        ):
-            with self.subTest(control=expected):
-                self.request = RunRequest.from_payload(run_request(self.root).to_payload() | changes)
-                module = FakeHarnessRun()
-                with self.assertRaises(BoardError) as caught:
-                    self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None)
-                self.assertEqual(caught.exception.code, "ROLE_RUN_UNSUPPORTED_CONTROL")
-                self.assertEqual(caught.exception.details["controls"], [expected])
-                self.assertEqual(module.requests, [])
-                module.supported_request_controls = (expected,)
-                self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None)
-                self.assertIs(module.requests[0], self.request)
+    def test_resume_checkpoint_requires_module_support(self):
+        self.request = RunRequest.from_payload(run_request(self.root).to_payload() | {
+            "continuation": {"mode": "native-session", "previousSessionId": "previous",
+                             "checkpoint": {"nativeTurnId": "native-turn", "attemptId": "previous-attempt",
+                                            "inputSha256": "a" * 64}}})
+        module = FakeHarnessRun()
+        with self.assertRaises(BoardError) as caught:
+            self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None)
+        self.assertEqual(caught.exception.code, "ROLE_RUN_UNSUPPORTED_CONTROL")
+        self.assertEqual(caught.exception.details["controls"], ["resume_checkpoint"])
+        self.assertEqual(module.requests, [])
+        module.supported_request_controls = ("resume_checkpoint",)
+        self.run_fake(module, lambda fact: FEEDBACK_CONTINUE, None)
+        self.assertIs(module.requests[0], self.request)
 
 
 class WorkerSeamTests(unittest.TestCase):
@@ -378,12 +373,6 @@ class RouterCallPointTests(unittest.TestCase):
         """A recording stand-in for the selected carrier; no real harness."""
 
         name = "dsh"
-        no_tool_structured = True
-        read_only_structured = True
-
-        def local_read_only_check(self):
-            return {"eligible": True, "reasonCode": None, "reason": None,
-                    "systemSandbox": False, "sameAttemptContinuation": False}
 
 
     def context(self, **kwargs):

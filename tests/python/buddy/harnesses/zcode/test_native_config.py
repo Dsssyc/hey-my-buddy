@@ -150,7 +150,7 @@ class RuntimePreferenceTests(NativeConfigCase):
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok" if no_tools else "write-final"
         request = self.fast_request("Return only one JSON value matching this schema: {}")
         if not no_tools:
-            request = request.model_copy(update={"tool_scope": "write"})
+            request = request.model_copy(update={"permission": "write"})
         return native_run.run(request, observer=worker_observer, services=None, cancelled=lambda: False)
 
     def preference_facts(self, result):
