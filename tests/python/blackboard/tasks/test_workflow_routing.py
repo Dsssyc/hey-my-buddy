@@ -12,6 +12,7 @@ from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from admission import run_next
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.buddy.roles.prompts import router_prompt
+from hey_my_buddy.buddy.roles.structured_call import structured_prompt
 from blackboard.routing.test_decision import (DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY,
                              SECOND_BUDDY_ID, THIRD_BUDDY, THIRD_BUDDY_ID)
 from blackboard.tasks.test_workflow import BUDDY, NONCE, WorkflowTestCase
@@ -560,7 +561,7 @@ class TestWorkflowRouting(WorkflowTestCase):
         self.assertEqual(context.decision_input, audit["input"])
         expected_prompt = router_prompt(router.render_prompt(audit["input"]))
         self.assertEqual(fixture_request.prompt, expected_prompt)
-        self.assertEqual(held[0].request.input_text, expected_prompt)
+        self.assertEqual(held[0].request.input_text, structured_prompt(expected_prompt, audit["input"]["outputSchema"]))
         self.assertEqual(fixture_request.output_schema, audit["input"]["outputSchema"])
         self.assertEqual(fixture_request.budget, audit["input"]["budget"])
         self.assertTrue(audit["inputVerification"]["unchanged"])
