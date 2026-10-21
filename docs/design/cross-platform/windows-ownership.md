@@ -2,7 +2,7 @@
 
 2026-10-21，设计候选，核对基线 `ab21a83a8e4c868ab3014ef7439ec2f11505d3e5`。本文只提出设计与实现验收顺序，没有修改产品代码、运行检查套件、连接日常看板、调用真实 harness 或验证 Windows 11。依据为[分批计划](plan.md)、[清单](inventory.md)的 F01、F02、F04、F08、P01、P02、P04、T03、AGENTS.md、[架构](../../reference/architecture.md)、[ADR-007](../../decisions/007-neutral-core-and-single-current-contract.md)、[ADR-010](../../decisions/010-production-workflow-repair-plan.md)、[ADR-031](../../decisions/031-one-process-per-execution.md)。涉及 harness 的建议同时受 ADR-023、ADR-030 约束。本文的“已核实”指本次读到源码或第十轮日志，不能当作目标系统的运行验收。
 
-本轮按 Host 核对独立审查后的决定修订：先用冻结的状态根文件身份挡住看板副本停止原执行；Windows 文件句柄层沿用现有 ctypes，只用 pywin32 校验 ACL；执行根 Job 保留执行，原生 Job 全空后交回执，执行根退出且根 Job 全空后才释放资源。服务控制台及外层 Job、登录会话、提权属主等新增假设均未验证，列入阶段 A。Linux/macOS 脱离进程组的后代另成一批，本批不宣称解决，也不再以它阻塞本批安装。
+本轮按 Host 核对独立审查后的决定修订：先用冻结的状态目录文件身份挡住看板副本停止原执行；Windows 文件句柄层沿用现有 ctypes，只用 pywin32 校验 ACL；执行根 Job 保留执行，原生 Job 全空后交回执，执行根退出且根 Job 全空后才释放资源。服务控制台及外层 Job、登录会话、提权属主等新增假设均未验证，列入阶段 A。Linux/macOS 脱离进程组的后代另成一批，本批不宣称解决，也不再以它阻塞本批安装。
 
 支持范围沿用计划：Windows 11 x64、本地 NTFS、同一个登录会话、Python 3.12；另建议将下限改为 3.12.4，交开发者确认；作为 Windows 系统服务运行、网络盘、FAT/exFAT 和 Windows ARM 不在首发范围。Linux、macOS 继续使用各自的真实开机会话和内核进程创建值。三系统共用任务身份、单一事实发布协议、结果导入及停止结算规则；ACL、Job、重解析点和文件共享模式在 Windows 的系统边界实现。
 
@@ -26,13 +26,13 @@ run `39555977214` 的四份 `overview.md` 记载：w1 为 74 文件、26 通过�
 
 库与 ctypes 的取舍按实际边界收窄：pywin32 只用于 `GetSecurityInfo`、ACL 遍历与 SID 比较，避免自己维护安全描述符、变长 ACE 与 SID 的解析；现有 `blackboard/tasks/windows_paths.py:WindowsFileAPI` 的 ctypes 句柄层原样搬到根包拟新增 `windows_files.py`，不使用 win32file/win32api 重写打开、固定、fd 转移、关闭与错误映射。`windows_paths.py` 保留工作树政策并调用搬出的能力，私有文件入口复用它；不保留两份实现，不另写 ctypes ACL 回退。`protocol/windows_process.py` 的 Job 层仍沿用 ctypes。本批新增的卷/文件身份读取和必要共享模式在唯一文件边界内扩展，不借搬移重做整个路径模块。
 
-Windows ACL 只留一条接受规则：属主是当前用户 SID 或本机 Administrators SID；DACL 存在且不是 NULL DACL；每一条 ACE 都是普通 allow 类型，受托者都在当前用户、LocalSystem、Administrators、OWNER RIGHTS 的白名单内。必须遍历全部 ACE，包括只作用于子对象的 ACE；其他属主、deny ACE、未知类型、对象或条件 ACE、白名单外主体一律拒绝。空 DACL 与 NULL DACL 区分，规则不额外要求某个访问掩码或“用户完全控制”；实际操作是否获准由系统调用决定。取消 generic mapping、继承范围分析和“状态根 DACL 必须受保护”的要求，不实现通用有效权限分析器。Windows 提权创建时属主是否为 Administrators、提权与非提权交替使用同一根能否正常工作，均需实验。此规则不承诺隔离管理员或同一用户的任意 shell。
+Windows ACL 只留一条接受规则：属主是当前用户 SID 或本机 Administrators SID；DACL 存在且不是 NULL DACL；每一条 ACE 都是普通 allow 类型，受托者都在当前用户、LocalSystem、Administrators、OWNER RIGHTS 的白名单内。必须遍历全部 ACE，包括只作用于子对象的 ACE；其他属主、deny ACE、未知类型、对象或条件 ACE、白名单外主体一律拒绝。空 DACL 与 NULL DACL 区分，规则不额外要求某个访问掩码或“用户完全控制”；实际操作是否获准由系统调用决定。取消 generic mapping、继承范围分析和“状态目录 DACL 必须受保护”的要求，不实现通用有效权限分析器。Windows 提权创建时属主是否为 Administrators、提权与非提权交替使用同一根能否正常工作，均需实验。此规则不承诺隔离管理员或同一用户的任意 shell。
 
-新私有目录用 Python 自带的 `mkdir(mode=0o700)` 创建，使用 Python 3.12.4 起在 Windows 上设置的受保护 DACL，不自造安全描述符；目录内新文件靠继承，凭据文件也不另带显式描述符。创建后仍以句柄读回并按上述唯一规则校验；已存在目录同样校验，不自动修改其 ACL。默认状态根、逐级创建的私有父目录与 PowerShell 启动器预先建立的目录都在范围内，不能认为传了 mode 就已证明既有目录安全。Python 创建的实际主体、保护标志及子文件继承仍未验证。建议将 `requires-python = ">=3.12.4,<3.13"` 交开发者确认；本任务不改依赖文件，也不为较早版本保留另一套建目录方法。
+新私有目录用 Python 自带的 `mkdir(mode=0o700)` 创建，使用 Python 3.12.4 起在 Windows 上设置的受保护 DACL，不自造安全描述符；目录内新文件靠继承，凭据文件也不另带显式描述符。创建后仍以句柄读回并按上述唯一规则校验；已存在目录同样校验，不自动修改其 ACL。默认状态目录、逐级创建的私有父目录与 PowerShell 启动器预先建立的目录都在范围内，不能认为传了 mode 就已证明既有目录安全。Python 创建的实际主体、保护标志及子文件继承仍未验证。建议将 `requires-python = ">=3.12.4,<3.13"` 交开发者确认；本任务不改依赖文件，也不为较早版本保留另一套建目录方法。
 
 文件边界继续使用已有 `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS` 语义逐级打开并固定祖先，父句柄不允许删除共享，检查类型、重解析属性与最终名称。私有叶子经同一句柄检查普通文件、属主和 DACL，然后交给读写者；ACL 用句柄上的 `GetSecurityInfo`，不用路径查询冒充同一对象。新文件独占创建并继承私有父目录权限；句柄转 CRT fd 只转移一次所有权，使用二进制及不可继承标志。普通源检出复用路径固定而不套私有 ACL 政策，Git 链接仍由工作树政策处理；POSIX 保留 `dir_fd/O_NOFOLLOW` 与 uid/mode，调用点不叠加另一轮权限猜测。
 
-受影响入口包括上述 CLI 与 launcher 凭据、`protocol/transport.py` 的状态根/token/endpoint、`private_dirs.py` 的目录与普通文件、`protocol/execution.py` 的 startup/live/receipt、`buddy/roles/turn_io.py` 的私有输入输出、`console/console_sessions.py` 的 session、`buddy/roles/run_execution.py:start_fast` 的空 cwd，以及备份和安装的私有文件。空 cwd 仍须私有、真实且为空。不要求磁盘根或普通用户目录一律私有；固定祖先的路径政策与私有对象 ACL 政策各有明确作用。
+受影响入口包括上述 CLI 与 launcher 凭据、`protocol/transport.py` 的状态目录/token/endpoint、`private_dirs.py` 的目录与普通文件、`protocol/execution.py` 的 startup/live/receipt、`buddy/roles/turn_io.py` 的私有输入输出、`console/console_sessions.py` 的 session、`buddy/roles/run_execution.py:start_fast` 的空 cwd，以及备份和安装的私有文件。空 cwd 仍须私有、真实且为空。不要求磁盘根或普通用户目录一律私有；固定祖先的路径政策与私有对象 ACL 政策各有明确作用。
 
 未验证的 Windows 11 实验全部列入阶段 A：普通用户与提权创建、两者交替访问同一根；Python 3.12.4 之前和之后、默认根及 PowerShell 先建目录，读回实际 owner/DACL/继承；普通 allow、只作用于子对象的白名单外 ACE、deny、NULL DACL 与其他属主的正反例；SQLite 和凭据新文件继承；并发把祖先换成 junction、叶子换成 reparse point；在稳定运行时里替换源目录后 `import win32security`。API 失败或导入失败明确报告，不能回退 mode 判断或放行。
 
@@ -52,11 +52,11 @@ F08 的根因已经由 w3、w4 的 `backup.py:create` 堆栈确认。`_private_c
 
 备份建议三个系统共用现有 journal 发布协议：先完成并验证 `.incoming`，发布 journal，必要时把 current 改名为 `.previous`，把 incoming 改名为 current，验证 current 后删除 previous，最后删除 journal。已有实现位于 `backup.py:_publication_journal/_recover_publication/create`；POSIX 目前另走 `exchange`，应在替换时删除这套分支及专属测试，不保留自动回退。恢复必须在备份锁下进行；current 在两次改名之间可以暂时缺席，所有正式读者必须先恢复或报告进行中，不能承诺路径一直存在。首次备份中断还没有完整一代时，返回未完成并允许重建，不声称一定有可恢复备份；不得丢掉唯一已验证的一代。
 
-决定 4 的推论只成立一半。已核实 `protocol/process_identity.py:boot_id/inspect_process_identity`：Linux 读 boot UUID，macOS 读 `kern.bootsessionuuid`，Windows 调 `NtQuerySystemInformation(0x5A)`，取前 16 字节作 BootIdentifier；相异时立即返回 `boot-changed`；这个当前实现尚无本轮新增的状态根文件身份与 Windows 会话围栏。`blackboard/tasks/interruption.py:_stop_native` 已把这个结果作为所有旧执行与原生进程停止的证据。真正换了一次内核开机会话，旧内核的进程不可能继续存在，因此这个推理可以证明进程停止；它不能证明断电前的回执、备份或未提交的 SQLite 数据还存在，也不能重建已丢的产物。恢复应记中断、按保留下来的证据处理部分输出，不能填造成功回执。新版恢复先做第 7 节的状态根归属核对；Windows 还须核对登录会话，不得在副本或不同会话中跳过围栏直接结算。
+决定 4 的推论只成立一半。已核实 `protocol/process_identity.py:boot_id/inspect_process_identity`：Linux 读 boot UUID，macOS 读 `kern.bootsessionuuid`，Windows 调 `NtQuerySystemInformation(0x5A)`，取前 16 字节作 BootIdentifier；相异时立即返回 `boot-changed`；这个当前实现尚无本轮新增的状态目录文件身份与 Windows 会话围栏。`blackboard/tasks/interruption.py:_stop_native` 已把这个结果作为所有旧执行与原生进程停止的证据。真正换了一次内核开机会话，旧内核的进程不可能继续存在，因此这个推理可以证明进程停止；它不能证明断电前的回执、备份或未提交的 SQLite 数据还存在，也不能重建已丢的产物。恢复应记中断、按保留下来的证据处理部分输出，不能填造成功回执。新版恢复先做第 7 节的状态目录归属核对；Windows 还须核对登录会话，不得在副本或不同会话中跳过围栏直接结算。
 
 Windows 分支目前只有代码，没有本次可读的系统 API 契约材料或 Windows 11 运行证据；源码注释写的“documented-size prefix”不能证明 `0x5A` 及 32 字节缓冲区在目标系统可用。因此不能现在确认 Windows 的上述前提。重启、关机后开机（含 Fast Startup）、休眠恢复、睡眠恢复、同次开机注销再登录分别记录标识与存活测试进程；要求实际终结旧进程的内核重启改变标识，保留用户进程的恢复不产生错误的改变。Fast Startup 是否换标识必须按观察记录，不从“点了关机”推导；旧执行已经结束但标识没变时，应依完整身份缺席证明。API 失败或结果不可靠时保持 unknown，禁止用墙钟启动时间或生成的 UUID 代替。
 
-应在启动意图中先冻结启动状态根的文件身份、已观测 bootId，以及 Windows 的会话号和预分配 Job 名，再允许创建执行；启动文件、marker、跨进程身份与持久记录绑定同一组启动事实，避免只剩没有归属或开机会话的 intent。当前 `spawn.intent` 只有 taskId/attemptId/generation，完整身份稍后才写入 `spawn.marker`；仅有这份 intent 不能在重启后凭空知道是哪次开机启动的。没有完整身份的既有意图不能用文件 mtime 推定启动会话，也不能把当前状态根身份补填成历史启动属主。启动到身份发布间的中断必须有测试：未放行原生工作不等于执行根已经消失，未证明的根仍占名额。若修改跨进程事实格式，按第 8 节处理契约与升级。
+应在启动意图中先冻结启动状态目录的文件身份、已观测 bootId，以及 Windows 的会话号和预分配 Job 名，再允许创建执行；启动文件、marker、跨进程身份与持久记录绑定同一组启动事实，避免只剩没有归属或开机会话的 intent。当前 `spawn.intent` 只有 taskId/attemptId/generation，完整身份稍后才写入 `spawn.marker`；仅有这份 intent 不能在重启后凭空知道是哪次开机启动的。没有完整身份的既有意图不能用文件 mtime 推定启动会话，也不能把当前状态目录身份补填成历史启动属主。启动到身份发布间的中断必须有测试：未放行原生工作不等于执行根已经消失，未证明的根仍占名额。若修改跨进程事实格式，按第 8 节处理契约与升级。
 
 未验证实验与测试：Windows 11 上对每个文件发布阶段、gzip 尾部结束前后、journal 两次改名和清理阶段设置模型无关的暂停点，由父测试进程强杀写者，重新启动读者/恢复器核对摘要、绑定和完整代际；POSIX 做同一组进程中断测试。为 bootId 单独保留重启前后探针记录。断电实验只能在可丢弃虚拟机或专用环境做，目标是确认重启后的停止结算与错误报告，不把它作为“不丢数据”的验收。拟扩充 `tests/python/protocol/test_native_process_journal.py`、`tests/python/buddy/runtime/test_execution_process.py`、`tests/python/install/test_backup.py`、`test_backup_windows.py`、`test_upgrade.py` 和 `tests/python/blackboard/store/test_interruption_recovery.py`。
 
@@ -72,15 +72,15 @@ Windows 服务改用 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`，不再依�
 
 Windows 11 需验证无 kill-on-close 的命名 Job 在所有服务句柄关闭后仍因关联进程存活而可接回，native Job 可以嵌套且后代仍在根 Job 中，Python/uv/shell/Node/new-console/breakaway 请求不能逃出根 Job。尤其验证启动器外层 Job 带 `SILENT_BREAKAWAY_OK` 时服务、执行、孙进程各归哪一层，以及 conhost 是否计入 ActiveProcesses；不能把进程计数看似只多一个的情况忽略掉。若组合不成立，回到设计选择，不用过滤进程名或放宽空 Job 判据补齐。
 
-Job 使用令牌的默认 DACL，不设置显式安全描述符；保留拒绝 `CreateJobObjectW` 打开已有同名对象的创建校验。随机 `Local\HeyMyBuddy-<uuid>` 只负责定位，必须绑定冻结的状态根文件身份、bootId、会话号及 task/attempt/generation，名字不单独授予停止权限。创建执行根时保持 suspended，取得并持久化完整身份及 Job 绑定后再恢复线程；原生工作仍须等待现有 `Execution.run` 的身份确认。创建到登记的崩溃窗口保留 pending，缺失登记不等于没有子进程。
+Job 使用令牌的默认 DACL，不设置显式安全描述符；保留拒绝 `CreateJobObjectW` 打开已有同名对象的创建校验。随机 `Local\HeyMyBuddy-<uuid>` 只负责定位，必须绑定冻结的状态目录文件身份、bootId、会话号及 task/attempt/generation，名字不单独授予停止权限。创建执行根时保持 suspended，取得并持久化完整身份及 Job 绑定后再恢复线程；原生工作仍须等待现有 `Execution.run` 的身份确认。创建到登记的崩溃窗口保留 pending，缺失登记不等于没有子进程。
 
 `Local\` 名字空间按 Windows 登录会话隔离。现有 `process_identity.py:validate_process_identity` 的身份只有 bootId、pid、startedAt、processGroupId、jobName，没有会话号。新版在 Windows 身份及启动事实里加入由 `ProcessIdToSessionId` 得到的会话号；POSIX 采用明确的不适用形式，不按字段缺失推断版本。服务打开 Job 或据 Job 缺席结算前，先核对当前会话与启动会话；不同或无法读取就 unknown，不接回、不发信号，也不把按名打不开解释为原 Job 已不存在。重启后的新会话是否仍相同不作假设；bootId 变化的停止事实不能在不同会话中绕过本批规定的归属边界。会话 API、同用户不同会话、会话切换后 Local Job 的可见性列入阶段 A。
 
-接回从 `blackboard/service/execution_scheduler.py:_resume_executions/verify_identity` 的权威 attempt 出发，先做第 7 节状态根文件身份及 Windows 会话核对，再读取固定私有证据，以 `OpenJobObjectW` 保留同一句柄完成查询、必要的停止和结束观察。根仍在时核对 bootId、原始创建 FILETIME、PID 与实际 Job 成员关系；根已退而 Job 还有成员时只能按已绑定的同一 Job 结束遗留工作。当前 `process_identity.py:_SystemSource.job_members/stop_job` 分别开关 Job，应收敛为同一次持有操作，不能查询后关闭再按名字打开另一个对象。这里不新增“已验证目标”类型，业务归属只在入口校验一次。
+接回从 `blackboard/service/execution_scheduler.py:_resume_executions/verify_identity` 的权威 attempt 出发，先做第 7 节状态目录文件身份及 Windows 会话核对，再读取固定私有证据，以 `OpenJobObjectW` 保留同一句柄完成查询、必要的停止和结束观察。根仍在时核对 bootId、原始创建 FILETIME、PID 与实际 Job 成员关系；根已退而 Job 还有成员时只能按已绑定的同一 Job 结束遗留工作。当前 `process_identity.py:_SystemSource.job_members/stop_job` 分别开关 Job，应收敛为同一次持有操作，不能查询后关闭再按名字打开另一个对象。这里不新增“已验证目标”类型，业务归属只在入口校验一次。
 
 Windows 有序停止沿现有 ExecutionLive stop 与 harness 原生 interrupt/close 路径，宽限后用 `TerminateJobObject`。`process_handle.py:signal_group` 当前把 SIGTERM 映射为 CTRL_BREAK_EVENT 并吞掉异常，不能把发送控制台事件当作无控制台运行的共同软停保证。command 替身没有原生协议，不承诺等价的 SIGTERM 处理机会。仍区分正常、宽限结束、强停及 service-stop，不伪造 POSIX 负退出码。
 
-同状态根、同会话中的停止证据是：持有的根 Job ActiveProcesses 为 0，且根的完整身份已退出；或按名打开明确返回对象不存在，同时根身份缺席且启动绑定可信；或符合归属及会话前提的真正 boot-changed。拒绝访问、查询失败、不完整成员列表、身份冲突、不同会话都保留 unknown。`TerminateJobObject` 返回成功、creator-reaped、长调用断开、回执里的成功布尔值都不能单独证明全部工作结束。正常回执前 native Job 必须全空，回执接收与根退出后的资源释放次序见第 5 节。
+同状态目录、同会话中的停止证据是：持有的根 Job ActiveProcesses 为 0，且根的完整身份已退出；或按名打开明确返回对象不存在，同时根身份缺席且启动绑定可信；或符合归属及会话前提的真正 boot-changed。拒绝访问、查询失败、不完整成员列表、身份冲突、不同会话都保留 unknown。`TerminateJobObject` 返回成功、creator-reaped、长调用断开、回执里的成功布尔值都不能单独证明全部工作结束。正常回执前 native Job 必须全空，回执接收与根退出后的资源释放次序见第 5 节。
 
 POSIX 继续使用 SIGTERM、必要时 SIGKILL 与原进程组缺席；killpg 成功不是结束证据，根先退而组仍在、PID 重用且组仍在继续 unknown。本批修正三系统共同的归属和结算顺序，不把进程组扩成不可逃逸的子树，POSIX 脱离后代按第 5 节拆出。
 
@@ -122,19 +122,19 @@ Windows 具体使用 native Job 嵌套于禁止脱离的根 Job。回合结束�
 
 未验证的 Windows 11 实验：自己持有的正常读者、允许删除共享的读者、外部禁止删除共享的读者分别参与 replace/delete；打开 SQLite 写/只读连接时恢复与删根；gzip 未关闭时改名；只读 Git 对象清理；已加载 Python runtime 的保留；junction 换入删除树。验证忙错误含操作和受限相对路径、原始系统错误，释放占用后能继续同一恢复/清理。拟扩充 `tests/python/install/test_backup_windows.py`、`test_upgrade.py`、`test_execution_install_fence.py`、`tests/python/blackboard/tasks/test_workspace_submission_cleanup.py`、`test_windows_workspace.py`、`tests/python/cli/test_support_cleanup.py`、`test_checks_cleanup.py` 与相应未关闭资源的原用例。POSIX 专项 killpg/FIFO 测试正确标为 POSIX，并补 Job 对应的边界测试；不能只跳过 Windows 失败。
 
-## 7. ADR-031 拟新增第 13 条：状态根文件身份围栏
+## 7. ADR-031 拟新增第 13 条：状态目录文件身份围栏
 
-本轮已读待办“看板副本上起的服务，停止时会强杀原服务的执行”及 Host 的 `tmp/copy-board-experiment.py`，没有运行它。待办记录 2026-10-20 私有副本服务经 `_force_if_required` → `kill_verified_process_group` 停止日常执行；脚本以两个私有服务和 SQLite 副本复现 B 停止后 A 的执行消失。现有启动 marker、startup、身份与看板都可能被复制，因此旧稿“由 store.directory 与 attempt 推导固定路径再核对”不能挡住副本；即使文件、task/attempt/generation、bootId、PID 与 start 全对得上，也只证明是哪一个进程，尚未证明它属于当前状态根。此事故不依赖 Windows，POSIX 围栏列为本批第一个实施阶段。
+本轮已读待办“看板副本上起的服务，停止时会强杀原服务的执行”及 Host 的 `tmp/copy-board-experiment.py`，没有运行它。待办记录 2026-10-20 私有副本服务经 `_force_if_required` → `kill_verified_process_group` 停止日常执行；脚本以两个私有服务和 SQLite 副本复现 B 停止后 A 的执行消失。现有启动 marker、startup、身份与看板都可能被复制，因此旧稿“由 store.directory 与 attempt 推导固定路径再核对”不能挡住副本；即使文件、task/attempt/generation、bootId、PID 与 start 全对得上，也只证明是哪一个进程，尚未证明它属于当前状态目录。此事故不依赖 Windows，POSIX 围栏列为本批第一个实施阶段。
 
 启动证据新增不可变的 `stateRootIdentity`，在允许创建执行之前由真实状态目录的句柄取得并冻结：POSIX 取该目录的 `st_dev/st_ino`；Windows 取卷序列号和文件 ID，均从句柄取，不把路径字符串或 Windows 模拟 st_ino 当替代。使用有平台标识的明确字段形式，数字/字节的编码由协议 schema 固定；不要在同一字段里按写入时间解释值。复制的 marker/startup/看板继续带原根的文件身份，B 目录有自己的身份，比较必不应通过；副本即使占了 A 原来的路径，也不能因同路径取得停止权限。当前源没有这个字段，Windows 获取及持久化编码为未验证，阶段 A 验证；不以本轮建议描述产品已经有围栏。
 
-接回、`execution_scheduler.py:verify_identity`、`_force_if_required`、崩溃结算及其原生 journal 处理都在进入动作的边界先比较冻结身份与现用状态根的句柄身份，再核对 Windows 会话和完整进程/Job 身份。不能只用服务启动时缓存的路径或旧目录身份代替当前实际根；打开失败、缺少启动根身份或身份不一致就按外来执行记 unknown，不接回、不连接其执行端点、不发信号，也不导入为本根已停止。长调用失败、boot-changed 或本地缺 marker 都不能越过归属围栏。新启动执行也绑定同一根身份，执行自己的身份上报不得把副本的当前根回填覆盖冻结值。
+接回、`execution_scheduler.py:verify_identity`、`_force_if_required`、崩溃结算及其原生 journal 处理都在进入动作的边界先比较冻结身份与现用状态目录的句柄身份，再核对 Windows 会话和完整进程/Job 身份。不能只用服务启动时缓存的路径或旧目录身份代替当前实际根；打开失败、缺少启动根身份或身份不一致就按外来执行记 unknown，不接回、不连接其执行端点、不发信号，也不导入为本根已停止。长调用失败、boot-changed 或本地缺 marker 都不能越过归属围栏。新启动执行也绑定同一根身份，执行自己的身份上报不得把副本的当前根回填覆盖冻结值。
 
-具体落点为 `protocol/execution.py:launch_execution` 的 intent/startup/marker 与执行身份交接，`protocol/process_identity.py` 的事实校验和 journal，`blackboard/tasks/interruption.py:read_identity/record_identity/_marker_identity/_stop_native`，`blackboard/service/execution_scheduler.py` 的恢复、身份确认与强停，以及 `blackboard/store/db.py` 的持久身份表。文件边界负责取得状态根句柄身份，业务入口统一做一次归属核对；保留 `kill_verified_process_group` 及其 dict 参数，不把它重构为“已验证目标”类型，也不在系统调用层再叠同一业务校验。系统层原有对活身份及停止结果的核对仍有必要，不能把归属判断等同于操作结果观察。
+具体落点为 `protocol/execution.py:launch_execution` 的 intent/startup/marker 与执行身份交接，`protocol/process_identity.py` 的事实校验和 journal，`blackboard/tasks/interruption.py:read_identity/record_identity/_marker_identity/_stop_native`，`blackboard/service/execution_scheduler.py` 的恢复、身份确认与强停，以及 `blackboard/store/db.py` 的持久身份表。文件边界负责取得状态目录句柄身份，业务入口统一做一次归属核对；保留 `kill_verified_process_group` 及其 dict 参数，不把它重构为“已验证目标”类型，也不在系统调用层再叠同一业务校验。系统层原有对活身份及停止结果的核对仍有必要，不能把归属判断等同于操作结果观察。
 
-当前 ADR-031 只有第 1 至 12 条。拟新增第 13 条仍交开发者确认：“服务只接回和停止由当前状态根启动的执行及其原生工作。启动前将该状态目录的文件身份冻结进启动证据；接回、身份确认、强停和崩溃结算先与现用状态根的文件身份比对，Windows 还须比对启动会话，再核对完整进程与进程组或 Job 身份。副本或同路径替换后的不同状态目录不取得原执行的归属；身份缺失、不符或无法观察时一律视为外来或未知，不接回、不发信号、不按已停释放资源。路径、PID、进程名、复制来的看板与证据文件均不能单独授予这些权限。”
+当前 ADR-031 只有第 1 至 12 条。拟新增第 13 条仍交开发者确认：“服务只接回和停止由当前状态目录启动的执行及其原生工作。启动前将该状态目录的文件身份冻结进启动证据；接回、身份确认、强停和崩溃结算先与现用状态目录的文件身份比对，Windows 还须比对启动会话，再核对完整进程与进程组或 Job 身份。副本或同路径替换后的不同状态目录不取得原执行的归属；身份缺失、不符或无法观察时一律视为外来或未知，不接回、不发信号、不按已停释放资源。路径、PID、进程名、复制来的看板与证据文件均不能单独授予这些权限。”
 
-状态根身份与可执行文件、harness 安装位置、Worker cwd 无关；稳定 runtime 和用户自己的 harness 可以在根外，合法工作区也通常在分配的检出。实际目录改名后文件身份可能不变，但这条比较只判归属，不额外承诺状态迁移或重定位的可用性；恢复/复制到一个新根不能继承旧执行的控制权。目录身份不能改成随机 board ID，因为 board ID 会随副本一起复制。
+状态目录身份与可执行文件、harness 安装位置、Worker cwd 无关；稳定 runtime 和用户自己的 harness 可以在根外，合法工作区也通常在分配的检出。实际目录改名后文件身份可能不变，但这条比较只判归属，不额外承诺状态迁移或重定位的可用性；恢复/复制到一个新根不能继承旧执行的控制权。目录身份不能改成随机 board ID，因为 board ID 会随副本一起复制。
 
 验收先在 POSIX 做 A/B 私有模型无关复现：A 有活执行，B 只复制看板，B 启动和停止之后 A 执行仍在；再完整复制启动文件、spawn.marker 和 native journal，结果相同，B 记 foreign/unknown 且不发信号。另测把新副本放到同一路径、同一真实根服务重启能接回、文件身份获取失败、marker/root identity 不符、PID 重用与 boot 变化，不让缺省分支绕过围栏。Windows 11 用卷/文件 ID 重做副本及同路径替换测试，并加不同会话；所有场景只操作私有根，原始复现脚本仅供改造成受支持检查用例，不能直接运行并删除其范围外现场。
 
@@ -142,9 +142,9 @@ Windows 具体使用 native Job 嵌套于禁止脱离的根 Job。回合结束�
 
 ## 8. 文件、契约与可各自验收的实施顺序
 
-公共文件改动集中在根包拟新增 `windows_files.py`：原样搬入现有 ctypes WindowsFileAPI，再在唯一边界接 ACL、状态根文件身份和确有证据才需要的短暂占用重试。`windows_paths.py` 保留工作树政策，`private_dirs.py` 承载私有政策；pywin32 不重写句柄层。公共私有事实发布模块统一 execution/turn_io/daemon/launcher/CLI 写入；测试观察与 READONLY 清理仍只服务私有测试根。
+公共文件改动集中在根包拟新增 `windows_files.py`：原样搬入现有 ctypes WindowsFileAPI，再在唯一边界接 ACL、状态目录文件身份和确有证据才需要的短暂占用重试。`windows_paths.py` 保留工作树政策，`private_dirs.py` 承载私有政策；pywin32 不重写句柄层。公共私有事实发布模块统一 execution/turn_io/daemon/launcher/CLI 写入；测试观察与 READONLY 清理仍只服务私有测试根。
 
-阶段 0：状态根文件身份围栏，本批第一个实施阶段，先完成不依赖 Windows 实验的 POSIX 修复。冻结目录 `st_dev/st_ino`，覆盖接回、verify_identity、force 与崩溃结算，完成契约/存储形式及 fixture 升级；把 Host 的 A/B 副本复现改成正式模型无关用例，要求 B 停止后 A 仍在，完整复制启动证据和同路径换副本也不能绕过。同一真实根重启仍能接回。Windows 的卷/文件 ID 对应落地随后依阶段 A/B 在阶段 D 完成，不因 Windows 工作未完延后 POSIX 事故修复；不新增目标类型重构。
+阶段 0：状态目录文件身份围栏，本批第一个实施阶段，先完成不依赖 Windows 实验的 POSIX 修复。冻结目录 `st_dev/st_ino`，覆盖接回、verify_identity、force 与崩溃结算，完成契约/存储形式及 fixture 升级；把 Host 的 A/B 副本复现改成正式模型无关用例，要求 B 停止后 A 仍在，完整复制启动证据和同路径换副本也不能绕过。同一真实根重启仍能接回。Windows 的卷/文件 ID 对应落地随后依阶段 A/B 在阶段 D 完成，不因 Windows 工作未完延后 POSIX 事故修复；不新增目标类型重构。
 
 阶段 A：Windows 11 模型无关的系统实验，全部为未验证，不能用本设计文字或 mock 代替结果。记录版本、登录会话、提权状态、目录身份、Job flags、实际成员及退出结果；具体需要 Host shell 或界面时由 Host 后续安排，本任务不执行真实 harness 或模型调用。该阶段可以与阶段 0 的 POSIX 实施并行，但不作为把 POSIX 围栏排后的理由。
 
@@ -152,7 +152,7 @@ Windows 具体使用 native Job 嵌套于禁止脱离的根 Job。回合结束�
 
 阶段 A 的身份实验：卷序列号与文件 ID 的句柄读取、目录改名/复制/同路径替换；ProcessIdToSessionId、Local Job 在同用户不同会话中的可见性，跨会话一律 unknown；BootIdentifier 在内核重启、Fast Startup、睡眠、休眠及注销/登录中的真实值与存活进程关系。不同会话按名字打不开不能记为 Job 已停；API 失败不能用墙钟替代。
 
-阶段 A 的私有存储实验：提权/非提权及交替用同一状态根；预置的 Python 3.12.4 前后环境里新目录、默认状态根、PowerShell 启动器先建目录的实际 owner/DACL/继承主体，核对白名单含 OWNER RIGHTS；凭据/SQLite 子文件继承、ACL 正反例和 junction 竞态；锁定稳定 runtime 中源目录被替换后 `import win32security`，确认 bootstrap 校验不会在尚无依赖时误载模块，并与 W08 的 .pth 问题衔接；开启 Defender 实时扫描跑文件发布热路径和占用实验。有瞬时冲突证据才设计唯一边界的一次有界重试，持续占用仍报忙。
+阶段 A 的私有存储实验：提权/非提权及交替用同一状态目录；预置的 Python 3.12.4 前后环境里新目录、默认状态目录、PowerShell 启动器先建目录的实际 owner/DACL/继承主体，核对白名单含 OWNER RIGHTS；凭据/SQLite 子文件继承、ACL 正反例和 junction 竞态；锁定稳定 runtime 中源目录被替换后 `import win32security`，确认 bootstrap 校验不会在尚无依赖时误载模块，并与 W08 的 .pth 问题衔接；开启 Defender 实时扫描跑文件发布热路径和占用实验。有瞬时冲突证据才设计唯一边界的一次有界重试，持续占用仍报忙。
 
 阶段 A 的文件发布实验：普通/允许删除共享/禁止删除共享的读者参与 replace/delete，SQLite 连接占用与关闭、已加载 runtime 保留、只读测试 Git 对象删除；对私有事实、native journal、gzip 尾部、备份 journal 两次改名及清理逐点强杀写者并恢复，核对摘要、绑定与完整代际。持续占用明确报忙且现场可恢复，发布成功才满足进程崩溃承诺；断电后的启动身份与中断报告单独验证，不承诺找回丢失数据。
 
@@ -160,7 +160,7 @@ Windows 具体使用 native Job 嵌套于禁止脱离的根 Job。回合结束�
 
 阶段 C：公共事实发布与唯一备份 journal，依赖 B。验收写者强杀的每个发布窗口、gzip 尾部由写者刷盘、三系统完整代恢复、只读 fsync 循环及 exchange 分支删除、唯一完整代不丢。接入经过实验确认的短暂占用处理；更新 owning reference 的故障模型，不因 PermissionError 消失就宣布 Job 修好。
 
-阶段 D：Windows 服务控制台/外层 Job、执行根 Job、会话与状态根身份接回，依赖阶段 0、A、B、C。落地 detached/new-group/breakaway 与 NO_WINDOW；Windows 身份增加会话及卷/文件 ID，先比归属再碰 Local Job；根 Job 保留执行、native 短命 Job 保留 kill-on-close，拒绝同名对象，Job 不设显式描述符。验收服务/Host 退出后实际存活、同根同会话接回、副本与跨会话不接回/不停止、根先退出仍有后代的处理、查询失败 unknown。新增 ADR-031 第 13 条的最终措辞仍须开发者确认。
+阶段 D：Windows 服务控制台/外层 Job、执行根 Job、会话与状态目录身份接回，依赖阶段 0、A、B、C。落地 detached/new-group/breakaway 与 NO_WINDOW；Windows 身份增加会话及卷/文件 ID，先比归属再碰 Local Job；根 Job 保留执行、native 短命 Job 保留 kill-on-close，拒绝同名对象，Job 不设显式描述符。验收服务/Host 退出后实际存活、同根同会话接回、副本与跨会话不接回/不停止、根先退出仍有后代的处理、查询失败 unknown。新增 ADR-031 第 13 条的最终措辞仍须开发者确认。
 
 阶段 E：Windows 后代停止与三系统共同的回执接收/最终结算，依赖 D。验收 native Job 全空后才发回执，服务先确认可靠接收、执行根退出及根 Job 全空后才释放资源；成功回执到达不提前完成，接收/退出/最终事务任一点崩溃都能恢复且不重复结算，冲突工作与回收在证据未齐时继续受阻。不增加只交付阶段事实。POSIX 只验收既有完整身份/已登记原组和共同次序，脱离后代待办及 cwd 回收扫描另批，不阻塞本批安装。
 
@@ -176,7 +176,7 @@ Windows 具体使用 native Job 嵌套于禁止脱离的根 Job。回合结束�
 
 ## 9. 本轮按 Host 审查决定的改动
 
-归属围栏改为冻结状态根文件身份，补入看板副本事故、脚本阅读边界、完整证据复制与同路径替换验收；POSIX 修复列为第一个实施阶段 0。第 13 条候选措辞及契约/显式升级随之重写，不做“已验证目标”类型重构。
+归属围栏改为冻结状态目录文件身份，补入看板副本事故、脚本阅读边界、完整证据复制与同路径替换验收；POSIX 修复列为第一个实施阶段 0。第 13 条候选措辞及契约/显式升级随之重写，不做“已验证目标”类型重构。
 
 Windows 启动补服务 detached/new-group、允许时 breakaway、不允许时明确失败，以及执行/native 子进程 NO_WINDOW；加入 Local Job 的会话号围栏、提权属主和默认 Job DACL。启动方关闭、SILENT_BREAKAWAY_OK、跨会话和 conhost 均明确未验证并列入阶段 A。
 
