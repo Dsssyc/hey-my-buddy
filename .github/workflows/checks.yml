@@ -20,15 +20,97 @@ defaults:
 
 jobs:
   frontend:
-    name: Frontend (ubuntu-latest, shard ${{ matrix.shard }}/2)
+    name: Frontend (typecheck and unit tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Prepare evidence directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/logs"
+          date +%s > "$RUNNER_TEMP/logs/started-at.txt"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/console/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: '0.12.19'
+          python-version: '3.12'
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install console dependencies
+        run: |
+          npm --prefix apps/console ci 2>&1 | tee "$RUNNER_TEMP/logs/npm-ci.log"
+      - name: Console typecheck
+        id: typecheck
+        if: ${{ !cancelled() }}
+        run: |
+          npm --prefix apps/console run typecheck 2>&1 | tee "$RUNNER_TEMP/logs/console-typecheck.log"
+      - name: Console unit tests
+        id: console-tests
+        if: ${{ !cancelled() }}
+        run: |
+          npm --prefix apps/console test -- --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/logs/console-tests.json" 2>&1 | tee "$RUNNER_TEMP/logs/console-tests.log"
+      - name: Result overview
+        if: ${{ always() }}
+        shell: python {0}
+        env:
+          TYPECHECK_RESULT: ${{ steps.typecheck.outcome }}
+          UNIT_RESULT: ${{ steps.console-tests.outcome }}
+        run: |
+          import json
+          import os
+          import time
+          from pathlib import Path
+
+          logs = Path(os.environ["RUNNER_TEMP"]) / "logs"
+          elapsed = time.time() - float((logs / "started-at.txt").read_text())
+          files = {}
+          unit_report = logs / "console-tests.json"
+          if unit_report.exists():
+              for result in json.loads(unit_report.read_text(encoding="utf-8"))["testResults"]:
+                  name = Path(result["name"]).relative_to(Path.cwd()).as_posix()
+                  files[name] = result["status"]
+
+          passed = sum(status == "passed" for status in files.values())
+          failed = sum(status == "failed" for status in files.values())
+          lines = [
+              "## ubuntu-latest / frontend typecheck and unit tests", "",
+              f"Elapsed: {elapsed:.1f}s. Files reported: {len(files)}; passed: {passed}; failed: {failed}; other: {len(files) - passed - failed}.",
+              "File counts cover the JSON reports written by the test tools; a missing report supplies no file results.", "",
+              "| Step | Result |", "| --- | --- |",
+              f"| Typecheck | {os.environ['TYPECHECK_RESULT']} |",
+              f"| Unit tests | {os.environ['UNIT_RESULT']} |",
+              "",
+              "| File | Result |", "| --- | --- |",
+          ]
+          lines.extend(f"| `{name}` | {status} |" for name, status in sorted(files.items()))
+          lines.extend(["", "Artifact: check-logs-ubuntu-latest-frontend.", ""])
+          summary = "\n".join(lines)
+          (logs / "overview.md").write_text(summary, encoding="utf-8")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write(summary)
+      - name: Upload step logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-logs-ubuntu-latest-frontend
+          path: ${{ runner.temp }}/logs
+          if-no-files-found: error
+
+  browser:
+    name: Browser (ubuntu-latest, shard ${{ matrix.shard }}/${{ strategy.job-total }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     env:
-      FRONTEND_SHARD: ${{ matrix.shard }}
+      BROWSER_SHARD: ${{ matrix.shard }}
+      BROWSER_SHARDS: ${{ strategy.job-total }}
     steps:
       - name: Prepare evidence directory
         run: |
@@ -64,30 +146,24 @@ jobs:
           PLAYWRIGHT_SKIP_BROWSER_GC: '1'
         run: |
           npm --prefix apps/console exec -- playwright install --with-deps --only-shell chromium 2>&1 | tee "$RUNNER_TEMP/logs/playwright-install.log"
-      - name: Console typecheck
-        id: typecheck
-        if: ${{ !cancelled() && matrix.shard == 1 }}
+      - name: Build console assets
+        id: build
+        working-directory: apps/console
         run: |
-          npm --prefix apps/console run typecheck 2>&1 | tee "$RUNNER_TEMP/logs/console-typecheck.log"
-      - name: Console unit tests
-        id: console-tests
-        if: ${{ !cancelled() && matrix.shard == 1 }}
-        run: |
-          npm --prefix apps/console test -- --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/logs/console-tests.json" 2>&1 | tee "$RUNNER_TEMP/logs/console-tests.log"
+          npm exec -- vite build 2>&1 | tee "$RUNNER_TEMP/logs/console-build.log"
       - name: Console browser checks
         id: browser-checks
-        if: ${{ !cancelled() }}
         timeout-minutes: 25
+        working-directory: apps/console
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/logs/console-browser-checks.json
         run: |
-          npm --prefix apps/console run test:browser -- --shard=${{ matrix.shard }}/2 --reporter=list,json 2>&1 | tee "$RUNNER_TEMP/logs/console-browser-checks.log"
+          npm exec -- playwright test --shard=${{ matrix.shard }}/${{ strategy.job-total }} --reporter=list,json 2>&1 | tee "$RUNNER_TEMP/logs/console-browser-checks.log"
       - name: Result overview
         if: ${{ always() }}
         shell: python {0}
         env:
-          TYPECHECK_RESULT: ${{ steps.typecheck.outcome }}
-          UNIT_RESULT: ${{ steps.console-tests.outcome }}
+          BUILD_RESULT: ${{ steps.build.outcome }}
           BROWSER_RESULT: ${{ steps.browser-checks.outcome }}
         run: |
           import json
@@ -98,12 +174,6 @@ jobs:
           logs = Path(os.environ["RUNNER_TEMP"]) / "logs"
           elapsed = time.time() - float((logs / "started-at.txt").read_text())
           files = {}
-          unit_report = logs / "console-tests.json"
-          if unit_report.exists():
-              for result in json.loads(unit_report.read_text(encoding="utf-8"))["testResults"]:
-                  name = Path(result["name"]).relative_to(Path.cwd()).as_posix()
-                  files[name] = result["status"]
-
           browser_report = logs / "console-browser-checks.json"
           if browser_report.exists():
               report = json.loads(browser_report.read_text(encoding="utf-8"))
@@ -124,17 +194,16 @@ jobs:
           passed = sum(status == "passed" for status in files.values())
           failed = sum(status == "failed" for status in files.values())
           lines = [
-              f"## ubuntu-latest / frontend shard {os.environ['FRONTEND_SHARD']}/2", "",
+              f"## ubuntu-latest / browser shard {os.environ['BROWSER_SHARD']}/{os.environ['BROWSER_SHARDS']}", "",
               f"Elapsed: {elapsed:.1f}s. Files reported: {len(files)}; passed: {passed}; failed: {failed}; other: {len(files) - passed - failed}.",
-              "File counts cover the JSON reports written by the test tools; a missing report supplies no file results.", "",
+              "File counts cover the JSON report written by Playwright; a missing report supplies no file results.", "",
               "| Step | Result |", "| --- | --- |",
-              f"| Typecheck | {os.environ['TYPECHECK_RESULT']} |",
-              f"| Unit tests | {os.environ['UNIT_RESULT']} |",
+              f"| Build | {os.environ['BUILD_RESULT']} |",
               f"| Browser checks | {os.environ['BROWSER_RESULT']} |", "",
               "| File | Result |", "| --- | --- |",
           ]
           lines.extend(f"| `{name}` | {status} |" for name, status in sorted(files.items()))
-          lines.extend(["", f"Artifact: check-logs-ubuntu-latest-frontend-shard-{os.environ['FRONTEND_SHARD']}.", ""])
+          lines.extend(["", f"Artifact: check-logs-ubuntu-latest-browser-shard-{os.environ['BROWSER_SHARD']}.", ""])
           summary = "\n".join(lines)
           (logs / "overview.md").write_text(summary, encoding="utf-8")
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
@@ -143,23 +212,23 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: check-logs-ubuntu-latest-frontend-shard-${{ matrix.shard }}
+          name: check-logs-ubuntu-latest-browser-shard-${{ matrix.shard }}
           path: ${{ runner.temp }}/logs
           if-no-files-found: error
 
   python:
-    name: Python (${{ matrix.os }}, shard ${{ matrix.shard }}/3)
+    name: Python (${{ matrix.os }}, shard ${{ matrix.shard }}/4)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4]
     env:
       CHECK_OS: ${{ matrix.os }}
       CHECK_SHARD: ${{ matrix.shard }}
-      CHECK_SHARDS: '3'
+      CHECK_SHARDS: '4'
       # Flush each completed file even if another file hangs until the timeout.
       PYTHONUNBUFFERED: '1'
     steps:

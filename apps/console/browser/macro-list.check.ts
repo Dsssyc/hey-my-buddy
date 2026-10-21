@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expect } from "@playwright/test";
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { screenshots as shots, expectNoSidewaysScroll, open, settle, test } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
@@ -18,53 +18,95 @@ async function photograph(page: Page, name: string, locale: string, width: numbe
   await page.screenshot({ path: join(shots, `actual-${name}-${locale}-${width}-${theme}.png`), animations: "disabled" });
 }
 
-async function photographMidMotion(page: Page, name: string, scope = "[data-slot=macro-workspace]") {
-  const motion = await page.evaluate(async selector => {
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    const root = document.querySelector(selector)!;
-    const running = root.getAnimations({ subtree: true }).filter(animation => {
-      const end = animation.effect?.getComputedTiming().endTime;
-      return end !== undefined && Number.isFinite(Number(end)) && Number(end) > 40 && animation.playState !== "finished";
+async function photographMidMotion(page: Page, name: string, trigger: Locator, scope = page.locator("[data-slot=macro-workspace]")) {
+  // A hover must not stand in for the state change we are checking.
+  await trigger.hover();
+  await settle(page);
+  const capture = await scope.evaluateHandle(root => {
+    const animations = new Set<Animation>();
+    // Flush the changed styles and pause in the mutation microtask, before a
+    // frame or the click's return trip can consume the short CSS transition.
+    const observer = new MutationObserver(() => {
+      for (const animation of root.getAnimations({ subtree: true })) {
+        const timing = animation.effect!.getComputedTiming();
+        if (!Number.isFinite(Number(timing.endTime)) || Number(timing.endTime) <= 40 ||
+            animation.playState === "finished" || animations.has(animation)) continue;
+        animation.pause();
+        animation.currentTime = Number(timing.delay) + Number(timing.activeDuration) / 2;
+        animations.add(animation);
+      }
     });
-    for (const animation of running) {
-      animation.pause();
-      animation.currentTime = Number(animation.effect!.getComputedTiming().endTime) / 2;
-    }
+    observer.observe(root, { attributes: true, childList: true, subtree: true });
     return {
-      count: running.length,
-      samples: running.flatMap(animation => {
-        const target = animation.effect instanceof KeyframeEffect ? animation.effect.target : null;
-        if (!(target instanceof HTMLElement)) return [];
-        const style = getComputedStyle(target);
-        return [{ slot: target.dataset.slot ?? "", height: target.getBoundingClientRect().height,
-          naturalHeight: parseFloat(style.getPropertyValue("--radix-collapsible-content-height")), opacity: Number(style.opacity),
-          frames: animation.effect instanceof KeyframeEffect ? animation.effect.getKeyframes() : [] }];
-      }),
+      animations,
+      release() {
+        observer.disconnect();
+        for (const animation of animations) if (animation.playState === "paused") animation.play();
+      },
     };
-  }, scope);
-  expect(motion.count, `${name} has visible motion`).toBeGreaterThan(0);
-  const contentSlot = name.startsWith("mid-group-") ? "collapsible-content" : name.startsWith("mid-list-") ? "macro-sidebar" : null;
-  if (contentSlot) {
-    const sample = motion.samples.find(item => item.slot === contentSlot);
-    expect(sample, `${name} animates ${contentSlot}`).toBeDefined();
-    expect(sample!.height, `${name} has an intermediate height`).toBeGreaterThan(0);
-    expect(Number.isFinite(sample!.naturalHeight), `${name} has a measured full height`).toBe(true);
-    expect(sample!.height, `${name} has an intermediate height`).toBeLessThan(sample!.naturalHeight);
-    expect(sample!.opacity, `${name} has intermediate opacity`).toBeGreaterThan(0);
-    expect(sample!.opacity, `${name} has intermediate opacity`).toBeLessThan(1);
-  }
-  if (name.startsWith("mid-list-")) {
-    const edges = await page.evaluate(() => {
-      const sidebar = document.querySelector("[data-slot=macro-sidebar]")!.getBoundingClientRect();
-      const detail = document.querySelector("[data-slot=macro-detail]")!.getBoundingClientRect();
-      return { sidebarRight: sidebar.right, detailLeft: detail.left };
+  });
+  try {
+    await trigger.click();
+    await expect.poll(() => capture.evaluate(state => [...state.animations].filter(animation => animation.playState === "paused").length),
+      { message: `${name} starts motion on the changed control` }).toBeGreaterThan(0);
+    const motion = await capture.evaluate(async state => {
+      const paused = [...state.animations].filter(animation => animation.playState === "paused");
+      await Promise.all(paused.map(animation => animation.ready));
+      return {
+        count: paused.length,
+        samples: paused.flatMap(animation => {
+          const effect = animation.effect as KeyframeEffect;
+          const target = effect.target;
+          if (!(target instanceof HTMLElement)) return [];
+          const style = getComputedStyle(target, effect.pseudoElement);
+          return [{ slot: target.dataset.slot ?? "", height: target.getBoundingClientRect().height,
+            naturalHeight: parseFloat(style.getPropertyValue("--radix-collapsible-content-height")), opacity: Number(style.opacity),
+            transition: animation instanceof CSSTransition ? animation.transitionProperty : null,
+            progress: effect.getComputedTiming().progress, frames: effect.getKeyframes() }];
+        }),
+      };
     });
-    expect(edges.sidebarRight, `${name} sidebar stays within its grid column`).toBeLessThanOrEqual(edges.detailLeft + 1);
+    expect(motion.count, `${name} has visible motion`).toBeGreaterThan(0);
+    for (const sample of motion.samples) {
+      expect(sample.progress, `${name} is inside the animation`).toBeGreaterThan(0);
+      expect(sample.progress, `${name} is inside the animation`).toBeLessThan(1);
+    }
+    if (name === "mid-row-select") {
+      const sample = motion.samples.find(item => item.slot === "macro-entry" && item.transition === "background-color");
+      expect(sample, "the selected row changes its background").toBeDefined();
+      expect(new Set(sample!.frames.map(frame => frame.backgroundColor)).size).toBeGreaterThan(1);
+    }
+    if (name === "mid-tab-select") {
+      const sample = motion.samples.find(item => item.slot === "tabs-trigger" && item.transition === "opacity");
+      expect(sample, "the selected tab fades in its underline").toBeDefined();
+      expect(sample!.opacity).toBeGreaterThan(0);
+      expect(sample!.opacity).toBeLessThan(1);
+    }
+    const contentSlot = name.startsWith("mid-group-") ? "collapsible-content" : name.startsWith("mid-list-") ? "macro-sidebar" : null;
+    if (contentSlot) {
+      const sample = motion.samples.find(item => item.slot === contentSlot);
+      expect(sample, `${name} animates ${contentSlot}`).toBeDefined();
+      expect(sample!.height, `${name} has an intermediate height`).toBeGreaterThan(0);
+      expect(Number.isFinite(sample!.naturalHeight), `${name} has a measured full height`).toBe(true);
+      expect(sample!.height, `${name} has an intermediate height`).toBeLessThan(sample!.naturalHeight);
+      expect(sample!.opacity, `${name} has intermediate opacity`).toBeGreaterThan(0);
+      expect(sample!.opacity, `${name} has intermediate opacity`).toBeLessThan(1);
+    }
+    if (name.startsWith("mid-list-")) {
+      const edges = await page.evaluate(() => {
+        const sidebar = document.querySelector("[data-slot=macro-sidebar]")!.getBoundingClientRect();
+        const detail = document.querySelector("[data-slot=macro-detail]")!.getBoundingClientRect();
+        return { sidebarRight: sidebar.right, detailLeft: detail.left };
+      });
+      expect(edges.sidebarRight, `${name} sidebar stays within its grid column`).toBeLessThanOrEqual(edges.detailLeft + 1);
+    }
+    await expectNoSidewaysScroll(page);
+    await mkdir(shots, { recursive: true });
+    await page.screenshot({ path: join(shots, `actual-${name}-en-US-1280-light.png`), animations: "allow" });
+  } finally {
+    await capture.evaluate(state => state.release());
+    await capture.dispose();
   }
-  await expectNoSidewaysScroll(page);
-  await mkdir(shots, { recursive: true });
-  await page.screenshot({ path: join(shots, `actual-${name}-en-US-1280-light.png`), animations: "allow" });
-  await page.evaluate(() => document.getAnimations().filter(animation => animation.playState === "paused").forEach(animation => animation.play()));
   await settle(page);
 }
 
@@ -367,25 +409,21 @@ test.describe("macro list motion", () => {
     const group = list.locator("[data-slot=macro-group]").last();
     const heading = group.locator("[data-slot=macro-group-heading]");
     await expect(heading).toHaveAttribute("aria-expanded", "false");
-    await heading.click();
-    await photographMidMotion(page, "mid-group-expand");
+    await photographMidMotion(page, "mid-group-expand", heading, group);
     await expect(heading).toHaveAttribute("aria-expanded", "true");
-    await heading.click();
-    await photographMidMotion(page, "mid-group-collapse");
+    await photographMidMotion(page, "mid-group-collapse", heading, group);
     await expect(heading).toHaveAttribute("aria-expanded", "false");
 
-    await list.locator("[data-macro-task-id]").nth(1).getByRole("button").click();
-    await photographMidMotion(page, "mid-row-select");
+    const row = list.locator("[data-macro-task-id]").nth(1).getByRole("button");
+    await photographMidMotion(page, "mid-row-select", row, row);
     await expect(list.locator("[data-macro-task-id]").nth(1).getByRole("button")).toHaveAttribute("aria-pressed", "true");
-    await list.getByRole("tab", { name: /^Running/ }).click();
-    await photographMidMotion(page, "mid-tab-select");
+    const tab = list.getByRole("tab", { name: /^Running/ });
+    await photographMidMotion(page, "mid-tab-select", tab, tab);
     await expect(list.getByRole("tab", { name: /^Running/ })).toHaveAttribute("aria-selected", "true");
 
-    await list.getByRole("button", { name: "Collapse macro task list" }).click();
-    await photographMidMotion(page, "mid-list-collapse");
+    await photographMidMotion(page, "mid-list-collapse", list.getByRole("button", { name: "Collapse macro task list" }));
     await expect(list).toBeHidden();
-    await page.getByRole("button", { name: "Expand macro task list" }).click();
-    await photographMidMotion(page, "mid-list-expand");
+    await photographMidMotion(page, "mid-list-expand", page.getByRole("button", { name: "Expand macro task list" }));
     await expect(list).toBeVisible();
   });
 });
