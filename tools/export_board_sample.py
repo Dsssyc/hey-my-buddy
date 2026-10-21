@@ -1,4 +1,5 @@
-"""Export at most 100 accepted micro tasks for disposable source-checkout development.
+"""Export the most recently accepted micro tasks, at most 100, for disposable
+source-checkout development.
 
 Run from the repository root:
     uv run --frozen python tools/export_board_sample.py OUTPUT [--source STATE]
@@ -42,10 +43,13 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
     version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     if version is None or version[0] != str(SCHEMA_VERSION):
         raise ValueError(f"Source must use current schema {SCHEMA_VERSION}")
+    # The most recently accepted micro tasks are selected; the reversed list
+    # writes them into the destination oldest first.
     selected = [row[0] for row in connection.execute(
         "SELECT r.run_id FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id "
         "WHERE r.state='accepted' AND t.accepted_at IS NOT NULL "
-        "ORDER BY t.accepted_at, r.run_id LIMIT ?", (MAX_TASKS,))]
+        "ORDER BY t.accepted_at DESC, r.run_id DESC LIMIT ?", (MAX_TASKS,))]
+    selected.reverse()
     runs = {row["run_id"]: row for row in _rows(connection, "workflow_runs", "run_id", selected)}
     records = {"workflow_runs": [runs[run_id] for run_id in selected]}
     routes = _rows(connection, "workflow_routes", "run_id", selected)

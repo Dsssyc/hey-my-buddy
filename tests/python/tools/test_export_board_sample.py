@@ -116,7 +116,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
             self.directory = original_directory
         self.assert_source_unchanged(before, files(board.directory))
 
-    def test_oldest_hundred_accepted_are_selected_and_cli_announces_disposal(self):
+    def test_most_recent_hundred_accepted_are_selected_and_cli_announces_disposal(self):
         source = self.directory / 'source'
         database = Database(source)
         database.initialize()
@@ -140,7 +140,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         self.assertIn('Delete this private sample', result.stdout)
         with closing(sqlite3.connect(self.directory / 'sample' / DB_FILE)) as connection:
             self.assertEqual([row[0] for row in connection.execute('SELECT run_id FROM workflow_runs ORDER BY rowid')],
-                             [f'run-{number:03d}' for number in range(100)])
+                             [f'run-{number:03d}' for number in range(3, 103)])
         self.assert_source_unchanged(before, files(source))
 
     def test_invalid_selected_execution_is_not_published(self):
