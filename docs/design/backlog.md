@@ -84,6 +84,8 @@
 
 **安装锁一批留下的顺带项。** 2026-10-21 F03（稳定的安装锁）验收时，Opus 独立审查提出、Host 核对过：退役旧版按运行时命名的锁文件失败时，抛的是裸的 `BlockingIOError` 或 `IsADirectoryError`，应改为带代码的 `BoardError`；两处测试没守住：存储围栏要持到旧服务拆下之后才释放，`.install.lock` 不在回收候选与跳过列表里；`test_runtime.py` 只拦截 `Path.unlink`；`upgrade.py` 的 `_prepare_runtime` 用 `ensure_private_dir` 加 `installation_lock` 重拼了 `storage.locked` 的锁，应在 `storage` 里只留一个入口，加一个阻塞的变体。退役 `.<id>.install.lock` 的循环是一次性的形式转换，升级基线越过带这一改动的版本之后删掉它；存储围栏本身保留。
 
+**私有发布被中途打断后留下的临时件。** 2026-10-21 阶段 C（统一事实发布）的 Opus 独立审查指出，Host 读代码核对过，都不是那一批引入的：写者在临时文件阶段被杀时，`.agent-credential.json.<hex>.tmp` 一类含凭据的临时件不在 `private_dirs.py` 的 `_CREDENTIAL_FILES` 里，凭据清理不会删它；备份校验在 backups 根下建的 `.verify-*` 目录里有一份解压后的完整看板，进程被杀后会一直留着。另外，`upgrade.restore` 读备份时不持备份锁，靠 `control-daemon.lock`、`board-owner.lock` 与唯一的 `create` 调用点互斥；这一点写进 operations。
+
 ## 运行环境
 
 **harness 这一层要收束：只管找到它、确认能用、读出模型、把回合交出去并如实取回。** 开发者于 2026-10-11 提出，原话的要点：harness 部分做得太复杂了，不该做成网关类产品的子集，还要提供登录之类的办法；harness 里是什么提供方是用户的事，用户可以用自己的工具去管；原生验证一直过于复杂和严苛，harness 随便升级一次原来的验证就会失效；项目应当聚焦在任务委派本身，不在边缘行为上求大而全。这与 ADR-023 第 5 条（资格检查只确认能力存在）一致，现在的实现没有做到。同日讨论下来的结论已起草成 [ADR-030](../decisions/030-harness-layer-scope.md)（已接受），其中又多了“不隔离、用户的 harness 原样使用”与“角色说明”两项，以它为准；下面是起草之前记下的三件： 2026-10-12：ADR-030 已接受，分批的做法与顺序在[执行计划](adr030/execution-plan.md)里；下面三条随它的批次 2、3、4 处理。
