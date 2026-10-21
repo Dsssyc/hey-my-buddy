@@ -578,10 +578,14 @@ class ConsoleDaemonTests(ConsoleTestCase):
             "    raise RuntimeError('R-05: native discovery reached the rejecting CLI')\n"
             "discovery.candidate_snapshot = reject\n"
         )
-        environment = {
+        environment = self.child_environment({
             "PYTHONPATH": os.pathsep.join((str(guard), str(PYTHON_ROOT), os.environ.get("PYTHONPATH", ""))),
             **{f"HMB_{name}_CLI": str(decoy) for name in ("CLAUDE", "CODEX", "DSH", "ZCODE")},
-        }
+        })
+        private_home = Path(environment["HOME"])
+        git_config = private_home / ".gitconfig"
+        # The fixture writes this before startup; the service must leave it alone.
+        git_config_before = git_config.read_bytes()
         payload = json.loads(self._catalog_fixture_path.read_text())
         model = payload["providers"][0]["models"][0]
         model["id"] = "r05-first-private-model"
@@ -624,7 +628,9 @@ class ConsoleDaemonTests(ConsoleTestCase):
                 "R-05: attempted native discovery/start; rejecting decoy calls: "
                 + (trace.read_text() if trace.exists() else ""),
             )
-        self.assertEqual(list((self.directory / "home").iterdir()), [])
+        self.assertEqual(list(private_home.iterdir()), [git_config])
+        self.assertEqual(git_config.read_bytes(), git_config_before,
+                         "R-05: service changed the fixture's Git configuration")
 
     def test_cli_console_opens_and_closes_the_real_daemon_surface(self):
         with self.daemon():

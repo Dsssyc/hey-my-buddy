@@ -264,7 +264,7 @@ class TestInquiry(BoardTestCase):
 
     def _submit(self, client, cwd, *, request_id, harness="dsh", provider="deepseek-official",
                 model="deepseek-flash", effort="off"):
-        environment = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
+        environment = {**os.environ, "GIT_CONFIG_SYSTEM": "/dev/null"}
         for arguments in (("init", "-q"), ("-c", "user.name=Buddy Test", "-c", "user.email=buddy@example.invalid",
                                            "commit", "--allow-empty", "-qm", "inquiry fixture")):
             completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True)
@@ -1001,7 +1001,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         self.catalog_fixture(zcode_catalog())
 
     def _submit(self, client, cwd, *, request_id, harness="zcode"):
-        environment = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
+        environment = {**os.environ, "GIT_CONFIG_SYSTEM": "/dev/null"}
         for arguments in (("init", "-q"), ("-c", "user.name=Buddy Test", "-c", "user.email=buddy@example.invalid",
                                            "commit", "--allow-empty", "-qm", "zcode live fixture")):
             completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True)

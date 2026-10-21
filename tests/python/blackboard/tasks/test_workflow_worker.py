@@ -19,6 +19,7 @@ import unittest
 from pathlib import Path
 
 from support import BoardTestCase, enable_fixture_buddy, wait_for
+from hey_my_buddy.cli.checks import prepare_test_home
 from console.test_console import Browser
 
 GIT_ENV = {
@@ -26,7 +27,6 @@ GIT_ENV = {
     "GIT_AUTHOR_EMAIL": "buddy@example.invalid",
     "GIT_COMMITTER_NAME": "Buddy Test",
     "GIT_COMMITTER_EMAIL": "buddy@example.invalid",
-    "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_SYSTEM": "/dev/null",
 }
 FIXTURE = Path(__file__).resolve().parents[2] / "buddy/harnesses/dsh/fixtures/workflow_agent.py"
@@ -45,7 +45,7 @@ def harness_environment(directory: Path) -> dict:
     tripwire holds off the invoking shell for the whole chain.
     """
     home = directory / "home"
-    home.mkdir(mode=0o700, exist_ok=True)
+    prepare_test_home(home)
     return {"HOME": str(home), "HMB_DSH_CLI": str(FIXTURE)}
 
 

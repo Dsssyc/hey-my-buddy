@@ -20,6 +20,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support import BoardTestCase
+from hey_my_buddy.cli.checks import prepare_test_home
 from protocol.fixtures import native_turn
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 
@@ -39,7 +40,6 @@ GIT_ENV = {
     "GIT_AUTHOR_EMAIL": "buddy@example.invalid",
     "GIT_COMMITTER_NAME": "Buddy Test",
     "GIT_COMMITTER_EMAIL": "buddy@example.invalid",
-    "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_SYSTEM": "/dev/null",
 }
 
@@ -272,7 +272,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         attempt = self.directory / "attempts" / run_id / attempt_id
         attempt.mkdir(mode=0o700, parents=True, exist_ok=True)
         home = self.directory / f"agent-home-{index}"
-        home.mkdir(mode=0o700, exist_ok=True)
+        prepare_test_home(home)
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "HOME")}
         environment.update(

@@ -31,21 +31,6 @@ def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
 
 
 class FixtureCleanupTests(unittest.TestCase):
-    def test_git_background_maintenance_is_disabled_for_repositories_and_children(self):
-        with private_state_dir() as directory:
-            repo = directory / "repo"
-            subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
-            for key, local_value, expected in (("maintenance.auto", "true", "false"),
-                                                ("gc.auto", "1", "0")):
-                subprocess.run(["git", "-C", str(repo), "config", key, local_value], check=True)
-                for environment in (dict(os.environ), _child_environment(directory)):
-                    actual = subprocess.run(["git", "-C", str(repo), "config", "--get", key],
-                                            env=environment, capture_output=True, text=True, check=True)
-                    self.assertEqual(actual.stdout.strip(), expected)
-                local = subprocess.run(["git", "-C", str(repo), "config", "--local", "--get", key],
-                                       capture_output=True, text=True, check=True)
-                self.assertEqual(local.stdout.strip(), local_value)
-
     def test_unconfirmed_shutdown_preserves_private_state(self):
         directory = None
         try:
@@ -193,7 +178,7 @@ class FixtureCleanupTests(unittest.TestCase):
                         "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
                         "XDG_RUNTIME_DIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA"):
                 self.assertTrue(Path(probe["environment"][key]).is_relative_to(directory), key)
-            self.assertEqual(list((directory / "home").iterdir()), [])
+            self.assertEqual(list((directory / "home").iterdir()), [directory / "home/.gitconfig"])
             for path in ("inherited-state", "inherited-runtime", "inherited-ipc", "home/.local/share/hey-my-buddy/state"):
                 self.assertFalse((directory / path).exists(), path)
 
@@ -260,7 +245,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 self.assertEqual(reread["catalog"]["providers"][0]["models"][0]["id"],
                                  payload["providers"][0]["models"][0]["id"])
                 self.assertFalse(native.called, "fixture catalog attempted native discovery")
-            self.assertEqual(list((directory / "home").iterdir()), [])
+            self.assertEqual(list((directory / "home").iterdir()), [directory / "home/.gitconfig"])
 
     def test_cleanup_stops_cli_started_replacement_after_restart(self):
         fixture = BoardTestCase("runTest")

@@ -9,7 +9,6 @@ import tempfile
 import unittest
 from unittest import mock
 
-from git_support import TEST_GIT_ENV
 from hey_my_buddy.buddy.roles import router_input
 from hey_my_buddy.errors import BoardError
 
@@ -23,8 +22,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         self.checkout.mkdir()
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("GIT_")}
-        self.environment.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
-        self.environment.update(TEST_GIT_ENV)
+        self.environment.update(GIT_CONFIG_NOSYSTEM="1")
         self.git("init", "--quiet")
         self.object_id = self.git("hash-object", "-w", "--stdin", input=b"frozen bytes").strip()
         self.tree = self.git("mktree", input=b"100644 blob " + self.object_id + b"\tfirst.txt\n").strip().decode()

@@ -55,8 +55,7 @@ class HarnessTestSafetyTests(unittest.TestCase):
             self.assertNotIn(key, fixture_environment)
         # The support helper retains its pre-existing per-fixture child home;
         # the suite launcher leaves its own state root untouched.
-        (self.child_root / 'home').rmdir()
-        self.assertEqual(list(self.child_root.iterdir()), [self.child_root / 'tmp'])
+        self.assertEqual(set(self.child_root.iterdir()), {self.child_root / 'tmp', self.child_root / 'home'})
         self.assertEqual(Path(environment['HOME']).parent, self.child_root.parent)
         self.assertFalse(Path(environment['HOME']).is_relative_to(self.child_root))
 

@@ -20,14 +20,13 @@ import unittest
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from git_support import TEST_GIT_ENV
-
 PYTHON_ROOT = (Path(__file__).resolve().parents[2] / "src")
 DELEGATE_ROOT = PYTHON_ROOT.parent
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
+from hey_my_buddy.cli.checks import prepare_test_home  # noqa: E402
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference  # noqa: E402
 from hey_my_buddy.private_dirs import attempt_root  # noqa: E402
 from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402
@@ -175,9 +174,8 @@ _INHERITED_CHILD_KEYS = {
 def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
     environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("HMB_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
     # HOME and SDK locations belong to this fixture, never to the interpreter's
-    # inherited account. Do not create native configuration files in this home.
+    # inherited account. Harness configuration directories stay empty.
     private_home = directory / "home"
-    private_home.mkdir(mode=0o700, exist_ok=True)
     environment.update(
         HOME=str(private_home),
         USERPROFILE=str(private_home),
@@ -214,6 +212,7 @@ def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
                 "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "HMB_MODEL_CATALOG_FILE"):
         if key in environment and not Path(environment[key]).resolve().is_relative_to(directory.resolve()):
             raise ValueError(f"Test {key} must be inside its private state directory")
+    prepare_test_home(Path(environment["HOME"]))
     return environment
 
 
