@@ -61,7 +61,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
             self.assertEqual(payload["inquiryToolFailures"], failure)
 
     def project(self, *, policy=None, completion=None, native_identity=None, event_count=None, capture=True):
-        fields = full_request(Path("/private/tmp")).to_payload()
+        fields = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         fields.update(permission="none", sessionServices=[], captureEvidence=capture)
         request = RunRequest.from_payload(fields)
         result = rc.RunResult(
@@ -104,7 +104,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
         self.assertNotIn("nativeEvidence", projected)
 
     def test_codex_policy_survives_without_capture_and_keeps_the_old_receipt_level(self):
-        fields = full_request(Path("/private/tmp")).to_payload()
+        fields = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
         fields.update(harness="codex", permission="none", sessionServices=[], captureEvidence=False)
         request = RunRequest.from_payload(fields)
         policy = {"sandbox": "read-only", "approvalPolicy": "never"}
@@ -121,7 +121,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
             self.assertEqual(review["nativePolicy"], policy)
 
     def test_codex_worker_receipt_keeps_identity_and_the_bounded_validation_reason(self):
-        request = full_request(Path("/private/tmp"))
+        request = full_request(Path(tempfile.gettempdir()).resolve())
         result = rc.RunResult(
             identity=request.identity, harness="codex", end=rc.RunEnd(status="ok"),
             native_identity=rc.NativeIdentity(session_id="thread-1", turn_id="turn-1"),

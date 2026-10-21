@@ -10,6 +10,7 @@ import stat
 import sys
 import tempfile
 
+from .paths import is_absolute_path
 from .errors import BoardError
 
 ADAPTERS = frozenset({'codex', 'claude', 'zcode', 'dsh', 'command'})
@@ -37,7 +38,7 @@ def linked(path: Path) -> bool:
 
 def _absolute(path: Path) -> Path:
     path = Path(path).absolute()
-    if not path.is_absolute():
+    if not is_absolute_path(path):
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path must be absolute')
     # macOS spells /private/var and /private/tmp through root-level aliases.
     # Canonicalize only these OS-owned aliases; resolving the whole path would hide a hostile link
@@ -205,7 +206,7 @@ def inquiry_fallback(path: Path, attempt_id: str) -> Path | None:
     if not isinstance(socket, str):
         return None
     socket_path = Path(socket)
-    if socket_path.name != 'inquiry.sock' or not socket_path.is_absolute():
+    if socket_path.name != 'inquiry.sock' or not is_absolute_path(socket_path):
         return None
     fallback = socket_path.parent
     allowed = {Path('/tmp').resolve() / 'hey-my-buddy-inquiry' / attempt_id,

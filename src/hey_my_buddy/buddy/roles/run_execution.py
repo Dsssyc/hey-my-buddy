@@ -19,6 +19,7 @@ from contextvars import copy_context
 from functools import partial
 from pathlib import Path
 
+from ...paths import is_absolute_path
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir
@@ -562,7 +563,7 @@ def start_fast(module, name: str, context: ExecutionContext, request) -> InlineR
             or not isinstance(request.output_schema, dict)):
         raise BoardError("INVALID_ARGUMENT", "no-tool call requires a bounded prompt, schema and no workflow authority")
     try:
-        if not cwd.is_absolute() or not cwd.is_dir() or cwd.is_symlink() or any(cwd.iterdir()):
+        if not is_absolute_path(cwd) or not cwd.is_dir() or cwd.is_symlink() or any(cwd.iterdir()):
             raise ValueError("not an empty private directory")
         info = cwd.stat()
         if info.st_mode & 0o077 or (hasattr(os, "getuid") and info.st_uid != os.getuid()):

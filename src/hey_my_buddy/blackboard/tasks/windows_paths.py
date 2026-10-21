@@ -16,6 +16,7 @@ from pathlib import Path
 import struct
 import uuid
 
+from ...paths import is_absolute_path
 from ...errors import BoardError
 
 FILE_READ_ATTRIBUTES = 0x0080
@@ -216,7 +217,7 @@ def parent(path, *, create=False, api=None):
     """Pin the volume root and each parent until the leaf operation finishes."""
     api = api if api is not None else WindowsFileAPI()
     path = Path(path)
-    if not path.is_absolute() or path.name in ("", ".", ".."):
+    if not is_absolute_path(path) or path.name in ("", ".", ".."):
         raise BoardError("INVALID_WORKSPACE", "A Windows workspace file needs an absolute path")
     parent_path = path.parent
     ancestors = list(reversed(parent_path.parents)) + [parent_path]

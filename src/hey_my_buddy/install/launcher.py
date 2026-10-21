@@ -93,10 +93,11 @@ def clean_host_environment() -> None:
 
 def _validate_agent_credential(value: object) -> dict:
     from hey_my_buddy.errors import BoardError
+    from hey_my_buddy.paths import is_absolute_path
     if not isinstance(value, dict) or not isinstance(value.get('token'), str) or not value['token'].strip():
         raise BoardError('UNAUTHORIZED', 'The attempt credential file has no token')
     state = value.get('stateDir')
-    if not isinstance(state, str) or not state or not Path(state).is_absolute():
+    if not isinstance(state, str) or not state or not is_absolute_path(state):
         raise BoardError('UNAUTHORIZED', 'The attempt credential file has no absolute stateDir')
     return value
 
@@ -259,6 +260,7 @@ def entry_modules(target: Path) -> dict[str, str]:
 
 def selected_runtime(state: Path, *, allow_overrides: bool = True) -> Path | None:
     from hey_my_buddy.errors import BoardError
+    from hey_my_buddy.paths import is_absolute_path
     if allow_overrides and os.environ.get('HMB_RUNTIME'):
         target = Path(os.environ['HMB_RUNTIME']).expanduser().resolve()
     elif allow_overrides and os.environ.get('HMB_DEV_SOURCE') == '1':
@@ -284,7 +286,7 @@ def selected_runtime(state: Path, *, allow_overrides: bool = True) -> Path | Non
                     raise BoardError('ACTIVE_RUNTIME_MISSING', 'Installed runtime pointer is missing; rerun the fixed-version package install command')
                 raise BoardError('DEV_SOURCE_REQUIRED', 'Source commands require HMB_DEV_SOURCE=1; use install for a stable runtime')
             target = _runtime_root() / identity.removeprefix('runtime:')
-        if (not target.is_absolute() or target.parent.resolve() != _runtime_root()
+        if (not is_absolute_path(target) or target.parent.resolve() != _runtime_root()
                 or not re.fullmatch(r'[0-9a-f]{32}', target.name) or target.is_symlink()):
             raise BoardError('ACTIVE_RUNTIME_INVALID', 'Active runtime is outside the configured root')
     if not _runtime_ready(target):

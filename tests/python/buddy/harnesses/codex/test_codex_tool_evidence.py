@@ -320,11 +320,12 @@ class CodexToolEventProjectionTests(unittest.TestCase):
             PrivateStatePaths, RunBudget, RunBuddy, RunIdentity, RunRequest,
             RunRequest,
         )
+        root = Path(tempfile.gettempdir()).resolve() / "fixture"
         request = RunRequest(
             identity=RunIdentity(task_id="t", attempt_id="a", generation=0, invocation_id="inv"),
             harness="codex", buddy=RunBuddy(provider="openai", model="m", effort="low"),
-            session_record_path="/fixture/session.jsonl",
-            cwd="/fixture", private_state=PrivateStatePaths(invocation_root="/fixture/i", native_root="/fixture/n"),
+            session_record_path=str(root / "session.jsonl"),
+            cwd=str(root), private_state=PrivateStatePaths(invocation_root=str(root / "i"), native_root=str(root / "n")),
             input_text="prompt", permission="read", output_schema={},
             budget=RunBudget(timeout_seconds=8))
         frame = request.to_payload()

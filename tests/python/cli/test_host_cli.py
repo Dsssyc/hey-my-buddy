@@ -514,7 +514,7 @@ class HelpExtractionRegressionTests(unittest.TestCase):
     def test_submit_reports_both_halves_of_the_cwd_rule(self):
         cwd = self.parameter("submit", "cwd")
         self.assertTrue(cwd.required)
-        self.assertIn('starts with "/"', cwd.bounds or "")
+        self.assertIn("absolute path on this machine", cwd.bounds or "")
         self.assertIn("existing directory", cwd.bounds or "")
 
     def test_an_undecodable_condition_is_a_readable_expression_with_its_source(self):
