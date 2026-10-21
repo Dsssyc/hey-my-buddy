@@ -20,6 +20,7 @@ NEW = (b'{"generation":"new","payload":"' + b"0123456789abcdef" * 4096
 
 # This runs in a separate writer process. The parent stops it while a real file
 # operation is in progress, rather than raising an exception in the same process.
+# Binary stdout keeps the marker bytes identical across Windows and POSIX.
 WRITER = r'''
 import os, stat, sys
 from pathlib import Path
@@ -29,7 +30,7 @@ path, stage, mode, content_path = sys.argv[1:]
 content = Path(content_path).read_bytes()
 def hold(name):
     if stage == name:
-        sys.stdout.write("READY\n")
+        sys.stdout.buffer.write(b"READY\n")
         sys.stdout.flush()
         sys.stdin.buffer.read(1)
 
@@ -102,24 +103,29 @@ os.link, os.unlink = intercept_link, intercept_unlink
 try:
     private_files.publish_bytes(Path(path), content, immutable=(mode == "immutable"))
 except FileExistsError:
-    sys.stdout.write("CONFLICT\n")
+    sys.stdout.buffer.write(b"CONFLICT\n")
 else:
     hold("after_success")
-    sys.stdout.write("SUCCESS\n")
+    sys.stdout.buffer.write(b"SUCCESS\n")
 sys.stdout.flush()
 '''
 
 
-def _read_marker(process: subprocess.Popen) -> bytes:
+def _wait_for_writer(process: subprocess.Popen, stage: str) -> None:
     messages: queue.Queue[bytes] = queue.Queue()
     thread = threading.Thread(target=lambda: messages.put(process.stdout.readline()), daemon=True)
     thread.start()
     try:
-        return messages.get(timeout=10)
+        marker = messages.get(timeout=10)
     except queue.Empty:
-        process.kill()
-        process.communicate(timeout=5)
-        raise AssertionError("writer did not reach its publication window")
+        marker = None
+    if marker != b"READY\n":
+        # A held writer keeps stderr open until it is stopped. Reading stderr
+        # before stopping it would deadlock on a malformed readiness marker.
+        if process.poll() is None:
+            process.kill()
+        _, stderr = process.communicate(timeout=5)
+        raise AssertionError(f"writer missed {stage}: {marker!r}; {stderr.decode(errors='replace')}")
 
 
 def _spawn(path: Path, content_path: Path, stage: str, mode: str) -> subprocess.Popen:
@@ -127,12 +133,55 @@ def _spawn(path: Path, content_path: Path, stage: str, mode: str) -> subprocess.
         "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
         "HMB_AGENT_CREDENTIAL_FILE", "HMB_AGENT_CREDENTIAL_FD", "VIRTUAL_ENV",
         "UV_PROJECT_ENVIRONMENT"}}
-    return subprocess.Popen([sys.executable, "-c", WRITER, str(path), stage, mode,
+    # Windows venv python.exe redirects to another process. The stdlib-only
+    # writer must run directly so killing this handle stops the writer itself;
+    # the check runner's PYTHONPATH supplies this checkout's private_files.
+    return subprocess.Popen([sys._base_executable, "-c", WRITER, str(path), stage, mode,
                              str(content_path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, env=environment)
 
 
 class PrivatePublicationTests(unittest.TestCase):
+    def test_spawn_handle_identifies_the_writer_process(self):
+        writer = r'''
+import os, sys
+from pathlib import Path
+Path(sys.argv[1]).write_text(str(os.getpid()), encoding="ascii")
+sys.stdout.buffer.write(b"READY\n")
+sys.stdout.flush()
+sys.stdin.buffer.read(1)
+'''
+        with tempfile.TemporaryDirectory() as root, mock.patch(__name__ + ".WRITER", writer):
+            identity = Path(root) / "writer.pid"
+            process = _spawn(identity, Path(root) / "content.bin", "identity", "mutable")
+            try:
+                _wait_for_writer(process, "identity")
+                self.assertEqual(int(identity.read_text(encoding="ascii")), process.pid)
+            finally:
+                process.kill()
+                process.communicate(timeout=5)
+
+    def test_unexpected_marker_stops_held_writer_and_reports_stderr(self):
+        writer = r'''
+import sys
+sys.stderr.write("writer diagnostic\n")
+sys.stderr.flush()
+sys.stdout.buffer.write(b"UNEXPECTED\n")
+sys.stdout.flush()
+sys.stdin.buffer.read(1)
+'''
+        with tempfile.TemporaryDirectory() as root, mock.patch(__name__ + ".WRITER", writer):
+            process = _spawn(Path(root) / "fact.json", Path(root) / "content.bin",
+                             "before_create", "mutable")
+            try:
+                with self.assertRaisesRegex(AssertionError, "writer missed before_create:.*writer diagnostic"):
+                    _wait_for_writer(process, "before_create")
+                self.assertIsNotNone(process.returncode)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate(timeout=5)
+
     def test_killed_writer_exposes_only_complete_mutable_facts(self):
         stages = ("before_create", "after_create", "before_write", "partial_write",
                   "after_write", "before_flush", "after_flush", "before_writer_fsync",
@@ -153,10 +202,7 @@ class PrivatePublicationTests(unittest.TestCase):
                                                 "after_cleanup", "after_success"} else (OLD if old_exists else None)
                     process = _spawn(path, content_path, stage, "mutable")
                     try:
-                        marker = _read_marker(process)
-                        if marker != b"READY\n":
-                            error = process.stderr.read().decode(errors="replace")
-                            self.fail(f"writer missed {stage}: {marker!r}; {error}")
+                        _wait_for_writer(process, stage)
                         observed = path.read_bytes() if path.exists() else None
                         self.assertEqual(observed, expected)
                         self.assertIn(observed, (None, OLD, NEW))
@@ -192,10 +238,7 @@ class PrivatePublicationTests(unittest.TestCase):
                                                          "after_cleanup", "after_success"} else None
                     process = _spawn(path, content_path, stage, "immutable")
                     try:
-                        marker = _read_marker(process)
-                        if marker != b"READY\n":
-                            error = process.stderr.read().decode(errors="replace")
-                            self.fail(f"writer missed {stage}: {marker!r}; {error}")
+                        _wait_for_writer(process, stage)
                         self.assertEqual(path.read_bytes() if path.exists() else None, expected)
                         process.kill()
                         process.communicate(timeout=5)
@@ -229,10 +272,7 @@ class PrivatePublicationTests(unittest.TestCase):
                 content_path.write_bytes(NEW)
                 process = _spawn(path, content_path, stage, "immutable")
                 try:
-                    marker = _read_marker(process)
-                    if marker != b"READY\n":
-                        error = process.stderr.read().decode(errors="replace")
-                        self.fail(f"conflicting writer missed {stage}: {marker!r}; {error}")
+                    _wait_for_writer(process, stage)
                     self.assertEqual(path.read_bytes(), OLD)
                     process.kill()
                     process.communicate(timeout=5)
@@ -252,7 +292,7 @@ class PrivatePublicationTests(unittest.TestCase):
                          for source in (first, second)]
             try:
                 for process in processes:
-                    self.assertEqual(_read_marker(process), b"READY\n")
+                    _wait_for_writer(process, "before_link")
                 self.assertFalse(path.exists())
                 for process in processes:
                     process.stdin.write(b"1")
