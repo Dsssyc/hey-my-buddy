@@ -14,6 +14,10 @@ _Avoid_: Buddy
 The single shared record of micro tasks, turns, requests, results and decisions, together with the mechanical rules that admit, queue and fence work on it. It makes no judgment about the work and never directs a buddy.
 _Avoid_: Buddy, Buddy service
 
+**状态目录 / state directory**:
+The private directory where one blackboard keeps its data on disk. It lies under the user's home by default; `HMB_STATE_DIR` selects another one.
+_Avoid_: 状态根 / state root
+
 ### Buddies and roles
 
 **buddy**:
