@@ -128,7 +128,7 @@ Windows 具体使用 native Job 嵌套于禁止脱离的根 Job。回合结束�
 
 启动证据新增不可变的 `stateRootIdentity`，在允许创建执行之前由真实状态目录的句柄取得并冻结：POSIX 取该目录的 `st_dev/st_ino`；Windows 取卷序列号和文件 ID，均从句柄取，不把路径字符串或 Windows 模拟 st_ino 当替代。使用有平台标识的明确字段形式，数字/字节的编码由协议 schema 固定；不要在同一字段里按写入时间解释值。复制的 marker/startup/看板继续带原根的文件身份，B 目录有自己的身份，比较必不应通过；副本即使占了 A 原来的路径，也不能因同路径取得停止权限。当前源没有这个字段，Windows 获取及持久化编码为未验证，阶段 A 验证；不以本轮建议描述产品已经有围栏。
 
-接回、`execution_scheduler.py:verify_identity`、`_force_if_required`、崩溃结算及其原生 journal 处理都在进入动作的边界先比较冻结身份与现用状态目录的句柄身份，再核对 Windows 会话和完整进程/Job 身份。不能只用服务启动时缓存的路径或旧目录身份代替当前实际根；打开失败、缺少启动根身份或身份不一致就按外来执行记 unknown，不接回、不连接其执行端点、不发信号，也不导入为本根已停止。长调用失败、boot-changed 或本地缺 marker 都不能越过归属围栏。新启动执行也绑定同一根身份，执行自己的身份上报不得把副本的当前根回填覆盖冻结值。
+接回、`execution_scheduler.py:verify_identity`、`_force_if_required`、崩溃结算及其原生 journal 处理都在进入动作的边界先比较冻结身份与现用状态目录的句柄身份，再核对 Windows 会话和完整进程/Job 身份。不能只用服务启动时缓存的路径或旧目录身份代替当前实际根；打开失败、缺少启动根身份或身份不一致就按外来执行记 unknown，不接回、不连接其执行端点、不发信号，也不导入为本根已停止。长调用失败或本地缺 marker 都不能越过归属围栏。开机会话变了时不比对状态目录身份：之前的进程一定都已结束，照常按中断结算、之后照常继续（2026-10-21 开发者把第 13 条限定在同一次开机里）。新启动执行也绑定同一根身份，执行自己的身份上报不得把副本的当前根回填覆盖冻结值。
 
 具体落点为 `protocol/execution.py:launch_execution` 的 intent/startup/marker 与执行身份交接，`protocol/process_identity.py` 的事实校验和 journal，`blackboard/tasks/interruption.py:read_identity/record_identity/_marker_identity/_stop_native`，`blackboard/service/execution_scheduler.py` 的恢复、身份确认与强停，以及 `blackboard/store/db.py` 的持久身份表。文件边界负责取得状态目录句柄身份，业务入口统一做一次归属核对；保留 `kill_verified_process_group` 及其 dict 参数，不把它重构为“已验证目标”类型，也不在系统调用层再叠同一业务校验。系统层原有对活身份及停止结果的核对仍有必要，不能把归属判断等同于操作结果观察。
 
