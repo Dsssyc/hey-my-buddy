@@ -7,10 +7,10 @@ import os
 import stat
 import sys
 import secrets
-import uuid
 from pathlib import Path
 from typing import Callable
 
+from ...private_files import publish_bytes
 from ...errors import BoardError
 from ...protocol.usage import MAX_ASSISTANT_MESSAGE_BYTES
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
@@ -54,7 +54,6 @@ def _private_bytes(path: Path, raw: bytes, *, exclusive: bool = False) -> None:
     else:
         if not stat.S_ISREG(metadata.st_mode):
             raise BoardError("PRIVATE_PATH_UNSAFE", "Private artifact target is not a regular file", path=str(path))
-    target = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     parent = None
     # Pin each POSIX directory without following links so a replacement after the
     # component checks cannot redirect the temporary file or its publication.
@@ -69,45 +68,12 @@ def _private_bytes(path: Path, raw: bytes, *, exclusive: bool = False) -> None:
         except BaseException:
             os.close(parent)
             raise
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    created = False
     try:
-        guard_private_path(target)
-        fd = os.open(target.name if parent is not None else target, flags, 0o600,
-                     **({"dir_fd": parent} if parent is not None else {}))
-        created = True
-        with os.fdopen(fd, "wb") as stream:
-            if hasattr(os, "fchmod"):
-                os.fchmod(stream.fileno(), 0o600)
-            else:
-                guard_private_path(target)
-                os.chmod(target, 0o600)
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
-        guard_private_path(path)
-        if exclusive:
-            os.link(target.name if parent is not None else target, path.name if parent is not None else path,
-                    **({"src_dir_fd": parent, "dst_dir_fd": parent} if parent is not None else {}))
-        else:
-            os.replace(target.name if parent is not None else target, path.name if parent is not None else path,
-                       **({"src_dir_fd": parent, "dst_dir_fd": parent} if parent is not None else {}))
-        if parent is not None:
-            os.fsync(parent)
+        publish_bytes(path, raw, immutable=exclusive, directory_fd=parent,
+                      validate=guard_private_path if parent is None else None)
     finally:
-        try:
-            if created:
-                if parent is not None:
-                    try:
-                        os.unlink(target.name, dir_fd=parent)
-                    except FileNotFoundError:
-                        pass
-                else:
-                    guard_private_path(target)
-                    target.unlink(missing_ok=True)
-        finally:
-            if parent is not None:
-                os.close(parent)
+        if parent is not None:
+            os.close(parent)
 
 
 def prepare_turn(context: ExecutionContext) -> None:

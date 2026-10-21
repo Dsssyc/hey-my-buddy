@@ -45,16 +45,8 @@ def _marker(skill: Path) -> dict | None:
 def write_runtime_hint(skill: Path, target: Path) -> None:
     """Bootstrap with a stable interpreter; active-runtime remains authority."""
     from .runtime import runtime_python
-    temporary = skill / ('.runtime-python-' + uuid.uuid4().hex)
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(fd, 'w', encoding="utf-8", newline="\n") as stream:
-            stream.write(str(runtime_python(target)) + '\n')
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, skill / '.runtime-python')
-    finally:
-        temporary.unlink(missing_ok=True)
+    from ..private_files import publish_bytes
+    publish_bytes(skill / '.runtime-python', (str(runtime_python(target)) + '\n').encode("utf-8"))
 
 
 def _is_product_skill(path: Path) -> bool:

@@ -21,6 +21,25 @@ STATE_FILES = ('console-settings.json',)
 
 
 class BackupTests(BoardTestCase):
+    def test_create_flushes_writable_payload_handles(self):
+        board = self.board()
+        board.store.db.close()
+        regular_flushed = set()
+        real_fsync = os.fsync
+
+        def checked_fsync(fd):
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                # Windows refuses fsync on a read-only file descriptor.
+                os.write(fd, b'')
+                regular_flushed.add(os.fstat(fd).st_ino)
+            return real_fsync(fd)
+
+        with mock.patch.object(backup.os, 'fsync', side_effect=checked_fsync):
+            current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None,
+                                         contract_version=CONTRACT_VERSION)['path'])
+        self.assertIn((current / 'board.sqlite3.gz').stat().st_ino, regular_flushed)
+        backup.verify(current)
+
     def test_fixture_backup_retains_current_schema_and_exact_bytes(self):
         fixture = load_fixture(self.directory)
         before = (self.directory / 'board.sqlite3').read_bytes()

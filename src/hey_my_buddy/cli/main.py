@@ -22,12 +22,12 @@ import re
 import secrets
 import stat
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 from . import cli_help, cli_views
 from ..protocol import transport
+from ..private_files import publish_bytes
 from ..errors import BoardError
 from ..home import control_file_path, submission_file_path
 from ..install.launcher import agent_credential_document, credential_state_dir, take_agent_credential_document
@@ -259,25 +259,7 @@ def _save_control(run_id: str, control: dict, state_dir: Path) -> str:
         },
         ensure_ascii=False,
     ).encode("utf-8")
-    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        os.chmod(path, 0o600)
-    except OSError:
-        Path(temporary).unlink(missing_ok=True)
-        raise
-    try:  # The directory entry itself is synced best-effort; the file is already durable.
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    except OSError:
-        pass
+    publish_bytes(path, payload)
     return str(path)
 
 
@@ -373,27 +355,14 @@ def _submission_token(request_id: object, params: dict, state_dir: Path) -> str:
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     directory.chmod(0o700)
     path = submission_file_path(state_dir, request_id)
-    name = path.stem
     token = secrets.token_hex(32)
     payload = json.dumps({"requestId": request_id, "submissionToken": token}, sort_keys=True).encode("utf-8")
-    # Write the complete record first, then publish it atomically with a hard link:
-    # a concurrent identical submission either links first (the winner) or reads the
-    # winner's fully written record. A half-written file is never observable and a
-    # malformed existing record is never overwritten.
-    fd, temporary = tempfile.mkstemp(dir=directory, prefix=f".{name}.", suffix=".tmp")
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-        except FileExistsError:
-            return _read_submission_token(path, request_id)
-        except OSError as exc:
-            raise BoardError("INVALID_ARGUMENT", f"The submission token could not be published: {exc}") from exc
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+        publish_bytes(path, payload, immutable=True)
+    except FileExistsError:
+        return _read_submission_token(path, request_id)
+    except OSError as exc:
+        raise BoardError("INVALID_ARGUMENT", f"The submission token could not be published: {exc}") from exc
     return token
 
 
