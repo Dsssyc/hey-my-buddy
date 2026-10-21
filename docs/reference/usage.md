@@ -8,7 +8,7 @@ For coding work, use the micro task lifecycle. Its normal path is one logical `r
 
 ### 1. Install once
 
-You need [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14 and a working local DSH, ZCode, Codex or Claude Code installation with its provider credentials. hey-my-buddy uses the harness credentials already configured and leaves global model settings alone.
+You need [uv](https://docs.astral.sh/uv/) (hey-my-buddy runs on Python 3.12, which uv installs itself when the machine has none) and a working local DSH, ZCode, Codex or Claude Code installation with its provider credentials. hey-my-buddy uses the harness credentials already configured and leaves global model settings alone.
 
 hey-my-buddy is one shared Agent Skill, `hey-my-buddy`, carrying its own CLI. Install it once:
 
