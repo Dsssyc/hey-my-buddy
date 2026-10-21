@@ -1,12 +1,13 @@
 """Contract-aware runtime cutover, with offline backup only for upgrades."""
 from __future__ import annotations
-from contextlib import contextmanager, closing
+from contextlib import contextmanager, closing, ExitStack
 from ..paths import is_absolute_path
 from .. import locking
 import gzip
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import stat
@@ -423,6 +424,34 @@ def retain_runtimes(state: Path, target: Path, previous: Path) -> dict:
                 'note':'Upgrade verified; cleanup can be retried independently'}
 
 
+@contextmanager
+def _prepare_runtime(state: Path, *, skill_source: Path | None):
+    """Fence the old reclaimer while replacing its per-runtime lock form.
+
+    The previous daemon knows only identity locks, not the new root lock. Its
+    storage fence covers both planning and pending-removal recovery, including
+    old build directories. Keep it until the previous daemon has stopped: even a
+    freshly READY runtime can be reclaimed before the cutover retains it.
+    Normal installation already serializes installers through the skill lock.
+    """
+    storage = state / 'storage'
+    private_dirs.ensure_private_dir(storage)
+    with runtime.installation_lock(storage / '.lock'):
+        installed = (runtime.materialize(root=skill_source / 'package')
+                     if skill_source is not None else runtime.materialize())
+        root = Path(installed['runtimeDir']).parent
+        with runtime.installation_lock(root / runtime.INSTALL_LOCK):
+            # This is the explicit upgrade of the old lock form. Runtime and
+            # storage code recognize only the root lock. Close before deletion
+            # so retirement works on Windows too; a live old installer refuses it.
+            for path in sorted(root.glob('.*.install.lock')):
+                if re.fullmatch(r'\.[0-9a-f]{32}\.install\.lock', path.name):
+                    with runtime.installation_lock(path, blocking=False, create=False):
+                        pass
+                    path.unlink()
+        yield installed
+
+
 def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Path | None = None) -> dict:
     schemas.reject_unknown(params, set(), 'upgrade')
     if os.environ.get('HMB_AGENT_CREDENTIAL_FILE'):
@@ -450,129 +479,131 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
     contract_changed = contract_version != CONTRACT_VERSION
     before = preflight(state, contract_changed=contract_changed)
     before['runtimeSettings'] = runtime_settings
-    # Dependency installation cannot disturb the old daemon; materialize before
-    # taking the short ownership fence and preserve both generations on failure.
-    materialized = runtime.materialize(root=skill_source / 'package') if skill_source is not None else runtime.materialize()
-    target = Path(materialized['runtimeDir'])
-    if previous == target and skill_source is None:
-        return {'upgraded': False, 'reason': 'already-current', 'runtimeContentId': target.name}
-    marker = state / 'upgrade.json'
-    with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):
-        if marker.exists():
-            raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'An interrupted upgrade journal exists; recover it before another upgrade')
-        attached = probe(state, previous)
-        if attached is None or attached.get('serviceId') != endpoint.get('serviceId'):
-            raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The installed service changed during runtime preparation')
-        if contract_changed:
-            before = preflight(state, contract_changed=True)
-            before['runtimeSettings'] = runtime_settings
-        skill_stage = None
-        skill_previous = None
-        if skill_source is not None:
-            if skill_target is None or skill_target.is_symlink():
-                raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is missing or linked')
-            from .skill_install import _marker, _is_product_skill
-            if skill_target.exists() and not (_marker(skill_target) or _is_product_skill(skill_target)):
-                raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is not a hey-my-buddy skill')
-            suffix = uuid.uuid4().hex
-            skill_stage = skill_target.with_name(f'.hey-my-buddy-upgrade-stage-{suffix}')
-            skill_previous = skill_target.with_name(f'.hey-my-buddy-upgrade-previous-{suffix}')
-            shutil.copytree(skill_source, skill_stage, symlinks=True)
-            from .skill_install import write_runtime_hint
-            write_runtime_hint(skill_stage, target)
-        journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight',
-                   'contractChanged': contract_changed, 'before':before, 'environment':preserved}
-        if skill_stage is not None:
-            from .skill_install import claude_skills_home, SKILL
-            claude_link = claude_skills_home() / SKILL
-            journal.update(skillTarget=str(skill_target), skillStage=str(skill_stage), skillPrevious=str(skill_previous),
-                           skillHadPrevious=skill_target.exists(), claudeLink=str(claude_link),
-                           claudeLinkWasMissing=not claude_link.exists() and not claude_link.is_symlink())
-        write_journal(marker, journal)
-        backed_up = None
-        active = previous
-        detached = False
-        try:
-            # A same-contract installation preserves live work.
-            detach(state, previous, contract_changed=contract_changed)
-            detached = True
-            with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
-                if contract_changed:
-                    before = idle_snapshot(state)
-                    before['runtimeSettings'] = runtime_settings
-                    journal['before'] = before
-                    backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
-                    journal.update(phase='backed-up', backup=backed_up)
+    with ExitStack() as preparation:
+        # Keep the old daemon serving work, excluding its storage reclaimer while
+        # preparing the runtime, before taking the short service ownership fence.
+        materialized = preparation.enter_context(_prepare_runtime(state, skill_source=skill_source))
+        target = Path(materialized['runtimeDir'])
+        if previous == target and skill_source is None:
+            return {'upgraded': False, 'reason': 'already-current', 'runtimeContentId': target.name}
+        marker = state / 'upgrade.json'
+        with file_lock(state / 'upgrade.lock'), file_lock(state / 'control-start.lock'):
+            if marker.exists():
+                raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'An interrupted upgrade journal exists; recover it before another upgrade')
+            attached = probe(state, previous)
+            if attached is None or attached.get('serviceId') != endpoint.get('serviceId'):
+                raise BoardError('UPGRADE_IDENTITY_CHANGED', 'The installed service changed during runtime preparation')
+            if contract_changed:
+                before = preflight(state, contract_changed=True)
+                before['runtimeSettings'] = runtime_settings
+            skill_stage = None
+            skill_previous = None
+            if skill_source is not None:
+                if skill_target is None or skill_target.is_symlink():
+                    raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is missing or linked')
+                from .skill_install import _marker, _is_product_skill
+                if skill_target.exists() and not (_marker(skill_target) or _is_product_skill(skill_target)):
+                    raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is not a hey-my-buddy skill')
+                suffix = uuid.uuid4().hex
+                skill_stage = skill_target.with_name(f'.hey-my-buddy-upgrade-stage-{suffix}')
+                skill_previous = skill_target.with_name(f'.hey-my-buddy-upgrade-previous-{suffix}')
+                shutil.copytree(skill_source, skill_stage, symlinks=True)
+                from .skill_install import write_runtime_hint
+                write_runtime_hint(skill_stage, target)
+            journal = {'startedAt': utc_now(), 'previous': str(previous), 'target': str(target), 'phase': 'preflight',
+                       'contractChanged': contract_changed, 'before':before, 'environment':preserved}
+            if skill_stage is not None:
+                from .skill_install import claude_skills_home, SKILL
+                claude_link = claude_skills_home() / SKILL
+                journal.update(skillTarget=str(skill_target), skillStage=str(skill_stage), skillPrevious=str(skill_previous),
+                               skillHadPrevious=skill_target.exists(), claudeLink=str(claude_link),
+                               claudeLinkWasMissing=not claude_link.exists() and not claude_link.is_symlink())
+            write_journal(marker, journal)
+            backed_up = None
+            active = previous
+            detached = False
+            try:
+                # A same-contract installation preserves live work.
+                detach(state, previous, contract_changed=contract_changed)
+                detached = True
+                preparation.close()
+                with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
+                    if contract_changed:
+                        before = idle_snapshot(state)
+                        before['runtimeSettings'] = runtime_settings
+                        journal['before'] = before
+                        backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
+                        journal.update(phase='backed-up', backup=backed_up)
+                        write_journal(marker, journal)
+                    journal.update(phase='prepared', expected=before)
                     write_journal(marker, journal)
-                journal.update(phase='prepared', expected=before)
+                active = target
+                health = start(state, target)
+                evidence = verify_started(state, target, health, before, contract_changed=contract_changed)
+                _verify_skill_generation(journal, target, health)
+                journal.update(phase='skill-switching', expected=before)
                 write_journal(marker, journal)
-            active = target
-            health = start(state, target)
-            evidence = verify_started(state, target, health, before, contract_changed=contract_changed)
-            _verify_skill_generation(journal, target, health)
-            journal.update(phase='skill-switching', expected=before)
-            write_journal(marker, journal)
-            _publish_skill(journal)
-            write_journal(marker, journal)
-            write_active_runtime(state, target, preserved)
-            journal.update(phase='verified', verification=evidence)
-            write_journal(marker, journal)
-            write_journal(state / 'upgrade-last.json', journal)
-            _finish_skill(journal)
-            journal_error = None
-            try:
-                clear_journal(marker)
-            except OSError as error:
-                journal_error = str(error)
-            pruning = retain_runtimes(state, target, previous)
-            return {'upgraded':True, **({'backup':backed_up} if backed_up is not None else {}), 'verification':evidence, 'previousRuntime':previous.name,
-                    'rollback':None, 'runtimePruning':pruning,
-                    **({'journalError':journal_error} if journal_error is not None else {})}
-        except Exception as failure:
-            reason = _failure_reason(failure)
-            try:
-                _restore_skill(journal)
-                if active == previous and not detached:
-                    surviving = probe(state, previous)
-                    if surviving is not None:
-                        write_active_runtime(state, previous, preserved)
-                        journal.update(phase='not-switched', failure=reason)
-                        write_journal(state / 'upgrade-last.json', journal)
-                        clear_journal(marker)
-                        error = failure.payload() if isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE' else {'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}
-                        error.setdefault('details', {})['reason'] = reason
-                        return {'upgraded':False, 'error':error}
-                endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
-                if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
-                    detach(state, active, contract_changed=contract_changed)
-                if backed_up is not None:
-                    with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
-                         file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
-                        restore(state, Path(backed_up['path']))
-                # A race admitted work before the old daemon detached: preserve it
-                # and restart the previous runtime without restoring an older DB.
-                recovered = start(state, previous)
-                evidence = (verify_started(state, previous, recovered, before, contract_changed=contract_changed)
-                            if backed_up is not None or not contract_changed else {'runtimeContentId':previous.name, 'workPreserved':True})
-                write_active_runtime(state, previous, preserved)
-                journal.update(phase='rolled-back', rollback=evidence, failure=reason)
-                write_journal(state / 'upgrade-last.json', journal)
-                clear_journal(marker)
-                if backed_up is None and isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE':
-                    error = failure.payload()
-                else:
-                    restored = 'Installation failed; the previous runtime and backup were restored' if backed_up is not None else 'Installation failed; the previous runtime was restored'
-                    error = {'code':'UPGRADE_ROLLED_BACK', 'message':restored}
-                error.setdefault('details', {})['reason'] = reason
-                return {'upgraded':False, 'error':error,
-                        **({'backup':backed_up} if backed_up is not None else {}), 'rollback':evidence}
-            except Exception as recovery:
-                journal.update(phase='recovery-required', failure=reason, recoveryFailure=_failure_reason(recovery))
+                _publish_skill(journal)
+                write_journal(marker, journal)
+                write_active_runtime(state, target, preserved)
+                journal.update(phase='verified', verification=evidence)
                 write_journal(marker, journal)
                 write_journal(state / 'upgrade-last.json', journal)
-                retained = 'journal and backup retained' if backed_up is not None else 'journal retained'
-                raise BoardError('UPGRADE_RECOVERY_REQUIRED', f'Automatic rollback could not prove recovery; {retained}; rerun install to recover', journal=str(marker),
-                                 reason=reason, recoveryReason=journal['recoveryFailure']) from recovery
+                _finish_skill(journal)
+                journal_error = None
+                try:
+                    clear_journal(marker)
+                except OSError as error:
+                    journal_error = str(error)
+                pruning = retain_runtimes(state, target, previous)
+                return {'upgraded':True, **({'backup':backed_up} if backed_up is not None else {}), 'verification':evidence, 'previousRuntime':previous.name,
+                        'rollback':None, 'runtimePruning':pruning,
+                        **({'journalError':journal_error} if journal_error is not None else {})}
+            except Exception as failure:
+                reason = _failure_reason(failure)
+                try:
+                    _restore_skill(journal)
+                    if active == previous and not detached:
+                        surviving = probe(state, previous)
+                        if surviving is not None:
+                            write_active_runtime(state, previous, preserved)
+                            journal.update(phase='not-switched', failure=reason)
+                            write_journal(state / 'upgrade-last.json', journal)
+                            clear_journal(marker)
+                            error = failure.payload() if isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE' else {'code':'UPGRADE_NOT_SWITCHED','message':'Upgrade could not detach; the previous service remains available'}
+                            error.setdefault('details', {})['reason'] = reason
+                            return {'upgraded':False, 'error':error}
+                    endpoint_now = json.loads((state / 'control.json').read_text()) if (state / 'control.json').exists() else None
+                    if detached and endpoint_now and endpoint_now.get('runtimeIdentity') == 'runtime:' + active.name:
+                        detach(state, active, contract_changed=contract_changed)
+                    if backed_up is not None:
+                        with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
+                             file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
+                            restore(state, Path(backed_up['path']))
+                    # A race admitted work before the old daemon detached: preserve it
+                    # and restart the previous runtime without restoring an older DB.
+                    recovered = start(state, previous)
+                    evidence = (verify_started(state, previous, recovered, before, contract_changed=contract_changed)
+                                if backed_up is not None or not contract_changed else {'runtimeContentId':previous.name, 'workPreserved':True})
+                    write_active_runtime(state, previous, preserved)
+                    journal.update(phase='rolled-back', rollback=evidence, failure=reason)
+                    write_journal(state / 'upgrade-last.json', journal)
+                    clear_journal(marker)
+                    if backed_up is None and isinstance(failure, BoardError) and failure.code == 'UPGRADE_NOT_IDLE':
+                        error = failure.payload()
+                    else:
+                        restored = 'Installation failed; the previous runtime and backup were restored' if backed_up is not None else 'Installation failed; the previous runtime was restored'
+                        error = {'code':'UPGRADE_ROLLED_BACK', 'message':restored}
+                    error.setdefault('details', {})['reason'] = reason
+                    return {'upgraded':False, 'error':error,
+                            **({'backup':backed_up} if backed_up is not None else {}), 'rollback':evidence}
+                except Exception as recovery:
+                    journal.update(phase='recovery-required', failure=reason, recoveryFailure=_failure_reason(recovery))
+                    write_journal(marker, journal)
+                    write_journal(state / 'upgrade-last.json', journal)
+                    retained = 'journal and backup retained' if backed_up is not None else 'journal retained'
+                    raise BoardError('UPGRADE_RECOVERY_REQUIRED', f'Automatic rollback could not prove recovery; {retained}; rerun install to recover', journal=str(marker),
+                                     reason=reason, recoveryReason=journal['recoveryFailure']) from recovery
 
 
 def recover(state: Path, root: Path) -> dict:

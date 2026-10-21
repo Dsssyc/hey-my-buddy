@@ -1,5 +1,6 @@
 """Private upgrade refusal, admission fence and backup restoration."""
-from contextlib import closing
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing, contextmanager
 import json
 import os
 import stat
@@ -7,16 +8,116 @@ import sqlite3
 import unittest
 from pathlib import Path
 from unittest import mock
+from threading import Event
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy import private_dirs
+from hey_my_buddy.blackboard.tasks import storage
 from hey_my_buddy.install import upgrade
 from hey_my_buddy.install import launcher
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
+    def test_runtime_preparation_excludes_the_previous_services_reclaimer(self):
+        board = self.board()
+        state = board.directory
+        target = self.directory / 'runtimes' / ('a' * 32)
+        target.mkdir(parents=True)
+        attempted, entered = Event(), Event()
+        original_lock = upgrade.runtime.locking.lock
+
+        def observe_lock(fd, **options):
+            attempted.set()
+            return original_lock(fd, **options)
+
+        def materialize():
+            entered.set()
+            # This is the existing old-service storage fence, independent of
+            # either generation's runtime lock naming scheme.
+            with self.assertRaises(BoardError) as busy:
+                with storage.locked(board.store):
+                    self.fail('old storage operation entered during installation')
+            self.assertEqual(busy.exception.code, 'STORAGE_BUSY')
+            return {'runtimeDir': str(target)}
+
+        def prepare():
+            with upgrade._prepare_runtime(state, skill_source=None) as result:
+                with self.assertRaises(BoardError) as busy:
+                    with storage.locked(board.store):
+                        self.fail('old reclaimer entered after READY, before cutover')
+                self.assertEqual(busy.exception.code, 'STORAGE_BUSY')
+                return result
+
+        with ThreadPoolExecutor(max_workers=1) as pool, \
+             mock.patch.object(upgrade.runtime, 'materialize', side_effect=materialize):
+            with storage.locked(board.store), \
+                 mock.patch.object(upgrade.runtime.locking, 'lock', side_effect=observe_lock):
+                future = pool.submit(prepare)
+                self.assertTrue(attempted.wait(5))
+                self.assertFalse(entered.is_set())
+            self.assertEqual(future.result(timeout=10), {'runtimeDir': str(target)})
+        with storage.locked(board.store):
+            pass
+
+    def test_upgrade_retires_identity_locks_only_after_closing_them(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        root = self.directory / 'runtimes'
+        target = root / ('a' * 32)
+        target.mkdir(parents=True)
+        legacy = [root / ('.' + identity * 32 + '.install.lock') for identity in ('a', 'b')]
+        unrelated = root / '.other.install.lock'
+        for path in [*legacy, unrelated]:
+            path.touch(mode=0o600)
+        real_lock, real_unlink = upgrade.runtime.installation_lock, Path.unlink
+        opened = set()
+        deleted = []
+
+        @contextmanager
+        def tracked_lock(path, **options):
+            with real_lock(path, **options) as fd:
+                opened.add(path)
+                try:
+                    yield fd
+                finally:
+                    opened.remove(path)
+
+        def windows_unlink(path, *args, **kwargs):
+            if path in opened:
+                raise PermissionError('Windows refuses deletion of an open file')
+            deleted.append(path)
+            return real_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(upgrade.runtime, 'materialize', return_value={'runtimeDir': str(target)}), \
+             mock.patch.object(upgrade.runtime, 'installation_lock', side_effect=tracked_lock), \
+             mock.patch.object(Path, 'unlink', windows_unlink):
+            with upgrade._prepare_runtime(state, skill_source=None):
+                pass
+        self.assertEqual(deleted, legacy)
+        self.assertTrue(unrelated.is_file())
+        self.assertTrue((root / upgrade.runtime.INSTALL_LOCK).is_file())
+        self.assertTrue((state / 'storage/.lock').is_file())
+
+    def test_upgrade_refuses_to_retire_a_live_old_installers_lock(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        root = self.directory / 'runtimes'
+        target = root / ('a' * 32)
+        target.mkdir(parents=True)
+        legacy = root / ('.' + 'a' * 32 + '.install.lock')
+        with upgrade.runtime.installation_lock(legacy), \
+             mock.patch.object(upgrade.runtime, 'materialize', return_value={'runtimeDir': str(target)}):
+            with self.assertRaises(BlockingIOError):
+                with upgrade._prepare_runtime(state, skill_source=None):
+                    pass
+        self.assertTrue(legacy.is_file())
+        # Both current fences were released even though retirement failed.
+        with upgrade.runtime.installation_lock(root / upgrade.runtime.INSTALL_LOCK, blocking=False), \
+             upgrade.runtime.installation_lock(state / 'storage/.lock', blocking=False):
+            pass
+
     def test_detach_uses_only_the_old_services_restart_fields(self):
         state = self.directory / 'state'
         state.mkdir()

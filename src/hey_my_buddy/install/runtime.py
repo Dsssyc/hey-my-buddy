@@ -21,7 +21,6 @@ node_modules and any existing virtual environment are never copied.
 """
 from __future__ import annotations
 
-from ..paths import is_absolute_path
 from .. import home, locking, private_dirs
 from contextlib import contextmanager
 import hashlib
@@ -39,6 +38,7 @@ from ..errors import BoardError
 
 RUNTIME_FORMAT = 1
 READY_FILE = "READY.json"
+INSTALL_LOCK = ".install.lock"
 PRIVATE_UV_VERSION = "0.12.19"
 DEFAULT_RUNTIME_ROOT = home.default_runtime_root()
 
@@ -82,7 +82,7 @@ def _declared_relative(value: Any, field: str, path: Path) -> str:
     if not isinstance(value, str) or not value.strip():
         raise _invalid(f"{field} must be a nonempty root-relative path", path)
     text = value.strip()
-    if is_absolute_path(text) or ".." in Path(text).parts or "\\" in text or text.startswith("~"):
+    if Path(text).anchor or ".." in Path(text).parts or "\\" in text or text.startswith("~"):
         raise _invalid(f"{field} must stay inside the project: {text!r}", path)
     return text
 
@@ -303,23 +303,10 @@ def is_ready(directory: Path) -> bool:
 
 @contextmanager
 def installation_lock(path: Path, *, blocking: bool = True, create: bool = True):
-    """Lock the current inode, retrying waiters whose completed owner unlinked it."""
-    while True:
-        fd = private_dirs.open_regular_fd(path, os.O_RDWR | (os.O_CREAT if create else 0))
-        try:
-            locking.lock(fd, blocking=blocking)
-            try:
-                current = path.lstat()
-            except FileNotFoundError:
-                current = None
-            opened = os.fstat(fd)
-            if current is not None and (current.st_dev, current.st_ino) == (opened.st_dev, opened.st_ino):
-                break
-        except BaseException:
-            os.close(fd)
-            raise
-        os.close(fd)
+    """Hold a stable lock file until the descriptor closes; never unlink it."""
+    fd = private_dirs.open_regular_fd(path, os.O_RDWR | (os.O_CREAT if create else 0))
     try:
+        locking.lock(fd, blocking=blocking)
         yield fd
     finally:
         os.close(fd)
@@ -350,17 +337,16 @@ def materialize(
     # Install into a temporary sibling first only because the final name must be a
     # complete directory atomically; every path recorded inside is rewritten to the
     # final location before installation starts.
-    lock_path = target.parent / f".{target.name}.install.lock"
+    lock_path = target.parent / INSTALL_LOCK
     with installation_lock(lock_path):
-        return _materialize_locked(root, target, lock_path, uv_bin, timeout_seconds, log_path)
+        return _materialize_locked(root, target, uv_bin, timeout_seconds, log_path)
 
 
-def _materialize_locked(root: Path, target: Path, lock_path: Path, uv_bin: str | None,
+def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
                         timeout_seconds: int, log_path: Path | None) -> dict:
     working = None
     try:
         if is_ready(target):
-            lock_path.unlink()
             return {"runtime": read_ready(target), "installed": False, "runtimeDir": str(target)}
         working = Path(tempfile.mkdtemp(prefix=f".{target.name}.build-", dir=target.parent))
         _copy_assets(root, working)
@@ -438,7 +424,6 @@ def _materialize_locked(root: Path, target: Path, lock_path: Path, uv_bin: str |
         _rewrite_environment_paths(environment, target)
         (target / READY_FILE).write_text(json.dumps(ready, indent=2, sort_keys=True) + "\n")
         result = {"runtime": read_ready(target), "installed": True, "runtimeDir": str(target)}
-        lock_path.unlink()
         return result
     finally:
         if working is not None and working.exists():

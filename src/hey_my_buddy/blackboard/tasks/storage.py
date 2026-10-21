@@ -19,11 +19,10 @@ from ...protocol import schemas
 from ..store.db import utc_now
 from . import host_conclusions
 from ...errors import BoardError
-from ...install.runtime import DEFAULT_RUNTIME_ROOT, is_ready, installation_lock
+from ...install.runtime import DEFAULT_RUNTIME_ROOT, INSTALL_LOCK, is_ready, installation_lock
 
 GRACE_SECONDS = 3 * 86400
 _RUNTIME_ID = r'[0-9a-f]{32}'
-_INSTALL_LOCK = re.compile(r'\.(' + _RUNTIME_ID + r')\.install\.lock')
 _BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
 
 
@@ -130,34 +129,14 @@ def runtime_usage(directory: Path, commands: list[str], known: bool) -> list[str
     return []
 
 
-def _runtime_lock_paths(path: Path) -> list[Path]:
-    if _INSTALL_LOCK.fullmatch(path.name):
-        return [path]
-    build = _BUILD_DIRECTORY.fullmatch(path.name)
-    if path.name.startswith('.build-'):
-        # The earlier unbound build names can belong to any old installer.
-        return sorted(set([path.parent / '.install.lock', path.parent / 'install.lock',
-                           *path.parent.glob('.*.install.lock')]))
-    identity = build[1] if build else path.name
-    return [path.parent / f'.{identity}.install.lock']
-
-
 @contextmanager
 def _runtime_removal_locks(path: Path, *, create: bool):
-    with ExitStack() as stack:
-        created = []
-        try:
-            for lock_path in _runtime_lock_paths(path):
-                existed = lock_path.exists() or lock_path.is_symlink()
-                if not create and not existed:
-                    continue
-                stack.enter_context(installation_lock(lock_path, blocking=False, create=create))
-                if not existed:
-                    created.append(lock_path)
-            yield
-        finally:
-            for lock_path in created:
-                lock_path.unlink()
+    lock_path = path.parent / INSTALL_LOCK
+    if not create and not lock_path.exists() and not lock_path.is_symlink():
+        yield
+        return
+    with installation_lock(lock_path, blocking=False, create=create):
+        yield
 
 
 def _runtime_lock_reasons(path: Path) -> list[str]:
@@ -584,6 +563,8 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         add('runtimes', runtime_root, ['runtime-format-unsupported'])
     elif runtime_root.exists():
         for path in sorted(runtime_root.iterdir()):
+            if path.name == INSTALL_LOCK:
+                continue  # Root-lifetime coordination file, never a reclamation candidate.
             if private_dirs.linked_component(path) is not None:
                 add('runtimes', path, ['linked-path'])
                 continue
@@ -592,16 +573,14 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             except OSError:
                 add('runtimes', path, ['runtime-identity-unproven'])
                 continue
-            lock = _INSTALL_LOCK.fullmatch(path.name)
             build = _BUILD_DIRECTORY.fullmatch(path.name)
             incomplete = (stat.S_ISDIR(path_stat.st_mode) and
                           re.fullmatch(_RUNTIME_ID, path.name) is not None and
                           not (path / 'READY.json').exists() and not (path / 'READY.json').is_symlink())
-            leftover = ((lock is not None and stat.S_ISREG(path_stat.st_mode)) or
-                        (stat.S_ISDIR(path_stat.st_mode) and
-                         (build is not None or path.name.startswith('.build-') or incomplete)))
+            leftover = (stat.S_ISDIR(path_stat.st_mode) and
+                        (build is not None or path.name.startswith('.build-') or incomplete))
             if leftover:
-                identity = lock[1] if lock else build[1] if build else path.name
+                identity = build[1] if build else path.name
                 reasons = (['retention-history-unproven'] if retained_ids is None else
                            ['retained-runtime'] if identity in retained_ids else [])
                 if foreign_default_root:
@@ -828,10 +807,7 @@ def apply(store, params: dict) -> dict:
             with ExitStack() as removal:
                 if runtime_pending:
                     original, tomb = Path(pending['path']), Path(pending['tomb'])
-                    if _INSTALL_LOCK.fullmatch(original.name) and not original.exists():
-                        removal.enter_context(installation_lock(tomb, blocking=False, create=False))
-                    else:
-                        removal.enter_context(_runtime_removal_locks(original, create=True))
+                    removal.enter_context(_runtime_removal_locks(original, create=True))
                     remaining = original if original.exists() else tomb
                     if remaining.is_dir():
                         _, commands, known = process_inventory(store.directory.resolve())

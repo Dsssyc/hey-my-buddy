@@ -75,47 +75,27 @@ class StorageTests(BoardTestCase):
         # A fresh file also protects a directory whose own timestamp is old.
         (entries['d' * 32] / 'payload').touch()
         (entries['.' + 'f' * 32 + '.build-recent'] / 'payload').touch()
-        orphan = root / ('.' + '1' * 32 + '.install.lock')
-        recent_lock = root / ('.' + '2' * 32 + '.install.lock')
-        held_lock = root / ('.' + '3' * 32 + '.install.lock')
-        directory_lock = root / ('.' + '0' * 32 + '.install.lock')
-        retained_lock = root / ('.' + current + '.install.lock')
-        for path in (orphan, recent_lock, held_lock, directory_lock, retained_lock):
-            path.touch(mode=0o600)
-            self._age_runtime_entry(path)
-        recent_lock.touch()
         outside = self.directory / 'outside-runtime'
         outside.mkdir()
         sentinel = outside / 'payload'
         sentinel.write_bytes(b'outside')
         linked = root / ('9' * 32)
         linked.symlink_to(outside, target_is_directory=True)
-        linked_lock = root / ('.' + '8' * 32 + '.install.lock')
-        linked_lock.symlink_to(sentinel)
-        owners = [os.open(path, os.O_RDWR) for path in (held_lock, directory_lock)]
-        try:
-            for fd in owners:
-                locking.lock(fd, blocking=False)
-            with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
-                 mock.patch.object(storage, 'runtime_usage', side_effect=lambda path, *_: (
-                     ['runtime-in-use'] if path.name == '6' * 32 else [])):
-                result = storage.prune_old_runtimes(board.store)
-        finally:
-            for fd in owners:
-                os.close(fd)
+        with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
+             mock.patch.object(storage, 'runtime_usage', side_effect=lambda path, *_: (
+                 ['runtime-in-use'] if path.name == '6' * 32 else [])):
+            result = storage.prune_old_runtimes(board.store)
         self.assertTrue(result['complete'])
-        expected_removed = {str(entries['c' * 32]), str(entries['.' + 'e' * 32 + '.build-abandoned']), str(orphan)}
+        expected_removed = {str(entries[name]) for name in ('c' * 32, '0' * 32,
+                                                          '.' + 'e' * 32 + '.build-abandoned')}
         self.assertEqual({row['path'] for row in result['removed']}, expected_removed)
-        for path in [*entries.values(), orphan, recent_lock, held_lock, directory_lock, retained_lock, linked, linked_lock]:
+        for path in [*entries.values(), linked]:
             self.assertEqual(path.exists(), str(path) not in expected_removed, path)
+        self.assertTrue((root / storage.INSTALL_LOCK).is_file())
         reasons = {Path(row['path']).name: row['reasons'] for row in result['skipped']}
         self.assertIn('retention-grace', reasons['d' * 32])
-        self.assertIn('retention-grace', reasons[recent_lock.name])
-        self.assertIn('runtime-installation-active', reasons[held_lock.name])
-        self.assertIn('runtime-installation-active', reasons['0' * 32])
         self.assertIn('runtime-in-use', reasons['6' * 32])
         self.assertIn('linked-path', reasons[linked.name])
-        self.assertIn('linked-path', reasons[linked_lock.name])
         self.assertEqual(sentinel.read_bytes(), b'outside')
 
     def test_runtime_cleanup_holds_the_installation_lock_until_directory_removal(self):
@@ -130,7 +110,7 @@ class StorageTests(BoardTestCase):
         real_remove = private_dirs.remove_tree
         observed = []
         def remove(tomb):
-            lock_path = root / f'.{candidate.name}.install.lock'
+            lock_path = root / storage.INSTALL_LOCK
             fd = os.open(lock_path, os.O_RDWR)
             try:
                 with self.assertRaises(BlockingIOError):
@@ -146,9 +126,9 @@ class StorageTests(BoardTestCase):
         self.assertEqual(len(observed), 1)
         self.assertEqual([row['path'] for row in result['removed']], [str(candidate)])
         self.assertFalse(candidate.exists())
-        self.assertEqual(list(root.iterdir()), [])
+        self.assertEqual(list(root.iterdir()), [root / storage.INSTALL_LOCK])
 
-    def test_unbound_build_leftover_waits_for_every_existing_installation_lock(self):
+    def test_all_runtime_removal_waits_for_the_root_installation_lock(self):
         board = self.board()
         root = Path(os.environ['HMB_RUNTIME_ROOT'])
         build = root / '.build-abandoned'
@@ -157,7 +137,7 @@ class StorageTests(BoardTestCase):
         self._age_runtime_entry(build)
         (board.directory / 'runtime-retention.json').write_text(json.dumps({
             'current': 'a' * 32, 'previous': 'b' * 32}))
-        lock_path = root / ('.' + 'a' * 32 + '.install.lock')
+        lock_path = root / storage.INSTALL_LOCK
         lock_path.touch(mode=0o600)
         self._age_runtime_entry(lock_path)
         fd = os.open(lock_path, os.O_RDWR)
@@ -193,6 +173,19 @@ class StorageTests(BoardTestCase):
         row = next(row for row in planned['candidates'] if row['path'] == str(candidate))
         self.assertTrue(row['eligible'])
         return candidate, planned, row
+
+    def test_runtime_apply_refuses_an_installer_that_started_after_the_plan(self):
+        board = self.board()
+        candidate, planned, _ = self._runtime_plan(board)
+        lock_path = candidate.parent / storage.INSTALL_LOCK
+        with storage.installation_lock(lock_path):
+            result = board.call('storage_apply', {
+                'planId': planned['planId'], 'commandId': 'installer-won', 'confirm': True})
+        self.assertEqual(result['removed'], [])
+        self.assertTrue(candidate.is_dir())
+        skipped = next(row for row in result['skipped'] if row['path'] == str(candidate))
+        self.assertIn('runtime-installation-active', skipped['reasons'])
+        self.assertTrue(lock_path.is_file())
 
     def test_private_state_cannot_prune_the_default_states_runtime_inventory(self):
         board = self.board()

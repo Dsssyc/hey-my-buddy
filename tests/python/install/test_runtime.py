@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 import ntpath
-import select
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -51,6 +50,18 @@ class RuntimePathTests(unittest.TestCase):
                     self.assertFalse(runtime._inside(LexicalWindowsPath(root), child))
             for child in (r"D:\runtime-other\python.exe", r"E:\runtime\python.exe"):
                 self.assertFalse(runtime._inside(LexicalWindowsPath(r"D:\runtime"), child, allow_lexical=True))
+
+    def test_declared_relative_rejects_every_native_anchor(self):
+        for flavor, anchored in (
+            (PureWindowsPath, ("/x", "D:x", "D:/x", "//server/share/x", "D:")),
+            (PurePosixPath, ("/x", "//x")),
+        ):
+            with self.subTest(platform=flavor.__name__), patch.object(runtime, "Path", flavor):
+                for value in anchored:
+                    with self.subTest(value=value), self.assertRaises(BoardError) as failure:
+                        runtime._declared_relative(value, "asset", flavor("manifest.json"))
+                    self.assertEqual(failure.exception.code, "RUNTIME_MANIFEST_INVALID")
+                self.assertEqual(runtime._declared_relative("a/b", "asset", flavor("manifest.json")), "a/b")
 
     def test_plugin_cache_comparison_uses_native_components(self):
         for flavor, cached, unrelated in (
@@ -118,7 +129,7 @@ def write_manifest(
     return path
 
 
-def fake_uv(directory: Path, *, gate: Path | None = None) -> Path:
+def fake_uv(directory: Path) -> Path:
     """A stand-in uv that publishes an interpreter without any dependency install."""
     directory.mkdir(parents=True, exist_ok=True)
     script = directory / "uv"
@@ -129,17 +140,6 @@ def fake_uv(directory: Path, *, gate: Path | None = None) -> Path:
         "base = Path(__file__).parent\n"
         "with (base / 'invocations').open('a') as stream:\n"
         "    stream.write('sync\\n')\n"
-        f"gate = {str(gate) if gate else None!r}\n"
-        "if gate is not None:\n"
-        "    try:\n"
-        "        (base / 'gate.claimed').touch(exist_ok=False)\n"
-        "    except FileExistsError:\n"
-        "        pass\n"
-        "    else:\n"
-        "        with (Path(gate) / 'started').open('w') as stream:\n"
-        "            stream.write('started\\n')\n"
-        "        with (Path(gate) / 'release').open() as stream:\n"
-        "            stream.readline()\n"
         "if (base / 'fail').exists():\n"
         "    raise SystemExit(7)\n"
         "interpreter = Path(os.environ['UV_PROJECT_ENVIRONMENT']) / 'bin' / 'python'\n"
@@ -398,7 +398,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
             self.assertTrue((target / relative).is_file(), relative)
         self.assertFalse((target / "tests").exists())
         self.assertFalse((target / ".venv").exists())
-        self.assertFalse((target.parent / f".{target.name}.install.lock").exists())
+        self.assertTrue((target.parent / runtime.INSTALL_LOCK).is_file())
         self.assertFalse((target / "src" / "hey_my_buddy" / "__pycache__").exists())
         self.assertTrue(Path(record["python"]).is_file())
         self.assertEqual(runtime.find_ready(self.root, self.runtime_root), target)
@@ -414,43 +414,34 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.assertEqual(runtime.read_ready(target)["resources"], {name: str(target / path) for name, path in resources.items()})
 
     def test_concurrent_installers_share_one_lock_until_ready(self):
-        gate = self.root.parent / "uv-gate"
-        gate.mkdir()
-        for name in ("started", "release"):
-            os.mkfifo(gate / name)
-        started_fd = os.open(gate / "started", os.O_RDWR | os.O_NONBLOCK)
-        release_fd = os.open(gate / "release", os.O_RDWR | os.O_NONBLOCK)
-        self.addCleanup(os.close, started_fd)
-        self.addCleanup(os.close, release_fd)
-        fake_uv(self.uv.parent, gate=gate)
-        target = runtime.runtime_dir(self.root, self.runtime_root)
-        lock_path = target.parent / f".{target.name}.install.lock"
-        second_attempted = Event()
-        locked_inodes = []
-        real_lock = runtime.locking.lock
+        first_building, release, second_attempted = Event(), Event(), Event()
+        real_run, real_lock = runtime.subprocess.run, runtime.locking.lock
+        acquisitions = []
+
+        def controlled_run(command, **options):
+            if command[0] == str(self.uv):
+                first_building.set()
+                if not release.wait(10):
+                    raise AssertionError("first installer was never released")
+            return real_run(command, **options)
 
         def observe_lock(fd, **options):
-            if not options.get("shared"):
-                locked_inodes.append(os.fstat(fd).st_ino)
-                if len(locked_inodes) == 1:
-                    # Keep the unlinked inode allocated with a separate open,
-                    # without retaining the flock through a duplicated fd.
-                    # Filesystems may immediately reuse a freed inode number.
-                    self.addCleanup(os.close, os.open(lock_path, os.O_RDONLY))
-                if len(locked_inodes) == 2:
-                    second_attempted.set()
+            acquisitions.append(fd)
+            if len(acquisitions) == 2:
+                second_attempted.set()
             return real_lock(fd, **options)
 
         options = {"destination": self.runtime_root, "uv_bin": str(self.uv), "timeout_seconds": 10}
-        with ThreadPoolExecutor(max_workers=2) as pool, patch.object(runtime.locking, "lock", side_effect=observe_lock):
+        target = runtime.runtime_dir(self.root, self.runtime_root)
+        lock_path = target.parent / runtime.INSTALL_LOCK
+        with ThreadPoolExecutor(max_workers=2) as pool, \
+             patch.object(runtime.subprocess, "run", side_effect=controlled_run), \
+             patch.object(runtime.locking, "lock", side_effect=observe_lock):
             first = pool.submit(runtime.materialize, self.root, **options)
             try:
-                readable, _, _ = select.select([started_fd], [], [], 5)
-                self.assertTrue(readable, "the first fake uv did not reach its controlled wait")
-                self.assertEqual(os.read(started_fd, 64), b"started\n")
+                self.assertTrue(first_building.wait(5))
                 second = pool.submit(runtime.materialize, self.root, **options)
-                self.assertTrue(second_attempted.wait(5), "the second installer did not reach the lock")
-                self.assertEqual(locked_inodes, [lock_path.stat().st_ino] * 2)
+                self.assertTrue(second_attempted.wait(5))
                 probe_fd = os.open(lock_path, os.O_RDWR)
                 try:
                     with self.assertRaises(BlockingIOError):
@@ -460,23 +451,90 @@ class RuntimeMaterializationTests(unittest.TestCase):
                 self.assertFalse((target / runtime.READY_FILE).exists())
                 self.assertFalse(second.done())
             finally:
-                os.write(release_fd, b"continue\n")
+                release.set()
             results = [first.result(timeout=15), second.result(timeout=15)]
 
         self.assertEqual(sorted(result["installed"] for result in results), [False, True])
         self.assertEqual(results[0]["runtime"], results[1]["runtime"])
-        self.assertEqual(results[0]["runtimeDir"], results[1]["runtimeDir"])
         self.assertTrue(runtime.is_ready(target))
         self.assertEqual((self.uv.parent / "invocations").read_text().splitlines(), ["sync"])
-        self.assertFalse(lock_path.exists(), "successful installers must remove their lock file")
-        self.assertGreaterEqual(len(locked_inodes), 3, "the waiter must reopen the unlinked lock inode")
-        self.assertNotEqual(locked_inodes[-1], locked_inodes[0])
+        self.assertTrue(lock_path.is_file())
+        self.assertEqual(len(acquisitions), 2)
 
-    def test_a_failed_install_retries_and_removes_its_lock_after_success(self):
+    def test_different_runtime_installers_use_the_same_root_lock(self):
+        first_copying, release, second_attempted = Event(), Event(), Event()
+        other = self.root.with_name("other-project")
+        write_assets(other)
+        write_manifest(other, resources={"other.runner": "resources/runner.py"})
+        self.assertNotEqual(runtime.content_id(self.root), runtime.content_id(other))
+        real_copy, real_lock = runtime._copy_assets, runtime.locking.lock
+        acquisitions = []
+
+        def controlled_copy(source, target):
+            if source == self.root:
+                first_copying.set()
+                if not release.wait(10):
+                    raise AssertionError("first installer was never released")
+            else:
+                self.assertTrue(release.is_set())
+            return real_copy(source, target)
+
+        def observe_lock(fd, **options):
+            acquisitions.append(fd)
+            if len(acquisitions) == 2:
+                second_attempted.set()
+            return real_lock(fd, **options)
+
+        options = {"destination": self.runtime_root, "uv_bin": str(self.uv)}
+        with ThreadPoolExecutor(max_workers=2) as pool, \
+             patch.object(runtime, "_copy_assets", side_effect=controlled_copy), \
+             patch.object(runtime.locking, "lock", side_effect=observe_lock):
+            first = pool.submit(runtime.materialize, self.root, **options)
+            try:
+                self.assertTrue(first_copying.wait(5))
+                second = pool.submit(runtime.materialize, other, **options)
+                self.assertTrue(second_attempted.wait(5))
+                self.assertFalse(second.done())
+            finally:
+                release.set()
+            self.assertTrue(first.result(timeout=15)["installed"])
+            self.assertTrue(second.result(timeout=15)["installed"])
+        self.assertEqual(len(acquisitions), 2)
+        self.assertTrue((self.runtime_root / runtime.INSTALL_LOCK).is_file())
+
+    def test_installation_never_deletes_an_open_lock_even_when_windows_would_refuse(self):
+        opened = set()
+        real_lock, real_unlink = runtime.installation_lock, Path.unlink
+
+        @contextmanager
+        def tracked_lock(path, **options):
+            with real_lock(path, **options) as fd:
+                opened.add(path)
+                try:
+                    yield fd
+                finally:
+                    opened.remove(path)
+
+        def windows_unlink(path, *args, **kwargs):
+            if path in opened:
+                raise PermissionError("Windows refuses deletion of an open file")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(runtime, "installation_lock", side_effect=tracked_lock), \
+             patch.object(Path, "unlink", windows_unlink):
+            failure = self.uv.parent / "fail"
+            failure.touch()
+            with self.assertRaises(BoardError):
+                self.materialize()
+            failure.unlink()
+            self.materialize()
+        self.assertTrue((self.runtime_root / runtime.INSTALL_LOCK).is_file())
+
+    def test_a_failed_install_retries_and_preserves_its_lock_after_success(self):
         failure_marker = self.uv.parent / "fail"
         failure_marker.touch()
         target = runtime.runtime_dir(self.root, self.runtime_root)
-        lock_path = target.parent / f".{target.name}.install.lock"
+        lock_path = target.parent / runtime.INSTALL_LOCK
         with self.assertRaises(BoardError) as failure:
             runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
         self.assertEqual(failure.exception.code, "RUNTIME_INSTALL_FAILED")
@@ -486,7 +544,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         failure_marker.unlink()
         self.assertEqual(self.materialize(), target)
         self.assertTrue(runtime.is_ready(target))
-        self.assertFalse(lock_path.exists())
+        self.assertTrue(lock_path.is_file())
         self.assertEqual((self.uv.parent / "invocations").read_text().splitlines(), ["sync", "sync"])
 
     def test_a_ready_runtime_keeps_its_paths_after_the_source_tree_is_replaced(self):
