@@ -34,12 +34,6 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: apps/console/package-lock.json
-      - uses: astral-sh/setup-uv@v6
-        with:
-          version: '0.12.19'
-          python-version: '3.12'
-          enable-cache: true
-          cache-dependency-glob: uv.lock
       - name: Install console dependencies
         run: |
           npm --prefix apps/console ci 2>&1 | tee "$RUNNER_TEMP/logs/npm-ci.log"
