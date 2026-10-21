@@ -629,10 +629,11 @@ class RealDaemonControlTests(unittest.TestCase):
         waited = self._submit_command("rpc-waited-1", sleep=15)
         cancellable = self._submit_command("rpc-cancel-1", sleep=15)
         deadline = time.monotonic() + 10
-        while call_board("task_get", {"runId": waited}, endpoint=self.endpoint,
-                         state_dir=self.state)["task"]["status"] == "queued":
-            self.assertLess(time.monotonic(), deadline)
-            time.sleep(0.05)
+        for run_id in (waited, cancellable):
+            while call_board("task_get", {"runId": run_id}, endpoint=self.endpoint,
+                             state_dir=self.state)["task"]["status"] == "queued":
+                self.assertLess(time.monotonic(), deadline)
+                time.sleep(0.05)
         started = time.monotonic()
         with ThreadPoolExecutor(max_workers=self.WAIT_CAPACITY) as pool:
             waits = [pool.submit(self._wait, waited) for _ in range(self.WAIT_CAPACITY)]
