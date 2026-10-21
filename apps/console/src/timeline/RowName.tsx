@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { StateMark } from "../components/ui/state-mark";
-import { useTextClipped } from "../components/use-text-clipped";
+import { useFadingText } from "../components/use-fading-text";
 import { HarnessLogo } from "../buddies/HarnessLogo";
 import { buddyLabel, displayTitle, rowStateInfo } from "../macro-task-display";
 import type { FriendlyBuddy } from "../macro-task-display";
@@ -42,7 +42,7 @@ export const RowName = forwardRef<HTMLButtonElement, {
   const title = displayTitle(row.titleSource, row.title);
   const repairTitle = row.fixes ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).fullText : null;
   const repair = row.fixes ? t("fixes", { title: repairTitle }) : null;
-  const [titleRef, titleClipped] = useTextClipped<HTMLSpanElement>(title.text);
+  const titleText = useFadingText(title.text);
   const tone = row.status === "queued" ? null : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
     : state.tone === "green" || row.category === "active" ? "live" : row.state === "failed" || row.status === "failed" ? "fail" : "past";
   const mark = tone === "live" ? "live" : null;
@@ -58,7 +58,7 @@ export const RowName = forwardRef<HTMLButtonElement, {
     <span className="flex w-full min-w-0 items-center gap-1.5 text-sm">
       {row.kind === "helper" && <span aria-hidden="true" className="text-ink3">└</span>}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-        <span ref={titleRef} className="min-w-0 overflow-hidden whitespace-nowrap font-medium [mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)]">{title.text}</span>
+        <span ref={titleText.ref} className={cn("min-w-0 font-medium", titleText.className)}>{title.text}</span>
         {row.fixes && <span data-slot="fix-link" className="min-w-0 max-w-1/2 shrink-0 truncate text-xs text-ink3" aria-label={repair!}>↪ {repairTitle}</span>}
       </span>
       {!!row.fixedBy?.length && <span data-slot="fixed-by" className="shrink-0 text-xs text-ink3" aria-label={t("fixedBy", { n: row.fixedBy.length })}>↩ {row.fixedBy.length}</span>}
@@ -68,7 +68,7 @@ export const RowName = forwardRef<HTMLButtonElement, {
     <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{!state.settled && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" ? "text-ink state-breathe" : !current && "text-ink3")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}{buddyLabel(row.buddy, buddies)}</span>
   </button>;
   const tuple = row.buddy ? [row.buddy.harness, row.buddy.provider, row.buddy.model, row.buddy.effort].map(value => value ?? t("unknown")).join(" / ") : null;
-  const wholeTitle = titleClipped || title.clipped;
+  const wholeTitle = titleText.hint !== undefined || title.clipped;
   return repairTitle || tuple || wholeTitle || hoverExtra || fresh || !!row.fixedBy?.length ? <Tooltip><TooltipTrigger asChild onFocus={event => { if (!event.currentTarget.matches(":focus-visible")) event.preventDefault(); }}>{button}</TooltipTrigger><TooltipContent side="bottom" align="start" className="wrap-anywhere text-left">
     {wholeTitle && <span className="block">{title.fullText}</span>}
     {repairTitle && repairTitle !== (wholeTitle ? title.fullText : null) && <span className="block">{repairTitle}</span>}

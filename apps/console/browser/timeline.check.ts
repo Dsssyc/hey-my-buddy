@@ -1,9 +1,55 @@
 import { expect, type Page } from "@playwright/test";
 import { screenshots as shots, open, test, settle, expectNoSidewaysScroll, expectWholeAndApart } from "./preview";
+import type { MacroTaskTimeline } from "../src/macro-task-types";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const waiting = "preview-run-a1-h1";
 const row = (page: Page, id: string) => page.locator(`[data-slot=timeline-row-name][data-run-id="${id}"]:visible`);
+
+for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
+  test.describe(`timeline name clipping ${theme} ${width}`, () => {
+    test.use({ locale: "zh-CN", viewport: { width, height: 1000 }, reducedMotion: "reduce" });
+    test("fades only clipped names and keeps the full title, correction and buddy on hover", async ({ page }) => {
+      const short = { runId: "preview-run-a1", title: "schema 26 的冗余清点", clipped: false };
+      const long = { runId: "preview-run-a2", title: "剪枝一：删除残留与死表，并核对时间轴微任务名称被截断时的渐隐和完整悬停提示", clipped: true };
+      let timeline!: MacroTaskTimeline;
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await page.route(`**/api/macro-tasks/${macro}/timeline*`, async route => {
+        const response = await route.fetch();
+        timeline = await response.json();
+        for (const { runId, title } of [short, long]) {
+          const item = timeline.rows.find(entry => entry.runId === runId)!;
+          item.title = title; item.titleSource = "title";
+        }
+        for (const item of timeline.rows) if (item.fixes === short.runId) {
+          item.fixesTitle = short.title; item.fixesTitleSource = "title";
+        }
+        await route.fulfill({ response, json: timeline });
+      });
+      await open(page, `#tasks/${macro}`);
+      for (const { runId, title, clipped } of [short, long]) {
+        const name = row(page, runId);
+        const label = name.getByText(title, { exact: true });
+        await expect(label).toBeVisible();
+        expect(await label.evaluate(node => node.scrollWidth > node.clientWidth)).toBe(clipped);
+        await expect(label).toHaveCSS("mask-image", clipped ? /linear-gradient/ : "none");
+        await label.hover();
+        const tooltip = page.getByRole("tooltip");
+        await expect(tooltip).toBeVisible();
+        await expect(tooltip.getByText(title, { exact: true })).toHaveCount(clipped ? 1 : 0);
+        const buddy = timeline.rows.find(item => item.runId === runId)!.buddy!;
+        await expect(tooltip).toContainText([buddy.harness, buddy.provider, buddy.model, buddy.effort].join(" / "));
+        if (clipped) {
+          await expect(name.locator("[data-slot=fix-link]")).toHaveText(`↪ ${short.title}`);
+          await expect(tooltip.getByText(short.title, { exact: true })).toBeVisible();
+        }
+        await page.mouse.move(width - 8, 8);
+        await expect(tooltip).toBeHidden();
+      }
+      await expectNoSidewaysScroll(page);
+    });
+  });
+}
 
 for (const locale of ["zh-CN", "en-US"]) for (const theme of ["light", "dark"]) for (const width of [1440, 800, 390]) {
   test.describe(`new task structure ${locale} ${theme} ${width}`, () => {
