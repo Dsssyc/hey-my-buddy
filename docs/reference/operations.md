@@ -41,7 +41,7 @@ After installation or upgrade, start a new Host task so it loads the installed s
 
 Requirements are macOS or Linux, [uv](https://docs.astral.sh/uv/) (the bootstrap scripts can place a fixed private uv when the machine has none; hey-my-buddy runs on Python 3.12, which uv installs itself when the machine has none unless its Python downloads are turned off), and a working local DSH, ZCode, Codex or Claude Code CLI with its own native user configuration and login. Node.js is needed when the selected ZCode CLI is a JavaScript entry file. hey-my-buddy never writes global harness model settings.
 
-Windows is not validated on a real machine. The code and scripts are portable — `install.ps1`, `hey-my-buddy.cmd` and `hey-my-buddy.ps1` exist, PATH is read from the registry — but symbolic-link creation, forced process termination and registry-based discovery still need native verification.
+Windows is not validated on a real machine beyond harness discovery: DSH CLI 0.2.1-rc.2 and Codex CLI 0.163.0 were found and probed on Windows 11. The code and scripts are portable — `install.ps1`, `hey-my-buddy.cmd` and `hey-my-buddy.ps1` exist, PATH is read from the registry — but symbolic-link creation, forced process termination and registry-based discovery still need native verification.
 
 ### Bootstrap scripts
 
