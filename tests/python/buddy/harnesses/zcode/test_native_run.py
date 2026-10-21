@@ -1686,7 +1686,10 @@ class DiscoveryStopTests(NativeRunCase):
         def owned_popen(*args, **kwargs):
             child = windows_process.owned_popen(*args, windows_api=windows_api, **kwargs)
             self.fd_close_child = child
-            owner = native_run.ProcessHandle(child, own_group=True, log_paths={})
+            creation_time = (mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10)
+                             if windows_api is not None else nullcontext())
+            with creation_time:
+                owner = native_run.ProcessHandle(child, own_group=True, log_paths={})
 
             def reap():
                 try:

@@ -6,6 +6,9 @@ import os
 import threading
 import time
 import unittest
+from unittest import mock
+
+from hey_my_buddy.buddy.harnesses.claude import protocol
 
 from hey_my_buddy.buddy.harnesses.claude.protocol import (
     ClaudeProtocolError,
@@ -18,6 +21,25 @@ from hey_my_buddy.buddy.harnesses.claude.protocol import (
 )
 
 
+class ObservedPipeReader:
+    """Keep a fake pipe's read descriptor alive until its reader exits."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.reader_started = threading.Event()
+        self.reader = None
+
+    def readline(self, *args):
+        self.reader = threading.current_thread()
+        self.reader_started.set()
+        return self.stream.readline(*args)
+
+    def close(self):
+        if self.reader is None or self.reader.is_alive():
+            raise AssertionError("the fake stdout reader is still using this descriptor")
+        self.stream.close()
+
+
 class FakeProcess:
     """A process-shaped object over two pipes: the controller side reads stdout and writes stdin."""
 
@@ -25,7 +47,7 @@ class FakeProcess:
         stdin_read, stdin_write = os.pipe()
         stdout_read, stdout_write = os.pipe()
         self.stdin = os.fdopen(stdin_write, "wb", buffering=0)
-        self.stdout = os.fdopen(stdout_read, "rb", buffering=0)
+        self.stdout = ObservedPipeReader(os.fdopen(stdout_read, "rb", buffering=0))
         self.native_reads = os.fdopen(stdin_read, "rb", buffering=0)
         self.native_writes = os.fdopen(stdout_write, "wb", buffering=0)
 
@@ -238,12 +260,17 @@ class ConnectionTests(unittest.TestCase):
         self.addCleanup(self._close)
         self.connection = Connection(self.process, time.monotonic() + 5, threading.Event())
 
-    def _close(self):
-        for stream in (self.process.stdin, self.process.stdout, self.process.native_reads, self.process.native_writes):
-            try:
-                stream.close()
-            except OSError:
-                pass
+    def _close(self, process=None):
+        process = self.process if process is None else process
+        # Give the reader EOF and join it before closing its read descriptor.
+        # A concurrent close/read can race with descriptor reuse or hang on Windows.
+        process.native_writes.close()
+        process.stdin.close()
+        self.assertTrue(process.stdout.reader_started.wait(2), "the fake stdout reader did not start")
+        process.stdout.reader.join(2)
+        self.assertFalse(process.stdout.reader.is_alive(), "the fake stdout reader did not exit")
+        process.stdout.close()
+        process.native_reads.close()
 
     def _write_frame(self, frame):
         self.process.native_writes.write((json.dumps(frame, separators=(",", ":")) + "\n").encode())
@@ -259,7 +286,24 @@ class ConnectionTests(unittest.TestCase):
             self._write_frame({"type": "control_response", "response": {
                 "subtype": "success", "request_id": frame["request_id"], "response": {"models": []}}})
         threading.Thread(target=respond, daemon=True).start()
-        self.assertEqual(self.connection.call({"subtype": "initialize"}), {"models": []})
+        native_write = os.write
+        def fragmented_write(fd, raw):
+            return native_write(fd, raw[:7])
+        with mock.patch.object(protocol.os, "write", side_effect=fragmented_write):
+            self.assertEqual(self.connection.call({"subtype": "initialize"}), {"models": []})
+
+    def test_fragmented_native_frame_waits_for_the_newline(self):
+        frames = []
+        self.connection.on_message = frames.append
+        # Split within a UTF-8 character, then hold back the line delimiter.
+        for fragment in (b'{"type":"system","text":"\xe4', b'\xb8\xad"}'):
+            self.process.native_writes.write(fragment)
+            self.connection.pump()
+            self.assertEqual(frames, [])
+        self.process.native_writes.write(b'\n')
+        while not frames:
+            self.connection.pump()
+        self.assertEqual(frames, [{"type": "system", "text": "中"}])
 
     def test_unknown_control_response_identity_is_rejected(self):
         self._write_frame({"type": "control_response", "response": {
@@ -340,18 +384,15 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual(budget.exception.code, "invalid-protocol")
 
     def test_oversized_native_frame_still_rejects(self):
-        from unittest import mock
-        from hey_my_buddy.buddy.harnesses.claude import protocol
         # A separate reader sees the small test bound before reading its frame.
         process = FakeProcess()
+        self.addCleanup(self._close, process)
         with mock.patch.object(protocol, "MAX_FRAME_BYTES", 64):
             connection = Connection(process, time.monotonic() + 5, threading.Event())
             process.native_writes.write(b'{"payload":"' + b'x' * 65 + b'"}\n')
             with self.assertRaises(ClaudeProtocolError) as caught:
                 connection.pump()
             self.assertEqual(caught.exception.code, "invalid-protocol")
-        for stream in (process.stdin, process.stdout, process.native_reads, process.native_writes):
-            stream.close()
 
     def test_drain_ends_only_on_the_observed_end_of_stream(self):
         self._write_frame({"type": "result", "subtype": "success", "session_id": "s"})

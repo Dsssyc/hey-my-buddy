@@ -12,6 +12,7 @@ import os
 import socket
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -154,6 +155,14 @@ class ConsoleTestCase(BoardTestCase):
 
 
 class ConsoleSecurityTests(ConsoleTestCase):
+    def test_console_starts_without_reverse_dns(self):
+        board = self.board()
+        with mock.patch.object(socket, "getfqdn", side_effect=AssertionError("reverse DNS")):
+            _stated, browser = self.open_console(board)
+            self.assertEqual(board.console._server.server_name, "127.0.0.1")
+            self.assertEqual(board.console._server.server_port, browser.port)
+            self.assertIn("csrfToken", browser.bootstrap())
+
     def test_reminder_threshold_requires_console_authority_and_updates_the_snapshot(self):
         board = self.board()
         _stated, browser = self.open_console(board)
