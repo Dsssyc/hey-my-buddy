@@ -1,6 +1,6 @@
 """Exact, kernel-owned process creation values used within a boot session.
 
-Linux uses /proc stat clock ticks, macOS uses libproc's raw microseconds, and
+Linux uses /proc stat clock ticks, macOS uses the kernel's raw microseconds, and
 Windows uses GetProcessTimes FILETIME ticks.  The platform in bootId identifies
 the unit; no wall-clock conversion or floating-point rounding enters storage.
 """
@@ -30,43 +30,46 @@ def process_start(pid: int, *, include_exited: bool) -> int | None:
     raise OSError(f"unsupported platform: {sys.platform}")
 
 
-class _MacBSDInfo(ctypes.Structure):
-    # sys/proc_info.h: struct proc_bsdinfo; sys/param.h: MAXCOMLEN = 16.
+class _MacKinfoProc(ctypes.Structure):
+    # sys/sysctl.h's 648-byte kinfo_proc on Darwin's 64-bit ABIs (arm64/x86_64).
+    # Only the prefix of kp_proc (sys/proc.h's extern_proc) is interpreted;
+    # the remaining extern_proc fields and kp_eproc stay opaque. p_starttime
+    # is a timeval: a 64-bit tv_sec and a 32-bit tv_usec, padded to 16 bytes.
     _fields_ = [
-        ("pbi_flags", ctypes.c_uint32), ("pbi_status", ctypes.c_uint32),
-        ("pbi_xstatus", ctypes.c_uint32), ("pbi_pid", ctypes.c_uint32),
-        ("pbi_ppid", ctypes.c_uint32),
-        ("pbi_uid", ctypes.c_uint32), ("pbi_gid", ctypes.c_uint32),
-        ("pbi_ruid", ctypes.c_uint32), ("pbi_rgid", ctypes.c_uint32),
-        ("pbi_svuid", ctypes.c_uint32), ("pbi_svgid", ctypes.c_uint32),
-        ("rfu_1", ctypes.c_uint32),
-        ("pbi_comm", ctypes.c_char * 16), ("pbi_name", ctypes.c_char * 32),
-        ("pbi_nfiles", ctypes.c_uint32), ("pbi_pgid", ctypes.c_uint32),
-        ("pbi_pjobc", ctypes.c_uint32), ("e_tdev", ctypes.c_uint32),
-        ("e_tpgid", ctypes.c_uint32), ("pbi_nice", ctypes.c_int32),
-        ("pbi_start_tvsec", ctypes.c_uint64),
-        ("pbi_start_tvusec", ctypes.c_uint64),
+        ("start_tvsec", ctypes.c_int64), ("start_tvusec", ctypes.c_int32),
+        ("_timeval_padding", ctypes.c_int32),
+        ("_vmspace", ctypes.c_uint64), ("_sigacts", ctypes.c_uint64),
+        ("_flag", ctypes.c_int32), ("status", ctypes.c_uint8),
+        ("pid", ctypes.c_int32), ("_remaining", ctypes.c_byte * 604),
     ]
 
 
 def _macos_process_start(pid: int, *, include_exited: bool) -> int | None:
-    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-    method = library.proc_pidinfo
-    method.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
-                       ctypes.c_void_p, ctypes.c_int]
+    # Unlike proc_pidinfo(PROC_PIDTBSDINFO), KERN_PROC_PID includes unreaped
+    # children. Both expose the same kernel start timeval, without rounding.
+    library = ctypes.CDLL(None, use_errno=True)
+    method = library.sysctl
+    method.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint,
+                       ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t),
+                       ctypes.c_void_p, ctypes.c_size_t]
     method.restype = ctypes.c_int
-    info = _MacBSDInfo()
-    count = method(pid, 3, 0, ctypes.byref(info), ctypes.sizeof(info))
-    if count == 0:
+    mib = (ctypes.c_int * 4)(1, 14, 1, pid)  # CTL_KERN, KERN_PROC, KERN_PROC_PID
+    info = _MacKinfoProc()
+    length = ctypes.c_size_t(ctypes.sizeof(info))
+    if method(mib, len(mib), ctypes.byref(info), ctypes.byref(length), None, 0) != 0:
         error = ctypes.get_errno()
         if error == errno.ESRCH:
             return None
         raise OSError(error, "cannot inspect process creation time")
-    if count != ctypes.sizeof(info) or info.pbi_pid != pid:
-        raise OSError("incomplete process creation observation")
-    if not include_exited and info.pbi_status == 5:  # sys/proc.h SZOMB
+    if length.value == 0:
         return None
-    return info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec
+    if (length.value != ctypes.sizeof(info) or info.pid != pid
+            or info.status not in {1, 2, 3, 4, 5}
+            or info.start_tvsec <= 0 or not 0 <= info.start_tvusec < 1_000_000):
+        raise OSError("incomplete process creation observation")
+    if not include_exited and info.status == 5:  # sys/proc.h SZOMB
+        return None
+    return info.start_tvsec * 1_000_000 + info.start_tvusec
 
 
 class _FileTime(ctypes.Structure):

@@ -9,6 +9,8 @@ import threading
 import unittest
 from unittest import mock
 
+from process_observation import wait_for_unreaped_child
+
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import process_identity as identity
@@ -161,3 +163,26 @@ class ProcessIdentityTests(unittest.TestCase):
         finally:
             if process.poll() is None:
                 handle.terminate(grace_seconds=0)
+
+    @unittest.skipUnless(sys.platform in {"darwin", "linux"}, "POSIX unreaped child identity")
+    def test_identity_of_child_that_exited_before_handle_construction(self):
+        process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
+        try:
+            wait_for_unreaped_child(process.pid)
+            handle = ProcessHandle(process, own_group=True, log_paths={})
+            record = identity.capture_process_identity(handle)
+            self.assertIs(identity.validate_process_identity(record), record)
+            self.assertEqual(record["bootId"], identity.boot_id())
+            self.assertEqual(record["pid"], process.pid)
+            self.assertIsInstance(record["startedAt"], int)
+            self.assertGreater(record["startedAt"], 0)
+            self.assertEqual(record["processGroupId"], process.pid)
+            self.assertIsNone(record["jobName"])
+            self.assertEqual(identity.process_start(process.pid, include_exited=True), record["startedAt"])
+            self.assertIsNone(identity.process_start(process.pid, include_exited=False))
+        finally:
+            process.wait(timeout=5)
+        self.assertEqual(process.returncode, 0)
+        for include_exited in (False, True):
+            with self.subTest(include_exited=include_exited):
+                self.assertIsNone(identity.process_start(process.pid, include_exited=include_exited))
