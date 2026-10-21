@@ -44,7 +44,7 @@ export default {
     counts: { read_one: "Read {{count}} file", read_other: "Read {{count}} files", edit_one: "Edited {{count}} file", edit_other: "Edited {{count}} files", delete_one: "Deleted {{count}} file", delete_other: "Deleted {{count}} files", move_one: "Moved {{count}} file", move_other: "Moved {{count}} files", search_one: "Searched {{count}} time", search_other: "Searched {{count}} times", execute_one: "Ran {{count}} command", execute_other: "Ran {{count}} commands", fetch_one: "Fetched {{count}} URL", fetch_other: "Fetched {{count}} URLs", think_one: "Reasoned {{count}} time", think_other: "Reasoned {{count}} times", switch_mode_one: "Switched mode {{count}} time", switch_mode_other: "Switched mode {{count}} times", other_one: "Made {{count}} call", other_other: "Made {{count}} calls" },
     highlightFailed: "Code highlighting could not be loaded",
     title: "Session", content: "Session content", loading: "Reading session…",
-    earlier: "Load earlier content", loadingEarlier: "Reading earlier content…", empty: "This execution has no session content yet", newContent: "New content",
+    loadingEarlier: "Reading earlier content…", empty: "This execution has no session content yet", newContent: "New content",
     omitted: "Not provided: {{content}}", separator: "; ", reasoning: "Reasoning", plan: "Plan",
     copy: "Copy full text", copied: "Copied", copyFailed: "Copy failed", recordingStopped: "Session recording stopped: {{reason}}",
     state: { running: "Running", ended: "Ended" },

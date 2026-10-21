@@ -4,12 +4,12 @@ import { isAbortError } from "../api";
 import { parseSession, records } from "./types";
 import type { RecordedEvent, SessionPage } from "./types";
 
-export const SESSION_PAGE_SIZE = 100;
+export const SESSION_PAGE_SIZE = 256;
 export type SessionClient = Pick<ConsoleApi, "session">;
 export type SessionData = Omit<SessionPage, "events"> & { events: RecordedEvent[]; change: "initial" | "earlier" | "later" };
 
 /** Owns all in-flight reads of a visible panel; hiding or disposing it cancels them. */
-export function useSession(client: SessionClient, taskId: string, attemptId: string, active: boolean, resumeBefore?: number) {
+export function useSession(client: SessionClient, taskId: string, attemptId: string, active: boolean) {
   const [data, setData] = useState<SessionData | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [earlierBusy, setEarlierBusy] = useState(false);
@@ -41,17 +41,9 @@ export function useSession(client: SessionClient, taskId: string, attemptId: str
       try {
         let cursor = latest.current?.after;
         if (cursor === undefined) {
-          const page = await read(resumeBefore === undefined ? {} : { after: resumeBefore }, controller);
+          const page = await read({}, controller);
           if (controller.signal.aborted) return;
-          let tail = page;
-          const events = records(page);
-          // A resumed view rebuilds the loaded suffix before restoring its viewport.
-          while (resumeBefore !== undefined && tail.events.length === SESSION_PAGE_SIZE) {
-            tail = await read({ after: tail.after }, controller);
-            if (controller.signal.aborted) return;
-            events.push(...records(tail));
-          }
-          update(() => ({ ...page, state: tail.state, stopped: tail.stopped, omitted: tail.omitted, after: tail.after, events, change: "initial" }));
+          update(() => ({ ...page, events: records(page), change: "initial" }));
           return;
         }
         while (!controller.signal.aborted) {

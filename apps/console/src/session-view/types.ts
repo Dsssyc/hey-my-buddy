@@ -16,7 +16,6 @@ export type MessageUpdate = z.infer<typeof message>;
 export type ToolUpdate = z.infer<typeof tool>;
 export type PlanUpdate = z.infer<typeof plan>;
 export type RecordedEvent = { id: string; event: SessionEvent };
-export type SessionPosition = { before: number; scrollTop: number; atBottom: boolean; focus: number | null; expanded: string[] };
 
 /** The HTTP response is the single boundary; renderers receive parsed facts. */
 export function parseSession(value: unknown): SessionPage {
