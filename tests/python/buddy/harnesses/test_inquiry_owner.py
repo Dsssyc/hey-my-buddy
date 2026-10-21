@@ -92,7 +92,7 @@ def direct_snapshot(endpoint, **kwargs):
 def records(path: Path) -> list[dict]:
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 class InquiryOwnerTests(unittest.TestCase):
@@ -276,7 +276,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
                 "state": state, **extras}
 
     def write_records(self, values):
-        self.path.write_text("".join(json.dumps(value) + "\n" for value in values))
+        self.path.write_text("".join(json.dumps(value) + "\n" for value in values), encoding="utf-8", newline="\n")
 
     def test_missing_empty_unreadable_and_over_limit_keep_complete_read_semantics(self):
         self.assertEqual(ib.read_inquiry_journal(RUN, None)["reason"], "no-journal-path")
@@ -299,7 +299,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
                             self.record("q-rejected"),
                             self.record("q-rejected", attemptId="foreign"), [],
                             {"inquiryId": "q-version", "version": 999}])
-        with self.path.open("a") as stream:
+        with self.path.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write("{torn tail")
         original = self.path.read_bytes()
         fact = ib.read_inquiry_journal(RUN, self.path)
@@ -470,11 +470,11 @@ class InquiryOwnerPeerTests(unittest.TestCase):
                            HMB_RUNTIME_ROOT=str(self.directory / "runtime"),
                            C2_ENV_FILE="", C2_RELAY_ANCHOR_ADDRESS="")
         self.stderr_path = self.directory / "peer.stderr"
-        self.stderr = self.stderr_path.open("x")
+        self.stderr = self.stderr_path.open("x", encoding="utf-8", newline="\n")
         self.addCleanup(self.stderr.close)
         self.process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--owner-peer"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
-            env=environment, text=True)
+            env=environment, text=True, encoding="utf-8")
         self.addCleanup(self.stop_peer)
         started = self.command("start", directory=str(self.directory), stateDir=str(self.state))
         self.assertTrue(started["ok"], started)

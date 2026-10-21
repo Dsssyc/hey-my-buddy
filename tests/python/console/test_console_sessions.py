@@ -67,7 +67,7 @@ class ConsoleSessionTests(ConsoleTestCase):
     def test_two_redemptions_race_for_exactly_one_session(self):
         board = self.board()
         board.console.assets_dir.mkdir(parents=True, exist_ok=True)
-        (board.console.assets_dir / 'index.html').write_text('<!doctype html><html><head></head><body></body></html>')
+        (board.console.assets_dir / 'index.html').write_text('<!doctype html><html><head></head><body></body></html>', encoding="utf-8", newline="\n")
         entry = board.call('console', {'action': 'open'})
         parts = urlsplit(entry['url'])
         barrier = threading.Barrier(2)
@@ -117,7 +117,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         _, browser = self.open_console(board)
         snapshot = browser.bootstrap()
         session_file = board.directory / 'console-sessions.json'
-        data = session_file.read_text()
+        data = session_file.read_text(encoding="utf-8")
         self.assertNotIn(browser.cookie.split('=', 1)[1], data)
         self.assertNotIn(snapshot['csrfToken'], data)
         self.assertEqual(os.stat(session_file).st_mode & 0o777, 0o600)
@@ -266,7 +266,7 @@ class ConsoleForegroundTests(ConsoleTestCase):
             child = subprocess.Popen([sys.executable, '-m', 'hey_my_buddy.cli.main', 'console',
                 '{"browser":false,"wait":true}'], env=_child_environment(self.directory),
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, start_new_session=True)
+                text=True, start_new_session=True, encoding="utf-8")
             try:
                 self.assertTrue(select.select([child.stderr], [], [], 20)[0], 'CLI did not report the entry')
                 notice = child.stderr.readline()

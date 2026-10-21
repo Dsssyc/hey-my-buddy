@@ -53,7 +53,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
         self.outside.mkdir(mode=0o700)
         self.sentinels = [self.outside / name for name in ("request.json", "result.json")]
         for sentinel in self.sentinels:
-            sentinel.write_text("outside-sentinel")
+            sentinel.write_text("outside-sentinel", encoding="utf-8", newline="\n")
         self.index = 0
 
     def start(self):
@@ -81,7 +81,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
 
     def assert_sentinels(self):
         for sentinel in self.sentinels:
-            self.assertEqual(sentinel.read_text(), "outside-sentinel")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "outside-sentinel")
 
     def assert_retention_failure(self, handle):
         outcome = read_only.collect(handle)
@@ -108,7 +108,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                 if replace_with_link:
                     control_path.unlink(missing_ok=True)
                     control_path.symlink_to(self.outside / "control.json")
-                control_path.write_text(json.dumps(malicious))
+                control_path.write_text(json.dumps(malicious), encoding="utf-8", newline="\n")
                 request.output_schema["properties"] = {"mutated": {"type": "string"}}
                 context.task_id, context.attempt_id, context.generation = "changed", "changed", 999
                 context.directory = self.outside
@@ -116,7 +116,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                     binding.evidence_root = self.outside
                 outcome = read_only.collect(handle)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
-                retained = json.loads((binding.evidence_root / "call-1/request.json").read_text())
+                retained = json.loads((binding.evidence_root / "call-1/request.json").read_text(encoding="utf-8"))
                 self.assertEqual(retained["prompt"], "frozen original prompt")
                 self.assertEqual(retained["outputSchema"], {"type": "object"})
                 self.assertEqual((binding.task_id, binding.attempt_id, binding.generation, binding.directory), original_identity)
@@ -192,7 +192,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                 directory = self.root / f"reparse-{location}"
                 directory.mkdir(mode=0o700)
                 target = directory / "result.json"
-                target.write_text("original-evidence")
+                target.write_text("original-evidence", encoding="utf-8", newline="\n")
                 rejected = target if location == "file" else directory
                 original_lstat = Path.lstat
                 def metadata(path, *args, **kwargs):
@@ -202,7 +202,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                     return value
                 with mock.patch.object(Path, "lstat", metadata), self.assertRaises(BoardError):
                     turn_io.private_json(target, {"overwritten": True})
-                self.assertEqual(target.read_text(), "original-evidence")
+                self.assertEqual(target.read_text(encoding="utf-8"), "original-evidence")
                 self.assertFalse(any(directory.glob(".*.tmp")))
 
 
@@ -312,7 +312,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 outcome = collect(handle)
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
                 control = (handle.role_run_control if hasattr(handle, "role_run_control")
-                           else json.loads((evidence / "no-tool-control.json").read_text()))
+                           else json.loads((evidence / "no-tool-control.json").read_text(encoding="utf-8")))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, adapter.name)))
                 cleanup_attempt_credentials(Path(environment["HMB_STATE_DIR"]), adapter.name, "task", "attempt")
                 self.assert_partition(context, adapter.name)
@@ -322,7 +322,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         context = fixture.context()
         account_home = fixture.root / "fixture-codex-home"
         account_home.mkdir(mode=0o700)
-        (account_home / "auth.json").write_text('{"fixture":"login"}')
+        (account_home / "auth.json").write_text('{"fixture":"login"}', encoding="utf-8", newline="\n")
         context.environment["CODEX_HOME"] = str(account_home)
         context.directory = Path(context.environment["HMB_STATE_DIR"]) / "attempts" / context.task_id / context.attempt_id
         context.turn = None
@@ -382,7 +382,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 outcome = decision_adapter.collect(handle, context)
                 self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
                 control = (handle.role_run_control if hasattr(handle, "role_run_control")
-                           else json.loads((context.directory / "no-tool-control.json").read_text()))
+                           else json.loads((context.directory / "no-tool-control.json").read_text(encoding="utf-8")))
                 self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, name)))
                 cleanup_attempt_credentials(Path(env["HMB_STATE_DIR"]), name, "task", "attempt")
                 self.assert_partition(context, name)
@@ -428,7 +428,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 startup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 startup.write_text(json.dumps({"claim": claim, "stateDir": str(state),
                     "nonce": "n" * 64,
-                    "sessionRecordPath": str(fixture.root / f"session-{harness}.jsonl")}))
+                    "sessionRecordPath": str(fixture.root / f"session-{harness}.jsonl")}), encoding="utf-8", newline="\n")
                 entry = fixture.root / f"execution-entry-{harness}.py"
                 entry.write_text(
                     "import json, os, runpy\n"
@@ -440,7 +440,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     f"identity_file = Path({str(fixture.root / 'execution-identity.json')!r})\n"
                     f"delivery = Path({str(fixture.root / 'execution-result.json')!r})\n"
                     "identity_file.write_text(json.dumps({'pid': os.getpid(), "
-                    "'startedAt': process_identity.process_start(os.getpid(), include_exited=True)}))\n"
+                    "'startedAt': process_identity.process_start(os.getpid(), include_exited=True)}), encoding='utf-8', newline='\\n')\n"
                     f"marker = state / 'attempts' / {task_id!r} / {attempt_id!r} / 'spawn.marker'\n"
                     f"fsync_json(marker, {{'taskId': {task_id!r}, 'attemptId': {attempt_id!r}, "
                     "'generation': 1, 'processIdentity': {'bootId': process_identity.boot_id(), "
@@ -455,19 +455,19 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     f"binding={{'taskId': {task_id!r}, 'attemptId': attempt_id, 'generation': generation}}, "
                     "sha256=reference['sha256'])\n"
                     "        assert receipt is not None\n"
-                    "        delivery.write_text(json.dumps(receipt['report']))\n"
+                    "        delivery.write_text(json.dumps(receipt['report']), encoding='utf-8', newline='\\n')\n"
                     "client.BoardClient = OfflineClient\n"
-                    "runpy.run_module('hey_my_buddy.buddy.runtime.execution', run_name='__main__')\n"
+                    "runpy.run_module('hey_my_buddy.buddy.runtime.execution', run_name='__main__')\n", encoding="utf-8", newline="\n"
                 )
                 completed = subprocess.run([sys.executable, str(entry), "--startup", str(startup)],
                     env=env, cwd=evidence, capture_output=True, text=True, timeout=35,
-                    start_new_session=True)
+                    start_new_session=True, encoding="utf-8")
                 self.assertEqual(completed.returncode, 0, completed.stderr[-4000:])
                 delivery = fixture.root / "execution-result.json"
                 self.assertTrue(delivery.is_file(), completed.stdout[-4000:])
-                report = json.loads(delivery.read_text())
+                report = json.loads(delivery.read_text(encoding="utf-8"))
                 self.assertIs(report["shutdownConfirmed"], True, report)
-                root_identity = json.loads((fixture.root / "execution-identity.json").read_text())
+                root_identity = json.loads((fixture.root / "execution-identity.json").read_text(encoding="utf-8"))
                 journal_path = native_process_journal_path(
                     receipt_directory(state, harness, task_id, attempt_id), root_identity)
                 binding = {"taskId": task_id, "attemptId": attempt_id, "generation": 1}
@@ -482,9 +482,9 @@ class PrivateAdapterInvariants(unittest.TestCase):
         original_record = fixture.micro_task_record
         def with_session_record(context, **kwargs):
             original_record(context, **kwargs)
-            selection = json.loads(fixture.record.read_text())
+            selection = json.loads(fixture.record.read_text(encoding="utf-8"))
             selection["dsh"]["command"] += ["--session-record", "usage"]
-            fixture.record.write_text(json.dumps(selection))
+            fixture.record.write_text(json.dumps(selection), encoding="utf-8", newline="\n")
         fixture.micro_task_record = with_session_record
         for index in (1, 2):
             with self.subTest(adapter="dsh", attempt=index):

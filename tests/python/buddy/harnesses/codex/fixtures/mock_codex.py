@@ -22,13 +22,13 @@ def state_path():
 
 def read_state():
     try:
-        return json.loads(state_path().read_text())
+        return json.loads(state_path().read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {"next": 1, "threads": {}}
 
 
 def write_state(value):
-    state_path().write_text(json.dumps(value))
+    state_path().write_text(json.dumps(value), encoding="utf-8", newline="\n")
 
 
 #: Two native requests inside one turn. The second one repeats the exact same
@@ -109,7 +109,7 @@ def main():
         native_config["model_provider"] = None
     user_config = Path(os.environ.get("CODEX_HOME") or Path(os.environ["HOME"]) / ".codex") / "config.toml"
     if user_config.is_file():
-        native_config.update(tomllib.loads(user_config.read_text()))
+        native_config.update(tomllib.loads(user_config.read_text(encoding="utf-8")))
     provider = native_config.get("model_provider") or "openai"
     def merge(target, update):
         for key, value in update.items():

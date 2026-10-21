@@ -34,17 +34,17 @@ def contract_signature_digest(source: str) -> str:
 
 class ContractVersionTests(unittest.TestCase):
     def test_contract_version_matches_software_major_and_minor(self):
-        project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         major, minor, _patch = project["project"]["version"].split(".")
         self.assertEqual(CONTRACT_VERSION, f"{major}.{minor}.0")
 
     def test_contract_signatures_match_the_pinned_version(self):
-        fixture = json.loads(SIGNATURE_FIXTURE.read_text())
+        fixture = json.loads(SIGNATURE_FIXTURE.read_text(encoding="utf-8"))
         self.assertEqual(CONTRACT_VERSION, fixture["contractVersion"])
-        self.assertEqual(contract_signature_digest(CONTRACT_SOURCE.read_text()), fixture["sha256"])
+        self.assertEqual(contract_signature_digest(CONTRACT_SOURCE.read_text(encoding="utf-8")), fixture["sha256"])
 
     def test_signature_digest_changes_when_a_method_signature_changes(self):
-        source = CONTRACT_SOURCE.read_text()
+        source = CONTRACT_SOURCE.read_text(encoding="utf-8")
         changed = source.replace(
             "def ping(self, request_json: str) -> str:",
             "def ping(self, request_json: bytes) -> str:",

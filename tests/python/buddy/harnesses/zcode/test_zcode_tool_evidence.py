@@ -48,9 +48,9 @@ workspace = {}
 provider = 'fixture-api'
 if case == 'native-config':
     personal = Path(os.environ['ZCODE_DATA_BASE_DIR']) / '.zcode/v2/provider_config.json'
-    provider = json.loads(personal.read_text())['config']['providerConfigRules']['providerRules'][0]['providerId']
+    provider = json.loads(personal.read_text(encoding='utf-8'))['config']['providerConfigRules']['providerRules'][0]['providerId']
 Path(__file__).with_name('launch-environment.json').write_text(json.dumps(
-    {key: value for key, value in os.environ.items() if key.startswith('ZCODE_')}))
+    {key: value for key, value in os.environ.items() if key.startswith('ZCODE_')}), encoding='utf-8', newline='\\n')
 def send(data):
     print(json.dumps(data), flush=True)
 def event(kind, seq, payload):
@@ -77,10 +77,10 @@ for line in sys.stdin:
         send({'id':'runtime-preferences','method':'session/requestRuntimePreferences',
               'params':{'sessionId':f's-{session}','scope':'runtime-materialization'}})
         reply = json.loads(sys.stdin.readline())
-        Path(__file__).with_name('runtime-preferences-reply.json').write_text(json.dumps(reply['result']))
+        Path(__file__).with_name('runtime-preferences-reply.json').write_text(json.dumps(reply['result']), encoding='utf-8', newline='\\n')
         if case == 'preference-correct' and session == 1:
             settings = Path(os.environ['ZCODE_DATA_BASE_DIR']) / '.zcode/v2/setting.json'
-            settings.write_text(json.dumps({'memoryEnabled':False, 'nativeSearchEnhancementsEnabled':False}))
+            settings.write_text(json.dumps({'memoryEnabled':False, 'nativeSearchEnhancementsEnabled':False}), encoding='utf-8', newline='\\n')
     elif method in ('session/setModel','session/setThoughtLevel'):
         result = {'session':{'sessionId':f's-{session}','workspace':workspace},
           'settings':{'model':{'current':{'providerId':provider,'modelId':'fixture-model',
@@ -112,7 +112,7 @@ for line in sys.stdin:
                   'params':{'sessionId':f's-{session}','kind':'shell'}})
             reply = json.loads(sys.stdin.readline())
             Path('refusal-reply.json').write_text(json.dumps(
-                {'id':reply.get('id'),'refused':'error' in reply}))
+                {'id':reply.get('id'),'refused':'error' in reply}), encoding='utf-8', newline='\\n')
             time.sleep(30)
             sys.exit(0)
         result = {'accepted':True,'sessionId':f's-{session}'}
@@ -157,7 +157,7 @@ for line in sys.stdin:
                   'params':{'sessionId':f's-{session}','kind':'shell'}})
             reply = json.loads(sys.stdin.readline())
             Path('refusal-reply.json').write_text(json.dumps(
-                {'id': reply.get('id'), 'refused': 'error' in reply}))
+                {'id': reply.get('id'), 'refused': 'error' in reply}), encoding='utf-8', newline='\\n')
             sys.exit(0)
         elif case == 'reverse-oauth':
             send({'id':'srv-2','method':'interaction/requestProviderRuntimeHeaders',
@@ -184,7 +184,7 @@ for line in sys.stdin:
             event('turn.completed',3,{'inputId':ident,'resultType':'success','response':'{"choice":"a"}'})
             send({'method':'state.updated','params':{'sessionId':f's-{session}','reason':'prompt_completed'}})
         elif case == 'timeout':
-            Path(__file__).with_name('prompt-ready').write_text(ident)
+            Path(__file__).with_name('prompt-ready').write_text(ident, encoding='utf-8', newline='\\n')
             time.sleep(5)
         elif case == 'truncated':
             sys.exit(0)
@@ -515,10 +515,10 @@ class FakeAppServerTests(unittest.TestCase):
         self.cwd = self.root / "empty"
         self.cwd.mkdir(mode=0o700)
         self.fake = self.root / "fake-zcode"
-        self.fake.write_text(textwrap.dedent(FAKE))
+        self.fake.write_text(textwrap.dedent(FAKE), encoding="utf-8", newline="\n")
         builtin = self.root / "provider/zcode-builtin.json"
         builtin.parent.mkdir()
-        builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
+        builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}', encoding="utf-8", newline="\n")
         native_home = self.root / "native-user-home"
         native_home.mkdir(mode=0o700)
         self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("HMB_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_"))
@@ -532,7 +532,7 @@ class FakeAppServerTests(unittest.TestCase):
 
     def execute(self, case="ok", *, timeout=3, cancel=False):
         ready = self.root / "prompt-ready"
-        previous_input = ready.read_text() if ready.exists() else ""
+        previous_input = ready.read_text(encoding="utf-8") if ready.exists() else ""
         context = ExecutionContext("task", "attempt", 1,
             {"provider": "fixture-api", "model": "fixture-model", "effort": "low", "cwd": str(self.cwd),
              "routerBudgetSeconds": timeout}, self.root / "attempt", {},
@@ -545,7 +545,7 @@ class FakeAppServerTests(unittest.TestCase):
             # Cancel an active native turn, not a controller still importing.
             deadline = time.monotonic() + 8
             def prompted():
-                return ready.exists() and ready.read_text() not in ("", previous_input)
+                return ready.exists() and ready.read_text(encoding="utf-8") not in ("", previous_input)
             while not prompted() and time.monotonic() < deadline:
                 time.sleep(0.01)
             self.assertTrue(prompted(), "fake native turn never received the prompt")
@@ -553,7 +553,7 @@ class FakeAppServerTests(unittest.TestCase):
         self.assertIsNotNone(handle.wait(timeout + 8))
         outcome = collect(handle)
         if outcome.result.get("code") == "invalid-native-result":
-            self.fail(f"controller emitted no result: {Path(handle.log_paths['stderr']).read_text()}")
+            self.fail(f"controller emitted no result: {Path(handle.log_paths['stderr']).read_text(encoding="utf-8")}")
         return outcome
 
 
@@ -662,7 +662,7 @@ class NoToolReceiptWiringTests(FakeAppServerTests):
         original_pump = native_run.NativeConnection._pump
 
         def pump(connection):
-            if not expired_at_prompt and ready.exists() and ready.read_text():
+            if not expired_at_prompt and ready.exists() and ready.read_text(encoding="utf-8"):
                 expired_at_prompt.append(True)
                 connection.deadline = time.monotonic() - 1
             return original_pump(connection)

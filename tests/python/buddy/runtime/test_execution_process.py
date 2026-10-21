@@ -89,7 +89,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertIs(launched_handle, handle)
             self.assertEqual(handle.process_identity, identity)
             self.assertEqual((state / "attempts/task-3/attempt-3/spawn.marker").is_file(), True)
-            self.assertEqual(json.loads((handle.execution_directory / "execution-start.json").read_text()),
+            self.assertEqual(json.loads((handle.execution_directory / "execution-start.json").read_text(encoding="utf-8")),
                              {"claim": claim, "stateDir": str(state), "nonce": "n" * 64,
                               "jobName": None, "sessionRecordPath": None})
 
@@ -166,7 +166,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             execution.live.start(process_identity)
             try:
                 endpoint_file = execution.directory / "execution-live.json"
-                material = json.loads(endpoint_file.read_text())
+                material = json.loads(endpoint_file.read_text(encoding="utf-8"))
                 if os.name != "nt":
                     self.assertEqual(endpoint_file.stat().st_mode & 0o777, 0o600)
                 client = read_execution_endpoint(execution.directory, execution.live.identity,

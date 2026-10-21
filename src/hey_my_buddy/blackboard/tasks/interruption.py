@@ -46,7 +46,7 @@ def _marker_identity(board, attempt) -> dict | None:
         fd = open_regular_fd(path, os.O_RDONLY)
     except FileNotFoundError:
         return None
-    with os.fdopen(fd) as source:
+    with os.fdopen(fd, encoding="utf-8") as source:
         raw = source.read(16385)
     if len(raw) > 16384:
         raise BoardError('INVALID_ARGUMENT', 'Execution spawn marker is too large')

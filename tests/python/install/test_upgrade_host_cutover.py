@@ -31,7 +31,7 @@ class HostCutoverTests(WorkflowTestCase):
         source = root / ("fixture-" + generation)
         source.mkdir(parents=True)
         runtime._copy_assets(ROOT, source)
-        fixture_text = DAEMON_FIXTURE.read_text()
+        fixture_text = DAEMON_FIXTURE.read_text(encoding="utf-8")
         bootstrap = fixture_text
         if record_environment:
             entry = "    raise SystemExit(main())"
@@ -39,11 +39,11 @@ class HostCutoverTests(WorkflowTestCase):
             bootstrap = bootstrap.replace(
                 entry,
                 "    (Path(os.environ['HMB_STATE_DIR']) / 'daemon-environment.json').write_text(\n"
-                "        json.dumps({'PATH': os.environ.get('PATH'), 'VIRTUAL_ENV': os.environ.get('VIRTUAL_ENV')}))\n"
+                "        json.dumps({'PATH': os.environ.get('PATH'), 'VIRTUAL_ENV': os.environ.get('VIRTUAL_ENV')}), encoding='utf-8', newline='\\n')\n"
                 + entry,
             )
         (source / "src/hey_my_buddy/_upgrade_fixture_daemon.py").write_text(
-            bootstrap + "\n# Fixture generation: " + generation + "\n"
+            bootstrap + "\n# Fixture generation: " + generation + "\n", encoding="utf-8", newline="\n"
         )
         target = root / runtime.content_id(source)
         source.rename(target)
@@ -52,8 +52,8 @@ class HostCutoverTests(WorkflowTestCase):
         # EnvBuilder records its creation command, including the fixture's own
         # runtime path. Installed uv environments have no such command field.
         configuration = environment / "pyvenv.cfg"
-        configuration.write_text("\n".join(line for line in configuration.read_text().splitlines()
-                                           if not line.startswith("command =")) + "\n")
+        configuration.write_text("\n".join(line for line in configuration.read_text(encoding="utf-8").splitlines()
+                                           if not line.startswith("command =")) + "\n", encoding="utf-8", newline="\n")
         site = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
         for name in ("c_two", "portalocker", "pydantic", "pydantic_core", "zstandard",
                      "typing_extensions", "typing_inspection", "annotated_types"):
@@ -67,7 +67,7 @@ class HostCutoverTests(WorkflowTestCase):
                 destination = site / file
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(distribution.locate_file(file), destination)
-        (site / "hey-my-buddy-fixture.pth").write_text(str(target / "src") + "\n")
+        (site / "hey-my-buddy-fixture.pth").write_text(str(target / "src") + "\n", encoding="utf-8", newline="\n")
         ready = {
             "format": runtime.RUNTIME_FORMAT, "state": "READY", "contentId": target.name,
             "source": str(target), "projectRoot": str(target), "environment": str(environment),
@@ -75,7 +75,7 @@ class HostCutoverTests(WorkflowTestCase):
             "resources": {name: str(path) for name, path in runtime.resource_paths(target).items()},
             "sourceCommit": None,
         }
-        (target / "READY.json").write_text(json.dumps(ready))
+        (target / "READY.json").write_text(json.dumps(ready), encoding="utf-8", newline="\n")
         self.assertTrue(runtime.is_ready(target))
         return target
 
@@ -108,12 +108,12 @@ class HostCutoverTests(WorkflowTestCase):
         )
         result = subprocess.run([str(runtime.runtime_python(installer)), "-c", coordinator,
                                  str(self.directory), str(target)], cwd=installer, env=environment,
-                                capture_output=True, text=True, timeout=65)
+                                capture_output=True, text=True, timeout=65, encoding="utf-8")
         log = self.directory / "upgrade-start.log"
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout +
-                         (log.read_text()[-5000:] if log.exists() else ""))
+                         (log.read_text(encoding="utf-8")[-5000:] if log.exists() else ""))
         self.assertTrue(json.loads(result.stdout)["runtimeStable"])
-        recorded = json.loads((self.directory / "daemon-environment.json").read_text())
+        recorded = json.loads((self.directory / "daemon-environment.json").read_text(encoding="utf-8"))
         self.assertIsNone(recorded["VIRTUAL_ENV"])
         service_entries = recorded["PATH"].split(os.pathsep)
         self.assertNotIn(installer_bin, service_entries)

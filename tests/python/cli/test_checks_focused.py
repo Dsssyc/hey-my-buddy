@@ -42,13 +42,13 @@ class FocusedChecksTests(unittest.TestCase):
                 "        self.assertEqual(Path.home().parent, state.parent.parent)\n"
                 f"        marker = Path({str(self.markers)!r}) / __name__\n"
                 "        self.assertFalse(marker.exists(), 'file ran twice')\n"
-                "        marker.write_text(str(state.parent))\n"
+                "        marker.write_text(str(state.parent), encoding='utf-8', newline='\\n')\n", encoding="utf-8", newline="\n"
             )
         (self.top / "empty").mkdir()
-        (self.top / "helper.py").write_text("")
+        (self.top / "helper.py").write_text("", encoding="utf-8", newline="\n")
         unreachable = self.top / "plain/test_unreachable.py"
         unreachable.parent.mkdir()
-        unreachable.write_text("")
+        unreachable.write_text("", encoding="utf-8", newline="\n")
 
     def invoke(self, arguments, *, process_table=()):
         output = io.StringIO()
@@ -116,7 +116,7 @@ class FocusedChecksTests(unittest.TestCase):
                     code, output, errors = self.invoke(["--jobs", str(jobs), *paths])
                     self.assertEqual(code, 0, errors + output)
                     self.assertEqual({path.name for path in self.markers.iterdir()}, expected)
-                    child_roots = {path.read_text() for path in self.markers.iterdir()}
+                    child_roots = {path.read_text(encoding="utf-8") for path in self.markers.iterdir()}
                     self.assertEqual(len(child_roots), len(expected))
                     self.assertEqual(len({Path(path).parent for path in child_roots}), 1)
                     self.assertIn(f"python tests run: {len(expected)} (skipped 0) "
@@ -133,7 +133,7 @@ class FocusedChecksTests(unittest.TestCase):
     def test_failed_test_has_exit_one_with_either_cleanup_result(self):
         (self.top / "test_failure.py").write_text(
             "import unittest\nclass Case(unittest.TestCase):\n"
-            "    def test_fails(self):\n        self.fail('fixture failure')\n"
+            "    def test_fails(self):\n        self.fail('fixture failure')\n", encoding="utf-8", newline="\n"
         )
         for table in ((), None):
             with self.subTest(observable=table is not None):
@@ -152,8 +152,8 @@ class FocusedChecksTests(unittest.TestCase):
             ["--jobs=1", "tests/python/test_first.py"], process_table=None)
         self.assertEqual(code, 3, errors + output)
         retained, = self.temporary.iterdir()
-        self.assertEqual(int((retained / checks.CREATOR_FILE_NAME).read_text()), os.getpid())
-        evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text())
+        self.assertEqual(int((retained / checks.CREATOR_FILE_NAME).read_text(encoding="utf-8")), os.getpid())
+        evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
         self.assertIn("ps process enumeration failed", evidence["observation"]["problems"][0])
         self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
                       output.splitlines()[-1])
@@ -163,7 +163,7 @@ class FocusedChecksTests(unittest.TestCase):
             code, output, errors = self.invoke(["--jobs=1", "tests/python/test_first.py"])
         self.assertEqual(code, 3, errors + output)
         retained, = self.temporary.iterdir()
-        evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text())
+        evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
         self.assertEqual(evidence["teardownError"], "RuntimeError: fixture teardown")
         self.assertIn(str(retained), output.splitlines()[-1])
 
@@ -176,7 +176,7 @@ class SweepTests(unittest.TestCase):
 
     def abandoned(self):
         root = checks.create_private_root(directory=self.directory)
-        (root / checks.CREATOR_FILE_NAME).write_text("999999999\n")
+        (root / checks.CREATOR_FILE_NAME).write_text("999999999\n", encoding="utf-8", newline="\n")
         return root
 
     def sweep(self, table):
@@ -197,11 +197,11 @@ class SweepTests(unittest.TestCase):
         dirty = self.abandoned()
         outsider = self.directory / "other-root"
         outsider.mkdir()
-        (outsider / "keep").write_text("untouched")
+        (outsider / "keep").write_text("untouched", encoding="utf-8", newline="\n")
         symlink = self.directory / "hey-my-buddy-checks-link"
         symlink.symlink_to(outsider, target_is_directory=True)
         lock = dirty / "control-daemon.lock"
-        lock.write_text("")
+        lock.write_text("", encoding="utf-8", newline="\n")
         # The drain keeps its existing behavior; a surviving owner is still residue.
         with (patch.object(checks, "request_cooperative_stop", return_value=[]),
               patch.object(checks, "lock_is_held", side_effect=lambda path: path == lock)):
@@ -215,7 +215,7 @@ class SweepTests(unittest.TestCase):
         self.assertIn(f"retained {dirty}: live process or held lifetime lock", output)
         self.assertEqual(output.splitlines()[-1],
                          "hey_my_buddy.cli.checks: sweep deleted 2, skipped 1, retained 1")
-        self.assertEqual((outsider / "keep").read_text(), "untouched")
+        self.assertEqual((outsider / "keep").read_text(encoding="utf-8"), "untouched")
         self.assertTrue(symlink.is_symlink())
         self.assertNotIn(str(outsider), output)
 
@@ -233,7 +233,7 @@ class SweepTests(unittest.TestCase):
         root = self.abandoned()
         code, output = self.sweep(None)
         self.assertEqual(code, 3, output)
-        report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text())
+        report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
         self.assertIn("creator status unknown", report["observation"]["problems"][0])
         self.assertIn("retained", output)
 
@@ -242,12 +242,12 @@ class SweepTests(unittest.TestCase):
         (root / checks.CREATOR_FILE_NAME).unlink()
         code, output = self.sweep(None)
         self.assertEqual(code, 3, output)
-        report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text())
+        report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
         self.assertIn("ps process enumeration failed", report["observation"]["problems"][0])
 
     def test_unreadable_creator_record_is_retained(self):
         root = self.abandoned()
-        (root / checks.CREATOR_FILE_NAME).write_text("not a pid")
+        (root / checks.CREATOR_FILE_NAME).write_text("not a pid", encoding="utf-8", newline="\n")
         code, output = self.sweep([])
         self.assertEqual(code, 3, output)
         self.assertIn("creator record unreadable", output)

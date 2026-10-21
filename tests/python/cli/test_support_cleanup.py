@@ -37,8 +37,8 @@ class FixtureCleanupTests(unittest.TestCase):
             with self.assertRaisesRegex(AssertionError, "shutdown unconfirmed"):
                 with patch("support.stop_private_service", side_effect=AssertionError("shutdown unconfirmed")):
                     with private_state_dir() as directory:
-                        (directory / "receipt.json").write_text("evidence")
-            self.assertEqual((directory / "receipt.json").read_text(), "evidence")
+                        (directory / "receipt.json").write_text("evidence", encoding="utf-8", newline="\n")
+            self.assertEqual((directory / "receipt.json").read_text(encoding="utf-8"), "evidence")
         finally:
             if directory is not None:
                 shutil.rmtree(directory)
@@ -153,7 +153,7 @@ class FixtureCleanupTests(unittest.TestCase):
                           'runtime': str(runtime_root()), 'catalog': payload['source']}
                 assert cc.shutdown()['completed']
                 print(json.dumps(result))
-            """)], env=environment, capture_output=True, text=True, timeout=30)
+            """)], env=environment, capture_output=True, text=True, timeout=30, encoding="utf-8")
             self.assertEqual(completed.returncode, 0, completed.stderr)
             probe = json.loads(completed.stdout)
             self.assertEqual(probe["state"], str(directory))
@@ -236,11 +236,11 @@ class FixtureCleanupTests(unittest.TestCase):
                 self.assertTrue(capabilities["adapters"]["dsh"]["available"])
                 refreshed = dispatch_local(service, "model_catalog_refresh", {"requestId": "r05-fixture"})
                 self.assertEqual(refreshed["catalog"]["source"], f"file:{catalog}")
-                payload = json.loads(catalog.read_text())
+                payload = json.loads(catalog.read_text(encoding="utf-8"))
                 self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"],
                                  payload["providers"][0]["models"][0]["id"])
                 payload["providers"][0]["models"][0]["id"] = "r05-fixture-changed-model"
-                catalog.write_text(json.dumps(payload))
+                catalog.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
                 reread = dispatch_local(service, "model_catalog_refresh", {"requestId": "r05-fixture-reread"})
                 self.assertEqual(reread["catalog"]["providers"][0]["models"][0]["id"],
                                  payload["providers"][0]["models"][0]["id"])
@@ -295,7 +295,7 @@ class FixtureCleanupTests(unittest.TestCase):
                     })
                     completed = subprocess.run(
                         [sys.executable, "-m", "hey_my_buddy.cli.main", "health"], env=environment,
-                        capture_output=True, text=True, timeout=60,
+                        capture_output=True, text=True, timeout=60, encoding="utf-8",
                     )
                     self.assertEqual(completed.returncode, 0, completed.stderr)
                     self.assertTrue(wait_for(lambda: _lock_held(directory / "control-daemon.lock")))

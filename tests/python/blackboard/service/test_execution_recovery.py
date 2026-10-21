@@ -217,7 +217,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
             for journal in self.directory.glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
-                for native in json.loads(journal.read_text())["identities"]:
+                for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
                     kill_verified_process_group(native)
 
     def _unknown(self, run_id):
@@ -237,7 +237,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             original = endpoint.read_bytes()
             corrupted = json.loads(original)
             corrupted["token"] = "0" * 64 if corrupted["token"] != "0" * 64 else "1" * 64
-            endpoint.write_text(json.dumps(corrupted))
+            endpoint.write_text(json.dumps(corrupted), encoding="utf-8", newline="\n")
             os.chmod(endpoint, 0o600)
             self.restart(daemon)
         try:
@@ -304,7 +304,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             f"        self.final_answers=[json.dumps({{'buddyId':{candidate!r},'note':'offline fixture choice','evidence':[]}})]\n"
             "        return module.fake_agent.FakeAgent.run_final_prompt(self,message)\n"
             "module.WorkflowAgent=GatedAgent\n"
-            "raise SystemExit(module.main())\n"
+            "raise SystemExit(module.main())\n", encoding="utf-8", newline="\n"
         )
         os.chmod(script, 0o700)
         self.catalog_fixture()
@@ -337,14 +337,14 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             budget = attempt_root(self.directory, "dsh", run_id,
                                   before["attemptId"]) / "execution-budget.json"
             self.assertTrue(wait_for(budget.exists, timeout=15))
-            original_budget = json.loads(budget.read_text())
+            original_budget = json.loads(budget.read_text(encoding="utf-8"))
             self.restart(daemon)
         try:
             with self.daemon(env=environment):
                 attached = wait_for(lambda: self._running(run_id), timeout=30)
                 self.assertIsNotNone(attached, self.client().get(runId=run_id))
                 self.assertEqual(attached["selectedAttempt"]["attemptId"], before["attemptId"])
-                self.assertEqual(json.loads(budget.read_text()), original_budget)
+                self.assertEqual(json.loads(budget.read_text(encoding="utf-8")), original_budget)
                 self.assertNotEqual(self.client().call("selection_get", {
                     "decisionId": created["decisionId"]})["decision"]["status"], "completed")
                 release.touch()
@@ -382,7 +382,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertEqual(attached["selectedAttempt"]["ownership"], "owned")
                 self.assertEqual(inspect_process_identity(identity), "alive")
                 os.kill(identity["pid"], signal.SIGSTOP)
-                material = json.loads(budget.read_text())
+                material = json.loads(budget.read_text(encoding="utf-8"))
                 material["deadline"] = time.monotonic() - 1
                 fsync_json(budget, material)
                 forced = wait_for(lambda: self.client().get(runId=run_id)["selectedAttempt"].get("forceRequestedAt"),
@@ -408,7 +408,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
             for journal in self.directory.glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
-                for native in json.loads(journal.read_text())["identities"]:
+                for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
                     kill_verified_process_group(native)
 
     def _completed_decision(self, decision_id):
@@ -427,7 +427,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                         ("config", "user.email", "buddy@example.invalid"),
                         ("config", "user.name", "Buddy Test")):
             subprocess.run(["git", *command], cwd=repo, check=True, capture_output=True)
-        (repo / "tracked.txt").write_text("private fixture\n")
+        (repo / "tracked.txt").write_text("private fixture\n", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
         subprocess.run(["git", "commit", "-q", "-m", "fixture"], cwd=repo,
                        check=True, capture_output=True)
@@ -485,7 +485,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
             for journal in self.directory.glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
-                for native in json.loads(journal.read_text())["identities"]:
+                for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
                     kill_verified_process_group(native)
 
     def _live_bridge(self, run_id):
@@ -520,7 +520,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
         _request, claim = self.claimed_decision()
         handle = self.recovered_handle(claim)
         handle.budget_path.write_text(json.dumps({"binding": handle.execution_binding,
-                                                  "deadline": time.monotonic() - 1}))
+                                                  "deadline": time.monotonic() - 1}), encoding="utf-8", newline="\n")
         scheduler = ExecutionScheduler(self.board_.service, live_registry=self.board_.live_registry)
         client = Mock()
         view = self.client.get(runId=claim["task"]["taskId"])

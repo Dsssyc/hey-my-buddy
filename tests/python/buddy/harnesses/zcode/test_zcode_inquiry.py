@@ -140,7 +140,7 @@ class BridgeHarness:
         path = Path(self.credentials["resultsPath"])
         if not path.exists():
             return []
-        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     def close(self):
         self.bridge.close()
@@ -248,7 +248,7 @@ class BridgeQueueTests(unittest.TestCase):
         directory.mkdir()
         path = directory / "inquiry.results.jsonl"
         path.write_text("".join(json.dumps(record) + "\n" for record in (
-            queued, discarded, {**queued, **OTHER_IDENTITY, "inquiryId": "q-foreign"})))
+            queued, discarded, {**queued, **OTHER_IDENTITY, "inquiryId": "q-foreign"})), encoding="utf-8", newline="\n")
         original = path.read_bytes()
         restored = BridgeHarness(directory, live=True)
         self.addCleanup(restored.close)
@@ -324,7 +324,7 @@ class BridgeQueueTests(unittest.TestCase):
         directory = Path(self.temporary.name) / "late-history"
         directory.mkdir()
         path = directory / "inquiry.results.jsonl"
-        path.write_text("".join(json.dumps(record) + "\n" for record in history))
+        path.write_text("".join(json.dumps(record) + "\n" for record in history), encoding="utf-8", newline="\n")
         restored = BridgeHarness(directory, live=True)
         self.addCleanup(restored.close)
         before = restored.published().inquiries[0]
@@ -375,7 +375,7 @@ class BridgeQueueTests(unittest.TestCase):
              "answer": {"text": "legacy", "bytes": 6, "truncated": False, "via": "x", "toolCallId": "c", "at": "t"}},
         ]
         Path(self.harness.credentials["resultsPath"]).write_text(
-            "garbage line\n" + "".join(json.dumps(record) + "\n" for record in records))
+            "garbage line\n" + "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8", newline="\n")
         restarted = make_inquiry_bridge(identity=IDENTITY,
                                   journal_path=self.harness.credentials["resultsPath"])
         restarted._load_journal()
@@ -583,7 +583,7 @@ class BridgeQueueTests(unittest.TestCase):
             self.harness.bridge.note_attention({"kind": "unsupported-native-request", "method": f"interaction/{index}",
                                                 "at": "2026-01-01T00:00:00Z", "outcome": "refused-with-jsonrpc-error"})
         self.assertEqual(self.harness.bridge.attention_report()["requests"], 8)
-        written = json.loads(self.harness.attention_path.read_text())
+        written = json.loads(self.harness.attention_path.read_text(encoding="utf-8"))
         self.assertEqual(written["requests"][-1]["method"], "interaction/9")
         self.assertEqual(written["attemptId"], "attempt-1")
 
@@ -633,7 +633,7 @@ class JournalBarrierTests(unittest.TestCase):
 
     def test_the_mcp_reader_in_a_real_other_process_waits_for_the_barrier(self):
         config_path = self.root / "bridge.json"
-        config_path.write_text(json.dumps(self.config))
+        config_path.write_text(json.dumps(self.config), encoding="utf-8", newline="\n")
         record = self.queued_record("q-cross-process")
         fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         environment = {key: value for key, value in os.environ.items()
@@ -692,7 +692,7 @@ class JournalBarrierTests(unittest.TestCase):
         # After the fault clears the same record commits as one clean line that
         # the session tools can read back.
         self.assertTrue(bridge._journal(record))
-        lines = [line for line in path.read_text().splitlines() if line.strip()]
+        lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         self.assertEqual([json.loads(line)["inquiryId"] for line in lines], ["q-rollback"])
 
     def test_a_crash_torn_tail_is_isolated_by_the_next_append_and_ignored_by_readers(self):
@@ -746,7 +746,7 @@ class FinishToolTests(unittest.TestCase):
         import hashlib
 
         self.journal.parent.mkdir(parents=True, exist_ok=True)
-        with self.journal.open("a") as stream:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps({"version": 1, "inquiryId": inquiry_id, "state": "queued", "question": question,
                                      "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
                                      "askedAt": "2026-01-01T00:00:00Z",
@@ -817,7 +817,7 @@ class FinishToolTests(unittest.TestCase):
                     "answer": {"text": "deploy-ok", "bytes": 10, "truncated": False,
                                "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "root-call",
                                "at": "2026-01-01T00:00:00Z"}, **IDENTITY}
-        with self.journal.open("a") as stream:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps(answered) + "\n")
         refused = self.call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "another"})
         self.assertTrue(refused["isError"])
@@ -840,7 +840,7 @@ class FinishToolTests(unittest.TestCase):
         import hashlib
 
         question = "what is the deployment word?"
-        with self.journal.open("a") as stream:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": "answered", "question": question,
                                      "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
                                      "answer": {"text": "deploy-ok", "bytes": 10, "truncated": False,
@@ -870,7 +870,7 @@ class FinishToolTests(unittest.TestCase):
              "askedAt": "t", **IDENTITY, "answer": {"text": "legacy", "bytes": 6, "truncated": False,
                                                     "via": "x", "toolCallId": "c", "at": "t"}},
         ]
-        with self.journal.open("a") as stream:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write("not json at all\n" + "".join(json.dumps(record) + "\n" for record in records))
         result = self.call("hey_my_buddy_checkpoint", {})
         receipt = verify_inquiry_receipt(result["content"][0]["text"], self.config, "inquiry-checkpoint")
@@ -883,7 +883,7 @@ class FinishToolTests(unittest.TestCase):
         # A finish is not blocked by a foreign "answered" or unversioned record.
         completed = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
         self.assertTrue(completed["isError"], "q-mine still blocks completion")
-        with self.journal.open("a") as stream:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps({"version": 1, "inquiryId": "q-mine", "state": "answered",
                                      "question": question, "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
                                      "askedAt": "t", **IDENTITY,
@@ -906,7 +906,7 @@ class FinishToolTests(unittest.TestCase):
     def test_completed_is_refused_while_a_native_request_is_unresolved(self):
         self.assertEqual(attention_requests(self.config), 0)
         self.attention.write_text(json.dumps({"version": 1, "requests": [
-            {"kind": "unsupported-native-request", "method": "interaction/requestPermission"}]}))
+            {"kind": "unsupported-native-request", "method": "interaction/requestPermission"}]}), encoding="utf-8", newline="\n")
         self.assertEqual(attention_requests(self.config), 1)
         refused = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
         envelope = self.refusal(refused, "hey_my_buddy_finish_turn")
@@ -1146,7 +1146,7 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         context = self.context(timeout=20)
         handle, outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        tree = json.loads((Path(handle.request.private_state.invocation_root) / "finish-bridge.json").read_text())
+        tree = json.loads((Path(handle.request.private_state.invocation_root) / "finish-bridge.json").read_text(encoding="utf-8"))
         self.assertIn("attentionPath", tree)
         control = handle.role_run_control
         self.assertEqual(tree["inquiryJournalPath"], control["inquiry"]["resultsPath"])

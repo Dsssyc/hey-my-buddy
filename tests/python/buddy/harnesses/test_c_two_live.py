@@ -1148,7 +1148,7 @@ class ReadyMaterialTests(unittest.TestCase):
             ctl.write_ready_material(path, descriptor)
             info = os.stat(path)
             self.assertEqual(stat.S_IMODE(info.st_mode), 0o600)
-            text = path.read_text()
+            text = path.read_text(encoding="utf-8")
             self.assertEqual(ctl.LiveEndpointDescriptor.from_payload(json.loads(text)),
                              descriptor)
             with self.assertRaises(OSError):
@@ -1371,7 +1371,7 @@ class LivePeer:
         self.environment = environment
         self.process = subprocess.Popen(
             command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=environment, text=True, cwd=str(self.directory), start_new_session=True)
+            env=environment, text=True, cwd=str(self.directory), start_new_session=True, encoding="utf-8")
         self.group_gone = False
         self.ready_path = self.directory / "live-ready.json"
         self.token_path = self.directory / "live-token"
@@ -1407,7 +1407,7 @@ class LivePeer:
 
     @property
     def token(self) -> str:
-        return self.token_path.read_text()
+        return self.token_path.read_text(encoding="utf-8")
 
     def command(self, payload: dict, *, timeout: float = 15.0) -> dict:
         assert self.process.stdin and self.process.stdout
@@ -1498,7 +1498,7 @@ class LivePeerCase(unittest.TestCase):
     def record(self, name: str, facts: dict) -> None:
         facts = {"name": name, **facts}
         path = self.evidence_directory / f"{name}.json"
-        path.write_text(canonical_json(facts))
+        path.write_text(canonical_json(facts), encoding="utf-8", newline="\n")
         print(f"[c-two-live evidence] {path}: {canonical_json(facts)}")
 
     def spawn(self, *, name: str | None = None, run: RunIdentity | None = None,
@@ -1654,7 +1654,7 @@ class NativeDeadlineTests(LivePeerCase):
             [sys.executable, "-c", PEER_LAUNCHER, str(FIXTURE_PATH), PEER_MODULE_NAME,
              "deadline-client"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, env=peer.environment,
-            cwd=peer.directory, start_new_session=True)
+            cwd=peer.directory, start_new_session=True, encoding="utf-8")
         process.stdin.write(canonical_json({"mode": mode, "stateDir": str(self.root / "state"),
                                            "descriptor": peer.descriptor.to_payload(),
                                            "token": peer.token}) + "\n")
@@ -1832,8 +1832,8 @@ class SubprocessLifecycleTests(LivePeerCase):
         self.assertEqual(stat.S_IMODE(os.stat(peer.ready_path).st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(os.stat(peer.token_path).st_mode), 0o600)
         self.assertEqual(ctl.LiveEndpointDescriptor.from_payload(
-            json.loads(peer.ready_path.read_text())), peer.descriptor)
-        self.assertNotIn(peer.token, peer.ready_path.read_text())
+            json.loads(peer.ready_path.read_text(encoding="utf-8"))), peer.descriptor)
+        self.assertNotIn(peer.token, peer.ready_path.read_text(encoding="utf-8"))
         channel = self.channel(peer)
         reply = self.deliver(peer, channel, inquiry_request())
         self.assertEqual((reply.status, reply.state), ("queued", "queued"))

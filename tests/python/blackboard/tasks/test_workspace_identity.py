@@ -41,7 +41,7 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
     def git(self, path, *args):
         environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
         result = subprocess.run(["git", "-C", str(path), *args], env=environment,
-                                capture_output=True, text=True, timeout=30)
+                                capture_output=True, text=True, timeout=30, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
@@ -53,7 +53,7 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
         self.git(path, "init", "-q")
         self.git(path, "config", "user.name", "Workspace Identity Test")
         self.git(path, "config", "user.email", "identity@example.invalid")
-        (path / "tracked.txt").write_text("base\n")
+        (path / "tracked.txt").write_text("base\n", encoding="utf-8", newline="\n")
         self.git(path, "add", "tracked.txt")
         self.git(path, "commit", "-qm", "base")
         return path

@@ -42,16 +42,16 @@ class VersionInfoTests(unittest.TestCase):
         (package / "protocol").mkdir(parents=True)
         (package / "blackboard/store").mkdir(parents=True)
         (root / "packaging").mkdir()
-        (root / "pyproject.toml").write_text(f'[project]\nname = "fixture"\nversion = "{version}"\n')
-        (package / "protocol/contracts.py").write_text('CONTRACT_VERSION = "6.8.0"\n')
-        (package / "blackboard/store/db.py").write_text('SCHEMA_VERSION = 14\n')
-        (package / "build-info.json").write_text(json.dumps({"sourceCommit": commit}))
+        (root / "pyproject.toml").write_text(f'[project]\nname = "fixture"\nversion = "{version}"\n', encoding="utf-8", newline="\n")
+        (package / "protocol/contracts.py").write_text('CONTRACT_VERSION = "6.8.0"\n', encoding="utf-8", newline="\n")
+        (package / "blackboard/store/db.py").write_text('SCHEMA_VERSION = 14\n', encoding="utf-8", newline="\n")
+        (package / "build-info.json").write_text(json.dumps({"sourceCommit": commit}), encoding="utf-8", newline="\n")
         (root / "packaging/runtime-assets.json").write_text(json.dumps({
             "format": 1, "assets": [{"path": "packaging/runtime-assets.json", "kind": "file"},
                                      {"path": "pyproject.toml", "kind": "file"},
                                      {"path": "src/hey_my_buddy", "kind": "directory"}],
             "resources": {"fixture": "src/hey_my_buddy/build-info.json"},
-        }))
+        }), encoding="utf-8", newline="\n")
 
     def actual(self):
         root = self.actual_root if hasattr(self, "actual_root") else self.source
@@ -63,13 +63,13 @@ class VersionInfoTests(unittest.TestCase):
     def ready(self, *, in_use=False, recorded=True, pin=True):
         python = self.installed / "venv/bin/python"
         python.parent.mkdir(parents=True)
-        python.write_text("# fixture only; never executed\n")
+        python.write_text("# fixture only; never executed\n", encoding="utf-8", newline="\n")
         marker = {"format": 1, "state": "READY", "contentId": self.installed.name,
                   "python": str(python), "resources": {"fixture": str(self.installed / "src/hey_my_buddy/build-info.json")},
                   "privateToken": "do-not-expose", "files": ["do-not-expose"]}
         if recorded:
             marker.update(sourceCommit="installed-ready-commit", installedAt="2026-09-30T01:02:03Z")
-        (self.installed / "READY.json").write_text(json.dumps(marker))
+        (self.installed / "READY.json").write_text(json.dumps(marker), encoding="utf-8", newline="\n")
         if pin:
             self.enterContext(mock.patch.dict(os.environ, {"HMB_RUNTIME": str(self.installed)}))
         if in_use:
@@ -122,11 +122,11 @@ class VersionInfoTests(unittest.TestCase):
         self.assertEqual(info["running"]["installedAt"], "2026-09-30T01:02:03Z")
 
     def test_missing_or_damaged_metadata_stays_unknown_without_git(self):
-        (self.source / "src/hey_my_buddy/build-info.json").write_text("broken json")
-        (self.source / "pyproject.toml").write_text("broken toml")
+        (self.source / "src/hey_my_buddy/build-info.json").write_text("broken json", encoding="utf-8", newline="\n")
+        (self.source / "pyproject.toml").write_text("broken toml", encoding="utf-8", newline="\n")
         self.ready(recorded=False)
-        (self.installed / "src/hey_my_buddy/protocol/contracts.py").write_text("# not recorded\n")
-        (self.installed / "src/hey_my_buddy/blackboard/store/db.py").write_text("# not recorded\n")
+        (self.installed / "src/hey_my_buddy/protocol/contracts.py").write_text("# not recorded\n", encoding="utf-8", newline="\n")
+        (self.installed / "src/hey_my_buddy/blackboard/store/db.py").write_text("# not recorded\n", encoding="utf-8", newline="\n")
         with mock.patch.object(runtime.subprocess, "check_output") as git:
             info = version_info.version_info(self.state)
         git.assert_not_called()
@@ -174,7 +174,7 @@ class VersionInfoTests(unittest.TestCase):
                         json.dumps({"format": 1, "contentId": self.source.name, "runtimeDir": str(self.source)}),
                         json.dumps({"format": 1, "contentId": "c" * 32, "runtimeDir": str(self.installed.parent / ("c" * 32))})):
             with self.subTest(pointer=damaged):
-                pointer.write_text(damaged)
+                pointer.write_text(damaged, encoding="utf-8", newline="\n")
                 try:
                     info = version_info.version_info(self.state)
                 except Exception as error:

@@ -57,7 +57,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
-    configuration = json.loads(Path(args.config).read_text())
+    configuration = json.loads(Path(args.config).read_text(encoding="utf-8"))
     while raw := sys.stdin.buffer.readline(MAX_OUTCOME_BYTES + 16384):
         try:
             message = decode_strict_json(raw)
@@ -65,8 +65,8 @@ def main() -> int:
                 return 1
             response = respond(message, configuration)
             if response is not None:
-                sys.stdout.write(canonical_json(response) + "\n")
-                sys.stdout.flush()
+                sys.stdout.buffer.write((canonical_json(response) + "\n").encode("utf-8"))
+                sys.stdout.buffer.flush()
         except (ValueError, TypeError, KeyError, RecursionError):
             return 1
     return 0

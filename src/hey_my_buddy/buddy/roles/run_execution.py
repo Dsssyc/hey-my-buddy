@@ -383,7 +383,7 @@ def worker_request(control: dict, module):
         raise BoardError("UNAUTHORIZED", "A Lead turn requires its attempt credential file")
     inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
     attention_path = Path(control["directory"]) / "attention.json"
-    task_text = Path(control["taskFile"]).read_text()
+    task_text = Path(control["taskFile"]).read_text(encoding="utf-8")
     from ..harnesses.registry import worker_format
     format = worker_format(control["harness"])
     permission = turn_input["executionWorkspace"].get("access", "write")

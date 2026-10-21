@@ -401,7 +401,7 @@ def _delete_cli_files(store, scope):
         if not safe_file(path):
             return False
         try:
-            document = json.loads(path.read_text())
+            document = json.loads(path.read_text(encoding="utf-8"))
         except (ValueError,UnicodeError):
             return False
         return isinstance(document,dict) and all(document.get(key) == value for key,value in binding.items())

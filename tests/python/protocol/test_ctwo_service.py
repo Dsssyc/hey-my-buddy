@@ -172,7 +172,7 @@ class TestNamedContract(BoardTestCase):
             self.assertEqual(code, 0, health)
             environment = _child_environment(self.directory)
             second = subprocess.run(
-                [sys.executable, "-m", "hey_my_buddy.blackboard.service.daemon"], env=environment, capture_output=True, text=True, timeout=60
+                [sys.executable, "-m", "hey_my_buddy.blackboard.service.daemon"], env=environment, capture_output=True, text=True, timeout=60, encoding="utf-8"
             )
             self.assertEqual(second.returncode, 2)
             self.assertIn("ALREADY_RUNNING", second.stderr)

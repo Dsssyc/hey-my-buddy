@@ -20,7 +20,7 @@ class DeletionFileTests(BoardTestCase):
 
     def file(self,path,document):
         path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_text(json.dumps(document))
+        path.write_text(json.dumps(document), encoding="utf-8", newline="\n")
         return path
 
     def test_private_roots_follow_historical_adapter_bindings_and_leave_links(self):
@@ -47,7 +47,7 @@ class DeletionFileTests(BoardTestCase):
             skipped = deletion._delete_private_roots(board.store,self.scope())
         self.assertTrue(skipped)
         self.assertTrue(root.is_symlink())
-        self.assertEqual(json.loads(user.read_text()),{'user':True})
+        self.assertEqual(json.loads(user.read_text(encoding="utf-8")),{'user':True})
 
     def test_cli_temporary_files_require_exact_embedded_binding(self):
         board = self.board()
@@ -74,7 +74,7 @@ class DeletionFileTests(BoardTestCase):
         skipped = deletion._delete_cli_files(board.store,self.scope())
         self.assertEqual(len(skipped),1)
         self.assertTrue(control.is_symlink())
-        self.assertEqual(json.loads(user.read_text()),{'keep':True})
+        self.assertEqual(json.loads(user.read_text(encoding="utf-8")),{'keep':True})
 
 
 
@@ -110,14 +110,14 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         group = private_dirs.session_group_root(board.directory, run['macroTaskId'])
         outside = self.directory / 'unrelated-session-content'
         outside.mkdir()
-        (outside / 'valuable').write_text('untouched')
+        (outside / 'valuable').write_text('untouched', encoding="utf-8", newline="\n")
         group.parent.mkdir(parents=True)
         group.symlink_to(outside, target_is_directory=True)
         with patch.object(deletion, '_delete_workspaces', return_value=[]):
             result = deletion.delete(board.store, run['macroTaskId'], 1)
         self.assertEqual(result['state'], 'deleted')
         self.assertEqual(result['skipped'][0]['objectKind'], 'session-records')
-        self.assertEqual((outside / 'valuable').read_text(), 'untouched')
+        self.assertEqual((outside / 'valuable').read_text(encoding="utf-8"), 'untouched')
 
     def test_private_root_partial_removal_retries_from_real_files(self):
         board = self.board()
@@ -125,11 +125,11 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         root = private_dirs.micro_task_root(board.directory,'dsh',run['runId'])
         root.mkdir(parents=True)
         first,remaining = root/'first',root/'remaining'
-        first.write_text('first private byte')
-        remaining.write_text('remaining private bytes')
+        first.write_text('first private byte', encoding="utf-8", newline="\n")
+        remaining.write_text('remaining private bytes', encoding="utf-8", newline="\n")
         evidence = board.directory/'attempts'/run['runId']/'evidence'
         evidence.parent.mkdir(parents=True)
-        evidence.write_text('execution evidence')
+        evidence.write_text('execution evidence', encoding="utf-8", newline="\n")
         original = private_dirs.remove_tree
         def interrupted(path,**kwargs):
             if path == root:
@@ -154,13 +154,13 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         first = control_file_path(board.directory,run['runId'],1)
         remaining = control_file_path(board.directory,run['runId'],2)
         first.parent.mkdir()
-        first.write_text('{}')
-        remaining.write_text('{}')
+        first.write_text('{}', encoding="utf-8", newline="\n")
+        remaining.write_text('{}', encoding="utf-8", newline="\n")
         submission = submission_file_path(board.directory,'cli-interruption')
         submission.parent.mkdir()
-        submission.write_text('{}')
+        submission.write_text('{}', encoding="utf-8", newline="\n")
         user = first.parent/'unrelated.g1.json'
-        user.write_text('unrelated control')
+        user.write_text('unrelated control', encoding="utf-8", newline="\n")
         original = Path.unlink
         removed = []
         def interrupted(path,*args,**kwargs):
@@ -182,4 +182,4 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         self.assertFalse(first.exists())
         self.assertFalse(remaining.exists())
         self.assertFalse(submission.exists())
-        self.assertEqual(user.read_text(),'unrelated control')
+        self.assertEqual(user.read_text(encoding="utf-8"),'unrelated control')

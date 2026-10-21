@@ -199,7 +199,7 @@ def inquiry_fallback(path: Path, attempt_id: str) -> Path | None:
     try:
         if path.stat().st_size > 8192:
             return None
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
         socket = value.get('socketPath') if isinstance(value, dict) else None
     except (OSError, ValueError):
         return None

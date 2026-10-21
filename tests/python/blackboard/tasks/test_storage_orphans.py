@@ -27,8 +27,8 @@ class StorageOrphanTests(WorkflowTestCase):
         builder.git(cls.source_template, 'init', '-q')
         builder.git(cls.source_template, 'config', 'user.name', 'Storage test')
         builder.git(cls.source_template, 'config', 'user.email', 'storage@example.invalid')
-        (cls.source_template / 'tracked.txt').write_text('input\n')
-        (cls.source_template / '.gitignore').write_text('ignored/\n')
+        (cls.source_template / 'tracked.txt').write_text('input\n', encoding="utf-8", newline="\n")
+        (cls.source_template / '.gitignore').write_text('ignored/\n', encoding="utf-8", newline="\n")
         builder.git(cls.source_template, 'add', '.')
         builder.git(cls.source_template, 'commit', '-qm', 'private input')
 
@@ -43,7 +43,7 @@ class StorageOrphanTests(WorkflowTestCase):
 
     def git(self, root, *args):
         env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
-        result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True, env=env, timeout=30)
+        result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True, env=env, timeout=30, encoding="utf-8")
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.strip()
 
@@ -79,7 +79,7 @@ class StorageOrphanTests(WorkflowTestCase):
         delivered = self.submit(board, request_id='integration-source', cwd=str(self.repo), kind='existing')
         self.register(board)
         claim = self.claim(board, run_id=delivered['runId'])
-        (self.repo / 'tracked.txt').write_text('sealed integration output\n')
+        (self.repo / 'tracked.txt').write_text('sealed integration output\n', encoding="utf-8", newline="\n")
         self.finish_turn(board, claim)
         view = board.call('workflow_get', {'runId': delivered['runId']})
         with board.store.db.read() as connection:
@@ -93,7 +93,7 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertEqual(accepted['integration']['state'], 'verified')
         self.assertEqual(accepted['integration']['target']['path'], str(checkout))
         self.assertEqual(self.git(checkout, 'rev-parse', 'HEAD'), manifest['inputCommit'])
-        self.assertEqual((checkout / 'tracked.txt').read_text(), 'input\n')
+        self.assertEqual((checkout / 'tracked.txt').read_text(encoding="utf-8"), 'input\n')
         return accepted
 
     def test_public_integration_before_inventory_protects_unchanged_target(self):
@@ -230,7 +230,7 @@ class StorageOrphanTests(WorkflowTestCase):
         parent = checkout.parent
         outputs = parent / 'outputs'
         outputs.mkdir()
-        (outputs / 'kept.txt').write_text('retained output')
+        (outputs / 'kept.txt').write_text('retained output', encoding="utf-8", newline="\n")
         refs = self.git(self.repo, 'for-each-ref', '--format=%(refname):%(objectname)',
                         'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/')
         records = {name: (parent / name).read_bytes() for name in ('manifest.json', 'input.json', 'request.json')}
@@ -238,8 +238,8 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertFalse(checkout.exists())
         self.assertEqual(len(result['removed']), 1)
         self.assertEqual(self.apply(planned), result)
-        self.assertEqual((outputs / 'kept.txt').read_text(), 'retained output')
-        self.assertEqual((self.repo / 'tracked.txt').read_text(), 'input\n')
+        self.assertEqual((outputs / 'kept.txt').read_text(encoding="utf-8"), 'retained output')
+        self.assertEqual((self.repo / 'tracked.txt').read_text(encoding="utf-8"), 'input\n')
         self.assertEqual(self.git(self.repo, 'for-each-ref', '--format=%(refname):%(objectname)',
                                  'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/'), refs)
         self.assertEqual({name: (parent / name).read_bytes() for name in records}, records)
@@ -401,14 +401,14 @@ class StorageOrphanTests(WorkflowTestCase):
 
     def test_apply_refuses_new_unsealed_tracked_and_untracked_content(self):
         _, checkout, planned = self.orphan()
-        (checkout / 'tracked.txt').write_text('changed\n')
-        (checkout / 'new.txt').write_text('new content\n')
+        (checkout / 'tracked.txt').write_text('changed\n', encoding="utf-8", newline="\n")
+        (checkout / 'new.txt').write_text('new content\n', encoding="utf-8", newline="\n")
         self.assert_retained(checkout, planned)
 
     def test_ignored_new_content_blocks_orphan_inspection(self):
         _, checkout, _ = self.orphan()
         (checkout / 'ignored').mkdir()
-        (checkout / 'ignored' / 'cache').write_text('unsealed ignored contents')
+        (checkout / 'ignored' / 'cache').write_text('unsealed ignored contents', encoding="utf-8", newline="\n")
         row = next(row for row in storage.inspect(self.board_instance.store)['candidates'] if row['path'] == str(checkout))
         self.assertFalse(row['eligible'])
         self.assertIn('unsealed-changes', row['reasons'])
@@ -429,7 +429,7 @@ class StorageOrphanTests(WorkflowTestCase):
         _, checkout, planned = self.orphan()
         checkout.rename(checkout.with_name('preserved-checkout'))
         checkout.mkdir()
-        (checkout / 'tracked.txt').write_text('replacement')
+        (checkout / 'tracked.txt').write_text('replacement', encoding="utf-8", newline="\n")
         self.assert_retained(checkout, planned)
 
     def test_apply_refuses_symlink_replacement(self):
@@ -443,13 +443,13 @@ class StorageOrphanTests(WorkflowTestCase):
         manifest, checkout, planned = self.orphan()
         manifest['checkoutRoot'] = str(self.repo)
         manifest['manifestSha256'] = workspace._sha(workspace._json({k: v for k, v in manifest.items() if k != 'manifestSha256'}))
-        (checkout.parent / 'manifest.json').write_text(json.dumps(manifest))
+        (checkout.parent / 'manifest.json').write_text(json.dumps(manifest), encoding="utf-8", newline="\n")
         self.assert_retained(checkout, planned)
 
     def test_unknown_directories_remain_blocked_candidates(self):
         unknown = self.directory / 'workspaces' / 'unknown-allocation'
         (unknown / 'checkout').mkdir(parents=True)
-        (unknown / 'checkout' / 'valuable.txt').write_text('retain')
+        (unknown / 'checkout' / 'valuable.txt').write_text('retain', encoding="utf-8", newline="\n")
         other = self.directory / 'workspaces' / 'unknown-directory'
         other.mkdir()
         planned = self.board_instance.call('storage_plan', {})
@@ -461,7 +461,7 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertIn('checkout-missing', by_path[str(other)]['reasons'])
         self.assertTrue(all(not row['eligible'] for row in rows))
         self.apply(planned)
-        self.assertEqual((unknown / 'checkout' / 'valuable.txt').read_text(), 'retain')
+        self.assertEqual((unknown / 'checkout' / 'valuable.txt').read_text(encoding="utf-8"), 'retain')
         self.assertTrue(other.is_dir())
 
     def test_fixed_refs_must_remain_direct_exact_commit_objects(self):
@@ -475,7 +475,7 @@ class StorageOrphanTests(WorkflowTestCase):
         (root / 'empty').mkdir(parents=True)
         request_only = root / 'request-only'
         request_only.mkdir()
-        (request_only / 'request.json').write_text(json.dumps({'version': 1, 'requestId': 'pending'}))
+        (request_only / 'request.json').write_text(json.dumps({'version': 1, 'requestId': 'pending'}), encoding="utf-8", newline="\n")
         host = self.submit(self.board_instance, request_id='host-owned', cwd=str(self.repo), kind='existing')
         self.assertEqual(host['workspace']['kind'], 'existing')
         with patch.object(storage, '_workspace_reference_rows', wraps=storage._workspace_reference_rows) as scan:
@@ -489,12 +489,12 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertGreater(by_path[str(request_only)]['bytes'],0)
         self.assertTrue(request_only.is_dir())
         self.assertTrue((root / 'empty').is_dir())
-        self.assertEqual((self.repo / 'tracked.txt').read_text(), 'input\n')
+        self.assertEqual((self.repo / 'tracked.txt').read_text(encoding="utf-8"), 'input\n')
 
     def test_known_allocation_with_rejected_ownership_is_never_an_orphan(self):
         submitted = self.submit(self.board_instance, request_id='known', cwd=str(self.repo), kind='worktree')
         checkout = Path(submitted['workspace']['path'])
-        manifest = json.loads((checkout.parent / 'manifest.json').read_text())
+        manifest = json.loads((checkout.parent / 'manifest.json').read_text(encoding="utf-8"))
         before = self.board_instance.call('storage_plan', {})
         row = next(row for row in before['candidates'] if row['path'] == str(checkout))
         self.assertFalse(row.get('orphan', False))
@@ -513,7 +513,7 @@ class StorageOrphanTests(WorkflowTestCase):
                                (json.dumps(current), submitted['runId']))
         changed = dict(manifest, access='read')
         changed['manifestSha256'] = workspace._sha(workspace._json({k: v for k, v in changed.items() if k != 'manifestSha256'}))
-        (checkout.parent / 'manifest.json').write_text(json.dumps(changed))
+        (checkout.parent / 'manifest.json').write_text(json.dumps(changed), encoding="utf-8", newline="\n")
         self.assertIsNone(workspace.resolve_allocation(self.directory, current, [manifest]))
         unproven = self.board_instance.call('storage_plan', {})
         self.assertFalse(any(row.get('orphan') and row['path'] == str(checkout) for row in unproven['candidates']))
@@ -521,7 +521,7 @@ class StorageOrphanTests(WorkflowTestCase):
 
     def test_planning_streams_rows_and_parses_each_field_once_for_multiple_orphans(self):
         first, checkout, _ = self.orphan()
-        request = json.loads((checkout.parent / 'request.json').read_text())
+        request = json.loads((checkout.parent / 'request.json').read_text(encoding="utf-8"))
         second = workspace.prepare(self.directory, 'second-orphan', request['intent'])
         body = json.dumps({'note': 'unique retained unrelated structured evidence'})
         with self.board_instance.store.db.write() as connection:
@@ -553,15 +553,15 @@ class StorageOrphanTests(WorkflowTestCase):
     def test_directory_identity_is_bound_only_to_original_request(self):
         _, checkout, planned = self.orphan()
         request_path = checkout.parent / 'request.json'
-        original = json.loads(request_path.read_text())
+        original = json.loads(request_path.read_text(encoding="utf-8"))
         other = workspace.prepare(self.directory, 'other-real-allocation', original['intent'])
         other_checkout = Path(other['checkoutRoot'])
         # Both allocations are genuine, with valid manifests, pinned inputs,
         # direct refs and Git locks. Only the request-derived directory binding
         # is broken by giving the second allocation the first original request.
         request_path_other = other_checkout.parent / 'request.json'
-        request_path_other.write_text(json.dumps(original))
-        self.assertEqual(json.loads(request_path_other.read_text()), original)
+        request_path_other.write_text(json.dumps(original), encoding="utf-8", newline="\n")
+        self.assertEqual(json.loads(request_path_other.read_text(encoding="utf-8")), original)
         workspace._validate_manifest(other)
         proof = workspace.cleanup_inspect(self.directory, other)
         self.assertEqual(proof['reasons'], [])
@@ -608,9 +608,9 @@ class StorageOrphanTests(WorkflowTestCase):
             calls.append((fresh['path'], kwargs.get('git_proof', True)))
             if kwargs.get('git_proof', True):
                 path = checkout.parent / 'request.json'
-                changed = json.loads(path.read_text())
+                changed = json.loads(path.read_text(encoding="utf-8"))
                 changed['requestId'] = 'different-original-request'
-                path.write_text(json.dumps(changed))
+                path.write_text(json.dumps(changed), encoding="utf-8", newline="\n")
             return fresh
         with patch.object(storage, '_orphan_workspace', side_effect=change_after_proof):
             result = self.assert_retained(checkout, planned)
@@ -620,7 +620,7 @@ class StorageOrphanTests(WorkflowTestCase):
     def test_raw_request_reference_protects_only_its_orphan_during_plan_and_apply(self):
         request_id = 'raw-token-request'
         manifest, checkout, _ = self.orphan(request_id)
-        request = json.loads((checkout.parent / 'request.json').read_text())
+        request = json.loads((checkout.parent / 'request.json').read_text(encoding="utf-8"))
         self.assertEqual(request['requestId'], request_id)
         control = workspace.prepare(self.directory, 'raw-token-unreferenced-control', request['intent'])
         control_checkout = Path(control['checkoutRoot'])

@@ -38,23 +38,23 @@ class InstallWithoutUpgradeTests(BoardTestCase):
         def copy_with_patch(source: Path, destination: Path) -> None:
             original_copy(source, destination)
             project = destination / "pyproject.toml"
-            software_version = tomllib.loads(project.read_text())["project"]["version"]
+            software_version = tomllib.loads(project.read_text(encoding="utf-8"))["project"]["version"]
             synthetic_version = f'{contract_version.rsplit(".", 1)[0]}.{patch_number}'
-            project_text = project.read_text()
+            project_text = project.read_text(encoding="utf-8")
             old_project = f'version = "{software_version}"'
             self.assertEqual(project_text.count(old_project), 1)
-            project.write_text(project_text.replace(old_project, f'version = "{synthetic_version}"', 1))
+            project.write_text(project_text.replace(old_project, f'version = "{synthetic_version}"', 1), encoding="utf-8", newline="\n")
             lock = destination / "uv.lock"
-            lock_text = lock.read_text()
+            lock_text = lock.read_text(encoding="utf-8")
             old_package = f'name = "hey-my-buddy"\nversion = "{software_version}"'
             self.assertEqual(lock_text.count(old_package), 1)
             lock.write_text(lock_text.replace(old_package,
-                                              f'name = "hey-my-buddy"\nversion = "{synthetic_version}"', 1))
+                                              f'name = "hey-my-buddy"\nversion = "{synthetic_version}"', 1), encoding="utf-8", newline="\n")
             contract = destination / "src/hey_my_buddy/protocol/contracts.py"
-            text = contract.read_text()
+            text = contract.read_text(encoding="utf-8")
             original = f'CONTRACT_VERSION = "{CONTRACT_VERSION}"'
             self.assertIn(original, text)
-            contract.write_text(text.replace(original, f'CONTRACT_VERSION = "{contract_version}"', 1))
+            contract.write_text(text.replace(original, f'CONTRACT_VERSION = "{contract_version}"', 1), encoding="utf-8", newline="\n")
 
         with mock.patch.object(runtime, "_copy_assets", side_effect=copy_with_patch):
             return cutover_fixture.HostCutoverTests.private_runtime(self, generation)
@@ -258,7 +258,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             run_id, release, before = self.command("contract-busy")
             head = self.event_head()
             self.assertIn(f'CONTRACT_VERSION = "{target_contract}"',
-                          (second / "src/hey_my_buddy/protocol/contracts.py").read_text())
+                          (second / "src/hey_my_buddy/protocol/contracts.py").read_text(encoding="utf-8"))
             with mock.patch.object(upgrade, "CONTRACT_VERSION", target_contract), \
                  mock.patch.object(upgrade.runtime, "materialize", side_effect=AssertionError("materialized")):
                 with self.assertRaises(BoardError) as caught:
@@ -282,7 +282,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
             with mock.patch.object(upgrade, "verify_started", side_effect=KeyboardInterrupt):
                 with self.assertRaises(KeyboardInterrupt):
                     upgrade.upgrade({})
-            journal = json.loads((self.directory / "upgrade.json").read_text())
+            journal = json.loads((self.directory / "upgrade.json").read_text(encoding="utf-8"))
             self.assertFalse(journal["contractChanged"])
             self.assertEqual(journal["before"]["schema"], SCHEMA_VERSION)
             self.assertNotIn("backup", journal)
@@ -373,5 +373,5 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
             for journal in self.directory.glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
-                for native in json.loads(journal.read_text())["identities"]:
+                for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
                     kill_verified_process_group(native)

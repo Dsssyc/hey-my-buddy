@@ -592,7 +592,7 @@ class RunnerReceiptTests(unittest.TestCase):
         evidence = receipt["toolEvidence"]
         self.assertEqual((evidence["toolCalls"], len(evidence["events"])), (2, 3))
         self.assertFalse(evidence["streamComplete"])
-        self.assertTrue(json.loads((self.root / "fixture.json").read_text())["interrupted"],
+        self.assertTrue(json.loads((self.root / "fixture.json").read_text(encoding="utf-8"))["interrupted"],
                         "the N+1 call must be interrupted through the native control request")
 
     def test_premature_tool_output_is_collected_before_the_boundary_rejection(self):

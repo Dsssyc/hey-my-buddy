@@ -27,7 +27,7 @@ from hey_my_buddy.protocol import rpc_config, transport
 def cli_health(selected, environment):
     command = [sys.executable, '-m', 'hey_my_buddy.cli.main', 'health']
     child = subprocess.Popen(command, env=dict(environment, HMB_STATE_DIR=str(selected)),
-                             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
     stdout, stderr = child.communicate(timeout=30)
     return child, {'pid': child.pid, 'command': command, 'waitExit': child.returncode,
                    'stdout': stdout, 'stderr': stderr}
@@ -63,7 +63,7 @@ def run_path_case(name, work):
                 assert endpoint['pid'] == child.pid
                 return endpoint, reply
             if child.poll() is not None or time.monotonic() > deadline:
-                raise AssertionError('owned daemon not ready: ' + (work / 'daemon.log').read_text())
+                raise AssertionError('owned daemon not ready: ' + (work / 'daemon.log').read_text(encoding="utf-8"))
             time.sleep(.05)
 
     try:
@@ -121,7 +121,7 @@ def run_path_case(name, work):
         failures = cleanup_owned_case(state, modes, handles, evidence)
         log.close()
         evidence['cleanupFailures'] = failures
-        (work / 'evidence.json').write_text(json.dumps(evidence, indent=2))
+        (work / 'evidence.json').write_text(json.dumps(evidence, indent=2), encoding="utf-8", newline="\n")
         if failures and 'failure' not in evidence:
             raise AssertionError('owned cleanup failed: ' + json.dumps(failures))
 
@@ -246,7 +246,7 @@ class PathStateTests(unittest.TestCase):
         self.assertEqual(caught.exception.message, 'IPC path contains a linked or unsafe component')
         self.assertEqual(caught.exception.details.get('path'), str(self.state / 'ipc'))
         child, receipt = cli_health(self.state, _child_environment(self.work))
-        (self.work / 'cli-process.json').write_text(json.dumps(receipt, indent=2))
+        (self.work / 'cli-process.json').write_text(json.dumps(receipt, indent=2), encoding="utf-8", newline="\n")
         self.assertEqual(child.returncode, 1, receipt)
         self.assertEqual(json.loads(receipt['stdout'])['error'], caught.exception.payload())
 
@@ -256,16 +256,16 @@ class RealPathStateTests(unittest.TestCase):
         work = Path(tempfile.mkdtemp(prefix='path-real-')).resolve()
         environment = _child_environment(work)
         sentinel = work / 'native-forbidden'
-        sentinel.write_text("#!/bin/sh\nprintf unexpected >> '" + str(work / 'native-invoked') + "'\nexit 99\n")
+        sentinel.write_text("#!/bin/sh\nprintf unexpected >> '" + str(work / 'native-invoked') + "'\nexit 99\n", encoding="utf-8", newline="\n")
         sentinel.chmod(0o700)
         environment.update({'HMB_' + name + '_CLI': str(sentinel) for name in ('CLAUDE', 'CODEX', 'DSH', 'ZCODE')})
         environment.update(HMB_MAX_CONCURRENT='1', HMB_CHECKS_TMPDIR=os.environ['HMB_CHECKS_TMPDIR'])
         command = [sys.executable, str(Path(__file__).resolve()), '--case', name, str(work)]
-        child = subprocess.Popen(command, env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        child = subprocess.Popen(command, env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, encoding="utf-8")
         stdout, stderr = child.communicate(timeout=100)
         (work / 'case-process.json').write_text(json.dumps({'pid': child.pid, 'command': command,
-                                                          'waitExit': child.returncode}, indent=2))
-        (work / 'case.log').write_text(stdout + stderr)
+                                                          'waitExit': child.returncode}, indent=2), encoding="utf-8", newline="\n")
+        (work / 'case.log').write_text(stdout + stderr, encoding="utf-8", newline="\n")
         self.assertEqual(child.returncode, 0, f'{name}: {work}\n{stdout}\n{stderr}')
 
     def test_path01_linked_cli_health_and_canonical_native_root(self):
@@ -289,7 +289,7 @@ class ReadonlyPathStateTests(unittest.TestCase):
             catalog = write_catalog_fixture(fixture.directory)
             sentinel = fixture.directory / 'native-forbidden'
             invoked = fixture.directory / 'native-invoked'
-            sentinel.write_text("#!/bin/sh\nprintf unexpected >> '" + str(invoked) + "'\nexit 99\n")
+            sentinel.write_text("#!/bin/sh\nprintf unexpected >> '" + str(invoked) + "'\nexit 99\n", encoding="utf-8", newline="\n")
             sentinel.chmod(0o700)
             original_environment = probe_fixture.private_environment
 
@@ -304,7 +304,7 @@ class ReadonlyPathStateTests(unittest.TestCase):
                 endpoint, received = fixture.native_ping_peer()
             # Establish the client role before observing attach-only I/O.
             self.assertEqual(transport.call_service('ping', state_dir=fixture.directory), {'token': endpoint['token']})
-            received_before = len(received.read_text().splitlines())
+            received_before = len(received.read_text(encoding="utf-8").splitlines())
             fixture.directory.chmod(0o500)
             # The peer appends to its trace file through its existing file
             # permissions. That write is evidence of real RPC, separate from
@@ -315,7 +315,7 @@ class ReadonlyPathStateTests(unittest.TestCase):
             recorder.assert_no_mutation()
             self.assertEqual({key: value for key, value in snapshot(fixture.directory).items() if key != received.name}, before)
             self.assertEqual(stat.S_IMODE(fixture.directory.stat().st_mode), 0o500)
-            self.assertEqual(len(received.read_text().splitlines()), received_before + 2)
+            self.assertEqual(len(received.read_text(encoding="utf-8").splitlines()), received_before + 2)
             self.assertFalse(invoked.exists())
             evidence.update(pid=endpoint['pid'], nativeRoot=str(transport.cc.local_endpoint_context().root),
                             mode=0o500, snapshotExceptPeerTracePreserved=True)
@@ -326,7 +326,7 @@ class ReadonlyPathStateTests(unittest.TestCase):
             clean = fixture.doCleanups()
             evidence['cleanupCompleted'] = clean
             evidence['peerReceipt'] = getattr(fixture, 'peer_receipt', {})
-            Path(os.environ['HMB_CHECKS_TMPDIR'], 'readonly-path-evidence.json').write_text(json.dumps(evidence, indent=2))
+            Path(os.environ['HMB_CHECKS_TMPDIR'], 'readonly-path-evidence.json').write_text(json.dumps(evidence, indent=2), encoding="utf-8", newline="\n")
             self.assertTrue(clean, 'native peer cleanup failed')
             self.assertEqual(evidence['peerReceipt'].get('waitExit'), 0)
 

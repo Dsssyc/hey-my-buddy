@@ -63,7 +63,7 @@ class StorageTests(BoardTestCase):
         root.mkdir()
         current, previous = 'a' * 32, 'b' * 32
         (board.directory / 'runtime-retention.json').write_text(json.dumps({
-            'current': current, 'previous': previous}))
+            'current': current, 'previous': previous}), encoding="utf-8", newline="\n")
         names = [current, previous, 'c' * 32, 'd' * 32, '0' * 32, '6' * 32,
                  '.' + 'e' * 32 + '.build-abandoned', '.' + 'f' * 32 + '.build-recent',
                  '.' + current + '.build-retained']
@@ -103,10 +103,10 @@ class StorageTests(BoardTestCase):
         root = Path(os.environ['HMB_RUNTIME_ROOT'])
         candidate = root / ('c' * 32)
         candidate.mkdir(parents=True)
-        (candidate / 'payload').write_text('incomplete installation')
+        (candidate / 'payload').write_text('incomplete installation', encoding="utf-8", newline="\n")
         self._age_runtime_entry(candidate)
         (board.directory / 'runtime-retention.json').write_text(json.dumps({
-            'current': 'a' * 32, 'previous': 'b' * 32}))
+            'current': 'a' * 32, 'previous': 'b' * 32}), encoding="utf-8", newline="\n")
         real_remove = private_dirs.remove_tree
         observed = []
         def remove(tomb):
@@ -133,10 +133,10 @@ class StorageTests(BoardTestCase):
         root = Path(os.environ['HMB_RUNTIME_ROOT'])
         build = root / '.build-abandoned'
         build.mkdir(parents=True)
-        (build / 'payload').write_text('unfinished build')
+        (build / 'payload').write_text('unfinished build', encoding="utf-8", newline="\n")
         self._age_runtime_entry(build)
         (board.directory / 'runtime-retention.json').write_text(json.dumps({
-            'current': 'a' * 32, 'previous': 'b' * 32}))
+            'current': 'a' * 32, 'previous': 'b' * 32}), encoding="utf-8", newline="\n")
         lock_path = root / storage.INSTALL_LOCK
         lock_path.touch(mode=0o600)
         self._age_runtime_entry(lock_path)
@@ -160,9 +160,9 @@ class StorageTests(BoardTestCase):
         root.mkdir()
         candidate = root / 'expired-runtime'
         candidate.mkdir()
-        (candidate / 'READY.json').write_text('{}')
-        (candidate / 'payload').write_text('runtime payload')
-        (board.directory / 'runtime-retention.json').write_text(json.dumps({'current': 'current', 'previous': 'previous'}))
+        (candidate / 'READY.json').write_text('{}', encoding="utf-8", newline="\n")
+        (candidate / 'payload').write_text('runtime payload', encoding="utf-8", newline="\n")
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({'current': 'current', 'previous': 'previous'}), encoding="utf-8", newline="\n")
         patches = (mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)),
                    mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', return_value=[]),
                    mock.patch('hey_my_buddy.blackboard.tasks.storage.is_ready', return_value=True))
@@ -192,8 +192,8 @@ class StorageTests(BoardTestCase):
         shared = self.directory / 'shared-default-runtime'
         previous = shared / 'retained-by-another-state'
         previous.mkdir(parents=True)
-        (previous / 'READY.json').write_text('{}')
-        (board.directory / 'runtime-retention.json').write_text(json.dumps({'current': 'test-current', 'previous': 'test-previous'}))
+        (previous / 'READY.json').write_text('{}', encoding="utf-8", newline="\n")
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({'current': 'test-current', 'previous': 'test-previous'}), encoding="utf-8", newline="\n")
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(shared)}), \
              mock.patch('hey_my_buddy.blackboard.tasks.storage.DEFAULT_RUNTIME_ROOT', shared), \
              mock.patch('hey_my_buddy.home.default_state_dir', return_value=self.directory / 'daily-state'), \
@@ -266,7 +266,7 @@ class StorageTests(BoardTestCase):
                 board.call('storage_apply', {'planId':second['planId'], 'commandId':'x', 'confirm':True})
             self.assertEqual(caught.exception.code, 'CONFLICT')
             path = board.directory / 'storage' / (second['planId'] + '.json')
-            data = json.loads(path.read_text());data['expiresAt']='2000-01-01T00:00:00+00:00';path.write_text(json.dumps(data))
+            data = json.loads(path.read_text(encoding="utf-8"));data['expiresAt']='2000-01-01T00:00:00+00:00';path.write_text(json.dumps(data), encoding="utf-8", newline="\n")
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', {'planId':second['planId'], 'commandId':'expired', 'confirm':True})
             self.assertEqual(caught.exception.code, 'PLAN_EXPIRED')
@@ -280,8 +280,8 @@ class StorageTests(BoardTestCase):
             (target/'READY.json').write_text(json.dumps({
                 'state': 'READY', 'contentId': name, 'format': 0,
                 'runtimeRoot': str(root), 'python': str(target / 'venv/bin/python'),
-            }))
-        (board.directory/'runtime-retention.json').write_text(json.dumps({'current':'current','previous':'previous'}))
+            }), encoding="utf-8", newline="\n")
+        (board.directory/'runtime-retention.json').write_text(json.dumps({'current':'current','previous':'previous'}), encoding="utf-8", newline="\n")
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)), mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', return_value=['runtime-in-use']):
             planned=board.call('storage_plan', {})
         rows=[r for r in planned['candidates'] if r['category']=='runtimes']
@@ -298,7 +298,7 @@ class StorageTests(BoardTestCase):
         (older / 'READY.json').write_text(json.dumps({
             'state': 'READY', 'contentId': older.name, 'format': 0,
             'runtimeRoot': str(root), 'python': str(older / 'venv/bin/python'),
-        }))
+        }), encoding="utf-8", newline="\n")
         (older / 'payload').write_bytes(b'old runtime')
         expected_bytes = sum(path.stat().st_size for path in older.iterdir())
         active, unknown = 'b' * 32, 'c' * 32
@@ -309,8 +309,8 @@ class StorageTests(BoardTestCase):
                 (candidate / 'READY.json').write_text(json.dumps({
                     'state': 'READY', 'contentId': name, 'format': 0,
                     'runtimeRoot': str(root), 'python': str(candidate / 'venv/bin/python'),
-                }))
-        (root / 'install.lock').write_text('lock')
+                }), encoding="utf-8", newline="\n")
+        (root / 'install.lock').write_text('lock', encoding="utf-8", newline="\n")
         (root / 'linked').symlink_to(older, target_is_directory=True)
         corrupt = root / 'corrupt-marker'
         corrupt.mkdir()
@@ -322,10 +322,10 @@ class StorageTests(BoardTestCase):
         (false_identity / 'READY.json').write_text(json.dumps({
             'state': 'READY', 'contentId': false_identity.name, 'format': 0,
             'runtimeRoot': str(root), 'python': str(self.directory / 'outside-python'),
-        }))
+        }), encoding="utf-8", newline="\n")
         (board.directory / 'runtime-retention.json').write_text(json.dumps({
             'current': 'current', 'previous': 'previous',
-        }))
+        }), encoding="utf-8", newline="\n")
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)), \
              mock.patch('hey_my_buddy.blackboard.tasks.storage.runtime_usage', side_effect=lambda path, *_: (
                  ['runtime-in-use'] if path.name == active else
@@ -390,7 +390,7 @@ class StorageTests(BoardTestCase):
         state = board.directory.resolve()
         for adapter in ('codex', 'claude', 'dsh', 'zcode'):
             root = private_dirs.ensure_private_dir(private_dirs.native_root(state, adapter, 'unknown-micro-task'))
-            (root / 'session.json').write_text('retained')
+            (root / 'session.json').write_text('retained', encoding="utf-8", newline="\n")
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
             micro_tasks = [row for row in planned['candidates'] if row['category'] == 'harnesses']
@@ -401,7 +401,7 @@ class StorageTests(BoardTestCase):
     def test_storage_lock_plan_receipt_and_save_reject_links_without_touching_targets(self):
         board = self.board()
         outside = self.directory / 'outside-record'
-        outside.write_text('{"sentinel":"untouched"}')
+        outside.write_text('{"sentinel":"untouched"}', encoding="utf-8", newline="\n")
         storage_root = board.directory / 'storage'
         storage_root.mkdir()
         (storage_root / '.lock').symlink_to(outside)
@@ -433,7 +433,7 @@ class StorageTests(BoardTestCase):
         with self.assertRaises(BoardError) as caught:
             storage._save_receipt(receipt, {'planId': planned['planId']})
         self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
-        self.assertEqual(outside.read_text(), '{"sentinel":"untouched"}')
+        self.assertEqual(outside.read_text(encoding="utf-8"), '{"sentinel":"untouched"}')
 
     def test_pending_journal_must_rebind_eligible_plan_and_fixed_tomb(self):
         board = self.board()
@@ -441,7 +441,7 @@ class StorageTests(BoardTestCase):
         outside = self.directory / 'outside-delete-target'
         outside.mkdir()
         sentinel = outside / 'sentinel'
-        sentinel.write_text('preserved')
+        sentinel.write_text('preserved', encoding="utf-8", newline="\n")
         params = {'planId': planned['planId'], 'commandId': 'forged-pending', 'confirm': True}
         receipt = board.directory / 'storage' / ('receipt-' + hashlib.sha256(b'forged-pending').hexdigest() + '.json')
         identity = candidate.lstat()
@@ -454,24 +454,24 @@ class StorageTests(BoardTestCase):
                           {**valid, 'fingerprint': 'forged'},
                           {**valid, 'id': 'forged'},
                           {**valid, 'bytes': row['bytes'] + 1}):
-            receipt.write_text(json.dumps({**base, 'pending': corrupted}))
+            receipt.write_text(json.dumps({**base, 'pending': corrupted}), encoding="utf-8", newline="\n")
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', params)
             self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
             self.assertTrue(candidate.exists())
-            self.assertEqual(sentinel.read_text(), 'preserved')
-        receipt.write_text(json.dumps({**base, 'pending': valid}))
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), 'preserved')
+        receipt.write_text(json.dumps({**base, 'pending': valid}), encoding="utf-8", newline="\n")
         plan_path = board.directory / 'storage' / (planned['planId'] + '.json')
         for update in ({'eligible': False}, {'category': 'durable'}, {'category': 'harnesses'}):
             altered = json.loads(json.dumps(planned))
             next(item for item in altered['candidates'] if item['id'] == row['id']).update(update)
-            plan_path.write_text(json.dumps(altered))
+            plan_path.write_text(json.dumps(altered), encoding="utf-8", newline="\n")
             with self.assertRaises(BoardError) as caught:
                 board.call('storage_apply', params)
             self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
             self.assertTrue(candidate.exists())
-        plan_path.write_text(json.dumps(planned))
-        receipt.write_text(json.dumps({**base, 'planId': 'stg-' + 'f' * 32, 'pending': valid}))
+        plan_path.write_text(json.dumps(planned), encoding="utf-8", newline="\n")
+        receipt.write_text(json.dumps({**base, 'planId': 'stg-' + 'f' * 32, 'pending': valid}), encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as caught:
             board.call('storage_apply', params)
         self.assertEqual(caught.exception.code, 'CONFLICT')
@@ -490,13 +490,13 @@ class StorageTests(BoardTestCase):
                 if not complete:
                     value['pending'] = {**row, 'tomb': str(self.directory / 'external-delete')}
                 encoded = json.dumps(value)
-                outside.write_text(encoded)
+                outside.write_text(encoded, encoding="utf-8", newline="\n")
                 with mock.patch('hey_my_buddy.blackboard.tasks.storage.json.load', side_effect=AssertionError('External journal was read')):
                     with self.assertRaises(BoardError) as caught:
                         board.call('storage_apply', {'planId': planned['planId'], 'commandId': 'linked-journal', 'confirm': True})
                 self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
                 self.assertTrue(candidate.exists())
-                self.assertEqual(outside.read_text(), encoded)
+                self.assertEqual(outside.read_text(encoding="utf-8"), encoded)
 
     def test_pending_tomb_cannot_redirect_deletion_after_live_name_is_absent(self):
         board = self.board()
@@ -505,15 +505,15 @@ class StorageTests(BoardTestCase):
         outside = self.directory / 'external-tomb-target'
         outside.mkdir()
         sentinel = outside / 'sentinel'
-        sentinel.write_text('keep outside')
+        sentinel.write_text('keep outside', encoding="utf-8", newline="\n")
         receipt = board.directory / 'storage' / ('receipt-' + hashlib.sha256(b'outside-tomb').hexdigest() + '.json')
         receipt.write_text(json.dumps({'planId': planned['planId'], 'complete': False,
             'removedBytes': 0, 'removed': [], 'skipped': [],
-            'pending': {key: row[key] for key in ('id', 'path', 'fingerprint', 'bytes')} | {'tomb': str(outside)}}))
+            'pending': {key: row[key] for key in ('id', 'path', 'fingerprint', 'bytes')} | {'tomb': str(outside)}}), encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as caught:
             board.call('storage_apply', {'planId': planned['planId'], 'commandId': 'outside-tomb', 'confirm': True})
         self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
-        self.assertEqual(sentinel.read_text(), 'keep outside')
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), 'keep outside')
 
     def test_storage_reparse_records_and_parent_are_refused_before_open(self):
         board = self.board()
@@ -521,7 +521,7 @@ class StorageTests(BoardTestCase):
         state = board.directory.resolve()
         root = state / 'storage'
         receipt = root / ('receipt-' + hashlib.sha256(b'reparse-journal').hexdigest() + '.json')
-        receipt.write_text(json.dumps({'planId': planned['planId'], 'complete': True}))
+        receipt.write_text(json.dumps({'planId': planned['planId'], 'complete': True}), encoding="utf-8", newline="\n")
         plan_path = root / (planned['planId'] + '.json')
         original = Path.lstat
         for marked in (root, root / '.lock', receipt, plan_path):
@@ -563,9 +563,9 @@ class StorageTests(BoardTestCase):
         self.assertTrue(tomb.exists())
         (tomb / 'payload').unlink()
         plan_path = board.directory / 'storage' / (planned['planId'] + '.json')
-        value = json.loads(plan_path.read_text())
+        value = json.loads(plan_path.read_text(encoding="utf-8"))
         value['expiresAt'] = '2000-01-01T00:00:00+00:00'
-        plan_path.write_text(json.dumps(value))
+        plan_path.write_text(json.dumps(value), encoding="utf-8", newline="\n")
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.remove_tree', wraps=real_remove):
             result = board.call('storage_apply', params)
         self.assertTrue(result['complete'])
@@ -582,11 +582,11 @@ class StorageTests(BoardTestCase):
         receipt.write_text(json.dumps({'planId': planned['planId'], 'removedBytes': 0, 'removed': [],
                                        'skipped': [], 'complete': False,
                                        'pending': {'id': row['id'], 'path': row['path'], 'tomb': str(tomb),
-                                                   'bytes': row['bytes'], 'fingerprint': row['fingerprint']}}))
+                                                   'bytes': row['bytes'], 'fingerprint': row['fingerprint']}}), encoding="utf-8", newline="\n")
         plan_path = board.directory / 'storage' / (planned['planId'] + '.json')
-        value = json.loads(plan_path.read_text())
+        value = json.loads(plan_path.read_text(encoding="utf-8"))
         value['expiresAt'] = '2000-01-01T00:00:00+00:00'
-        plan_path.write_text(json.dumps(value))
+        plan_path.write_text(json.dumps(value), encoding="utf-8", newline="\n")
         result = board.call('storage_apply', params)
         self.assertTrue(result['complete'])
         self.assertEqual(len(result['removed']), 1)
@@ -604,11 +604,11 @@ class StorageTests(BoardTestCase):
         tomb.rename(tomb.with_name('parked-original'))
         tomb.mkdir()
         sentinel = tomb / 'replacement-sentinel'
-        sentinel.write_text('retain replacement')
+        sentinel.write_text('retain replacement', encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as caught:
             board.call('storage_apply', params)
         self.assertEqual(caught.exception.code, 'STORAGE_CHANGED')
-        self.assertEqual(sentinel.read_text(), 'retain replacement')
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), 'retain replacement')
 
     def test_linked_runtime_and_ready_path_are_protected_before_ready_read(self):
         board = self.board()
@@ -616,7 +616,7 @@ class StorageTests(BoardTestCase):
         root.mkdir()
         outside = self.directory / 'outside-ready'
         outside.mkdir()
-        (outside / 'READY.json').write_text('outside')
+        (outside / 'READY.json').write_text('outside', encoding="utf-8", newline="\n")
         (root / 'linked-runtime').symlink_to(outside, target_is_directory=True)
         local = root / 'local-runtime'
         local.mkdir()
@@ -636,7 +636,7 @@ class StorageTests(BoardTestCase):
         candidate = root / 'reparse-runtime'
         candidate.mkdir()
         ready_path = candidate / 'READY.json'
-        ready_path.write_text('retained READY')
+        ready_path.write_text('retained READY', encoding="utf-8", newline="\n")
         original = Path.lstat
         for marked in (candidate, ready_path):
             with self.subTest(marked=marked):
@@ -655,7 +655,7 @@ class StorageTests(BoardTestCase):
                 row = next(row for row in planned['candidates'] if Path(row['path']).name == candidate.name)
                 self.assertFalse(row['eligible'])
                 self.assertIn('linked-path', row['reasons'])
-        self.assertEqual(ready_path.read_text(), 'retained READY')
+        self.assertEqual(ready_path.read_text(encoding="utf-8"), 'retained READY')
 
     def test_unaccepted_unknown_shutdown_reports_both_protections(self):
         workflow = mock.Mock()

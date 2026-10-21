@@ -85,7 +85,7 @@ class InTurnInquiryTests(unittest.TestCase):
         self.bridge.deliver_native("q", {"sessionId": "native-session"})
         self.bridge.close()
         self.assertEqual(self.bridge.entries["q"]["state"], "unavailable")
-        self.assertEqual(set(json.loads(Path(self.bridge.journal_path).read_text().splitlines()[-1])),
+        self.assertEqual(set(json.loads(Path(self.bridge.journal_path).read_text(encoding="utf-8").splitlines()[-1])),
                          {"version", "taskId", "attemptId", "generation", "turnId", "sessionId",
                           "inquiryId", "state", "unavailableAt"})
         self.assertEqual(self.bridge.report()["unansweredDelivered"], 1)

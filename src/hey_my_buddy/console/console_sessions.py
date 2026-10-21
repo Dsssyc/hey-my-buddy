@@ -47,7 +47,7 @@ class ConsoleSessions:
             if path.is_symlink() or path.stat().st_mode & 0o077:
                 raise BoardError("CONSOLE_SESSION_STORE", "Session file must be a private regular file")
             try:
-                data = json.loads(path.read_text())
+                data = json.loads(path.read_text(encoding="utf-8"))
                 if data.get("version") != 1 or len(data["sessions"]) > MAX_SESSIONS:
                     raise ValueError("invalid session store")
                 for row in data["sessions"]:
@@ -65,7 +65,7 @@ class ConsoleSessions:
         temporary = self.file.with_name(self.file.name + ".tmp-" + secrets.token_hex(8))
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:
-            with os.fdopen(fd, "w") as stream:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
                 json.dump({"version": 1, "sessions": rows}, stream)
                 stream.flush()
                 os.fsync(stream.fileno())

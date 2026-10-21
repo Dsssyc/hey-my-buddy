@@ -134,7 +134,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
         pid_path = self.directory / f"{name}.pid"
         release = self.directory / f"{name}.release"
         script = ("import os,pathlib,time\n"
-                  f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
+                  f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='utf-8', newline='\\n')\n"
                   f"pathlib.Path({str(started)!r}).touch()\n"
                   f"release=pathlib.Path({str(release)!r})\n"
                   "while not release.exists(): time.sleep(.05)\n")
@@ -151,13 +151,13 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             third_release = self.directory / "third.release"
             try:
                 self.assertTrue(wait_for(lambda: first_started.exists() and second_started.exists(), timeout=60),
-                                (self.directory / "test-daemon.log").read_text()[-3000:])
+                                (self.directory / "test-daemon.log").read_text(encoding="utf-8")[-3000:])
                 self.assertEqual(client.health()["capacity"]["totalActive"], 2)
                 third, third_started, third_release = self.gated("third")
                 self.assertEqual(client.get(runId=third)["queueReason"], "capacity")
                 first_release.touch()
                 self.assertTrue(wait_for(lambda: third_started.exists(), timeout=60),
-                                (self.directory / "test-daemon.log").read_text()[-3000:])
+                                (self.directory / "test-daemon.log").read_text(encoding="utf-8")[-3000:])
                 second_release.touch()
                 third_release.touch()
                 for run_id in (first, second, third):
@@ -194,7 +194,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                 reply = client.call("service_control", {"action": "stop", "drainSeconds": 0})
                 self.assertEqual(reply["cancelRequested"], 1)
                 first.wait(timeout=20)
-                self.assertTrue(wait_for(lambda: self.native_stopped(int((self.directory / "zero-drain.pid").read_text())),
+                self.assertTrue(wait_for(lambda: self.native_stopped(int((self.directory / "zero-drain.pid").read_text(encoding="utf-8"))),
                                          timeout=12), "zero-drain stop never reached the running command")
             finally:
                 release.touch()
@@ -243,7 +243,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                                          timeout=60), client.get(runId=run_id))
                 view = client.get(runId=run_id)
                 self.assertTrue(view["shutdownConfirmed"])
-                native_pid = int((self.directory / "death-running.pid").read_text())
+                native_pid = int((self.directory / "death-running.pid").read_text(encoding="utf-8"))
                 self.assertTrue(wait_for(lambda: self.native_stopped(native_pid), timeout=30))
             finally:
                 release.touch()
@@ -255,7 +255,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             pid_path = self.directory / "frozen.pid"
             script = ("import os,pathlib,signal,time\n"
                       "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                      f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
+                      f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='utf-8', newline='\\n')\n"
                       f"pathlib.Path({str(started)!r}).touch()\n"
                       "while True: time.sleep(1)\n")
             run_id = self.submit_execution(requestId="frozen", task="ignore stop", cwd=str(self.workdir("frozen")),
@@ -269,7 +269,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             view = client.get(runId=run_id)
             self.assertEqual(view["status"], "cancelled")
             self.assertTrue(view["shutdownConfirmed"])
-            self.assertTrue(wait_for(lambda: self.native_stopped(int(pid_path.read_text())), timeout=10))
+            self.assertTrue(wait_for(lambda: self.native_stopped(int(pid_path.read_text(encoding="utf-8"))), timeout=10))
             self.assertTrue(wait_for(lambda: self.native_stopped(execution_pid), timeout=10))
 
     def test_stopped_execution_is_killed_from_the_recorded_force_time(self):
@@ -296,7 +296,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                 self.assertTrue(view["shutdownConfirmed"])
                 elapsed = (datetime.now(timezone.utc) - recorded).total_seconds()
                 self.assertGreaterEqual(elapsed, 7)
-                native_pid = int((self.directory / 'freeze-execution.pid').read_text())
+                native_pid = int((self.directory / 'freeze-execution.pid').read_text(encoding="utf-8"))
                 self.assertTrue(wait_for(lambda: self.native_stopped(native_pid), timeout=30))
             finally:
                 release.touch()

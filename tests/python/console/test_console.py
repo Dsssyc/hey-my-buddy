@@ -144,10 +144,10 @@ class ConsoleTestCase(BoardTestCase):
             (root / "assets").mkdir(parents=True, exist_ok=True)
             (root / "index.html").write_text(
                 '<!doctype html><html><head><script src="./assets/app.js"></script>'
-                '</head><body><div id=root>hey-my-buddy console fixture</div></body></html>'
+                '</head><body><div id=root>hey-my-buddy console fixture</div></body></html>', encoding="utf-8", newline="\n"
             )
-            (root / "assets" / "app.js").write_text("export const ready = true;\n")
-            (root / "assets" / "app.css").write_text("body{color:#20332e}\n")
+            (root / "assets" / "app.js").write_text("export const ready = true;\n", encoding="utf-8", newline="\n")
+            (root / "assets" / "app.css").write_text("body{color:#20332e}\n", encoding="utf-8", newline="\n")
         stated = board.call("console", {"action": "open"})
         self.assertTrue(stated["url"].startswith("http://127.0.0.1:"))
         self.assertFalse(stated["readOnly"])
@@ -490,7 +490,7 @@ class ConsoleAssetTests(ConsoleTestCase):
 
     def test_assets_are_served_with_headers_and_traversal_is_refused(self):
         board = self.board()
-        (self.directory / "outside.txt").write_text("not an asset")
+        (self.directory / "outside.txt").write_text("not an asset", encoding="utf-8", newline="\n")
         _, browser = self.open_console(board, assets=True)
         status, headers, body = browser.get("/")
         self.assertEqual(status, 200)
@@ -564,7 +564,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             "import json, sys\n"
             f"with open({str(trace)!r}, 'a') as stream:\n"
             "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-            "raise SystemExit(86)\n"
+            "raise SystemExit(86)\n", encoding="utf-8", newline="\n"
         )
         decoy.chmod(0o700)
         # Discovery ignores HOME when resolving system account homes. Intercept
@@ -576,7 +576,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             "def reject(harness, **kwargs):\n"
             f"    subprocess.run([sys.executable, {str(decoy)!r}, harness], check=False)\n"
             "    raise RuntimeError('R-05: native discovery reached the rejecting CLI')\n"
-            "discovery.candidate_snapshot = reject\n"
+            "discovery.candidate_snapshot = reject\n", encoding="utf-8", newline="\n"
         )
         environment = self.child_environment({
             "PYTHONPATH": os.pathsep.join((str(guard), str(PYTHON_ROOT), os.environ.get("PYTHONPATH", ""))),
@@ -586,7 +586,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
         git_config = private_home / ".gitconfig"
         # The fixture writes this before startup; the service must leave it alone.
         git_config_before = git_config.read_bytes()
-        payload = json.loads(self._catalog_fixture_path.read_text())
+        payload = json.loads(self._catalog_fixture_path.read_text(encoding="utf-8"))
         model = payload["providers"][0]["models"][0]
         model["id"] = "r05-first-private-model"
         fixture = self.catalog_fixture(payload)
@@ -597,7 +597,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
                 self.assertEqual(Path(health["stateDir"]), self.directory)
                 code, capabilities = self.cli("harnesses", "{}", env=environment)
                 self.assertEqual(code, 0, capabilities)
-                self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+                self.assertFalse(trace.exists(), trace.read_text(encoding="utf-8") if trace.exists() else "")
                 code, opened = self.cli("console", json.dumps({"action": "open", "browser": False}), env=environment)
                 self.assertEqual(code, 0, opened)
                 browser = Browser(opened["url"])
@@ -606,17 +606,17 @@ class ConsoleDaemonTests(ConsoleTestCase):
                     "model_catalog_refresh", {"requestId": "r05-http-catalog"}, csrf=csrf,
                 )
                 self.assertEqual(status, 200, body)
-                self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+                self.assertFalse(trace.exists(), trace.read_text(encoding="utf-8") if trace.exists() else "")
                 refreshed = json.loads(body)["result"]["catalog"]
                 self.assertEqual(refreshed["source"], f"file:{fixture}", "R-05: private fixture source")
                 self.assertEqual(refreshed["providers"][0]["models"][0]["id"], model["id"], "R-05: private fixture content")
                 # Re-read changed file contents through the real CLI and transport;
                 # a cached constant or a different fixture cannot satisfy this check.
                 model["id"] = "r05-second-private-model"
-                fixture.write_text(json.dumps(payload))
+                fixture.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
                 code, refreshed = self.cli("model-catalog-refresh", json.dumps({"requestId": "r05-cli-catalog"}), env=environment)
                 self.assertEqual(code, 0, refreshed)
-                self.assertFalse(trace.exists(), trace.read_text() if trace.exists() else "")
+                self.assertFalse(trace.exists(), trace.read_text(encoding="utf-8") if trace.exists() else "")
                 self.assertEqual(refreshed["catalog"]["source"], f"file:{fixture}", "R-05: private fixture source after rewrite")
                 self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"], model["id"], "R-05: private fixture content after rewrite")
                 self.assertIn(model["id"], {buddy["model"] for buddy in browser.bootstrap()["buddies"]})
@@ -626,7 +626,7 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertFalse(
                 trace.exists(),
                 "R-05: attempted native discovery/start; rejecting decoy calls: "
-                + (trace.read_text() if trace.exists() else ""),
+                + (trace.read_text(encoding="utf-8") if trace.exists() else ""),
             )
         self.assertEqual(list(private_home.iterdir()), [git_config])
         self.assertEqual(git_config.read_bytes(), git_config_before,

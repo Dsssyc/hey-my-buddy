@@ -519,7 +519,7 @@ class ExecutionActivityForwarding(BoardTestCase):
         existing = {"phase": "unknown", "eventSeq": 1}
         client.progress(attempt["attemptId"], attempt["generation"], "c" * 32, data={"activity": existing})
         path = directory / "activity.json"
-        path.write_text("retired activity file")
+        path.write_text("retired activity file", encoding="utf-8", newline="\n")
         with mock.patch.object(os, "open", wraps=os.open) as opened:
             control.start()
             time.sleep(0.4)

@@ -101,7 +101,7 @@ class SessionRecordCase(unittest.TestCase):
             text = "".join(json.dumps(event) + "\n" for event in events)
             path.write_bytes(zstandard.ZstdCompressor().compress(text.encode()))
         else:
-            path.write_text("".join(json.dumps(event) + "\n" for event in events))
+            path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8", newline="\n")
         return path
 
 
@@ -336,7 +336,7 @@ class ResumeBoundaryTests(SessionRecordCase):
         # total-byte cap, so freeze_session_records itself encounters the bound.
         path = self.sessions / f"{SESSION}.v3.jsonl"
         payload = "x" * (1024 * 1024)
-        with path.open("w", encoding="utf-8") as rollout:
+        with path.open("w", encoding="utf-8", newline="\n") as rollout:
             rollout.write(json.dumps(turn_one()[0]) + "\n")
             for seq in range(66):
                 rollout.write(json.dumps({"type": "fixture/padding", "seq": seq,
@@ -346,7 +346,7 @@ class ResumeBoundaryTests(SessionRecordCase):
 
         baseline = self.freeze()
         self.assertFalse(baseline.reliable)
-        with path.open("a", encoding="utf-8") as rollout:
+        with path.open("a", encoding="utf-8", newline="\n") as rollout:
             for event in turn_two_append():
                 rollout.write(json.dumps(event) + "\n")
         # Let the final read see the entire file: its own truncation and replay

@@ -67,7 +67,7 @@ def loaded_ids(tests: Path, modules: list[str], environment: dict) -> dict:
         env=environment,
         capture_output=True,
         text=True,
-        timeout=300,
+        timeout=300, encoding="utf-8",
     )
     if completed.returncode != 0:
         raise AssertionError(completed.stderr[-4000:])
@@ -130,7 +130,7 @@ class ScheduledModulesTests(unittest.TestCase):
         ):
             path = tests / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("" if path.name == "__init__.py" else case)
+            path.write_text("" if path.name == "__init__.py" else case, encoding="utf-8", newline="\n")
         modules = checks.python_test_modules(self.directory)
         self.assertEqual(modules, ["nested.deeper.test_deep", "nested.test_inner", "test_top"])
         environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
@@ -182,7 +182,7 @@ class RunnerTestCase(unittest.TestCase):
         self.private_root.mkdir()
 
     def module(self, name: str, body: str) -> str:
-        (self.modules / f"{name}.py").write_text(textwrap.dedent(body))
+        (self.modules / f"{name}.py").write_text(textwrap.dedent(body), encoding="utf-8", newline="\n")
         return name
 
     def environment(self) -> dict:
@@ -222,7 +222,8 @@ class ParallelOutcomeTests(RunnerTestCase):
                     home = Path(os.environ["HOME"])
                     self.assertEqual(home.parent, root.parent)
                     self.assertFalse(home.is_relative_to(root))
-                    (Path(os.environ["CHECKS_FIXTURE_MARKERS"]) / "root").write_text(str(root))
+                    (Path(os.environ["CHECKS_FIXTURE_MARKERS"]) / "root").write_text(
+                        str(root), encoding="utf-8", newline="\\n")
 
                 @unittest.skip("fixture")
                 def test_is_skipped(self):
@@ -234,12 +235,42 @@ class ParallelOutcomeTests(RunnerTestCase):
         failure, output = self.run_parallel([self.passing()])
         self.assertIsNone(failure, output)
         self.assertIn("hey_my_buddy.cli.checks: python tests run: 2 (skipped 1) in 1 of 1 files", output)
-        child_root = Path((self.markers / "root").read_text())
+        child_root = Path((self.markers / "root").read_text(encoding="utf-8"))
         self.assertEqual(child_root.parent, self.private_root)
 
     def test_an_empty_python_suite_is_refused(self):
         failure, _output = self.run_parallel([])
         self.assertEqual(failure, "python suite has no test modules")
+
+    def test_default_encoding_is_an_error_only_inside_the_product_package(self):
+        third_party = self.module(
+            "checksfixture_encoding_external",
+            """
+            import unittest
+
+            class External(unittest.TestCase):
+                def test_implicit_encoding(self):
+                    with open(__file__) as stream:
+                        self.assertTrue(stream.read(1))
+            """,
+        )
+        product = self.module(
+            "checksfixture_encoding_product",
+            """
+            import unittest
+            from hey_my_buddy.cli import checks
+
+            exec("def _encoding_probe():\\n    with open(__file__) as stream:\\n        stream.read(1)\\n", checks.__dict__)
+
+            class Product(unittest.TestCase):
+                def test_implicit_encoding(self):
+                    checks._encoding_probe()
+            """,
+        )
+        failure, output = self.run_parallel([third_party, product])
+        self.assertIn("checksfixture_encoding_product", failure)
+        self.assertNotIn("checksfixture_encoding_external", failure)
+        self.assertIn("EncodingWarning: 'encoding' argument not specified", output)
 
     def test_every_kind_of_failing_file_fails_the_run(self):
         names = [
@@ -348,7 +379,8 @@ class LeftoverProcessTests(RunnerTestCase):
                         [sys.executable, "-c", "import threading; threading.Event().wait(120)"], start_new_session=True
                     )
                     marker = Path(os.environ["CHECKS_FIXTURE_MARKERS"]) / f"{__name__}.json"
-                    marker.write_text(json.dumps({"pid": os.getpid(), "leftover": leftover.pid}))
+                    marker.write_text(json.dumps({"pid": os.getpid(), "leftover": leftover.pid}),
+                                      encoding="utf-8", newline="\\n")
                     threading.Event().wait(120)
         """
         names = [self.module(f"checksfixture_slow_{letter}", slow) for letter in "abc"]
@@ -361,10 +393,10 @@ class LeftoverProcessTests(RunnerTestCase):
 
             checks.run_suites_parallel(Path(sys.argv[1]), Path(sys.argv[2]), 2, sys.argv[3:])
             """
-        ))
+        ), encoding="utf-8", newline="\n")
         environment = {**os.environ, **self.environment()}
         environment["PYTHONPATH"] = os.pathsep.join([str(REPOSITORY / "src"), environment["PYTHONPATH"]])
-        log = (self.directory / "driver.log").open("w")
+        log = (self.directory / "driver.log").open("w", encoding="utf-8", newline="\n")
         self.addCleanup(log.close)
         process = subprocess.Popen(
             [sys.executable, str(driver), str(REPOSITORY), str(self.private_root), *names],
@@ -380,7 +412,7 @@ class LeftoverProcessTests(RunnerTestCase):
             found = []
             for name in names[:2]:
                 try:
-                    found.append(json.loads((self.markers / f"{name}.json").read_text()))
+                    found.append(json.loads((self.markers / f"{name}.json").read_text(encoding="utf-8")))
                 except (OSError, ValueError):
                     return None
             return found
@@ -396,8 +428,8 @@ class LeftoverProcessTests(RunnerTestCase):
         try:
             process.wait(timeout=90)
         except subprocess.TimeoutExpired:
-            self.fail("the interrupted run did not stop: " + (self.directory / "driver.log").read_text()[-2000:])
-        output = (self.directory / "driver.log").read_text()
+            self.fail("the interrupted run did not stop: " + (self.directory / "driver.log").read_text(encoding="utf-8")[-2000:])
+        output = (self.directory / "driver.log").read_text(encoding="utf-8")
         self.assertNotEqual(process.returncode, 0, output)
         self.assertIn("KeyboardInterrupt", output)
         for child in children:

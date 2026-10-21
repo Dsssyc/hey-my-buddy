@@ -87,7 +87,7 @@ def generate(args):
     repo = work / "repository"
     run(["git", "init", "--quiet", str(repo)], env=env)
     run(["git", "-C", str(repo), "fetch", "--quiet", "--no-tags", str(root), WORKSPACE_INPUT], env=env)
-    (repo / ".git/HEAD").write_text(WORKSPACE_INPUT + "\n")
+    (repo / ".git/HEAD").write_bytes((WORKSPACE_INPUT + "\n").encode("utf-8"))
     run(["git", "-C", str(repo), "read-tree", WORKSPACE_INPUT], env=env)
     run(["git", "-C", str(repo), "checkout-index", "--all"], env=env)
     for label in ("delivered", "accepted", "failed", "cancelled"):
@@ -134,7 +134,7 @@ def populate(args):
                               "models": [{"id": "fixture-alpha", "efforts": ["high"]},
                                          {"id": "fixture-beta", "efforts": ["high"]}]}]}
     catalog_file = work / "catalog.json"
-    catalog_file.write_text(json_text(catalog) + "\n")
+    catalog_file.write_bytes((json_text(catalog) + "\n").encode("utf-8"))
     os.environ["HMB_MODEL_CATALOG_FILE"] = str(catalog_file)
     operations = []
     ids = {}
@@ -295,7 +295,7 @@ def populate(args):
                 # the native quota refusal. Restore the site after recording it.
                 root = work / "workspaces" / label
                 forbidden = root / "outside.txt"
-                forbidden.write_text("fixture unauthorized change\n")
+                forbidden.write_bytes(b"fixture unauthorized change\n")
                 try:
                     workspace.seal(work / "state", turn["input"]["executionWorkspace"], run_id, attempt["attemptId"])
                 except BoardError as error:
@@ -319,7 +319,7 @@ def populate(args):
                 continue
             manifest = turn["input"]["executionWorkspace"]
             if label == "delivered":
-                (work / "workspaces" / label / "fixture.txt").write_text("fixture sealed change\n")
+                (work / "workspaces" / label / "fixture.txt").write_bytes(b"fixture sealed change\n")
             sealed = workspace.seal(work / "state", manifest, run_id, attempt["attemptId"])
             record = completed_record(claim, label)
             report(claim, nonce, status="ok", result={"status": "ok", "turn": record, "workspaceSeal": sealed,
@@ -346,8 +346,8 @@ def populate(args):
         adopted_claim = admit(nonce, adopted["runId"])
         adopted_manifest = adopted_claim["turn"]["input"]["executionWorkspace"]
         adopted_checkout = Path(adopted_manifest["path"])
-        (adopted_checkout / "README.md").write_text("fixture authorized change\n")
-        (adopted_checkout / "outside.txt").write_text("fixture adopted change\n")
+        (adopted_checkout / "README.md").write_bytes(b"fixture authorized change\n")
+        (adopted_checkout / "outside.txt").write_bytes(b"fixture adopted change\n")
         try:
             workspace.seal(work / "state", adopted_manifest, adopted["runId"], adopted_claim["attempt"]["attemptId"])
         except BoardError as error:
@@ -385,7 +385,7 @@ def populate(args):
         stock_ids["verified"] = verified["runId"]
         verified_claim = admit(nonce, verified["runId"])
         verified_manifest = verified_claim["turn"]["input"]["executionWorkspace"]
-        (Path(verified_manifest["path"]) / "README.md").write_text("fixture verified integration\n")
+        (Path(verified_manifest["path"]) / "README.md").write_bytes(b"fixture verified integration\n")
         verified_seal = workspace.seal(work / "state", verified_manifest, verified["runId"],
                                          verified_claim["attempt"]["attemptId"])
         report(verified_claim, nonce, status="ok", result={"status": "ok",
@@ -395,16 +395,18 @@ def populate(args):
         assert verified_view["state"] == "delivered"
         artifact = next(item for item in verified_view["artifacts"] if item["kind"] == "output")
         target = work / "workspaces" / "cancelled"
-        before = subprocess.check_output(["git", "-C", str(target), "rev-parse", "HEAD"], text=True).strip()
+        before = subprocess.check_output(["git", "-C", str(target), "rev-parse", "HEAD"],
+                                         text=True, encoding="utf-8").strip()
         run(["git", "-C", str(target), "apply", "--binary", artifact["diffPath"]])
-        (target / "README.md").write_text("fixture adjusted integration\n")
-        (target / "fixture-host.txt").write_text("fixture Host-owned target path\n")
+        (target / "README.md").write_bytes(b"fixture adjusted integration\n")
+        (target / "fixture-host.txt").write_bytes(b"fixture Host-owned target path\n")
         run(["git", "-C", str(target), "add", "README.md", "fixture-host.txt"])
         commit_env = {**os.environ, "GIT_AUTHOR_DATE": "2026-01-01T00:00:00 +0000",
                       "GIT_COMMITTER_DATE": "2026-01-01T00:00:00 +0000"}
         run(["git", "-C", str(target), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
              "commit", "--quiet", "-m", "Fixture integration"], env=commit_env)
-        after = subprocess.check_output(["git", "-C", str(target), "rev-parse", "HEAD"], text=True).strip()
+        after = subprocess.check_output(["git", "-C", str(target), "rev-parse", "HEAD"],
+                                        text=True, encoding="utf-8").strip()
         run(["git", "-C", str(work / "repository"), "update-ref", "refs/hey-my-buddy/fixture-target", after])
         verified_accepted = call("workflow_accept", {"runId": verified["runId"],
             "artifactId": artifact["artifactId"], "note": "Fixture Host adjusted the output in the target",
@@ -581,7 +583,7 @@ def populate(args):
             source_schema = list(connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name"))
             row_counts = {row[1]: connection.execute(f'SELECT COUNT(*) FROM "{row[1]}"').fetchone()[0]
                           for row in source_schema if row[0] == "table" and row[1] != "sqlite_sequence"}
-        (work / "raw.sql").write_text(raw_sql)
+        (work / "raw.sql").write_bytes(raw_sql.encode("utf-8"))
         redactions = [(str(work), "<fixture-root>")]
         sql = raw_sql
         for old, new in redactions:
@@ -590,14 +592,16 @@ def populate(args):
         output = args.output_dir.resolve()
         output.mkdir(parents=True, exist_ok=True)
         sql_path = output / "board.sql"
-        sql_path.write_text(header + sql)
-        (output / "catalog.json").write_text(json_text(catalog) + "\n")
+        sql_path.write_bytes((header + sql).encode("utf-8"))
+        (output / "catalog.json").write_bytes((json_text(catalog) + "\n").encode("utf-8"))
         operations_text = json_text(operations).replace(str(work), "<fixture-root>")
-        (output / "operations.json").write_text(operations_text + "\n")
+        (output / "operations.json").write_bytes((operations_text + "\n").encode("utf-8"))
         resources = export_resources(work, workspace, preimages)
-        (output / "workspace-resources.json").write_text(json.dumps(resources, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        (output / "workspace-resources.json").write_bytes(
+            (json.dumps(resources, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
         metadata = {"format": 2, "sourceCommit": BASE, "sourceVersion": BASE_VERSION, "schemaVersion": BASE_SCHEMA,
-            "sourceTree": subprocess.check_output(["git", "rev-parse", BASE + "^{tree}"], text=True).strip(),
+            "sourceTree": subprocess.check_output(["git", "rev-parse", BASE + "^{tree}"],
+                                                  text=True, encoding="utf-8").strip(),
             "workspaceInputCommit": WORKSPACE_INPUT,
             "generationCommand": "python packaging/generate-upgrade-fixture.py " +
                 ("--python <prepared-python>" if args.python else "--offline") +
@@ -615,14 +619,15 @@ def populate(args):
             "pythonVersion": sys.version.split()[0],
             "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
-            "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode()),
+            "schemaSha256": digest(json_text([list(row) for row in source_schema]).encode("utf-8")),
             "sqlSha256": digest(sql_path.read_bytes()), "operationsSha256": digest((output / "operations.json").read_bytes()),
             "catalogSha256": digest((output / "catalog.json").read_bytes()),
             "resourcesSha256": digest((output / "workspace-resources.json").read_bytes())}
         metadata["loadedSourceModules"] = sorted(str(Path(module.__file__).resolve().relative_to(source))
             for name, module in sys.modules.items() if name.startswith("hey_my_buddy.") and getattr(module, "__file__", None))
         metadata["generatorSha256"] = digest(Path(__file__).read_bytes())
-        (output / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        (output / "metadata.json").write_bytes(
+            (json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     print(json.dumps(verify(output, work / "restored.sqlite3"), ensure_ascii=False))
 
 
@@ -644,18 +649,22 @@ def export_resources(work, workspace, preimages):
         for role, path in (("checkoutId", actual["gitDir"]), ("repositoryId", actual["repositoryPath"])):
             identities[actual[role]] = template(path)
     repository = work / "repository"
+    # Git refs, object IDs and types here use ASCII syntax, within UTF-8.
     refs = dict(line.split(" ") for line in subprocess.check_output(
-        ["git", "-C", str(repository), "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"], text=True).splitlines())
+        ["git", "-C", str(repository), "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"],
+        text=True, encoding="utf-8").splitlines())
     # The fixed input is a root commit: its complete reachable object closure is
     # tiny. Export raw object bytes as hex so no generating repository is needed.
     oids = sorted({line.split(" ")[0] for line in subprocess.check_output(
-        ["git", "-C", str(repository), "rev-list", "--objects", WORKSPACE_INPUT, *refs.values()], text=True).splitlines()})
+        ["git", "-C", str(repository), "rev-list", "--objects", WORKSPACE_INPUT, *refs.values()],
+        text=True, encoding="utf-8").splitlines()})
     objects = []
     for oid in oids:
-        kind = subprocess.check_output(["git", "-C", str(repository), "cat-file", "-t", oid], text=True).strip()
+        kind = subprocess.check_output(["git", "-C", str(repository), "cat-file", "-t", oid],
+                                       text=True, encoding="utf-8").strip()
         data = subprocess.check_output(["git", "-C", str(repository), "cat-file", kind, oid])
         objects.append({"oid": oid, "type": kind, "hex": data.hex()})
-    files = {str(path.relative_to(work / "state")): template(path.read_text())
+    files = {str(path.relative_to(work / "state")): template(path.read_text(encoding="utf-8"))
              for folder in ("workspaces", "harnesses", "sessions")
              for path in sorted((work / "state" / folder).rglob("*"))
              if path.is_file() and (path.suffix in {".json", ".jsonl", ".patch"})}
@@ -696,7 +705,7 @@ def export_resources(work, workspace, preimages):
 
 
 def verify(output, restored):
-    metadata = json.loads((output / "metadata.json").read_text())
+    metadata = json.loads((output / "metadata.json").read_text(encoding="utf-8"))
     assert digest((output / "board.sql").read_bytes()) == metadata["sqlSha256"]
     assert digest((output / "operations.json").read_bytes()) == metadata["operationsSha256"]
     assert digest((output / "catalog.json").read_bytes()) == metadata["catalogSha256"]
@@ -704,7 +713,7 @@ def verify(output, restored):
     if restored.exists():
         raise ValueError("restore destination must not exist")
     with sqlite3.connect(restored) as connection:
-        connection.executescript((output / "board.sql").read_text())
+        connection.executescript((output / "board.sql").read_text(encoding="utf-8"))
         connection.execute("PRAGMA foreign_keys=ON")
         assert connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -731,9 +740,9 @@ def verify(output, restored):
                           **{metadata["stockIds"][key]: "accepted" for key in ("adopted", "verified", "helper")},
                           metadata["stockIds"]["helperParent"]: "concluded"}
         schema = [list(row) for row in connection.execute("SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name")]
-        assert digest(json_text(schema).encode()) == metadata["schemaSha256"]
-        assert "<fixture-root>" in (output / "board.sql").read_text()
-        assert "/Users/" not in (output / "board.sql").read_text()
+        assert digest(json_text(schema).encode("utf-8")) == metadata["schemaSha256"]
+        assert "<fixture-root>" in (output / "board.sql").read_text(encoding="utf-8")
+        assert "/Users/" not in (output / "board.sql").read_text(encoding="utf-8")
         return {"integrity": "ok", "foreignKeyViolations": 0, "schema": BASE_SCHEMA, "states": states,
                 "tables": sum(row[0] == "table" and row[1] != "sqlite_sequence" for row in schema),
                 "events": connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], "sourceSchemaMatches": True}

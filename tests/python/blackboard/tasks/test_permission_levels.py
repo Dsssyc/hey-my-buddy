@@ -198,7 +198,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
             saved.append(dict(manifest))
             self.assertEqual(manifest['access'], access)
             if access != 'read':
-                (Path(manifest['path']) / 'tracked.txt').write_text(f'turn {index}\n')
+                (Path(manifest['path']) / 'tracked.txt').write_text(f'turn {index}\n', encoding="utf-8", newline="\n")
             attempt_id = claim['claim']['attempt']['attemptId']
             seal = git_workspace.seal(self.directory, manifest, run_id, attempt_id)
             self.finish_turn(board, claim, seal)
@@ -236,7 +236,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
             self.assertIsNone(problem)
 
     def test_permission_only_preparation_preserves_untracked_input_selectors(self):
-        (self.repo / 'input.txt').write_text('Explicit input\n')
+        (self.repo / 'input.txt').write_text('Explicit input\n', encoding="utf-8", newline="\n")
         board = self.board()
         self.register(board)
         submitted = board.call('workflow_submit', {

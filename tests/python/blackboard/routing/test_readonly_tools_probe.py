@@ -27,7 +27,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
     def prepared(self):
         report = probe.run(self.args)
         self.args.expected_packet_sha256 = report['packetSha256']
-        return json.loads(Path(report['packet']).read_text())
+        return json.loads(Path(report['packet']).read_text(encoding="utf-8"))
 
     def outcome(self, packet):
         result = {**tool_receipt(packet['binding'], 1), 'resolved': packet['buddy'],
@@ -43,7 +43,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
             report = probe.run(self.args)
             self.assertEqual(report['modelCalls'], 0)
             self.assertEqual(probe.run(self.args)['packetSha256'], report['packetSha256'])
-        packet = json.loads(Path(report['packet']).read_text())
+        packet = json.loads(Path(report['packet']).read_text(encoding="utf-8"))
         self.assertNotIn(packet['expected']['marker'], packet['request']['prompt'])
         self.assertEqual(packet['request']['budget']['toolCalls'], 8)
 
@@ -72,7 +72,7 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
 
     def test_changed_input_or_buddy_cannot_reuse_approval(self):
         self.prepared()
-        (self.args.output_root / 'frozen' / 'selection-guide.txt').write_text('changed')
+        (self.args.output_root / 'frozen' / 'selection-guide.txt').write_text('changed', encoding="utf-8", newline="\n")
         self.args.execute = True
         with patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')):
             with self.assertRaises(ValueError):
@@ -81,9 +81,9 @@ class ReadonlyToolsProbeTests(unittest.TestCase):
     def test_changed_request_cannot_reuse_the_prepared_approval_digest(self):
         self.prepared()
         path = self.args.output_root / 'prepared.json'
-        changed = json.loads(path.read_text())
+        changed = json.loads(path.read_text(encoding="utf-8"))
         changed['request']['prompt'] = 'a different request'
-        path.write_text(json.dumps(changed))
+        path.write_text(json.dumps(changed), encoding="utf-8", newline="\n")
         self.args.execute = True
         with patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')):
             with self.assertRaisesRegex(ValueError, 'exact prepared packet digest'):

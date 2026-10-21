@@ -81,7 +81,7 @@ class HarnessServiceTests(BoardTestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM harness_health').fetchone()[0], 0)
 
     def test_upgrade_fence_allows_cached_diagnostics_but_refuses_refresh(self):
-        (self.board.directory / 'upgrade.json').write_text('{}')
+        (self.board.directory / 'upgrade.json').write_text('{}', encoding="utf-8", newline="\n")
         self.assertNotIn('error', self.call('capabilities'))
         self.service.harnesses.kick.assert_not_called()
         result = self.call('capabilities', refresh=True, harness='codex')

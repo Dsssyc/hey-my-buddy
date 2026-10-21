@@ -92,9 +92,9 @@ class PersonalMarkerTests(unittest.TestCase):
     def test_only_text_files_carrying_a_marker_are_reported(self):
         directory = Path(tempfile.mkdtemp(prefix="hygiene-"))
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
-        (directory / "clean.md").write_text("The archive is under ~/.local/share/example.\n")
-        (directory / "leaky.md").write_text("The archive is under /Users/alice/.local/share/example.\n")
-        (directory / "layout.ts").write_text('const path = "~/Desktop/code/project";\n')
+        (directory / "clean.md").write_text("The archive is under ~/.local/share/example.\n", encoding="utf-8", newline="\n")
+        (directory / "leaky.md").write_text("The archive is under /Users/alice/.local/share/example.\n", encoding="utf-8", newline="\n")
+        (directory / "layout.ts").write_text('const path = "~/Desktop/code/project";\n', encoding="utf-8", newline="\n")
         (directory / "binary.bin").write_bytes(b"\0\1/Users/alice/Desktop/code/")
         names = ["clean.md", "leaky.md", "layout.ts", "binary.bin", "missing.md"]
         markers = personal_markers(Path("/Users/alice"), Path("/Users/alice/Desktop/code/project"))

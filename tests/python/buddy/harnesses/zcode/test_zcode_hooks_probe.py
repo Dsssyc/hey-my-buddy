@@ -104,11 +104,11 @@ class SnapshotTests(unittest.TestCase):
     def test_snapshot_and_diff_detect_every_change_kind(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            (root / "a.txt").write_text("one", encoding="utf-8")
-            (root / "b.txt").write_text("two", encoding="utf-8")
+            (root / "a.txt").write_text("one", encoding="utf-8", newline="\n")
+            (root / "b.txt").write_text("two", encoding="utf-8", newline="\n")
             before = probe.snapshot_tree(str(root))
-            (root / "a.txt").write_text("one-changed", encoding="utf-8")
-            (root / "c.txt").write_text("three", encoding="utf-8")
+            (root / "a.txt").write_text("one-changed", encoding="utf-8", newline="\n")
+            (root / "c.txt").write_text("three", encoding="utf-8", newline="\n")
             (root / "b.txt").unlink()
             diff = probe.diff_snapshots(before, probe.snapshot_tree(str(root)))
             self.assertEqual(diff["changed"], ["a.txt"])

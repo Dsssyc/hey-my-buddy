@@ -42,7 +42,7 @@ class CheckpointDomain:
             reply = exchange(self.process, value, timeout=timeout)
         except Exception as error:
             raise AssertionError(f"checkpoint owner pipe failed: {error}; "
-                                 f"{(self.root / 'owner.log').read_text()}") from error
+                                 f"{(self.root / 'owner.log').read_text(encoding="utf-8")}") from error
         if not reply.get("ok"):
             raise AssertionError(reply)
         return reply
@@ -61,7 +61,7 @@ class CheckpointDomain:
             evidence["ownerExitCode"] = code
             if code != 0:
                 raise AssertionError(f"checkpoint owner exit {code}: "
-                                     f"{(self.root / 'owner.log').read_text()}")
+                                     f"{(self.root / 'owner.log').read_text(encoding="utf-8")}")
         except Exception:
             if self.process.poll() is None:
                 # This kills only our saved child, never its descendants by PID.
@@ -73,7 +73,7 @@ class CheckpointDomain:
             # Keep stop facts outside the normal TemporaryDirectory cleanup.
             # A missing native receipt stays unknown even when the owner exits.
             audit = Path(os.environ["TMPDIR"]) / "checkpoint-domain-processes.jsonl"
-            with audit.open("a") as stream:
+            with audit.open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write(json.dumps(evidence) + "\n")
             self.process.stdin.close()
             self.process.stdout.close()
@@ -201,7 +201,7 @@ def serve():
                              "records": {key: fixture.inquiry_records(context, key)
                                          for key in command["ids"]},
                              "methods": fixture.native_log(context, "methods.jsonl"),
-                             "journal": fixture.inquiry_results_path(context).read_text()}
+                             "journal": fixture.inquiry_results_path(context).read_text(encoding="utf-8")}
                 elif operation == "stop":
                     stop = cleanup()
                     print(json.dumps({"ok": True, **stop}), flush=True)
@@ -210,7 +210,7 @@ def serve():
                     raise ValueError(f"unknown fixture command: {operation}")
                 print(json.dumps({"ok": True, **facts}), flush=True)
             except Exception:
-                logs = {name: Path(path).read_text()[-12000:]
+                logs = {name: Path(path).read_text(encoding="utf-8")[-12000:]
                         for name, path in context.log_paths().items() if Path(path).is_file()} if context else {}
                 print(json.dumps({"ok": False, "error": traceback.format_exc(),
                                   "controllerLogs": logs}), flush=True)

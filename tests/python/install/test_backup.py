@@ -34,24 +34,24 @@ class BackupTests(BoardTestCase):
         board = self.board()
         board.store.db.close()
         for name in STATE_FILES:
-            (board.directory / name).write_text(json.dumps({'name': name, 'generation': 1}))
+            (board.directory / name).write_text(json.dumps({'name': name, 'generation': 1}), encoding="utf-8", newline="\n")
         for name in ('runtime-retention.json', 'active-runtime.json', 'launch-settings.json'):
-            (board.directory / name).write_text(json.dumps({'name': name, 'generation': 1}))
+            (board.directory / name).write_text(json.dumps({'name': name, 'generation': 1}), encoding="utf-8", newline="\n")
         for name in ('controls/x.json', 'attempts/run/attempt/result.json',
                      'workspaces/large', 'harnesses/zcode/native', 'console-sessions.json'):
             path = board.directory / name
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('retained evidence')
+            path.write_text('retained evidence', encoding="utf-8", newline="\n")
         first = backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         current = Path(first['path'])
         manifest = backup.verify(current)
         self.assertTrue(first['verified'])
         self.assertEqual(set(manifest['files']), {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)})
         self.assertEqual((current / 'state/console-settings.json').stat().st_mode & 0o777, 0o600)
-        (board.directory / 'console-settings.json').write_text('{"generation":2}')
+        (board.directory / 'console-settings.json').write_text('{"generation":2}', encoding="utf-8", newline="\n")
         second = backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(first['path'], second['path'])
-        self.assertEqual(json.loads((current / 'state/console-settings.json').read_text()), {'generation': 2})
+        self.assertEqual(json.loads((current / 'state/console-settings.json').read_text(encoding="utf-8")), {'generation': 2})
         self.assertEqual([path.name for path in current.parent.iterdir() if path.is_dir()], ['current'])
 
     def test_missing_state_files_are_optional(self):
@@ -68,10 +68,10 @@ class BackupTests(BoardTestCase):
         outside.parent.mkdir(parents=True)
         outside.write_bytes(b'outside backup scope')
         manifest_path = current / 'manifest.json'
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest['files']['state/attempts/run/result.json'] = {
             'bytes': outside.stat().st_size, 'sha256': hashlib.sha256(outside.read_bytes()).hexdigest()}
-        manifest_path.write_text(json.dumps(manifest))
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as caught:
             backup.verify(current)
         self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
@@ -82,7 +82,7 @@ class BackupTests(BoardTestCase):
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None,
                                      contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
-        manifest = json.loads(path.read_text())
+        manifest = json.loads(path.read_text(encoding="utf-8"))
         source = self.directory / 'mismatched.sqlite3'
         source.write_bytes(gzip.decompress((current / 'board.sqlite3.gz').read_bytes()))
         with sqlite3.connect(source) as connection:
@@ -93,7 +93,7 @@ class BackupTests(BoardTestCase):
         payload.write_bytes(gzip.compress(source.read_bytes()))
         manifest['files']['board.sqlite3.gz'] = {'bytes': payload.stat().st_size,
                                                 'sha256': hashlib.sha256(payload.read_bytes()).hexdigest()}
-        path.write_text(json.dumps(manifest))
+        path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")
         before = {file: file.read_bytes() for file in current.rglob('*') if file.is_file()}
         with self.assertRaises(BoardError) as caught:
             backup.verify(current)
@@ -108,7 +108,7 @@ class BackupTests(BoardTestCase):
                                      contract_version=CONTRACT_VERSION)['path'])
         manifest_path = current / 'manifest.json'
         payload_path = current / 'board.sqlite3.gz'
-        original_manifest = json.loads(manifest_path.read_text())
+        original_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         original_payload = payload_path.read_bytes()
         empty_sqlite = self.directory / 'empty.sqlite3'
         with sqlite3.connect(empty_sqlite):
@@ -127,23 +127,23 @@ class BackupTests(BoardTestCase):
                     manifest['files']['board.sqlite3.gz'] = {
                         'bytes': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}
                 payload_path.write_bytes(payload)
-                manifest_path.write_text(json.dumps(manifest))
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")
                 with self.assertRaises(BoardError) as caught:
                     backup.verify(current)
                 self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
         payload_path.write_bytes(original_payload)
-        manifest_path.write_text(json.dumps(original_manifest))
+        manifest_path.write_text(json.dumps(original_manifest), encoding="utf-8", newline="\n")
 
     def test_verify_refuses_unsupported_schema(self):
         board = self.board()
         board.store.db.close()
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         path = current / 'manifest.json'
-        manifest = json.loads(path.read_text())
+        manifest = json.loads(path.read_text(encoding="utf-8"))
         for version in (21, 23, 24, 25, 26, 28):
             with self.subTest(schema=version):
                 manifest['schema'] = version
-                path.write_text(json.dumps(manifest))
+                path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")
                 with self.assertRaises(BoardError) as caught:
                     backup.verify(current)
                 self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
@@ -156,7 +156,7 @@ class BackupTests(BoardTestCase):
                                      contract_version=CONTRACT_VERSION)['path'])
         manifest_path = current / 'manifest.json'
         payload_path = current / 'board.sqlite3.gz'
-        original_manifest = json.loads(manifest_path.read_text())
+        original_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         original_payload = payload_path.read_bytes()
         cases = {
             'truncated': original_payload[:-8],
@@ -170,7 +170,7 @@ class BackupTests(BoardTestCase):
                 manifest['files']['board.sqlite3.gz'] = {
                     'bytes': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}
                 payload_path.write_bytes(payload)
-                manifest_path.write_text(json.dumps(manifest))
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")
                 with self.assertRaises(BoardError) as caught:
                     backup.verify(current)
                 self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
@@ -212,26 +212,26 @@ class BackupTests(BoardTestCase):
         with self.assertRaises(BoardError):
             backup.verify(current)
         sentinel = self.directory / 'outside-sentinel'
-        sentinel.write_text('retained evidence')
+        sentinel.write_text('retained evidence', encoding="utf-8", newline="\n")
         evidence = board.directory / 'attempts/run/attempt/result.json'
         evidence.parent.mkdir(parents=True)
         evidence.symlink_to(sentinel)
         backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
-        self.assertEqual(sentinel.read_text(), 'retained evidence')
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), 'retained evidence')
         self.assertTrue(evidence.is_symlink())
 
     def test_linked_preserved_state_file_is_refused_without_publication(self):
         board = self.board()
         board.store.db.close()
         sentinel = self.directory / 'outside-sentinel'
-        sentinel.write_text('keep outside')
+        sentinel.write_text('keep outside', encoding="utf-8", newline="\n")
         state_file = board.directory / 'console-settings.json'
         state_file.symlink_to(sentinel)
         with self.assertRaises(BoardError) as caught:
             backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         self.assertEqual(caught.exception.code, 'BACKUP_UNSAFE_PATH')
         self.assertEqual(caught.exception.details['path'], str(state_file))
-        self.assertEqual(sentinel.read_text(), 'keep outside')
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), 'keep outside')
         self.assertFalse((board.directory / 'backups/current').exists())
 
     def test_retained_paths_do_not_join_backup_or_block_creation(self):
@@ -240,16 +240,16 @@ class BackupTests(BoardTestCase):
         native = board.directory / 'attempts/run/attempt/native/codex-home'
         native.mkdir(parents=True)
         secret = self.directory / 'private-auth.json'
-        secret.write_text('private credential')
+        secret.write_text('private credential', encoding="utf-8", newline="\n")
         (native / 'auth.json').symlink_to(secret)
         checkout = board.directory / 'workspaces/large'
         checkout.parent.mkdir()
-        checkout.write_text('unchanged checkout')
+        checkout.write_text('unchanged checkout', encoding="utf-8", newline="\n")
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         self.assertEqual(set(backup.verify(current)['files']), {'board.sqlite3.gz'})
         self.assertTrue((native / 'auth.json').is_symlink())
-        self.assertEqual(secret.read_text(), 'private credential')
-        self.assertEqual(checkout.read_text(), 'unchanged checkout')
+        self.assertEqual(secret.read_text(encoding="utf-8"), 'private credential')
+        self.assertEqual(checkout.read_text(encoding="utf-8"), 'unchanged checkout')
 
     @unittest.skipUnless(hasattr(os, 'mkfifo'), 'requires POSIX FIFOs')
     def test_special_rollback_source_refuses_publication_and_keeps_previous_generation(self):

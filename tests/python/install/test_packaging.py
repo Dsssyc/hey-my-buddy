@@ -50,7 +50,7 @@ class SingleEntrypointTests(unittest.TestCase):
         self.assertTrue(LAUNCHER.is_file(), "scripts/hey-my-buddy is the skill launcher")
         self.assertTrue(os.access(LAUNCHER, os.X_OK))
         self.assertFalse((ROOT / "bin").exists())
-        pyproject = (ROOT / "pyproject.toml").read_text()
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertEqual(pyproject.count("[project.scripts]"), 1)
         self.assertIn('hey-my-buddy = "hey_my_buddy.install.package_install:main"', pyproject)
         self.assertNotIn('\nbuddy =', pyproject)
@@ -116,7 +116,7 @@ class CwdIndependentCliTests(unittest.TestCase):
             cwd=str(cwd),
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=timeout, encoding="utf-8",
         )
         self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
         return json.loads(completed.stdout)
@@ -187,18 +187,18 @@ class SkillBuildTests(unittest.TestCase):
         from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
         self.assertEqual(sorted(path.name for path in self.skill.iterdir()),
                          ["SKILL.md", "package", "references", "scripts", "skill.json"])
-        text = (self.skill / "SKILL.md").read_text()
+        text = (self.skill / "SKILL.md").read_text(encoding="utf-8")
         head = text.split("\n---\n", 1)[0]
         self.assertIn("\nname: hey-my-buddy", head)
-        version = re.search(r'version = "([^"]+)"', (ROOT / "pyproject.toml").read_text()).group(1)
+        version = re.search(r'version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(encoding="utf-8")).group(1)
         self.assertIn(f'version: "{version}"', head)
-        marker = json.loads((self.skill / "skill.json").read_text())
+        marker = json.loads((self.skill / "skill.json").read_text(encoding="utf-8"))
         self.assertEqual((marker["name"], marker["version"], marker["contract"]), ("hey-my-buddy", version, CONTRACT_VERSION))
         self.assertTrue(os.access(self.skill / "scripts" / "hey-my-buddy", os.X_OK))
 
     def test_links_stay_inside_the_skill(self):
         for document in [self.skill / "SKILL.md", *sorted((self.skill / "references").glob("*.md"))]:
-            for target in re.findall(r"\]\(([^)\s]+)\)", document.read_text()):
+            for target in re.findall(r"\]\(([^)\s]+)\)", document.read_text(encoding="utf-8")):
                 if re.match(r"[a-z]+://", target) or target.startswith("#"):
                     continue
                 path = target.split("#", 1)[0]

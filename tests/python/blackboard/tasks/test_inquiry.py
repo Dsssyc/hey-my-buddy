@@ -151,7 +151,7 @@ class JournalOwner:
 
     def append(self, record):
         with self.lock:
-            with open(self.journal_path, "a") as stream:
+            with open(self.journal_path, "a", encoding="utf-8", newline="\n") as stream:
                 stream.write(json.dumps({**self.bound, **record}) + "\n")
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -267,7 +267,7 @@ class TestInquiry(BoardTestCase):
         environment = {**os.environ, "GIT_CONFIG_SYSTEM": "/dev/null"}
         for arguments in (("init", "-q"), ("-c", "user.name=Buddy Test", "-c", "user.email=buddy@example.invalid",
                                            "commit", "--allow-empty", "-qm", "inquiry fixture")):
-            completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True)
+            completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(completed.returncode, 0, completed.stderr)
         submitted = client.workflow_submit(
             requestId=request_id, hostId="inquiry-test-host", task="do", cwd=str(cwd), harness=harness,
@@ -384,7 +384,7 @@ class TestInquiry(BoardTestCase):
                           "answer": {"text": "the tests are still running", "bytes": 27,
                                      "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "call-42",
                                      "at": "2026-10-07T05:00:04.000Z", "truncated": False}})
-            + "\n"
+            + "\n", encoding="utf-8", newline="\n"
         )
         try:
             board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-real", "question": "status?"})
@@ -418,7 +418,7 @@ class TestInquiry(BoardTestCase):
             + "\n"
             + json.dumps({**bound, "inquiryId": "q-empty", "state": "answered",
                           "via": "tool:hey_my_buddy_answer_inquiry"})
-            + "\n"
+            + "\n", encoding="utf-8", newline="\n"
         )
         try:
             board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-empty", "question": "status?"})
@@ -441,7 +441,7 @@ class TestInquiry(BoardTestCase):
             + json.dumps({**bound, "inquiryId": "q-journal", "state": "answered",
                           "answer": {"text": "from the journal"}})
             + "\n"
-            + "{torn line\n"
+            + "{torn line\n", encoding="utf-8", newline="\n"
         )
         try:
             board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-journal", "question": "hello?"})
@@ -588,7 +588,7 @@ class TestInquiry(BoardTestCase):
             "turnId": "other-turn", "inquiryId": "q-foreign", "state": "answered",
             "answer": {"text": "answer that belongs to a different run"},
             "via": "tool:hey_my_buddy_answer_inquiry",
-        }) + "\n")
+        }) + "\n", encoding="utf-8", newline="\n")
         try:
             result = board.call(
                 "inquiry_observe",
@@ -828,7 +828,7 @@ class TestInquiry(BoardTestCase):
             legal = {**owner.bound, "inquiryId": f"q-source-{index}", "state": "answered",
                      "answer": {"text": "earlier legal answer"}}
             rows.extend((legal, {**legal, key: value, "answer": {"text": "foreign answer"}}))
-        Path(owner.journal_path).write_text("".join(json.dumps(row) + "\n" for row in rows) + "{torn line\n")
+        Path(owner.journal_path).write_text("".join(json.dumps(row) + "\n" for row in rows) + "{torn line\n", encoding="utf-8", newline="\n")
         for index, (_key, _value, reason) in enumerate(changed):
             with self.subTest(source=_key):
                 question_id = f"q-source-{index}"
@@ -944,7 +944,7 @@ class TestInquiry(BoardTestCase):
             {**bound, "inquiryId": "q-valid", "state": "answered", "answer": {"text": "valid answer"}},
         ]
         journal = Path(owner.journal_path)
-        journal.write_text("".join(json.dumps(record) + "\n" for record in records))
+        journal.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8", newline="\n")
         evidence = journal.read_bytes()
         before = len(owner.requests)
         for selector in ({}, {"inquiryId": "q-state", "question": "status?"}, {}):
@@ -1004,7 +1004,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         environment = {**os.environ, "GIT_CONFIG_SYSTEM": "/dev/null"}
         for arguments in (("init", "-q"), ("-c", "user.name=Buddy Test", "-c", "user.email=buddy@example.invalid",
                                            "commit", "--allow-empty", "-qm", "zcode live fixture")):
-            completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True)
+            completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(completed.returncode, 0, completed.stderr)
         submitted = client.workflow_submit(
             requestId=request_id, hostId="zcode-live-test-host", task="do", cwd=str(cwd), harness=harness,
@@ -1093,7 +1093,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
             "version": 1, "taskId": task["runId"], "attemptId": attempt["attemptId"],
             "generation": attempt["generation"], "turnId": bridge.identity.turn_id,
             "inquiryId": "q-empty", "state": "answered", "via": "tool:hey_my_buddy_answer_inquiry",
-        }) + "\n")
+        }) + "\n", encoding="utf-8", newline="\n")
         board.call("inquiry_observe", {
             "runId": task["runId"], "inquiryId": "q-empty", "question": "status?",
         })
@@ -1141,7 +1141,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
             "version": 1, "taskId": "another-task", "attemptId": "another-attempt", "generation": 0,
             "turnId": "other", "inquiryId": "q-live", "state": "answered",
             "answer": {"text": "answer that belongs to a different run"},
-        }) + "\n")
+        }) + "\n", encoding="utf-8", newline="\n")
         result = board.call("inquiry_observe", {
             "runId": task["runId"], "inquiryId": "q-live", "question": "who are you?",
         })
@@ -1182,7 +1182,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
                                     "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": f"call-{index}",
                                     "at": "2026-10-06T00:00:00Z", "truncated": False}})
         journal = Path(bridge.journal_path)
-        journal.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        journal.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8", newline="\n")
         board.store._message_post(task["runId"], "q0", "first")
         board.store._message_post(task["runId"], "q31", "last")
         result = board.call("inquiry_observe", {"runId": task["runId"]})
@@ -1261,7 +1261,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
                  "inquiryId": "q-last", "state": "answered",
                  "answer": {"text": "owned answer", "bytes": 12,
                             "via": "tool:hey_my_buddy_answer_inquiry"}}
-        journal.write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n")
+        journal.write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n", encoding="utf-8", newline="\n")
         result = board.call("inquiry_observe", {
             "runId": task["runId"], "inquiryId": "q-last", "question": "probe",
         })

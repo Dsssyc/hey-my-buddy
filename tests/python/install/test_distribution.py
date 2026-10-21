@@ -16,17 +16,17 @@ ROOT = Path(__file__).resolve().parents[3]
 
 class DistributionTests(unittest.TestCase):
     def test_install_entry_and_private_bootstraps(self):
-        config = tomllib.loads((ROOT / "pyproject.toml").read_text())
+        config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertEqual(config["project"]["scripts"], {"hey-my-buddy": "hey_my_buddy.install.package_install:main"})
         for name in ("install.sh", "install.ps1"):
-            script = (ROOT / name).read_text()
+            script = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn("0.12.19", script)
             self.assertIn("580e9742bc1ca4f9a6da3c4aa3db2dcceb0d0be84d75647abdae91bff68e52fc", script)
             self.assertIn("hey-my-buddy", script)
             self.assertIn("sha256", script.lower())
             self.assertNotIn("tool install", script)
-        self.assertIn("tool run --from", (ROOT / "install.sh").read_text())
-        self.assertIn("tool run --from", (ROOT / "install.ps1").read_text())
+        self.assertIn("tool run --from", (ROOT / "install.sh").read_text(encoding="utf-8"))
+        self.assertIn("tool run --from", (ROOT / "install.ps1").read_text(encoding="utf-8"))
 
     def test_wheel_and_sdist_are_complete_and_clean(self):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-dist-", dir=os.environ.get("HMB_CHECKS_TMPDIR")) as folder:
@@ -41,10 +41,10 @@ class DistributionTests(unittest.TestCase):
             if local_build:
                 command.extend(["--no-build-isolation", "--python", "python3.12"])
             result = subprocess.run(command, cwd=ROOT, env=env,
-                                    capture_output=True, text=True, timeout=180)
+                                    capture_output=True, text=True, timeout=180, encoding="utf-8")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"],
-                                  capture_output=True, text=True, check=True).stdout.strip()
+                                  capture_output=True, text=True, check=True, encoding="utf-8").stdout.strip()
             wheel = next((root / "dist").glob("*.whl"))
             sdist = next((root / "dist").glob("*.tar.gz"))
             with zipfile.ZipFile(wheel) as archive:
@@ -89,7 +89,7 @@ class DistributionTests(unittest.TestCase):
             # must keep the original sourceCommit in its embedded skill marker.
             layout = next((root / "sdist").iterdir())
             from_sdist = subprocess.run(["uv", "build", "--wheel", "--out-dir", str(root / "from-sdist")],
-                                        cwd=layout, env=env, capture_output=True, text=True, timeout=180)
+                                        cwd=layout, env=env, capture_output=True, text=True, timeout=180, encoding="utf-8")
             self.assertEqual(from_sdist.returncode, 0, from_sdist.stdout + from_sdist.stderr)
             with zipfile.ZipFile(next((root / "from-sdist").glob("*.whl"))) as archive:
                 marker = json.loads(archive.read("hey_my_buddy/_distribution/skill.json"))

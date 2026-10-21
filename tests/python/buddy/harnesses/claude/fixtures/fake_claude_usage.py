@@ -15,7 +15,7 @@ import sys
 import time
 from pathlib import Path
 
-FIXTURE = json.loads(Path(__file__).with_name("native-usage-claude.json").read_text())
+FIXTURE = json.loads(Path(__file__).with_name("native-usage-claude.json").read_text(encoding="utf-8"))
 
 
 def send(value):
@@ -38,11 +38,11 @@ def write_state(update):
         return
     state = {}
     try:
-        state = json.loads(Path(path).read_text())
+        state = json.loads(Path(path).read_text(encoding="utf-8"))
     except (FileNotFoundError, ValueError):
         state = {}
     state.update(update)
-    Path(path).write_text(json.dumps(state))
+    Path(path).write_text(json.dumps(state), encoding="utf-8", newline="\n")
 
 
 def rewrite(value, session_id):

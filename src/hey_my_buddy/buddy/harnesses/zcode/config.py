@@ -48,8 +48,8 @@ def provider_access_types(builtin: Path, personal: Path) -> dict[str, str]:
     """
     missing_access = object()
     try:
-        b = json.loads(builtin.read_text())["config"]["providerConfigRules"]
-        p = json.loads(personal.read_text())["config"]["providerConfigRules"]
+        b = json.loads(builtin.read_text(encoding="utf-8"))["config"]["providerConfigRules"]
+        p = json.loads(personal.read_text(encoding="utf-8"))["config"]["providerConfigRules"]
         templates = {r["templateId"]: r.get("config", {}).get("access", {})
                      for r in b.get("templateRules", [])}
         rules = {r["providerId"]: (r.get("templateId"), r.get("config", {}).get("access", missing_access))
@@ -72,7 +72,7 @@ def load_runtime_preferences(environment: dict) -> dict:
     """Read only the two optional app settings the CLI asks its host to supply."""
     path = Path(environment.get("ZCODE_DATA_BASE_DIR") or Path.home()) / ".zcode/v2/setting.json"
     try:
-        document = json.loads(path.read_text())
+        document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         document = None
     settings = document if isinstance(document, dict) else {}

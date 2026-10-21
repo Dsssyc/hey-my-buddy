@@ -29,7 +29,7 @@ def main():
                      "web_search": "enabled", "approval_policy": "on-request"}
     user_config = Path(os.environ.get("CODEX_HOME") or Path(os.environ["HOME"]) / ".codex") / "config.toml"
     if user_config.is_file():
-        native_config.update(tomllib.loads(user_config.read_text()))
+        native_config.update(tomllib.loads(user_config.read_text(encoding="utf-8")))
     def merge(target, update):
         for key, value in update.items():
             if isinstance(value, dict):
@@ -69,7 +69,7 @@ def main():
                              "config": {"mcp_servers": {"user-tool": {}}, "features": {"apps": True}}, "version": "1"}]}})
         elif method == "thread/start":
             trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
-            trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv}))
+            trace.write_text(json.dumps({"thread": params, "home": os.environ["CODEX_HOME"], "userHome": os.environ["HOME"], "argv": sys.argv}), encoding="utf-8", newline="\n")
             receipt = {"thread": {"id": "thread-1", "cwd": params["cwd"], "environments": []},
                        "model": "other" if case == "wrong-model" else params["model"],
                        "modelProvider": native_config.get("model_provider") or "openai", "approvalPolicy": "never"}
@@ -87,9 +87,9 @@ def main():
         elif method == "turn/start":
             turns += 1
             trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
-            recorded = json.loads(trace.read_text())
+            recorded = json.loads(trace.read_text(encoding="utf-8"))
             recorded.setdefault("turns", []).append(params)
-            trace.write_text(json.dumps(recorded))
+            trace.write_text(json.dumps(recorded), encoding="utf-8", newline="\n")
             turn_id = f"turn-{turns}"
             if case == "unlisted-model":
                 # The native answer decides: the server rejects the turn under

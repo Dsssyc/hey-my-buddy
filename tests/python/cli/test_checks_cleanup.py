@@ -117,7 +117,7 @@ class ChecksEnvironmentTests(unittest.TestCase):
                 env=environment,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=60, encoding="utf-8",
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(Path(completed.stdout.strip()).parent, tmp)
@@ -138,7 +138,7 @@ class ResidueObservationTests(unittest.TestCase):
     def test_lock_is_held_requires_an_owner(self):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
             path = Path(raw) / "lifetime.lock"
-            path.write_text("")
+            path.write_text("", encoding="utf-8", newline="\n")
             self.assertFalse(checks.lock_is_held(path))
             fd = hold_lock(path)
             try:
@@ -154,9 +154,9 @@ class ResidueObservationTests(unittest.TestCase):
             state = root / "hey-my-buddy-test-state"
             state.mkdir(parents=True)
             for name in ("control-daemon.lock", "board-owner.lock"):
-                (state / name).write_text("")
+                (state / name).write_text("", encoding="utf-8", newline="\n")
             unrelated = state / "unrelated.lock"
-            unrelated.write_text("")
+            unrelated.write_text("", encoding="utf-8", newline="\n")
             bystander = hold_lock(unrelated)
             fd = hold_lock(state / "board-owner.lock")
             try:
@@ -172,7 +172,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
         root = checks.create_private_root()
         state = root / "tmp" / "hey-my-buddy-test-clean"
         state.mkdir(parents=True)
-        (state / "control-daemon.lock").write_text("")
+        (state / "control-daemon.lock").write_text("", encoding="utf-8", newline="\n")
         self.assertIsNone(checks.teardown_private_root(root, drain_seconds=0.5))
         self.assertFalse(root.exists())
 
@@ -180,13 +180,13 @@ class PrivateRootTeardownTests(unittest.TestCase):
         root = checks.create_private_root()
         state = root / "tmp" / "hey-my-buddy-test-daemon"
         state.mkdir(parents=True)
-        (state / "control-daemon.lock").write_text("")
+        (state / "control-daemon.lock").write_text("", encoding="utf-8", newline="\n")
         fd = hold_lock(state / "control-daemon.lock")
         try:
             evidence = checks.teardown_private_root(root, drain_seconds=0.2)
             self.assertIsNotNone(evidence)
             self.assertTrue(root.exists())
-            report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text())
+            report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
             entry = report["held"]["daemon"][0]
             self.assertEqual(entry["path"], str(state / "control-daemon.lock"))
             self.assertEqual(entry["directory"], str(state))
@@ -203,7 +203,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
         execution = root / "tmp" / "hey-my-buddy-test-unlinked" / "executions" / "fixture"
         execution.mkdir(parents=True)
         lock = execution / "execution.lock"
-        lock.write_text("")
+        lock.write_text("", encoding="utf-8", newline="\n")
         script = (
             "import os, sys, time\n"
             "from hey_my_buddy import locking\n"
@@ -217,7 +217,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
             [sys.executable, "-c", script, str(execution)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            text=True, encoding="utf-8",
         )
         try:
             self.assertEqual(process.stdout.readline().strip(), "LOCKED")
@@ -243,7 +243,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
         execution = root / "tmp" / "hey-my-buddy-test-stuck" / "executions" / "fixture"
         execution.mkdir(parents=True)
         lock = execution / "execution.lock"
-        lock.write_text("")
+        lock.write_text("", encoding="utf-8", newline="\n")
         script = (
             "import os, sys, time\n"
             "from hey_my_buddy import locking\n"
@@ -256,7 +256,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
             [sys.executable, "-c", script, str(lock)],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            text=True, encoding="utf-8",
         )
         try:
             self.assertEqual(process.stdout.readline().strip(), "LOCKED")
@@ -264,7 +264,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
             evidence = checks.teardown_private_root(root, drain_seconds=1.0)
             self.assertIsNotNone(evidence)
             self.assertTrue(root.exists())
-            report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text())
+            report = json.loads((root / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
             self.assertIn(process.pid, [entry["pid"] for entry in report["processes"]])
             self.assertEqual(report["observation"]["problems"], [])
         finally:

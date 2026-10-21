@@ -82,7 +82,7 @@ def read_journal(results_path: str | None) -> dict:
     if size > MAX_JOURNAL_BYTES:
         return {"available": False, "reason": "journal-exceeds-limit", "entries": {}}
     try:
-        text = path.read_text(errors="replace")
+        text = path.read_text(errors="replace", encoding="utf-8")
     except OSError:
         return {"available": False, "reason": "journal-unreadable", "entries": {}}
     entries: dict[str, dict] = {}

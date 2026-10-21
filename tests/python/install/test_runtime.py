@@ -97,17 +97,17 @@ def write_assets(root: Path) -> None:
     """The minimal set of declared files a synthetic runtime root needs."""
     bridge = root / "src" / "hey_my_buddy"
     bridge.mkdir(parents=True, exist_ok=True)
-    (bridge / "fixture_bridge.py").write_text("# synthetic Python resource\n")
+    (bridge / "fixture_bridge.py").write_text("# synthetic Python resource\n", encoding="utf-8", newline="\n")
     console = root / "src" / "hey_my_buddy" / "console" / "assets"
     console.mkdir(parents=True, exist_ok=True)
-    (console / "index.html").write_text("<html>console</html>\n")
+    (console / "index.html").write_text("<html>console</html>\n", encoding="utf-8", newline="\n")
     cache = root / "src" / "hey_my_buddy" / "__pycache__"
     cache.mkdir(parents=True, exist_ok=True)
     (cache / "fixture_bridge.cpython-312.pyc").write_bytes(b"\0compiled")
     (root / "resources").mkdir(parents=True, exist_ok=True)
     for name in ("runner.py", "catalog.json", "decision.py"):
-        (root / "resources" / name).write_text("{}\n" if name.endswith(".json") else f"# {name}\n")
-    (root / "pyproject.toml").write_text('[project]\nname = "synthetic"\nversion = "0.0.0"\n')
+        (root / "resources" / name).write_text("{}\n" if name.endswith(".json") else f"# {name}\n", encoding="utf-8", newline="\n")
+    (root / "pyproject.toml").write_text('[project]\nname = "synthetic"\nversion = "0.0.0"\n', encoding="utf-8", newline="\n")
 
 
 def write_manifest(
@@ -125,7 +125,7 @@ def write_manifest(
     payload.update(extra or {})
     path = root / runtime.ASSET_MANIFEST
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n")
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
     return path
 
 
@@ -138,14 +138,14 @@ def fake_uv(directory: Path) -> Path:
         "import os\n"
         "from pathlib import Path, PurePosixPath, PureWindowsPath\n"
         "base = Path(__file__).parent\n"
-        "with (base / 'invocations').open('a') as stream:\n"
+        "with (base / 'invocations').open('a', encoding='utf-8', newline='\\n') as stream:\n"
         "    stream.write('sync\\n')\n"
         "if (base / 'fail').exists():\n"
         "    raise SystemExit(7)\n"
         "interpreter = Path(os.environ['UV_PROJECT_ENVIRONMENT']) / 'bin' / 'python'\n"
         "interpreter.parent.mkdir(parents=True, exist_ok=True)\n"
-        "interpreter.write_text('#!/bin/sh\\n')\n"
-        "interpreter.chmod(0o755)\n"
+        "interpreter.write_text('#!/bin/sh\\n', encoding='utf-8', newline='\\n')\n"
+        "interpreter.chmod(0o755)\n", encoding="utf-8", newline="\n"
     )
     script.chmod(0o755)
     return script
@@ -196,7 +196,7 @@ class DeclaredManifestTests(unittest.TestCase):
     def test_a_missing_manifest_is_reported_instead_of_probing_an_old_layout(self):
         decoy = self.root / "scripts" / "runner.py"
         decoy.parent.mkdir(parents=True)
-        decoy.write_text("// old layout\n")
+        decoy.write_text("// old layout\n", encoding="utf-8", newline="\n")
         (self.root / "python").mkdir()
         self.manifest_path.unlink()
         with self.assertRaises(BoardError) as failure:
@@ -216,7 +216,7 @@ class DeclaredManifestTests(unittest.TestCase):
         relative = "harnesses/new-harness/runner.py"
         runner = self.root / relative
         runner.parent.mkdir(parents=True)
-        runner.write_text("# a different harness\n")
+        runner.write_text("# a different harness\n", encoding="utf-8", newline="\n")
         resources = {"new-harness.runner": relative}
         write_manifest(
             self.root,
@@ -290,7 +290,7 @@ class DeclaredManifestTests(unittest.TestCase):
 
     def test_nested_asset_symlinks_outside_the_root_are_never_copied(self):
         outside = self.root.parent / "outside.py"
-        outside.write_text("# not part of the declared root\n")
+        outside.write_text("# not part of the declared root\n", encoding="utf-8", newline="\n")
         linked = self.root / "src/hey_my_buddy/external.py"
         linked.symlink_to(outside)
         destination = self.root.parent / "copied"
@@ -309,9 +309,9 @@ class DeclaredManifestTests(unittest.TestCase):
 
     def test_iter_assets_copies_only_declared_content(self):
         (self.root / "tests").mkdir()
-        (self.root / "tests" / "test_scratch.py").write_text("# not a runtime asset\n")
+        (self.root / "tests" / "test_scratch.py").write_text("# not a runtime asset\n", encoding="utf-8", newline="\n")
         (self.root / ".venv").mkdir()
-        (self.root / ".venv" / "pyvenv.cfg").write_text("home = /nope\n")
+        (self.root / ".venv" / "pyvenv.cfg").write_text("home = /nope\n", encoding="utf-8", newline="\n")
         (self.root / "resources" / "__pycache__").mkdir()
         (self.root / "resources" / "__pycache__" / "stale.pyc").write_bytes(b"\0")
         relative = {path for path, _file in runtime.iter_assets(self.root)}
@@ -331,7 +331,7 @@ class DeclaredManifestTests(unittest.TestCase):
     def test_content_id_covers_every_asset_and_the_manifest_itself(self):
         first = runtime.content_id(self.root)
         self.assertEqual(len(first), 32)
-        (self.root / "resources" / "runner.py").write_text("// changed\n")
+        (self.root / "resources" / "runner.py").write_text("// changed\n", encoding="utf-8", newline="\n")
         second = runtime.content_id(self.root)
         self.assertNotEqual(first, second)
         write_manifest(self.root, extra={"note": "identity covers the manifest bytes"})
@@ -457,7 +457,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.assertEqual(sorted(result["installed"] for result in results), [False, True])
         self.assertEqual(results[0]["runtime"], results[1]["runtime"])
         self.assertTrue(runtime.is_ready(target))
-        self.assertEqual((self.uv.parent / "invocations").read_text().splitlines(), ["sync"])
+        self.assertEqual((self.uv.parent / "invocations").read_text(encoding="utf-8").splitlines(), ["sync"])
         self.assertTrue(lock_path.is_file())
         self.assertEqual(len(acquisitions), 2)
 
@@ -545,7 +545,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.assertEqual(self.materialize(), target)
         self.assertTrue(runtime.is_ready(target))
         self.assertTrue(lock_path.is_file())
-        self.assertEqual((self.uv.parent / "invocations").read_text().splitlines(), ["sync", "sync"])
+        self.assertEqual((self.uv.parent / "invocations").read_text(encoding="utf-8").splitlines(), ["sync", "sync"])
 
     def test_a_ready_runtime_keeps_its_paths_after_the_source_tree_is_replaced(self):
         target = self.materialize()
@@ -566,7 +566,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
             copied.parent.mkdir(parents=True, exist_ok=True)
             copied.write_bytes(source.read_bytes())
         target = self.materialize()
-        expected = {name: runtime.resource_path("roles." + name, self.root).read_text()
+        expected = {name: runtime.resource_path("roles." + name, self.root).read_text(encoding="utf-8")
                     for name in ("worker", "router", "lead", "wrap_up")}
         replaced = self.root.with_name("project-replaced")
         self.root.rename(replaced)
@@ -579,10 +579,10 @@ class RuntimeMaterializationTests(unittest.TestCase):
                  "import json; from hey_my_buddy.install.runtime import resource_path; "
                  "from hey_my_buddy.buddy.roles.prompts import worker_prompt, router_prompt, wrap_up_prompt; "
                  "print(json.dumps({'resources': {n: [str(resource_path('roles.'+n)), "
-                 "resource_path('roles.'+n).read_text()] for n in ('worker','router','lead','wrap_up')}, "
+                 "resource_path('roles.'+n).read_text(encoding='utf-8')] for n in ('worker','router','lead','wrap_up')}, "
                  "'worker': worker_prompt('ROLE: task', {}, delivery=()), 'router': router_prompt('ROLE: task'), "
                  "'wrap_up': wrap_up_prompt()}))"],
-                cwd=target, env=environment, capture_output=True, text=True, timeout=30)
+                cwd=target, env=environment, capture_output=True, text=True, timeout=30, encoding="utf-8")
             self.assertEqual(probe.returncode, 0, probe.stderr)
             actual = json.loads(probe.stdout)
             for name, (path, text) in actual["resources"].items():
@@ -656,7 +656,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         record = runtime.read_ready(target)
         site = Path(record["environment"]) / "lib" / "python3.12" / "site-packages"
         site.mkdir(parents=True)
-        (site / "buddy.pth").write_text(str(REAL_ROOT / "src") + "\n")
+        (site / "buddy.pth").write_text(str(REAL_ROOT / "src") + "\n", encoding="utf-8", newline="\n")
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("buddy.pth" in leak for leak in leaks), leaks)
 
@@ -680,7 +680,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
     def test_source_leaks_find_a_pyvenv_that_references_the_project(self):
         target = self.materialize()
         record = runtime.read_ready(target)
-        (Path(record["environment"]) / "pyvenv.cfg").write_text(f"home = /usr/bin\nproject = {REAL_ROOT}\n")
+        (Path(record["environment"]) / "pyvenv.cfg").write_text(f"home = /usr/bin\nproject = {REAL_ROOT}\n", encoding="utf-8", newline="\n")
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("references the project source tree" in leak for leak in leaks), leaks)
 

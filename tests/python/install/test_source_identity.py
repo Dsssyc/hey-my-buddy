@@ -13,7 +13,7 @@ class SourceIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-source-identity-") as raw:
             root = Path(raw)
             (root / "src/hey_my_buddy").mkdir(parents=True)
-            (root / "src/hey_my_buddy/build-info.json").write_text(json.dumps({"sourceCommit": "a" * 40}))
+            (root / "src/hey_my_buddy/build-info.json").write_text(json.dumps({"sourceCommit": "a" * 40}), encoding="utf-8", newline="\n")
             with patch("hey_my_buddy.install.skill_package.subprocess.check_output", return_value="b" * 40) as git:
                 self.assertEqual(source_commit(root), "a" * 40)
                 git.assert_not_called()
@@ -22,6 +22,6 @@ class SourceIdentityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-source-identity-") as raw:
             root = Path(raw)
             (root / "src/hey_my_buddy").mkdir(parents=True)
-            (root / "src/hey_my_buddy/build-info.json").write_text('{"sourceCommit":null}')
+            (root / "src/hey_my_buddy/build-info.json").write_text('{"sourceCommit":null}', encoding="utf-8", newline="\n")
             with patch("hey_my_buddy.install.skill_package.subprocess.check_output", return_value="b" * 40):
                 self.assertIsNone(source_commit(root))

@@ -225,7 +225,7 @@ class SyntheticBoard:
         record = claim_record(claim, outcome=outcome)
         evidence = self.state / "attempts" / run_id / attempt["attemptId"]
         evidence.mkdir(parents=True, exist_ok=True)
-        (evidence / "turn-output.json").write_text(json.dumps(record))
+        (evidence / "turn-output.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
         result = {"status": "ok", "mode": "run", "processState": {"shutdownConfirmed": True},
                   "logPaths": {}, "turn": record, "turnResultPath": str(evidence / "turn-output.json"),
                   "workspaceSeal": self.workspace.seal(self.state, claim["turn"]["input"]["executionWorkspace"],
@@ -321,7 +321,7 @@ class SyntheticBoard:
             path = paths[count % len(paths)]
             file = path / f"synthetic-{count:05d}.json"
             path.mkdir(parents=True, exist_ok=True)
-            file.write_text(json.dumps({"synthetic": True, "seed": self.seed, "ordinal": count}))
+            file.write_text(json.dumps({"synthetic": True, "seed": self.seed, "ordinal": count}), encoding="utf-8", newline="\n")
 
     def facts(self):
         from hey_my_buddy.blackboard.tasks.macro_tasks import pending_root_count
@@ -588,11 +588,11 @@ def main(argv=None):
     recipe = Recipe.smoke() if args.scale == "smoke" else Recipe()
     failure = None
     with SyntheticBoard(state, runtime, source, seed=args.seed, recipe=recipe) as fixture:
-        (output / "fixture-facts.json").write_text(json.dumps(fixture.initial_facts, indent=2) + "\n")
+        (output / "fixture-facts.json").write_text(json.dumps(fixture.initial_facts, indent=2) + "\n", encoding="utf-8", newline="\n")
         if args.generate_only:
             report = {"initialFacts": fixture.initial_facts, "measurement": None}
         else:
-            with (output / "samples.jsonl").open("x") as stream:
+            with (output / "samples.jsonl").open("x", encoding="utf-8", newline="\n") as stream:
                 def save(row):
                     stream.write(json.dumps(row) + "\n")
                     stream.flush()
@@ -602,12 +602,12 @@ def main(argv=None):
                     failure = error
                     report = {"measurementStatus": "failed", "errorType": type(error).__name__,
                               "error": str(error), "initialFacts": fixture.initial_facts,
-                              "samples": [json.loads(line) for line in (output / "samples.jsonl").read_text().splitlines()],
+                              "samples": [json.loads(line) for line in (output / "samples.jsonl").read_text(encoding="utf-8").splitlines()],
                               "aggregates": None}
         report.update(sourceRevisionDeclared=BASELINE_SHA if args.baseline_source else args.source_revision,
                       sourceContentSha256=source_digest(source), helperSha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                       pythonVersion=sys.version, paths={"source": "<selected-source>", "state": "<private-state>", "runtime": "<private-runtime>", "output": "<private-output>"})
-        (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8", newline="\n")
     if failure is not None:
         raise failure
     print(json.dumps({"report": str(output / "report.json"), "retainedState": str(state), "retainedRuntime": str(runtime)}))

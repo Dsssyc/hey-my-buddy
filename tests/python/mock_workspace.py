@@ -168,7 +168,7 @@ class MockWorkspace:
         attempt_dir = Path(state_dir) / "attempts" / task_id / attempt_id
         attempt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         diff = attempt_dir / "workspace.diff"
-        diff.write_text("--- a\n+++ b\n")
+        diff.write_text("--- a\n+++ b\n", encoding="utf-8", newline="\n")
         os.chmod(diff, 0o600)
         seal = {
             "version": 1,
@@ -189,7 +189,7 @@ class MockWorkspace:
             "snapshotSha256": (manifest.get("snapshot") and sha256_text(canonical_json(manifest["snapshot"]))) or "",
             "ref": f"refs/hey-my-buddy/workflow/{task_id}/{attempt_id}",
             "diffPath": str(diff),
-            "diffSha256": sha256_text(diff.read_text()),
+            "diffSha256": sha256_text(diff.read_text(encoding="utf-8")),
             "sealedAfterShutdown": True,
             "includedUntracked": (manifest.get("snapshot") or {}).get("included", []),
         }

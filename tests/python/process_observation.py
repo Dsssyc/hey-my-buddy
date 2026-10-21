@@ -15,7 +15,7 @@ def wait_for_unreaped_child(pid: int, *, timeout: float = 5.0) -> None:
             raise TimeoutError(f"child {pid} did not become a zombie; last ps state: {state!r}")
         observation = subprocess.run(
             ["ps", "-o", "stat=", "-p", str(pid)], check=True,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=remaining,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=remaining, encoding="utf-8",
         )
         state = observation.stdout.strip()
         if state.startswith("Z"):

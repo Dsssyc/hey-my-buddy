@@ -83,14 +83,14 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         for adapter in ('codex', 'dsh', 'zcode', 'claude'):
             for attempt_id in (failed_id, success_id):
                 root = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id))
-                (root / 'agent-credential.json').write_text('credential fixture')
-                (root / 'unknown-events.json').write_text('failure evidence fixture')
+                (root / 'agent-credential.json').write_text('credential fixture', encoding="utf-8", newline="\n")
+                (root / 'unknown-events.json').write_text('failure evidence fixture', encoding="utf-8", newline="\n")
                 if attempt_id == success_id:
-                    (root / 'config.toml').write_text('native configuration fixture')
+                    (root / 'config.toml').write_text('native configuration fixture', encoding="utf-8", newline="\n")
             native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, adapter, run_id))
-            (native / 'session.json').write_text('native binding fixture')
+            (native / 'session.json').write_text('native binding fixture', encoding="utf-8", newline="\n")
             unknown = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown'))
-            (unknown / 'unknown-record').write_text('not a known attempt')
+            (unknown / 'unknown-record').write_text('not a known attempt', encoding="utf-8", newline="\n")
         accepted = self.accept_run(board, delivered, keepCheckout=True)
         reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
         self.assertTrue(reclaimed['removed'])
@@ -101,7 +101,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 if attempt_id == success_id:
                     self.assertFalse(root.exists())
                 else:
-                    self.assertEqual((root / 'unknown-events.json').read_text(), 'failure evidence fixture')
+                    self.assertEqual((root / 'unknown-events.json').read_text(encoding="utf-8"), 'failure evidence fixture')
             self.assertFalse(private_dirs.native_root(board.directory, adapter, run_id).exists())
             self.assertFalse(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown').exists())
         for attempt_id in (failed_id, success_id):
@@ -132,20 +132,20 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         record.close()
         expected = path.read_bytes()
         outside = self.directory / 'retained-outside-private-root.txt'
-        outside.write_text('untouched target')
+        outside.write_text('untouched target', encoding="utf-8", newline="\n")
         for adapter in ('dsh', 'zcode', 'claude'):
             root = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id))
             if adapter == 'dsh':
                 (root / 'unrelated-link').symlink_to(outside)
             elif adapter == 'zcode':
                 (root / 'unrelated-directory').mkdir()
-                (root / 'unrelated-directory/unrelated.txt').write_text('not a record')
-            (root / 'settings.json').write_text('configuration fixture')
+                (root / 'unrelated-directory/unrelated.txt').write_text('not a record', encoding="utf-8", newline="\n")
+            (root / 'settings.json').write_text('configuration fixture', encoding="utf-8", newline="\n")
         accepted = self.accept_run(board, delivered, keepCheckout=True)
         reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
         self.assertTrue(reclaimed['removed'])
         self.assertEqual(path.read_bytes(), expected)
-        self.assertEqual(outside.read_text(), 'untouched target')
+        self.assertEqual(outside.read_text(encoding="utf-8"), 'untouched target')
         for adapter in ('dsh', 'zcode', 'claude'):
             self.assertFalse(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id).exists())
 
@@ -154,7 +154,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         delivered = self.submit(board, request_id='integration-source', cwd=str(self.repo))
         self.register(board)
         claim = self.claim(board, run_id=delivered['runId'])
-        (self.repo / 'tracked.txt').write_text('sealed integration output\n')
+        (self.repo / 'tracked.txt').write_text('sealed integration output\n', encoding="utf-8", newline="\n")
         self.finish_turn(board, claim)
         view = board.call('workflow_get', {'runId': delivered['runId']})
         with board.store.db.read() as connection:
@@ -190,7 +190,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             manifest = kwargs['micro_task']['manifest']
             directory = Path(manifest['checkoutRoot']).parent
             (directory / 'outputs').mkdir()
-            (directory / 'outputs/evidence.txt').write_text('retained output')
+            (directory / 'outputs/evidence.txt').write_text('retained output', encoding="utf-8", newline="\n")
             saved.update(manifest=manifest, refs=self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'))
             return original(*args, **kwargs)
         with patch.object(board.store, 'task_submit', side_effect=admission):
@@ -200,7 +200,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertTrue(caught.exception.details['submissionCleanup']['removed'])
         directory = self.allocation()
         self.assertFalse((directory / 'checkout').exists())
-        self.assertEqual((directory / 'outputs/evidence.txt').read_text(), 'retained output')
+        self.assertEqual((directory / 'outputs/evidence.txt').read_text(encoding="utf-8"), 'retained output')
         self.assertTrue((directory / 'manifest.json').exists())
         self.assertEqual(source_index, (self.repo / '.git/index').read_bytes())
         self.assertEqual(saved['refs'], self.git(self.repo, 'for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'))
@@ -241,9 +241,9 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertEqual(facts['cleanupError']['code'], 'WORKSPACE_GIT_ERROR')
         directory = self.allocation()
         self.assertTrue((directory / 'checkout').is_dir())
-        manifest = json.loads((directory / 'manifest.json').read_text())
+        manifest = json.loads((directory / 'manifest.json').read_text(encoding="utf-8"))
         self.assertTrue(workspace.cleanup_inspect(self.directory, manifest)['eligible'])
-        self.assertEqual(json.loads(next(directory.glob('submission-cleanup-*.json')).read_text()), facts)
+        self.assertEqual(json.loads(next(directory.glob('submission-cleanup-*.json')).read_text(encoding="utf-8")), facts)
         self.assert_no_registration(board)
 
     def test_preexisting_prepared_worktree_is_preserved_on_rejection(self):
@@ -262,7 +262,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         with patch.object(board.store, 'task_submit', side_effect=BoardError('ADMISSION_FAILED', 'rejected')):
             with self.assertRaises(BoardError):
                 self.submit(board, cwd=str(self.repo), executionWorkspace={'kind':'existing', 'access':'write'})
-        self.assertEqual((self.repo / 'tracked.txt').read_text(), 'base\n')
+        self.assertEqual((self.repo / 'tracked.txt').read_text(encoding="utf-8"), 'base\n')
         self.assertEqual(self.git(self.repo, 'status', '--porcelain'), '')
 
     def test_committed_winner_survives_post_commit_failure(self):
@@ -378,7 +378,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 self.rejected(board)
         self.assertIs(caught.exception, error)
         directory = self.allocation()
-        manifest = json.loads((directory / 'manifest.json').read_text())
+        manifest = json.loads((directory / 'manifest.json').read_text(encoding="utf-8"))
         self.assertTrue((directory / 'checkout').exists())
         self.assertEqual(error.details['submissionCleanup']['cleanupError']['code'], 'WORKSPACE_GIT_ERROR')
         self.assertTrue(workspace.cleanup_inspect(self.directory, manifest)['eligible'])
@@ -389,12 +389,12 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         error = BoardError('ADMISSION_FAILED', 'rejected with changed content')
         def changed(*args, **kwargs):
             checkout = Path(kwargs['micro_task']['manifest']['checkoutRoot'])
-            (checkout / 'tracked.txt').write_text('valuable new content')
+            (checkout / 'tracked.txt').write_text('valuable new content', encoding="utf-8", newline="\n")
             raise error
         with patch.object(board.store, 'task_submit', side_effect=changed):
             with self.assertRaises(BoardError):
                 self.rejected(board)
-        self.assertEqual((self.allocation() / 'checkout/tracked.txt').read_text(), 'valuable new content')
+        self.assertEqual((self.allocation() / 'checkout/tracked.txt').read_text(encoding="utf-8"), 'valuable new content')
         self.assertIn('unsealed-changes', error.details['submissionCleanup']['reasons'])
         self.assert_no_registration(board)
 

@@ -100,7 +100,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         self.change(browser, True)
         second.cookie = old_cookie
         self.assertEqual(second.get("/api/console")[0], 401)
-        settings = json.loads((board.directory / "console-settings.json").read_text())
+        settings = json.loads((board.directory / "console-settings.json").read_text(encoding="utf-8"))
         self.assertEqual(settings["revision"], 3)
         self.assertTrue(settings["requireLogin"])
 
@@ -124,7 +124,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         self.assertEqual(second.get("/api/console")[0], 401)
         self.assertEqual(first.command("console_logout", {}, csrf=csrf)[0], 200)
         self.assertEqual(first.get("/api/console")[0], 401)
-        self.assertEqual(json.loads((board.directory / "console-sessions.json").read_text())["sessions"], [])
+        self.assertEqual(json.loads((board.directory / "console-sessions.json").read_text(encoding="utf-8"))["sessions"], [])
 
     def test_two_cookie_free_writers_apply_last_write(self):
         board = self.board()

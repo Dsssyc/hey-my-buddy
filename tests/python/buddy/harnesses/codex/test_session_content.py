@@ -81,7 +81,7 @@ class SessionProjectionTests(unittest.TestCase):
         self.assertEqual(self.record.path, self.state / "attempt.jsonl")
         if os.name != "nt":
             self.assertEqual(self.record.path.stat().st_mode & 0o777, 0o600)
-        self.assertEqual(json.loads(self.record.path.read_text().splitlines()[0]),
+        self.assertEqual(json.loads(self.record.path.read_text(encoding="utf-8").splitlines()[0]),
                          {"protocol": "acp", "protocolVersion": 1, "projectionVersion": 1})
         with patch("os.fsync", side_effect=AssertionError("display writes never fsync")):
             self.item("item/completed", text="visible now")
@@ -387,7 +387,7 @@ class SessionRecordRecoveryTests(unittest.TestCase):
         outside = self.root / "outside"
         outside.mkdir()
         target = outside / "sentinel.jsonl"
-        target.write_text("sentinel", encoding="utf-8")
+        target.write_text("sentinel", encoding="utf-8", newline="\n")
         linked_file = self.root / "linked.jsonl"
         linked_file.symlink_to(target)
         record = SessionRecord(linked_file, "attempt")

@@ -43,7 +43,7 @@ class TestExecutionRecords(BoardTestCase):
             self.assertEqual(envelope["status"], "completed")
             self.assertEqual(envelope["runId"], task["runId"])
             self.assertIn("argv", envelope["result"])
-            self.assertEqual(marker.read_text().strip(), "done")
+            self.assertEqual(marker.read_text(encoding="utf-8").strip(), "done")
 
     def test_internal_execution_submit_is_idempotent_for_the_same_request_id(self):
         with self.daemon():

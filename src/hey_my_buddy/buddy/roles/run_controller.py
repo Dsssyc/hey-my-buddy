@@ -86,7 +86,7 @@ def main() -> int:
     except Exception:
         frame, code = canonical_json({"status": "error", "code": "role-controller-failed",
                                       "processState": {"shutdownConfirmed": False}}), 1
-    sys.stdout.write(frame + "\n")
+    sys.stdout.buffer.write((frame + "\n").encode("utf-8"))
     return code
 
 

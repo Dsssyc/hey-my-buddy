@@ -46,7 +46,7 @@ class CurrentCoreTests(BoardTestCase):
         return path
 
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
-        signature = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "contract_signatures.json").read_text())
+        signature = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "contract_signatures.json").read_text(encoding="utf-8"))
         self.assertEqual(CONTRACT_VERSION, signature["contractVersion"])
         self.assertEqual(SCHEMA_VERSION, 27)
         board = self.board()
@@ -71,7 +71,7 @@ class CurrentCoreTests(BoardTestCase):
         source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy"
         writes = []
         for path in source.rglob("*.py"):
-            for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
                     if re.search(r"\b(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|UPDATE|DELETE\s+FROM)\s+meta\b",
                                  node.value, re.IGNORECASE):

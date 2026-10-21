@@ -304,7 +304,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             )
             for path in (native / "session", evidence / "task.txt", control, submission):
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("private fixture")
+                path.write_text("private fixture", encoding="utf-8", newline="\n")
             return native.parent, evidence.parent, control, submission
 
         target_paths = materialize(target)

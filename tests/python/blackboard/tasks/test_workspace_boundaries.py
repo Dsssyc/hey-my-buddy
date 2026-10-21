@@ -31,13 +31,13 @@ class WorkspaceBoundaryTests(unittest.TestCase):
     def test_thousand_scope_violations_keep_complete_evidence_and_restore(self):
         paths = [f"docs/blocked-{number:04d}.txt" for number in range(1000)]
         for name in paths:
-            (self.repo / name).write_text("authorized\n")
+            (self.repo / name).write_text("authorized\n", encoding="utf-8", newline="\n")
         self.git("add", ".")
         self.git("commit", "-qm", "many scoped inputs")
         manifest = self.prepare()
         checkout = Path(manifest["path"])
         for name in paths:
-            (checkout / name).write_text("outside declared scope\n")
+            (checkout / name).write_text("outside declared scope\n", encoding="utf-8", newline="\n")
         self.git("add", "docs", cwd=checkout)
         error = self.assert_error("WORKSPACE_SCOPE_VIOLATION", self.seal, manifest)
         evidence = error.details["evidence"]
@@ -52,13 +52,13 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(resolved["resolvedPaths"], paths)
         self.assertEqual(resolved["remainingPaths"], [])
         for name in paths:
-            self.assertEqual((checkout / name).read_text(), "authorized\n")
+            self.assertEqual((checkout / name).read_text(encoding="utf-8"), "authorized\n")
         self.assertEqual(self.git("diff", "--cached", "--name-only", cwd=checkout), b"")
         self.assertNotIn("changedEntries", resolved["artifact"]["snapshot"])
 
     def test_first_turn_cumulative_patch_uses_sealed_diff_without_git(self):
         manifest = self.prepare()
-        (Path(manifest["path"]) / "src/file.txt").write_text("output\n")
+        (Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
         sealed = self.seal(manifest)
         with patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")):
             cumulative = workspace.cumulative_patch(manifest, sealed, manifest["inputCommit"])
@@ -67,9 +67,9 @@ class WorkspaceBoundaryTests(unittest.TestCase):
 
     def test_missing_staged_commit_rejects_turn_start_when_input_still_exists(self):
         source = self.repo / "src/file.txt"
-        source.write_text("staged only\n")
+        source.write_text("staged only\n", encoding="utf-8", newline="\n")
         self.git("add", "src/file.txt")
-        source.write_text("base\n")
+        source.write_text("base\n", encoding="utf-8", newline="\n")
         manifest = self.prepare(kind="existing")
         staged = manifest["snapshot"]["stagedCommit"]
         self.assertEqual(manifest["inputCommit"], self.base)
@@ -77,22 +77,22 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.clear_refs_and_prune(staged)
         self.assertEqual(self.git("cat-file", "-t", manifest["inputCommit"]), b"commit\n")
         self.assert_error("WORKSPACE_GIT_ERROR", workspace.verify, manifest, require_unchanged=False)
-        self.assertEqual(source.read_text(), "base\n")
-        source.write_text("output after the staged commit disappeared\n")
+        self.assertEqual(source.read_text(encoding="utf-8"), "base\n")
+        source.write_text("output after the staged commit disappeared\n", encoding="utf-8", newline="\n")
         with patch.object(workspace, "_write_objects", side_effect=AssertionError("write before input proof")):
             self.assert_error("WORKSPACE_GIT_ERROR", self.seal, manifest)
-        self.assertEqual(source.read_text(), "output after the staged commit disappeared\n")
+        self.assertEqual(source.read_text(encoding="utf-8"), "output after the staged commit disappeared\n")
 
     def test_unused_staged_commit_does_not_add_a_git_read(self):
         source = self.repo / "src/file.txt"
-        source.write_text("staged input\n")
+        source.write_text("staged input\n", encoding="utf-8", newline="\n")
         self.git("add", "src/file.txt")
         # Existing inputs with equal trees have separate commits for those trees;
         # worktrees never use the source index as their execution index.
         for kind in ("existing", "worktree"):
             with self.subTest(kind=kind):
                 if kind == "worktree":
-                    source.write_text("base\n")
+                    source.write_text("base\n", encoding="utf-8", newline="\n")
                 manifest = self.prepare(request=kind, kind=kind)
                 snapshot = manifest["snapshot"]
                 self.assertNotEqual(snapshot["stagedCommit"], manifest["inputCommit"])
@@ -113,12 +113,12 @@ class WorkspaceBoundaryTests(unittest.TestCase):
 
     def test_missing_input_commit_rejects_turn_start_and_sealing(self):
         source = self.repo / "src/file.txt"
-        source.write_text("prepared input\n")
+        source.write_text("prepared input\n", encoding="utf-8", newline="\n")
         self.git("add", "src/file.txt")
         manifest = self.prepare(kind="existing")
         self.assertNotEqual(manifest["inputCommit"], self.base)
         self.clear_refs_and_prune(manifest["inputCommit"], manifest["snapshot"]["stagedCommit"])
-        source.write_text("output after the input commit disappeared\n")
+        source.write_text("output after the input commit disappeared\n", encoding="utf-8", newline="\n")
         for boundary, operation in (
             ("turn-start", lambda: workspace.verify(manifest, require_unchanged=False)),
             ("seal", lambda: self.seal(manifest)),
@@ -126,11 +126,11 @@ class WorkspaceBoundaryTests(unittest.TestCase):
             with self.subTest(boundary=boundary):
                 with patch.object(workspace, "_write_objects", side_effect=AssertionError("write before input proof")):
                     self.assert_error("WORKSPACE_GIT_ERROR", operation)
-        self.assertEqual(source.read_text(), "output after the input commit disappeared\n")
+        self.assertEqual(source.read_text(encoding="utf-8"), "output after the input commit disappeared\n")
 
     def test_missing_output_commit_rejects_integration_even_with_matching_target(self):
         manifest = self.prepare(kind="existing")
-        (self.repo / "src/file.txt").write_text("sealed output\n")
+        (self.repo / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         sealed = self.seal(manifest)
         self.git("add", "src/file.txt")
         self.git("commit", "-qm", "integrated output")
@@ -146,7 +146,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         expected = [(manifest["snapshot"]["inputRef"], manifest["inputCommit"]),
                     (manifest["snapshot"]["stagedRef"], manifest["snapshot"]["stagedCommit"])]
         if sealed_output:
-            (checkout / "src/file.txt").write_text("sealed output\n")
+            (checkout / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
             sealed = self.seal(manifest)
             expected.append((sealed["ref"], sealed["commit"]))
         proof = lambda: workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
@@ -178,9 +178,9 @@ class WorkspaceBoundaryTests(unittest.TestCase):
     def test_mismatching_fingerprint_cleanup_proof_writes_no_objects(self):
         manifest = self.prepare()
         checkout = Path(manifest["path"])
-        (checkout / "src/file.txt").write_text("sealed output\n")
+        (checkout / "src/file.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         sealed = self.seal(manifest)
-        (checkout / "src/new.txt").write_text("unique unsealed object for read-only cleanup\n")
+        (checkout / "src/new.txt").write_text("unique unsealed object for read-only cleanup\n", encoding="utf-8", newline="\n")
         before = self.git("cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
         with patch.object(workspace, "_write_objects", side_effect=AssertionError("object write")) as writes, \
                 patch.object(workspace, "_tree", side_effect=AssertionError("tree construction")) as trees:
@@ -191,7 +191,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         writes.assert_not_called()
         trees.assert_not_called()
         self.assertEqual(self.git("cat-file", "--batch-all-objects", "--batch-check=%(objectname)"), before)
-        self.assertEqual((checkout / "src/new.txt").read_text(), "unique unsealed object for read-only cleanup\n")
+        self.assertEqual((checkout / "src/new.txt").read_text(encoding="utf-8"), "unique unsealed object for read-only cleanup\n")
 
     def test_cleanup_requires_current_product_lock_reason(self):
         manifest = self.prepare()
@@ -282,7 +282,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         (checkout / "src/file.txt").write_bytes(b"staged only\x00\xff")
         self.git("add", "src/file.txt", cwd=checkout)
         staged_index = workspace._entries(checkout)
-        (checkout / "src/file.txt").write_text("base\n")
+        (checkout / "src/file.txt").write_text("base\n", encoding="utf-8", newline="\n")
         ordinary = workspace.cleanup_inspect(self.state, manifest, sealed=sealed)
         self.git("worktree", "unlock", str(checkout))
         (checkout / ".git").unlink()
@@ -293,7 +293,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(proof["reasons"], ["unsealed-changes"])
         self.assertEqual(proof["unsealedPaths"], ordinary["unsealedPaths"])
         self.assertEqual(workspace._entries(git_dir), staged_index)
-        self.assertEqual((checkout / "src/file.txt").read_text(), "base\n")
+        self.assertEqual((checkout / "src/file.txt").read_text(encoding="utf-8"), "base\n")
         workspace._git(git_dir, "read-tree", manifest["inputTree"])
         self.assertEqual(workspace._entries(git_dir), initial_index)
         self.assertTrue(workspace.cleanup_inspect(self.state, manifest, sealed=sealed, resume=True)["eligible"])

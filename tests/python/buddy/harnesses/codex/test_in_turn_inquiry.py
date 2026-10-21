@@ -175,7 +175,7 @@ class ClientToolWorkerTests(SeamCase):
         resumed = run(next_request, observer=lambda _facts: FEEDBACK_CONTINUE,
                       services=RunServices(inquiry=self.services(next_request)), cancelled=lambda: False)
         self.assertEqual(resumed.end.status, "ok", resumed.end.message)
-        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
+        trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
         thread = trace["threads"][result.native_identity.session_id]
         self.assertTrue(thread["initialize"]["capabilities"]["experimentalApi"])
         self.assertEqual(thread["start"]["dynamicTools"], inquiry.dynamic_tools)
@@ -219,7 +219,7 @@ class ClientToolWorkerTests(SeamCase):
                     raise outcomes[0]
                 result = outcomes[0]
                 self.assertEqual(result.end.status, "ok", result.end.message)
-                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text())
+                trace = json.loads(Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).read_text(encoding="utf-8"))
                 native_thread = trace["threads"][result.native_identity.session_id]
                 self.assertEqual(native_thread["steer"]["expectedTurnId"], result.native_identity.turn_id)
                 if case == "inquiry-invalid-retry":

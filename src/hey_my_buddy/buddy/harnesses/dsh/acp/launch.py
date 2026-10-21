@@ -145,7 +145,7 @@ def record_launch(log_path: Path, argv: list[str], environment: dict, *, spawn_c
     fd = private_dirs.open_regular_fd(
         Path(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+        with os.fdopen(fd, "a", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(entry, sort_keys=True) + "\n")
     except BaseException:
         try:

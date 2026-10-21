@@ -324,7 +324,7 @@ class ControlFileTests(PrivateStateTestCase):
     def test_direct_cli_reads_credential_file_once(self):
         from hey_my_buddy.install import launcher
         credential_file = self.directory / "direct-credential.json"
-        credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}))
+        credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
         credential_file.chmod(0o600)
         original_read = launcher.read_private
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}), \
@@ -362,7 +362,7 @@ class ControlFileTests(PrivateStateTestCase):
             cli._read_control(str(link))
         self.assertEqual(linked.exception.code, "INSECURE_CONTROL_FILE")
 
-        path.write_text(json.dumps({**triple, "unexpected": True}))
+        path.write_text(json.dumps({**triple, "unexpected": True}), encoding="utf-8", newline="\n")
         path.chmod(0o600)
         with self.assertRaises(BoardError) as unexpected:
             cli._read_control(str(path))
@@ -396,7 +396,7 @@ class ControlFileTests(PrivateStateTestCase):
     def test_agent_credential_passes_explicit_control_file_for_service_authorization(self):
         path = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}, state_dir=self.directory)
         credential_file = self.directory / "control-credential.json"
-        credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}))
+        credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
         credential_file.chmod(0o600)
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
             self.assertEqual(cli._apply_control({"runId": "run-1", "controlFile": path}, "decide"),
@@ -415,9 +415,9 @@ class ControlFileTests(PrivateStateTestCase):
         self.assertEqual(missing.exception.code, "INVALID_ARGUMENT")
         path = Path(cli._save_control("owned-run", {"hostId": "host-1", "ownerGeneration": 1,
                                                       "controlToken": "host-control"}, state_dir=self.directory))
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding="utf-8"))
         value["hostId"] = None
-        path.write_text(json.dumps(value))
+        path.write_text(json.dumps(value), encoding="utf-8", newline="\n")
         path.chmod(0o600)
         with self.assertRaises(BoardError) as invalid:
             cli._read_control(str(path))
@@ -481,7 +481,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         claim = self.claim(board)
         token = claim["claim"]["agentCredential"]
         credential_file = self.directory / "attempt-credential.json"
-        credential_file.write_text(json.dumps({"token": token, "stateDir": str(self.directory)}))
+        credential_file.write_text(json.dumps({"token": token, "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
         credential_file.chmod(0o600)
 
         other_state = self.directory / "other-board"
@@ -512,7 +512,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         payload = json.loads(self.submit_payload("owned", cwd=str(self.workdir("owned"))))
         payload.pop("hostId")
         credential_file = self.directory / "lead-credential.json"
-        credential_file.write_text(json.dumps({"token": credential, "stateDir": str(self.directory)}))
+        credential_file.write_text(json.dumps({"token": credential, "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
         credential_file.chmod(0o600)
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
             code, child = self.run_cli("submit", json.dumps({**payload, "output": "full"}))
@@ -636,7 +636,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         board = self.board()
         self.use_board_transport(board)
         credential_file = self.directory / "invalid-credential.json"
-        credential_file.write_text(json.dumps({"token": "not-a-real-credential", "stateDir": str(self.directory)}))
+        credential_file.write_text(json.dumps({"token": "not-a-real-credential", "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
         credential_file.chmod(0o600)
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
             code, refused = self.run_cli("submit", self.submit_payload("cli-req-4"))

@@ -15,6 +15,7 @@ or stream content is decoded as UTF-8 and parsed directly, never through a shell
 that method actually validates (see :mod:`hey_my_buddy.cli.cli_help`).
 """
 import argparse
+import io
 import json
 import os
 import re
@@ -511,6 +512,11 @@ def _help_command(arguments: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DOCUMENT) -> int:
+    # The CLI emits UTF-8 JSON through pipes as well as the native console.
+    # A caller-supplied in-memory text stream has no byte encoding to configure.
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            stream.reconfigure(encoding="utf-8", newline="\n")
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["help"]:
         return _help_command(argv[1:])

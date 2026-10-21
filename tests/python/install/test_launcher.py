@@ -23,21 +23,21 @@ class LauncherTests(unittest.TestCase):
             skill = root / 'hey-my-buddy'
             (skill / 'scripts').mkdir(parents=True)
             (skill / 'package').mkdir()
-            (skill / 'package/pyproject.toml').write_text('[project]\nname="fixture"\n')
+            (skill / 'package/pyproject.toml').write_text('[project]\nname="fixture"\n', encoding="utf-8", newline="\n")
             shutil.copy2(source, skill / 'scripts/hey-my-buddy')
             target = root / 'runtime' / ('f' * 32)
             python = runtime.runtime_python(target)
             python.parent.mkdir(parents=True)
-            python.write_text('#!/bin/sh\nprintf \'{"used":"stable-hint"}\\n\'\n')
+            python.write_text('#!/bin/sh\nprintf \'{"used":"stable-hint"}\\n\'\n', encoding="utf-8", newline="\n")
             python.chmod(0o700)
             write_runtime_hint(skill, target)
             trap = root / 'bin'
             trap.mkdir()
-            (trap / 'python3').write_text('#!/bin/sh\nexit 77\n')
+            (trap / 'python3').write_text('#!/bin/sh\nexit 77\n', encoding="utf-8", newline="\n")
             (trap / 'python3').chmod(0o700)
             env = {'PATH': str(trap) + ':/usr/bin:/bin', 'HOME': str(root),
                    'HMB_STATE_DIR': str(root / 'state'), 'HMB_RUNTIME_ROOT': str(root / 'runtime'), 'UV_BIN': str(root / 'missing-uv')}
-            result = subprocess.run(['/bin/sh', str(skill / 'scripts/hey-my-buddy'), 'ping'], env=env, capture_output=True, text=True)
+            result = subprocess.run(['/bin/sh', str(skill / 'scripts/hey-my-buddy'), 'ping'], env=env, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout), {'used': 'stable-hint'})
 
@@ -51,19 +51,19 @@ class LauncherTests(unittest.TestCase):
             target = root / ('a' * 32)
             python = target / 'venv/bin/python'
             python.parent.mkdir(parents=True)
-            python.write_text('#!/bin/sh\nprintf \'{"used":"active"}\\n\'\n')
+            python.write_text('#!/bin/sh\nprintf \'{"used":"active"}\\n\'\n', encoding="utf-8", newline="\n")
             python.chmod(0o700)
             (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
-            (target / 'READY.json').write_text(json.dumps({'format': 1, 'state': 'READY', 'contentId': target.name}))
+            (target / 'READY.json').write_text(json.dumps({'format': 1, 'state': 'READY', 'contentId': target.name}), encoding="utf-8", newline="\n")
             launcher.write_active_runtime(state, target)
             bootstrap = base / 'bootstrap'
-            bootstrap.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -S "$@"\n')
+            bootstrap.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -S "$@"\n', encoding="utf-8", newline="\n")
             bootstrap.chmod(0o700)
             environment = {key: value for key, value in os.environ.items() if not key.startswith('HMB_')}
             environment.update(HMB_STATE_DIR=str(state), HMB_RUNTIME_ROOT=str(root),
                                HMB_BOOTSTRAP_PYTHON=str(bootstrap), UV_BIN=str(base / 'missing-uv'))
             completed = subprocess.run(['/bin/sh', str(script), 'ping'], env=environment,
-                                       capture_output=True, text=True, check=False)
+                                       capture_output=True, text=True, check=False, encoding="utf-8")
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             self.assertEqual(json.loads(completed.stdout), {'used': 'active'})
 
@@ -87,7 +87,7 @@ class LauncherTests(unittest.TestCase):
             state = root / 'board'
             state.mkdir(mode=0o700)
             credential = root / 'agent-credential.json'
-            credential.write_text(json.dumps({'token': 'fixture-secret', 'stateDir': str(state)}))
+            credential.write_text(json.dumps({'token': 'fixture-secret', 'stateDir': str(state)}), encoding="utf-8", newline="\n")
             credential.chmod(0o600)
             target = root / 'runtime' / ('a' * 32)
             (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
@@ -116,7 +116,7 @@ class LauncherTests(unittest.TestCase):
             state.mkdir(mode=0o700)
             credential = root / 'agent-credential.json'
             document = {'token': 'fixture-secret', 'stateDir': str(state)}
-            credential.write_text(json.dumps(document))
+            credential.write_text(json.dumps(document), encoding="utf-8", newline="\n")
             credential.chmod(0o600)
             original_read = launcher.read_private
             with mock.patch.dict(os.environ, {'HMB_AGENT_CREDENTIAL_FILE': str(credential)}, clear=True), \

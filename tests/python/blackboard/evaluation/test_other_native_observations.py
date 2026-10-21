@@ -29,8 +29,8 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "buddy" / "harnesses"
-CLAUDE_NATIVE = json.loads((FIXTURES / "claude/fixtures/native-usage-claude.json").read_text())
-ZCODE_NATIVE = json.loads((FIXTURES / "zcode/fixtures/native-usage-zcode.json").read_text())
+CLAUDE_NATIVE = json.loads((FIXTURES / "claude/fixtures/native-usage-claude.json").read_text(encoding="utf-8"))
+ZCODE_NATIVE = json.loads((FIXTURES / "zcode/fixtures/native-usage-zcode.json").read_text(encoding="utf-8"))
 FAKE_CLAUDE_USAGE = FIXTURES / "claude/fixtures/fake_claude_usage.py"
 MOCK_ZCODE_USAGE = FIXTURES / "zcode/fixtures/mock_zcode_usage.py"
 
@@ -250,7 +250,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
     def test_an_oversized_assistant_text_is_bounded_with_its_full_provenance(self):
         outcome = self.execute("usage-long-text")
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        recorded = json.loads(self.state.read_text())
+        recorded = json.loads(self.state.read_text(encoding="utf-8"))
         message = outcome.result["lastAssistantMessage"]
         self.assertTrue(message["truncated"])
         self.assertEqual(message["sourceBytes"], recorded["longTextBytes"])
@@ -426,9 +426,9 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.cwd.mkdir()
         self.builtin = self.root / "builtin.json"
         self.personal = self.root / "personal.json"
-        self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}))
+        self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}), encoding="utf-8", newline="\n")
         self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
-            {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
+            {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}), encoding="utf-8", newline="\n")
         self.environment = clean_environment()
         self.environment.update(HMB_CONSOLE_PORT="0",
                                 HMB_STATE_DIR=str(self.root / "state"),

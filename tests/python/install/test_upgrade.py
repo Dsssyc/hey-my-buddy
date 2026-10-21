@@ -153,7 +153,7 @@ class UpgradeTests(BoardTestCase):
             environment = upgrade._environment(state, target)
         self.assertEqual(environment['HMB_MAX_CONCURRENT'], '3')
         self.assertEqual(environment['HMB_WAIT_CAPACITY'], '48')
-        self.assertEqual(json.loads((state / 'launch-settings.json').read_text())['environment'], settings)
+        self.assertEqual(json.loads((state / 'launch-settings.json').read_text(encoding="utf-8"))['environment'], settings)
 
     def test_verified_recovery_keeps_journal_when_clear_fails_without_rollback(self):
         state = self.directory / 'state'
@@ -167,7 +167,7 @@ class UpgradeTests(BoardTestCase):
 
         def refuse_clear(_path):
             self.assertTrue(marker.exists())
-            self.assertEqual(json.loads((state / 'upgrade-last.json').read_text())['phase'], 'verified')
+            self.assertEqual(json.loads((state / 'upgrade-last.json').read_text(encoding="utf-8"))['phase'], 'verified')
             raise OSError('denied')
 
         with mock.patch.object(upgrade.runtime, 'is_ready', return_value=True), \
@@ -179,7 +179,7 @@ class UpgradeTests(BoardTestCase):
         self.assertTrue(result['upgraded'])
         self.assertEqual(result['journalError'], 'denied')
         self.assertTrue(marker.exists())
-        self.assertEqual(json.loads(marker.read_text())['phase'], 'verified')
+        self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))['phase'], 'verified')
 
     def test_busy_upgrade_leaves_skill_launcher_runtime_and_service_unchanged(self):
         board = self.board()
@@ -189,16 +189,16 @@ class UpgradeTests(BoardTestCase):
         previous.mkdir(parents=True)
         skill = self.directory / 'skills/hey-my-buddy'
         (skill / 'scripts').mkdir(parents=True)
-        (skill / 'SKILL.md').write_text('old skill')
-        (skill / 'scripts/hey-my-buddy').write_text('old launcher')
+        (skill / 'SKILL.md').write_text('old skill', encoding="utf-8", newline="\n")
+        (skill / 'scripts/hey-my-buddy').write_text('old launcher', encoding="utf-8", newline="\n")
         source = self.directory / 'new-skill'
         source.mkdir()
-        (source / 'SKILL.md').write_text('new skill')
+        (source / 'SKILL.md').write_text('new skill', encoding="utf-8", newline="\n")
         control = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'existing', 'pid': 123,
                    'contractVersion': '0.19.0'}
-        (state / 'control.json').write_text(json.dumps(control))
+        (state / 'control.json').write_text(json.dumps(control), encoding="utf-8", newline="\n")
         active = state / 'active-runtime.json'
-        active.write_text(json.dumps({'runtimeDir': str(previous)}))
+        active.write_text(json.dumps({'runtimeDir': str(previous)}), encoding="utf-8", newline="\n")
         before = [(skill / 'SKILL.md').read_bytes(), (skill / 'scripts/hey-my-buddy').read_bytes(),
                   active.read_bytes(), (state / 'control.json').read_bytes()]
         health = {'serviceId': 'existing', 'pid': 123, 'maxConcurrent': 1, 'waitCapacity': 32, 'contractVersion': '0.19.0'}
@@ -222,7 +222,7 @@ class UpgradeTests(BoardTestCase):
         skill = self.directory / 'skills/hey-my-buddy'
         old_skill = skill.with_name('buddy')
         old_skill.mkdir(parents=True)
-        (old_skill / 'skill.json').write_text(json.dumps({'name': 'buddy'}))
+        (old_skill / 'skill.json').write_text(json.dumps({'name': 'buddy'}), encoding="utf-8", newline="\n")
         old_link = self.directory / 'claude/buddy'
         old_link.parent.mkdir()
         old_link.symlink_to(old_skill, target_is_directory=True)
@@ -230,33 +230,33 @@ class UpgradeTests(BoardTestCase):
         staged = skill.with_name('.hey-my-buddy-upgrade-stage-' + 'a' * 32)
         for directory, value in ((skill, 'old'), (staged, 'new')):
             (directory / 'scripts').mkdir(parents=True)
-            (directory / 'SKILL.md').write_text(value)
-            (directory / 'scripts/hey-my-buddy').write_text(value + ' launcher')
+            (directory / 'SKILL.md').write_text(value, encoding="utf-8", newline="\n")
+            (directory / 'scripts/hey-my-buddy').write_text(value + ' launcher', encoding="utf-8", newline="\n")
         journal = {'skillTarget': str(skill), 'skillStage': str(staged),
                    'skillPrevious': str(previous), 'skillHadPrevious': True}
         with mock.patch('hey_my_buddy.install.skill_install.agent_skills_home', return_value=skill.parent), \
              mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}):
             upgrade._publish_skill(journal)
-            self.assertEqual((skill / 'SKILL.md').read_text(), 'new')
+            self.assertEqual((skill / 'SKILL.md').read_text(encoding="utf-8"), 'new')
             upgrade._restore_skill(journal)
-        self.assertEqual((skill / 'SKILL.md').read_text(), 'old')
-        self.assertEqual((skill / 'scripts/hey-my-buddy').read_text(), 'old launcher')
+        self.assertEqual((skill / 'SKILL.md').read_text(encoding="utf-8"), 'old')
+        self.assertEqual((skill / 'scripts/hey-my-buddy').read_text(encoding="utf-8"), 'old launcher')
         self.assertFalse(previous.exists())
         self.assertFalse(staged.exists())
-        self.assertEqual(json.loads((old_skill / 'skill.json').read_text()), {'name': 'buddy'})
+        self.assertEqual(json.loads((old_skill / 'skill.json').read_text(encoding="utf-8")), {'name': 'buddy'})
         self.assertTrue(old_link.is_symlink())
 
     def test_recovery_rejects_unrelated_skill_paths_before_deleting(self):
         unrelated = self.directory / 'unrelated'
         unrelated.mkdir()
         keep = unrelated / 'keep.txt'
-        keep.write_text('user data')
+        keep.write_text('user data', encoding="utf-8", newline="\n")
         journal = {'skillTarget': str(unrelated), 'skillStage': str(self.directory / 'stage'),
                    'skillPrevious': str(self.directory / 'previous'), 'skillHadPrevious': False}
         with self.assertRaises(BoardError) as caught:
             upgrade._restore_skill(journal)
         self.assertEqual(caught.exception.code, 'UPGRADE_RECOVERY_REQUIRED')
-        self.assertEqual(keep.read_text(), 'user data')
+        self.assertEqual(keep.read_text(encoding="utf-8"), 'user data')
 
     def test_raced_admission_aborts_before_backup_and_keeps_previous_owner(self):
         board = self.board()
@@ -265,7 +265,7 @@ class UpgradeTests(BoardTestCase):
         previous, target = root / ('a' * 32), root / ('b' * 32)
         previous.mkdir(parents=True)
         endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old', 'pid': 123, 'contractVersion': '0.19.0'}
-        (state / 'control.json').write_text(json.dumps(endpoint))
+        (state / 'control.json').write_text(json.dumps(endpoint), encoding="utf-8", newline="\n")
         health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
         busy = BoardError('UPGRADE_NOT_IDLE', 'raced task', active=[{'runId': 'raced', 'state': 'queued'}])
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
@@ -284,13 +284,13 @@ class UpgradeTests(BoardTestCase):
         reason = result['error']['details']['reason']
         self.assertEqual(reason, {'code':'UPGRADE_NOT_IDLE', 'message':'raced task',
                                  'details':{'active':[{'runId':'raced', 'state':'queued'}], 'tables':[]}})
-        journal = json.loads((state / 'upgrade-last.json').read_text())
+        journal = json.loads((state / 'upgrade-last.json').read_text(encoding="utf-8"))
         self.assertEqual(journal['phase'], 'not-switched')
         self.assertEqual(journal['failure'], reason)
         detach.assert_called_once()
         create.assert_not_called()
         self.assertFalse((state / 'upgrade.json').exists())
-        self.assertEqual(json.loads((state / 'control.json').read_text()), endpoint)
+        self.assertEqual(json.loads((state / 'control.json').read_text(encoding="utf-8")), endpoint)
 
     def test_fenced_upgrade_rejects_new_linked_state_file_and_rolls_back(self):
         board = self.board()
@@ -300,19 +300,19 @@ class UpgradeTests(BoardTestCase):
         previous.mkdir(parents=True)
         endpoint = {'runtimeIdentity': 'runtime:' + previous.name, 'serviceId': 'old',
                     'pid': 123, 'contractVersion': '0.19.0'}
-        (state / 'control.json').write_text(json.dumps(endpoint))
+        (state / 'control.json').write_text(json.dumps(endpoint), encoding="utf-8", newline="\n")
         health = {**endpoint, 'maxConcurrent': 1, 'waitCapacity': 32}
         original_write = upgrade.write_journal
         inserted = False
         sentinel = self.directory / 'outside-sentinel'
-        sentinel.write_text('keep outside')
+        sentinel.write_text('keep outside', encoding="utf-8", newline="\n")
         relative = 'console-settings.json'
         evidence = state / 'attempts/run/attempt/result.json'
         evidence.parent.mkdir(parents=True)
-        evidence.write_text('retained evidence')
+        evidence.write_text('retained evidence', encoding="utf-8", newline="\n")
         checkout = state / 'workspaces/checkout/keep.txt'
         checkout.parent.mkdir(parents=True)
-        checkout.write_text('retained checkout')
+        checkout.write_text('retained checkout', encoding="utf-8", newline="\n")
 
         def fenced_write(path, value):
             nonlocal inserted
@@ -341,15 +341,15 @@ class UpgradeTests(BoardTestCase):
         detach.assert_called()
         start.assert_called()
         self.assertFalse((state / 'upgrade.json').exists())
-        self.assertEqual(json.loads((state / 'control.json').read_text()), endpoint)
-        self.assertEqual(sentinel.read_text(), 'keep outside')
-        self.assertEqual(evidence.read_text(), 'retained evidence')
-        self.assertEqual(checkout.read_text(), 'retained checkout')
+        self.assertEqual(json.loads((state / 'control.json').read_text(encoding="utf-8")), endpoint)
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), 'keep outside')
+        self.assertEqual(evidence.read_text(encoding="utf-8"), 'retained evidence')
+        self.assertEqual(checkout.read_text(encoding="utf-8"), 'retained checkout')
         self.assertFalse((state / 'backups/current').exists())
 
     def test_transaction_admission_rechecks_a_fence_after_rpc_entry(self):
         board = self.board()
-        (board.directory / 'upgrade.json').write_text('{}')
+        (board.directory / 'upgrade.json').write_text('{}', encoding="utf-8", newline="\n")
         # Bypass the outer RPC guard, as a call that entered just before fencing would.
         with self.assertRaises(BoardError) as caught:
             board.store.task_submit({'requestId': 'late', 'task': 'late work', 'cwd': str(self.workdir()),
@@ -372,7 +372,7 @@ class UpgradeTests(BoardTestCase):
 
     def test_upgrade_journal_fences_admission_without_cancellation(self):
         board=self.board()
-        marker=board.directory/'upgrade.json';marker.write_text('{}')
+        marker=board.directory/'upgrade.json';marker.write_text('{}', encoding="utf-8", newline="\n")
         self.assertEqual(board.call('ping', {})['status'], 'ok')
         with self.assertRaises(BoardError) as caught:
             board.call('task_retry', {'runId': 'blocked'})
@@ -381,42 +381,42 @@ class UpgradeTests(BoardTestCase):
 
     def test_restore_verified_backup_replays_only_saved_state_files(self):
         board=self.board()
-        settings=board.directory/'console-settings.json';settings.write_text('{"original":true}')
+        settings=board.directory/'console-settings.json';settings.write_text('{"original":true}', encoding="utf-8", newline="\n")
         preserved = {name: board.directory / name for name in
                      ('active-runtime.json', 'runtime-retention.json')}
         for path in preserved.values():
-            path.write_text('{"beforeBackup":true}')
+            path.write_text('{"beforeBackup":true}', encoding="utf-8", newline="\n")
         missing=board.directory/'launch-settings.json'
         native=board.directory/'harnesses/zcode/retained';native.mkdir(parents=True);(native/'sessions.sqlite').write_bytes(b'native')
         home=board.directory/'attempts/run/attempt/native/codex-home';home.mkdir(parents=True)
-        secret=self.directory/'private-auth.json';secret.write_text('private credential')
+        secret=self.directory/'private-auth.json';secret.write_text('private credential', encoding="utf-8", newline="\n")
         (home/'auth.json').symlink_to(secret)
-        (home.parent.parent/'personal-provider.json').write_text('private provider key')
+        (home.parent.parent/'personal-provider.json').write_text('private provider key', encoding="utf-8", newline="\n")
         board.store.db.close()
         current=Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
-        settings.write_text('{"changed":true}')
+        settings.write_text('{"changed":true}', encoding="utf-8", newline="\n")
         for path in preserved.values():
-            path.write_text('{"afterBackup":true}')
-        missing.write_text('{"createdAfterBackup":true}')
+            path.write_text('{"afterBackup":true}', encoding="utf-8", newline="\n")
+        missing.write_text('{"createdAfterBackup":true}', encoding="utf-8", newline="\n")
         evidence=board.directory/'attempts/run/attempt/result.json'
-        evidence.write_text('post-backup evidence')
+        evidence.write_text('post-backup evidence', encoding="utf-8", newline="\n")
         checkout=board.directory/'workspaces/checkout/keep.txt'
         checkout.parent.mkdir(parents=True)
-        checkout.write_text('post-backup checkout')
+        checkout.write_text('post-backup checkout', encoding="utf-8", newline="\n")
         with closing(sqlite3.connect(board.directory / 'board.sqlite3')) as connection, connection:
             connection.execute("INSERT INTO meta(key,value) VALUES('post-backup','changed')")
         (board.directory / '.restore.sqlite3').write_bytes(b'partial earlier restore')
         upgrade.restore(board.directory,current)
         self.assertFalse((board.directory / '.restore.sqlite3').exists())
-        self.assertEqual(json.loads(settings.read_text()),{'original':True})
-        self.assertEqual(json.loads(missing.read_text()),{'createdAfterBackup':True})
+        self.assertEqual(json.loads(settings.read_text(encoding="utf-8")),{'original':True})
+        self.assertEqual(json.loads(missing.read_text(encoding="utf-8")),{'createdAfterBackup':True})
         for path in preserved.values():
-            self.assertEqual(json.loads(path.read_text()), {'afterBackup': True})
-        self.assertEqual(evidence.read_text(),'post-backup evidence')
-        self.assertEqual(checkout.read_text(),'post-backup checkout')
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {'afterBackup': True})
+        self.assertEqual(evidence.read_text(encoding="utf-8"),'post-backup evidence')
+        self.assertEqual(checkout.read_text(encoding="utf-8"),'post-backup checkout')
         self.assertEqual((native/'sessions.sqlite').read_bytes(),b'native')
         self.assertTrue((home/'auth.json').is_symlink())
-        self.assertEqual(secret.read_text(),'private credential')
+        self.assertEqual(secret.read_text(encoding="utf-8"),'private credential')
         self.assertFalse((current/'state/attempts/run/attempt/native/codex-home').exists())
         self.assertFalse((current/'state/attempts/run/attempt/personal-provider.json').exists())
         with closing(sqlite3.connect(board.directory / 'board.sqlite3')) as connection:
@@ -480,7 +480,7 @@ class UpgradeTests(BoardTestCase):
         board = self.board()
         state = board.directory
         control = state / 'console-settings.json'
-        control.write_text('{"backedUp":true}')
+        control.write_text('{"backedUp":true}', encoding="utf-8", newline="\n")
         board.store.db.close()
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         sentinel = self.directory / 'outside-sentinel'
@@ -507,16 +507,16 @@ class UpgradeTests(BoardTestCase):
         board = self.board()
         state = board.directory
         settings = state / 'console-settings.json'
-        settings.write_text('{"backedUp":true}')
+        settings.write_text('{"backedUp":true}', encoding="utf-8", newline="\n")
         board.store.db.close()
         current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
         board_bytes = (state / 'board.sqlite3').read_bytes()
         evidence = state / 'attempts/run/attempt/result.json'
         evidence.parent.mkdir(parents=True)
-        evidence.write_text('retained evidence')
+        evidence.write_text('retained evidence', encoding="utf-8", newline="\n")
         checkout = state / 'workspaces/checkout/keep.txt'
         checkout.parent.mkdir(parents=True)
-        checkout.write_text('retained checkout')
+        checkout.write_text('retained checkout', encoding="utf-8", newline="\n")
         for name in ('board.sqlite3', 'board.sqlite3-wal', 'board.sqlite3-shm',
                      'console-settings.json', '.restore.sqlite3'):
             with self.subTest(path=name):
@@ -531,8 +531,8 @@ class UpgradeTests(BoardTestCase):
                     self.assertTrue(stat.S_ISFIFO(target.lstat().st_mode))
                     if name != 'board.sqlite3':
                         self.assertEqual((state / 'board.sqlite3').read_bytes(), board_bytes)
-                    self.assertEqual(evidence.read_text(), 'retained evidence')
-                    self.assertEqual(checkout.read_text(), 'retained checkout')
+                    self.assertEqual(evidence.read_text(encoding="utf-8"), 'retained evidence')
+                    self.assertEqual(checkout.read_text(encoding="utf-8"), 'retained checkout')
                 finally:
                     target.unlink()
                     if original is not None:

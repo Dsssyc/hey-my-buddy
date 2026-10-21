@@ -113,7 +113,7 @@ class NativeRunCase(unittest.TestCase):
                    services=None, cancelled=lambda: False)
 
     def fixture_state(self) -> dict:
-        return json.loads(self.state_path.read_text())
+        return json.loads(self.state_path.read_text(encoding="utf-8"))
 
 
 class NativeInquiryTests(NativeRunCase):
@@ -155,8 +155,8 @@ class NativeInquiryTests(NativeRunCase):
         report_ref = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-report")
         if result.end.status != expected_status:
             stderr = next((ref for ref in result.evidence_refs if ref.kind == "native-stderr"), None)
-            self.fail(Path(stderr.location).read_text() if stderr else result.end.message)
-        return result, json.loads(Path(report_ref.location).read_text())
+            self.fail(Path(stderr.location).read_text(encoding="utf-8") if stderr else result.end.message)
+        return result, json.loads(Path(report_ref.location).read_text(encoding="utf-8"))
 
     def test_root_signed_answer_binds_to_running_turn(self):
         result, report = self.execute_inquiry("inquiry-answer")
@@ -201,7 +201,7 @@ class NativeInquiryTests(NativeRunCase):
                 self.assertEqual(report["answered"], answered)
                 self.assertEqual(report["unansweredDelivered"], 1 - answered)
                 reference = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-tool-failures")
-                failures = json.loads(Path(reference.location).read_text())
+                failures = json.loads(Path(reference.location).read_text(encoding="utf-8"))
                 self.assertEqual(failures["records"][0]["error"], "fixture inquiry transport error: retry permitted")
                 self.assertEqual(failures["records"][0]["toolCallId"], "toolu_inquiry_1")
                 self.assertEqual(failures["dropped"], 0)
@@ -226,7 +226,7 @@ class NativeInquiryTests(NativeRunCase):
         self.assertFalse(self.fixture_state().get("unadmittedFollowupRan", False))
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         reference = next(ref for ref in result.evidence_refs if ref.kind == "native-observations")
-        observations = json.loads(Path(reference.location).read_text())
+        observations = json.loads(Path(reference.location).read_text(encoding="utf-8"))
         self.assertTrue(observations["stoppedAtRootResult"])
         self.assertTrue(observations["unadmittedFollowupInit"])
         self.assertEqual(observations["unadmittedFollowupMessages"], 2)
@@ -1035,7 +1035,7 @@ class DiscoveryTests(NativeRunCase):
         state = self.fixture_state()
         self.assertIn("--no-session-persistence", state["argv"])
         self.assertEqual(state["seenAnthropicEnv"], [])
-        settings = json.loads(Path(flag_value(state["argv"], "--settings")).read_text())
+        settings = json.loads(Path(flag_value(state["argv"], "--settings")).read_text(encoding="utf-8"))
         self.assertEqual(settings, native_run.permission_sandbox_settings("write"))
 
     def test_unknown_account_does_not_require_a_login_proof_process(self):

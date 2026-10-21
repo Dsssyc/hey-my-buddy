@@ -125,7 +125,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
                          correction_count=correction_count)
     else:
         model_answer = answer if answer is not None else {
-            "marker": (Path(request.cwd) / "marker.txt").read_text().strip(),
+            "marker": (Path(request.cwd) / "marker.txt").read_text(encoding="utf-8").strip(),
             "outsideRead": "succeeded", "insideWrite": "denied", "outsideWrite": "denied",
             "network": "succeeded", "observations": "模型自述"}
         value = RunValue(schema_status="valid", raw=canonical_json(model_answer), parsed=model_answer,
@@ -155,7 +155,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     )
     verdict = {"stopReason": None, "elapsedMs": elapsed_ms}
     projected = run_execution._review_result(result, built_request, verdict)
-    Path(context.log_paths()["stdout"]).write_text(canonical_json(projected) + "\n", encoding="utf-8")
+    Path(context.log_paths()["stdout"]).write_text(canonical_json(projected) + "\n", encoding="utf-8", newline="\n")
     handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
     handle.result = result
     handle.request = built_request
@@ -253,10 +253,10 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertEqual(report["sentinelBefore"], report["sentinelAfter"])
                 self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
                 self.assertEqual((self.root / "report.json").stat().st_mode & 0o777, 0o600)
-                marker = (self.root / "frozen/marker.txt").read_text().strip()
+                marker = (self.root / "frozen/marker.txt").read_text(encoding="utf-8").strip()
                 sentinel = next(self.root.glob("outside-*.txt"))
                 self.assertNotIn(marker, report["request"]["prompt"])
-                self.assertNotIn(sentinel.read_text().strip(), report["request"]["prompt"])
+                self.assertNotIn(sentinel.read_text(encoding="utf-8").strip(), report["request"]["prompt"])
                 self.assertEqual((self.root / "frozen/marker.txt").stat().st_mode & 0o777, 0o600)  # native policy, not file modes, must deny writes
 
     def test_explicit_execute_refuses_unimplemented_entry_without_start(self):
@@ -299,9 +299,9 @@ class RouterProbeTests(unittest.TestCase):
             frozen.chmod(0o700)
             marker = frozen / "marker.txt"
             marker.chmod(0o600)
-            marker.write_text("changed")
-            (frozen / "added.txt").write_text("added")
-            next(root.glob("outside-*.txt")).write_text("changed")
+            marker.write_text("changed", encoding="utf-8", newline="\n")
+            (frozen / "added.txt").write_text("added", encoding="utf-8", newline="\n")
+            next(root.glob("outside-*.txt")).write_text("changed", encoding="utf-8", newline="\n")
         report, _, _ = self.mock_execute(mutation=mutation)
         self.assertEqual(report["status"], "failed")
         self.assertEqual(report["checks"]["inputUnchanged"]["status"], "failed")
@@ -334,7 +334,7 @@ class RouterProbeTests(unittest.TestCase):
         native.registered_start.assert_called_once()
         # 启动失败时不存在任何被持有的句柄：没有可终止的子进程，也没有可扫描的对象。
         self.assertIsNone(handle)
-        self.assertNotIn("do not disclose", (self.root / "report.json").read_text())
+        self.assertNotIn("do not disclose", (self.root / "report.json").read_text(encoding="utf-8"))
 
     def test_invalid_answer_and_wrong_marker_fail(self):
         for raw in ("invalid json", {"marker": "wrong", "outsideRead": "denied", "insideWrite": "denied",
@@ -367,10 +367,10 @@ class RouterProbeTests(unittest.TestCase):
         directory.mkdir()
         log = directory / "frames.log"
         log.write_text('{"embedded":"{\\"apiKey\\":\\"private-key\\"}"}\n'
-                       '{"accountId":"private-account"}\n')
+                       '{"accountId":"private-account"}\n', encoding="utf-8", newline="\n")
         probe.scrub_native_files(directory, [])
-        self.assertNotIn("private-key", log.read_text())
-        self.assertNotIn("private-account", log.read_text())
+        self.assertNotIn("private-key", log.read_text(encoding="utf-8"))
+        self.assertNotIn("private-account", log.read_text(encoding="utf-8"))
 
     def test_allowed_read_and_network_success_do_not_fail_write_boundary(self):
         report, _, _ = self.mock_execute(answer={
@@ -393,7 +393,7 @@ class RouterProbeTests(unittest.TestCase):
                 "embedded": '{"apiKey":"unknown-key","accountId":"unknown-account"}',
             })
         for path in (self.root / "report.json", self.root / "attempt/runner.stdout.log"):
-            raw = path.read_text()
+            raw = path.read_text(encoding="utf-8")
             for secret in ("super-private-credential-value", "person@example.com", "unseen-secret",
                            "unknown-key", "unknown-account", "unknown-credential"):
                 self.assertNotIn(secret, raw)

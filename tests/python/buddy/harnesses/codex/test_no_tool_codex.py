@@ -36,13 +36,13 @@ class NoToolCodexTests(unittest.TestCase):
         self.runtime.mkdir(mode=0o700)
         self.home = self.root / "account-home"
         self.home.mkdir(mode=0o700)
-        (self.home / "auth.json").write_text('{"test":"fake-auth-only"}')
+        (self.home / "auth.json").write_text('{"test":"fake-auth-only"}', encoding="utf-8", newline="\n")
         (self.home / "models_cache.json").write_text(json.dumps({"client_version": "0.157.0", "models": [{
             "slug": "fixture-model", "display_name": "Fixture", "shell_type": "unified_exec",
             "apply_patch_tool_type": "freeform", "experimental_supported_tools": ["clock"],
             "supported_reasoning_levels": [{"effort": "low"}], "tool_mode": "code_mode_only",
-            "multi_agent_version": "v2"}]}))
-        (self.home / "config.toml").write_text('model_provider = "openai"\n[features]\napps = true\n\n[mcp_servers.fixture]\ncommand = "fixture-mcp"\n')
+            "multi_agent_version": "v2"}]}), encoding="utf-8", newline="\n")
+        (self.home / "config.toml").write_text('model_provider = "openai"\n[features]\napps = true\n\n[mcp_servers.fixture]\ncommand = "fixture-mcp"\n', encoding="utf-8", newline="\n")
         self.cwd = self.root / "empty"
         self.cwd.mkdir(mode=0o700)
 
@@ -80,7 +80,7 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertTrue(evidence["streamComplete"])
         self.assertEqual((evidence["events"], evidence["toolCalls"], evidence["unsettledToolCalls"],
                           evidence["truncated"]), ([], 0, 0, False))
-        trace = json.loads((directory / "trace.json").read_text())
+        trace = json.loads((directory / "trace.json").read_text(encoding="utf-8"))
         self.assertEqual(trace["home"], str(self.home))
         self.assertEqual(trace["userHome"], str(self.root))
         self.assertIs(trace["thread"]["ephemeral"], True)
@@ -89,8 +89,8 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertNotIn("environments", trace["turns"][0])
         self.assertFalse(list(Path(control["nativeRoot"]).rglob("codex-home")))
         self.assertFalse((self.home / "auth.json").is_symlink())
-        self.assertEqual((self.home / "auth.json").read_text(), '{"test":"fake-auth-only"}')
-        self.assertEqual(json.loads((self.home / "models_cache.json").read_text())["models"][0]["multi_agent_version"], "v2")
+        self.assertEqual((self.home / "auth.json").read_text(encoding="utf-8"), '{"test":"fake-auth-only"}')
+        self.assertEqual(json.loads((self.home / "models_cache.json").read_text(encoding="utf-8"))["models"][0]["multi_agent_version"], "v2")
 
     def test_protocol_variants_preserve_non_tool_answers_and_conservative_tool_evidence(self):
         from buddy.harnesses.codex.fixtures.protocol_items import PROTOCOL_ITEMS, FUTURE_ITEMS
@@ -216,11 +216,11 @@ class NoToolCodexTests(unittest.TestCase):
         outcome, _control, directory = self.run_case("format")
         self.assertEqual(outcome.status, 'ok', outcome.result)
         self.assertEqual(outcome.result["correctionCount"], 1)
-        self.assertEqual(len(json.loads((directory / "trace.json").read_text())["turns"]), 2)
+        self.assertEqual(len(json.loads((directory / "trace.json").read_text(encoding="utf-8"))["turns"]), 2)
         outcome, _control, directory = self.run_case("outside")
         self.assertEqual(outcome.status, 'ok', outcome.result)
         self.assertFalse(outcome.result["answerValid"])
-        self.assertEqual(len(json.loads((directory / "trace.json").read_text())["turns"]), 1)
+        self.assertEqual(len(json.loads((directory / "trace.json").read_text(encoding="utf-8"))["turns"]), 1)
         bounded = {"type": "object", "additionalProperties": False, "required": ["reason"],
                    "properties": {"reason": {"type": "string", "maxLength": 2}}}
         self.assertEqual(correction_code('{"reason":"too long"}', bounded), 'answer-shape')
@@ -229,7 +229,7 @@ class NoToolCodexTests(unittest.TestCase):
         outcome, _control, directory = self.run_case("config-mismatch")
         self.assertEqual(outcome.status, 'ok', outcome.result)
         self.assertIs(outcome.result["modelStarted"], True)
-        self.assertEqual(len(json.loads((directory / "trace.json").read_text())["turns"]), 1)
+        self.assertEqual(len(json.loads((directory / "trace.json").read_text(encoding="utf-8"))["turns"]), 1)
         self.assertEqual(outcome.result["policyCheck"]["configReadback"]["status"], "unknown")
         self.assertEqual(outcome.result["nativeConfigPolicy"]["web_search"], "enabled")
         outcome, _control, directory = self.run_case("wrong-model")
@@ -237,7 +237,7 @@ class NoToolCodexTests(unittest.TestCase):
         self.assertEqual(outcome.result["code"], "buddy-mismatch")
         self.assertIs(outcome.result["modelStarted"], False)
         self.assertEqual(outcome.result["nativeThreadReceipt"]["model"], "other")
-        self.assertNotIn("turns", json.loads((directory / "trace.json").read_text()))
+        self.assertNotIn("turns", json.loads((directory / "trace.json").read_text(encoding="utf-8")))
         outcome, control, _directory = self.run_case("hang", timeout=1)
         self.assertEqual(outcome.status, 'failed', outcome.result)
         self.assertEqual(outcome.result["code"], "deadline")

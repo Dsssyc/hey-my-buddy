@@ -361,10 +361,10 @@ class ProbeFixtureCase(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.probe = load_probe()
         self.fake = self.root / "fake-app-server.py"
-        self.fake.write_text(FAKE_SERVER)
+        self.fake.write_text(FAKE_SERVER, encoding="utf-8", newline="\n")
         builtin = self.root / "provider/zcode-builtin.json"
         builtin.parent.mkdir()
-        builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
+        builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}', encoding="utf-8", newline="\n")
         self.nonce = "probe-nonce-4f0c2a"
         self.fake_report = self.root / "fake-report.json"
 
@@ -381,7 +381,7 @@ class ProbeFixtureCase(unittest.TestCase):
             report = self.probe.run_probe(self.root / "probe", cwd=self.root / "scratch",
                                           provider="fixture-api", model="fixture-model", effort="low",
                                           nonce=self.nonce, wall_seconds=30.0)
-        fake = json.loads(self.fake_report.read_text()) if self.fake_report.exists() else {}
+        fake = json.loads(self.fake_report.read_text(encoding="utf-8")) if self.fake_report.exists() else {}
         return report, fake
 
 

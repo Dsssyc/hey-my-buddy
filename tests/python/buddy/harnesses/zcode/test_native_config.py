@@ -25,11 +25,11 @@ class NativeConfigCase(NativeRunCase):
         self.native_config = self.root / "用户 .配置 空格"
         self.fake = self.native_config / "bin/zcode"
         self.fake.parent.mkdir(parents=True)
-        self.fake.write_text(FAKE)
+        self.fake.write_text(FAKE, encoding="utf-8", newline="\n")
         self.builtin = self.native_config / "config/provider/zcode-builtin.json"
         self.builtin.parent.mkdir(parents=True)
         self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {
-            "templateRules": [], "providerRules": []}}}))
+            "templateRules": [], "providerRules": []}}}), encoding="utf-8", newline="\n")
         self.personal = self.native_config / ".zcode/v2/provider_config.json"
         self.personal.parent.mkdir(parents=True)
         self.write_provider("zhipu-account")
@@ -46,7 +46,7 @@ class NativeConfigCase(NativeRunCase):
             "providerId": provider, "config": {"access": {
                 "type": access, "apiKey": "secret-never-returned"},
                 "api": {"baseUrl": "https://secret-endpoint.invalid"},
-                "requestAuth": {"headers": {"Authorization": "secret-never-returned"}}}}]}}}))
+                "requestAuth": {"headers": {"Authorization": "secret-never-returned"}}}}]}}}), encoding="utf-8", newline="\n")
 
     def discover(self):
         return native_run.run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discover",
@@ -66,7 +66,7 @@ class NativeConfigTests(NativeConfigCase):
         result = native_run.run(request, observer=worker_observer, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result)
         self.assertEqual(result.buddy.checked.provider.value, "fixture-account")
-        env = json.loads(self.fake.with_name("launch-environment.json").read_text())
+        env = json.loads(self.fake.with_name("launch-environment.json").read_text(encoding="utf-8"))
         self.assertEqual(env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"], str(self.builtin.resolve()))
         self.assertNotIn("ZCODE_MODEL_TELEMETRY_ENABLED", env)
         self.assertNotIn("ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", env)
@@ -82,7 +82,7 @@ class NativeConfigTests(NativeConfigCase):
         self.write_provider("api-key", provider="fixture-api")
         before = self.discover()
         self.assertEqual(before["providers"][0]["accessType"], "api-key")
-        self.personal.write_text("invalid JSON")
+        self.personal.write_text("invalid JSON", encoding="utf-8", newline="\n")
         after = self.discover()
         self.assertEqual([{**p, "accessType": "unknown"} for p in before["providers"]], after["providers"])
         self.assertEqual(after["providers"][0]["provider"], "fixture-api")
@@ -90,7 +90,7 @@ class NativeConfigTests(NativeConfigCase):
         self.personal.unlink()
         self.assertEqual(self.discover()["providers"], after["providers"])
         for contents in ("null", "[]", '{"config":{"providerConfigRules":null}}'):
-            self.personal.write_text(contents)
+            self.personal.write_text(contents, encoding="utf-8", newline="\n")
             self.assertEqual(self.discover()["providers"], after["providers"])
         with mock.patch.object(Path, "read_text", side_effect=PermissionError("private fixture")):
             self.assertEqual(provider_access_types(self.builtin, self.personal), {})
@@ -106,14 +106,14 @@ class NativeConfigTests(NativeConfigCase):
                 self.assertNotIn("secret", json.dumps(value))
         self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {
             "templateRules": [{"templateId": "plan", "config": {"access": {"type": "zhipu-coding-plan-api-key"}}}],
-            "providerRules": [{"providerId": "fixture-account", "templateId": "plan"}]}}}))
+            "providerRules": [{"providerId": "fixture-account", "templateId": "plan"}]}}}), encoding="utf-8", newline="\n")
         self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [{
-            "providerId": "fixture-account", "config": {"api": {"baseUrl": "ignored"}}}]}}}))
+            "providerId": "fixture-account", "config": {"api": {"baseUrl": "ignored"}}}]}}}), encoding="utf-8", newline="\n")
         self.assertEqual(provider_access_types(self.builtin, self.personal),
                          {"fixture-account": "zhipu-coding-plan-api-key"})
-        value = json.loads(self.personal.read_text())
+        value = json.loads(self.personal.read_text(encoding="utf-8"))
         value["config"]["providerConfigRules"]["providerRules"][0]["config"]["access"] = None
-        self.personal.write_text(json.dumps(value))
+        self.personal.write_text(json.dumps(value), encoding="utf-8", newline="\n")
         self.assertEqual(provider_access_types(self.builtin, self.personal), {"fixture-account": "unknown"})
 
     def test_availability_and_preparation_do_not_read_provider_files(self):
@@ -138,7 +138,7 @@ class NativeConfigTests(NativeConfigCase):
         self.assertIsNone(result.model_started)
 
     def test_unreadable_builtin_billing_content_does_not_refuse_preparation(self):
-        self.builtin.write_text("not JSON")
+        self.builtin.write_text("not JSON", encoding="utf-8", newline="\n")
         native_run.check_preparation({"provider": "fixture-account"}, dict(os.environ))
         os.environ["HMB_ZCODE_TEST_CASE"] = "discovery"
         self.assertEqual(self.discover()["providers"][0]["accessType"], "unknown")
@@ -147,7 +147,7 @@ class NativeConfigTests(NativeConfigCase):
 class RuntimePreferenceTests(NativeConfigCase):
     def write_settings(self, value):
         self.settings = self.native_config / ".zcode/v2/setting.json"
-        self.settings.write_text(json.dumps(value))
+        self.settings.write_text(json.dumps(value), encoding="utf-8", newline="\n")
 
     def execute_preferences(self, *, no_tools):
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok" if no_tools else "write-final"
@@ -159,7 +159,7 @@ class RuntimePreferenceTests(NativeConfigCase):
     def preference_facts(self, result):
         self.assertEqual(result.end.status, "ok", result)
         ref = next(ref for ref in result.evidence_refs if ref.kind == "native-runtime-preferences")
-        return json.loads(Path(ref.location).read_text())
+        return json.loads(Path(ref.location).read_text(encoding="utf-8"))
 
     def test_user_preferences_are_answered_and_no_tools_only_tightens_search(self):
         for memory, search, no_tools in ((True, False, False), (False, True, False),
@@ -170,7 +170,7 @@ class RuntimePreferenceTests(NativeConfigCase):
                                      "proxy": "secret-proxy-never-returned"})
                 result = self.execute_preferences(no_tools=no_tools)
                 facts = self.preference_facts(result)
-                reply = json.loads(self.fake.with_name("runtime-preferences-reply.json").read_text())
+                reply = json.loads(self.fake.with_name("runtime-preferences-reply.json").read_text(encoding="utf-8"))
                 self.assertEqual(reply, {"memoryEnabled": memory,
                     "nativeSearchEnhancementsEnabled": search and not no_tools,
                     "askUserQuestionAutoResolutionEnabled": False, "modelContextBudgetStrategy": "preflight-v1"})
@@ -188,7 +188,7 @@ class RuntimePreferenceTests(NativeConfigCase):
                 if contents is None:
                     self.settings.unlink(missing_ok=True)
                 else:
-                    self.settings.write_text(contents)
+                    self.settings.write_text(contents, encoding="utf-8", newline="\n")
                 for no_tools in (False, True):
                     facts = self.preference_facts(self.execute_preferences(no_tools=no_tools))
                     self.assertEqual(facts["memoryEnabled"], {"value": False, "source": "fallback"})
@@ -217,9 +217,9 @@ class RuntimePreferenceTests(NativeConfigCase):
         self.assertEqual(read.call_count, 1)
         self.assertEqual(result.value.correction_count, 1)
         # The mock rewrote the file after the first materialization request.
-        self.assertFalse(json.loads(self.settings.read_text())["memoryEnabled"])
+        self.assertFalse(json.loads(self.settings.read_text(encoding="utf-8"))["memoryEnabled"])
         self.assertTrue(self.preference_facts(result)["memoryEnabled"]["value"])
-        self.assertTrue(json.loads(self.fake.with_name("runtime-preferences-reply.json").read_text())["memoryEnabled"])
+        self.assertTrue(json.loads(self.fake.with_name("runtime-preferences-reply.json").read_text(encoding="utf-8"))["memoryEnabled"])
 
 
 class FinalMessageUsageTests(NativeRunCase):

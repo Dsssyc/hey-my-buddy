@@ -298,7 +298,7 @@ class CatalogTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-catalog-test-") as temporary:
             directory = Path(temporary)
             file = directory / "catalog.json"
-            file.write_text(json.dumps(self.payload()))
+            file.write_text(json.dumps(self.payload()), encoding="utf-8", newline="\n")
             with patch.dict(os.environ, {catalog.CATALOG_FILE_ENV: str(file)}), patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=Harness()):
                 identity = dict(harness="zcode", provider="deepseek-official", model="deepseek-flash", effort="high")
                 self.assertEqual(catalog.validate_buddy(identity, directory=directory), identity)

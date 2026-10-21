@@ -32,9 +32,9 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.builtin.parent.mkdir()
         self.personal = self.root / "native-user-home/.zcode/v2/provider_config.json"
         self.personal.parent.mkdir(parents=True)
-        self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}))
+        self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}), encoding="utf-8", newline="\n")
         self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
-            {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
+            {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}), encoding="utf-8", newline="\n")
         self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("HMB_", "ANTHROPIC_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         native_home = self.root / "native-user-home"
         native_home.mkdir(mode=0o700, exist_ok=True)
@@ -154,7 +154,7 @@ class ZcodeFixtureCase(unittest.TestCase):
         path = self.inquiry_results_path(context)
         if not path.exists():
             return []
-        return [json.loads(line) for line in path.read_text().splitlines()
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
                 if line.strip() and json.loads(line).get("inquiryId") == inquiry_id]
 
     def release(self, context):
@@ -166,7 +166,7 @@ class ZcodeFixtureCase(unittest.TestCase):
         from hey_my_buddy.private_dirs import context_root
 
         path = next(context_root(context, "zcode").glob("run-*/native-logs/" + name), None)
-        return path.read_text() if path is not None and path.exists() else ""
+        return path.read_text(encoding="utf-8") if path is not None and path.exists() else ""
 
     def wait_file(self, context, name, timeout=20):
         from hey_my_buddy.private_dirs import context_root
@@ -176,7 +176,7 @@ class ZcodeFixtureCase(unittest.TestCase):
         while time.monotonic() < deadline:
             path = next(context_root(context, "zcode").glob("run-*/native-logs/" + name), None)
             if path is not None:
-                return path.read_text()
+                return path.read_text(encoding="utf-8")
             time.sleep(0.05)
         return None
 
@@ -354,7 +354,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertNotIn("turn", first.result)
         from hey_my_buddy.private_dirs import context_root
         root = Path(first_handle.role_run_control["nativeRoot"])
-        prior_session = json.loads((root / "sessions.fixture.json").read_text())["sessionId"]
+        prior_session = json.loads((root / "sessions.fixture.json").read_text(encoding="utf-8"))["sessionId"]
         _, second = self.execute(self.context(index=2, mode="reconstructed-new-session"))
         self.assertEqual(second.status, "ok", second.to_report())
         turn = second.result["turn"]
@@ -448,9 +448,9 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertTrue(outcome.shutdown_confirmed)
 
     def test_oauth_provider_is_not_rejected_during_preparation(self):
-        value = json.loads(self.personal.read_text())
+        value = json.loads(self.personal.read_text(encoding="utf-8"))
         value["config"]["providerConfigRules"]["providerRules"][0]["config"]["access"] = {"type": "zhipu-account"}
-        self.personal.write_text(json.dumps(value))
+        self.personal.write_text(json.dumps(value), encoding="utf-8", newline="\n")
         context = self.context()
         self.adapter.prepare(context)
         self.assertTrue(context.turn_input_file().is_file())

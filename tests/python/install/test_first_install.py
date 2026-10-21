@@ -69,10 +69,10 @@ class SkillInstallTests(unittest.TestCase):
     def test_a_different_version_replaces_the_skill_without_leftovers(self):
         self.install()
         marker = self.agents / "hey-my-buddy/skill.json"
-        stale = json.loads(marker.read_text())
-        marker.write_text(json.dumps({**stale, "version": "0.0.1"}))
+        stale = json.loads(marker.read_text(encoding="utf-8"))
+        marker.write_text(json.dumps({**stale, "version": "0.0.1"}), encoding="utf-8", newline="\n")
         self.assertEqual(self.install()["skill"]["placement"], "updated")
-        self.assertEqual(json.loads(marker.read_text())["version"], stale["version"])
+        self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["version"], stale["version"])
         self.assertEqual(sorted(path.name for path in self.agents.iterdir() if not path.name.endswith(".lock")), ["hey-my-buddy"])
 
     def test_foreign_directories_are_never_replaced(self):
@@ -85,7 +85,7 @@ class SkillInstallTests(unittest.TestCase):
         (self.claude / "hey-my-buddy").rmdir()
         self.assertFalse((self.agents / "hey-my-buddy").exists())
         (self.agents / "hey-my-buddy").mkdir()
-        (self.agents / "hey-my-buddy/SKILL.md").write_text("---\nname: someone-else\ndescription: x\n---\n")
+        (self.agents / "hey-my-buddy/SKILL.md").write_text("---\nname: someone-else\ndescription: x\n---\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as caught:
             self.install()
         self.assertEqual(caught.exception.code, "SKILL_TARGET_CONFLICT")
@@ -93,7 +93,7 @@ class SkillInstallTests(unittest.TestCase):
     def test_a_worker_credential_cannot_install(self):
         from hey_my_buddy.errors import BoardError
         credential = self.base / "attempt-credential.json"
-        credential.write_text(json.dumps({"token": "attempt-token", "stateDir": self.environment["HMB_STATE_DIR"]}))
+        credential.write_text(json.dumps({"token": "attempt-token", "stateDir": self.environment["HMB_STATE_DIR"]}), encoding="utf-8", newline="\n")
         credential.chmod(0o600)
         with self.assertRaises(BoardError) as caught:
             self.install(HMB_AGENT_CREDENTIAL_FILE=str(credential))
@@ -106,8 +106,8 @@ class SkillInstallTests(unittest.TestCase):
         with patch("hey_my_buddy.install.skill_install.project_root", return_value=built / "package"):
             result = self.install()
         self.assertEqual(result["skill"]["placement"], "installed")
-        self.assertEqual(json.loads((self.agents / "hey-my-buddy/skill.json").read_text()),
-                         json.loads((built / "skill.json").read_text()))
+        self.assertEqual(json.loads((self.agents / "hey-my-buddy/skill.json").read_text(encoding="utf-8")),
+                         json.loads((built / "skill.json").read_text(encoding="utf-8")))
         self.assertEqual(result["legacyPlugins"], [str(self.base / "codex/plugins/cache/personal/hey-my-buddy")])
         self.assertIn("codex plugin remove", result["next"])
 
@@ -160,7 +160,7 @@ class SkillInstallTests(unittest.TestCase):
         completed = subprocess.run(
             ["/bin/sh", str(LAUNCHER), "install"], cwd=cwd, capture_output=True, text=True, timeout=240,
             env=current_environment(**self.environment, HMB_DEV_SOURCE="1",
-                                    UV_PROJECT_ENVIRONMENT=str(self.base / "cli-venv")),
+                                    UV_PROJECT_ENVIRONMENT=str(self.base / "cli-venv")), encoding="utf-8",
         )
         self.assertEqual(completed.returncode, 0, completed.stderr + completed.stdout)
         result = json.loads(completed.stdout)
@@ -172,7 +172,7 @@ class DocumentationTests(unittest.TestCase):
     """Both READMEs and the owning reference describe the same first-install path."""
 
     def test_operations_document_the_shared_skill_install(self):
-        text = OPERATIONS.read_text()
+        text = OPERATIONS.read_text(encoding="utf-8")
         self.assertIn("hey_my_buddy.protocol.rpc_config", text)
         self.assertIn("## Installation", text)
         for fragment in ("~/.agents/skills/hey-my-buddy", "~/.claude/skills/hey-my-buddy", "scripts/hey-my-buddy install",
@@ -181,9 +181,9 @@ class DocumentationTests(unittest.TestCase):
         self.assertNotIn("codex plugin add", text)
 
     def test_readmes_keep_first_install_parity(self):
-        version = re.search(r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(), re.MULTILINE).group(1)
+        version = re.search(r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.MULTILINE).group(1)
         for name in ("README.md", "README.zh-CN.md"):
-            text = (ROOT / name).read_text()
+            text = (ROOT / name).read_text(encoding="utf-8")
             self.assertIn(f"uvx hey-my-buddy@{version} install", text, name)
             self.assertIn("~/.agents/skills/hey-my-buddy", text, name)
             self.assertIn("docs/reference/operations.md#installation", text, name)

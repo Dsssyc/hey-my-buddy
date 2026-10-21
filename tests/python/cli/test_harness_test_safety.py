@@ -37,7 +37,7 @@ class HarnessTestSafetyTests(unittest.TestCase):
         for key in keys:
             self.assertTrue(Path(values[key]).resolve().is_relative_to(self.root), key)
         completed = subprocess.run([sys.executable, "-c", "from pathlib import Path; print(Path.home())"],
-                                   env=values, capture_output=True, text=True, check=True)
+                                   env=values, capture_output=True, text=True, check=True, encoding="utf-8")
         self.assertEqual(completed.stdout.strip(), values["HOME"])
 
     def test_isolation_does_not_override_discovery_or_fill_the_child_root(self):

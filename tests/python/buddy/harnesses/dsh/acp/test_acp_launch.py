@@ -63,7 +63,7 @@ class LaunchRejectionTest(AcpTestCase):
     def test_spawn_failure_is_recorded_in_the_launch_log(self):
         with self.assertRaises(OSError):
             launch([str(self.root / "missing-cli")], private_root=self.root)
-        entries = [json.loads(line) for line in (self.logs / "launches.jsonl").read_text().splitlines()]
+        entries = [json.loads(line) for line in (self.logs / "launches.jsonl").read_text(encoding="utf-8").splitlines()]
         self.assertTrue(entries[0]["rejected"])
         self.assertIsNone(entries[0]["pid"])
 
@@ -83,7 +83,7 @@ class LegalLaunchTest(AcpTestCase):
             handle.wait(5)
         if os.name != "nt":
             self.assertEqual(process.pid, handle.pgid)
-        entry = json.loads((self.root / "logs" / "launches.jsonl").read_text().splitlines()[0])
+        entry = json.loads((self.root / "logs" / "launches.jsonl").read_text(encoding="utf-8").splitlines()[0])
         self.assertIsNone(entry["rejected"])
         self.assertEqual(process.pid, entry["pid"])
         self.assertIn("PATH", entry["envKeys"])
@@ -91,7 +91,7 @@ class LegalLaunchTest(AcpTestCase):
         self.assertNotIn("dshHome", entry)
         self.assertNotIn("home", entry)
         # No environment value may appear in the launch record.
-        raw = (self.root / "logs" / "launches.jsonl").read_text()
+        raw = (self.root / "logs" / "launches.jsonl").read_text(encoding="utf-8")
         self.assertNotIn(junk_value, raw)
         self.assertNotIn(os.environ["PATH"], raw)
 

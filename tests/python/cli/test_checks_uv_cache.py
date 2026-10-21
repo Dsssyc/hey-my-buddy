@@ -31,7 +31,7 @@ class ChecksUvCacheTests(unittest.TestCase):
     def child_values(self, environment):
         completed = subprocess.run(
             [sys.executable, "-c", "import json, os; print(json.dumps(dict(os.environ)))"],
-            env=environment, capture_output=True, text=True, check=True,
+            env=environment, capture_output=True, text=True, check=True, encoding="utf-8",
         )
         return json.loads(completed.stdout)
 
@@ -89,7 +89,7 @@ class ChecksUvCacheTests(unittest.TestCase):
         caller = {"HOME": str(self.directory / "caller-home"), "PATH": os.environ["PATH"]}
         with patch.dict(os.environ, caller, clear=True):
             expected = subprocess.run(
-                ["uv", "cache", "dir"], capture_output=True, text=True, check=True,
+                ["uv", "cache", "dir"], capture_output=True, text=True, check=True, encoding="utf-8",
             ).stdout.strip()
             environment = self.environment()
         values = self.child_values(environment)

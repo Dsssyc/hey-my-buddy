@@ -62,7 +62,7 @@ else:
     rpc_config.configure_server(state)
 cc.register(ProbeContract, ProbeImpl(), name="hey-my-buddy-probe",
             concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-Path(sys.argv[1]).write_text(json.dumps({"address": cc.server_address(), "pid": os.getpid(), "root": cc.local_endpoint_context().root}))
+Path(sys.argv[1]).write_text(json.dumps({"address": cc.server_address(), "pid": os.getpid(), "root": cc.local_endpoint_context().root}), encoding="utf-8", newline="\\n")
 stop = sys.argv[2]
 while not os.path.exists(stop):
     time.sleep(0.05)
@@ -126,7 +126,7 @@ class ProbeServer:
     def __init__(self, root: Path, *, mode: str = "profile", overrides: dict | None = None, name: str = "probe"):
         self.root = Path(root)
         self.script = self.root / f"{name}-server.py"
-        self.script.write_text(PROBE_SERVER)
+        self.script.write_text(PROBE_SERVER, encoding="utf-8", newline="\n")
         self.endpoint_path = self.root / f"{name}-endpoint.json"
         self.stop_path = self.root / f"{name}-stop"
         self.log_path = self.root / f"{name}-server.log"
@@ -150,7 +150,7 @@ class ProbeServer:
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             if self.endpoint_path.exists():
-                return json.loads(self.endpoint_path.read_text())["address"]
+                return json.loads(self.endpoint_path.read_text(encoding="utf-8"))["address"]
             if self.process.poll() is not None:
                 raise AssertionError(f"probe server exited early: {self._log_tail()}")
             time.sleep(0.05)
@@ -158,7 +158,7 @@ class ProbeServer:
 
     def _log_tail(self) -> str:
         self.log.flush()
-        return self.log_path.read_text()[-1500:]
+        return self.log_path.read_text(encoding="utf-8")[-1500:]
 
     @property
     def pid(self) -> int:
@@ -168,7 +168,7 @@ class ProbeServer:
         """One client subprocess that configures itself before connecting."""
         script = self.root / "probe-client.py"
         if not script.exists():
-            script.write_text(PROBE_CLIENT)
+            script.write_text(PROBE_CLIENT, encoding="utf-8", newline="\n")
         environment = private_environment(
             self.root,
             PROBE_CLIENT_MODE=client_mode,
@@ -179,7 +179,7 @@ class ProbeServer:
             env=environment,
             capture_output=True,
             text=True,
-            timeout=180,
+            timeout=180, encoding="utf-8",
         )
         text = completed.stdout.strip().splitlines()
         if not text:
@@ -189,18 +189,18 @@ class ProbeServer:
     def spawn(self, operation: str, argument: str) -> subprocess.Popen:
         script = self.root / "probe-client.py"
         if not script.exists():
-            script.write_text(PROBE_CLIENT)
+            script.write_text(PROBE_CLIENT, encoding="utf-8", newline="\n")
         return subprocess.Popen(
             [sys.executable, str(script), self.address, operation, argument],
             env=private_environment(self.root),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            text=True, encoding="utf-8",
         )
 
     def close(self) -> None:
-        self.stop_path.write_text("1")
+        self.stop_path.write_text("1", encoding="utf-8", newline="\n")
         try:
             self.process.wait(timeout=30)
         except subprocess.TimeoutExpired:  # pragma: no cover - test watchdog
@@ -315,13 +315,13 @@ class ProfileTests(unittest.TestCase):
         ipc = self.state / "ipc"
         ipc.mkdir(mode=0o700)
         file_state = self.state / "file-state"
-        file_state.write_text("ordinary file")
+        file_state.write_text("ordinary file", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as refused:
             rpc_config.configure_client(file_state)
         self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
         file_ipc = self.state / "file-ipc"
         file_ipc.mkdir()
-        (file_ipc / "ipc").write_text("ordinary file")
+        (file_ipc / "ipc").write_text("ordinary file", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as refused:
             rpc_config.configure_client(file_ipc)
         self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
@@ -354,13 +354,13 @@ class ProfileTests(unittest.TestCase):
         alias = self.state / "state-alias"
         alias.symlink_to(target, target_is_directory=True)
         marker = self.state / "untouched"
-        marker.write_text("private sibling")
+        marker.write_text("private sibling", encoding="utf-8", newline="\n")
         before = sorted(self.state.rglob("*"))
         with self.assertRaises(BoardError) as refused:
             rpc_config.configure_local_endpoint(alias)
         self.assertEqual(target.stat().st_mode & 0o777, 0o755)
         self.assertEqual(sorted(self.state.rglob("*")), before)
-        self.assertEqual(marker.read_text(), "private sibling")
+        self.assertEqual(marker.read_text(encoding="utf-8"), "private sibling")
         self.assertTrue(alias.is_symlink())
         self.assertFalse((target / "ipc").exists())
         self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
@@ -429,7 +429,7 @@ class IsolatedTransportTests(unittest.TestCase):
         server = self.probe()
         self.assertEqual(self.work.stat().st_mode & 0o777, 0o755)
         self.assertEqual((self.work / "ipc").stat().st_mode & 0o777, 0o700)
-        self.assertEqual(Path(json.loads(server.endpoint_path.read_text())["root"]), self.work / "ipc")
+        self.assertEqual(Path(json.loads(server.endpoint_path.read_text(encoding="utf-8"))["root"]), self.work / "ipc")
         reply = server.call("echo", "0755-parent")
         self.assertTrue(reply["ok"], reply)
         self.assertEqual(reply["sha256"], hashlib.sha256(b"0755-parent").hexdigest())
@@ -481,7 +481,7 @@ class IsolatedTransportTests(unittest.TestCase):
         # A mutation remains private: the deliberately conflicting native fallback
         # is also a test-owned 0700 directory, never the default public namespace.
         server = self.probe()
-        endpoint = json.loads(server.endpoint_path.read_text())
+        endpoint = json.loads(server.endpoint_path.read_text(encoding="utf-8"))
         self.assertEqual(Path(endpoint["root"]), self.work / "ipc")
         reply = server.call("echo", "private-root")
         self.assertTrue(reply["ok"], reply)
@@ -491,9 +491,9 @@ class IsolatedTransportTests(unittest.TestCase):
         other = self.work / "other"
         other.mkdir(mode=0o700)
         script = other / "client.py"
-        script.write_text(PROBE_CLIENT)
+        script.write_text(PROBE_CLIENT, encoding="utf-8", newline="\n")
         completed = subprocess.run([sys.executable, str(script), server.address, "echo", "unreachable"],
-                                   env=private_environment(other), capture_output=True, text=True, timeout=30)
+                                   env=private_environment(other), capture_output=True, text=True, timeout=30, encoding="utf-8")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertFalse(json.loads(completed.stdout.strip().splitlines()[-1])["ok"])
         self.assertTrue(server.call("echo", "still-here")["ok"])
@@ -585,11 +585,11 @@ class RealDaemonControlTests(unittest.TestCase):
                     pass
             if process.poll() is not None:
                 log.close()
-                raise AssertionError(f"daemon exited early: {log_path.read_text()[-2000:]}")
+                raise AssertionError(f"daemon exited early: {log_path.read_text(encoding="utf-8")[-2000:]}")
             time.sleep(0.05)
         log.close()
         if health is None:
-            raise AssertionError(f"daemon never became healthy: {log_path.read_text()[-2000:]}")
+            raise AssertionError(f"daemon never became healthy: {log_path.read_text(encoding="utf-8")[-2000:]}")
         return _read_endpoint(self.state)
 
     def _submit_command(self, request_id: str, *, sleep: float) -> str:

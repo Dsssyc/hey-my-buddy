@@ -84,7 +84,7 @@ class ProjectorTests(unittest.TestCase):
                 self.assertEqual(self.record.events[-1]['rawInput'], {})
 
     def test_versioned_message_parts_preserve_exact_supplied_reasoning(self):
-        sample = json.loads((Path(__file__).with_name('fixtures') / 'native-usage-zcode.json').read_text())
+        sample = json.loads((Path(__file__).with_name('fixtures') / 'native-usage-zcode.json').read_text(encoding="utf-8"))
         self.assertEqual(sample['harnessVersion'], '0.16.9')
         expected = []
         for item in sample['finalMessages']['messages']:

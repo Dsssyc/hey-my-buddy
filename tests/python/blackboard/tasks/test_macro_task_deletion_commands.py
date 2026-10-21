@@ -177,7 +177,7 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
         claimed = self.claim(board, run_id)
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         checkout = Path(manifest["path"])
-        (checkout / "tracked.txt").write_text("accepted output\n")
+        (checkout / "tracked.txt").write_text("accepted output\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)
         delivered = self.view(board, run_id)

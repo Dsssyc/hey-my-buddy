@@ -69,7 +69,7 @@ class WorkerServicesCase(unittest.TestCase):
         return receipt
 
     def queue(self, inquiry_id="q-1", question="what is the deployment word?", *, identity=IDENTITY) -> None:
-        with self.journal.open("a") as stream:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps({"version": 1, "inquiryId": inquiry_id, "state": "queued",
                                      "question": question,
                                      "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
@@ -110,7 +110,7 @@ class MicroTaskPromptTests(unittest.TestCase):
     def test_the_prompt_assembles_role_scope_finish_contract_task_and_input_in_order(self):
         prompt = worker_services.micro_task_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__hey_my_buddy_finish_turn")
         sections = prompt.split("\n\n")
-        self.assertEqual(sections[0] + "\n", resource_path("roles.worker").read_text())
+        self.assertEqual(sections[0] + "\n", resource_path("roles.worker").read_text(encoding="utf-8"))
         self.assertTrue(sections[1].startswith("This is a Buddy root turn for a micro task."))
         self.assertIn("obtain one successful receipt from mcp__srv__hey_my_buddy_finish_turn", sections[2])
         self.assertIn("all six fields: disposition, summary, remaining, decisions, artifacts, request", sections[2])
@@ -158,7 +158,7 @@ class RoleBoundaryTests(unittest.TestCase):
                                     "print(any('harnesses.zcode' in m or 'harnesses.codex' in m"
                                     " or 'harnesses.claude' in m or 'harnesses.dsh' in m for m in sys.modules));"
                                     "print(callable(w.call_session_tool), callable(w.micro_task_prompt))"],
-                                   capture_output=True, text=True, env=environment, cwd=outside)
+                                   capture_output=True, text=True, env=environment, cwd=outside, encoding="utf-8")
         self.assertEqual(probe.returncode, 0, probe.stderr)
         module_file, harness_free, callables = probe.stdout.splitlines()
         self.assertTrue(Path(module_file).resolve().is_relative_to(source),
@@ -197,7 +197,7 @@ class FinishBoundaryTests(WorkerServicesCase):
         self.assertEqual(len(receipt["receiptId"]), 32)
 
     def test_an_invalid_outcome_is_corrected_before_any_host_condition_is_named(self):
-        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}))
+        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8", newline="\n")
         self.queue()
         envelope = self.envelope(self.call("hey_my_buddy_finish_turn", {"disposition": "completed"}), "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "invalid-arguments")
@@ -205,7 +205,7 @@ class FinishBoundaryTests(WorkerServicesCase):
         self.assertEqual(turn_io.validate_outcome(self.outcome("completed")), None)
 
     def test_an_outstanding_native_request_blocks_completed_and_waiting(self):
-        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}))
+        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8", newline="\n")
         self.configuration["delegationAuthority"] = True
         for disposition in ("completed", "waiting"):
             with self.subTest(disposition=disposition):
@@ -232,7 +232,7 @@ class FinishBoundaryTests(WorkerServicesCase):
     def test_attention_is_named_before_a_pending_inquiry_for_a_completed_outcome(self):
         # Both Host conditions outstanding: the boundary order names the native
         # attention request first, exactly as the moved contract requires.
-        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}))
+        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8", newline="\n")
         self.queue()
         envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome("completed")), "hey_my_buddy_finish_turn")
         self.assertEqual(envelope["reason"], "attention-outstanding")
@@ -244,7 +244,7 @@ class FinishBoundaryTests(WorkerServicesCase):
         for terminal in ("answered", "discarded"):
             with self.subTest(state=terminal):
                 self.queue()
-                with self.journal.open("a") as stream:
+                with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
                     stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": terminal,
                                              **IDENTITY}) + "\n")
                 self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("completed")))
@@ -255,7 +255,7 @@ class InquiryToolTests(WorkerServicesCase):
         self.queue("q-mine", "mine?")
         self.queue("q-foreign", "other attempt?", identity=OTHER_IDENTITY)
         self.queue("q-answered", "done?")
-        with self.journal.open("a") as stream:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps({"version": 1, "inquiryId": "q-answered", "state": "answered",
                                      "question": "done?", "questionSha256": "c" * 64, **IDENTITY}) + "\n")
         receipt = self.receipt(self.call("hey_my_buddy_checkpoint", {}))
@@ -278,7 +278,7 @@ class InquiryToolTests(WorkerServicesCase):
             with self.subTest(reason=reason):
                 envelope = self.envelope(self.call("hey_my_buddy_answer_inquiry", arguments), "hey_my_buddy_answer_inquiry")
                 self.assertEqual(envelope["reason"], reason)
-        with self.journal.open("a") as stream:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": "answered",
                                      "question": "what is the deployment word?",
                                      "questionSha256": hashlib.sha256(
@@ -300,9 +300,9 @@ class InquiryToolTests(WorkerServicesCase):
     def test_an_attention_record_is_counted_but_never_fatal(self):
         self.assertEqual(worker_services.attention_requests(self.configuration), 0)
         self.attention.write_text(json.dumps({"version": 1, "requests": [
-            {"kind": "unsupported-native-request", "method": "interaction/requestPermission"}]}))
+            {"kind": "unsupported-native-request", "method": "interaction/requestPermission"}]}), encoding="utf-8", newline="\n")
         self.assertEqual(worker_services.attention_requests(self.configuration), 1)
-        self.attention.write_text("not json")
+        self.attention.write_text("not json", encoding="utf-8", newline="\n")
         self.assertEqual(worker_services.attention_requests(self.configuration), 0)
         oversize = self.root / "oversize.json"
         oversize.write_bytes(b"0" * (worker_services.MAX_ATTENTION_BYTES + 1))

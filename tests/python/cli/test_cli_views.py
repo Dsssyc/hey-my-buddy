@@ -83,7 +83,7 @@ class CliViewTests(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         claimed = self.claim(self.board_instance, run_id, request_id="views-claim")
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
-        (Path(manifest["path"]) / "tracked.txt").write_text("sealed output\n")
+        (Path(manifest["path"]) / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(self.board_instance, claimed, seal)
         return submitted, self.view(self.board_instance, run_id)

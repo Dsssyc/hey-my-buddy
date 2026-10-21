@@ -348,7 +348,7 @@ class TestCrashWindows(BoardTestCase):
                     self.directory, private_harness, claim["task"]["taskId"], claim["attempt"]["attemptId"]
                 ))
                 credential = private_root / "agent-credential.json"
-                credential.write_text('{"token":"private-test-sentinel"}')
+                credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
                 handle = self._finished_fake_handle()
                 handle.shutdown_confirmed = lambda: False
                 cancelled = []
@@ -378,7 +378,7 @@ class TestCrashWindows(BoardTestCase):
             self.directory, "codex", claim["task"]["taskId"], claim["attempt"]["attemptId"]
         ))
         credential = private_root / "agent-credential.json"
-        credential.write_text('{"token":"private-test-sentinel"}')
+        credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
         handle = self._finished_fake_handle()
         fake_adapter = SimpleNamespace(
             name=claim["task"]["spec"]["adapter"],
@@ -415,7 +415,7 @@ class TestCrashWindows(BoardTestCase):
             self.directory, "claude", claim["task"]["taskId"], claim["attempt"]["attemptId"]
         ))
         credential = private_root / "agent-credential.json"
-        credential.write_text('{"token":"private-test-sentinel"}')
+        credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
         handle = self._finished_fake_handle()
         fake_adapter = SimpleNamespace(
             name=claim["task"]["spec"]["adapter"],
@@ -470,7 +470,7 @@ class TestCrashWindows(BoardTestCase):
         def start(_context):
             nonlocal starts
             starts += 1
-            credential.write_text('{"token":"private-test-sentinel"}')
+            credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
             if starts == 2:
                 raise RuntimeError("spawn may have happened before start returned")
             return first_handle
@@ -506,7 +506,7 @@ class TestCrashWindows(BoardTestCase):
         def uncertain_start(_context):
             nonlocal starts
             starts += 1
-            credential.write_text('{"token":"private-test-sentinel"}')
+            credential.write_text('{"token":"private-test-sentinel"}', encoding="utf-8", newline="\n")
             raise FileNotFoundError(2, "injected after possible spawn", "mock")
 
         fake_adapter = SimpleNamespace(
@@ -625,7 +625,7 @@ class TestLifecycle(BoardTestCase):
                 },
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True,
+                text=True, encoding="utf-8",
             )
             self.children.append(waiting)
             # Wait until the daemon has actually admitted the client's wait; that is
@@ -675,7 +675,7 @@ class TestLifecycle(BoardTestCase):
             code, result = self.cli("result", json.dumps({"runId": run_id}))
             self.assertEqual(code, 0, result)
             self.assertTrue(result["resultAvailable"])
-            self.assertEqual(artifact.read_text().strip(), "durable")
+            self.assertEqual(artifact.read_text(encoding="utf-8").strip(), "durable")
             stdout_artifacts = [
                 entry["location"] for entry in result["artifacts"] if entry["location"].endswith("runner.stdout.log")
             ]
@@ -946,7 +946,7 @@ class TestExtensibility(BoardTestCase):
         self.assertEqual(result["result"]["status"], "ok")
         self.assertEqual(result["result"]["argv"][0], "/bin/sh")
         self.assertEqual(result["resultMeta"]["status"], "ok")
-        self.assertEqual(marker.read_text().strip(), "one")
+        self.assertEqual(marker.read_text(encoding="utf-8").strip(), "one")
         self.assertEqual(client.get(runId=task["runId"])["status"], "completed")
         self.assertTrue(client.get(runId=task["runId"])["shutdownConfirmed"])
 
@@ -1006,7 +1006,7 @@ class TestPackaging(BoardTestCase):
         code, health = self.cli("health", env=environment, timeout=600)
         install_log = self.directory / "runtime-install.log"
         self.assertEqual(code, 0, {"health": health,
-                                  "installLog": install_log.read_text()[-8000:] if install_log.exists() else None})
+                                  "installLog": install_log.read_text(encoding="utf-8")[-8000:] if install_log.exists() else None})
         self.assertTrue(health["runtimeStable"], health)
         self.assertTrue(str(health["runtimeIdentity"]).startswith("runtime:"))
         runtime_dir = runtime.find_ready(destination=runtime_root)

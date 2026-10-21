@@ -32,7 +32,7 @@ class NetworkErrorContinuationTests(MicroTaskWorkerTestCase):
             self.assertEqual(len(records), 1, {"failed": failed,
                                                "result": self.cli("result", json.dumps({"runId": submitted["runId"]}),
                                                                   env=self.env())})
-            self.assertEqual(json.loads(records[0].read_text())["failure"]["code"], "NETWORK_UNAVAILABLE")
+            self.assertEqual(json.loads(records[0].read_text(encoding="utf-8"))["failure"]["code"], "NETWORK_UNAVAILABLE")
             partial = next(item for item in failed["artifacts"] if item["kind"] == "partial-output")
             self.assertFalse(partial["verified"])
             code, continued = self.cli("continue", json.dumps({

@@ -223,7 +223,7 @@ class NativeDenialTests(unittest.TestCase):
                             "ruleId": "mode.plan.nonReadOnly", **extra}}
 
     def append(self, record):
-        with self.log.open("a") as stream:
+        with self.log.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(json.dumps(record) + "\n")
 
     def complete(self):
@@ -259,10 +259,10 @@ class NativeDenialTests(unittest.TestCase):
     def test_incomplete_log_line_waits_for_the_rest(self):
         self.frame("scheduled", "bash", "Bash")
         raw = json.dumps(self.denial("bash", "Bash"))
-        self.log.write_text(raw[:20])
+        self.log.write_text(raw[:20], encoding="utf-8", newline="\n")
         self.facts.read_denials()
         self.assertEqual(self.facts.tool_calls, 1)
-        with self.log.open("a") as stream:
+        with self.log.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(raw[20:] + "\n")
         self.assertIsNone(tool_evidence.judge_tool_evidence(self.complete(), "read"))
 
@@ -271,7 +271,7 @@ class NativeDenialTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.setUp()
                 self.frame("scheduled", "bash", "Bash")
-                self.log.write_text(line)
+                self.log.write_text(line, encoding="utf-8", newline="\n")
                 package = self.complete()
                 self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
                                  tool_evidence.TOOL_EVIDENCE_UNVERIFIED)

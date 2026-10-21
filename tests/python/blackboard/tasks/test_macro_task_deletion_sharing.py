@@ -58,7 +58,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         claim = self.claim(board,owner['runId'])
         manifest = claim['claim']['turn']['input']['executionWorkspace']
         checkout = Path(manifest['path'])
-        (checkout/'tracked.txt').write_text('owned sealed output\n')
+        (checkout/'tracked.txt').write_text('owned sealed output\n', encoding="utf-8", newline="\n")
         seal = workspace.seal(self.directory,manifest,owner['runId'],claim['claim']['attempt']['attemptId'])
         self.finish_turn(board,claim,seal)
         view = self.view(board,owner['runId'])
@@ -78,4 +78,4 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         deleted = deletion.delete(board.store,owner['macroTaskId'],1)
         self.assertEqual(deleted['state'],'deleted',deleted)
         self.assertFalse(checkout.exists())
-        self.assertEqual((self.repo/'tracked.txt').read_text(),'base\n')
+        self.assertEqual((self.repo/'tracked.txt').read_text(encoding="utf-8"),'base\n')

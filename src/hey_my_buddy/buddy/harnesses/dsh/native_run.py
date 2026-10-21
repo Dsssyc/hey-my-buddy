@@ -853,7 +853,7 @@ class _AttentionPolicy:
         try:
             path = Path(self._bridge["attentionPath"])
             if path.is_file():
-                value = json.loads(path.read_text()).get("requests")
+                value = json.loads(path.read_text(encoding="utf-8")).get("requests")
                 requests = [item for item in value if isinstance(item, dict)][:7] + requests \
                     if isinstance(value, list) else requests
             private_json(path, {"version": 1, "requests": requests})

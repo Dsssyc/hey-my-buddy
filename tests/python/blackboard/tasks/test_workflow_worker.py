@@ -58,13 +58,13 @@ class MicroTaskWorkerTestCase(BoardTestCase):
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.email", "buddy@example.invalid")
         self.git("config", "user.name", "Buddy Test")
-        (self.repo / "tracked.txt").write_text("base\n")
+        (self.repo / "tracked.txt").write_text("base\n", encoding="utf-8", newline="\n")
         self.git("add", ".")
         self.git("commit", "-q", "-m", "base")
 
     def git(self, *arguments: str) -> str:
         completed = subprocess.run(
-            ["git", *arguments], cwd=self.repo, env={**os.environ, **GIT_ENV}, capture_output=True, text=True
+            ["git", *arguments], cwd=self.repo, env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8"
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         return completed.stdout
@@ -126,7 +126,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 continue
             path = Path(location).resolve()
             if path.is_relative_to(self.directory.resolve()) and path.is_file():
-                details["logs"][name] = path.read_text(errors="replace")[-4000:]
+                details["logs"][name] = path.read_text(errors="replace", encoding="utf-8")[-4000:]
         return json.dumps(details, ensure_ascii=False, indent=2)
 
     def test_real_worker_imports_a_turn_and_seals_the_output(self):
@@ -201,13 +201,13 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             attempt_directory = self.directory / "attempts" / run_id / turn["attemptId"]
             self.assertFalse((attempt_directory / "activity.json").exists())
             bindings = [json.loads(line) for log in self.directory.rglob("fixture-agent.log")
-                        for line in log.read_text().splitlines() if '"workflow-binding"' in line]
+                        for line in log.read_text(encoding="utf-8").splitlines() if '"workflow-binding"' in line]
             self.assertEqual(len(bindings), 1)
             self.assertEqual(bindings[0]["launcherEnvKeys"], [])
 
             # The final acceptance is separate from execution and bound to the
             # actual sealed artifact, with its explicit integration decision.
-            control = json.loads(control_path.read_text())
+            control = json.loads(control_path.read_text(encoding="utf-8"))
             code, acknowledged = self.cli(
                 "accept",
                 json.dumps(
@@ -232,7 +232,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             code, submitted = self.submit("worker-req-2")
             self.assertEqual(code, 0, submitted)
             credential = self.directory / "agent-credential.json"
-            credential.write_text(json.dumps({"token": "not-a-real-credential", "stateDir": str(self.directory)}))
+            credential.write_text(json.dumps({"token": "not-a-real-credential", "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
             os.chmod(credential, 0o600)
             env = {**self.env(), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
             code, refused = self.cli(
@@ -272,7 +272,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
         })
         response = admit_board(board, {'workerId': 'ordinary-worker', 'claimRequestId': 'ordinary-claim', 'runId': submitted['runId'], 'nonce': 'o' * 16})
         credential = self.directory / "ordinary-credential.json"
-        credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}))
+        credential.write_text(json.dumps({"token": response["claim"]["agentCredential"]}), encoding="utf-8", newline="\n")
         credential.chmod(0o600)
         incoming = {**self.child_environment(self.env()), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
         controller = controller_environment(self.directory, incoming)
@@ -304,7 +304,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             self.assertIsNotNone(response["claim"], response)
             credential = self.directory / "launcher-credential.json"
             credential.write_text(json.dumps({"token": response["claim"]["agentCredential"],
-                                              "stateDir": str(self.directory)}))
+                                              "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
             credential.chmod(0o600)
             incoming = {**self.child_environment(self.env()), "HMB_AGENT_CREDENTIAL_FILE": str(credential)}
             controller = controller_environment(self.directory, incoming)
@@ -325,7 +325,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                               ("config", "user.name", "Buddy Test"), ("add", "."),
                               ("commit", "-q", "-m", "base", "--allow-empty")):
                 prepared = subprocess.run(["git", *arguments], cwd=child_repo, env={**os.environ, **GIT_ENV},
-                                          capture_output=True, text=True)
+                                          capture_output=True, text=True, encoding="utf-8")
                 self.assertEqual(prepared.returncode, 0, prepared.stderr)
             child_request = {**BUDDY, "requestId": "launcher-owned", "task": "Do bounded work",
                              "output": "full",
@@ -345,13 +345,13 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 "path=json.loads(prompt.split('Credential file path: ',1)[1]"
                 ".split('\\n',1)[0]); "
                 "command=subprocess.run([sys.executable,'-c',sys.argv[1],sys.argv[2]],"
-                "env={'HMB_AGENT_CREDENTIAL_FILE':path},capture_output=True,text=True); "
+                "env={'HMB_AGENT_CREDENTIAL_FILE':path},capture_output=True,text=True,encoding='utf-8'); "
                 "sys.stdout.write(command.stdout); sys.stderr.write(command.stderr); "
                 "sys.exit(command.returncode)"
             )
             command = subprocess.run([sys.executable, "-c", fixture_harness, bootstrap, json.dumps(child_request)],
                                      cwd=Path(__file__).resolve().parents[4] / "src", env=environment,
-                                     input=prompt, capture_output=True, text=True, timeout=30)
+                                     input=prompt, capture_output=True, text=True, timeout=30, encoding="utf-8")
             self.assertEqual(command.returncode, 0, command.stdout + command.stderr)
             owned = json.loads(command.stdout)
             self.assertIsNone(owned["hostId"])
@@ -496,13 +496,13 @@ class SubmissionPreparationRaceTests(MicroTaskWorkerTestCase):
             tokens = self._race(lambda: cli._submission_token("req-race", {}, self.directory))
             self.assertEqual(len(set(tokens)), 1, tokens)
             path = next((self.directory / "submissions").glob("*.json"))
-            original = path.read_text()
-            path.write_text("not-json")
+            original = path.read_text(encoding="utf-8")
+            path.write_text("not-json", encoding="utf-8", newline="\n")
             with self.assertRaises(BoardError) as raised:
                 cli._submission_token("req-race", {}, self.directory)
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-            self.assertEqual(path.read_text(), "not-json", "a malformed record is never overwritten")
-            path.write_text(original)
+            self.assertEqual(path.read_text(encoding="utf-8"), "not-json", "a malformed record is never overwritten")
+            path.write_text(original, encoding="utf-8", newline="\n")
 
 
 

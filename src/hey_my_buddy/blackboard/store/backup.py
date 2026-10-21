@@ -299,8 +299,9 @@ def _publication_journal(root: Path, *, had_current: bool) -> None:
     _, _, _, journal, temporary = _backup_paths(root)
     if journal.exists() or temporary.exists():
         raise BoardError('BACKUP_RECOVERY_REQUIRED', 'Existing publication journal must be recovered')
-    with _open(temporary, 'x') as stream:
-        json.dump({'format': 1, 'hadCurrent': had_current}, stream)
+    raw = json.dumps({'format': 1, 'hadCurrent': had_current}).encode('utf-8')
+    with _open(temporary, 'xb') as stream:
+        stream.write(raw)
         stream.flush()
         os.fsync(stream.fileno())
     _rename(temporary, journal)
@@ -462,8 +463,9 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
                     'databaseSnapshot':snapshot_metadata, 'runtime': runtime_identity, 'pluginCommit': plugin_commit, 'pluginCommitStatus': 'recorded' if plugin_commit else 'unavailable-in-runtime-metadata',
                     'files': files}
         manifest_path = incoming / 'manifest.json'
-        with _open(manifest_path, 'x') as stream:
-            json.dump(manifest, stream, ensure_ascii=False, sort_keys=True)
+        raw = json.dumps(manifest, ensure_ascii=False, sort_keys=True).encode('utf-8')
+        with _open(manifest_path, 'xb') as stream:
+            stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
         verify(incoming)

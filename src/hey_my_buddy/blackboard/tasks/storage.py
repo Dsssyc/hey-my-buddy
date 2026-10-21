@@ -6,6 +6,7 @@ from ...paths import is_absolute_path
 from ... import locking
 import hashlib
 import json
+import locale
 import os
 from pathlib import Path
 import re
@@ -63,7 +64,9 @@ def _service_process_patterns() -> list[tuple[re.Pattern[str], str]]:
 def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
     """Only observations. Commands and unrelated process details never escape."""
     try:
-        listing = subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True, timeout=10)
+        # ps/lsof display native argv and filenames using the process locale.
+        listing = subprocess.check_output(['ps', '-axo', 'pid=,command='], text=True,
+                                          encoding=locale.getencoding(), timeout=10)
     except (OSError, subprocess.SubprocessError):
         return [], [], False
     services = _service_process_patterns()
@@ -88,14 +91,15 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
         # Daemon argv can omit its state root. Control identity provides one exact
         # positive match, but no missing PID is interpreted as stopped.
         try:
-            current = json.loads((state / 'control.json').read_text())
+            current = json.loads((state / 'control.json').read_text(encoding="utf-8"))
             if int(pid) == current.get('pid'):
                 observed_state = str(state)
         except (OSError, ValueError):
             pass
         if observed_state is None:
             try:
-                opened = subprocess.run(['lsof','-nP','-p',pid,'-Fn'], capture_output=True, text=True, timeout=5)
+                opened = subprocess.run(['lsof','-nP','-p',pid,'-Fn'], capture_output=True, text=True,
+                                        encoding=locale.getencoding(), timeout=5)
                 roots = {str(Path(line[1:].removesuffix(' (deleted)')).parent) for line in opened.stdout.splitlines()
                          if line.startswith('n/') and line.removesuffix(' (deleted)').endswith(('/board-owner.lock','/control-daemon.lock'))}
                 if len(roots) == 1:
@@ -119,7 +123,8 @@ def runtime_usage(directory: Path, commands: list[str], known: bool) -> list[str
     # argv alone misses mapped/open files and working directories. Inspect this
     # user's file table; any incomplete observation retains the runtime.
     try:
-        result = subprocess.run(['lsof', '-nP', '-u', str(os.getuid()), '-Fn'], capture_output=True, text=True, timeout=30)
+        result = subprocess.run(['lsof', '-nP', '-u', str(os.getuid()), '-Fn'], capture_output=True,
+                                text=True, encoding=locale.getencoding(), timeout=30)
     except (OSError, subprocess.SubprocessError):
         return ['process-inspection-unavailable']
     if result.returncode or result.stderr.strip():
@@ -553,7 +558,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     foreign_default_root = (runtime_root.resolve() == Path(DEFAULT_RUNTIME_ROOT).resolve()
                             and state != default_state_dir().resolve())
     try:
-        keep = json.loads((state / 'runtime-retention.json').read_text())
+        keep = json.loads((state / 'runtime-retention.json').read_text(encoding="utf-8"))
         retained_ids = {keep['current'], keep['previous']}
     except (OSError, KeyError, ValueError):
         retained_ids = None
@@ -670,6 +675,7 @@ def _read_storage_json(path: Path, *, missing_ok: bool = False) -> dict | None:
 
 def _atomic_storage_json(path: Path, value: dict) -> None:
     _guard_storage(path)
+    raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
     temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
     _guard_storage(temporary)
     try:
@@ -677,8 +683,8 @@ def _atomic_storage_json(path: Path, value: dict) -> None:
             fd = private_dirs.open_regular_fd(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except BoardError as error:
             raise BoardError('STORAGE_UNSAFE', 'Storage temporary file is unsafe', path=str(temporary)) from error
-        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
-            json.dump(value, stream, ensure_ascii=False, allow_nan=False)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
         _guard_storage(path)

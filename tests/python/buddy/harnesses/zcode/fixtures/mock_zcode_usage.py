@@ -21,7 +21,7 @@ if "--version" in sys.argv:
     print("fixture-0.16.9-usage")
     raise SystemExit(0)
 
-FIXTURE = json.loads(Path(__file__).with_name("native-usage-zcode.json").read_text())
+FIXTURE = json.loads(Path(__file__).with_name("native-usage-zcode.json").read_text(encoding="utf-8"))
 case = os.environ.get("HMB_ZCODE_TEST_CASE", "usage-ok")
 state = Path(os.environ["ZCODE_SESSION_DB_PATH"]).with_suffix(".fixture.json")
 log_dir = Path(os.environ["ZCODE_LOG_DIR"])
@@ -79,7 +79,7 @@ def mcp_call(tool, arguments):
     config = mcp[0]
     env = {**os.environ, **{x["name"]: x["value"] for x in config.get("env", [])}}
     child = subprocess.Popen([config["command"], *config["args"]], env=env, stdin=subprocess.PIPE,
-                             stdout=subprocess.PIPE, text=True)
+                             stdout=subprocess.PIPE, text=True, encoding="utf-8")
     child.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                   "params": {"name": tool, "arguments": arguments}}) + "\n")
     child.stdin.flush()
@@ -113,7 +113,7 @@ def run_turn(params):
     prompt_input_id = params["inputId"]
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text(json.dumps({"sessionId": session_id, "selection": selection,
-                                "permissionMode": permission_mode}))
+                                "permissionMode": permission_mode}), encoding="utf-8", newline="\n")
     event("turn.started", {"inputId": prompt_input_id, "resultType": None})
     if case == "usage-quota":
         emit_deltas()
@@ -181,7 +181,7 @@ for line in sys.stdin:
     elif method == "session/resume":
         workspace = params.get("workspace") or {}
         mcp = params.get("mcpServers") or []
-        stored = json.loads(state.read_text())
+        stored = json.loads(state.read_text(encoding="utf-8"))
         assert stored["sessionId"] == params["sessionId"]
         session_id, selection, permission_mode = stored["sessionId"], stored["selection"], stored["permissionMode"]
         plan_active = False

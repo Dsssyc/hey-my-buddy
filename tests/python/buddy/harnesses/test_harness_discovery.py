@@ -69,7 +69,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
     @staticmethod
     def plain_file(path: Path, source: str) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source)
+        path.write_text(source, encoding="utf-8", newline="\n")
         return path
 
     def test_snapshot_only_fingerprints_candidates_and_manager_records(self):
@@ -78,10 +78,10 @@ class HarnessDiscoveryTests(unittest.TestCase):
             bin_dir = home / "bin"
             bin_dir.mkdir()
             cli = bin_dir / self.candidate_name("codex")
-            cli.write_text("stub")
+            cli.write_text("stub", encoding="utf-8", newline="\n")
             record = home / ".nvm/alias/default"
             record.parent.mkdir(parents=True)
-            record.write_text("v24.1.0")
+            record.write_text("v24.1.0", encoding="utf-8", newline="\n")
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ):
@@ -99,7 +99,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             bin_dir = home / 'bin'
             bin_dir.mkdir()
             for name in ('codex', 'node'):
-                (bin_dir / self.candidate_name(name)).write_text('fixture')
+                (bin_dir / self.candidate_name(name)).write_text('fixture', encoding="utf-8", newline="\n")
             with patch.object(discovery, '_home', return_value=home), \
                  patch.object(discovery, '_manager_records', return_value=([], [])), \
                  patch.object(discovery, '_common_dirs', return_value=[]), \
@@ -123,7 +123,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             for path, value in ((home / ".nvm/alias/default", "v24.1.0"),
                                 (home / ".fnm/aliases/default", "v25.0.0")):
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(value)
+                path.write_text(value, encoding="utf-8", newline="\n")
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
@@ -142,7 +142,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             bin_dir.mkdir()
             script = home / "packages/codex.js"
             script.parent.mkdir()
-            script.write_text("// npm target")
+            script.write_text("// npm target", encoding="utf-8", newline="\n")
             launcher = bin_dir / "codex"
             launcher.symlink_to(script)
             node = self.plain_file(bin_dir / "node", "import sys\nprint(\"codex 3.0.0\" if len(sys.argv) > 2 else \"v24.1.0\")\n")
@@ -203,12 +203,12 @@ class HarnessDiscoveryTests(unittest.TestCase):
             home = Path(directory)
             record = home / ".nvm/alias/default"
             record.parent.mkdir(parents=True)
-            record.write_text("v22.0.0")
+            record.write_text("v22.0.0", encoding="utf-8", newline="\n")
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
                 first = discovery.candidate_snapshot("node", environment={"PATH": ""})
-                record.write_text("v24.0.0")
+                record.write_text("v24.0.0", encoding="utf-8", newline="\n")
                 second = discovery.candidate_snapshot("node", environment={"PATH": ""})
             self.assertNotEqual(discovery._scan_hash(first), discovery._scan_hash(second))
             self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
@@ -231,14 +231,14 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 missing = fingerprint(a, b)
                 self.assertEqual(missing, fingerprint(b, empty, a))
                 cli = a / self.candidate_name('codex')
-                cli.write_text('one')
+                cli.write_text('one', encoding="utf-8", newline="\n")
                 appeared = fingerprint(a, b)
                 self.assertNotEqual(missing, appeared)
                 self.assertEqual(appeared, fingerprint(empty, b, a))
-                cli.write_text('changed-size')
+                cli.write_text('changed-size', encoding="utf-8", newline="\n")
                 changed = fingerprint(a, b)
                 self.assertNotEqual(appeared, changed)
-                (b / self.candidate_name('codex')).write_text('other')
+                (b / self.candidate_name('codex')).write_text('other', encoding="utf-8", newline="\n")
                 self.assertNotEqual(fingerprint(a, b), fingerprint(b, a))
                 (b / self.candidate_name('codex')).unlink()
                 cli.unlink()
@@ -250,7 +250,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             home = Path(directory)
             cli = home / 'bin' / self.candidate_name('codex')
             cli.parent.mkdir()
-            cli.write_text('fixture')
+            cli.write_text('fixture', encoding="utf-8", newline="\n")
             paths = [str(home / f'empty-{index}') for index in range(discovery._MAX_CANDIDATES + 1)]
             with patch.object(discovery, '_home', return_value=home), \
                  patch.object(discovery, '_common_dirs', return_value=[]), \
@@ -274,13 +274,13 @@ class HarnessDiscoveryTests(unittest.TestCase):
             cli = home / "bin" / self.candidate_name("codex")
             node = home / "bin" / self.candidate_name("node")
             cli.parent.mkdir()
-            cli.write_text("#!/usr/bin/env node\n")
-            node.write_text("node-one")
+            cli.write_text("#!/usr/bin/env node\n", encoding="utf-8", newline="\n")
+            node.write_text("node-one", encoding="utf-8", newline="\n")
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
                 first = discovery.candidate_snapshot("codex", manual_path=str(cli), environment={"PATH": ""})
-                node.write_text("node-two-with-new-size")
+                node.write_text("node-two-with-new-size", encoding="utf-8", newline="\n")
                 second = discovery.candidate_snapshot("codex", manual_path=str(cli), environment={"PATH": ""})
             self.assertNotEqual(discovery._scan_hash(first), discovery._scan_hash(second))
             self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
@@ -324,10 +324,10 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 "assert sys.stdin.read() == ''\n"
                 "private = Path(os.environ['DSH_HOME'])\n"
                 "assert private.is_dir()\n"
-                "(private / 'probe-marker').write_text('owned')\n"
+                "(private / 'probe-marker').write_text('owned', encoding='utf-8', newline='\\n')\n"
                 f"Path({str(snapshot)!r}).write_text(json.dumps({{'dshHome': str(private), "
                 "'home': os.environ.get('HOME'), 'proxy': os.environ.get('HTTPS_PROXY'), "
-                "'ca': os.environ.get('SSL_CERT_FILE'), 'keys': sorted(os.environ)}))\n"
+                "'ca': os.environ.get('SSL_CERT_FILE'), 'keys': sorted(os.environ)}), encoding='utf-8', newline='\\n')\n"
                 "print('dsh 1.2.0', file=sys.stderr)\n"))
             environment = {
                 "PATH": "", "HOME": str(root), "DSH_HOME": str(daily),
@@ -339,13 +339,13 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 result = discovery.discover("dsh", manual_path=str(cli), environment=environment)
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["version"], "1.2.0")
-            observed = json.loads(snapshot.read_text())
+            observed = json.loads(snapshot.read_text(encoding="utf-8"))
             self.assertEqual(observed["dshHome"], str(daily))
             self.assertEqual(observed["home"], str(root))
             self.assertEqual(observed["proxy"], "https://proxy.invalid")
             self.assertEqual(observed["ca"], str(root / "ca.pem"))
             self.assertNotIn("OPENAI_API_KEY", observed["keys"])
-            self.assertEqual((daily / "probe-marker").read_text(), "owned")
+            self.assertEqual((daily / "probe-marker").read_text(encoding="utf-8"), "owned")
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group observation")
     def test_dsh_version_probe_retains_its_directory_when_stop_is_unknown(self):
@@ -358,7 +358,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             pid_file = root / "pid"
             cli = self.plain_file(root / "dsh", (
                 "import os\nfrom pathlib import Path\n"
-                f"Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+                f"Path({str(pid_file)!r}).write_text(str(os.getpid()), encoding='utf-8', newline='\\n')\n"
                 "print('dsh 1.2.0')\n"))
             with patch.object(discovery.tempfile, "mkdtemp", return_value=str(private)), \
                  patch.object(ProcessHandle, "shutdown_confirmed", return_value=False), \
@@ -371,7 +371,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             # The injected uncertainty retains the directory. The test itself
             # verifies the actual group is gone before its fixture cleans up.
             with self.assertRaises(ProcessLookupError):
-                os.killpg(int(pid_file.read_text()), 0)
+                os.killpg(int(pid_file.read_text(encoding="utf-8")), 0)
 
     def test_partial_manager_defaults_match_installed_versions_and_direct_root(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -385,7 +385,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             }
             for path, value in defaults.items():
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(value)
+                path.write_text(value, encoding="utf-8", newline="\n")
             locations = [
                 home / ".nvm/versions/node/v24.2.1/bin" / self.candidate_name('codex'),
                 home / ".nvm/versions/node/v24.2.10/bin" / self.candidate_name('codex'),
@@ -395,9 +395,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
             ]
             for location in locations:
                 location.parent.mkdir(parents=True, exist_ok=True)
-                location.write_text("stub")
+                location.write_text("stub", encoding="utf-8", newline="\n")
             direct_node = home / ".fnm/node-versions/v24.3.0/installation" / self.candidate_name('node')
-            direct_node.write_text("stub")
+            direct_node.write_text("stub", encoding="utf-8", newline="\n")
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
@@ -410,7 +410,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertIn(str(direct_node), [item["path"] for item in node_snapshot["candidates"]])
             self.assertIn(str(home / ".nvm/alias/lts/*"),
                           [item["path"] for item in snapshot["managerRecords"]])
-            (home / ".nvm/alias/default").write_text("node")
+            (home / ".nvm/alias/default").write_text("node", encoding="utf-8", newline="\n")
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
@@ -422,7 +422,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             home = Path(directory)
             cli = self.plain_file(home / "manual/zcode", 'print("release next: private detail")\n')
             marker = home / "lower-ran"
-            lower = self.plain_file(home / "common" / self.candidate_name('zcode'), f'from pathlib import Path\nPath({str(marker)!r}).write_text("ran")\nprint("v9.0.0")\n')
+            lower = self.plain_file(home / "common" / self.candidate_name('zcode'), f'from pathlib import Path\nPath({str(marker)!r}).write_text("ran", encoding="utf-8", newline="\\n")\nprint("v9.0.0")\n')
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[lower.parent]
             ), patch.object(discovery, "_app_paths", return_value=[]):
@@ -507,14 +507,14 @@ class HarnessDiscoveryTests(unittest.TestCase):
         self.assertNotIn("ANTHROPIC_BASE_URL", result)
         with tempfile.TemporaryDirectory() as directory:
             cli = Path(directory) / "codex"
-            cli.write_text("stub")
+            cli.write_text("stub", encoding="utf-8", newline="\n")
             path = discovery.native_environment({"PATH": ""}, command=[str(cli)])["PATH"]
             self.assertEqual(path, str(cli.parent))
 
     def test_plain_powershell_file_is_not_a_discovery_candidate(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "claude.ps1").write_text("Write-Output never-run")
+            (root / "claude.ps1").write_text("Write-Output never-run", encoding="utf-8", newline="\n")
             with patch.object(discovery, "_home", return_value=root), \
                  patch.object(discovery, "_common_dirs", return_value=[]), \
                  patch.object(discovery, "_app_paths", return_value=[]):
@@ -525,7 +525,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
     def test_native_environment_is_allowlisted_and_command_prepends_bins(self):
         with tempfile.TemporaryDirectory() as directory:
             cli = Path(directory) / "codex"
-            cli.write_text("stub")
+            cli.write_text("stub", encoding="utf-8", newline="\n")
             result = discovery.native_environment({"PATH": "/usr/bin", "HOME": "/home/user",
                                                    "HTTPS_PROXY": "proxy", "OPENAI_API_KEY": "secret",
                                                    "ANTHROPIC_BASE_URL": "third-party",
@@ -576,7 +576,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                 self.assertEqual(discovery._variants(directory, 'codex'), expected)
         with tempfile.TemporaryDirectory() as root:
             for name in ('codex.ps1', 'codex.bat', 'codex.com', 'codex'):
-                (Path(root) / name).write_text('ignored')
+                (Path(root) / name).write_text('ignored', encoding="utf-8", newline="\n")
             with patch.object(discovery, '_variants',
                               side_effect=lambda directory, name: [directory / (name + '.exe'),
                                                                     directory / (name + '.cmd')]):
@@ -606,7 +606,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             root = Path(directory)
             for name in ('codex.cmd', 'codex.bat', 'codex.ps1', 'codex.com', 'codex'):
                 entry = root / name
-                entry.write_text('do not execute')
+                entry.write_text('do not execute', encoding="utf-8", newline="\n")
                 candidate = {'path': str(entry), 'source': 'manual', 'exists': True,
                              'fingerprint': discovery.file_fingerprint(entry)}
                 with self.subTest(name=name), \
@@ -630,7 +630,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shim = root / 'codex.cmd'
-            shim.write_text('first shim')
+            shim.write_text('first shim', encoding="utf-8", newline="\n")
             with patch.object(discovery, '_home', return_value=root), \
                  patch.object(discovery, '_manager_records', return_value=([], [])), \
                  patch.object(discovery, '_common_dirs', return_value=[]), \
@@ -638,7 +638,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                  patch.object(discovery, '_registry_paths', return_value=[]), \
                  patch.object(discovery, '_record_text', side_effect=AssertionError('snapshot must only stat')):
                 first = discovery.candidate_snapshot('codex', manual_path=str(shim), environment={'PATH': ''})
-                shim.write_text('changed shim with a different size')
+                shim.write_text('changed shim with a different size', encoding="utf-8", newline="\n")
                 second = discovery.candidate_snapshot('codex', manual_path=str(shim), environment={'PATH': ''})
             self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
 
@@ -648,10 +648,10 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             shim = root / 'codex.cmd'
             target = root / 'lib/cli.js'
             target.parent.mkdir()
-            target.write_text('fixture')
-            shim.write_text('@node "%~dp0\\lib\\cli.js" %*')
+            target.write_text('fixture', encoding="utf-8", newline="\n")
+            shim.write_text('@node "%~dp0\\lib\\cli.js" %*', encoding="utf-8", newline="\n")
             adjacent = root / 'node.exe'
-            adjacent.write_text('native placeholder')
+            adjacent.write_text('native placeholder', encoding="utf-8", newline="\n")
             windows = SimpleNamespace(name='nt', pathsep=os.pathsep)
             with patch.object(discovery, 'os', windows), \
                  patch.object(discovery, 'probe', return_value=(None, b'v24.1.0')) as probe:
@@ -661,7 +661,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             adjacent.unlink()
             path_node = root / 'other/node.exe'
             path_node.parent.mkdir()
-            path_node.write_text('native placeholder')
+            path_node.write_text('native placeholder', encoding="utf-8", newline="\n")
             found = {'status': 'ready', 'available': True, 'executable': str(path_node),
                      'version': '24.1.0', 'reason': None}
             with patch.object(discovery, 'os', windows), \
@@ -715,7 +715,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             js = root / 'package/bin/codex.js'
             for path in (node, js):
                 path.parent.mkdir(parents=True)
-                path.write_text('fixture')
+                path.write_text('fixture', encoding="utf-8", newline="\n")
             source = {'PATH': '/user/bin', 'PATHEXT': '.EXE;.JS'}
             selected = discovery.native_environment(source, command=[str(node), str(js)])
             self.assertEqual(selected['PATH'], os.pathsep.join([str(node.parent), '/user/bin']))
@@ -729,9 +729,9 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             root = Path(directory)
             script = root / 'package/cli.js'
             script.parent.mkdir()
-            script.write_text('fixture JS')
+            script.write_text('fixture JS', encoding="utf-8", newline="\n")
             node_script = root / 'package/node-tool'
-            node_script.write_text('#!/usr/bin/env node\n')
+            node_script.write_text('#!/usr/bin/env node\n', encoding="utf-8", newline="\n")
             bin_dir = root / 'bin'
             bin_dir.mkdir()
             js_link = bin_dir / 'linked-js'
@@ -749,7 +749,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             root = Path(directory)
             target = root / 'lib/cli.js'
             target.parent.mkdir()
-            target.write_text('fixture')
+            target.write_text('fixture', encoding="utf-8", newline="\n")
             shim = root / 'codex.cmd'
             valid = (
                 '@node "%~dp0\\lib\\cli.js" %*',
@@ -760,12 +760,12 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             )
             for content in valid:
                 with self.subTest(content=content):
-                    shim.write_text(content)
+                    shim.write_text(content, encoding="utf-8", newline="\n")
                     self.assertEqual(discovery._script_uses_node(shim), target.resolve())
             special = root / 'lib (测试)&^%!/cli.js'
             special.parent.mkdir()
-            special.write_text('fixture')
-            shim.write_text('@node "%~dp0\\lib (测试)&^%!\\cli.js" %*')
+            special.write_text('fixture', encoding="utf-8", newline="\n")
+            shim.write_text('@node "%~dp0\\lib (测试)&^%!\\cli.js" %*', encoding="utf-8", newline="\n")
             self.assertEqual(discovery._script_uses_node(shim), special.resolve())
             invalid = (
                 '@node %~dp0\\lib\\cli.js %*',
@@ -778,10 +778,10 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             )
             for content in invalid:
                 with self.subTest(content=content):
-                    shim.write_text(content)
+                    shim.write_text(content, encoding="utf-8", newline="\n")
                     with self.assertRaises(discovery.EntryUnsupported):
                         discovery._script_uses_node(shim)
-            shim.write_text('@python "%~dp0\\lib\\cli.js" %*')
+            shim.write_text('@python "%~dp0\\lib\\cli.js" %*', encoding="utf-8", newline="\n")
             candidate = {'path': str(shim), 'source': 'manual', 'exists': True,
                          'fingerprint': discovery.file_fingerprint(shim)}
             with patch.object(discovery, 'probe') as probe, \
@@ -806,7 +806,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
     def test_candidate_preparation_failure_proves_no_probe_created(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'codex'
-            path.write_text('plain fixture')
+            path.write_text('plain fixture', encoding="utf-8", newline="\n")
             candidate = {'path': str(path), 'source': 'manual', 'fingerprint': {}, 'exists': True}
             with patch.object(discovery, '_launch_command', _REAL_LAUNCH_COMMAND), \
                  patch.object(discovery, '_script_uses_node', side_effect=ValueError('fixture input failed')), \

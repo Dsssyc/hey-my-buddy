@@ -55,8 +55,8 @@ class CodexSchemaTests(unittest.TestCase):
                 root = Path(directory)
                 turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
                         "turnId": "turn", "executionWorkspace": {"access": "full"}}
-                (root / "input.json").write_text(canonical_json(turn))
-                (root / "task.txt").write_text("Task")
+                (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
+                (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
                 control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
                            "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
                            "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
@@ -126,8 +126,8 @@ class CodexSchemaTests(unittest.TestCase):
                     root = Path(directory)
                     turn = {"taskId": "task", "attemptId": "attempt", "generation": 1,
                             "turnId": "turn", "executionWorkspace": {"access": access}}
-                    (root / "input.json").write_text(canonical_json(turn))
-                    (root / "task.txt").write_text("Task")
+                    (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
+                    (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
                     binding = SimpleNamespace(services=None,
                                               description=SessionService(tool_names=("mcp__test__finish",)),
                                               completion_tool="finish", checkpoint_tool="checkpoint",
@@ -174,8 +174,8 @@ class SchemaWorkerTests(NativeRunCase):
         turn = {"taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
                 "resumeMode": "initial", "previousSessionId": previous,
                 "executionWorkspace": {"access": "read"}}
-        (root / "input.json").write_text(canonical_json(turn))
-        (root / "task.txt").write_text("Do this bounded task")
+        (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
+        (root / "task.txt").write_text("Do this bounded task", encoding="utf-8", newline="\n")
         control = {"operation": "worker", "harness": "claude", "spec": BUDDY,
                    "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
                    "directory": str(root), "nativeRoot": str(root / "native"),

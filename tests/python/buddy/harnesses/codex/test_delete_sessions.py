@@ -43,7 +43,7 @@ class DeleteSessionTests(unittest.TestCase):
             native_root=self.root / "native", timeout_seconds=5, cancelled=lambda: False)
 
     def requests(self):
-        return [json.loads(line) for line in self.trace.read_text().splitlines()]
+        return [json.loads(line) for line in self.trace.read_text(encoding="utf-8").splitlines()]
 
     def test_adapter_uses_controller_and_deletes_each_exact_identity_once(self):
         record = private_dirs.session_record_path(self.root / 'state', 'run:owned-task', 'owned-attempt')
