@@ -1,5 +1,7 @@
 # Windows 第二批：执行所有权、停止证据与私有存储
 
+2026-10-21 更正：开发者把 ADR-031 第 13 条定为由开发流程约束、不在产品里设围栏。本文第 7 节的状态目录文件身份围栏与阶段 0 作废，下一轮修订删去；Windows 会话号仍是按名字打开 Job 时要核对的事实，留在阶段 D。
+
 2026-10-21，设计候选，核对基线 `ab21a83a8e4c868ab3014ef7439ec2f11505d3e5`。本文只提出设计与实现验收顺序，没有修改产品代码、运行检查套件、连接日常看板、调用真实 harness 或验证 Windows 11。依据为[分批计划](plan.md)、[清单](inventory.md)的 F01、F02、F04、F08、P01、P02、P04、T03、AGENTS.md、[架构](../../reference/architecture.md)、[ADR-007](../../decisions/007-neutral-core-and-single-current-contract.md)、[ADR-010](../../decisions/010-production-workflow-repair-plan.md)、[ADR-031](../../decisions/031-one-process-per-execution.md)。涉及 harness 的建议同时受 ADR-023、ADR-030 约束。本文的“已核实”指本次读到源码或第十轮日志，不能当作目标系统的运行验收。
 
 本轮按 Host 核对独立审查后的决定修订：先用冻结的状态目录文件身份挡住看板副本停止原执行；Windows 文件句柄层沿用现有 ctypes，只用 pywin32 校验 ACL；执行根 Job 保留执行，原生 Job 全空后交回执，执行根退出且根 Job 全空后才释放资源。服务控制台及外层 Job、登录会话、提权属主等新增假设均未验证，列入阶段 A。Linux/macOS 脱离进程组的后代另成一批，本批不宣称解决，也不再以它阻塞本批安装。
