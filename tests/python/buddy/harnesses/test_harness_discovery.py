@@ -624,7 +624,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
              patch.object(Path, 'resolve', side_effect=AssertionError('entry type is already known')):
             for suffix in ('.exe', '.bat', '.ps1', '.com', ''):
                 with self.subTest(suffix=suffix):
-                    self.assertIsNone(discovery._script_uses_node(Path('/fixture/cli' + suffix)))
+                    self.assertIsNone(discovery._script_launch(Path('/fixture/cli' + suffix)))
 
     def test_shim_file_change_invalidates_location_fingerprint_without_parsing(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -649,7 +649,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             target = root / 'lib/cli.js'
             target.parent.mkdir()
             target.write_text('fixture', encoding="utf-8", newline="\n")
-            shim.write_text('@node "%~dp0\\lib\\cli.js" %*', encoding="utf-8", newline="\n")
+            shim.write_text('@"node" "%~dp0\\lib\\cli.js" %*', encoding="utf-8", newline="\n")
             adjacent = root / 'node.exe'
             adjacent.write_text('native placeholder', encoding="utf-8", newline="\n")
             windows = SimpleNamespace(name='nt', pathsep=os.pathsep)
@@ -752,27 +752,26 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             target.write_text('fixture', encoding="utf-8", newline="\n")
             shim = root / 'codex.cmd'
             valid = (
-                '@node "%~dp0\\lib\\cli.js" %*',
-                '@node "%dp0%\\lib\\cli.js" %*',
-                'set "SOME_UNRELATED_FLAG=1"\n@node "%~dp0\\lib\\cli.js" %*',
-                '@node "%~dp0\\lib\\cli.js" if exist "%~dp0\\node.exe" rem selector',
+                '@"node" "%~dp0\\lib\\cli.js" %*',
+                '@"node" "%dp0%\\lib\\cli.js" %*',
+                'set "SOME_UNRELATED_FLAG=1"\n@"node" "%~dp0\\lib\\cli.js" %*',
                 'set "node_exe=%~dp0\\node.exe"\n@"%node_exe%" "%~dp0\\lib\\cli.js" %*',
             )
             for content in valid:
                 with self.subTest(content=content):
                     shim.write_text(content, encoding="utf-8", newline="\n")
-                    self.assertEqual(discovery._script_uses_node(shim), target.resolve())
-            special = root / 'lib (测试)&^%!/cli.js'
+                    self.assertEqual(discovery._script_launch(shim).arguments, [str(target.resolve())])
+            special = root / 'lib (测试)&^/cli.js'
             special.parent.mkdir()
             special.write_text('fixture', encoding="utf-8", newline="\n")
-            shim.write_text('@node "%~dp0\\lib (测试)&^%!\\cli.js" %*', encoding="utf-8", newline="\n")
-            self.assertEqual(discovery._script_uses_node(shim), special.resolve())
+            shim.write_text('@"node" "%~dp0\\lib (测试)&^\\cli.js" %*', encoding="utf-8", newline="\n")
+            self.assertEqual(discovery._script_launch(shim).arguments, [str(special.resolve())])
             invalid = (
-                '@node %~dp0\\lib\\cli.js %*',
-                '@node "%~dp0\\missing.js" %*',
+                '@"node" %~dp0\\lib\\cli.js %*',
+                '@"node" "%~dp0\\missing.js" %*',
                 '@python "%~dp0\\lib\\cli.js" %*',
-                '@node "%~dp0\\lib\\cli.js" "%~dp0\\lib\\cli.js" %*',
-                '@node "%~dp0\\lib\\cli.js"\n@node "%~dp0\\lib\\cli.js"',
+                '@"node" "%~dp0\\lib\\cli.js" "%~dp0\\lib\\cli.js" %*',
+                '@"node" "%~dp0\\lib\\cli.js"\n@"node" "%~dp0\\lib\\cli.js"',
                 'set "SOME_UNRELATED_FLAG=1"',
                 'x' * 4097,
             )
@@ -780,7 +779,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                 with self.subTest(content=content):
                     shim.write_text(content, encoding="utf-8", newline="\n")
                     with self.assertRaises(discovery.EntryUnsupported):
-                        discovery._script_uses_node(shim)
+                        discovery._script_launch(shim)
             shim.write_text('@python "%~dp0\\lib\\cli.js" %*', encoding="utf-8", newline="\n")
             candidate = {'path': str(shim), 'source': 'manual', 'exists': True,
                          'fingerprint': discovery.file_fingerprint(shim)}
@@ -809,7 +808,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
             path.write_text('plain fixture', encoding="utf-8", newline="\n")
             candidate = {'path': str(path), 'source': 'manual', 'fingerprint': {}, 'exists': True}
             with patch.object(discovery, '_launch_command', _REAL_LAUNCH_COMMAND), \
-                 patch.object(discovery, '_script_uses_node', side_effect=ValueError('fixture input failed')), \
+                 patch.object(discovery, '_script_launch', side_effect=ValueError('fixture input failed')), \
                  patch.object(discovery, 'probe') as probe:
                 with self.assertRaises(ValueError) as caught:
                     discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1)

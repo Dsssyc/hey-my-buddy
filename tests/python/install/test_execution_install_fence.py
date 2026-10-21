@@ -155,7 +155,8 @@ class ExecutionInstallFenceTests(BoardTestCase):
         started = self.directory / "worker.started"
         release = self.directory / "worker.release"
         self.addCleanup(release.touch)
-        script_text = script.read_text(encoding="utf-8")
+        script_source = self.directory / "fixture-router.py"
+        script_text = script_source.read_text(encoding="utf-8")
         point = "            (root/'worker.started').touch()\n"
         self.assertEqual(script_text.count(point), 1)
         emission = ("            (root/'worker.started').touch()\n"
@@ -165,7 +166,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
                     "{'sessionUpdate':'agent_message_chunk','content':"
                     "{'type':'text','text':'offline fixture activity'}}})\n"
                     "            (root/'activity.sent').touch()\n")
-        script.write_text(script_text.replace(point, emission, 1), encoding="utf-8", newline="\n")
+        script_source.write_text(script_text.replace(point, emission, 1), encoding="utf-8", newline="\n")
         repo = self.workdir("worker-repo")
         for command in (("init", "-q", "-b", "main"),
                         ("config", "user.email", "buddy@example.invalid"),

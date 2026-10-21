@@ -19,6 +19,7 @@ import unittest
 from pathlib import Path
 
 from support import BoardTestCase, enable_fixture_buddy, wait_for
+from fake_executable import make_fake_executable
 from hey_my_buddy.cli.checks import prepare_test_home
 from console.test_console import Browser
 
@@ -33,26 +34,24 @@ FIXTURE = Path(__file__).resolve().parents[2] / "buddy/harnesses/dsh/fixtures/wo
 BUDDY = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "off"}
 
 
-def harness_environment(directory: Path) -> dict:
+def harness_environment(directory: Path, entry: Path) -> dict:
     """Select the offline micro-task agent as the harness's CLI entry.
 
-    The daemon chain runs the service-selected health record, and the catalog
-    fixture daemon composes every harness's command from ``HMB_<X>_CLI`` —
-    a ``.py`` entry launches under the daemon's own interpreter, anything else
-    runs directly, with no wrapper script and no production compatibility
-    variable. The selection is this module's micro-task fixture file. HOME is
-    pinned into the test's private root so the agent's forced-private-home
-    tripwire holds off the invoking shell for the whole chain.
+    The fixture is a generated native entry on Windows and an executable
+    script on POSIX, so the daemon and execution process use the same shared
+    CLI resolver. HOME stays inside the test's private root for the agent's
+    forced-private-home tripwire.
     """
     home = directory / "home"
     prepare_test_home(home)
-    return {"HOME": str(home), "HMB_DSH_CLI": str(FIXTURE)}
+    return {"HOME": str(home), "HMB_DSH_CLI": str(entry)}
 
 
 class MicroTaskWorkerTestCase(BoardTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.catalog_fixture()
+        self.harness_cli = make_fake_executable(self.directory / "harness-bin", "dsh", source=FIXTURE)
         self.repo = self.directory / "repo"
         self.repo.mkdir()
         self.git("init", "-q", "-b", "main")
@@ -70,7 +69,7 @@ class MicroTaskWorkerTestCase(BoardTestCase):
         return completed.stdout
 
     def env(self) -> dict:
-        return harness_environment(self.directory)
+        return harness_environment(self.directory, self.harness_cli)
 
     def submit(self, request_id: str = "worker-req-1") -> tuple[int, dict]:
         return self.cli(

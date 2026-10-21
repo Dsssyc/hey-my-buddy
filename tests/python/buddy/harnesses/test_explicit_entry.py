@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from hey_my_buddy.buddy.harnesses import discovery
+from hey_my_buddy.buddy.harnesses import discovery, runtime_selection
 from hey_my_buddy.buddy.harnesses.claude import config as claude
 from hey_my_buddy.buddy.harnesses.codex import config as codex
 from hey_my_buddy.buddy.harnesses.zcode import config as zcode
@@ -16,25 +16,47 @@ from hey_my_buddy.buddy.harnesses.zcode import config as zcode
 class ExplicitEntryTests(unittest.TestCase):
     def test_each_override_uses_the_shared_resolver_and_preserves_refusal(self):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"}):
-            entry = Path(temporary) / "npm-entry.cmd"
+            entry = Path(temporary) / "native-entry.exe"
             for name, config, exception in (("claude", claude, claude.ClaudeUnavailable),
                                             ("codex", codex, codex.CodexUnavailable),
-                                            ("zcode", zcode, zcode.NativeError)):
+                                            ("zcode", zcode, zcode.NativeError),
+                                            ("dsh", None, discovery.EntryUnavailable)):
                 environment = {f"HMB_{name.upper()}_CLI": str(entry)}
+                command_for = config.cli_command if config is not None else lambda env: runtime_selection.launch_for("dsh", env)[0]
                 with self.subTest(harness=name), mock.patch.object(discovery, "_launch_command", return_value=["node.exe", "cli.js"]) as resolve:
-                    self.assertEqual(config.cli_command(environment), ["node.exe", "cli.js"])
+                    self.assertEqual(command_for(environment), ["node.exe", "cli.js"])
                     resolve.assert_called_once_with(entry, environment)
                 with self.subTest(harness=name), mock.patch.object(discovery, "_launch_command", side_effect=discovery.EntryUnsupported()):
                     with self.assertRaises(exception) as caught:
-                        config.cli_command(environment)
+                        command_for(environment)
                     self.assertEqual(caught.exception.reason["code"], "harness.entry-unsupported")
 
     def test_no_override_uses_the_selected_command(self):
         with mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"}), mock.patch(
-                "hey_my_buddy.buddy.harnesses.runtime_selection.command_for", return_value=["selected.exe"]) as selected:
+                "hey_my_buddy.buddy.harnesses.runtime_selection.launch_for", return_value=(["selected.exe"], {})) as selected:
             for name, config in (("claude", claude), ("codex", codex), ("zcode", zcode)):
                 self.assertEqual(config.cli_command({}), ["selected.exe"])
                 selected.assert_called_with(name, {})
+
+    def test_overrides_require_development_mode_for_all_four_harnesses(self):
+        records = [{'harness': name, 'status': 'ready', 'command': ['selected.exe']}
+                   for name in ('claude', 'codex', 'zcode', 'dsh')]
+        environment = {f'HMB_{record["harness"].upper()}_CLI': 'override.exe' for record in records}
+        with mock.patch.dict(os.environ, {'HMB_DEV_SOURCE': '0'}), runtime_selection.bound(records), \
+             mock.patch.object(discovery, '_launch_command') as resolve:
+            for record in records:
+                with self.subTest(harness=record['harness']):
+                    self.assertEqual(runtime_selection.launch_for(record['harness'], environment),
+                                     (['selected.exe'], {}))
+            resolve.assert_not_called()
+
+    def test_development_controller_preserves_all_four_overrides(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = {'HMB_DEV_SOURCE': '1', **{f'HMB_{name.upper()}_CLI': f'{name}.exe'
+                       for name in ('claude', 'codex', 'zcode', 'dsh')}}
+            result = runtime_selection.controller_environment(temporary, source)
+            for key, value in source.items():
+                self.assertEqual(result[key], value)
 
     def test_unconfirmed_node_probe_is_not_reported_as_no_child(self):
         from buddy.harnesses.claude import test_native_run as claude_cases

@@ -1040,7 +1040,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
 
     def test_late_account_failure_cannot_invalidate_a_new_health_generation(self):
         from hey_my_buddy.errors import BoardError
-        def fail_after_setting_change(*args):
+        def fail_after_setting_change(*args, **kwargs):
             with self.board.db.write() as db:
                 db.execute("UPDATE harness_health SET revision=revision+1,status='unknown',record_json=? WHERE harness='codex'",
                            (json.dumps({'reason': probe_reason('not-checked')}),))

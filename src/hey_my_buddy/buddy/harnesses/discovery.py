@@ -5,6 +5,7 @@ never consults shell startup files or inherited provider credentials.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import json
 import logging
@@ -286,7 +287,8 @@ def location_fingerprint(snapshot: dict) -> str:
                                           if item["fingerprint"] is not None]})
 
 
-def native_environment(environment: dict, *, command: tuple[str, ...] | list[str] = ()) -> dict:
+def native_environment(environment: dict, *, command: tuple[str, ...] | list[str] = (),
+                       entry: str | Path | None = None) -> dict:
     """Build an account-preserving, credential-free environment for native CLIs.
 
     CA certificate path variables are preserved alongside the proxy variables:
@@ -313,6 +315,7 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
             prefixes.append(str(path.parent))
     inherited_path = result.get("PATH", "")
     result["PATH"] = os.pathsep.join([*prefixes, *([inherited_path] if inherited_path else [])])
+    result.update(shim_environment(entry))
     return result
 
 
@@ -421,7 +424,7 @@ def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | Non
     assert process.stdout is not None
     chunks: list[bytes] = []
     pipe = msvcrt.get_osfhandle(process.stdout.fileno())
-    peek = ctypes.windll.kernel32.PeekNamedPipe
+    peek = ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe
     peek.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
                      ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
                      ctypes.POINTER(wintypes.DWORD)]
@@ -431,7 +434,9 @@ def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | Non
     while time.monotonic() < stop_at:
         readable = peek(pipe, None, 0, None, ctypes.byref(available), None)
         if not readable:
-            if process.poll() is None:
+            # The child can close stdout before exiting. Broken pipe is EOF,
+            # not a failed read; its exit still has the remaining probe budget.
+            if ctypes.get_last_error() != 109:  # ERROR_BROKEN_PIPE
                 reason = "pipe-failed"
             break
         if available.value:
@@ -446,6 +451,11 @@ def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | Non
             time.sleep(0.01)
     else:
         reason = "timeout"
+    if reason is None:
+        try:
+            process.wait(timeout=max(0, stop_at - time.monotonic()))
+        except subprocess.TimeoutExpired:
+            reason = "timeout"
     forced = reason is not None
     if forced:
         try:
@@ -456,7 +466,7 @@ def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | Non
             pass
         if process.poll() is None:
             process.kill()
-    process.wait()
+        process.wait()
     process.stdout.close()
     return (reason, b"", False) if forced else (
         ("probe-failed" if process.returncode else None), b"".join(chunks), True)
@@ -519,7 +529,8 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
     return (code, output) if stopped else ("shutdown-unverified", b"")
 
 
-def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -> tuple[str | dict | None, bytes]:
+def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *,
+                       launch_environment: dict | None = None) -> tuple[str | dict | None, bytes]:
     """Use the same owned DSH launcher for the no-input version check.
 
     Keep the caller's HOME, DSH_HOME and native environment unchanged, and
@@ -539,7 +550,7 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -
     try:
         try:
             process, handle = launch([*command, "--version"], private_root=root,
-                                     source_environment=environment, merge_stderr=True)
+                                     source_environment=environment, launch_environment=launch_environment, merge_stderr=True)
         except LaunchOwnershipError as error:
             process, handle = error.process, error.handle
         except WindowsCommandLineTooLong as error:
@@ -596,49 +607,146 @@ class EntryUnsupported(EntryUnavailable):
         super().__init__("entry-unsupported")
 
 
-def _script_uses_node(path: Path) -> Path | None:
-    if path.suffix.lower() == ".cmd":
-        text = _record_text(path)
-        if text is None:
+@dataclass
+class ScriptLaunch:
+    # None is the npm/Node selector, resolved through the existing Node discovery.
+    program: Path | None
+    arguments: list[str]
+    environment: dict[str, str]
+
+
+def _shim_path(path: Path, value: str) -> Path:
+    match = re.fullmatch(r'%(?:dp0%|~dp0)[\\/]?(.+)', value, re.I)
+    if match is None or is_absolute_path(match[1]) or re.search(r'[%!"\x00]', match[1]):
+        raise EntryUnsupported()
+    return path.parent.joinpath(*match[1].replace('\\', '/').split('/')).resolve()
+
+
+def _entry_exists(target: Path) -> bool:
+    # Electron owns ASAR lookup. A real archive plus the normal version probe
+    # verifies an entry without adding an archive reader or executing JS here.
+    for parent in target.parents:
+        if parent.suffix.lower() == '.asar':
+            return parent.is_file()
+    return target.is_file()
+
+
+def _cmd_launch(path: Path) -> ScriptLaunch:
+    text = _record_text(path)
+    if text is None:
+        raise EntryUnsupported()
+    # Recognize npm's literal directory helper as a whole, so assignments
+    # skipped by a goto never become child state. No batch flow is evaluated.
+    helper = r':find_dp0\nset dp0=%~dp0\nexit /b'
+    lines = '\n'.join(line.strip().lstrip('@') for line in text.splitlines())
+    before = re.compile(r'(?im)^goto start\n' + helper + r'\n:start(?:\n|$)')
+    lines, before_count = before.subn('', lines)
+    after = re.compile(r'(?im)^' + helper + r'\s*$')
+    lines, after_count = after.subn('', lines)
+    if before_count + after_count:
+        if before_count + after_count != 1:
             raise EntryUnsupported()
-        # Read only literal Node selection assignments and a quoted target
-        # operand. No batch control flow or environment expression is executed.
-        node_names = {"node", "node.exe"}
-        node_program = re.compile(r'(?:%(?:dp0%|~dp0)[\\/]?)?node(?:\.exe)?', re.I)
-        for assignment in re.finditer(r'(?im)\bset\s+"?([\w]+)=([^"\r\n]+)"?', text):
-            if node_program.fullmatch(assignment[2].strip()):
-                node_names.add("%" + assignment[1].lower() + "%")
-        targets = []
-        call = re.compile(r'(?i)(?:"([^"\r\n]+)"|(?<![\w%])((?:node)(?:\.exe)?|%[\w]+%))'
-                          r'\s+"(%(?:dp0%|~dp0)([^"\r\n]*))"')
-        for match in call.finditer(text):
-            program = (match[1] or match[2]).lower()
-            if program not in node_names and not node_program.fullmatch(program):
-                continue
-            remainder = text[match.end():].split("\n", 1)[0]
-            if re.match(r'\s+"%(?:dp0%|~dp0)[^"\r\n]*"', remainder, re.I):
-                raise EntryUnsupported()
-            relative = match[4]
-            if relative.startswith(("\\", "/")):
-                relative = relative[1:]
-            if not relative or is_absolute_path(relative):
-                raise EntryUnsupported()
-            # A shim uses Windows separators even in parser tests on POSIX.
-            target = path.parent.joinpath(*relative.replace("\\", "/").split("/"))
-            targets.append(target)
-        if len(targets) != 1 or not targets[0].is_file():
+        lines, call_count = re.subn(r'(?im)^call :find_dp0(?:\n|$)', '', lines)
+        if call_count != 1:
             raise EntryUnsupported()
-        return targets[0].resolve()
+    text = lines
+    node_program = re.compile(r'(?:%(?:dp0%|~dp0)[\\/]?)?node(?:\.exe)?', re.I)
+    assignments = list(re.finditer(r'(?im)^\s*@?set\s+"?([\w]+)=([^"\r\n]*)"?\s*$', text))
+    program_variables = {name.lower() for name in re.findall(r'"%([\w]+)%"(?=\s)', text)}
+    selectors = {match[1].lower() for match in assignments
+                 if match[1].lower() in program_variables and node_program.fullmatch(match[2])}
+    environment = {}
+    for match in assignments:
+        name, value = match[1], match[2]
+        if name.lower() in selectors:
+            if not node_program.fullmatch(value):
+                raise EntryUnsupported()
+            continue
+        # npm's directory/extension selection scaffolding is not child state.
+        if selectors and (name.lower(), value.lower()) in (('dp0', '%~dp0'), ('pathext', '%pathext:;.js;=;%')):
+            continue
+        if not re.fullmatch(r'@?set\s+"[\w]+=[^"\r\n]*"', match[0].strip(), re.I) or re.search(r'[%!\x00]', value):
+            raise EntryUnsupported()
+        environment[name] = value
+    calls = []
+    selector_block = False
+    for line in text.splitlines():
+        stripped = line.strip().lstrip('@')
+        if calls and stripped and not re.fullmatch(r'exit /b(?: %errorlevel%)?', stripped, re.I) and not stripped.lower().startswith(('rem ', '::')):
+            raise EntryUnsupported()
+        if calls and re.fullmatch(r'exit /b(?: %errorlevel%)?', stripped, re.I):
+            continue
+        if not stripped or re.fullmatch(r'(?:echo off|setlocal(?: DisableDelayedExpansion)?)', stripped, re.I) or stripped.lower().startswith(('rem ', '::')):
+            continue
+        assignment = re.fullmatch(r'set\s+"?([\w]+)=([^"\r\n]*)"?', stripped, re.I)
+        if assignment:
+            if selector_block and assignment[1].lower() not in selectors and (assignment[1].lower(), assignment[2].lower()) != ('pathext', '%pathext:;.js;=;%'):
+                raise EntryUnsupported()
+            continue
+        if re.fullmatch(r'if exist "%(?:dp0%|~dp0)[\\/]?node\.exe" \(', stripped, re.I):
+            selector_block = True
+            continue
+        if selector_block and stripped.lower() == ') else (':
+            continue
+        if selector_block and stripped == ')':
+            selector_block = False
+            continue
+        # npm appends its one invocation after this fixed forwarding prelude.
+        line = re.sub(r'^\s*endlocal\s+&\s+goto\s+#_undefined_#\s+2>NUL\s+\|\|\s+title\s+%COMSPEC%\s+&\s*', '', line, flags=re.I)
+        match = re.fullmatch(r'\s*@?"([^"\r\n]+)"\s+(.+?)\s+%\*\s*', line)
+        if match is None or selector_block:
+            raise EntryUnsupported()
+        program, operands = match.groups()
+        tokens = re.findall(r'"[^"\r\n]*"|[^\s"]+', operands)
+        if not re.fullmatch(r'(?:"[^"\r\n]*"|[^\s"]+)(?:\s+(?:"[^"\r\n]*"|[^\s"]+))*', operands):
+            raise EntryUnsupported()
+        arguments = []
+        targets = 0
+        for token in tokens:
+            if re.match(r'^"%(?:dp0%|~dp0)', token, re.I):
+                target = _shim_path(path, token[1:-1])
+                if target.suffix.lower() not in ('.js', '.cjs', '.mjs') or not _entry_exists(target):
+                    raise EntryUnsupported()
+                arguments.append(str(target))
+                targets += 1
+            else:
+                quoted = token.startswith('"')
+                literal = token[1:-1] if quoted else token
+                if not literal or re.search(r'[%!"\x00]' if quoted else r'[%!^&|<>"\x00]', literal) or is_absolute_path(literal):
+                    raise EntryUnsupported()
+                arguments.append(literal)
+        if targets != 1:
+            raise EntryUnsupported()
+        if node_program.fullmatch(program) or program.lower() in {'%' + name + '%' for name in selectors}:
+            executable = None
+        else:
+            executable = _shim_path(path, program)
+            if executable.suffix.lower() != '.exe' or not executable.is_file():
+                raise EntryUnsupported()
+        calls.append(ScriptLaunch(executable, arguments, environment))
+    if len(calls) != 1 or selector_block:
+        raise EntryUnsupported()
+    return calls[0]
+
+
+def shim_environment(path: str | Path | None) -> dict[str, str]:
+    """Derive child state from the original entry already held in health records."""
+    return _cmd_launch(Path(path)).environment if path and Path(path).suffix.lower() == '.cmd' else {}
+
+
+def _script_launch(path: Path) -> ScriptLaunch | None:
+    if path.suffix.lower() == '.cmd':
+        return _cmd_launch(path)
     if os.name == "nt" and path.suffix.lower() not in (".js", ".cjs", ".mjs"):
         return None
     try:
         if path.resolve().suffix.lower() in (".js", ".cjs", ".mjs"):
-            return path
+            return ScriptLaunch(None, [str(path)], {})
         if path.suffix.lower() in (".ps1", ".bat", ".com", ".exe") or os.name == "nt":
             return None
         with path.open("rb") as stream:
             first_line = stream.readline(128).lower()
-            return path if first_line.startswith(b"#!") and b"node" in first_line else None
+            return ScriptLaunch(None, [str(path)], {}) if first_line.startswith(b"#!") and b"node" in first_line else None
     except (OSError, RuntimeError):
         return None
 
@@ -699,12 +807,16 @@ def _launch_command(path: Path, environment: dict, *, deadline: float | None = N
     """Resolve one entry into native argv without invoking a command shell."""
     if not path.is_file():
         raise EntryUnavailable("not-found")
-    entry = _script_uses_node(path)
+    entry = _script_launch(path)
     if entry is not None:
-        node, problem = _node_for(path, environment, deadline if deadline is not None else time.monotonic() + _SCAN_TIMEOUT)
-        if node is None:
-            raise EntryUnavailable(problem)
-        return [node, str(entry)]
+        if entry.program is None:
+            node, problem = _node_for(path, environment, deadline if deadline is not None else time.monotonic() + _SCAN_TIMEOUT)
+            if node is None:
+                raise EntryUnavailable(problem)
+            command = [node]
+        else:
+            command = _native_command(entry.program)
+        return [*command, *entry.arguments]
     return _native_command(path)
 
 
@@ -756,9 +868,11 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
                 result["status"] = "unknown"
             result["reason"] = _probe_reason(error.code)
             return result
+        launch_environment = shim_environment(path)
         child_env = native_environment(environment, command=command)
+        child_env.update(launch_environment)
         shutdown = False
-        code, output = (_probe_dsh_version(command, child_env, deadline) if harness == "dsh" else
+        code, output = (_probe_dsh_version(command, child_env, deadline, launch_environment=launch_environment) if harness == "dsh" else
                         probe([*command, "--version"], child_env, deadline=deadline))
         shutdown = code != "shutdown-unverified"
         if code is not None:

@@ -369,7 +369,7 @@ class HarnessHealth:
         billing = failure = None
         try:
             from ...buddy.harnesses.codex.account_probe import read
-            billing = read(health['command'], self.environment())
+            billing = read(health['command'], self.environment(), entry=health.get('executable'))
         except (BoardError, CodexProtocolError, OSError, ValueError, RuntimeError) as error:
             diagnostic_code = error.code if isinstance(error, (BoardError, CodexProtocolError)) else None
             cause = (make_reason('harness.shutdown-unverified', operation='account-read')

@@ -81,7 +81,7 @@ from ..run_contract import (
     fold_unknown_events,
     unknown_event_name,
 )
-from ..runtime_selection import command_for, environment_for
+from ..runtime_selection import launch_for, environment_for
 from ..session_record import SessionRecord
 from .session_content import DshSessionProjector
 from .acp import AcpClient
@@ -341,7 +341,7 @@ def check_preparation(spec: dict, environment: dict) -> None:
     """Confirm the capability: a ready installed dsh command, selected or discoverable.
 
     A service-selected record is confirmed without spawning. Without one, the
-    same bounded discovery that :func:`command_for` falls back to refreshes the
+    same bounded discovery that :func:`launch_for` falls back to refreshes the
     selection first — the harness's own version handshake is the only thing it
     launches, never a prompt or a model call. A missing or unhealthy command
     refuses here, before any attempt builds a run.
@@ -601,7 +601,8 @@ def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path,
     title generation and telemetry follow the user's native configuration.
     """
     from ..runtime_selection import environment_for
-    command = command_for("dsh", dict(environment_for()))
+    incoming = dict(environment_for())
+    command, launch_environment = launch_for("dsh", incoming)
     argv = [*command, "--profile", "acp"]
     rows = [{"id": _SESSION_ROOT_ROW, "config": {"root": str(sessions_root)}},
             {"id": "storage-json", "config": {"root": str(sessions_root.parent / "storages")}},
@@ -611,7 +612,7 @@ def _launch_agent(*, cwd: str, launch_root: Path, invocation_root: Path,
     argv += ["--patch", str(patch_path)]
     try:
         return AcpClient.start(argv, private_root=launch_root,
-                               extra_env=extra_env or None, cwd=Path(cwd),
+                               extra_env=extra_env or None, launch_environment=launch_environment, cwd=Path(cwd),
                                frame_log=FrameMetaLog(launch_root / "logs" / "frames.jsonl"),
                                permission_policy=permission_policy)
     except LaunchOwnershipError as error:

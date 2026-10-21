@@ -94,8 +94,8 @@ class NativeRunCase(unittest.TestCase):
                                                   "DSH_HOME": str(self.base / "source-dsh-home")})
         environment.start()
         self.addCleanup(environment.stop)
-        patcher = mock.patch.object(native_run, "command_for",
-                                    side_effect=lambda *_args: self.agent_argv())
+        patcher = mock.patch.object(native_run, "launch_for",
+                                    side_effect=lambda *_args: (self.agent_argv(), {}))
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -487,8 +487,8 @@ class FastSeamTests(NativeRunCase):
 
     def test_a_spawn_failure_reports_an_unavailable_agent_and_no_started_model(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
-        with mock.patch.object(native_run, "command_for",
-                               return_value=["/no/such/dsh-interpreter"]):
+        with mock.patch.object(native_run, "launch_for",
+                               return_value=(["/no/such/dsh-interpreter"], {})):
             result = run(self.fast_request("prompt", scope="write"),
                          observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=None, cancelled=lambda: False)
