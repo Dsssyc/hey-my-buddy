@@ -161,6 +161,24 @@ class ExportBoardSampleTests(WorkflowTestCase):
                 self.assert_source_unchanged(before, files(board.directory))
                 self.assertEqual(list(self.directory.glob('.board-sample-*')), [])
 
+    def test_uncertain_ownership_after_confirmed_stop_is_exported(self):
+        # A lost connection freezes ownership at 'uncertain'; the stop facts
+        # below are the only stop evidence the sample must show.
+        board = InProcessBoard(self.directory / 'source')
+        self._stack.append(board)
+        run, attempt = self.accepted(board, 'accepted', kind='worktree')
+        with board.store.db.write() as connection:
+            connection.execute('UPDATE attempts SET execution_state=\'finished\',shutdown_confirmed=1,cleanup_pending=0')
+            connection.execute("UPDATE attempts SET ownership='uncertain' WHERE attempt_id=?", (attempt,))
+        board.store.db.close()
+        output = export_sample(board.directory, self.directory / 'sample')
+        with closing(sqlite3.connect(output / DB_FILE)) as connection:
+            self.assertEqual([row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')],
+                             [run['runId']])
+            self.assertEqual(connection.execute(
+                'SELECT ownership,execution_state,shutdown_confirmed,cleanup_pending FROM attempts').fetchone(),
+                ('uncertain', 'finished', 1, 0))
+
     def test_empty_sample_empty_output_and_nonempty_output_refusal(self):
         board = self.source_board()
         output = self.directory / 'sample'
