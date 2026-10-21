@@ -7,7 +7,6 @@ including a replacement daemon that the CLI may have started after a restart.
 from __future__ import annotations
 
 import errno
-import fcntl
 import json
 import os
 import shutil
@@ -25,6 +24,7 @@ DELEGATE_ROOT = PYTHON_ROOT.parent
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
+from hey_my_buddy import locking  # noqa: E402
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
 from hey_my_buddy.cli.checks import prepare_test_home  # noqa: E402
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference  # noqa: E402
@@ -112,10 +112,10 @@ def _lock_held(path: Path) -> bool:
         return False
     try:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locking.lock(fd, blocking=False)
         except BlockingIOError:
             return True
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        locking.unlock(fd)
         return False
     finally:
         os.close(fd)

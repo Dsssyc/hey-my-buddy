@@ -1,7 +1,6 @@
 """The portable lock keeps flock semantics on POSIX (ADR-015 portability work)."""
 from __future__ import annotations
 
-import fcntl
 import os
 from pathlib import Path
 import tempfile
@@ -41,7 +40,10 @@ class LockingTests(unittest.TestCase):
         with self.assertRaises(BlockingIOError):
             locking.lock(writer, blocking=False)
 
+    @unittest.skipUnless(os.name == "posix", "raw fcntl.flock interoperability requires POSIX")
     def test_it_interoperates_with_a_raw_flock_holder(self):
+        import fcntl
+
         raw, portable = self.open(), self.open()
         fcntl.flock(raw, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with self.assertRaises(BlockingIOError):

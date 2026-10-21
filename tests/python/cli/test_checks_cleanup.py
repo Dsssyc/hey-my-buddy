@@ -1,7 +1,6 @@
 """The checks runner contains every suite inside one private root it can retire."""
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import shutil
@@ -14,18 +13,19 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from hey_my_buddy import locking
 from hey_my_buddy.cli import checks
 
 
 def hold_lock(path: Path) -> int:
-    """An open fd that owns ``path``'s flock until the caller closes it."""
+    """An open fd that owns ``path``'s lock until the caller closes it."""
     fd = os.open(path, os.O_RDWR)
-    fcntl.flock(fd, fcntl.LOCK_EX)
+    locking.lock(fd)
     return fd
 
 
 def release_lock(fd: int) -> None:
-    fcntl.flock(fd, fcntl.LOCK_UN)
+    locking.unlock(fd)
     os.close(fd)
 
 
@@ -205,10 +205,11 @@ class PrivateRootTeardownTests(unittest.TestCase):
         lock = execution / "execution.lock"
         lock.write_text("")
         script = (
-            "import fcntl, os, sys, time\n"
+            "import os, sys, time\n"
+            "from hey_my_buddy import locking\n"
             "execution = sys.argv[1]\n"
             "fd = os.open(os.path.join(execution, 'execution.lock'), os.O_RDWR)\n"
-            "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+            "locking.lock(fd)\n"
             "print('LOCKED', flush=True)\n"
             "time.sleep(0.4)\n"
         )
@@ -244,9 +245,10 @@ class PrivateRootTeardownTests(unittest.TestCase):
         lock = execution / "execution.lock"
         lock.write_text("")
         script = (
-            "import fcntl, os, sys, time\n"
+            "import os, sys, time\n"
+            "from hey_my_buddy import locking\n"
             "fd = os.open(sys.argv[1], os.O_RDWR)\n"
-            "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+            "locking.lock(fd)\n"
             "print('LOCKED', flush=True)\n"
             "time.sleep(300)\n"
         )

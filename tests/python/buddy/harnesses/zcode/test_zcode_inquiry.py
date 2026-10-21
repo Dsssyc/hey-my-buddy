@@ -11,7 +11,6 @@ the real runner and fixture live in ``test_zcode_checkpoint.py``.
 """
 from __future__ import annotations
 
-import fcntl
 import hashlib
 import json
 import os
@@ -26,6 +25,7 @@ import unittest
 from pathlib import Path
 
 from buddy.harnesses.test_c_two_live import TEST_CRM, decode_snapshot, wire_observe
+from hey_my_buddy import locking
 from hey_my_buddy.protocol import activity as activity_module
 from hey_my_buddy.blackboard.tasks import inquiry as inquiry_module
 from hey_my_buddy.private_dirs import context_root
@@ -617,7 +617,7 @@ class JournalBarrierTests(unittest.TestCase):
         fd = os.open(self.journal, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         observed: list[dict] = []
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            locking.lock(fd)
             os.write(fd, record[:24])  # a deliberately in-flight, uncommitted record
             reader = threading.Thread(target=lambda: observed.append(read_inquiry_entries(self.config)))
             reader.start()
@@ -651,7 +651,7 @@ class JournalBarrierTests(unittest.TestCase):
 
         self.addCleanup(stop)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            locking.lock(fd)
             process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                             "params": {"name": "hey_my_buddy_checkpoint", "arguments": {}}}).encode() + b"\n")
             process.stdin.flush()
