@@ -113,6 +113,7 @@ class FreezeRequestTests(RouterSequenceTestCase):
         snapshot["hostPacket"]["privateHostFact"]["notes"].append("caller mutation")
         first["additionalHostContext"]["evidence"][0]["text"] = "returned copy mutation"
         reopened = Database(self.board_.store.db.directory)
+        self.addCleanup(reopened.close)
         reopened.initialize()
         with reopened.read() as db:
             persisted = router_sequence.request_snapshot(db, "dec-1")

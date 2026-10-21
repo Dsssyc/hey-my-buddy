@@ -309,18 +309,20 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         os.chmod(script, 0o700)
         self.catalog_fixture()
         store = BoardStore(self.directory)
-        store.initialize()
-        first = "dsh:deepseek-official:deepseek-flash:max"
-        with store.db.write() as db:
-            for buddy_id, model in ((first, "deepseek-flash"), (candidate, "deepseek-v4-pro")):
-                db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
-                           "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
-                           (buddy_id, buddy_id, "dsh", "deepseek-official", model, "max",
-                            canonical_json([])))
-            settings = {**router.configuration(db), "routerBuddyIds": [first],
-                        "defaultRoutingMode": "fast"}
-            router._write_settings(db, settings)
-        store.db.close()
+        try:
+            store.initialize()
+            first = "dsh:deepseek-official:deepseek-flash:max"
+            with store.db.write() as db:
+                for buddy_id, model in ((first, "deepseek-flash"), (candidate, "deepseek-v4-pro")):
+                    db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
+                               "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
+                               (buddy_id, buddy_id, "dsh", "deepseek-official", model, "max",
+                                canonical_json([])))
+                settings = {**router.configuration(db), "routerBuddyIds": [first],
+                            "defaultRoutingMode": "fast"}
+                router._write_settings(db, settings)
+        finally:
+            store.db.close()
         return script, started, gate, candidate
 
     def test_router_result_after_restart_uses_frozen_decision_and_budget(self):

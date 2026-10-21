@@ -122,7 +122,7 @@ class ChecksEnvironmentTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(Path(completed.stdout.strip()).parent, tmp)
         finally:
-            shutil.rmtree(root, ignore_errors=True)
+            shutil.rmtree(root)
 
     def test_daemon_stop_uses_explicit_state_and_ends_its_rpc_session(self):
         endpoint = {"address": "ipc://private-checks-mock", "token": "fixture"}
@@ -194,7 +194,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
             self.assertIn("control-daemon.lock", report["stateDirectories"][str(state)]["files"])
         finally:
             release_lock(fd)
-            shutil.rmtree(root, ignore_errors=True)
+            shutil.rmtree(root)
 
     def test_teardown_waits_out_a_live_process_with_unlinked_lock(self):
         # A racing cleanup unlinks the lock file while its holder still runs; a clean
@@ -234,7 +234,8 @@ class PrivateRootTeardownTests(unittest.TestCase):
             for stream in (process.stdout, process.stderr):
                 if stream is not None:
                     stream.close()
-            shutil.rmtree(root, ignore_errors=True)
+            if root.exists():
+                shutil.rmtree(root)
 
     def test_teardown_reports_a_surviving_process_with_unlinked_lock(self):
         # No held lock is visible after the unlink, so only live-process observation
@@ -268,12 +269,14 @@ class PrivateRootTeardownTests(unittest.TestCase):
             self.assertIn(process.pid, [entry["pid"] for entry in report["processes"]])
             self.assertEqual(report["observation"]["problems"], [])
         finally:
-            process.terminate()
-            process.wait(timeout=10)
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=10)
             for stream in (process.stdout, process.stderr):
                 if stream is not None:
                     stream.close()
-            shutil.rmtree(root, ignore_errors=True)
+            if root.exists():
+                shutil.rmtree(root)
 
 
 if __name__ == "__main__":

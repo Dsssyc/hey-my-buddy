@@ -32,6 +32,13 @@ def _later(seconds: int) -> str:
 
 
 class ExplicitCatalogTrustTests(BoardTestCase):
+    def stop_reread_threads(self, release, threads):
+        release.set()
+        for thread in threads:
+            if thread.is_alive():
+                thread.join(timeout=10)
+            self.assertFalse(thread.is_alive(), "A catalog re-read thread outlived its test")
+
     def setUp(self):
         super().setUp()
         self.clock = FakeClock()
@@ -244,6 +251,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
                 outcomes.append(error.code)
 
         threads = [threading.Thread(target=submit_missing) for _ in range(4)]
+        self.addCleanup(self.stop_reread_threads, release, threads)
         for thread in threads:
             thread.start()
         self.assertTrue(started.wait(timeout=10), "No thread claimed the re-read")
@@ -278,9 +286,12 @@ class ExplicitCatalogTrustTests(BoardTestCase):
                 errors.append(error.code)
 
         first = threading.Thread(target=request)
+        threads = [first]
+        self.addCleanup(self.stop_reread_threads, release, threads)
         first.start()
         self.assertTrue(entered.wait(timeout=10), "The shared read never started")
         second = threading.Thread(target=request)
+        threads.append(second)
         second.start()
         second.join(timeout=0.3)
         self.assertTrue(second.is_alive(), "A concurrent request waits for the in-flight read; it cannot finish first")
@@ -313,11 +324,14 @@ class ExplicitCatalogTrustTests(BoardTestCase):
                 waiter["outcome"] = (error.code, error.details.get("reason"), error.details.get("catalogReadAt"))
 
         first = threading.Thread(target=request)
+        threads = [first]
+        self.addCleanup(self.stop_reread_threads, release, threads)
         first.start()
         self.assertTrue(entered.wait(timeout=10))
         with patch.object(catalog, "CATALOG_REREAD_JOIN_SECONDS", 0.3):
             began = time.monotonic()
             second = threading.Thread(target=request)
+            threads.append(second)
             second.start()
             second.join(timeout=10)
             elapsed = time.monotonic() - began
@@ -385,11 +399,14 @@ class ExplicitCatalogTrustTests(BoardTestCase):
                 errors.append(error.code)
 
         first = threading.Thread(target=request)
+        threads = [first]
+        self.addCleanup(self.stop_reread_threads, release, threads)
         first.start()
         self.assertTrue(entered.wait(timeout=10), "The shared read never started")
         with patch.object(catalog, "coordinate_catalog_reread", coordinate_after_the_first_judgment), \
                 patch.object(catalog, "CATALOG_REREAD_JOIN_SECONDS", 0.5):
             second = threading.Thread(target=request)
+            threads.append(second)
             second.start()
             deadline = time.monotonic() + 10
             while not arrivals and time.monotonic() < deadline:
