@@ -31,6 +31,7 @@ from hey_my_buddy.buddy.roles import structured_call as read_only, turn_io
 from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles.controller import FastPreparation, ReviewPreparation, start_router_preparation
 import buddy.harnesses.codex.test_no_tool_codex as codex_fast_tests
+from buddy.harnesses.fixture_selection import select_fixture
 import buddy.harnesses.zcode.test_no_tool_zcode as zcode_fast_tests
 import buddy.harnesses.dsh.test_dsh_role_wiring as dsh_coding_tests
 import buddy.harnesses.claude.test_claude as claude_tests
@@ -290,9 +291,9 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
                     environment.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
                         PYTHONPATH=os.pathsep.join((str(Path(__file__).parents[4] / "src"), os.environ.get('PYTHONPATH', ''))), HMB_DEV_SOURCE="1",
-                        HMB_CODEX_CLI=str(codex_fast_tests.FIXTURE),
                         HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
                         HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
+                    select_fixture(environment, fixture.root, "codex", codex_fast_tests.FIXTURE)
                     spec = {"provider": "openai", "model": "fixture-model", "effort": "low"}
                 else:
                     environment = {**fixture.environment, "HMB_ZCODE_TEST_CASE": "ok"}
@@ -361,9 +362,9 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
                     env.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
                         PYTHONPATH=os.pathsep.join((str(Path(__file__).parents[4] / "src"), os.environ.get('PYTHONPATH', ''))), HMB_DEV_SOURCE="1",
-                        HMB_CODEX_CLI=str(codex_fast_tests.FIXTURE),
                         HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
                         HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
+                    select_fixture(env, fixture.root, "codex", codex_fast_tests.FIXTURE)
                     spec = {"provider": "openai", "model": "fixture-model", "effort": "low"}
                 context = ExecutionContext("task", "attempt", 1,
                     {"adapter": "decision", "cwd": str(fixture.cwd), "routerBudgetSeconds": 60},
@@ -405,9 +406,10 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
                     env.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
                         PYTHONPATH=os.pathsep.join((str(Path(__file__).parents[4] / "src"), os.environ.get("PYTHONPATH", ""))),
-                        HMB_DEV_SOURCE="1", HMB_CODEX_CLI=str(codex_fast_tests.FIXTURE),
+                        HMB_DEV_SOURCE="1",
                         HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
                         HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
+                    select_fixture(env, fixture.root, "codex", codex_fast_tests.FIXTURE)
                     buddy = {"harness": harness, "provider": "openai",
                              "model": "fixture-model", "effort": "low"}
                 state = Path(env["HMB_STATE_DIR"])

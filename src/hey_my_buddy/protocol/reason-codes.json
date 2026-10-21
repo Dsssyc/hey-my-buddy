@@ -73,6 +73,14 @@
   "harness.auth-unverified": [
     "operation"
   ],
+  "harness.command-line-too-long": [
+    "operation",
+    "utf16Units",
+    "limit"
+  ],
+  "harness.entry-unsupported": [
+    "operation"
+  ],
   "harness.interpreter-missing": [
     "operation"
   ],

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 
 from ...roles.turn_io import canonical_json
@@ -59,13 +58,14 @@ def cli_command(environment: dict | None = None) -> list[str]:
             return command_for("claude", env)
         except BoardError as error:
             raise ClaudeUnavailable(error.message) from None
-    value = env.get("HMB_CLAUDE_CLI") or shutil.which("claude", path=env.get("PATH"))
-    if not value:
-        raise ClaudeUnavailable("Claude Code CLI is missing; configure HMB_CLAUDE_CLI")
-    path = Path(value).expanduser().resolve()
-    if not path.is_file() or not os.access(path, os.X_OK):
-        raise ClaudeUnavailable("the configured Claude Code CLI is not executable")
-    return [str(path)]
+    from ..discovery import EntryUnavailable, _launch_command
+    path = Path(env["HMB_CLAUDE_CLI"]).expanduser().absolute()
+    try:
+        return _launch_command(path, env)
+    except EntryUnavailable as error:
+        failure = ClaudeUnavailable(str(error))
+        failure.reason = error.reason
+        raise failure from None
 
 
 def base_args() -> list[str]:

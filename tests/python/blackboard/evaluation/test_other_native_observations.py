@@ -14,6 +14,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from buddy.harnesses.fixture_selection import select_fixture
 
 from hey_my_buddy.protocol import usage
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
@@ -156,13 +157,13 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
-        FAKE_CLAUDE_USAGE.chmod(0o755)
         self.state = self.root / "fixture-state.json"
         self.environment = clean_environment()
-        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CLAUDE_CLI=str(FAKE_CLAUDE_USAGE),
+        self.environment.update(HMB_CONSOLE_PORT="0",
                                 HMB_CLAUDE_FIXTURE_STATE=str(self.state),
                                 HMB_STATE_DIR=str(self.root / "state"),
                                 HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_DEV_SOURCE="1")
+        select_fixture(self.environment, self.root, "claude", FAKE_CLAUDE_USAGE)
         claude_module._reset_metadata_cache()
         self.addCleanup(claude_module._reset_metadata_cache)
         self.adapter = worker_executor("claude")
@@ -428,13 +429,13 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}))
         self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
             {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}))
-        MOCK_ZCODE_USAGE.chmod(0o755)
         self.environment = clean_environment()
-        self.environment.update(HMB_CONSOLE_PORT="0", HMB_ZCODE_CLI=str(MOCK_ZCODE_USAGE.resolve()),
+        self.environment.update(HMB_CONSOLE_PORT="0",
                                 HMB_STATE_DIR=str(self.root / "state"),
                                 HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_DEV_SOURCE="1",
                                 ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin),
                                 ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
+        select_fixture(self.environment, self.root, "zcode", MOCK_ZCODE_USAGE.resolve())
         self.adapter = worker_executor("zcode")
 
     def context(self, case: str, *, index: int = 1, previous=None, mode=None, timeout: int = 12,

@@ -8,6 +8,8 @@ from unittest.mock import patch
 from hey_my_buddy.blackboard.service.harness_health import HarnessHealth, MAX_PATH_HINTS
 from support import BoardTestCase, FakeClock
 
+CLI_SUFFIX = ".exe" if os.name == "nt" else ""
+
 
 def probe_reason(code):
     return {'code': f'harness.{code}', 'params': {'operation': 'probe'}}
@@ -123,8 +125,8 @@ class HarnessHealthTests(BoardTestCase):
         node_dir = self.directory / 'other-bin'
         cli_dir.mkdir()
         node_dir.mkdir()
-        (cli_dir / 'codex').write_text('fixture')
-        (node_dir / 'node').write_text('fixture')
+        (cli_dir / ('codex' + CLI_SUFFIX)).write_text('fixture')
+        (node_dir / ('node' + CLI_SUFFIX)).write_text('fixture')
         self.health.add_path_hint(os.pathsep.join([str(cli_dir), str(node_dir), 'relative']))
         self.health.refresh('codex', force=True)
         environment = self.native.call_args.args[2]
@@ -138,13 +140,13 @@ class HarnessHealthTests(BoardTestCase):
         for index in range(MAX_PATH_HINTS + 1):
             directory = self.directory / f'cli-{index}'
             directory.mkdir()
-            (directory / ('node' if index % 2 else 'codex')).write_text('fixture')
+            (directory / (('node' if index % 2 else 'codex') + CLI_SUFFIX)).write_text('fixture')
             directories.append(str(directory))
         empty = [str(self.directory / f'empty-{index}') for index in range(100)]
         unrelated = self.directory / 'unrelated'
         unrelated.mkdir()
         (unrelated / 'other-tool').write_text('fixture')
-        (unrelated / 'codex').mkdir()
+        (unrelated / ('codex' + CLI_SUFFIX)).mkdir()
         self.health.add_path_hint(os.pathsep.join([*empty, str(unrelated), *directories]))
         self.assertEqual(self.health._path_hints, tuple(directories[:MAX_PATH_HINTS]))
         self.health.add_path_hint(os.pathsep.join(reversed(directories)))
@@ -156,24 +158,24 @@ class HarnessHealthTests(BoardTestCase):
             directory = self.directory / name
             directory.mkdir()
             if name != 'c':
-                (directory / 'codex').write_text('fixture')
+                (directory / ('codex' + CLI_SUFFIX)).write_text('fixture')
             directories.append(str(directory))
         self.health.add_path_hint(os.pathsep.join(directories[:2]))
         self.health.add_path_hint(os.pathsep.join([directories[2], directories[1], directories[0]]))
         self.assertEqual(self.health._path_hints, tuple(directories[:2]))
-        (self.directory / 'c/codex').write_text('appeared')
+        (self.directory / 'c' / ('codex' + CLI_SUFFIX)).write_text('appeared')
         self.health.add_path_hint(os.pathsep.join([directories[2], directories[1], directories[0]]))
         self.assertEqual(self.health._path_hints, tuple(directories))
 
     def test_alternating_empty_path_hints_do_not_rebuild_health_or_reread_catalog(self):
         from hey_my_buddy.buddy.harnesses import discovery
         self.scan.stop()
-        cli = self.directory / 'bin/codex'
+        cli = self.directory / 'bin' / ('codex' + CLI_SUFFIX)
         cli.parent.mkdir()
         cli.write_text('fixture')
         other = self.directory / 'empty'
-        paths = [str(cli.parent), str(other) + ':' + str(cli.parent),
-                 ':'.join([*(str(self.directory / f'empty-{index}') for index in range(100)),
+        paths = [str(cli.parent), os.pathsep.join([str(other), str(cli.parent)]),
+                 os.pathsep.join([*(str(self.directory / f'empty-{index}') for index in range(100)),
                            str(cli.parent)])]
         with patch.object(discovery, '_home', return_value=self.directory), \
              patch.object(discovery, '_common_dirs', return_value=[]), \
@@ -198,7 +200,7 @@ class HarnessHealthTests(BoardTestCase):
         directories = [self.directory / name for name in ('caller-a', 'caller-b')]
         for directory in directories:
             directory.mkdir()
-            (directory / 'codex').write_text('fixture')
+            (directory / ('codex' + CLI_SUFFIX)).write_text('fixture')
         with patch.object(discovery, '_home', return_value=self.directory), \
              patch.object(discovery, '_common_dirs', return_value=[]), \
              patch.object(discovery, '_app_paths', return_value=[]), \
@@ -226,9 +228,8 @@ class HarnessHealthTests(BoardTestCase):
         for directory in [*binaries, *empty]:
             directory.mkdir()
         for directory in binaries:
-            executable = directory / 'codex'
+            executable = directory / ('codex' + CLI_SUFFIX)
             executable.write_text('fixture')
-            executable.chmod(0o755)
         caller_paths = [
             [empty[0], binaries[0], missing[0], binaries[1]],
             [missing[1], binaries[0], empty[1], binaries[1], missing[0], empty[0]],
@@ -254,9 +255,8 @@ class HarnessHealthTests(BoardTestCase):
 
             added = self.directory / 'bin-c'
             added.mkdir()
-            executable = added / 'codex'
+            executable = added / ('codex' + CLI_SUFFIX)
             executable.write_text('fixture')
-            executable.chmod(0o755)
             environment.return_value = {'PATH': os.pathsep.join([str(added), environments[1]['PATH']])}
             third = self.health.refresh('codex', preflight=True)
             self.assertNotEqual(third['locationFingerprint'], first['locationFingerprint'])
@@ -291,6 +291,25 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(len(readings), 2)
         self.assertGreater(readings[1]['observationId'], readings[0]['observationId'])
         self.assertEqual(readings[1]['buddies'], readings[0]['buddies'])
+
+    def test_ready_record_expires_without_a_location_change(self):
+        first = self.health.refresh('codex')
+        with self.board.db.write() as db:
+            db.execute("UPDATE harness_health SET expires_at='2000',scan_after='2000' WHERE harness='codex'")
+        result = self.health.refresh('codex', preflight=True)
+        self.assertEqual(result['status'], 'ready')
+        self.assertEqual(result['locationFingerprint'], first['locationFingerprint'])
+        self.assertEqual(self.native.call_count, 2)
+
+    def test_launch_failure_invalidates_ready_record_and_reprobes(self):
+        first = self.health.refresh('codex')
+        self.health.invalidate('codex', first['revision'], cause=probe_reason('launch-failed'))
+        invalidated = self.health.get('codex')
+        self.assertNotEqual(invalidated['status'], 'ready')
+        self.assertEqual(invalidated['reason'], probe_reason('launch-failed'))
+        recovered = self.health.refresh('codex', preflight=True)
+        self.assertEqual(recovered['status'], 'ready')
+        self.assertEqual(self.native.call_count, 2)
 
     def test_negative_auth_observation_expires_even_without_file_changes(self):
         self.discovered = {'harness': 'codex', 'status': 'login-required', 'reason': probe_reason('login-required')}

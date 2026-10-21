@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from buddy.harnesses.fixture_selection import select_fixture
 
 from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
@@ -396,12 +397,13 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses.base import ExecutionContext
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        environment.update(HMB_CONSOLE_PORT="0", HMB_CODEX_CLI=str(FIXTURE),
+        environment.update(HMB_CONSOLE_PORT="0",
                            HMB_CODEX_FIXTURE_STATE=str(self.root / f"fixture-{index}.json"),
                            CODEX_HOME=str(self.home), HOME=str(self.root),
                            HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                            HMB_DEV_SOURCE="1", HMB_CODEX_FIXTURE_CASE=case,
                            PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))
+        select_fixture(environment, self.root, "codex", FIXTURE)
         context = ExecutionContext(task_id=task, attempt_id=attempt, generation=generation,
                                   session_record_path=str(self.root / f"session-{attempt}.jsonl"),
                                   spec={"cwd": str(self.cwd), "task": "Select", "routerBudgetSeconds": 8,

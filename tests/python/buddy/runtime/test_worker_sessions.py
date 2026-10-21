@@ -95,7 +95,7 @@ class WorkerSessionTests(unittest.TestCase):
             with mock.patch.dict(os.environ, {'HMB_DEV_SOURCE': '1',
                                               'HMB_STATE_DIR': str(fixture.root / 'state'),
                                               'HMB_RUNTIME_ROOT': str(fixture.root / 'runtime'),
-                                              'HMB_CODEX_CLI': str(fixture.environment['HMB_CODEX_CLI'])}):
+                                              'HMB_HARNESS_RECORD_FILE': fixture.environment['HMB_HARNESS_RECORD_FILE']}):
                 outcome = fixture.execute(fixture.context())
             self.assertTrue(outcome.shutdown_confirmed)
             from hey_my_buddy.buddy.runtime.execution import Execution

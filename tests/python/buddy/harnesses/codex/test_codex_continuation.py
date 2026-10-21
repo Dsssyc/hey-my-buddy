@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from unittest import mock
+from buddy.harnesses.fixture_selection import select_fixture
 
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
@@ -28,10 +29,10 @@ class CodexContinuationTests(WorkflowTestCase):
             environment.update(HMB_DEV_SOURCE="1", HMB_STATE_DIR=str(self.directory),
                                CODEX_HOME=str(self.directory / 'native-account'), HOME=str(self.directory),
                                HMB_RUNTIME_ROOT=str(self.directory / "runtime"),
-                               HMB_CODEX_CLI=str(Path(__file__).parent / "fixtures/mock_codex.py"),
                                HMB_CODEX_FIXTURE_STATE=str(self.directory / "native-state.json"),
                                HMB_CODEX_FIXTURE_CASE=case,
                                PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))
+            select_fixture(environment, self.directory, "codex", Path(__file__).parent / "fixtures/mock_codex.py")
             # The check runner sets this for every test subprocess; a standalone
             # run of this module needs the same developer-source selection.
             patch_env = mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"})

@@ -15,6 +15,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from buddy.harnesses.fixture_selection import select_fixture
 
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
@@ -490,14 +491,14 @@ class RunnerReceiptTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
-        FIXTURE.chmod(0o755)
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("HMB_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
                             and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CLAUDE_CLI=str(FIXTURE),
+        self.environment.update(HMB_CONSOLE_PORT="0",
                                 HMB_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
                                 HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                                 HMB_DEV_SOURCE="1")
+        select_fixture(self.environment, self.root, "claude", FIXTURE)
         claude_module._reset_metadata_cache()
         self.addCleanup(claude_module._reset_metadata_cache)
         self.adapter = ClaudeAdapter()

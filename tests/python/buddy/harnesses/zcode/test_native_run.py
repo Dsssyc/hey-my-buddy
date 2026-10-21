@@ -51,6 +51,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
+from buddy.harnesses.fixture_selection import select_fixture
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
 from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
 from hey_my_buddy.protocol import owned_process as windows_process
@@ -658,7 +659,8 @@ class WorkerSeamTests(MockNativeCase):
         from hey_my_buddy.protocol.usage import normalize_token_usage
         fixture = Path(__file__).parent / "fixtures/mock_zcode_usage.py"
         expected = json.loads(fixture.with_name("native-usage-zcode.json").read_text())["expectedMessages"]
-        with mock.patch.dict(self.environment, {"HMB_ZCODE_CLI": str(fixture)}):
+        with mock.patch.dict(self.environment):
+            select_fixture(self.environment, self.root, "zcode", fixture)
             for first_level, second_level, before, after in (
                     ("read", "write", "build", "yolo"),
                     ("write", "read", "yolo", "yolo"),

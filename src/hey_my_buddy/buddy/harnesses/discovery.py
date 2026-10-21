@@ -98,8 +98,9 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
         root = home / "Library/Application Support/fnm"
         specs.append(("fnm", root / "aliases/default", root / "node-versions"))
     elif os.name == "nt":
-        root = home / "AppData/Roaming/fnm"
-        specs.append(("fnm", root / "aliases/default", root / "node-versions"))
+        if os.environ.get("APPDATA"):
+            root = Path(os.environ["APPDATA"]) / "fnm"
+            specs.append(("fnm", root / "aliases/default", root / "node-versions"))
     records: list[dict] = []
     roots: list[tuple[str, Path]] = []
     for manager, record, root in specs:
@@ -183,7 +184,9 @@ def _registry_paths() -> list[str]:
                           (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
             try:
                 with winreg.OpenKey(hive, key) as handle:
-                    value, _ = winreg.QueryValueEx(handle, "Path")
+                    value, kind = winreg.QueryValueEx(handle, "Path")
+                    if kind == winreg.REG_EXPAND_SZ:
+                        value = winreg.ExpandEnvironmentStrings(value)
                     paths.extend(value.split(os.pathsep))
             except OSError:
                 continue
@@ -192,10 +195,12 @@ def _registry_paths() -> list[str]:
         return []
 
 
-def _common_dirs(home: Path) -> list[Path]:
+def _common_dirs(home: Path, environment: dict | None = None) -> list[Path]:
     if os.name == "nt":
-        return [home / "AppData/Roaming/npm", home / "AppData/Local/Programs/nodejs",
-                Path(r"C:\Program Files\nodejs"), home / ".local/bin"]
+        env = os.environ if environment is None else environment
+        return [Path(env[key]) / suffix for key, suffix in (
+            ("APPDATA", "npm"), ("LOCALAPPDATA", "Programs/nodejs"), ("ProgramFiles", "nodejs"))
+            if env.get(key)] + [home / ".local/bin"]
     return [Path("/opt/homebrew/bin"), Path("/usr/local/bin"), Path("/usr/bin"), home / ".local/bin",
             home / ".npm-global/bin", home / ".volta/bin"]
 
@@ -212,7 +217,7 @@ def _app_paths(harness: str) -> list[Path]:
 
 def _variants(directory: Path, name: str) -> list[Path]:
     if os.name == "nt":
-        return [directory / (name + suffix) for suffix in (".exe", ".cmd", ".ps1", "")]
+        return [directory / (name + suffix) for suffix in (".exe", ".cmd")]
     return [directory / name]
 
 
@@ -235,7 +240,7 @@ def candidate_snapshot(harness: str, *, manual_path: str | None = None,
         places.append(("manual", Path(manual_path).expanduser()))
     for source, directory in manager_dirs:
         places.extend((source, path) for path in _variants(directory, name))
-    places.extend(("common", path) for directory in _common_dirs(home) for path in _variants(directory, name))
+    places.extend(("common", path) for directory in _common_dirs(home, environment) for path in _variants(directory, name))
     places.extend(("app", path) for path in _app_paths(harness))
     places.extend(("registry", path) for directory in _registry_paths() for path in _variants(Path(directory), name))
     caller_path = (os.environ if environment is None else environment).get("PATH", "")
@@ -302,14 +307,10 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
                "NODE_EXTRA_CA_CERTS")
     result = {key: environment[key] for key in allowed if key in environment}
     prefixes = []
-    for item in reversed(command):
-        if not isinstance(item, str):
-            continue
-        path = Path(item)
+    if command:
+        path = Path(command[0])
         if is_absolute_path(path) and file_fingerprint(path):
-            parent = str(path.parent)
-            if parent not in prefixes:
-                prefixes.append(parent)
+            prefixes.append(str(path.parent))
     inherited_path = result.get("PATH", "")
     result["PATH"] = os.pathsep.join([*prefixes, *([inherited_path] if inherited_path else [])])
     return result
@@ -462,7 +463,7 @@ def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | Non
 
 
 def probe(command: list[str], environment: dict, *, deadline: float | None = None,
-           cwd: str | None = None, owned: list | None = None) -> tuple[str | None, bytes]:
+           cwd: str | None = None, owned: list | None = None) -> tuple[str | dict | None, bytes]:
     """Run one noninteractive probe with bounded time, output and child lifetime."""
     receipt = {"created": False, "shutdown": True, "exit_code": None}
     if owned is not None:
@@ -473,6 +474,7 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
     from ...protocol.process_identity import native_process_journal_active
 
     journalled = native_process_journal_active()
+    from ...protocol.owned_process import WindowsCommandLineTooLong
     try:
         if journalled:
             from ...protocol.owned_process import owned_popen
@@ -480,10 +482,14 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
                                   stderr=subprocess.STDOUT, env=environment, cwd=cwd,
                                   start_new_session=os.name != "nt")
         else:
+            from ...protocol.owned_process import check_windows_command_line
+            check_windows_command_line(command)
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT, env=environment, cwd=cwd,
                                        start_new_session=os.name != "nt",
                                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
+    except WindowsCommandLineTooLong as error:
+        return make_reason("harness.command-line-too-long", operation="probe", utf16Units=error.utf16_units, limit=error.limit), b""
     except (OSError, ValueError):
         return "launch-failed", b""
     if journalled:
@@ -513,13 +519,14 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
     return (code, output) if stopped else ("shutdown-unverified", b"")
 
 
-def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -> tuple[str | None, bytes]:
+def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -> tuple[str | dict | None, bytes]:
     """Use the same owned DSH launcher for the no-input version check.
 
     Keep the caller's HOME, DSH_HOME and native environment unchanged, and
     retain the directory if the owned group cannot be confirmed stopped.
     """
     from .dsh.acp.launch import LaunchOwnershipError, LaunchRejected, launch
+    from ...protocol.owned_process import WindowsCommandLineTooLong
 
     start = time.monotonic()
     if start >= deadline:
@@ -535,6 +542,8 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float) -
                                      source_environment=environment, merge_stderr=True)
         except LaunchOwnershipError as error:
             process, handle = error.process, error.handle
+        except WindowsCommandLineTooLong as error:
+            return make_reason("harness.command-line-too-long", operation="probe", utf16Units=error.utf16_units, limit=error.limit), b""
         except (LaunchRejected, OSError, ValueError):
             return code, output
         else:
@@ -573,32 +582,82 @@ def _priority(source: str) -> int:
             "common": 2, "app": 2, "registry": 3, "path": 4}[source]
 
 
-def _script_uses_node(path: Path) -> bool:
+class EntryUnavailable(ValueError):
+    """An entry cannot become a native argv; no entry process was created."""
+
+    def __init__(self, code: str | dict):
+        super().__init__(code)
+        self.code = code
+        self.reason = _probe_reason(code)
+
+
+class EntryUnsupported(EntryUnavailable):
+    def __init__(self):
+        super().__init__("entry-unsupported")
+
+
+def _script_uses_node(path: Path) -> Path | None:
+    if path.suffix.lower() == ".cmd":
+        text = _record_text(path)
+        if text is None:
+            raise EntryUnsupported()
+        # Read only literal Node selection assignments and a quoted target
+        # operand. No batch control flow or environment expression is executed.
+        node_names = {"node", "node.exe"}
+        node_program = re.compile(r'(?:%(?:dp0%|~dp0)[\\/]?)?node(?:\.exe)?', re.I)
+        for assignment in re.finditer(r'(?im)\bset\s+"?([\w]+)=([^"\r\n]+)"?', text):
+            if node_program.fullmatch(assignment[2].strip()):
+                node_names.add("%" + assignment[1].lower() + "%")
+        targets = []
+        call = re.compile(r'(?i)(?:"([^"\r\n]+)"|(?<![\w%])((?:node)(?:\.exe)?|%[\w]+%))'
+                          r'\s+"(%(?:dp0%|~dp0)([^"\r\n]*))"')
+        for match in call.finditer(text):
+            program = (match[1] or match[2]).lower()
+            if program not in node_names and not node_program.fullmatch(program):
+                continue
+            remainder = text[match.end():].split("\n", 1)[0]
+            if re.match(r'\s+"%(?:dp0%|~dp0)[^"\r\n]*"', remainder, re.I):
+                raise EntryUnsupported()
+            relative = match[4]
+            if relative.startswith(("\\", "/")):
+                relative = relative[1:]
+            if not relative or is_absolute_path(relative):
+                raise EntryUnsupported()
+            # A shim uses Windows separators even in parser tests on POSIX.
+            target = path.parent.joinpath(*relative.replace("\\", "/").split("/"))
+            targets.append(target)
+        if len(targets) != 1 or not targets[0].is_file():
+            raise EntryUnsupported()
+        return targets[0].resolve()
+    if os.name == "nt" and path.suffix.lower() not in (".js", ".cjs", ".mjs"):
+        return None
     try:
         if path.resolve().suffix.lower() in (".js", ".cjs", ".mjs"):
-            return True
-        if path.suffix.lower() in (".cmd", ".ps1", ".exe"):
-            return False
+            return path
+        if path.suffix.lower() in (".ps1", ".bat", ".com", ".exe") or os.name == "nt":
+            return None
         with path.open("rb") as stream:
-            return b"node" in stream.readline(128).lower() and stream.tell() <= 128
+            first_line = stream.readline(128).lower()
+            return path if first_line.startswith(b"#!") and b"node" in first_line else None
     except (OSError, RuntimeError):
-        return False
+        return None
 
 
-def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | None, str | None]:
+def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | None, str | dict | None]:
     shutdown = True  # No child has been created in this scan stage.
     try:
         # Use the launcher directory before resolving npm's symlink into node_modules.
-        adjacent = _variants(path.parent, "node")
+        adjacent = ([path.parent / "node.exe"] if os.name == "nt" else _variants(path.parent, "node"))
         seen = set()
         failures = []
         for option in adjacent:
             if str(option) in seen or file_fingerprint(option) is None:
                 continue
             seen.add(str(option))
-            command = _launch_command(option, environment)
-            if command is None:
-                failures.append("interpreter-missing")
+            try:
+                command = _native_command(option)
+            except EntryUnavailable as error:
+                failures.append(error.code)
                 continue
             child_env = native_environment(environment, command=command)
             shutdown = False
@@ -619,7 +678,7 @@ def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | Non
             return None, _code(found)
         if found['status'] == 'unknown' or any(code in ('timeout', 'scan-timeout') for code in failures):
             return None, 'scan-timeout' if _code(found) == 'scan-timeout' else 'timeout'
-        missing = "node-missing" if found["status"] == "missing" else _code(found)
+        missing = "node-missing" if found["status"] == "missing" or _code(found) == "entry-unsupported" else found["reason"]
         return None, failures[0] if failures else missing or "node-missing"
     except Exception as error:
         if hasattr(error, "discovery_shutdown_confirmed"):
@@ -628,25 +687,31 @@ def _node_for(path: Path, environment: dict, deadline: float) -> tuple[str | Non
         raise
 
 
-def _launch_command(path: Path, environment: dict) -> list[str] | None:
-    if os.name == 'nt' and path.suffix.lower() == '.cmd':
-        import ntpath
-        command = ntpath.join(environment.get('SYSTEMROOT') or r'C:\Windows', 'System32', 'cmd.exe')
-        return [command, '/d', '/s', '/c', str(path)]
-    if path.suffix.lower() == ".ps1":
-        shell = shutil.which("pwsh", path=environment.get("PATH")) or shutil.which(
-            "powershell.exe", path=environment.get("PATH"))
-        if shell is None and os.name == "nt":
-            fallback = Path(r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe")
-            shell = str(fallback) if fallback.is_file() else None
-        return [shell, "-NoProfile", "-NonInteractive", "-File", str(path)] if shell else None
+def _native_command(path: Path) -> list[str]:
+    if os.name == "nt" and path.suffix.lower() != ".exe":
+        raise EntryUnsupported()
     if os.name != "nt" and not os.access(path, os.X_OK):
-        return None
+        raise EntryUnavailable("interpreter-missing")
     return [str(path)]
+
+
+def _launch_command(path: Path, environment: dict, *, deadline: float | None = None) -> list[str]:
+    """Resolve one entry into native argv without invoking a command shell."""
+    if not path.is_file():
+        raise EntryUnavailable("not-found")
+    entry = _script_uses_node(path)
+    if entry is not None:
+        node, problem = _node_for(path, environment, deadline if deadline is not None else time.monotonic() + _SCAN_TIMEOUT)
+        if node is None:
+            raise EntryUnavailable(problem)
+        return [node, str(entry)]
+    return _native_command(path)
 
 
 PROBE_REASON_CODES: dict[str, str] = {
     "not-found": "harness.not-found",
+    "entry-unsupported": "harness.entry-unsupported",
+    "command-line-too-long": "harness.command-line-too-long",
     "node-missing": "harness.node-missing",
     "login-required": "harness.login-required",
     "interpreter-missing": "harness.interpreter-missing",
@@ -662,7 +727,9 @@ PROBE_REASON_CODES: dict[str, str] = {
 }
 
 
-def _probe_reason(code: str | None) -> dict | None:
+def _probe_reason(code: str | dict | None) -> dict | None:
+    if isinstance(code, dict):
+        return code
     return make_reason(PROBE_REASON_CODES[code], operation="probe") if code else None
 
 
@@ -681,21 +748,14 @@ def _candidate_handshake(harness: str, candidate: dict, environment: dict, deadl
             result["status"] = "missing"
             result["reason"] = _probe_reason("not-found")
             return result
-        if harness != "node" and _script_uses_node(path):
-            shutdown = False
-            node, problem = _node_for(path, environment, deadline)
-            shutdown = problem != "shutdown-unverified"
-            if node is None:
-                if problem in ('timeout', 'scan-timeout'):
-                    result['status'] = 'unknown'
-                result["reason"] = _probe_reason(problem)
-                return result
-            command = [node, str(path)]
-        else:
-            command = _launch_command(path, environment)
-            if command is None:
-                result["reason"] = _probe_reason("interpreter-missing")
-                return result
+        try:
+            command = (_native_command(path) if harness == "node" else
+                       _launch_command(path, environment, deadline=deadline))
+        except EntryUnavailable as error:
+            if error.code in ("timeout", "scan-timeout"):
+                result["status"] = "unknown"
+            result["reason"] = _probe_reason(error.code)
+            return result
         child_env = native_environment(environment, command=command)
         shutdown = False
         code, output = (_probe_dsh_version(command, child_env, deadline) if harness == "dsh" else
@@ -812,9 +872,9 @@ def _discover(harness: str, *, manual_path: str | None = None,
             failure = failure or next((item for item in attempts if item["status"] == "login-required"), None)
             failure = failure or (attempts[0] if attempts else None)
             status = failure["status"] if failure else "missing"
-            reason = _code(failure) if failure else "not-found"
+            reason = failure["reason"] if failure else "not-found"
         else:
-            status, reason = "ready", _code(selected)
+            status, reason = "ready", selected["reason"]
         diagnostics = [{"path": item["path"], "source": item["source"], "status": item["status"],
                         "reason": item["reason"]} for item in attempts[:_MAX_DIAGNOSTICS]]
         if not attempts:

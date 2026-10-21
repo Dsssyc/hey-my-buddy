@@ -20,6 +20,7 @@ from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_pr
 from hey_my_buddy.buddy.roles import run_controller, run_execution, structured_call, turn_io
 from hey_my_buddy.errors import BoardError
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
+from buddy.harnesses.fixture_selection import select_fixture
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
 from buddy.harnesses.test_run_contract import full_request
 
@@ -253,8 +254,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
     def test_a_changed_provenance_reference_fails_without_losing_real_stop(self):
         context = self.context("usage-ok")
         fixture = Path(__file__).parents[1] / "harnesses/zcode/fixtures/mock_zcode_usage.py"
-        fixture.chmod(0o755)
-        context.environment["HMB_ZCODE_CLI"] = str(fixture)
+        select_fixture(context.environment, self.root, "zcode", fixture)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(context.timeout_seconds + 10))

@@ -44,6 +44,8 @@ export default {
   "execution-process-not-created": "The execution process was not created.",
   "harness.account-read-failed": "The harness account could not be read; check it and retry.",
   "harness.auth-unverified": "Harness authentication is unconfirmed; log in and check again.",
+  "harness.command-line-too-long": "The {{operation}} command needs {{utf16Units}} UTF-16 units, exceeding the Windows limit of {{limit}}, so it was not started.",
+  "harness.entry-unsupported": "This harness entry or its Node target is unsupported; select a native executable or a recognized npm Node entry.",
   "harness.interpreter-missing": "The harness interpreter is missing; install it and check again.",
   "harness.launch-failed": "The harness failed to start; check the CLI or set its path.",
   "harness.login-required": "The harness requires login; log in and check again.",

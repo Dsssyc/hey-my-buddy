@@ -16,6 +16,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
+from buddy.harnesses.fixture_selection import select_fixture
 
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, NoToolStructuredRequest
@@ -515,7 +516,6 @@ class FakeAppServerTests(unittest.TestCase):
         self.cwd.mkdir(mode=0o700)
         self.fake = self.root / "fake-zcode"
         self.fake.write_text(textwrap.dedent(FAKE))
-        self.fake.chmod(0o755)
         builtin = self.root / "provider/zcode-builtin.json"
         builtin.parent.mkdir()
         builtin.write_text('{"config":{"providerConfigRules":{"templateRules":[],"providerRules":[]}}}')
@@ -525,9 +525,10 @@ class FakeAppServerTests(unittest.TestCase):
                             and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment["PYTHONPATH"] = str(Path(__file__).parents[5] / "src") + os.pathsep + os.environ.get("PYTHONPATH", "")
         self.environment.update(HMB_DEV_SOURCE="1", HMB_STATE_DIR=str(self.root / "state"),
-                                HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_ZCODE_CLI=str(self.fake),
+                                HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                                 HOME=str(native_home), USERPROFILE=str(native_home),
                                 ZCODE_DATA_BASE_DIR=str(native_home))
+        select_fixture(self.environment, self.root, "zcode", self.fake)
 
     def execute(self, case="ok", *, timeout=3, cancel=False):
         ready = self.root / "prompt-ready"

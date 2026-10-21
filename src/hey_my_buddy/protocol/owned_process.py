@@ -15,6 +15,7 @@ from .windows_process import WindowsAPI
 
 CREATE_SUSPENDED = 0x00000004
 CREATE_NEW_PROCESS_GROUP = 0x00000200
+WINDOWS_COMMAND_LINE_LIMIT = 32767
 
 
 class OwnedJob:
@@ -52,6 +53,34 @@ class ProcessCreationEvidence:
     exit_code: int | None
 
 
+class WindowsCommandLineTooLong(ValueError):
+    """The final Windows argv cannot fit in one CreateProcess command line."""
+
+    code = "harness.command-line-too-long"
+    limit = WINDOWS_COMMAND_LINE_LIMIT
+
+    def __init__(self, utf16_units: int):
+        self.utf16_units = utf16_units
+        self.owned_popen_evidence = ProcessCreationEvidence(False, True, None)
+        super().__init__(f"Windows command line has {utf16_units} UTF-16 units; limit is {self.limit}")
+
+
+def check_windows_command_line(argv, *, windows: bool | None = None) -> None:
+    """Check exactly the command line that Python's Windows Popen will encode.
+
+    The terminating NUL counts towards CreateProcess's UTF-16 limit. Callers
+    with their own Popen path use this once before creating the process.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return
+    encoded = subprocess.list2cmdline(argv)
+    units = len(encoded.encode("utf-16-le", errors="surrogatepass")) // 2 + 1
+    if units > WINDOWS_COMMAND_LINE_LIMIT:
+        raise WindowsCommandLineTooLong(units)
+
+
 def owned_popen(*args, windows_api=None, job_name: str | None = None, **kwargs):
     """Create a process with tree ownership before any user code can run.
 
@@ -65,6 +94,7 @@ def owned_popen(*args, windows_api=None, job_name: str | None = None, **kwargs):
     """
     from .process_identity import begin_native_process_spawn, discard_confirmed_native_spawn
 
+    check_windows_command_line(args[0], windows=os.name == "nt" or windows_api is not None)
     intent = begin_native_process_spawn()
     process = None
     job = None

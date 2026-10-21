@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from buddy.harnesses.fixture_selection import select_fixture
 
 from hey_my_buddy import private_dirs
 from hey_my_buddy.buddy.harnesses.base import Adapter
@@ -29,8 +30,9 @@ class DeleteSessionTests(unittest.TestCase):
                        ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "OPENAI_API_KEY", "CODEX_API_KEY")}
         environment.update(HOME=str(self.root), CODEX_HOME=str(self.root / "codex-home"),
                            HMB_DEV_SOURCE="1", HMB_STATE_DIR=str(self.root / "state"),
-                           HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_CODEX_CLI=str(FIXTURE),
+                           HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                            HMB_CODEX_FIXTURE_STATE=str(self.trace))
+        select_fixture(environment, self.root, "codex", FIXTURE)
         private = patch.dict(os.environ, environment, clear=True)
         private.start()
         self.addCleanup(private.stop)

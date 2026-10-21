@@ -46,7 +46,7 @@ from ....private_dirs import ensure_private_dir
 from ...roles.turn_io import private_json
 from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
-from ....protocol.owned_process import owned_popen
+from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..native_support import (
     CancelFlag,
@@ -755,6 +755,8 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
                 if owned is not None:
                     owned[:] = [{"created": evidence.created, "shutdown": evidence.shutdown_confirmed,
                                  "exit_code": evidence.exit_code}]
+                if isinstance(error, WindowsCommandLineTooLong):
+                    raise NativeError(error.code, str(error)) from None
                 if isinstance(error, OSError):
                     raise NativeError("harness-unavailable", "The selected ZCode executable could not start") from None
                 raise
@@ -1194,7 +1196,11 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             outcome.record = None
         except (NativeError, VersionShutdownError) as error:
             state.status = "cancelled" if error.code == "cancelled" else "error"
-            state.reason = error.code
+            launch_reason = getattr(error, "reason", None)
+            state.reason = launch_reason["code"] if launch_reason is not None else error.code
+            if state.reason == "harness.shutdown-unverified":
+                # Entry resolution may own a Node probe before the main spawn.
+                owned_spawn[:] = [{"created": True, "shutdown": False, "exit_code": None}]
             state.error_text = str(error)
             if error.code == "native-disconnected":
                 state.failure_kind = "transport"

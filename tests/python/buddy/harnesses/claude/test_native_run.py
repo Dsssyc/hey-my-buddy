@@ -18,6 +18,7 @@ import unittest
 import uuid
 from pathlib import Path
 from unittest import mock
+from buddy.harnesses.fixture_selection import select_command, select_fixture
 
 from hey_my_buddy.buddy.harnesses.claude import native_run
 from hey_my_buddy.blackboard.routing.router import answer_schema
@@ -70,17 +71,15 @@ class NativeRunCase(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.cwd = self.base / "checkout"
         self.cwd.mkdir()
-        FIXTURE.chmod(0o755)
-        STREAM_FIXTURE.chmod(0o755)
-        USAGE_FIXTURE.chmod(0o755)
         self.state_path = self.base / "fixture.json"
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith(("HMB_", "ANTHROPIC_", "CLAUDE_"))
                        and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
-        environment.update(HMB_CONSOLE_PORT="0", HMB_DEV_SOURCE="1", HMB_CLAUDE_CLI=str(FIXTURE),
+        environment.update(HMB_CONSOLE_PORT="0", HMB_DEV_SOURCE="1",
                            HMB_CLAUDE_FIXTURE_STATE=str(self.state_path),
                            HMB_STATE_DIR=str(self.base / "state"),
                            HMB_RUNTIME_ROOT=str(self.base / "runtime"))
+        select_fixture(environment, self.base, "claude", FIXTURE)
         self.patcher = mock.patch.dict(os.environ, environment, clear=True)
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
@@ -91,7 +90,7 @@ class NativeRunCase(unittest.TestCase):
         self.case = case
 
     def use_fixture(self, fixture: Path):
-        os.environ["HMB_CLAUDE_CLI"] = str(fixture)
+        select_fixture(os.environ, self.base, "claude", fixture)
 
     def request(self, *, scope: str = "write", schema=None, timeout: int = 10,
                 continuation=None) -> RunRequest:
@@ -1121,10 +1120,11 @@ class DiscoveryTests(NativeRunCase):
         # The unknown catalog cannot substitute for actual stop evidence.
 
     def test_discovery_refuses_an_unusable_cli(self):
-        os.environ["HMB_CLAUDE_CLI"] = str(self.base / "missing-cli")
-        with self.assertRaises(native_run.ClaudeUnavailable) as caught:
+        select_command(os.environ, self.base, "claude", [str(self.base / "missing-cli")])
+        with self.assertRaises(native_run.ClaudeProtocolError) as caught:
             run_discovery(cwd=str(self.cwd), invocation_root=self.base / "d3",
                           native_root=self.base / "d3n", timeout_seconds=25, cancelled=lambda: False)
+        self.assertEqual(caught.exception.code, "harness-unavailable")
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
 
 
