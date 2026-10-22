@@ -17,7 +17,7 @@ function render(ui: ReactElement, options?: RenderOptions) {
 
 function snapshotFixture(): Snapshot {
   return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a", canWrite: true, reason: null },
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a" },
 
     configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     buddies: [], preferences: [], modelServiceNotes: [], decisions: [],
@@ -600,7 +600,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     await requestStop(f);
     const dialog = await screen.findByRole("dialog", { name: "停止宏任务" });
     const snapshot = snapshotFixture();
-    f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: null } }}
+    f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: undefined as unknown as Snapshot["consoleSession"] }}
       api={f.api} refresh={f.refresh} active writesAvailable={false} />);
     await f.user.click(within(dialog).getByRole("button", { name: "确认停止宏任务" }));
     expect(await screen.findByText("停止请求未提交")).toBeTruthy();
@@ -618,7 +618,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
     // unknown entry: its identity survives for the same-macroTask replay.
     await requestStop(f);
     const secondDialog = await screen.findByRole("dialog", { name: "停止宏任务" });
-    f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: { id: "session-a", canWrite: false, reason: null } }}
+    f.rerender(<MacroTasks snapshot={{ ...snapshot, consoleSession: undefined as unknown as Snapshot["consoleSession"] }}
       api={f.api} refresh={f.refresh} active writesAvailable={false} />);
     await f.user.click(within(secondDialog).getByRole("button", { name: "确认停止宏任务" }));
     expect(screen.getByText("停止未确认")).toBeTruthy();

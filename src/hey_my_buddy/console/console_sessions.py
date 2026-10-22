@@ -5,14 +5,12 @@ from dataclasses import dataclass, field
 import hashlib
 import hmac
 import json
-import os
 from pathlib import Path
 import secrets
 import time
 from typing import Callable
 
 from ..private_files import publish_bytes
-from ..private_dirs import open_regular_fd, validate_private_fd
 from ..errors import BoardError
 
 ENTRY_SECONDS = 10 * 60
@@ -20,10 +18,6 @@ ENTRY_SECONDS = 10 * 60
 COOKIE_SECONDS = 400 * 24 * 60 * 60
 MAX_ENTRIES = 16
 MAX_SESSIONS = 64
-READ_OPERATIONS = frozenset({
-    "accounts",
-    "selection_get", "selection_list", "buddy_list", "workflow_get", "message_list",
-})
 
 @dataclass
 class BrowserSession:
@@ -34,7 +28,7 @@ class BrowserSession:
     token_hash: str = field(default="", repr=False)
 
     def view(self) -> dict:
-        return {"id": self.id, "canWrite": True, "reason": None}
+        return {"id": self.id}
 
 class ConsoleSessions:
     """Call under the owning Console lock, including mutation dispatch."""
@@ -47,19 +41,11 @@ class ConsoleSessions:
         self.sessions: dict[str, BrowserSession] = {}
         if path is not None and path.exists():
             try:
-                with os.fdopen(open_regular_fd(path, os.O_RDONLY), "r", encoding="utf-8") as stream:
-                    if os.name != 'nt':
-                        validate_private_fd(stream.fileno())
-                    data = json.load(stream)
-                if data.get("version") != 1 or len(data["sessions"]) > MAX_SESSIONS:
-                    raise ValueError("invalid session store")
-                for row in data["sessions"]:
-                    token_hash = row["tokenHash"]
-                    if len(token_hash) != 64 or any(c not in '0123456789abcdef' for c in token_hash):
-                        raise ValueError("invalid hash")
-                    self.sessions[row["id"]] = BrowserSession(row["id"], "", secrets.token_urlsafe(32), row["lastSeen"], token_hash)
-            except (ValueError, TypeError, KeyError) as error:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as error:
                 raise BoardError("CONSOLE_SESSION_STORE", "Invalid persistent console session store") from error
+            for row in data["sessions"]:
+                self.sessions[row["id"]] = BrowserSession(row["id"], "", secrets.token_urlsafe(32), row["lastSeen"], row["tokenHash"])
 
     def _save(self) -> None:
         if self.file is None:
@@ -68,7 +54,7 @@ class ConsoleSessions:
         publish_bytes(self.file, json.dumps({"version": 1, "sessions": rows}).encode("utf-8"))
 
     def issue(self) -> str:
-        self.expire()
+        self._expire_entries()
         if len(self.entries) >= MAX_ENTRIES:
             raise BoardError("CONSOLE_LIMIT", "Too many unused entry links; wait for their expiry")
         ticket = secrets.token_urlsafe(32)
@@ -76,7 +62,7 @@ class ConsoleSessions:
         return ticket
 
     def redeem(self, ticket: str, cookie: str = "") -> BrowserSession:
-        self.expire()
+        self._expire_entries()
         deadline = self.entries.get(ticket)
         if deadline is None or self.clock() >= deadline:
             raise BoardError("CONSOLE_ENTRY_EXPIRED", "This entry link is used or expired; run hey-my-buddy console again")
@@ -116,10 +102,9 @@ class ConsoleSessions:
         self._save()
         return session
 
-    def expire(self) -> list[BrowserSession]:
+    def _expire_entries(self) -> None:
         now = self.clock()
         self.entries = {token: end for token, end in self.entries.items() if now < end}
-        return []
 
     def revoke(self, session_id: str | None = None) -> list[BrowserSession]:
         previous = self.sessions
@@ -131,6 +116,3 @@ class ConsoleSessions:
             self.sessions = previous
             raise
         return revoked
-
-    def path(self, session: BrowserSession) -> str:
-        return "/"

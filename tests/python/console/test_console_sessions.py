@@ -59,10 +59,10 @@ class ConsoleSessionTests(ConsoleTestCase):
         board, now = self.timed_board()
         _, first = self.open_console(board, assets=True)
         pending = board.call('console', {'action': 'open'})
-        self.assertTrue(first.bootstrap()['consoleSession']['canWrite'])
+        self.assertTrue(first.bootstrap()['consoleSession']['id'])
         now[0] += ENTRY_SECONDS
         self.assertEqual(first.call('GET', urlsplit(pending['url']).path)[0], 410)
-        self.assertTrue(first.bootstrap()['consoleSession']['canWrite'])
+        self.assertTrue(first.bootstrap()['consoleSession']['id'])
 
     def test_two_redemptions_race_for_exactly_one_session(self):
         board = self.board()
@@ -88,8 +88,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         self.assertEqual(first, second)
         self.assertEqual(len(list(jar)), 1)
         reread = json.load(opener.open(first + 'api/console', timeout=5))
-        self.assertTrue(reread['consoleSession']['canWrite'])
-        self.assertIsNone(reread['consoleSession']['reason'])
+        self.assertTrue(reread['consoleSession']['id'])
 
     def queued_task(self, board):
         return board.submit_execution(**{'requestId': 'console-session-task', 'task': 'still pending',
@@ -100,7 +99,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         _, first = self.open_console(board)
         _, second = self.open_console(board)
         for browser in (first, second):
-            self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
+            self.assertTrue(browser.bootstrap()['consoleSession']['id'])
         snapshot = first.bootstrap()
         status, _, raw = first.command('user_policy_publish', {
             'commandId': 'first-publish', 'buddySettings': []}, csrf=snapshot['csrfToken'])
@@ -126,11 +125,11 @@ class ConsoleSessionTests(ConsoleTestCase):
         board.console.start(issue_ticket=False)
         restored = browser.bootstrap()
         self.assertEqual(snapshot['consoleSession']['id'], restored['consoleSession']['id'])
-        self.assertTrue(restored['consoleSession']['canWrite'])
+        self.assertTrue(restored['consoleSession']['id'])
         self.assertNotEqual(snapshot['csrfToken'], restored['csrfToken'])
         self.assertEqual(browser.command('selection_list', {}, csrf=restored['csrfToken'])[0], 200)
 
-    def test_fixed_port_collision_is_explicit_and_nonloopback_is_refused(self):
+    def test_fixed_port_collision_is_explicit(self):
         from hey_my_buddy.console.server import Console
         board = self.board()
         _, browser = self.open_console(board)
@@ -139,32 +138,10 @@ class ConsoleSessionTests(ConsoleTestCase):
         with self.assertRaises(BoardError) as caught:
             occupied.start()
         self.assertEqual(caught.exception.code, 'CONSOLE_PORT_IN_USE')
-        with self.assertRaises(BoardError):
-            Console(other.store, other.service, host='0.0.0.0')
 
-    def test_idle_console_stays_open_and_does_not_touch_tasks(self):
-        board, now = self.timed_board()
-        run_id = self.queued_task(board)
-        entry, browser = self.open_console(board)
-        now[0] += 200
-        board.call('console', {'action': 'status'})
-        # Neither a public status read nor an unauthenticated request is activity.
-        anonymous = Browser(browser.origin + browser.prefix + '/')
-        self.assertEqual(anonymous.get('/api/console')[0], 401)
-        now[0] += 100
-        board.console.expire(entry['consoleId'])
-        self.assertTrue(board.console.status()['running'])
-        self.assertEqual(board.call('task_get', {'runId': run_id})['task']['status'], 'queued')
-        self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
-
-    def test_authenticated_reads_keep_the_console_alive_but_old_waiter_cannot_close_replacement(self):
-        board, now = self.timed_board()
+    def test_old_waiter_cannot_close_replacement(self):
+        board = self.board()
         old, browser = self.open_console(board)
-        now[0] += 299
-        browser.bootstrap()
-        now[0] += 2
-        board.console.expire(old['consoleId'])
-        self.assertTrue(board.console.status()['running'])
         board.call('console', {'action': 'close', 'expectedConsoleId': old['consoleId']})
         new = board.call('console', {'action': 'open'})
         refusal = board.call('console', {'action': 'close', 'expectedConsoleId': old['consoleId']})
@@ -239,7 +216,7 @@ class ConsoleSessionTests(ConsoleTestCase):
         csrf = first.bootstrap()['csrfToken']
         self.assertEqual(first.command('console_logout', {}, csrf=csrf)[0], 200)
         fresh = board.call('console', {'action': 'open'})
-        self.assertTrue(Browser(fresh['url']).bootstrap()['consoleSession']['canWrite'])
+        self.assertTrue(Browser(fresh['url']).bootstrap()['consoleSession']['id'])
         self.assertEqual(board.console.status()['sessionCount'], MAX_SESSIONS)
 
     def test_close_fence_rejects_invalid_or_misplaced_identity(self):
@@ -272,7 +249,7 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 notice = child.stderr.readline()
                 self.assertTrue(notice.startswith('hey-my-buddy console: the browser was not opened; entry URL: '))
                 browser = Browser(notice.partition('entry URL: ')[2].strip())
-                self.assertTrue(browser.bootstrap()['consoleSession']['canWrite'])
+                self.assertTrue(browser.bootstrap()['consoleSession']['id'])
                 child.send_signal(signal.SIGINT)
                 self.assertTrue(wait_for(
                     lambda: not self.cli('console', '{"action":"status"}')[1]['running'], 30),

@@ -17,7 +17,7 @@ function render(ui: ReactElement, options?: RenderOptions) {
 
 function snapshotFixture(): Snapshot {
   return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a", canWrite: true, reason: null },
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session-a" },
 
     configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     buddies: [], preferences: [], modelServiceNotes: [], decisions: [],

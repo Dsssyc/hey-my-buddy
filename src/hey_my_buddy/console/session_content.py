@@ -134,13 +134,9 @@ def read(store, task_id: str, attempt_id: str, params: dict) -> dict:
     except BoardError as error:
         if error.code == 'INVALID_ARGUMENT':
             raise
-        if stopped is not None:
-            return {**response, **_empty_page(params)}
         raise BoardError('SESSION_UNREADABLE', 'The session record could not be read',
                          reason=reason('session.unreadable')) from None
     except OSError:
-        if stopped is not None:
-            return {**response, **_empty_page(params)}
         raise BoardError('SESSION_UNREADABLE', 'The session record could not be read',
                          reason=reason('session.unreadable')) from None
     return {**response, **page}

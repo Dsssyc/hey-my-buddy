@@ -351,10 +351,13 @@ class DecisionBrowseTests(RoutingHistoryTestCase):
         board = self.board()
         self.seed(board)
         created = self.select_decision(board, "named-operation")
-        listed = board.console.command("selection_list", {})
+        board.console.start(issue_ticket=False)
+        session = board.console._local_session
+        board.service.register_console_authority(session.cookie, session.id)
+        listed = board.console.command("selection_list", {}, session=session)
         self.assertEqual(listed["total"], 1)
         self.assertEqual(listed["decisions"][0]["decisionId"], created["decisionId"])
-        self.assert_code("METHOD_NOT_FOUND", board.console.command, "selection-list", {})
+        self.assert_code("METHOD_NOT_FOUND", board.console.command, "selection-list", {}, session=session)
 
 
 class TurnRoutingBindingTests(RoutingHistoryTestCase):

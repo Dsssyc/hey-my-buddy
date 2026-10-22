@@ -31,7 +31,7 @@ class ConsoleAccessTests(ConsoleTestCase):
             self.assertIn("frame-ancestors 'none'", headers["content-security-policy"])
             snapshot = browser.bootstrap()
             self.assertEqual(snapshot["consoleAccess"], {"requireLogin": False, "revision": 0, "sessions": []})
-            self.assertTrue(snapshot["consoleSession"]["canWrite"])
+            self.assertTrue(snapshot["consoleSession"]["id"])
             self.assertIsNone(browser.cookie)
         self.assertEqual(board.console.status()["sessionCount"], 0)
         for _ in range(70):
@@ -75,7 +75,7 @@ class ConsoleAccessTests(ConsoleTestCase):
         self.assertTrue(pending["url"].startswith(browser.origin + "/launch/"))
         now[0] += ENTRY_SECONDS - 1
         second = Browser(pending["url"])
-        self.assertTrue(second.bootstrap()["consoleSession"]["canWrite"])
+        self.assertTrue(second.bootstrap()["consoleSession"]["id"])
         self.assertEqual(second.call("GET", urlsplit(pending["url"]).path)[0], 410)
         expired = board.console.start()
         now[0] += ENTRY_SECONDS

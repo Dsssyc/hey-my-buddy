@@ -29,7 +29,7 @@ function buddy(modelService: typeof sonnet, effort: string, extra: Partial<Buddy
 
 function snapshot(extra: Partial<Snapshot> = {}): Snapshot & { harnesses: HarnessHealth[] } {
   return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard" },
     buddies: [buddy(sonnet, "medium", { enabled: true }), buddy(sonnet, "high"), buddy(sol, "medium"), buddy(sol, "low")],
@@ -204,7 +204,7 @@ describe("a buddy's own preference", () => {
 
 describe("a session that cannot write", () => {
   it("shows every setting and changes none, and says why on the switch", async () => {
-    const f = fixture(snapshot({ consoleSession: { id: "fixture-session", canWrite: false, reason: null } }));
+    const f = fixture(snapshot({ consoleSession: undefined as unknown as Snapshot["consoleSession"] }));
     const user = userEvent.setup();
     open(f);
     await listed(1, 4);

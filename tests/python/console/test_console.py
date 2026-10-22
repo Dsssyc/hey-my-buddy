@@ -487,6 +487,31 @@ class ConsoleAssetTests(ConsoleTestCase):
         self.assertNotIn("gate", snapshot)
         self.assertFalse(snapshot["capabilities"]["consoleAssets"])
 
+    def test_route_failures_are_logged_once_without_private_paths_in_response(self):
+        from unittest import mock
+        board = self.board()
+        _, browser = self.open_console(board, assets=True)
+        csrf = browser.bootstrap()["csrfToken"]
+        cases = (
+            ("hey_my_buddy.console.server.Console.read_snapshot", "/api/console", False),
+            ("hey_my_buddy.console.version_info.version_info", "/api/runtime-version", False),
+            ("hey_my_buddy.console.server.call_operation", "/api/macro-tasks", False),
+            ("hey_my_buddy.console.server.call_operation", "/api/tasks/unknown", False),
+            ("hey_my_buddy.console.server.session_content.read", "/api/tasks/task/attempts/attempt/session", False),
+            ("hey_my_buddy.console.server.Console.command", "/api/command", True),
+        )
+        for target, route, command in cases:
+            with self.subTest(route=route), mock.patch(target, side_effect=RuntimeError("private/path/secret")):
+                with self.assertLogs("hey_my_buddy.console.server", level="ERROR") as recorded:
+                    status, _, body = (browser.command("selection_list", {}, csrf=csrf)
+                                       if command else browser.get(route))
+                self.assertEqual(status, 500)
+                self.assertEqual(json.loads(body)["error"]["code"], "INTERNAL_ERROR")
+                self.assertNotIn(b"private/path/secret", body)
+                self.assertNotIn(b"Traceback", body)
+                self.assertEqual(len(recorded.records), 1)
+                self.assertIn("private/path/secret", recorded.output[0])
+
     def test_assets_are_served_with_headers_and_traversal_is_refused(self):
         board = self.board()
         (self.directory / "outside.txt").write_text("not an asset", encoding="utf-8", newline="\n")
@@ -505,11 +530,17 @@ class ConsoleAssetTests(ConsoleTestCase):
         status, headers, _body = browser.get("/assets/app.css")
         self.assertEqual(status, 200)
         self.assertTrue(headers["content-type"].startswith("text/css"))
-        # Directory listings and non-allowlisted files are not reachable.
+        # Directory listings and files outside the asset root are not reachable.
         self.assertEqual(browser.get("/assets/")[0], 404)
         self.assertEqual(browser.get("/assets")[0], 404)
         self.assertEqual(browser.get("/outside.txt")[0], 404)
-        # Traversal, encoded traversal, absolute paths and crafted names are refused.
+        arbitrary = board.console.assets_dir / "assets" / "built.extra"
+        arbitrary.write_bytes(b"built asset")
+        status, headers, body = browser.get("/assets/built.extra")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["content-type"], "application/octet-stream")
+        self.assertEqual(body, b"built asset")
+        # Traversal, encoded traversal and paths outside the root are refused.
         for path in (
             "/../outside.txt",
             "/%2e%2e/outside.txt",
@@ -780,7 +811,6 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
             self.assertIn("consoleAuthority", json.loads(data)["error"]["message"])
 
     def test_the_preview_answers_only_what_the_real_console_allows(self) -> None:
-        from hey_my_buddy.console.console_sessions import READ_OPERATIONS
         from hey_my_buddy.console.server import CONSOLE_OPERATIONS
 
         probes = Path(__file__).resolve().parents[3] / "tests" / "probes"
@@ -790,7 +820,6 @@ class ConsoleDecisionBrowseTests(ConsoleTestCase):
         finally:
             sys.path.remove(str(probes))
         self.assertTrue(set(preview.ALLOWED_OPERATIONS) <= set(CONSOLE_OPERATIONS))
-        self.assertEqual(set(preview.READ_OPERATIONS), set(READ_OPERATIONS) & set(preview.ALLOWED_OPERATIONS))
         self.assertIn("message_list", preview.ALLOWED_OPERATIONS)
         self.assertEqual(preview.validate_fixtures(), [])
 

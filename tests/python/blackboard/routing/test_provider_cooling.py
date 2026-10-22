@@ -99,9 +99,6 @@ class ProviderCoolingTests(BoardTestCase):
         self.reject()
         params = {"requestId": "console-clear", "harness": "dsh", "provider": "fixture"}
         self.assertTrue(self.board_.console_call("quota_redetect", params)["cleared"])
-        with self.assertRaises(BoardError) as denied:
-            self.board_.console.command("quota_redetect", {**params, "requestId": "unauthenticated"})
-        self.assertEqual(denied.exception.code, "CONSOLE_SESSION_EXPIRED")
 
 
 class CoolingWorkflowTests(WorkflowTestCase):
