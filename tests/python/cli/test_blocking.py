@@ -347,6 +347,31 @@ class ResultTruthTests(unittest.TestCase):
         self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
         self.assertEqual(service.calls, ["status", "wait"])
 
+    def test_result_service_error_keeps_the_same_run_recovery_without_retrying(self):
+        for status, outcome in (("completed", "completed-no-result"), ("failed", "failed")):
+            with self.subTest(status=status):
+                clock = VirtualClock()
+                service = FakeService(clock)
+                service.run.update(status=status, resultAvailable=True, shutdownConfirmed=True)
+
+                def unavailable(_run):
+                    raise ServiceError("SERVICE_UNAVAILABLE", "result service unavailable")
+
+                service.result_response = unavailable
+                envelope = await_run({"runId": "run-fixture"},
+                                     state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
+                self.assertEqual(envelope["status"], status)
+                self.assertEqual(envelope["outcome"], outcome)
+                self.assertEqual(envelope["runId"], "run-fixture")
+                self.assertEqual(envelope["requestId"], "fixture")
+                self.assertFalse(envelope["ok"])
+                self.assertTrue(envelope["resultAvailable"])
+                self.assertFalse(envelope["resultDelivered"])
+                self.assertEqual(envelope["error"]["code"], "SERVICE_UNAVAILABLE")
+                self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
+                self.assertEqual(envelope["recovery"]["commands"], recovery_commands("fixture", "run-fixture"))
+                self.assertEqual(service.calls, ["status", "result"])
+
     def test_successful_result_control_keeps_completed_semantics(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, complete_after_waits=1)

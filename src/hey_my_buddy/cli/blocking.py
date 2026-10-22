@@ -261,7 +261,6 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
         )
     from ..blackboard.evaluation.native_observations import failure_view
     final_text = result.get("finalText")
-    remaining = outcome.get("remaining", [])
     disposition = outcome.get("disposition")
     return {
         "status": result.get("status"),
@@ -277,7 +276,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
             "sessionId": turn.get("sessionId"),
             "disposition": disposition,
             "summary": _head_text(outcome.get("summary"), 2000),
-            "remaining": [item[:500] for item in remaining[:8]],
+            "remaining": [item[:500] for item in outcome["remaining"][:8]],
         },
         "request": outcome.get("request") if disposition in ("assistance", "attention") else None,
         "artifacts": artifacts,
@@ -544,7 +543,21 @@ def _wait_until_terminal(
                 "message": "The terminal run has no persisted runner result, so no successful result can be reported",
             },
         )
-    full = service("result", {"runId": run_id}, state_dir)
+    try:
+        full = service("result", {"runId": run_id}, state_dir)
+    except ServiceError as failure:
+        return _result_undelivered(
+            run,
+            request_id=request_id,
+            run_id=run_id,
+            waited_seconds=clock() - started,
+            wait_seconds=wait_seconds,
+            recovery_reason=(
+                "The run is terminal but its persisted result could not be read. Inspect the same run and "
+                "read its result again by runId; do not relaunch the work because of this read failure."
+            ),
+            error={"code": failure.code, "message": str(failure)},
+        )
     micro_task_view = _micro_task_result_view(full, run_id)
     if micro_task_view is not None:
         # A late execution completion does not undo the Host's micro task cancellation.

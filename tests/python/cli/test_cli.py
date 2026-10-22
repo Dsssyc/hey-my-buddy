@@ -347,6 +347,30 @@ class ControlFileTests(PrivateStateTestCase):
         self.assertNotEqual(other, path)
         self.assertEqual(cli._read_control(path), triple)
 
+    def test_control_file_input_errors_name_the_file_boundary_before_rpc(self):
+        for name, contents in (
+            ("missing", None),
+            ("directory", None),
+            ("invalid-json", b"{"),
+            ("invalid-utf8", b"\xff"),
+            ("null", b"null"),
+            ("array", b"[]"),
+            ("empty-object", b"{}"),
+            ("missing-token", b'{"hostId":"host-1","ownerGeneration":1}'),
+        ):
+            with self.subTest(name=name):
+                path = self.directory / name
+                if name == "directory":
+                    path.mkdir()
+                elif contents is not None:
+                    path.write_bytes(contents)
+                with mock.patch.object(cli, "_call_service") as service:
+                    code, result = self.run_cli("decide", json.dumps({"runId": "run-1", "controlFile": str(path)}))
+                self.assertEqual(code, 1)
+                self.assertEqual(result["error"]["code"], "INVALID_ARGUMENT")
+                self.assertIn("control file", result["error"]["message"].lower())
+                service.assert_not_called()
+
     def test_apply_control_injects_only_the_named_file_and_never_a_latest_generation(self):
         first = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}, state_dir=self.directory)
         second = cli._save_control("run-1", {"hostId": "host-2", "ownerGeneration": 2, "controlToken": "token-2"}, state_dir=self.directory)

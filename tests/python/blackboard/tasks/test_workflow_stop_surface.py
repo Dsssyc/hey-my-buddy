@@ -75,7 +75,7 @@ class MicroTaskStopWaitTests(unittest.TestCase):
             if method == "status":
                 return dict(run)
             if method == "result":
-                return {**run, "result": {"status": "ok", "turn": {"outcome": {"disposition": "completed", "summary": "done"}}}}
+                return {**run, "result": {"status": "ok", "turn": {"outcome": {"disposition": "completed", "summary": "done", "remaining": []}}}}
             raise AssertionError(f"unexpected operation {method}")
 
         result = await_run({"runId": "parent", "waitSeconds": 1}, state_dir=self.state, service=service, clock=VirtualClock())

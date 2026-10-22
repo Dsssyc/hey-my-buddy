@@ -246,16 +246,18 @@ def _read_control(path_value: str) -> dict:
     """Read the Host's named control file; the service validates its control triple."""
     if not isinstance(path_value, str) or not path_value.strip():
         raise BoardError("INVALID_ARGUMENT", "controlFile must be a nonempty path string")
-    path = Path(path_value).expanduser()
-    with path.open("rb") as handle:
-        raw = handle.read(MAX_PARAMS_BYTES + 1)
-    if len(raw) > MAX_PARAMS_BYTES:
-        raise BoardError("INVALID_ARGUMENT", "The control file is too large")
     try:
+        path = Path(path_value).expanduser()
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_PARAMS_BYTES + 1)
+        if len(raw) > MAX_PARAMS_BYTES:
+            raise ValueError("document is too large")
         value = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
-        raise BoardError("INVALID_ARGUMENT", "The control file is not valid JSON") from exc
-    return {field: value[field] for field in _CONTROL_TRIPLE}
+        if not isinstance(value, dict):
+            raise ValueError("expected a JSON object")
+        return {field: value[field] for field in _CONTROL_TRIPLE}
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        raise BoardError("INVALID_ARGUMENT", f"Invalid control file: {exc}") from exc
 
 
 def _apply_control(params: dict) -> dict:
