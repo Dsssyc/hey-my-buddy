@@ -500,7 +500,11 @@ class PreparationTests(WorkflowTestCase):
         board, run_id, _, cont = self.pending()
         replacement = workspace.prepare(self.directory, "wrong-checkout", self.intent(self.repository("wrong-checkout")))
         before = self.rows(board, run_id, cont)
-        with patch.object(workspace, "prepare", return_value=replacement), patch.object(workspace, "verify") as verify:
+        def wrong_checkout(*args, _preparation, **kwargs):
+            _preparation["replayed"] = False
+            return replacement
+
+        with patch.object(workspace, "prepare", side_effect=wrong_checkout), patch.object(workspace, "verify") as verify:
             board.store.workflow.prepare_continuation_workspace({"runId": run_id})
         verify.assert_not_called()
         after = self.rows(board, run_id, cont)

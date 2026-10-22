@@ -10,7 +10,7 @@ sandbox or a claim that every physical file remains unchanged.
 from contextlib import ExitStack, contextmanager
 from ...paths import is_absolute_path
 from ... import locking
-from ... import private_dirs, private_files
+from ... import private_files
 from collections import Counter
 import hashlib
 import json
@@ -516,7 +516,8 @@ def _diff(root, before, after):
 def _read(path, *, repository=None):
     try:
         if _WINDOWS:
-            return windows_paths.read(path, repository=repository)
+            return (windows_paths.read(path, repository=repository) if repository is not None
+                    else private_files.read_bytes(path))
         with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
             return stream.read()
     except FileNotFoundError:
@@ -534,18 +535,23 @@ def _record(path):
 
 
 def _write_once(path, data, *, repository=None):
-    if _WINDOWS:
+    if _WINDOWS and repository is not None:
         windows_paths.write_once(path, data, repository=repository)
         return
     with windows_paths.artifact_publication(path):
         private_files.publish_bytes(path, data, immutable=True,
-                                    open_file=lambda entry, flags, mode: os.open(entry, flags | os.O_NOFOLLOW, mode))
+                                    open_file=None if _WINDOWS else
+                                    lambda entry, flags, mode: os.open(entry, flags | os.O_NOFOLLOW, mode))
 
 
 @contextmanager
 def _lock(directory, *, create=True):
-    descriptor = (windows_paths.lock_fd(directory / ".lock", create=create, repository=directory) if _WINDOWS else
-                  os.open(directory / ".lock", os.O_RDWR | (os.O_CREAT if create else 0) | os.O_NOFOLLOW, 0o600))
+    flags = os.O_RDWR | (os.O_CREAT if create else 0)
+    if _WINDOWS:
+        from ...windows_files import open_regular_fd
+        descriptor = open_regular_fd(directory / ".lock", flags)
+    else:
+        descriptor = os.open(directory / ".lock", flags | os.O_NOFOLLOW, 0o600)
     try:
         try:
             locking.lock(descriptor, blocking=False)
@@ -609,8 +615,6 @@ def _actor_identity(value, label, roles=("host", "lead", "console")):
 
 
 def _mkdir(path):
-    if path.is_symlink():
-        raise BoardError("WORKSPACE_CONFLICT", "A workspace state directory is a symlink", path=str(path))
     path.mkdir(mode=0o777 if os.name == 'nt' else 0o700, exist_ok=True)
 
 
@@ -940,8 +944,6 @@ def _borrowed_submission_allocation(state_dir, intent):
     if len(parts) < 2 or not _workspace_identifier(parts[0]) or parts[1] != "checkout":
         return None
     directory = state / "workspaces" / parts[0]
-    if directory.is_symlink() or directory.resolve() != directory:
-        raise BoardError("WORKSPACE_UNSAFE", "The borrowed allocation directory changed")
     original = _record(directory / "manifest.json")
     if original is None:
         return None
@@ -950,18 +952,13 @@ def _borrowed_submission_allocation(state_dir, intent):
             or allocation["path"] != str(directory / "checkout")):
         raise BoardError("WORKSPACE_UNSAFE", "The borrowed checkout has no proven original allocation")
     verify(original, require_unchanged=False)
-    actual = inspect(str(path))
-    if (actual["checkoutRoot"] != allocation["path"]
-            or original["checkoutId"] != actual["checkoutId"]
-            or original["repositoryId"] != actual["repositoryId"]):
+    if original["checkoutRoot"] != allocation["path"]:
         raise BoardError("WORKSPACE_CHANGED", "The borrowed execution checkout identity changed")
-    registration = _worktree_record(Path(actual["repositoryPath"]), directory / "checkout")
+    registration = _worktree_record(Path(original["snapshot"]["repositoryPath"]), directory / "checkout")
     if registration is None or registration.get("locked") != "hey-my-buddy:" + parts[0]:
         raise BoardError("WORKSPACE_UNSAFE", "The borrowed checkout lost its original Git allocation lock")
     lock = directory / ".lock"
-    facts = lock.lstat()
-    if not stat.S_ISREG(facts.st_mode):
-        raise BoardError("WORKSPACE_UNSAFE", "The borrowed allocation lock is not a regular file")
+    facts = lock.stat()
     return directory, original, (_identity(directory), _identity(directory / "checkout"),
                                  facts.st_dev, facts.st_ino, facts.st_mode)
 
@@ -1041,7 +1038,6 @@ STASH_ENTRY_LIMIT = 64
 #: Bounded per-side entries carried by one frozen stash comparison record.
 STASH_COMPARISON_LIMIT = 16
 RESOLUTION_ACTIONS = ("restore", "adopt", "abandon")
-INTEGRATION_STRATEGIES = ("patch", "cherry-pick", "merge", "not-required")
 
 
 def _entry_state(entries, path):
@@ -1193,13 +1189,9 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                  suffix: str, kind: str | None, allowed_paths: tuple = ()) -> dict:
     with _errors():
         _validate_manifest(manifest)
-        if any(not isinstance(value, str) or not value or "\0" in value for value in (task_id, attempt_id)):
-            raise BoardError("INVALID_WORKSPACE", "task_id and attempt_id must be stable identities")
         workspace_id = manifest["workspaceId"]
-        if not isinstance(workspace_id, str) or not workspace_id.startswith("ws-") or len(workspace_id) != 35 or any(value not in "0123456789abcdef" for value in workspace_id[3:]):
-            raise BoardError("INVALID_WORKSPACE", "Invalid workspace identity")
         workspace_dir = Path(state_dir).resolve() / "workspaces" / workspace_id
-        if workspace_dir.is_symlink() or _record(workspace_dir / "manifest.json") != manifest:
+        if _record(workspace_dir / "manifest.json") != manifest:
             raise BoardError("WORKSPACE_CONFLICT", "This state directory does not own the supplied workspace manifest")
         with _lock(workspace_dir):
             _mkdir(workspace_dir / "outputs")
@@ -1303,7 +1295,7 @@ def _scope_records(workspace_dir, manifest, task_id, attempt_id):
     folder = workspace_dir / "outputs" / _sha(_json([task_id, attempt_id])) / "scope-conflicts"
     if not folder.exists():
         return []
-    if folder.is_symlink() or not folder.is_dir():
+    if not folder.is_dir():
         raise BoardError("WORKSPACE_CONFLICT", "The scope evidence path is not a regular directory", path=str(folder))
     records = []
     for path in sorted(folder.glob("*.json")):
@@ -1327,8 +1319,6 @@ def scope_conflicts(state_dir, manifest: dict, task_id: str, attempt_id: str) ->
     """
     with _errors():
         _validate_manifest(manifest)
-        if any(not isinstance(value, str) or not value or "\0" in value for value in (task_id, attempt_id)):
-            raise BoardError("INVALID_WORKSPACE", "task_id and attempt_id must be stable identities")
         workspace_dir = Path(state_dir).resolve() / "workspaces" / manifest["workspaceId"]
         return _scope_records(workspace_dir, manifest, task_id, attempt_id)
 
@@ -1778,8 +1768,6 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             raise BoardError("INVALID_WORKSPACE", "Resolution action must be restore, adopt or abandon")
         if not isinstance(observed_fingerprint, str) or re.fullmatch(r"[0-9a-f]{64}", observed_fingerprint) is None:
             raise BoardError("INVALID_WORKSPACE", "observedFingerprint must be a workspace fingerprint")
-        if any(not isinstance(value, str) or not value or "\0" in value for value in (task_id, attempt_id)):
-            raise BoardError("INVALID_WORKSPACE", "task_id and attempt_id must be stable identities")
         if paths is None:
             selected_paths = []
         elif isinstance(paths, list) and all(isinstance(value, str) for value in paths):
@@ -1788,7 +1776,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             raise BoardError("INVALID_WORKSPACE", "paths must be a list of relative workspace paths")
         workspace_id = manifest["workspaceId"]
         workspace_dir = Path(state_dir).resolve() / "workspaces" / workspace_id
-        if workspace_dir.is_symlink() or _record(workspace_dir / "manifest.json") != manifest:
+        if _record(workspace_dir / "manifest.json") != manifest:
             raise BoardError("WORKSPACE_CONFLICT", "This state directory does not own the supplied workspace manifest")
         with _lock(workspace_dir):
             output_id = _sha(_json([task_id, attempt_id]))
@@ -1967,7 +1955,7 @@ def verify_sealed_output(original_input: dict, final_input: dict, artifact: dict
 
 
 def integration_verify(artifact: dict, *, original_input: dict, final_input: dict,
-                       path: str, ref: str, strategy: str, before_commit: str | None = None,
+                       path: str, ref: str, before_commit: str | None = None,
                        repository_id: str | None = None, checkout_id: str | None = None,
                        host_paths=None, note: str | None = None,
                        _confirm_adjustments: bool = False) -> dict:
@@ -1982,8 +1970,6 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
     the pure content comparison of the artifact against the target tree.
     """
     with _errors():
-        if strategy not in ("patch", "cherry-pick", "merge"):
-            raise BoardError("INVALID_WORKSPACE", "A verified integration uses patch, cherry-pick or merge")
         if not isinstance(artifact, dict):
             raise BoardError("INVALID_WORKSPACE", "The integration source artifact is missing")
         if bool(host_paths) and not before_commit:
@@ -2032,8 +2018,6 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
                     differing.append({"path": name, "artifactOid": None, "targetOid": actual["oid"],
                                       "targetMode": actual["mode"]})
                 continue
-            if not isinstance(expected, list) or len(expected) != 2:
-                raise BoardError("INVALID_WORKSPACE", "The artifact output binding is malformed", path=name)
             if actual is None:
                 missing.append(name)
             elif actual == {"mode": expected[0], "oid": expected[1]}:
@@ -2047,7 +2031,7 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
         unrecorded = sorted({item["path"] for item in differing} - set(adjustments)) + sorted(set(missing) - set(adjustments))
         verification = {
             "verified": bool((before is None or _is_ancestor(root, before, after)) and not unrecorded),
-            "strategy": strategy,
+            "strategy": "patch",
             "target": {"kind": "checkout", "path": identity["checkoutRoot"], "checkoutId": identity["checkoutId"],
                        "repositoryId": identity["repositoryId"], "ref": ref},
             "beforeCommit": before, "beforeTree": before_tree, "afterCommit": after, "afterTree": after_tree,
@@ -2071,22 +2055,16 @@ def _workspace_identifier(value):
 
 
 def allocation_lock_directory(state_dir, workspace_id: str | None) -> Path | None:
-    """Return an existing private record directory with an ordinary lock file.
+    """Return an existing private record directory with its existing lock file.
 
     Both deletion marking and ordinary reclaim use this exact predicate. It
-    never creates a new lock or follows a linked component.
+    never creates a new lock.
     """
     if not _workspace_identifier(workspace_id):
         return None
     directory = Path(state_dir).resolve() / "workspaces" / workspace_id
     lock_path = directory / ".lock"
-    if (private_dirs.linked_component(lock_path) is not None
-            or not directory.is_dir()):
-        return None
-    try:
-        return directory if stat.S_ISREG(lock_path.lstat().st_mode) else None
-    except FileNotFoundError:
-        return None
+    return directory if directory.is_dir() and lock_path.is_file() else None
 
 
 def _attached_branch_report(checkout_root, record) -> dict:
@@ -2165,7 +2143,7 @@ def resolve_allocation(state_dir, manifest: dict, retained=None) -> dict | None:
                     or not _inside(candidate.get("path"), checkout_root)):
                 continue
             directory = state_dir / "workspaces" / workspace_id
-            if directory.is_symlink() or not directory.is_dir():
+            if not directory.is_dir():
                 continue
             if _record(directory / "manifest.json") != candidate:
                 continue
@@ -2179,7 +2157,7 @@ def resolve_allocation(state_dir, manifest: dict, retained=None) -> dict | None:
 
 
 def _allocation_refs(repository, allocation_id, manifest, retained):
-    """Bounded retention view of every fixed ref that belongs to this checkout."""
+    """Complete retention view of every fixed ref that belongs to this checkout."""
     identifiers = list(dict.fromkeys((allocation_id, manifest["workspaceId"])))
     for candidate in _allocation_candidates(manifest, retained):
         value = candidate.get("workspaceId")
@@ -2191,9 +2169,7 @@ def _allocation_refs(repository, allocation_id, manifest, retained):
     for identifier in identifiers:
         refs.extend(os.fsdecode(line) for line in _git(
             repository, "for-each-ref", "--format=%(refname)", f"refs/hey-my-buddy/workspaces/{identifier}/").splitlines())
-        if len(refs) >= 64:
-            break
-    return sorted(set(refs))[:64]
+    return sorted(set(refs))
 
 
 def _cleanup_resume_registration(repository, checkout_root, allocation, manifest):

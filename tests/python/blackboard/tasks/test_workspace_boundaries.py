@@ -137,7 +137,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "HEAD^{tree}").decode().strip(), sealed["tree"])
         self.clear_refs_and_prune(sealed["commit"])
         self.assert_error("WORKSPACE_GIT_ERROR", workspace.integration_verify, sealed,
-                          original_input=manifest, final_input=manifest, path=str(self.repo), ref="HEAD", strategy="patch")
+                          original_input=manifest, final_input=manifest, path=str(self.repo), ref="HEAD")
 
     def check_each_cleanup_ref(self, *, sealed_output):
         manifest = self.prepare()
@@ -240,6 +240,19 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertTrue(proof["eligible"], proof)
         self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
         self.assertFalse(checkout.exists())
+
+    def test_cleanup_lists_all_fixed_refs_across_retained_workspaces(self):
+        manifest = self.prepare()
+        repository = manifest["snapshot"]["repositoryPath"]
+        related = dict(manifest, workspaceId="ws-" + "f" * 32)
+        refs = [f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/retained/extra-{index}"
+                for index in range(65)]
+        refs.append(f"refs/hey-my-buddy/workspaces/{related['workspaceId']}/retained/later")
+        self.git("update-ref", "--stdin", cwd=repository,
+                 data="".join(f"create {ref} {manifest['inputCommit']}\n" for ref in refs).encode())
+        proof = workspace.cleanup_inspect(self.state, manifest, retained=[related])
+        self.assertTrue(proof["eligible"])
+        self.assertTrue(set(refs) <= set(proof["refs"]))
 
     def test_resumed_cleanup_checks_modes_and_symlinks_without_following_them(self):
         for change in ("mode", "file-link", "directory-link"):

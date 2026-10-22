@@ -47,6 +47,7 @@ class WorkerDeletionInventoryTests(unittest.TestCase):
         self.assertEqual({row["taskId"] for row in selected}, {"selected", "second"})
         self.assertTrue(all(row["storageOwner"] == "harness-user-store" for row in selected))
         self.assertEqual(handle(self.store, {})["count"], 4)
+        self.assertEqual(set(handle(self.store, {})), {"harness", "sessions", "count"})
         self.assertEqual(deletable_sessions(self.store, set()), [])
 
     def test_resumed_sessions_require_creation_receipt_and_merge_attempts(self):

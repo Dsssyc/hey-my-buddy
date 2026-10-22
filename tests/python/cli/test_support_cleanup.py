@@ -218,7 +218,7 @@ class FixtureCleanupTests(unittest.TestCase):
     def test_r05_catalog_daemon_fixture_binds_capabilities_without_native_discovery(self):
         """Exercise the existing daemon fixture without binding a socket."""
         from hey_my_buddy.blackboard.service.daemon import Daemon
-        from hey_my_buddy.blackboard.service.service import dispatch_local
+        from hey_my_buddy.blackboard.service.service import call_operation
 
         with private_state_dir() as directory:
             catalog = write_catalog_fixture(directory)
@@ -236,14 +236,14 @@ class FixtureCleanupTests(unittest.TestCase):
                     self.assertFalse(native.called, "fixture capabilities attempted native discovery")
                     self.assertNotIn("error", capabilities)
                     self.assertTrue(capabilities["adapters"]["dsh"]["available"])
-                    refreshed = dispatch_local(service, "model_catalog_refresh", {"requestId": "r05-fixture"})
+                    refreshed = call_operation(service, "model_catalog_refresh", {"requestId": "r05-fixture"})
                     self.assertEqual(refreshed["catalog"]["source"], f"file:{catalog}")
                     payload = json.loads(catalog.read_text(encoding="utf-8"))
                     self.assertEqual(refreshed["catalog"]["providers"][0]["models"][0]["id"],
                                      payload["providers"][0]["models"][0]["id"])
                     payload["providers"][0]["models"][0]["id"] = "r05-fixture-changed-model"
                     catalog.write_text(json.dumps(payload), encoding="utf-8", newline="\n")
-                    reread = dispatch_local(service, "model_catalog_refresh", {"requestId": "r05-fixture-reread"})
+                    reread = call_operation(service, "model_catalog_refresh", {"requestId": "r05-fixture-reread"})
                     self.assertEqual(reread["catalog"]["providers"][0]["models"][0]["id"],
                                      payload["providers"][0]["models"][0]["id"])
                     self.assertFalse(native.called, "fixture catalog attempted native discovery")

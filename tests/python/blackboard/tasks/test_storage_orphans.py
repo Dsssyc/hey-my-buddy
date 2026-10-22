@@ -12,6 +12,7 @@ from unittest.mock import patch
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from support import private_state_dir
 from hey_my_buddy.blackboard.tasks import storage, workflow, workspace
+from hey_my_buddy.errors import BoardError
 
 
 class StorageOrphanTests(WorkflowTestCase):
@@ -303,7 +304,7 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assert_retained(checkout, planned)
 
     def test_unreadable_retained_artifact_keeps_reference_unproven(self):
-        _, checkout, planned = self.orphan()
+        manifest, checkout, planned = self.orphan()
         parent = self.submit(self.board_instance, request_id='other-run', cwd=str(self.repo), kind='existing',
                              task='{freeform task text is never a JSON reference}')
         before = next(row for row in storage.inspect(self.board_instance.store)['candidates'] if row['path'] == str(checkout))
@@ -313,10 +314,17 @@ class StorageOrphanTests(WorkflowTestCase):
                 (artifact_id,run_id,kind,manifest_json,manifest_sha256,created_at)
                 VALUES (?,?,'input','{invalid-json','unreadable-private-fixture',?)''',
                 ('unreadable-artifact', parent['runId'], '2026-01-01T00:00:00Z'))
-        row = next(row for row in storage.inspect(self.board_instance.store)['candidates'] if row['path'] == str(checkout))
-        self.assertFalse(row['eligible'])
-        self.assertIn('workflow_artifacts-reference-unproven', row['reasons'])
-        self.assert_retained(checkout, planned)
+        with self.board_instance.store.db.read() as connection:
+            reasons = storage.allocation_references(connection, manifest)
+        self.assertIn('workflow_artifacts-reference-unproven', reasons)
+        # Corrupt service-owned JSON now fails inventory loudly. The deletion
+        # boundary still treats its references as unproven and removes nothing.
+        with self.assertRaises(sqlite3.OperationalError):
+            storage.inspect(self.board_instance.store)
+        with self.assertRaises(BoardError) as raised:
+            self.apply(planned)
+        self.assertEqual(raised.exception.code, 'INTERNAL_ERROR')
+        self.assertTrue(checkout.exists())
 
     def test_artifact_location_protects_checkout_even_without_manifest(self):
         _, checkout, planned = self.orphan()

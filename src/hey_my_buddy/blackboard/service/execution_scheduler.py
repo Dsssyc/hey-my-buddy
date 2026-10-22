@@ -433,8 +433,6 @@ class ExecutionScheduler:
         path = handle.budget_path
         from ...private_dirs import open_regular_fd
         from ...json_codec import decode_strict_json
-        if not path.exists():
-            return False
         try:
             descriptor = open_regular_fd(path, os.O_RDONLY)
         except FileNotFoundError:

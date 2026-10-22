@@ -143,7 +143,6 @@ class BoardStore:
         directory: str | Path,
         *,
         max_concurrent: int = scheduling.TOTAL_CONCURRENCY_DEFAULT,
-        wait_capacity: int = 32,
         clock: Callable[[], str] = utc_now,
     ):
         self.directory = Path(directory)
@@ -151,8 +150,7 @@ class BoardStore:
         #: The one machine-wide concurrent-attempt ceiling (HMB_MAX_CONCURRENT).
         #: Routing/selection attempts and business attempts share it and the same
         #: per-model-service counters; there is no separate decision lane.
-        self.max_concurrent = scheduling.clamp_total(max_concurrent)
-        self.wait_capacity = max(1, int(wait_capacity))
+        self.max_concurrent = max_concurrent
         self._clock = clock
         self._condition = threading.Condition()
         self._head = 0
@@ -172,6 +170,9 @@ class BoardStore:
         # authority and every one of its mutations is one of these transactions.
         self.workflow = WorkflowCoordinator(self, clock=self._clock)
         self._recovery_lock = threading.Lock()
+
+    def upgrading(self) -> bool:
+        return (self.directory / "upgrade.json").exists()
 
     # -- lifecycle -----------------------------------------------------------
     def initialize(self) -> None:
@@ -718,7 +719,7 @@ class BoardStore:
         """Explicit per-model-service limits from the user-owned ``model_service_concurrency`` table."""
         rows = connection.execute("SELECT harness, provider, model, concurrency_limit FROM model_service_concurrency").fetchall()
         return {
-            (row["harness"], row["provider"], row["model"]): scheduling.clamp_model_limit(row["concurrency_limit"])
+            (row["harness"], row["provider"], row["model"]): row["concurrency_limit"]
             for row in rows
         }
 
@@ -815,7 +816,7 @@ class BoardStore:
         model service, so the queue reason names the limit that is actually full. Workspace
         and exclusive-resource admission applies to all work unchanged.
         """
-        if (self.directory / 'upgrade.json').exists():
+        if self.upgrading():
             raise BoardError('UPGRADE_IN_PROGRESS', 'Admission is fenced until the coordinated upgrade finishes')
         if self._total_active(connection) >= self.max_concurrent:
             return scheduling.REASON_TOTAL_CAPACITY
@@ -923,11 +924,7 @@ class BoardStore:
         ).fetchone()
         if row is None:
             return None
-        try:
-            value = json.loads(row["activity_json"])
-        except ValueError:
-            return None
-        return value if isinstance(value, dict) else None
+        return json.loads(row["activity_json"])
 
     def _store_activity(self, connection: sqlite3.Connection, attempt: sqlite3.Row, activity: dict) -> bool:
         """Persist one monotone activity receipt.
@@ -1182,11 +1179,6 @@ class BoardStore:
                 raise BoardError("NOT_READY", "The runner result is not available yet")
             view = self._decorate(connection, task)
             payload = json.loads(attempt["result_json"])
-            if not isinstance(payload, dict) or not {"status", "result", "shutdownConfirmed"}.issubset(payload):
-                raise BoardError(
-                    "UNSUPPORTED_RESULT_FORMAT",
-                    "The stored result does not use the current receipt format; use a clean state directory",
-                )
             # Only the current execution receipt is unpacked. Its adapter result is
             # opaque data, even when it contains fields named result or turn.
             view["result"] = _public_result_payload(payload)["result"]
@@ -1334,13 +1326,6 @@ class BoardStore:
                     state=task["state"],
                     attemptId=attempt["attempt_id"] if attempt else None,
                 )
-            if attempt is not None and attempt["result_json"] is not None and not attempt["shutdown_confirmed"]:
-                raise BoardError(
-                    "SHUTDOWN_UNCONFIRMED",
-                    "The previous attempt has a result but unconfirmed shutdown; inspect survivors before retrying",
-                    attemptId=attempt["attempt_id"],
-                )
-            spec = json.loads(task["spec_json"])
             if attempt is not None:
                 self._release_claims(connection, attempt["attempt_id"])
             blocker = self._admission_blocker(connection, spec, exclude_task=task["task_id"])
@@ -1765,14 +1750,11 @@ class BoardStore:
             # repository whose reading genuinely failed is
             # present as a key and may start with its honest ``unknown``.
             repository = self.workflow.run_repository_path(connection, chosen["task_id"])
-            if repository is not None and not (
-                isinstance(stash_facts, dict)
-                and repository in (stash_facts.get("repositories") or {})
-            ):
+            if repository is not None and repository not in stash_facts["repositories"]:
                 raise ClaimStashCoverageRetry(chosen["task_id"])
             spec = self.workflow.effective_spec(connection, chosen)
             generation = chosen_generation
-            attempt_id = chosen_attempt_id or str(uuid.uuid4())
+            attempt_id = chosen_attempt_id
             now = self.now()
             connection.execute(
                 "INSERT INTO attempts(attempt_id, task_id, generation, nonce_verifier,"
@@ -1797,7 +1779,7 @@ class BoardStore:
                 ),
             )
             connection.execute("UPDATE attempts SET cleanup_pending=1 WHERE attempt_id=?", (attempt_id,))
-            effective_cwd = chosen["cwd"] or spec["cwd"]
+            effective_cwd = chosen["cwd"]
             for kind, values in (("cwd", [effective_cwd]), ("exclusive", spec.get("exclusiveResources", []))):
                 for resource in values:
                     # (task, resource) is unique, so a retried task re-holds its own
@@ -1967,8 +1949,6 @@ class BoardStore:
 
     def _require_effective_attempt(self, connection: sqlite3.Connection, attempt: sqlite3.Row) -> None:
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
-        if task is None:
-            raise BoardError("NOT_FOUND", "Unknown task for this attempt")
         current = task["active_attempt_id"]
         if current is not None:
             if current == attempt["attempt_id"]:
@@ -2241,8 +2221,6 @@ class BoardStore:
                 self._require_effective_attempt(connection, attempt)
             else:
                 attempt = self._verify_attempt_actor(connection, params)
-            if attempt["attempt_id"] != attempt_id_param:
-                raise BoardError("INVALID_ARGUMENT", "attemptId does not match the request")
             if attempt["execution_state"] == "finished" and attempt["result_json"] is None:
                 raise BoardError("ATTEMPT_FINISHED", "This execution was released before process creation")
             if termination_reason == "deadline" and attempt["adapter"] != "decision":
@@ -2904,7 +2882,7 @@ class BoardStore:
                 self._retain_claims(connection, attempt["attempt_id"])
                 summary["uncertain"] += 1
                 task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
-                if task is not None and task["state"] in ("running", "cancelling"):
+                if task["state"] in ("running", "cancelling"):
                     connection.execute(
                         "UPDATE tasks SET queue_reason=?, updated_at=? WHERE task_id=?",
                         (UNCERTAIN_QUEUE_REASON, now, attempt["task_id"]),
@@ -2914,7 +2892,7 @@ class BoardStore:
                     "attempt.uncertain",
                     task_id=attempt["task_id"],
                     attempt_id=attempt["attempt_id"],
-                    revision=task["revision"] if task else None,
+                    revision=task["revision"],
                     payload={},
                 )
             summary["retained"] = int(

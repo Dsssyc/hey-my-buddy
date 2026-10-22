@@ -1150,31 +1150,32 @@ class Database:
             fresh = not self.path.exists()
             if not fresh:
                 self._require_current_schema()
-            self.directory.mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True, exist_ok=True)
-            if os.name != 'nt':
-                os.chmod(self.directory, 0o700)
+            self.directory.mkdir(parents=True, exist_ok=True)
+            if fresh:
+                # SQLite's own creation mode follows the umask, so create the
+                # file with its final mode before handing it to SQLite.
+                os.close(os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
             with self.connect() as connection:
                 if fresh:
                     connection.executescript(SCHEMA)
-                version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-                if version is None:
                     connection.execute("BEGIN IMMEDIATE")
                     try:
                         connection.execute(
                             "INSERT INTO meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),)
                         )
+                        connection.execute(
+                            "INSERT INTO meta(key, value) VALUES(?, ?)", (SECRET_KEY, secrets.token_hex(32))
+                        )
+                        from ..routing.router import initialize_configuration
+                        initialize_configuration(connection)
+                        connection.execute(
+                            "INSERT INTO reminder_settings(id, silence_seconds, updated_at, revision) "
+                            "VALUES(1, 900, ?, 1)", (utc_now(),)
+                        )
                         connection.execute("COMMIT")
                     except BaseException:
                         connection.execute("ROLLBACK")
                         raise
-                if fresh:
-                    from ..routing.router import initialize_configuration
-                    initialize_configuration(connection)
-                    connection.execute(
-                        "INSERT INTO reminder_settings(id, silence_seconds, updated_at, revision) "
-                        "VALUES(1, 900, ?, 1)", (utc_now(),)
-                    )
-                    os.chmod(self.path, 0o600)
                 integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
                 if integrity != "ok":
                     raise Corruption(f"Board database integrity check failed: {integrity}")
@@ -1190,14 +1191,11 @@ class Database:
     def _load_secret(self) -> bytes:
         if self._secret is not None:
             return self._secret
-        with self.write() as connection:
+        with self.read() as connection:
             row = connection.execute("SELECT value FROM meta WHERE key=?", (SECRET_KEY,)).fetchone()
-            if row is None:
-                value = secrets.token_hex(32)
-                connection.execute("INSERT INTO meta(key, value) VALUES(?, ?)", (SECRET_KEY, value))
-            else:
-                value = row["value"]
-        self._secret = bytes.fromhex(value)
+        if row is None:
+            raise Corruption("Existing board has no capability secret")
+        self._secret = bytes.fromhex(row["value"])
         return self._secret
 
     @property

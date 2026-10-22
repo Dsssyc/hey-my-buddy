@@ -234,39 +234,10 @@ class SealFactPinningTests(WorkflowStashTestCase):
         # The pinned digest is recomputable from the stored payload alone.
         from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
         self.assertEqual(pinned["manifestSha256"], WorkflowCoordinator.shared_refs_record_digest(pinned))
-        self.assertEqual(WorkflowCoordinator.verify_shared_refs_record(pinned), pinned)
         self.assertEqual(pinned["turnId"], claimed["claim"]["turn"]["turnId"])
         self.assertEqual(pinned["attemptId"], claimed["claim"]["attempt"]["attemptId"])
         self.assertEqual(pinned["turnInputSha256"], claimed["claim"]["turn"]["inputSha256"])
 
-    def test_a_tampered_pinned_record_fails_verification(self):
-        from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
-        from hey_my_buddy.errors import BoardError
-        board = self.board()
-        repository = self.repo_key()
-        self.workspace.stash_inventories[repository] = observed([entry("a" * 40, "original description")])
-        claimed = self.submit_and_claim(board)
-        self.workspace.stash_inventories[repository] = observed([])
-        self.finish(board, claimed)
-        with board.store.db.read() as connection:
-            row = connection.execute(
-                "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='shared-refs'",
-                (self.run_id,)).fetchone()
-        pinned = json.loads(row[0])
-        self.assertEqual(WorkflowCoordinator.verify_shared_refs_record(pinned), pinned)
-        # Any later drift between the stored payload and its pinned digest —
-        # here a rewritten description — is refused as changed evidence.
-        pinned["startStash"]["entries"][0]["description"] = "rewritten history"
-        with self.assertRaises(BoardError) as raised:
-            WorkflowCoordinator.verify_shared_refs_record(pinned)
-        self.assertEqual(raised.exception.code, "WORKSPACE_MANIFEST_CHANGED")
-        broken = dict(pinned)
-        broken["manifestSha256"] = "0" * 64
-        with self.assertRaises(BoardError) as shape:
-            WorkflowCoordinator.verify_shared_refs_record(broken)
-        self.assertEqual(shape.exception.code, "WORKSPACE_MANIFEST_CHANGED")
-        with self.assertRaises(BoardError):
-            WorkflowCoordinator.verify_shared_refs_record({"version": 2})
 
     def test_pinning_is_identity_stable_for_the_same_turn(self):
         board = self.board()

@@ -247,31 +247,41 @@ class WindowsWorkspaceTests(unittest.TestCase):
         self.assertFalse((self.root / "elsewhere").exists())
         self.assertEqual(self.api.open, [])
 
-    def test_lock_file_cannot_follow_a_link(self):
-        with mock.patch.object(workspace, "_WINDOWS", True), \
-             mock.patch.object(windows_paths, "WindowsFileAPI", return_value=self.api):
+    def test_private_lock_leaf_cannot_follow_a_link(self):
+        with workspace._lock(self.root):
+            pass
+        (self.root / ".lock").unlink()
+        (self.root / ".lock").symlink_to("elsewhere")
+        with self.assertRaises(BoardError if os.name == "nt" else OSError):
             with workspace._lock(self.root):
-                self.assertEqual(self.api.open, [])
-            (self.root / ".lock").unlink()
-            (self.root / ".lock").symlink_to("elsewhere")
-            with self.assertRaises(BoardError) as error:
-                with workspace._lock(self.root):
-                    pass
-        self.assertEqual(error.exception.code, "WORKSPACE_UNSUPPORTED")
+                pass
         self.assertFalse((self.root / "elsewhere").exists())
-        self.assertEqual(self.api.open, [])
 
     def test_existing_lock_does_not_create_a_missing_file(self):
-        with mock.patch.object(workspace, "_WINDOWS", True), \
-             mock.patch.object(windows_paths, "WindowsFileAPI", return_value=self.api):
-            with self.assertRaises(FileNotFoundError):
-                with workspace._lock(self.root, create=False):
-                    pass
-            self.assertFalse((self.root / ".lock").exists())
-            with workspace._lock(self.root):
-                pass
+        with self.assertRaises(FileNotFoundError):
             with workspace._lock(self.root, create=False):
                 pass
+        self.assertFalse((self.root / ".lock").exists())
+        with workspace._lock(self.root):
+            pass
+        with workspace._lock(self.root, create=False):
+            pass
+
+    def test_private_records_allow_a_linked_ancestor(self):
+        directory = self.root / "records"
+        directory.mkdir()
+        linked = self.root / "linked-records"
+        linked.symlink_to(directory, target_is_directory=True)
+        workspace._mkdir(linked)
+        record = linked / "manifest.json"
+        workspace._write_once(record, b"immutable")
+        self.assertEqual(workspace._read(record), b"immutable")
+        workspace._write_once(record, b"immutable")
+        with self.assertRaises(BoardError) as error:
+            workspace._write_once(record, b"different")
+        self.assertEqual(error.exception.code, "WORKSPACE_CONFLICT")
+        with workspace._lock(linked):
+            self.assertTrue((directory / ".lock").is_file())
 
     def test_windows_names_and_case_aliases_are_rejected(self):
         invalid = ["folder\\escape", "x:stream", "CON.txt", "COM¹.log", "NUL .txt", "item.",

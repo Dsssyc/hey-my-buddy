@@ -690,7 +690,7 @@ class TestInquiry(BoardTestCase):
         session = "inquiry-console-session"
         board.service.register_console_authority(session)
         params = {"runId": task["runId"], "inquiryId": "q-console-author", "question": "status?"}
-        board.call("inquiry_observe", {**params, "consoleAuthority": session})
+        board.call("inquiry_observe", {**params, "consoleAuthority": {"sessionId": session}})
         expected = {"role": "console", "id": board.service.console_public_identity(session)}
         self.assertEqual(client.get_message("q-console-author", runId=task["runId"])["author"], expected)
         board.call("inquiry_observe", params)

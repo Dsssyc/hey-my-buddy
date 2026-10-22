@@ -372,7 +372,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         sealed["cumulativePatch"] = cumulative
         report = workspace_module.integration_verify(
             sealed, original_input=manifest, final_input=manifest, path=str(self.repo), ref="HEAD",
-            strategy="patch", before_commit=original,
+            before_commit=original,
         )
         self.assertFalse(report["verified"])
         self.assertEqual(len(report["differingPaths"]), file_count)
@@ -439,7 +439,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         with self.assertRaises(BoardError):
             workspace_module.integration_verify(
                 {**seal, "commit": "0" * 40}, original_input=manifest, final_input=manifest,
-                path=str(target["path"]), ref="HEAD", strategy="patch", before_commit=target["before"],
+                path=str(target["path"]), ref="HEAD", before_commit=target["before"],
             )
 
     def test_cleared_workspace_refs_allow_turns_and_acceptance_but_block_cleanup(self):
@@ -2442,7 +2442,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(workspace_module.inspect(str(target["path"]))["checkoutId"], target["checkoutId"])
         target_check = workspace_module.integration_verify(
             seal, original_input=original, final_input=original,
-            path=str(target["path"]), ref="HEAD", strategy="patch", before_commit=target["before"],
+            path=str(target["path"]), ref="HEAD", before_commit=target["before"],
             repository_id=target["repositoryId"], checkout_id=target["checkoutId"],
         )
         self.assertTrue(target_check["verified"])

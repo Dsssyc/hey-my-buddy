@@ -21,7 +21,7 @@ class UserPolicyTests(BoardTestCase):
             db.execute("INSERT INTO evaluation_preferences VALUES('retired','pin','user intent')")
 
     def user(self, operation, params):
-        return self.board_.call(operation, {**params, 'consoleAuthority': self.session})
+        return self.board_.call(operation, {**params, 'consoleAuthority': {'sessionId': self.session}})
 
     def publication_params(self):
         return {}

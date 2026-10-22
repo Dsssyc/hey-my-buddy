@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 import tempfile
 import time
@@ -232,7 +233,7 @@ class ExecutionObservationTests(unittest.TestCase):
         store = Mock()
         scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
         handle = Mock()
-        handle.budget_path.exists.return_value = False
+        handle.budget_path = Path(tempfile.gettempdir()) / ("missing-budget-" + uuid.uuid4().hex)
         client = Mock()
         claim = {"attempt": {"attemptId": "attempt"}}
         future = (datetime.now(timezone.utc) + timedelta(seconds=30)).isoformat()
@@ -356,7 +357,7 @@ class ExecutionObservationTests(unittest.TestCase):
         for index in range(2):
             attempt = f"attempt-{index}"
             handle = Mock(execution_binding={"taskId": f"task-{index}"})
-            handle.budget_path.exists.return_value = False
+            handle.budget_path = Path(tempfile.gettempdir()) / ("missing-budget-" + uuid.uuid4().hex)
             client = Mock()
             scheduler._handles[attempt] = (handle, {"pid": index + 1})
             scheduler._clients[attempt] = client

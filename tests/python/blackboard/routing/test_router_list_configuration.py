@@ -42,7 +42,7 @@ class RouterListConfigurationTests(BoardTestCase):
             }
 
     def user(self, operation, params):
-        return self.board_.call(operation, {**params, "consoleAuthority": self.session})
+        return self.board_.call(operation, {**params, "consoleAuthority": {"sessionId": self.session}})
 
     def publish(self, configuration=None, *, command=None, **changes):
         """One authenticated console publication."""

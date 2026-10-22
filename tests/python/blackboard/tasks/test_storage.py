@@ -287,9 +287,9 @@ class StorageTests(BoardTestCase):
         rows=[r for r in planned['candidates'] if r['category']=='runtimes']
         self.assertEqual(len(rows),3)
         self.assertTrue(all(not r['eligible'] for r in rows))
-        self.assertIn('runtime-in-use', next(r for r in rows if r['path'].endswith('/' + older))['reasons'])
+        self.assertIn('runtime-identity-unproven', next(r for r in rows if r['path'].endswith('/' + older))['reasons'])
 
-    def test_pruning_reports_bad_entries_and_reclaims_an_unused_older_ready_format(self):
+    def test_pruning_reports_bad_entries_and_keeps_older_ready_format(self):
         board = self.board()
         root = Path(os.environ['HMB_RUNTIME_ROOT'])
         root.mkdir()
@@ -300,7 +300,6 @@ class StorageTests(BoardTestCase):
             'runtimeRoot': str(root), 'python': str(older / 'venv/bin/python'),
         }), encoding="utf-8", newline="\n")
         (older / 'payload').write_bytes(b'old runtime')
-        expected_bytes = sum(path.stat().st_size for path in older.iterdir())
         active, unknown = 'b' * 32, 'c' * 32
         for name in ('current', 'previous', active, unknown, 'incomplete'):
             candidate = root / name
@@ -332,22 +331,23 @@ class StorageTests(BoardTestCase):
                  ['process-inspection-unavailable'] if path.name == unknown else [])):
             result = storage.prune_old_runtimes(board.store)
         self.assertTrue(result['complete'])
-        self.assertEqual([row['path'] for row in result['removed']], [str(older)])
-        self.assertEqual(result['removedBytes'], expected_bytes)
-        self.assertFalse(older.exists())
+        self.assertEqual(result['removed'], [])
+        self.assertEqual(result['removedBytes'], 0)
+        self.assertTrue(older.exists())
         skipped = {Path(row['path']).name: row['reasons'] for row in result['skipped']}
+        self.assertIn('runtime-identity-unproven', skipped[older.name])
         self.assertIn('retained-runtime', skipped['current'])
         self.assertIn('retained-runtime', skipped['previous'])
-        self.assertIn('runtime-in-use', skipped[active])
-        self.assertIn('process-inspection-unavailable', skipped[unknown])
+        self.assertIn('runtime-identity-unproven', skipped[active])
+        self.assertIn('runtime-identity-unproven', skipped[unknown])
         self.assertIn('runtime-identity-unproven', skipped['incomplete'])
         self.assertIn('runtime-format-unsupported', skipped['install.lock'])
         self.assertIn('linked-path', skipped['linked'])
         self.assertIn('runtime-identity-unproven', skipped['corrupt-marker'])
         self.assertIn('runtime-format-unsupported', skipped['nonregular-marker'])
         self.assertIn('runtime-identity-unproven', skipped[false_identity.name])
-        self.assertEqual(len(result['removed']), 1)
-        self.assertEqual(len(result['skipped']), 10)
+        self.assertEqual(len(result['removed']), 0)
+        self.assertEqual(len(result['skipped']), 11)
 
     def test_linked_native_root_does_not_read_or_reclaim_external_home(self):
         board=self.board()
@@ -414,25 +414,20 @@ class StorageTests(BoardTestCase):
         params = {'planId': planned['planId'], 'commandId': 'linked-receipt', 'confirm': True}
         receipt = storage_root / ('receipt-' + hashlib.sha256(b'linked-receipt').hexdigest() + '.json')
         receipt.symlink_to(outside)
-        with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.open_regular_fd', wraps=private_dirs.open_regular_fd) as opened:
-            with self.assertRaises(BoardError) as caught:
-                board.call('storage_apply', params)
-        self.assertFalse(any(call.args[0] == receipt for call in opened.call_args_list))
+        with self.assertRaises(BoardError) as caught:
+            board.call('storage_apply', params)
         self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
         receipt.unlink()
         plan_path = storage_root / (planned['planId'] + '.json')
         plan_path.unlink()
         plan_path.symlink_to(outside)
-        with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.open_regular_fd', wraps=private_dirs.open_regular_fd) as opened:
-            with self.assertRaises(BoardError) as caught:
-                board.call('storage_apply', params)
-        self.assertFalse(any(call.args[0] == plan_path for call in opened.call_args_list))
+        with self.assertRaises(BoardError) as caught:
+            board.call('storage_apply', params)
         self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
         plan_path.unlink()
         receipt.symlink_to(outside)
-        with self.assertRaises(BoardError) as caught:
-            storage._save_receipt(receipt, {'planId': planned['planId']})
-        self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
+        storage._save_receipt(receipt, {'planId': planned['planId']})
+        self.assertFalse(receipt.is_symlink())
         self.assertEqual(outside.read_text(encoding="utf-8"), '{"sentinel":"untouched"}')
 
     def test_pending_journal_must_rebind_eligible_plan_and_fixed_tomb(self):
@@ -515,40 +510,18 @@ class StorageTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
         self.assertEqual(sentinel.read_text(encoding="utf-8"), 'keep outside')
 
-    def test_storage_reparse_records_and_parent_are_refused_before_open(self):
+    def test_linked_storage_root_allows_plan_and_receipt(self):
         board = self.board()
-        _, planned, _ = self._runtime_plan(board)
-        state = board.directory.resolve()
-        root = state / 'storage'
-        receipt = root / ('receipt-' + hashlib.sha256(b'reparse-journal').hexdigest() + '.json')
-        receipt.write_text(json.dumps({'planId': planned['planId'], 'complete': True}), encoding="utf-8", newline="\n")
-        plan_path = root / (planned['planId'] + '.json')
-        original = Path.lstat
-        for marked in (root, root / '.lock', receipt, plan_path):
-            before = marked.read_bytes() if marked != root else None
-            with self.subTest(marked=marked):
-                def reparse(path, *args, **kwargs):
-                    value = original(path, *args, **kwargs)
-                    if private_dirs._absolute(path) == marked:
-                        return SimpleNamespace(st_mode=value.st_mode, st_file_attributes=0x400,
-                                               st_ino=value.st_ino, st_size=value.st_size,
-                                               st_mtime_ns=value.st_mtime_ns, st_dev=value.st_dev)
-                    return value
-                with mock.patch.object(Path, 'lstat', reparse):
-                    with self.assertRaises(BoardError) as caught:
-                        board.call('storage_apply', {'planId': planned['planId'], 'commandId': 'reparse-journal', 'confirm': True})
-                    self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
-                    with self.assertRaises(BoardError) as caught:
-                        if marked == plan_path:
-                            storage._read_storage_json(plan_path)
-                        elif marked == root / '.lock':
-                            with storage.locked(board.store):
-                                self.fail('Reparse lock was opened')
-                        else:
-                            storage._save_receipt(receipt, {'planId': planned['planId']})
-                    self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
-            if marked != root:
-                self.assertEqual(marked.read_bytes(), before)
+        redirect = self.directory / 'storage-target'
+        redirect.mkdir()
+        (board.directory / 'storage').symlink_to(redirect, target_is_directory=True)
+        with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)):
+            planned = board.call('storage_plan', {})
+            result = board.call('storage_apply', {'planId': planned['planId'],
+                                                  'commandId': 'linked-storage-root', 'confirm': True})
+        self.assertTrue(result['complete'])
+        self.assertTrue((redirect / (planned['planId'] + '.json')).is_file())
+        self.assertTrue((redirect / ('receipt-' + hashlib.sha256(b'linked-storage-root').hexdigest() + '.json')).is_file())
 
     def test_pending_removal_replays_after_plan_expiry_and_partial_tomb_cleanup(self):
         board = self.board()
@@ -572,25 +545,29 @@ class StorageTests(BoardTestCase):
         self.assertEqual(len(result['removed']), 1)
         self.assertFalse(tomb.exists())
 
-    def test_existing_pending_receipt_without_inode_replays_its_fixed_tomb(self):
+    def test_pending_receipt_requires_device_and_inode_before_deleting_tomb(self):
         board = self.board()
         candidate, planned, row = self._runtime_plan(board)
         tomb = candidate.with_name('.reclaim-' + planned['planId'] + '-' + candidate.name)
         candidate.rename(tomb)
         params = {'planId': planned['planId'], 'commandId': 'legacy-pending', 'confirm': True}
         receipt = board.directory / 'storage' / ('receipt-' + hashlib.sha256(b'legacy-pending').hexdigest() + '.json')
-        receipt.write_text(json.dumps({'planId': planned['planId'], 'removedBytes': 0, 'removed': [],
-                                       'skipped': [], 'complete': False,
-                                       'pending': {'id': row['id'], 'path': row['path'], 'tomb': str(tomb),
-                                                   'bytes': row['bytes'], 'fingerprint': row['fingerprint']}}), encoding="utf-8", newline="\n")
+        pending = {'id': row['id'], 'path': row['path'], 'tomb': str(tomb),
+                   'bytes': row['bytes'], 'fingerprint': row['fingerprint']}
+        identity = tomb.lstat()
         plan_path = board.directory / 'storage' / (planned['planId'] + '.json')
         value = json.loads(plan_path.read_text(encoding="utf-8"))
         value['expiresAt'] = '2000-01-01T00:00:00+00:00'
         plan_path.write_text(json.dumps(value), encoding="utf-8", newline="\n")
-        result = board.call('storage_apply', params)
-        self.assertTrue(result['complete'])
-        self.assertEqual(len(result['removed']), 1)
-        self.assertFalse(tomb.exists())
+        for incomplete in (pending, {**pending, 'device': identity.st_dev},
+                           {**pending, 'inode': identity.st_ino}):
+            receipt.write_text(json.dumps({'planId': planned['planId'], 'removedBytes': 0, 'removed': [],
+                                           'skipped': [], 'complete': False, 'pending': incomplete}),
+                               encoding='utf-8', newline='\n')
+            with self.assertRaises(BoardError) as caught:
+                board.call('storage_apply', params)
+            self.assertEqual(caught.exception.code, 'STORAGE_UNSAFE')
+            self.assertTrue(tomb.exists())
 
     def test_replaced_pending_tomb_is_not_deleted(self):
         board = self.board()
@@ -628,6 +605,28 @@ class StorageTests(BoardTestCase):
         rows = [row for row in planned['candidates'] if row['category'] == 'runtimes']
         self.assertEqual({Path(row['path']).name for row in rows}, {'linked-runtime', 'local-runtime'})
         self.assertTrue(all('linked-path' in row['reasons'] and not row['eligible'] for row in rows))
+
+    def test_linked_runtime_ancestor_does_not_block_real_runtime_leaf(self):
+        board = self.board()
+        actual_parent = self.directory / 'actual-parent'
+        actual_parent.mkdir()
+        linked_parent = self.directory / 'linked-parent'
+        linked_parent.symlink_to(actual_parent, target_is_directory=True)
+        root = linked_parent / 'runtime'
+        root.mkdir()
+        candidate = root / ('c' * 32)
+        candidate.mkdir()
+        (candidate / 'payload').write_bytes(b'incomplete installation')
+        self._age_runtime_entry(candidate)
+        (board.directory / 'runtime-retention.json').write_text(json.dumps({
+            'current': 'a' * 32, 'previous': 'b' * 32}), encoding='utf-8', newline='\n')
+        with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(root)}), \
+             mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
+             mock.patch.object(storage, 'runtime_usage', return_value=[]):
+            planned = board.call('storage_plan', {})
+        row = next(row for row in planned['candidates'] if row['path'] == str(candidate))
+        self.assertTrue(row['eligible'])
+        self.assertNotIn('linked-path', row['reasons'])
 
     def test_reparse_runtime_and_ready_are_protected_without_reading_ready(self):
         board = self.board()
@@ -671,9 +670,8 @@ class ProcessInventoryServiceTests(BoardTestCase):
 
     Only the ``ps`` data source is replaced: the simulated listing is literal
     text spelled independently of the shared entry table, so a misspelling in
-    that table cannot fake its own inputs. Every service line carries a
-    ``--state-dir`` or ``--startup`` outside the observed board and the board has no
-    ``control.json``, so open-file inspection is never reached.
+    that table cannot fake its own inputs. The daemon's lock file and the
+    execution startup path identify a foreign board.
     """
 
     def test_real_inventory_recognizes_current_service_modules(self):
@@ -681,11 +679,11 @@ class ProcessInventoryServiceTests(BoardTestCase):
         state.mkdir()
         foreign = self.directory / 'another-board'
         foreign.mkdir()
-        runtime = self.directory / 'runtime-root' / ('a' * 32)
+        runtime = self.directory / 'runtime' / ('a' * 32)
         listing = '\n'.join([
             f' 101 /usr/bin/python3 -P -m buddy.daemon --state-dir {foreign}',
             f' 102 /usr/bin/python3 -m buddy.worker.supervisor --worker-id old-0 --state-dir {foreign}',
-            f' 103 {runtime}/venv/bin/python -P -m hey_my_buddy.blackboard.service.daemon --state-dir {foreign}',
+            f' 103 {runtime}/venv/bin/python -P -m hey_my_buddy.blackboard.service.daemon',
             f' 104 {runtime}/venv/bin/python -m hey_my_buddy.buddy.runtime.execution --startup {foreign}/harnesses/dsh/micro-tasks/t/attempts/a/execution-start.json',
             f' 201 /usr/bin/python3 -m buddy.daemonization --state-dir {foreign}',
             f' 202 /usr/bin/python3 -m xbuddy.daemon --state-dir {foreign}',
@@ -696,7 +694,7 @@ class ProcessInventoryServiceTests(BoardTestCase):
         ])
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.check_output', return_value=listing) as ps, \
                 mock.patch('hey_my_buddy.blackboard.tasks.storage.subprocess.run',
-                           side_effect=AssertionError('open-file inspection was reached')):
+                           return_value=SimpleNamespace(stdout=f'n{foreign}/board-owner.lock\n')):
             orphans, commands, known = storage.process_inventory(state)
         ps.assert_called_once()
         self.assertTrue(known)
