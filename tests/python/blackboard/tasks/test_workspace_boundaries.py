@@ -241,6 +241,19 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
         self.assertFalse(checkout.exists())
 
+    def test_cleanup_lists_all_fixed_refs_across_retained_workspaces(self):
+        manifest = self.prepare()
+        repository = manifest["snapshot"]["repositoryPath"]
+        related = dict(manifest, workspaceId="ws-" + "f" * 32)
+        refs = [f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/retained/extra-{index}"
+                for index in range(65)]
+        refs.append(f"refs/hey-my-buddy/workspaces/{related['workspaceId']}/retained/later")
+        self.git("update-ref", "--stdin", cwd=repository,
+                 data="".join(f"create {ref} {manifest['inputCommit']}\n" for ref in refs).encode())
+        proof = workspace.cleanup_inspect(self.state, manifest, retained=[related])
+        self.assertTrue(proof["eligible"])
+        self.assertTrue(set(refs) <= set(proof["refs"]))
+
     def test_resumed_cleanup_checks_modes_and_symlinks_without_following_them(self):
         for change in ("mode", "file-link", "directory-link"):
             with self.subTest(change=change):

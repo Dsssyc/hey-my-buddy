@@ -28,10 +28,10 @@ _BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
 
 
 def tree_info(path: Path, *, excluded: frozenset[Path] = frozenset()) -> tuple[int, str, bool]:
-    """Size and mutation fingerprint without traversing any reparse point."""
+    """Size and mutation fingerprint without descending into linked entries."""
     size = 0
     digest = hashlib.sha256()
-    safe = private_dirs.linked_component(path) is None
+    safe = not private_dirs.linked(path)
     if not safe:
         return 0, '', False
     if not path.exists():
@@ -80,8 +80,7 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
         kind = next((role for pattern, role in services if pattern.search(command)), None)
         if kind is None:
             continue
-        match = re.search(r'--state-dir\s+(\S+)', command)
-        observed_state = match.group(1) if match else None
+        observed_state = None
         if kind == 'execution':
             startup = re.search(r'--startup\s+(.+execution-start\.json)$', command)
             if startup:
@@ -106,7 +105,7 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
                     observed_state = roots.pop()
             except (OSError, subprocess.SubprocessError):
                 pass
-        runtime_match = re.search(r'(/\S+/(?:runtime|runtime-root)/[^/ ]+)/', command)
+        runtime_match = re.search(r'(/\S+/runtime/[^/ ]+)/', command)
         if observed_state is not None:
             observed_state = str(Path(observed_state).resolve())
         if observed_state != str(state):
@@ -169,24 +168,6 @@ def _runtime_leftover_recent(path: Path, now: float) -> bool:
     return False
 
 
-def _legacy_runtime_identity(directory: Path, ready: Path) -> bool:
-    """Recognize an older READY marker without requiring today's asset layout."""
-    if re.fullmatch(r'[0-9a-f]{32}', directory.name) is None:
-        return False
-    try:
-        marker = _read_storage_json(ready)
-    except (BoardError, OSError, UnicodeError):
-        return False
-    interpreter = marker.get('python')
-    if not isinstance(interpreter, str):
-        return False
-    python_path = Path(interpreter)
-    if not is_absolute_path(python_path) or '..' in python_path.parts or not python_path.is_relative_to(directory):
-        return False
-    return (marker.get('state') == 'READY' and marker.get('contentId') == directory.name
-            and marker.get('runtimeRoot') == str(directory.parent))
-
-
 def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
     if run is None or task is None:
         return ['owner-unproven']
@@ -198,18 +179,13 @@ def _zcode_reasons(store, connection, run, task, now: float) -> list[str]:
         reasons.append('shutdown-unconfirmed')
     if run['state'] == 'accepted' and task['accepted_at']:
         finished_at = task['accepted_at']
-        unproven = 'acceptance-time-unproven'
     elif run['state'] == 'concluded':
         finished_at = host_conclusions.current(connection, run)['created_at']
-        unproven = 'conclusion-time-unproven'
     else:
         return ['continuation-supported', *reasons]
-    try:
-        finished = datetime.fromisoformat(finished_at).timestamp()
-        if now - finished < GRACE_SECONDS:
-            reasons.append('grace-period')
-    except (ValueError, TypeError, AttributeError):
-        reasons.append(unproven)
+    finished = datetime.fromisoformat(finished_at).timestamp()
+    if now - finished < GRACE_SECONDS:
+        reasons.append('grace-period')
     if connection.execute("SELECT 1 FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued')", (run['run_id'],)).fetchone():
         reasons.append('pending-continuations')
     if connection.execute("SELECT 1 FROM workflow_requests WHERE run_id=? AND state='open'", (run['run_id'],)).fetchone():
@@ -309,9 +285,6 @@ def _orphan_workspace(store, directory: Path, *, git_proof: bool = True) -> dict
     result = {'path': str(path), 'orphan': True, 'runId': None, 'reasons': [],
               'manifest': None, 'allocationFacts': None}
     try:
-        for item in (directory, path, directory / 'manifest.json', directory / 'request.json',
-                     directory / 'input.json', directory / '.lock'):
-            _guard_storage(item)
         manifest = _read_storage_json(directory / 'manifest.json')
         request = _read_storage_json(directory / 'request.json')
         pinned = _read_storage_json(directory / 'input.json')
@@ -372,7 +345,6 @@ def _orphan_workspace(store, directory: Path, *, git_proof: bool = True) -> dict
 def _remove_orphan_workspace(store, candidate: dict) -> None:
     from . import workspace
     directory = Path(candidate['path']).parent
-    _guard_storage(directory)
     # This is the same lock and order as submission: allocation, then board.
     # Keep the DB writer fence through removal so admission cannot win between
     # checking retained facts and deleting a checkout.
@@ -394,7 +366,6 @@ def _remove_orphan_workspace(store, candidate: dict) -> None:
             # deletion authority to changed request/input records or inodes.
             for name, item in (('allocation', directory), ('checkout', Path(candidate['path'])),
                                ('lock', directory / '.lock')):
-                _guard_storage(item)
                 identity = item.lstat()
                 facts = {'device': identity.st_dev, 'inode': identity.st_ino, 'mode': identity.st_mode}
                 if facts != fresh['allocationFacts']['identities'][name]:
@@ -415,14 +386,10 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     orphaned, commands, known = process_inventory(state)
     now = time.time()
     def add(category, path, reasons, *, excluded=frozenset(), **metadata):
-        linked = private_dirs.linked_component(path)
-        if linked is not None:
-            size, fingerprint, safe = 0, '', False
-        else:
-            size, fingerprint, safe = tree_info(path, excluded=excluded)
+        size, fingerprint, safe = tree_info(path, excluded=excluded)
         if not safe:
             reasons = [*reasons, 'linked-path']
-        if linked is None and not path.exists():
+        if not path.exists() and not private_dirs.linked(path):
             return
         row = {'id': hashlib.sha256(str(path).encode()).hexdigest()[:24], 'category': category,
                'path': str(path), 'bytes': size, 'eligible': not reasons, 'reasons': sorted(set(reasons)),
@@ -450,8 +417,8 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             sealed = store.workflow._latest_handoff(connection, run, manifest) if not reasons else None
             workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons, sealed))
     home_root = state / 'harnesses/zcode'
-    if any(private_dirs.linked(p) for p in (state / 'harnesses', home_root)):
-        add('zcode', state / 'harnesses' if private_dirs.linked(state / 'harnesses') else home_root, ['linked-path'])
+    if private_dirs.linked(home_root):
+        add('zcode', home_root, ['linked-path'])
     elif home_root.exists():
         for path in sorted(home_root.iterdir()):
             if path.name == 'micro-tasks':
@@ -459,17 +426,15 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
             add('zcode', path, reasons, runId=run_id)
     harnesses = state / 'harnesses'
-    if harnesses.exists() and not private_dirs.linked(harnesses):
+    if harnesses.exists():
         for adapter in sorted(private_dirs.ADAPTERS):
             adapter_root = harnesses / adapter
             if private_dirs.linked(adapter_root):
-                add('harnesses', adapter_root, ['linked-path'], adapter=adapter)
                 continue
             if not adapter_root.exists():
                 continue
             micro_tasks = adapter_root / 'micro-tasks'
             if private_dirs.linked(micro_tasks):
-                add('harnesses', micro_tasks, ['linked-path'], adapter=adapter)
                 continue
             if micro_tasks.exists():
                 for path in sorted(micro_tasks.iterdir()):
@@ -480,14 +445,9 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                     if path.name != 'micro-tasks':
                         add('harnesses', path, ['legacy-layout-unmigrated'], adapter=adapter)
     sessions = state / 'sessions'
-    if private_dirs.linked_component(sessions) is not None:
-        add('session-records', sessions, ['macro-task-deletion'])
-    elif sessions.exists():
+    if sessions.exists():
         for category in ('macro-tasks', 'micro-tasks'):
             groups = sessions / category
-            if private_dirs.linked_component(groups) is not None:
-                add('session-records', groups, ['macro-task-deletion'])
-                continue
             if groups.exists():
                 for group in sorted(groups.iterdir()):
                     add('session-records', group, ['macro-task-deletion'], groupId=(
@@ -528,14 +488,12 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             continue
     workspace_root = state / 'workspaces'
     orphan_inputs = []
-    if private_dirs.linked_component(workspace_root) is not None:
-        add('workspaces', workspace_root, ['linked-path'], orphan=True, runId=None)
-    elif workspace_root.is_dir():
+    if workspace_root.is_dir():
         for directory in sorted(workspace_root.iterdir()):
             path = directory / 'checkout'
             if path in seen or path in recognized:
                 continue
-            if not (path.exists() or private_dirs.linked_component(path) is not None):
+            if not path.exists():
                 add('workspaces', directory, ['owner-unproven', 'checkout-missing'],
                     orphan=True, runId=None)
                 continue
@@ -562,7 +520,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         retained_ids = {keep['current'], keep['previous']}
     except (OSError, KeyError, ValueError, BoardError):
         retained_ids = None
-    if private_dirs.linked_component(runtime_root) is not None:
+    if private_dirs.linked(runtime_root):
         add('runtimes', runtime_root, ['linked-path'])
     elif runtime_root.exists() and not runtime_root.is_dir():
         add('runtimes', runtime_root, ['runtime-format-unsupported'])
@@ -570,7 +528,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         for path in sorted(runtime_root.iterdir()):
             if path.name == INSTALL_LOCK:
                 continue  # Root-lifetime coordination file, never a reclamation candidate.
-            if private_dirs.linked_component(path) is not None:
+            if private_dirs.linked(path):
                 add('runtimes', path, ['linked-path'])
                 continue
             try:
@@ -601,7 +559,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 add('runtimes', path, ['runtime-format-unsupported'])
                 continue
             ready = path / 'READY.json'
-            if private_dirs.linked_component(ready) is not None:
+            if private_dirs.linked(ready):
                 add('runtimes', path, ['linked-path'])
                 continue
             try:
@@ -620,7 +578,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 current_ready = is_ready(path)
             except (BoardError, OSError, ValueError, TypeError, UnicodeError):
                 current_ready = False
-            if not current_ready and not _legacy_runtime_identity(path, ready):
+            if not current_ready:
                 reasons.append('runtime-identity-unproven')
             if not reasons:
                 reasons.extend(runtime_usage(path, commands, known))
@@ -631,7 +589,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
         if path.name in {'workspaces','harnesses','sessions','backups','archives'} or path == runtime_root:
             continue
         add('durable', path, ['durable-record'])
-    if harnesses.exists() and not private_dirs.linked(harnesses):
+    if harnesses.exists():
         for path in sorted(harnesses.iterdir()):
             if path.name not in private_dirs.ADAPTERS:
                 add('durable', path, ['durable-record'])
@@ -647,23 +605,22 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     return {'createdAt': utc_now(), 'categories': categories, 'candidates': rows, 'orphanProcesses': orphaned}
 
 
-def _guard_storage(path: Path) -> None:
-    linked = private_dirs.linked_component(path)
-    if linked is not None:
-        raise BoardError('STORAGE_UNSAFE', 'Storage path contains a link or reparse point', path=str(linked))
-
-
 def _read_storage_json(path: Path, *, missing_ok: bool = False) -> dict | None:
-    _guard_storage(path)
     try:
-        fd = private_dirs.open_regular_fd(path, os.O_RDONLY)
+        if os.name == 'nt':
+            from ... import windows_files
+            fd = windows_files.open_regular_fd(path, os.O_RDONLY)
+        else:
+            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except FileNotFoundError:
         if missing_ok:
             return None
         raise
-    except BoardError as error:
+    except (BoardError, OSError) as error:
         raise BoardError('STORAGE_UNSAFE', 'Storage record is unsafe', path=str(path)) from error
     with os.fdopen(fd, 'r', encoding='utf-8') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise BoardError('STORAGE_UNSAFE', 'Storage record is not a regular file', path=str(path))
         try:
             value = json.load(stream)
         except ValueError as error:
@@ -676,8 +633,7 @@ def _read_storage_json(path: Path, *, missing_ok: bool = False) -> dict | None:
 def _atomic_storage_json(path: Path, value: dict) -> None:
     raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode('utf-8')
     try:
-        private_files.publish_bytes(path, raw, open_file=private_dirs.open_regular_fd,
-                                    validate=_guard_storage, directory_nofollow=True)
+        private_files.publish_bytes(path, raw)
     except BoardError as error:
         raise BoardError('STORAGE_UNSAFE', 'Storage record is unsafe', path=str(path)) from error
 
@@ -712,26 +668,25 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
         allowed = any(original.parent == root / 'harnesses' / adapter / 'micro-tasks'
                       for adapter in private_dirs.ADAPTERS)
     tomb = original.with_name('.reclaim-' + planned['planId'] + '-' + original.name)
-    has_identity = 'device' in pending or 'inode' in pending
     if (not allowed or pending.get('tomb') != str(tomb) or
-            has_identity and (not isinstance(pending.get('device'), int) or
-                              not isinstance(pending.get('inode'), int))):
+            type(pending.get('device')) is not int or type(pending.get('inode')) is not int):
         raise BoardError('STORAGE_UNSAFE', 'Pending removal path is outside its fixed storage boundary')
 
 
 @contextmanager
 def locked(store):
     path = store.directory / 'storage'
-    _guard_storage(path)
     path.mkdir(mode=0o777 if os.name == 'nt' else 0o700, exist_ok=True)
-    _guard_storage(path)
     if not path.is_dir():
         raise BoardError('STORAGE_UNSAFE', 'Storage plan root must be a directory', path=str(path))
     lock_path = path / '.lock'
-    _guard_storage(lock_path)
     try:
-        fd = private_dirs.open_regular_fd(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    except BoardError as error:
+        if os.name == 'nt':
+            from ... import windows_files
+            fd = windows_files.open_regular_fd(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        else:
+            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    except (BoardError, OSError) as error:
         raise BoardError('STORAGE_UNSAFE', 'Storage lock is unsafe', path=str(lock_path)) from error
     try:
         locking.lock(fd, blocking=False)
@@ -884,30 +839,26 @@ def _finish_pending(result: dict, receipt: Path) -> None:
     """Resume only a previously journaled exact tomb; never count it as skipped."""
     pending = result['pending']
     original, tomb = Path(pending['path']), Path(pending['tomb'])
-    _guard_storage(original)
-    _guard_storage(tomb)
     original_exists = original.exists()
     tomb_exists = tomb.exists()
     if original_exists:
         identity = original.lstat()
-        if (tomb_exists or ('device' in pending and
-                           (identity.st_dev != pending['device'] or identity.st_ino != pending['inode'])) or
+        if (tomb_exists or
+                (identity.st_dev != pending['device'] or identity.st_ino != pending['inode']) or
                 tree_info(original)[1:] != (pending['fingerprint'], True)):
             raise BoardError('STORAGE_CHANGED', 'Pending removal no longer matches its candidate')
         os.rename(original, tomb)
-        _guard_storage(original.parent)
-        private_files.sync_directory(original.parent, follow_symlinks=False)
+        private_files.sync_directory(original.parent)
         tomb_exists = True
     if tomb_exists:
         identity = tomb.lstat()
-        if 'device' in pending and (identity.st_dev != pending['device'] or identity.st_ino != pending['inode']):
+        if identity.st_dev != pending['device'] or identity.st_ino != pending['inode']:
             raise BoardError('STORAGE_CHANGED', 'Pending tomb no longer matches its candidate')
         if tomb.is_dir():
             private_dirs.remove_tree(tomb)
         else:
             tomb.unlink()
-        _guard_storage(tomb.parent)
-        private_files.sync_directory(tomb.parent, follow_symlinks=False)
+        private_files.sync_directory(tomb.parent)
     result['removed'].append({k:pending[k] for k in ('id','path','bytes')})
     result['removedBytes'] += pending['bytes']
     del result['pending']

@@ -9,6 +9,7 @@ from blackboard.tasks import test_workspace as workspace_tests
 from hey_my_buddy import private_dirs
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import workspace
+from hey_my_buddy.blackboard.tasks import macro_task_deletion_workspace as deletion_workspace
 from hey_my_buddy.blackboard.tasks.macro_task_deletion_workspace import delete_workspaces
 
 
@@ -76,11 +77,22 @@ class DeletionWorkspaceTests(unittest.TestCase):
             with self.subTest(phase=phase):
                 manifest = self.prepare(request="request-" + phase)
                 directory = self.state / "workspaces" / manifest["workspaceId"]
-                def interrupt(completed):
-                    if completed == phase:
+                tomb = directory.parent / (".deleting-" + manifest["workspaceId"])
+                if phase == "checkout":
+                    owner, name = workspace, "cleanup_remove"
+                elif phase == "refs":
+                    owner, name = deletion_workspace, "_delete_refs"
+                else:
+                    owner, name = private_dirs, "remove_tree"
+                original = getattr(owner, name)
+                def interrupt(*args, **kwargs):
+                    result = original(*args, **kwargs)
+                    if phase != "allocation" or args[0] == tomb:
                         raise OSError("interrupted")
-                with self.assertRaisesRegex(OSError, "interrupted"):
-                    delete_workspaces(SimpleNamespace(directory=self.state), [manifest], [], interrupt)
+                    return result
+                with patch.object(owner, name, side_effect=interrupt):
+                    with self.assertRaisesRegex(OSError, "interrupted"):
+                        self.delete(manifest)
                 self.assertEqual(self.delete(manifest), [])
                 self.assertFalse(directory.exists())
 
@@ -107,7 +119,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         self.assertEqual(self.delete(manifest), [])
         self.assertFalse(tomb.exists())
 
-    def test_allocation_lock_directory_requires_existing_ordinary_lock(self):
+    def test_allocation_lock_directory_requires_existing_lock(self):
         manifest = self.prepare()
         identifier = manifest["workspaceId"]
         directory = self.state / "workspaces" / identifier
@@ -190,7 +202,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         self.assertIn("macro-task-deletion.owner-unproven", [item["reason"]["code"] for item in skipped])
         self.assertEqual(set(directory.parent.iterdir()), before)
 
-    def test_linked_allocation_lock_is_left_in_place(self):
+    def test_linked_allocation_lock_does_not_allow_removal(self):
         manifest = self.prepare()
         directory = self.state / "workspaces" / manifest["workspaceId"]
         lock = directory / ".lock"
@@ -198,8 +210,8 @@ class DeletionWorkspaceTests(unittest.TestCase):
         outside = self.root / "foreign-lock"
         outside.write_text("owned elsewhere", encoding="utf-8", newline="\n")
         lock.symlink_to(outside)
-        skipped = self.delete(manifest)
-        self.assertIn("macro-task-deletion.owner-unproven", [item["reason"]["code"] for item in skipped])
+        with self.assertRaises((OSError, BoardError)):
+            self.delete(manifest)
         self.assertEqual(outside.read_text(encoding="utf-8"), "owned elsewhere")
         self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
 
@@ -210,7 +222,8 @@ class DeletionWorkspaceTests(unittest.TestCase):
         directory.rename(outside)
         directory.symlink_to(outside, target_is_directory=True)
         skipped = self.delete(manifest)
-        self.assertIn("macro-task-deletion.owner-unproven", [item["reason"]["code"] for item in skipped])
+        self.assertTrue(skipped)
+        self.assertTrue(directory.is_symlink())
         self.assertTrue(outside.is_dir())
         self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
 

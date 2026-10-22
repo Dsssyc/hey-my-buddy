@@ -86,6 +86,9 @@ class MockWorkspace:
                          "includedUntracked": list(intent.get("includeUntracked", [])),
                          "executionSelectors": list(intent.get("includeUntracked", [])), "excluded": [], "staged": {}, "unstaged": {}},
         }
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        manifest["snapshot"].update(inputRef=prefix + "input", stagedRef=prefix + "staged",
+                                    stagedCommit=manifest["inputCommit"])
         manifest["manifestSha256"] = sha256_text(canonical_json(manifest))
         return manifest
 

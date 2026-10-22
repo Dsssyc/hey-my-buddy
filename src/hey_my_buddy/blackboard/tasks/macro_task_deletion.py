@@ -273,13 +273,7 @@ def _scope_summary(store, scope):
     for manifest in scope.manifests:
         identifier = manifest['workspaceId']
         previous = manifests.setdefault(identifier, manifest)
-        prefix = 'refs/hey-my-buddy/workspaces/' + identifier + '/'
-        snapshot = manifest['snapshot']
-        # A missing or conflicting fixed binding cannot establish a complete
-        # reference scope. Do not turn a known subset into a total.
-        if (previous != manifest or snapshot.get('inputRef') != prefix + 'input'
-                or snapshot.get('stagedRef') != prefix + 'staged'
-                or not snapshot.get('stagedCommit')):
+        if previous != manifest:
             refs_known = False
             continue
         for ref, commit in _fixed_refs(manifest).items():
@@ -342,7 +336,7 @@ def _delete_workspaces(store, scope):
 
 
 def _remove_owned_tree(path, *, object_kind='private-root'):
-    if (private_dirs.linked_component(path) is not None
+    if (private_dirs.linked(path)
             or path.exists() and not path.is_dir()):
         return [{'objectKind':object_kind, 'path':str(path), 'reason':reason('macro-task-deletion.owner-unproven')}]
     private_dirs.remove_tree(path)
@@ -370,11 +364,6 @@ def _delete_private_roots(store, scope):
     for task_id, harnesses in adapters.items():
         for harness in harnesses:
             root = private_dirs.micro_task_root(store.directory, harness, task_id)
-            for attempt in scope.attempt_rows:
-                if attempt['task_id'] == task_id:
-                    inquiry = root / 'attempts' / attempt['attempt_id'] / 'inquiry.json'
-                    if not private_dirs.linked(root) and not any(private_dirs.linked(p) for p in inquiry.parents):
-                        private_dirs.cleanup_inquiry_fallback(inquiry, attempt['attempt_id'])
             skipped.extend(_remove_owned_tree(root))
             skipped.extend(_remove_owned_tree(store.directory / 'harnesses' / harness / hashlib.sha256(task_id.encode()).hexdigest()))
         skipped.extend(_remove_owned_tree(store.directory / 'attempts' / task_id))
@@ -389,7 +378,7 @@ def _delete_cli_files(store, scope):
     skipped = []
 
     def safe_file(path):
-        return private_dirs.linked_component(path) is None and (not path.exists() or path.is_file())
+        return not private_dirs.linked(path) and (not path.exists() or path.is_file())
 
     def remove(path):
         if not safe_file(path):
@@ -407,7 +396,7 @@ def _delete_cli_files(store, scope):
         return isinstance(document,dict) and all(document.get(key) == value for key,value in binding.items())
 
     controls = store.directory / 'controls'
-    if controls.is_dir() and private_dirs.linked_component(controls) is None:
+    if controls.is_dir() and not private_dirs.linked(controls):
         files = list(controls.iterdir())
         for run_id in scope.runs:
             pattern = re.compile(re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\Z')
@@ -424,7 +413,7 @@ def _delete_cli_files(store, scope):
     for task in scope.task_rows:
         path = submission_file_path(store.directory,task['request_id'])
         remove(path)
-        if submissions.is_dir() and private_dirs.linked_component(submissions) is None:
+        if submissions.is_dir() and not private_dirs.linked(submissions):
             for temporary in submissions.glob('.' + path.stem + '.*.tmp'):
                 if temporary_matches(temporary,requestId=task['request_id']):
                     remove(temporary)

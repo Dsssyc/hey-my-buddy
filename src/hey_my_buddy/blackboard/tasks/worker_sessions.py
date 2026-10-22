@@ -11,8 +11,7 @@ from __future__ import annotations
 from contextlib import nullcontext
 import json
 
-from ...errors import BoardError
-from ...protocol.schemas import optional_string, reject_unknown
+from ...protocol.schemas import reject_unknown
 
 
 def _completed_codex_turn(result: dict, row) -> dict | None:
@@ -139,13 +138,6 @@ def deletable_sessions(store, task_ids: set[str], *, connection=None) -> list[di
 
 
 def handle(store, params: dict) -> dict:
-    reject_unknown(params, {'action', 'harness'}, 'worker.sessions')
-    action = optional_string(params, 'action', max_length=16) or 'list'
-    harness = optional_string(params, 'harness', max_length=16) or 'codex'
-    if action != 'list':
-        raise BoardError('INVALID_ARGUMENT', 'action must be list; DSH grouped-session archiving was removed with the grouping feature (ADR-021)')
-    if harness != 'codex':
-        raise BoardError('UNSUPPORTED', 'Only Codex history is listed here; DSH sessions are execution-private and its grouped listing and archiving were removed (ADR-021)')
+    reject_unknown(params, set(), 'worker.sessions')
     rows = _inventory(store)
-    return {'harness': harness, 'sessions': rows, 'count': len(rows),
-            'nativeAccess': False, 'codexAction': 'confirm native archive/delete separately'}
+    return {'harness': 'codex', 'sessions': rows, 'count': len(rows)}

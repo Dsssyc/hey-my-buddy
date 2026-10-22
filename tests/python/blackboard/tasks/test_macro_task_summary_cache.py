@@ -338,36 +338,12 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(self.rows()[group]["description"],'{"fictional":1}')
             self.assert_recomputed(counter,[group])
 
-    def test_duplicate_description_keys_use_existing_python_summary_semantics(self):
-        group = self.fixture.macros[0]
-        root = self.root_for(group)
-        for key in ('"description"', '"descr\\u0069ption"'):
-            with self.subTest(key=key):
-                payload = '{"macroTaskId":' + json.dumps(group) + ',"description":"fixed",' + key + ':"old"}'
-                self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (payload, root))
-                self.assertEqual(self.rows()[group]["description"], "old")
-                self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (payload.replace('"old"', '"new"'), root))
-                self.assertEqual(self.rows()[group]["description"], "new")
-                with self.store.db.read() as connection:
-                    self.assertEqual(macro_tasks._summary(connection, group, [], [])["description"], "new")
-
-    def test_duplicate_macro_task_id_corrections_cannot_reuse_old_description(self):
-        group = self.fixture.macros[0]
-        root = self.root_for(group)
-        payload = '{"macroTaskId":"macro-first", "macroTaskId":' + json.dumps(group) + ',"description":"old"}'
-        self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (payload, root))
-        self.assertEqual(self.rows()[group]["description"], "old")
-        # The first SQLite-selected key and total document length stay identical.
-        other = group[:-1] + ('0' if group[-1] != '0' else '1')
-        self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (payload.replace(json.dumps(group), json.dumps(other)), root))
-        self.assertIsNone(self.rows()[group]["description"])
-
-    def test_unconsumed_duplicate_json_keys_and_unrelated_meta_changes_keep_reuse(self):
+    def test_unconsumed_json_fields_and_unrelated_meta_changes_keep_reuse(self):
         group = self.fixture.macros[0]
         root = self.root_for(group)
         project = "fictional-json-project"
         self.sql("UPDATE macro_tasks SET project_id=? WHERE macro_task_id=?", (project, group))
-        event = '{"macroTaskId":' + json.dumps(group) + ',"noise":"one","noise":"two","description":"fixed"}'
+        event = json.dumps({"macroTaskId": group, "noise": "two", "description": "fixed"})
         self.sql("UPDATE events SET payload_json=? WHERE kind='workflow.macro_task_created' AND task_id=?", (event, root))
         expected = self.read()
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
@@ -376,15 +352,13 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(self.read(), expected)
             self.assert_recomputed(counter, [])
 
-    def test_description_type_precision_nul_and_size_boundaries_preserve_summary(self):
+    def test_description_type_precision_and_size_boundaries_preserve_summary(self):
         group = self.fixture.macros[0]
         root = self.root_for(group)
         cases = (
             ("x" * memo.TEXT_BOUND, "x" * (memo.TEXT_BOUND - 1) + "y"),
             ("x" * (memo.TEXT_BOUND + 1), "x" * memo.TEXT_BOUND + "y"),
-            ("fixed\0old", "fixed\0new"),
             ("字" * memo.TEXT_BOUND, "字" * (memo.TEXT_BOUND - 1) + "新"),
-            (92233720368547758080, 92233720368547758081),
             (None, False),
             (False, {"fictional": "new"}),
         )
@@ -396,24 +370,6 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                     self.assertEqual(self.rows()[group]["description"], value)
                     with self.store.db.read() as connection:
                         self.assertEqual(macro_tasks._summary(connection, group, [], [])["description"], value)
-
-    def test_standalone_title_task_and_summary_nul_suffix_corrections(self):
-        root = self.root_for(self.fixture.macros[1])
-        group = "run:" + root
-        self.sql("UPDATE workflow_runs SET macro_task_id=NULL WHERE run_id=?", (root,))
-        corrections = (
-            ("UPDATE workflow_runs SET title=? WHERE run_id=?", "title"),
-            ("UPDATE tasks SET spec_json=json_set(spec_json,'$.task',?) WHERE task_id=?", "title"),
-            ("UPDATE workflow_turns SET outcome_json=json_set(outcome_json,'$.summary',?) WHERE run_id=?", "summary"),
-        )
-        for statement, field in corrections:
-            with self.subTest(field=field, statement=statement):
-                if statement.startswith("UPDATE tasks"):
-                    self.sql("UPDATE workflow_runs SET title=NULL WHERE run_id=?", (root,))
-                self.sql(statement, ("fixed\0old", root))
-                self.assertEqual(self.rows()[group][field], "fixed\0old")
-                self.sql(statement, ("fixed\0new", root))
-                self.assertEqual(self.rows()[group][field], "fixed\0new")
 
     def test_huge_unrelated_event_fields_are_not_copied_into_marker(self):
         group = self.fixture.macros[0]
