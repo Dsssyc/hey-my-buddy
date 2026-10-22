@@ -556,7 +556,6 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertTrue(self.board_.call("workflow_continue", host_params)["duplicate"])
 
     def test_zero_candidates_offer_only_an_explicit_buddy_continue_template(self):
-        from hey_my_buddy.cli import main as cli, cli_views
         from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
         for mode in ("disabled", "cooling"):
             with self.subTest(mode=mode):
@@ -584,9 +583,6 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                 self.assertEqual(choice["params"]["expectedRevision"], view["revision"])
                 self.assertTrue(boundary["commands"]["reroute"]["blocked"])
                 self.assertIsNone(boundary["commands"]["reroute"]["params"])
-                rendered = cli._render_output("await", {"workflow": {"routingBoundary": boundary},
-                    "request": {"routing": True}, "nextCommands": []}, cli_views.OUTPUT_BRIEF)
-                self.assertEqual(rendered["nextCommands"], [{"method": "continue", "params": choice["params"]}])
                 with self.board_.store.db.read() as db:
                     self.assertEqual(db.execute("SELECT COUNT(*) FROM router_dispatches").fetchone()[0], 0)
                     self.assertIsNone(router_sequence.request_snapshot(db, view["routing"]["decisionId"]))

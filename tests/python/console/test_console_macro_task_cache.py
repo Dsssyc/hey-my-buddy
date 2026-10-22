@@ -1,6 +1,7 @@
 """B08/B09 at the real Console HTTP boundary; no timing thresholds."""
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import patch
 from urllib.parse import urlencode
