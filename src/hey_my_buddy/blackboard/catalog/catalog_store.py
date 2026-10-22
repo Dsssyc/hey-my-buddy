@@ -47,7 +47,9 @@ def current(db):
                              for p in json.loads(row['payload_json'])['providers'] if p['harness'] == row['harness'])
     if not results:
         return None
-    return CatalogView.from_payload({'source': 'current-native-observations', 'providers': providers, 'discoveries': results})
+    return CatalogView({'source': 'current-native-observations', 'harnessVersion': None,
+                        'providerVersion': None, 'discoveredAt': None,
+                        'providers': providers, 'discoveries': results, 'warnings': []})
 
 
 def _buddy_content(row):
@@ -125,7 +127,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                                              for item in payload['providers'])}
                     record['billingByProvider'] = native_access
                     db.execute("UPDATE harness_health SET record_json=? WHERE harness='zcode'", (canonical_json(record),))
-            view = CatalogView.from_payload({**payload, 'providers': [p for p in payload['providers'] if p['harness'] == name]})
+            view = CatalogView({**payload, 'providers': [p for p in payload['providers'] if p['harness'] == name]})
             view.discovery_id = discovery_id
             from ..service.harness_health import read_health
             from ...buddy.harnesses.runtime_selection import bound
@@ -233,10 +235,7 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 table_changed = True
         pending_after = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY harness,provider,model')]
         table_changed = table_changed or pending_before != pending_after
-        active_count = db.execute('SELECT COUNT(*) FROM buddies WHERE available=1').fetchone()[0]
-        if active_count > 200:
-            raise BoardError('CATALOG_LIMIT', 'The current native buddy set exceeds 200 buddies; no entries were silently dropped')
-        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'buddies': CatalogView.from_payload(payload).proposed_buddies(), 'appliedHarnesses': applied, 'staleHarnesses': stale}
+        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'buddies': CatalogView(payload).proposed_buddies(), 'appliedHarnesses': applied, 'staleHarnesses': stale}
         db.execute('UPDATE catalog_observations SET response_json=? WHERE observation_id=?', (canonical_json(response), observation_id))
         for transition in transitions:
             kind = transition.pop('kind')

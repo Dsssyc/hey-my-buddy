@@ -405,7 +405,7 @@ class ConsoleCoreTests(BoardTestCase):
     def test_core_carries_the_state_keys_and_snapshot_wraps_them(self):
         board = self.board()
         core = board.evaluation.console_core()
-        for key in ("configuration", "configurationError", "buddies",
+        for key in ("configuration", "buddies",
                     "modelServiceConcurrency", "unavailableBuddyCount", "preferences", "modelServiceNotes",
                     "decisions"):
             self.assertIn(key, core)

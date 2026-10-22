@@ -463,8 +463,7 @@ describe("independent Router and budget fields", () => {
 });
 
 describe("unavailable Router settings in the editor", () => {
-  const unavailable = { ...snapshot, configuration: null,
-    configurationError: { code: "router-settings-upgrade-required", message: "Router 设置需升级",} } as Snapshot;
+  const unavailable = { ...snapshot, configuration: null } as Snapshot;
   it("publishes unrelated changes while leaving upgrade-only settings null", () => {
     const baseline = makeDraft(unavailable);
     const draft = setModelServiceNote(baseline, flash, "仍可保存备注");

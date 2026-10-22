@@ -72,9 +72,7 @@ WORKFLOW_HELPER_FIELDS: frozenset[str] = frozenset()
 
 
 #: Every field ``task_submit`` accepts. Anything else is INVALID_ARGUMENT, so a
-#: typo can never silently change what is executed. The retired task-local
-#: routing inputs (``routingPreferences``, ``routingMode``, ``allowRoutingFallback``)
-#: are ADR-021 decision 5 and are rejected here, not silently ignored.
+#: typo can never silently change what is executed.
 SUBMIT_FIELDS = frozenset(
     {
         "requestId",
@@ -103,9 +101,6 @@ WORKFLOW_SPEC_FIELDS = frozenset({
 })
 WORKFLOW_SUBMIT_FIELDS = WORKFLOW_SPEC_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked", "delegationAuthority", "fixes"}
 WORKFLOW_HELPER_FIELDS = WORKFLOW_SPEC_FIELDS | {"executionWorkspace", "integrator", "role"}
-#: The retired duplicate and routing spellings ADR-021 decisions 5 and 17 remove;
-#: naming one is an explicit rejection, never a silent ignore.
-RETIRED_SPEC_KEYS = ("spec", "routingPreferences", "routingMode", "allowRoutingFallback", "inheritRoutingPreferences")
 MIN_SUBMISSION_TOKEN = 16
 MAX_SUBMISSION_TOKEN = 256
 
@@ -510,41 +505,10 @@ def normalize_submission_token(params: dict) -> str | None:
     return value
 
 
-def _reject_retired_spec_keys(params: dict) -> None:
-    """Name the retired duplicate and routing spellings, not a generic unknown field."""
-    if "spec" in params:
-        raise BoardError(
-            "INVALID_ARGUMENT",
-            "spec is a retired duplicate spelling; give the ordinary spec fields flat, at the top level",
-            field="spec",
-        )
-    if "adapter" in params:
-        raise BoardError("INVALID_ARGUMENT",
-                         "Micro tasks do not accept adapter; name a buddy with harness", field="adapter")
-    if "argv" in params:
-        raise BoardError("INVALID_ARGUMENT",
-                         "Micro tasks do not accept argv", field="argv")
-    if "inheritRoutingPreferences" in params:
-        raise BoardError(
-            "INVALID_ARGUMENT",
-            "inheritRoutingPreferences is retired: task-local routing preferences no longer exist, "
-            "so there is nothing for a helper to inherit",
-            field="inheritRoutingPreferences",
-        )
-    for key in ("routingPreferences", "routingMode", "allowRoutingFallback"):
-        if key in params:
-            raise BoardError(
-                "INVALID_ARGUMENT",
-                f"{key} is retired Host routing input; " + PARTIAL_BUDDY_HINT,
-                field=key,
-            )
-
-
 def normalize_workflow_submit(params: dict, *, lead_run_id: str | None = None) -> dict:
     """Validate one ``workflow_submit`` request into its canonical parts."""
     params = require_object(params, "workflow submit request")
     reject_untrusted_override(params)
-    _reject_retired_spec_keys(params)
     reject_unknown(params, WORKFLOW_SUBMIT_FIELDS, "workflow.submit")
     request_id = required_string(params, "requestId", max_length=MAX_REQUEST_ID)
     host_id = None if lead_run_id is not None else required_string(params, "hostId", max_length=256)
@@ -641,7 +605,6 @@ def normalize_helpers(params: dict, *, integrator: dict) -> list[dict]:
         if not isinstance(entry, dict):
             raise BoardError("INVALID_ARGUMENT", f"helpers[{index}] must be a JSON object")
         reject_untrusted_override(entry)
-        _reject_retired_spec_keys(entry)
         if "delegationAuthority" in entry:
             raise BoardError("INVALID_ARGUMENT", "Only Host submissions may grant delegationAuthority; helpers cannot carry it",
                              field="delegationAuthority")

@@ -3,7 +3,6 @@ from copy import deepcopy
 import hashlib
 import json
 
-from ...errors import BoardError
 from ...protocol.schemas import BUDDY_FIELDS
 
 KINDS = ("router-unavailable", "routing-changed", "router-abstained")
@@ -23,29 +22,7 @@ def build_boundary(*, kind: str, code: str | None, reason: dict | None, candidat
     either explicitly preserves live helpers with ``keep`` or blocks through
     ``continuation_problem``; these templates never cancel helpers.
     """
-    if not isinstance(kind, str) or kind not in KINDS:
-        raise BoardError("INVALID_ARGUMENT", "Unknown Router boundary kind")
-    if not isinstance(candidates, list) or not isinstance(router_trials, list) or not isinstance(facts, dict):
-        raise BoardError("INVALID_ARGUMENT", "Router boundary requires frozen candidates, trials and facts")
-    if type(shutdown_confirmed) is not bool:
-        raise BoardError("INVALID_ARGUMENT", "Router boundary stop evidence must be boolean")
-    if not isinstance(decision_id, str) or not decision_id:
-        raise BoardError("INVALID_ARGUMENT", "Router boundary requires its decision identity")
-    for value, name in ((code, "code"), (retry_at, "retry_at"), (run_id, "run_id"), (target_run_id, "target_run_id"),
-                        (continuation_problem, "continuation_problem")):
-        if value is not None and (not isinstance(value, str) or not value.strip()):
-            raise BoardError("INVALID_ARGUMENT", f"Router boundary {name} must be a nonempty string or null")
-    if revision is not None and (type(revision) is not int or revision < 0):
-        raise BoardError("INVALID_ARGUMENT", "Router boundary revision must be a nonnegative integer or null")
-    if helper_policy is not None and helper_policy != "keep":
-        raise BoardError("INVALID_ARGUMENT", "Router boundary helper_policy must be 'keep' or null")
-    identities = []
-    for candidate in candidates:
-        if (not isinstance(candidate, dict) or not isinstance(candidate.get("buddyId"), str)
-                or any(not isinstance(candidate.get(key), str) or not candidate[key].strip()
-                       for key in BUDDY_FIELDS)):
-            raise BoardError("INVALID_ARGUMENT", "A frozen Router candidate needs a complete buddy identity")
-        identities.append({key: candidate[key] for key in BUDDY_FIELDS})
+    identities = [{key: candidate[key] for key in BUDDY_FIELDS} for candidate in candidates]
 
     blocked = run_id is None or not shutdown_confirmed or continuation_problem is not None or revision is None
     base = {"runId": run_id, "expectedRevision": revision, "controlFile": "<saved-control-file>"}

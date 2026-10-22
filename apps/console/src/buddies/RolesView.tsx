@@ -93,7 +93,7 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
     <ScrollArea className="min-h-0 flex-1">
       <h2 className="px-6 pt-5 pb-2 text-base font-semibold">{t("roles.heading")}</h2>
       {!configuration && <p className="mx-6 mb-3 border-l-2 border-fail pl-3 text-xs text-fail" role="alert">
-        {snapshot.configurationError?.message ? t("roles.upgrade.titleWith", { message: snapshot.configurationError.message }) : t("roles.upgrade.title")}</p>}
+        {t("roles.upgrade.title")}</p>}
 
       <Section name={t("roles.list.name")} unsaved={mark(unsaved.list)} id={LIST_ID} tabIndex={-1}>
         <RouterList lines={lines} buddies={data.buddies} mode={configuration?.defaultRoutingMode} locked={locked}

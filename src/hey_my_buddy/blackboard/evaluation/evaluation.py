@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any
 
 from ...protocol import schemas
 from ...protocol.reasons import reason_from_json
 from . import user_policy
-from ...errors import BoardError
 
 MAX_DECISION_PAGE = 50
 
@@ -24,24 +22,13 @@ class EvaluationStore:
     def _now(self) -> str:
         return self._clock()
 
-    @staticmethod
-    def _validate_configuration(entry: Any) -> dict:
-        """The strict list-settings patch: omissions preserve, ``[]`` clears, everything else validates."""
-        from ..routing.router_settings import validate_router_settings_patch
-        return validate_router_settings_patch(entry)
-
     def console_core(self) -> dict:
         """One coherent view of buddies, policy, configuration and selection history."""
         with self.board.db.read() as connection:
             from ..routing import router
-            configuration_error = None
-            try:
-                settings = router.configuration(connection)
-                routing_budget = router.configured_budget(connection)
-            except BoardError as error:
-                settings, routing_budget = None, None
-                configuration_error = {"code": error.code, "message": str(error)}
-            configured_ids = (settings or {}).get("routerBuddyIds") or []
+            settings = router.configuration(connection)
+            routing_budget = router.configured_budget(connection)
+            configured_ids = settings["routerBuddyIds"]
             configured_marks = ",".join("?" for _ in configured_ids) or "NULL"
             from ..catalog import catalog_store
             from ..catalog.catalog import pending_model_services
@@ -54,7 +41,7 @@ class EvaluationStore:
                     "SELECT p.*, h.status AS harness_status, c.status AS catalog_state, c.reason AS catalog_reason FROM buddies p "
                     "LEFT JOIN harness_health h ON h.harness=p.harness "
                     "LEFT JOIN catalog_current c ON c.harness=p.harness "
-                    f"WHERE (p.available=1 AND h.status='ready') OR p.buddy_id IN ({configured_marks}) ORDER BY p.rowid LIMIT 202",
+                    f"WHERE (p.available=1 AND h.status='ready') OR p.buddy_id IN ({configured_marks}) ORDER BY p.rowid",
                     configured_ids
                 )
             ]
@@ -89,11 +76,10 @@ class EvaluationStore:
             event_cursor = self.board._head_of(connection)
         return {
             "eventCursor": event_cursor,
-            "configuration": ({
+            "configuration": {
                 **settings,
                 "routingBudgetLimits": routing_budget,
-            } if settings is not None else None),
-            "configurationError": configuration_error,
+            },
             "buddies": buddies,
             "modelServiceConcurrency": model_service_concurrency,
             "unavailableBuddyCount": unavailable_count,
@@ -123,10 +109,8 @@ class EvaluationStore:
         adapter_available, adapter_reason = self.board.decisions._adapter_available()
         return {
             "selection": bool(adapter_available),
-            "decisionAdapter": bool(adapter_available),
             "decisionAdapterReason": adapter_reason,
             "modelCatalogDiscovery": bool(catalog.discovery_available()),
-            "taskControl": True,
         }
 
     def record_catalog(self, discovered: dict, observation_id=None) -> dict:
@@ -146,7 +130,7 @@ class EvaluationStore:
             "model": row["model"],
             "effort": row["effort"],
             "effortRank": effort_ranks.get((row["harness"], row["provider"], row["model"]), {}).get(row["effort"]),
-            "available": bool(row["available"]) and ("harness_status" not in row.keys() or row["harness_status"] == "ready"),
+            "available": bool(row["available"]) and row["harness_status"] == "ready",
             "enabled": bool(row["enabled"]),
             "capabilities": capabilities,
             "contextWindow": row["context_window"],
@@ -157,27 +141,24 @@ class EvaluationStore:
             view["unavailableReason"] = reason_from_json(row["unavailable_code"], row["unavailable_params_json"])
             if row["unavailable_content"] is not None:
                 view["unavailableContent"] = row["unavailable_content"]
-        if "catalog_state" in row.keys():
-            view["catalogState"] = row["catalog_state"] or "unknown"
-            view["catalogReason"] = json.loads(row["catalog_reason"]) if row["catalog_reason"] else None
-        if "catalog_state" in row.keys() or pending is not None:
-            # ADR-027 rule 6: the model-level catalog judgment, separate from the
-            # harness-level reading state above. Pending is per model identity.
-            from ..catalog.catalog import CATALOG_FACT_REASONS
-            model_service = (row["harness"], row["provider"], row["model"])
-            since = (pending or {}).get(model_service)
-            if since:
-                view["catalogStatus"] = "pending"
-                view["pendingSince"] = since
-            elif not row["available"] and row["unavailable_code"] in (*CATALOG_FACT_REASONS, 'catalog.account-binding-changed'):
-                view["catalogStatus"] = "unavailable"
-            else:
-                view["catalogStatus"] = "available"
+        view["catalogState"] = row["catalog_state"] or "unknown"
+        view["catalogReason"] = json.loads(row["catalog_reason"]) if row["catalog_reason"] else None
+        # ADR-027 rule 6: the model-level catalog judgment, separate from the
+        # harness-level reading state above. Pending is per model identity.
+        from ..catalog.catalog import CATALOG_FACT_REASONS
+        model_service = (row["harness"], row["provider"], row["model"])
+        since = (pending or {}).get(model_service)
+        if since:
+            view["catalogStatus"] = "pending"
+            view["pendingSince"] = since
+        elif not row["available"] and row["unavailable_code"] in (*CATALOG_FACT_REASONS, 'catalog.account-binding-changed'):
+            view["catalogStatus"] = "unavailable"
+        else:
+            view["catalogStatus"] = "available"
         return view
 
     @staticmethod
     def _decision_view(row: sqlite3.Row) -> dict:
-        keys = row.keys()
         view = {
             "decisionId": row["decision_id"],
             "status": row["status"],
@@ -187,9 +168,8 @@ class EvaluationStore:
             "note": row["note"],
             "createdAt": row["created_at"],
         }
-        if "run_id" in keys:
-            view["runId"] = row["run_id"]
-        if "updated_at" in keys and row["updated_at"] is not None:
+        view["runId"] = row["run_id"]
+        if row["updated_at"] is not None:
             view["updatedAt"] = row["updated_at"]
         return view
 

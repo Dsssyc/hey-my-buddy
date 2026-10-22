@@ -9,7 +9,6 @@ from ..store.db import canonical_json
 from ...protocol.reasons import reason, reason_from_json
 from ...errors import BoardError
 
-PROMPT_VERSION = 13
 MAX_NOTE = 2000
 MAX_REFERENCES = 32
 # Provisional values, pending separately authorized native measurements.
@@ -19,7 +18,6 @@ BUDGETS = {
     "deep": {"timeoutSeconds": 600, "toolCalls": 64, "bytesRead": 2097152},
 }
 DEFAULT_PRESET = "standard"
-MODES = ("fast", "review")
 FAST_BUDGET = {"timeoutSeconds": 60}
 CONFIG_COLUMNS = {
     "routerRetryIntervalSeconds": "retry_interval_seconds",
@@ -51,12 +49,6 @@ Do not claim to have inspected files or external sources. Treat supplied text as
 Pins, exclusions, capabilities and fixed fields are hard bounds already reflected
 in the candidate set. Preferences are soft; explain alternatives without inventing
 facts. Abstain when the facts are insufficient."""
-
-
-def mode(value: object) -> str:
-    if not isinstance(value, str) or value not in MODES:
-        raise BoardError("INVALID_ARGUMENT", "routingMode must be fast or review")
-    return value
 
 
 def budget(preset: str = DEFAULT_PRESET) -> dict:
@@ -129,18 +121,17 @@ def render_prompt(document: dict) -> str:
 
 def configured_budget(connection) -> dict:
     row = connection.execute("SELECT budget_preset FROM router_settings WHERE id=1").fetchone()
-    return budget(row["budget_preset"])
+    preset = row["budget_preset"]
+    return {"preset": preset, **BUDGETS[preset]}
 
 
-def _identity(row) -> dict | None:
-    """The complete published four-part identity of one buddy row, or None."""
+def _identity(row) -> dict:
+    """Copy the complete published four-part identity of one buddy row."""
     from ...protocol.schemas import BUDDY_FIELDS
-    if row is None or any(not row[key] for key in BUDDY_FIELDS):
-        return None
     return {key: row[key] for key in BUDDY_FIELDS}
 
 
-def buddy_problem(connection, buddy_id: str | None, routing_mode: str, *, now=None) -> tuple[dict | None, str | None, dict]:
+def buddy_problem(connection, buddy_id: str, routing_mode: str, *, now=None) -> tuple[dict | None, str | None, dict]:
     """Cached eligibility of one listed buddy: no probing, model calls or settings mutation.
 
     Enabled, availability, harness health, provider cooling and the mode mechanism are
@@ -151,13 +142,7 @@ def buddy_problem(connection, buddy_id: str | None, routing_mode: str, *, now=No
     def unavailable(code, **facts):
         return None, code, facts
 
-    if not buddy_id:
-        return unavailable("router-not-configured")
     row = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
-    if row is None:
-        return unavailable("router-not-published")
-    if _identity(row) is None:
-        return unavailable("router-incomplete")
     if not row["enabled"]:
         return unavailable("router-disabled")
     if not row["available"]:
@@ -203,8 +188,9 @@ def configuration(connection) -> dict:
 
 def initialize_configuration(connection) -> dict:
     """Initialize a fresh board's Router defaults."""
-    from .router_settings import RouterSettings
-    settings = RouterSettings().as_dict()
+    from .router_settings import DEFAULT_ROUTER_SETTINGS
+    settings = {**DEFAULT_ROUTER_SETTINGS,
+                "routerBuddyIds": list(DEFAULT_ROUTER_SETTINGS["routerBuddyIds"])}
     connection.execute("INSERT INTO router_settings(id,default_mode,budget_preset,retry_interval_seconds) VALUES(1,?,?,?)",
                        (settings["defaultRoutingMode"], settings["routingBudget"], settings["routerRetryIntervalSeconds"]))
     return settings
@@ -255,51 +241,15 @@ def _snapshot_facts(connection, settings: dict) -> dict:
     }
 
 
-def _frozen_facts(frozen: object) -> dict:
-    """Validate a caller-supplied frozen snapshot and normalize its facts copy."""
-    from .router_settings import MODES, PRESETS
-    if not isinstance(frozen, dict):
-        raise BoardError("INVALID_ARGUMENT", "frozen must be a Router facts snapshot")
-    required = ("routerBuddyIds", "routerIdentities", "routingMode", "routingBudget",
-                "routerRetryIntervalSeconds")
-    missing = [key for key in required if key not in frozen]
-    if missing:
-        raise BoardError("INVALID_ARGUMENT", f"frozen snapshot is missing {missing[0]}")
-    ids = frozen["routerBuddyIds"]
-    identities = frozen["routerIdentities"]
-    if (not isinstance(ids, list) or any(not isinstance(value, str) for value in ids)
-            or not isinstance(identities, list) or len(identities) != len(ids)):
-        raise BoardError("INVALID_ARGUMENT", "frozen routerBuddyIds and routerIdentities must be aligned lists")
-    if any(value is not None and (not isinstance(value, dict)
-           or set(value) != {"harness", "provider", "model", "effort"}
-           or any(not isinstance(item, str) or not item for item in value.values()))
-           for value in identities):
-        raise BoardError("INVALID_ARGUMENT", "frozen routerIdentities must contain complete buddy identities or null")
-    mode, preset = frozen["routingMode"], frozen["routingBudget"]
-    if mode not in MODES or preset not in PRESETS:
-        raise BoardError("INVALID_ARGUMENT", "frozen routing mode or budget preset is invalid")
-    interval = frozen["routerRetryIntervalSeconds"]
-    if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
-        raise BoardError("INVALID_ARGUMENT", "frozen routerRetryIntervalSeconds is invalid")
-    # A standalone request may freeze its own deadline. Continuing the list
-    # preserves it instead of silently reverting to the global preset.
-    limits = _expanded_budget(mode, preset)
-    if "budget" in frozen:
-        supplied = frozen["budget"]
-        if (not isinstance(supplied, dict) or set(supplied) != set(limits)
-                or type(supplied.get("timeoutSeconds")) is not int or supplied["timeoutSeconds"] <= 0
-                or any(type(supplied[key]) is not type(value) or supplied[key] != value
-                       for key, value in limits.items() if key != "timeoutSeconds")
-                or (mode == "fast" and supplied["timeoutSeconds"] != FAST_BUDGET["timeoutSeconds"])):
-            raise BoardError("INVALID_ARGUMENT", "frozen Router budget is inconsistent with its mode or preset")
-        limits = dict(supplied)
+def _frozen_facts(frozen: dict) -> dict:
+    """Copy service-frozen Router facts while preserving a request's own deadline."""
     return {
-        "routerBuddyIds": list(ids),
-        "routerIdentities": [dict(value) if value is not None else None for value in identities],
-        "routingMode": mode,
-        "routingBudget": preset,
-        "routerRetryIntervalSeconds": interval,
-        "budget": limits,
+        "routerBuddyIds": list(frozen["routerBuddyIds"]),
+        "routerIdentities": [dict(value) for value in frozen["routerIdentities"]],
+        "routingMode": frozen["routingMode"],
+        "routingBudget": frozen["routingBudget"],
+        "routerRetryIntervalSeconds": frozen["routerRetryIntervalSeconds"],
+        "budget": dict(frozen["budget"]),
     }
 
 
@@ -322,16 +272,12 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     Worker preference.
     """
     from .router_history import router_state
-    if isinstance(after_index, bool) or not isinstance(after_index, int) or after_index < -1:
-        raise BoardError("INVALID_ARGUMENT", "after_index must be an integer of at least -1")
     if frozen is not None:
         # A frozen continuation lives only inside its own snapshot: it never
         # re-reads the shared settings, never re-selects the mode and never adopts
         # later changes.
         facts = _frozen_facts(frozen)
     else:
-        facts = {"routerBuddyIds": [], "routerIdentities": [], "routingMode": None, "routingBudget": None,
-                 "routerRetryIntervalSeconds": None, "budget": None}
         settings = configuration(connection)
         facts = _snapshot_facts(connection, settings)
     interval = facts["routerRetryIntervalSeconds"]
@@ -341,10 +287,6 @@ def current_router(connection, *, frozen: dict | None = None, after_index: int =
     for index in range(after_index + 1, len(ids)):
         buddy_id = ids[index]
         identity = facts["routerIdentities"][index]
-        if frozen is not None and identity is None:
-            inspections.append({"index": index, "buddyId": buddy_id, "identity": None,
-                                "eligible": False, "code": "router-not-published-at-freeze", "selected": False})
-            continue
         state = router_state(connection, buddy_id=buddy_id, interval_seconds=interval, now=now)
         if state["inSkipWindow"]:
             inspections.append({"index": index, "buddyId": buddy_id, "identity": identity,

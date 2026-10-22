@@ -5,13 +5,9 @@ from ..store.db import utc_now
 
 
 def _time(value):
-    if not isinstance(value, str):
+    if value is None:
         return None
-    try:
-        stamp = datetime.fromisoformat(value)
-        return stamp.astimezone(timezone.utc) if stamp.tzinfo else None
-    except ValueError:
-        return None
+    return datetime.fromisoformat(value).astimezone(timezone.utc)
 
 
 def _iso(stamp):
@@ -31,7 +27,7 @@ def record_rejection(connection, harness, provider, failure, *, now=None):
         (harness, provider),
     ).fetchone()
     count = row["consecutive_rejections"] + 1 if row else 1
-    seconds = 86400 if count >= 7 else min(1800 * 2 ** (count - 1), 86400)
+    seconds = min(1800 * 2 ** (count - 1), 86400)
     until = present + timedelta(seconds=seconds)
     reset = _time(failure.get("resetsAt"))
     if reset is not None and reset > present:

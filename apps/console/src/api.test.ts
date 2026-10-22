@@ -32,10 +32,9 @@ describe("L4 ordered Router list configuration", () => {
 
 describe("snapshot upgrade boundary and routing health", () => {
   const configuration = { routerBuddyIds: ["head"], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "standard" };
-  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration, configurationError: null, buddies: [],
+  const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration, buddies: [],
     preferences: [], modelServiceNotes: [], modelServiceConcurrency: [],
     tasks: { pendingCount: 0 } };
-  const error = { code: "router-settings-upgrade-required", message: "Router 设置需升级" };
   const health = { available: false, reason: { code: "router-consecutive-failures", params: {} }, windowSize: 20, sampleCount: 3,
     failureCount: 3, consecutiveFailures: 3, abstentionCount: 0, cancelledCount: 0,
     lastSuccessAt: null, lastSuccessDecisionId: null,
@@ -43,14 +42,9 @@ describe("snapshot upgrade boundary and routing health", () => {
   function apiFor(body: unknown) {
     return createApi("", vi.fn(async () => new Response(JSON.stringify(body))) as typeof fetch);
   }
-  it("accepts the explicit unavailable upgrade state without inventing settings", async () => {
-    await expect(apiFor({ ...snapshot, configuration: null, configurationError: error }).snapshot())
-      .resolves.toMatchObject({ configuration: null, configurationError: error });
-    for (const broken of [null, { ...error, message: "" }, { ...error, code: "unknown" }]) {
-      await expect(apiFor({ ...snapshot, configuration: null, configurationError: broken }).snapshot())
-        .rejects.toHaveProperty("code", "INVALID_RESPONSE");
-    }
-    await expect(apiFor({ ...snapshot, configurationError: error }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  it("refuses an unavailable Router configuration", async () => {
+    await expect(apiFor({ ...snapshot, configuration: null }).snapshot())
+      .rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
   it("reads nullable preference notes and refuses a malformed preference publication view", async () => {
     for (const note of [null, "", " 用户备注 "]) {
@@ -238,7 +232,7 @@ describe("local read verification evidence", () => {
 
 describe("conditional reads (ETag / If-None-Match / 304)", () => {
   const snapshot = { csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "session", canWrite: true, reason: null }, configuration: { routerBuddyIds: [], routerRetryIntervalSeconds: 600, defaultRoutingMode: "fast", routingBudget: "brief" },
-    configurationError: null, buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
+    buddies: [], preferences: [], modelServiceNotes: [], modelServiceConcurrency: [], tasks: { pendingCount: 3 } };
   function jsonResponse(value: unknown, etag?: string) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (etag) headers.ETag = etag;

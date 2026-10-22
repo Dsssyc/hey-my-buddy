@@ -97,11 +97,7 @@ export function validRoutingConfiguration(value: unknown): value is Configuratio
 }
 
 function validConfigurationState(data: Snapshot): boolean {
-  const error = data.configurationError;
-  if (data.configuration !== null) return validRoutingConfiguration(data.configuration) && error == null;
-  return !!error && typeof error === "object" && !Array.isArray(error)
-    && error.code === "router-settings-upgrade-required"
-    && typeof error.message === "string" && error.message.trim().length > 0;
+  return validRoutingConfiguration(data.configuration);
 }
 
 /** One per-buddy health entry; a malformed field refuses the whole entry. */

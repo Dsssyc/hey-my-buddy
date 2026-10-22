@@ -80,7 +80,7 @@ class PermissionLevelsTests(WorkflowTestCase):
                                                     'accessNote': 'Exercise the existing connector permission gate'})
                 self.assertEqual(rejected.exception.code, 'INVALID_ARGUMENT')
                 self.assertEqual(rejected.exception.details['field'], 'adapter')
-                self.assertIn('Micro tasks do not accept', rejected.exception.message)
+                self.assertIn('Unknown', rejected.exception.message)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM tasks').fetchone()[0], 0)
 

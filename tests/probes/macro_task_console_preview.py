@@ -2331,7 +2331,6 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
                                                   "toolCalls": 24, "bytesRead": 524288}},
-        "configurationError": None,
         "buddies": buddies,
         "modelServiceConcurrency": concurrency_rows(),
         "harnesses": harness_rows(state),

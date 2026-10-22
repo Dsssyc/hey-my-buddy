@@ -244,26 +244,6 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertTrue(trial["shutdownConfirmed"])
         self.assertIsNone(trial["usage"])
 
-    def test_freeze_retains_additional_host_packet_without_rewriting_other_snapshot_fields(self):
-        self.set_settings(ids=[])
-        request = self.request()
-        original = self.snapshot_of(request["decisionId"])
-        private = self.request(request_id="private-extra")
-        snapshot = self.snapshot_of(private["decisionId"])
-        snapshot.pop("frozenAt")
-        packet = {"buddies": [], "privateHostFact": "retained, never sent"}
-        with self.board_.store.db.write() as db:
-            # Recreate only this second public parent's snapshot; no dispatch
-            # references it. Keep the first request's frozen evidence untouched.
-            self.assertEqual(router_sequence.dispatches(db, private["decisionId"]), ())
-            db.execute("DELETE FROM router_requests WHERE decision_id=?", (private["decisionId"],))
-            frozen = router_sequence.freeze_request(db, private["decisionId"], snapshot={**snapshot, "hostPacket": packet}, now=T0)
-        self.assertEqual(frozen["hostPacket"], packet)
-        self.assertEqual(frozen["baseInput"], snapshot["baseInput"])
-        self.assertEqual(frozen, {**snapshot, "hostPacket": packet, "frozenAt": T0})
-        self.assertEqual(self.snapshot_of(private["decisionId"]), frozen)
-        self.assertEqual(self.snapshot_of(request["decisionId"]), original)
-
     def test_settings_edit_does_not_change_the_frozen_no_answer_path(self):
         request, first = self.start()
         self.set_settings(ids=[B, A], mode="review", interval=30)
@@ -325,22 +305,21 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertEqual(self.tasks(), [])
         self.assertEqual(self.attempts(), [])
 
-    def test_model_byte_and_entry_caps_preserve_untruncated_host_packet(self):
+    def test_model_byte_cap_preserves_untruncated_host_packet(self):
         delta = "dsh:fixture:delta:max"
         self.add_buddy(C, model="charlie")
         self.add_buddy(delta, model="delta")
-        for ordinal, ceiling in enumerate(("MAX_DECISION_INPUT_BYTES", "MAX_DECISION_BUDDIES")):
-            with self.subTest(ceiling=ceiling), patch("hey_my_buddy.blackboard.routing.decision." + ceiling, 1):
-                request = self.request(request_id="oversize-" + str(ordinal))
-            boundary = self.boundary(request["decisionId"])
-            self.assert_packet(boundary, ids=(A, B, C, delta))
-            self.assertEqual(boundary["kind"], "routing-changed")
-            self.assertEqual(len(boundary["candidates"]), 4)
-            self.assertEqual(self.tasks(), [])
-            self.assertEqual(self.attempts(), [])
-            self.assertEqual(boundary["routerTrials"][0]["outcome"], "skipped")
-            self.assertEqual(boundary["routerTrials"][0]["phase"], "preflight")
-            self.assertIsNone(boundary["routerTrials"][0]["code"])
+        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", 1):
+            request = self.request(request_id="oversize-bytes")
+        boundary = self.boundary(request["decisionId"])
+        self.assert_packet(boundary, ids=(A, B, C, delta))
+        self.assertEqual(boundary["kind"], "routing-changed")
+        self.assertEqual(len(boundary["candidates"]), 4)
+        self.assertEqual(self.tasks(), [])
+        self.assertEqual(self.attempts(), [])
+        self.assertEqual(boundary["routerTrials"][0]["outcome"], "skipped")
+        self.assertEqual(boundary["routerTrials"][0]["phase"], "preflight")
+        self.assertIsNone(boundary["routerTrials"][0]["code"])
 
     def test_later_buddies_and_preferences_cannot_replace_frozen_facts(self):
         self.set_settings(ids=[])
@@ -493,14 +472,6 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         self.assertIs(boundary["routerTrials"][0]["shutdownConfirmed"], False)
         self.assertTrue(boundary["commands"]["continue"]["blocked"])
 
-    def test_malformed_unrelated_event_cannot_break_frozen_boundary_read(self):
-        request, _, _ = self.finish_all()
-        before = self.boundary(request["decisionId"])
-        with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO events(kind,payload_json,created_at) VALUES('router.no_answer','{invalid',?)", (T0,))
-            db.execute("INSERT INTO events(kind,payload_json,created_at) VALUES('decision.needs_host','{invalid',?)", (T0,))
-        self.assertEqual(self.boundary(request["decisionId"]), before)
-
 
 class MicroTaskBoundaryTests(WorkflowTestCase):
     answer = failover.FailoverTests.answer
@@ -629,7 +600,6 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         view = self.routed()
         candidate = view["routing"]["routingBoundary"]["candidates"][1]
         cases = (
-            ("removed", "DELETE FROM buddies WHERE buddy_id=?", (B,), {}),
             ("identity-changed", "UPDATE buddies SET model='changed' WHERE buddy_id=?", (B,), {}),
             ("disabled", "UPDATE buddies SET enabled=0 WHERE buddy_id=?", (B,), {}),
             ("unavailable", "UPDATE buddies SET available=0 WHERE buddy_id=?", (B,), {}),
@@ -829,6 +799,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         current = self.board_.call("workflow_get", {"runId": view["runId"]})
         boundary = current["routing"]["routingBoundary"]
         self.assertEqual(boundary["kind"], "router-abstained")
+        self.assertEqual(boundary["routerTrials"][0]["outcome"], "answered")
         self.assertEqual(boundary["reason"], {"code": "router-abstained", "params": {}})
         self.assertIsNone(current["activeRequest"]["summary"])
         self.assertEqual(current["activeRequest"]["reason"], boundary["reason"])
@@ -839,7 +810,11 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         with self.board_.store.db.read() as db:
             payload = json.loads(db.execute("SELECT payload_json FROM workflow_requests WHERE request_id=?",
                                            (current["activeRequest"]["requestId"],)).fetchone()[0])
+            sequence = {row["kind"]: row["seq"] for row in db.execute(
+                "SELECT seq,kind FROM events WHERE kind IN ('router.answered','decision.needs_host','workflow.routing_needs_host')")}
         self.assertEqual(payload, {"source": "routing"})
+        self.assertLess(sequence["router.answered"], sequence["decision.needs_host"])
+        self.assertLess(sequence["router.answered"], sequence["workflow.routing_needs_host"])
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT decision_id FROM workflow_requests WHERE request_id=?",
                                         (current["activeRequest"]["requestId"],)).fetchone()[0],

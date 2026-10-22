@@ -18,9 +18,9 @@ from hey_my_buddy.errors import BoardError
 
 
 def reading(models=('alpha',), efforts=('max',), account_status='confirmed'):
-    return {'source': 'fixture-native', 'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': account_status}],
+    return catalog.canonical_payload({'source': 'fixture-native', 'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': account_status}],
             'providers': [{'harness': 'dsh', 'provider': 'fixture',
-                           'models': [{'id': model, 'efforts': list(efforts), 'available': True} for model in models]}]}
+                           'models': [{'id': model, 'efforts': list(efforts), 'available': True} for model in models]}]})
 
 
 IDENTITY = {"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"}
@@ -140,6 +140,8 @@ class ExplicitCatalogTrustTests(BoardTestCase):
             self.validate({**IDENTITY, "model": "beta"})
         self.assertEqual(rejected.exception.code, "BUDDY_UNAVAILABLE")
         self.assertEqual(rejected.exception.details["catalogReadAt"], read_at)
+        self.assertEqual(rejected.exception.details["rereadIssue"],
+                         {"code": "HARNESS_UNAVAILABLE", "message": "fixture refresh failed"})
 
     def test_c05_a_reread_that_breaks_health_keeps_the_rejection_context(self):
         # The bounded re-read's native failure path invalidates the harness; the
@@ -508,7 +510,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(buddy['pendingSince'], self.clock.value)
         from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
         with self.board.store.db.read() as db:
-            candidates = [row['buddy_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+            candidates = [row['buddy_id'] for row in DecisionCoordinator._scan_candidates(db, [], coding_only=True)[0]]
         self.assertEqual(candidates, ['dsh:fixture:alpha:max'], 'A pending model stays inside the bounds')
         self.assertEqual(self.validate(), IDENTITY, 'A pending model stays acceptable explicitly')
 
@@ -554,7 +556,7 @@ class ExplicitCatalogTrustTests(BoardTestCase):
         self.assertEqual(rejected.exception.details['legalEfforts'], ['high'])
         from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator
         with self.board.store.db.read() as db:
-            candidates = [row['buddy_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+            candidates = [row['buddy_id'] for row in DecisionCoordinator._scan_candidates(db, [], coding_only=True)[0]]
         self.assertEqual(candidates, ['dsh:fixture:alpha:high'])
         if pending:
             self.assertEqual(alpha['high']['catalogStatus'], 'pending')

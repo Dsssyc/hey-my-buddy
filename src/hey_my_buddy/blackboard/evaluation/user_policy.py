@@ -17,8 +17,8 @@ MODEL_SERVICE_CONCURRENCY_FIELDS = frozenset({'harness', 'provider', 'model', 'l
 def _model_service_concurrency_changes(params: dict) -> list[dict]:
     """Validate the ``modelServiceConcurrency`` patch: model service tuples and limits only."""
     values = params.get('modelServiceConcurrency', [])
-    if not isinstance(values, list) or len(values) > 200:
-        raise BoardError('INVALID_ARGUMENT', 'modelServiceConcurrency must contain at most 200 patches')
+    if not isinstance(values, list):
+        raise BoardError('INVALID_ARGUMENT', 'modelServiceConcurrency must be a list')
     seen: set[tuple[str, str, str]] = set()
     for value in values:
         if not isinstance(value, dict):
@@ -47,8 +47,8 @@ def require_console() -> None:
 def _model_service_changes(params: dict, field: str, fields: set[str]) -> list[dict]:
     """Validate a model-service-keyed patch: one entry per ``(harness, provider, model)``."""
     values = params.get(field, [])
-    if not isinstance(values, list) or len(values) > 200:
-        raise BoardError('INVALID_ARGUMENT', f'{field} must contain at most 200 patches')
+    if not isinstance(values, list):
+        raise BoardError('INVALID_ARGUMENT', f'{field} must be a list')
     seen: set[tuple[str, str, str]] = set()
     for value in values:
         if not isinstance(value, dict):
@@ -92,8 +92,8 @@ def model_service_notes(connection, buddy_ids: list[str]) -> list[dict]:
 
 def _changes(params: dict, field: str, fields: set[str]) -> list[dict]:
     values = params.get(field, [])
-    if not isinstance(values, list) or len(values) > 200:
-        raise BoardError('INVALID_ARGUMENT', f'{field} must contain at most 200 patches')
+    if not isinstance(values, list):
+        raise BoardError('INVALID_ARGUMENT', f'{field} must be a list')
     seen = set()
     for value in values:
         if not isinstance(value, dict):
@@ -181,7 +181,8 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
             ),
         )
     if 'configuration' in provided:
-        configuration = evaluation._validate_configuration(params['configuration'])
+        from ..routing.router_settings import validate_router_settings_patch
+        configuration = validate_router_settings_patch(params['configuration'])
         from ..routing import router
         current = router.configuration(connection)
         merged = {**current, **configuration}
@@ -196,10 +197,6 @@ def publish(evaluation, connection, *, now: str, params: dict) -> dict:
                                          (buddy_id,)).fetchone()
                 if row is None:
                     raise BoardError('NOT_FOUND', 'Unknown buddyId', buddyId=buddy_id)
-                if any(not row[key] for key in ('harness', 'provider', 'model', 'effort')):
-                    raise BoardError('INVALID_ARGUMENT',
-                                     'routerBuddyIds entries must reference published buddies with complete '
-                                     'harness/provider/model/effort identities', buddyId=buddy_id)
         router._write_settings(connection, configuration)
         if 'routingBudget' in configuration:
             evaluation.board._append_event(connection, 'evaluation.routing_budget_changed',

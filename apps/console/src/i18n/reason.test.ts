@@ -35,6 +35,19 @@ describe("the program reason catalog", () => {
     }
   });
 
+  it("formats every current candidate bound in both languages", () => {
+    const bounds = ["identity-changed", "disabled", "unavailable", "constraints", "capability-missing",
+      "excluded", "not-pinned", "harness-unavailable", "quota-exhausted", "not-a-candidate"];
+    for (const language of ["zh", "en"] as const) {
+      setLanguageChoice(language);
+      for (const bound of bounds) {
+        const text = reasonText({ code: "router-out-of-bounds", params: { bound } });
+        expect(text, `${language}: ${bound}`).not.toContain(bound);
+        expect(text).not.toMatch(/shell:|\{\{/);
+      }
+    }
+  });
+
   it("reads optional publication and routing facts without unfinished interpolation", () => {
     for (const code of ["decision-publication-failed", "router-review-unsupported", "router-no-tool-unsupported", "bridge-refused"]) {
       expect(reasonText({ code, params: {} })).not.toMatch(/\{\{/);

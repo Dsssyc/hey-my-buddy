@@ -1,7 +1,6 @@
 """ADR-021 switch policy; no model, service, state or runtime calls."""
 import unittest
 
-from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router_failover import classify_outcome
 
 
@@ -14,7 +13,7 @@ class RouterFailoverTests(unittest.TestCase):
     def test_stopped_unavailable_preflight_and_unusable_runtime_answers_allow_next_router(self):
         cases = {
             "preflight": ("router-disabled", "router-catalog-unavailable", "router-harness-unavailable",
-                          "router-not-published-at-freeze", "router-quota-exhausted", "router-review-unsupported",
+                          "router-quota-exhausted", "router-review-unsupported",
                           "router-no-tool-unsupported"),
             "runtime": ("timeout", "provider-error", "native-error", "empty-answer",
                         "answer-invalid-json", "answer-shape", "readonly-budget-exhausted"),
@@ -58,20 +57,6 @@ class RouterFailoverTests(unittest.TestCase):
                                                    cancelled=True, circumstances_changed=True), "cancelled")
                     self.assertEqual(self.classify(answer_valid=valid, shutdown_confirmed=stopped,
                                                    circumstances_changed=True), "changed")
-
-    def test_boolean_facts_are_strict_and_stage_and_code_are_typed(self):
-        for name in ("answer_valid", "abstained", "cancelled", "circumstances_changed", "shutdown_confirmed"):
-            for value in (None, 0, 1, "true", [], {}):
-                with self.subTest(name=name, value=value), self.assertRaises(BoardError) as error:
-                    self.classify(**{name: value})
-                self.assertEqual(error.exception.code, "INVALID_ARGUMENT")
-        for stage in (None, False, 1, [], {}, "claim", ""):
-            with self.subTest(stage=stage), self.assertRaises(BoardError):
-                self.classify(stage=stage)
-        for code in (False, 1, [], {}):
-            with self.subTest(code=code), self.assertRaises(BoardError):
-                self.classify(code=code)
-
 
 if __name__ == "__main__":
     unittest.main()

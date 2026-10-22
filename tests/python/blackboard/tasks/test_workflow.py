@@ -265,7 +265,7 @@ class LifecycleTests(WorkflowTestCase):
             with self.subTest(fields=fields), self.assertRaises(BoardError) as caught:
                 self.submit(board, **fields)
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
-            self.assertIn('Micro tasks do not accept', caught.exception.message)
+            self.assertIn('Unknown', caught.exception.message)
         self.catalog_validation.assert_not_called()
         self.assertEqual(self.workspace.prepare_calls, [])
         with board.store.db.read() as connection:
@@ -1307,7 +1307,7 @@ class NestedSpecTests(WorkflowTestCase):
                 "submissionToken": "n" * 32,
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("flat", raised.exception.message)
+        self.assertEqual(raised.exception.details["field"], "spec")
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_submit", {
                 "requestId": "req-conflict",

@@ -41,12 +41,15 @@ export default {
       "account-read": "Account read"
     },
     "bound": {
-      "removed": "Candidate removed",
       "disabled": "Disabled",
       "unavailable": "Unavailable",
       "excluded": "Excluded",
       "capability-missing": "Capability missing",
-      "constraints-or-quota": "Constraints or quota",
+      "identity-changed": "Identity changed",
+      "constraints": "Constraints not met",
+      "not-pinned": "Not pinned",
+      "harness-unavailable": "Harness unavailable",
+      "quota-exhausted": "Quota exhausted",
       "not-a-candidate": "Not a candidate"
     },
     "disposition": {

@@ -362,7 +362,6 @@ export type Snapshot = {
   consoleAccess?: ConsoleAccess;
   reminderSettings?: ReminderSettings;
   configuration: Configuration | null;
-  configurationError?: { code: string; message: string } | null;
   buddies: Buddy[];
   /** Preferences for individual buddies. */
   preferences: Preference[];

@@ -175,6 +175,6 @@ class RoutingModesTests(BoardTestCase):
                 schemas.normalize_workflow_submit({'requestId': 'test', 'hostId': 'host', 'task': 'x', 'cwd': '.',
                                                    'executionWorkspace': {'kind': 'existing', 'access': 'read'}, **payload})
             self.assertEqual(raised.exception.code, 'INVALID_ARGUMENT')
-            self.assertIn('retired Host routing input', raised.exception.message)
+            self.assertIn('Unknown', raised.exception.message)
         with self.assertRaises(BoardError):
             router.budget('quick')
