@@ -100,12 +100,18 @@ class Daemon:
         with self._cleanup_lock:
             pending = tuple(self._cleanup_pending)
             self._cleanup_pending.clear()
+        failed = False
         for run_id in pending:
             try:
                 cleanup_accepted_workspace(self.store, run_id)
             except (BoardError, OSError) as error:
-                # Guard refusals preserve the workspace and its durable plan.
+                # Expected retention preserves the workspace and its durable plan.
+                if isinstance(error, BoardError) and error.code == "NOT_READY":
+                    continue
+                failed = True
                 self.store.record_service_issue("workspace-cleanup", error)
+        if pending and not failed:
+            self.store.clear_service_issue("workspace-cleanup")
 
     def service(self) -> BoardService:
         return BoardService(
@@ -206,6 +212,7 @@ class Daemon:
 
     def cancel_queued(self, note: str | None, *, exclude: set[str] | None = None) -> int:
         count = 0
+        failed = False
         for task in self.store.active_work()["queuedTasks"]:
             if exclude and task["taskId"] in exclude:
                 continue
@@ -214,12 +221,16 @@ class Daemon:
                                        initiator="service")
                 count += 1
             except BoardError as error:
+                failed = True
                 self.store.record_service_issue("cancel-queued", error)
                 continue
+        if not failed:
+            self.store.clear_service_issue("cancel-queued")
         return count
 
     def cancel_active(self, note: str | None, *, exclude: set[str] | None = None) -> int:
         count = 0
+        failed = False
         for attempt in self.store.active_work()["attempts"]:
             if exclude and attempt["taskId"] in exclude:
                 continue
@@ -228,8 +239,11 @@ class Daemon:
                                        initiator="service")
                 count += 1
             except BoardError as error:
+                failed = True
                 self.store.record_service_issue("cancel-active", error)
                 continue
+        if not failed:
+            self.store.clear_service_issue("cancel-active")
         return count
 
     def drain(self, seconds: int) -> list[dict]:

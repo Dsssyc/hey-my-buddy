@@ -228,6 +228,12 @@ class HarnessServiceTests(BoardTestCase):
         issue = self.board.service_issues()[0]
         self.assertEqual((issue["stage"], issue["code"], issue["message"]),
                          ("harness-discovery:codex", "RuntimeError", "fixture probe defect"))
+        self.board.record_service_issue("harness-discovery:dsh", RuntimeError("other harness still failed"))
+        ready = {"harness": "codex", "status": "ready", "command": ["/fixture/codex"], "reason": None}
+        with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"harness": "codex", "managerRecords": [], "candidates": []}), \
+             patch("hey_my_buddy.blackboard.service.harness_health._discover", return_value=ready):
+            self.call("capabilities", refresh=True, harness="codex")
+        self.assertEqual([item["stage"] for item in self.board.service_issues()], ["harness-discovery:dsh"])
 
     def test_background_scan_failure_is_visible_and_scan_continues(self):
         from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
@@ -237,3 +243,7 @@ class HarnessServiceTests(BoardTestCase):
         self.assertEqual(refresh.call_count, 4)
         issue = self.board.service_issues()[0]
         self.assertEqual((issue["stage"], issue["code"]), ("harness-scan:dsh", "HARNESS_UNAVAILABLE"))
+        with patch.object(self.service.harnesses, "refresh", return_value={}):
+            HarnessHealth.kick(self.service.harnesses)
+            self.service.harnesses._thread.join()
+        self.assertEqual(self.board.service_issues(), [])

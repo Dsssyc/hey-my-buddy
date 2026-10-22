@@ -49,7 +49,7 @@ SERVICE_ENVIRONMENT_KEYS = frozenset({
     # This program's private roots, interpreter selection and launch settings.
     'HMB_STATE_DIR', 'HMB_RUNTIME_ROOT', 'HMB_RUNTIME', 'HMB_RUNTIME_IDENTITY',
     'HMB_MAX_CONCURRENT', 'HMB_WAIT_CAPACITY', 'HMB_CONSOLE_PORT',
-    'HMB_MODEL_CATALOG_FILE', 'HMB_DEBUG',
+    'HMB_MODEL_CATALOG_FILE',
     'HMB_AGENT_SKILLS_DIR', 'HMB_CLAUDE_SKILLS_DIR', 'UV_BIN',
 })
 
