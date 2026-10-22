@@ -44,7 +44,7 @@ Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试
 
 文件实验的四个单文件窗口各重复三次：写完未 fsync、fsync 后、替换前被杀都读到完整 OLD，替换后被杀读到完整 NEW。此证据没有覆盖 native journal、多文件绑定、gzip 尾部、备份恢复器或断电；阶段 C 的验收也不能替拟换代的 Windows API 完成验收。当前 `publish_bytes` 的 Windows 可变发布仍调用 `os.replace`，finally 会清理其临时文件；不能写成当前产品已经保留失败的临时文件或支持带读者换代。
 
-Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInfoEx, POSIX_SEMANTICS | REPLACE_IF_EXISTS)`，先做实验再落地。它在临时文件句柄上用一条路径覆盖目标缺席的首次发布和已有目标的换代，带过去的是已在该临时文件句柄上校验的 owner/DACL；新实现写完后仍保留该句柄，flush/fsync 后按句柄改名，完成后关闭。不可变对象继续 compare-and-create，备份的目录 journal 协议保持现状。不实现 delete-then-rename，不保留多套替换 API 的运行时回退。
+Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInfoEx, POSIX_SEMANTICS | REPLACE_IF_EXISTS)`，先做实验再落地。它在临时文件句柄上用一条路径覆盖目标缺席的首次发布和已有目标的换代，带过去的是已在该临时文件句柄上校验的 owner/DACL；新实现写完后仍保留该句柄，flush/fsync 后按句柄改名，完成后关闭。不可变对象继续 compare-and-create，备份的目录 journal 协议保持现状。不实现 delete-then-rename，不保留多套替换 API 的运行时回退。桌面实验已选定这一机制（[桌面实验记录](windows-experiments-desktop.md)）：普通令牌下连续发布 1000 次、无重试、零错误；首次发布、无读者与允许删除共享的读者都成功；禁止删除共享的读者让发布以错误 32 失败，目标带 READONLY 时为错误 5，所以产品自己的读者一律允许删除共享，产品也不给自己的文件设 READONLY。实验时机器上的实时扫描来自联想预装的杀毒软件（火绒引擎），Defender 处于被动状态，未测。
 
 现有文件实验只证明：允许删除共享的目标读者持有时，os.replace 和 `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` 各三次错误 5，ReplaceFileW 三次成功；POSIX 语义改名尚未试过。Host 本轮审查指出 ReplaceFileW 对目标缺席需要另一条路径，且会把被替换文件的 ACL、属性与对象 ID 合到新文件，因此先试按句柄的 POSIX 语义改名。上述新 API 的完整性、元数据与耐久性均未在测试机验证，不能由选型推导已可用。
 
@@ -80,7 +80,7 @@ Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInf
 
 有序停止沿现有 ExecutionLive stop 进入 harness 原生 interrupt/close，宽限后强停 native Job，必要时强停根 Job。`process_handle.py:signal_group` 的 CTRL_BREAK 不是无控制台的通用软停：实验的 NO_WINDOW/new-group 替身调用成功但 0.5 秒后仍活着，私有停止文件协议则退出 0，TerminateJobObject 则强停后全空。停止文件仅为实验替身，产品不新增文件停止协议。command 替身无原生协议，不承诺 POSIX SIGTERM 的处理机会，不伪造负退出码。
 
-执行与 native 子进程保留 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`，仍先 suspended、加入 Job 再恢复，不设 breakaway；只有服务使用 detached 加 breakaway。NO_WINDOW 不证明没有 conhost，残留由终止 native Job 并观察全空处理。Host 本轮审查依据 Windows 文档指出，无控制台父进程启动未带 NO_WINDOW 的控制台程序会新开可见窗口，harness 派生的 cmd、pwsh、git 未必设置该标志；测试机尚未实测这一桌面行为。因此不为消除 conhost 改执行/native 的启动方式，补项 2、4 只验证保留方案的窗口及收尾，不安排 detached 对照。
+执行与 native 子进程保留 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`，仍先 suspended、加入 Job 再恢复，不设 breakaway；只有服务使用 detached 加 breakaway。NO_WINDOW 不证明没有 conhost，残留由终止 native Job 并观察全空处理。桌面实验已实测（[桌面实验记录](windows-experiments-desktop.md)）：detached 的服务替身以 flags=0 起的 Python 子进程得到可见窗口，从 PowerShell 与 VS Code 终端启动时都出现；而 NO_WINDOW 的执行经 cmd、pwsh、git 派生的后代，采样时都没有窗口。所以服务自己起的每一个控制台子进程都必须带 CREATE_NO_WINDOW，包括阶段 D 放进 Job 的发现探针。因此不为消除 conhost 改执行/native 的启动方式，补项 2、4 只验证保留方案的窗口及收尾，不安排 detached 对照。
 
 ## 5. 后代停止、conhost 与共同结算次序
 
@@ -118,15 +118,15 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 阶段 A 已完成上述两份模型无关实验，相关结论逐项并入本文；剩余实验如下，不包含目录身份或电源操作。每项在新的独立实验根运行，记录源码、Python/CLI/工具版本、令牌、会话、完整身份、Job flags/成员、原始输出、错误码及最后收尾。显式安装探针 Python 使用私有根及 uv 的 `--no-bin --no-registry`，不触碰日常服务、看板和环境。只用模型无关替身及版本命令，不调用模型。
 
-1. 桌面普通令牌与交替提权：开发者同一用户打开普通及管理员 PowerShell，分别记录 TokenElevation、TokenOwner 和组，特别记录普通令牌 Administrators 的 deny-only 属性；固定 Python 3.12.13，在宽继承父目录和默认父目录逐级用 0700 建根，读回每级 owner/DACL/继承。先测原样提权创建后普通访问，再测提权进程先把令牌默认属主设为当前用户的政策；普通建根后管理员创建子目录、凭据及 SQLite/WAL/SHM，普通窗口重新访问，再反向重复，另测 WAL/SHM 重建。覆盖默认状态目录及 PowerShell 先建目录的入口。若这一政策使两种令牌均可用就按此落地；若设置被拒，就采用第 2 节在提权启动边界拒绝的分支，不加主体、不自动修既有 ACL。
+1. 桌面普通令牌与交替提权：开发者同一用户打开普通及管理员 PowerShell，分别记录 TokenElevation、TokenOwner 和组，特别记录普通令牌 Administrators 的 deny-only 属性；固定 Python 3.12.13，在宽继承父目录和默认父目录逐级用 0700 建根，读回每级 owner/DACL/继承。先测原样提权创建后普通访问，再测提权进程先把令牌默认属主设为当前用户的政策；普通建根后管理员创建子目录、凭据及 SQLite/WAL/SHM，普通窗口重新访问，再反向重复，另测 WAL/SHM 重建。覆盖默认状态目录及 PowerShell 先建目录的入口。若这一政策使两种令牌均可用就按此落地；若设置被拒，就采用第 2 节在提权启动边界拒绝的分支，不加主体、不自动修既有 ACL。已完成（[桌面实验记录](windows-experiments-desktop.md)）：提权进程把默认属主设为当前用户之后，目录、凭据、SQLite 及其 WAL/SHM 在两种令牌间可交替访问和重建；不设时普通令牌打不开管理员属主的对象。阶段 B 按这一政策落地。
 
-2. 桌面启动方和窗口：开发者分别从 PowerShell、VS Code 终端及已有 Host CLI 工具 shell 启动私有服务替身，独立观察方登记真实 PID/FILETIME、会话和 Job，再关闭启动窗口/shell。服务使用 detached/new-group/breakaway；在可确认不属于 Job 的启动方核实额外 breakaway 是否被忽略，并测允许/禁止脱离的外层，决定是否可以一律加标志。执行和 native 保留 NO_WINDOW/new-group，观察其窗口、HWND、conhost，以及它们经 cmd/pwsh/git 起控制台孙进程的窗口和成员；不安排执行/native 的 detached 对照。服务及后代独立存活且窗口行为满足要求才验收相应入口，拒绝脱离的外层明确不支持。实际 Host shell 若不能在无模型调用条件下取得，该入口继续未验证。
+2. 桌面启动方和窗口：开发者分别从 PowerShell、VS Code 终端及已有 Host CLI 工具 shell 启动私有服务替身，独立观察方登记真实 PID/FILETIME、会话和 Job，再关闭启动窗口/shell。服务使用 detached/new-group/breakaway；在可确认不属于 Job 的启动方核实额外 breakaway 是否被忽略，并测允许/禁止脱离的外层，决定是否可以一律加标志。执行和 native 保留 NO_WINDOW/new-group，观察其窗口、HWND、conhost，以及它们经 cmd/pwsh/git 起控制台孙进程的窗口和成员；不安排执行/native 的 detached 对照。服务及后代独立存活且窗口行为满足要求才验收相应入口，拒绝脱离的外层明确不支持。实际 Host shell 若不能在无模型调用条件下取得，该入口继续未验证。部分完成（[桌面实验记录](windows-experiments-desktop.md)）：两个入口的启动 shell 都已在某个 Job 里，带 breakaway 的服务替身创建成功；外层禁止脱离时创建以错误 5 失败，按上文明确不支持。服务替身的子进程弹出了窗口，见第 5 节的结论。启动窗口关掉之后服务是否继续存活，这次没有采到重叠时段，留到阶段 D 用真实服务验收；Host CLI 工具 shell 未观察。
 
 3. 根 Job 与真实 venv 链：已由补充实验完成（[a3 记录](windows-experiments-a3.md)）。后代没有离开根，保留 venv 入口（第 4 节）。执行持根句柄、服务确认后关闭创建句柄的次序成立，另一进程能按原名接回且成员身份不变；执行正常退出或被强杀后，按名打开在 0.5 ms 内返回错误 2，全部登记成员在 9.1 ms 内缺席；服务持临时句柄时 TerminateJobObject 后 ActiveProcesses=0。各暂停点上的句柄次序、服务重启与同契约安装不杀执行、停止观察中崩溃与先后崩溃后的结算、marker 前的意图仍 unknown，以及重名创建失败而原 flags 不变，由阶段 D 在产品上验收，不再单列实验；产品上不成立时 D 不验收，保存反例交 Host 重新定机制。
 
-4. conhost 与版本发现：桌面使用 NO_WINDOW/new-group，必要时以 new-console 作可见窗口参照，运行协议停止/强停替身并记录根/native 两层完整成员；按相同最终启动方式复跑 Codex CLI 0.163.0 的产品发现与直接 Node 加 JS 版本命令，保留失败时成员、创建时间和主进程退出时刻。实际 CLI 版本变化须重新注明，不能沿用旧结论。不做执行/native 的 detached 对照；验证协议先行、native 非空再终止、全空才回执、执行退出后根停止证据成立。若产品失败时残留 conhost 才可归因于同一机制；否则追实际失败原因，不过滤计数。DSH shim 实现及其版本发现由另一任务交证据。经 SSH 的部分已完成（[a3 记录](windows-experiments-a3.md)）：NO_WINDOW 下根与 native 两层都计入 conhost；协议停止后 native 有一次还剩 pwsh，终止 native Job 后全空。Codex CLI 0.163.0 与 DSH CLI 的产品发现已在 shim 的独立复跑中得到 ready。桌面上的可见窗口部分仍待做。
+4. conhost 与版本发现：桌面使用 NO_WINDOW/new-group，必要时以 new-console 作可见窗口参照，运行协议停止/强停替身并记录根/native 两层完整成员；按相同最终启动方式复跑 Codex CLI 0.163.0 的产品发现与直接 Node 加 JS 版本命令，保留失败时成员、创建时间和主进程退出时刻。实际 CLI 版本变化须重新注明，不能沿用旧结论。不做执行/native 的 detached 对照；验证协议先行、native 非空再终止、全空才回执、执行退出后根停止证据成立。若产品失败时残留 conhost 才可归因于同一机制；否则追实际失败原因，不过滤计数。DSH shim 实现及其版本发现由另一任务交证据。经 SSH 的部分已完成（[a3 记录](windows-experiments-a3.md)）：NO_WINDOW 下根与 native 两层都计入 conhost；协议停止后 native 有一次还剩 pwsh，终止 native Job 后全空。Codex CLI 0.163.0 与 DSH CLI 的产品发现已在 shim 的独立复跑中得到 ready。桌面上的可见窗口部分仍待做。桌面部分已完成（[桌面实验记录](windows-experiments-desktop.md)）：NO_WINDOW 下根与 native 的成员采样时都没有窗口，协议停止与直接强停都收敛到全空。
 
-5. Defender 与文件换代：开发者打开实时扫描，首尾保存 Get-MpComputerStatus 均为 RealTimeProtectionEnabled=True，保持普通令牌和锁定环境。在独立根先对 SetFileInformationByHandle 的 FileRenameInfoEx 加 POSIX_SEMANTICS/REPLACE_IF_EXISTS 做第 3 节全矩阵、强杀窗口及实际恢复器；失败才对 ReplaceFileW 做同矩阵，另核对其首次发布分支和元数据合并，最后只选一个机制。选定机制再至少 1000 次无受控读者、无重试连续发布，分开统计人为占用和热路径异常、errno/winerror及迭代号。异常时保留实际文件和摘要，释放已知读者后记录继续结果；无偶发不加重试，有证据才定唯一边界的一次有界重试，未满足完整性/ACL 就不采用。开发者只需安排设置与桌面，探针由后续实施任务执行并保存原始输出。
+5. Defender 与文件换代：开发者打开实时扫描，首尾保存 Get-MpComputerStatus 均为 RealTimeProtectionEnabled=True，保持普通令牌和锁定环境。在独立根先对 SetFileInformationByHandle 的 FileRenameInfoEx 加 POSIX_SEMANTICS/REPLACE_IF_EXISTS 做第 3 节全矩阵、强杀窗口及实际恢复器；失败才对 ReplaceFileW 做同矩阵，另核对其首次发布分支和元数据合并，最后只选一个机制。选定机制再至少 1000 次无受控读者、无重试连续发布，分开统计人为占用和热路径异常、errno/winerror及迭代号。异常时保留实际文件和摘要，释放已知读者后记录继续结果；无偶发不加重试，有证据才定唯一边界的一次有界重试，未满足完整性/ACL 就不采用。开发者只需安排设置与桌面，探针由后续实施任务执行并保存原始输出。已完成，Defender 除外（[桌面实验记录](windows-experiments-desktop.md)）：选定 FileRenameInfoEx，结论见第 3 节；产品恢复器的接入与 Defender 开启条件留给阶段 C 的后续。
 
 6. 私有边界与会话补项：DACL 缺失、对象/条件/未知 ACE 用合成 ACE 列表及查询结果写单元测试，不在测试机构造；目录联接与叶子重解析竞态已由补充实验完成，结论见第 2 节；新增 ACL bootstrap 的首次、active 指针及源替换入口在实现后原生补测，记录接受/拒绝与句柄关闭。SSH 会话的 sessionId 为 0，桌面会话与它不同，可以实测跨会话。若当前桌面与 SSH 的 ProcessIdToSessionId 确实不同，用一边持有的 Local Job 在另一边尝试打开，再回原会话核对原成员仍活；两边相同就不称跨会话实测，不要求注销或新建会话。不同会话未取得时保留原生证据缺口，代码仍拒绝把另一会话的错误 2 当停止。此项不依赖重启、快速启动、睡眠或休眠实验。
 
@@ -163,3 +163,5 @@ E 的 ACK 语义、保留回执的交接规则和新增接收表均改变契约/
 Windows 换代先试 FileRenameInfoEx 的 POSIX 语义改名，失败才测 ReplaceFileW，最终只留一个机制；补项 5 和阶段 C 后续随之调整。ACE 形状反例改为单元测试，junction/bootstrap 保留原生补项。修正回滚入口为 upgrade:start，将桌面实验置第 7 节、阶段置第 8 节，顺排节号；ADR 条款与 D 的身份/升级判断同步改写，阶段 E 接收结算及接收表、F 测试收尾和其余阶段版本判断保留。
 
 2026-10-22 按补充实验（[a3 记录](windows-experiments-a3.md)）：补项 3 完成，保留 venv 入口，不改启动链；固定祖先改以 `GENERIC_READ` 打开，因为只请求 `FILE_READ_ATTRIBUTES` 的句柄挡不住改名；补项 6 的目录竞态完成。
+
+2026-10-22 按桌面实验（[桌面实验记录](windows-experiments-desktop.md)）：补项 1 完成，阶段 B 采用提权进程设默认属主的政策；补项 5 选定 FileRenameInfoEx；服务起的每个控制台子进程都带 CREATE_NO_WINDOW；跨会话的错误 2 不是停止证据，已实测；启动窗口关闭后服务的存活留到阶段 D 验收。

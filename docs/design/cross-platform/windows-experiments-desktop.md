@@ -67,7 +67,7 @@ normal2 对上述 baseline 目录/凭据/数据库的访问被拒，句柄 ACL �
 
 桌面两组均以 `CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` 创建 execution/native，分配对应 kill-on-close、禁止脱离 Job 后再恢复；没有执行/native 的 detached 对照。native 分别经 cmd、pwsh、Git shell alias 启动 Python 叶子。Git 路径实际登记到 Git 启动器、真正 git、sh 和 Python 叶子；全部成员继续计入根/native，不过滤 conhost。
 
-两组起齐时根 Job 均为 12 个成员，native 均为 10 个成员；根含两个 conhost，native 含其中一个。cmd/pwsh/git 及叶子的 PID、FILETIME、两层成员关系保存在 handoff 快照中，两个快照里所有成员的 EnumWindows 列表均为空。NEW_CONSOLE 参照的 Python PID 32328、FILETIME 134371332794800797、HWND 1639664 则为 visible=true，约 4 秒后自行停止。开发者尚未回报本步骤前段是否有瞬时弹窗以及参照窗口是否亲眼出现；空列表只覆盖采样时刻，不替代完整时段的肉眼观察。
+两组起齐时根 Job 均为 12 个成员，native 均为 10 个成员；根含两个 conhost，native 含其中一个。cmd/pwsh/git 及叶子的 PID、FILETIME、两层成员关系保存在 handoff 快照中，两个快照里所有成员的 EnumWindows 列表均为空。NEW_CONSOLE 参照的 Python PID 32328、FILETIME 134371332794800797、HWND 1639664 则为 visible=true，约 4 秒后自行停止。开发者事后回报：这一段似乎没有弹窗，但当时在看 Host 给的步骤，可能有一闪而过的没看到；参照窗口也没有留意到。空列表只覆盖采样时刻，不替代完整时段的肉眼观察。（Host 于合入时补记）
 
 | 桌面组 | native 收尾 | native 最终计数 | execution 退出后根名首次错误 2 | 全部登记身份缺席的最后采样 |
 | --- | --- | --- | --- | --- |
@@ -106,7 +106,7 @@ Host 另转交开发者的一次普通令牌观察：直接运行 Codex app（MS
 
 ## 尚未取得的证据
 
-本次没有完成桌面启动 shell 已退出后服务继续存活的重叠采样；两个服务入口实际出现额外子进程窗口，窗口条件不满足。没有取得已确认无 Job 的启动方、已有 Host CLI 工具 shell、完整 Codex 登录发现、DSH 重跑、实际产品默认状态/ACL bootstrap、产品恢复器或 Defender 实时保护开启条件。desktop-native 的采样窗口列表和 NEW_CONSOLE 可见记录已取得，开发者对整段可见性的口头反馈尚未收到。第一次重复启动的跨会话持有者证据被覆盖，不能补写为完成。
+本次没有完成桌面启动 shell 已退出后服务继续存活的重叠采样；两个服务入口实际出现额外子进程窗口，窗口条件不满足。没有取得已确认无 Job 的启动方、已有 Host CLI 工具 shell、完整 Codex 登录发现、DSH 重跑、实际产品默认状态/ACL bootstrap、产品恢复器或 Defender 实时保护开启条件。desktop-native 的采样窗口列表和 NEW_CONSOLE 可见记录已取得，开发者对整段可见性没有可靠的肉眼观察。第一次重复启动的跨会话持有者证据被覆盖，不能补写为完成。
 
 这些缺口不以 SSH 预检、命令退出 0、开发者 READY 或 Worker 完成消息替代；后续实施及 Host 验收应使用本文逐项边界。没有安排重启、注销、睡眠、休眠、系统设置或关闭杀毒软件的动作。
 
