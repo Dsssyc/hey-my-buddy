@@ -69,7 +69,7 @@ class WorkspaceApiTests(RealWorkspaceTestCase):
         for name, operation in OPERATIONS.items():
             with self.subTest(operation=operation):
                 self.assertIn(name, cli.METHODS)
-                self.assertIn(name, cli.CONTROL_METHODS)
+                self.assertIn(name, cli.cli_help._CONTROL_METHODS)
                 self.assertIn(operation, CONTROL_OPERATIONS)
                 self.assertNotIn(operation, CONSOLE_OPERATIONS)
                 self.assertTrue(callable(getattr(BuddyControl, operation)))

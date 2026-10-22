@@ -35,7 +35,6 @@ MICRO_TASK_RECEIPTS = frozenset(
         "reclaim",
         "scope-amend",
         "workspace-resolve",
-        "suggest",
     }
 )
 #: Commands whose response is one execution task view.
@@ -44,9 +43,9 @@ TASK_VIEWS = frozenset({"status", "execution-cancel", "execution-retry", "execut
 _TITLE_LIMIT = 120
 
 
-def pop_output_mode(params: object) -> str:
+def pop_output_mode(params: dict) -> str:
     """Remove and validate the CLI-local ``output`` option before any RPC."""
-    if not isinstance(params, dict) or "output" not in params:
+    if "output" not in params:
         return OUTPUT_BRIEF
     mode = params.pop("output")
     if mode not in OUTPUT_MODES:
@@ -58,7 +57,7 @@ def pop_output_mode(params: object) -> str:
 
 def render(method: str, response: Any, mode: str = OUTPUT_BRIEF) -> Any:
     """The printed form of one successful CLI response."""
-    if mode == OUTPUT_FULL or not isinstance(response, dict) or set(response) == {"error"}:
+    if mode == OUTPUT_FULL or set(response) == {"error"}:
         return response
     projector = _PROJECTORS.get(method)
     if projector is None:
@@ -76,10 +75,8 @@ def _present(value: Any) -> bool:
     return value is not None and value != [] and value != {}
 
 
-def _pick(source: dict | None, keys: tuple[str, ...]) -> dict:
+def _pick(source: dict, keys: tuple[str, ...]) -> dict:
     """Copy the reported keys whose values carry information."""
-    if not isinstance(source, dict):
-        return {}
     return {key: source[key] for key in keys if key in source and _present(source[key])}
 
 
@@ -99,7 +96,7 @@ def _title(task_text: Any, summary: Any) -> str | None:
 
 def _shutdown(value: Any) -> Any:
     """Keep a complete shutdown report unless it is fully confirmed."""
-    if not isinstance(value, dict):
+    if value is None:
         return value
     if value.get("selfConfirmed") is True and value.get("descendantsConfirmed") is True and not value.get("unconfirmedCount"):
         return {"selfConfirmed": True, "descendantsConfirmed": True}
@@ -107,7 +104,7 @@ def _shutdown(value: Any) -> Any:
 
 
 def _nonzero(mapping: Any) -> dict:
-    if not isinstance(mapping, dict):
+    if mapping is None:
         return {}
     return {key: value for key, value in mapping.items() if value}
 
@@ -118,8 +115,13 @@ _TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode", "res
 #: The routing basis keeps the frozen submission facts (hard constraints and the
 #: user exclusions that narrowed the candidate set) beside the choice itself, so
 #: a Host sees why a route had few candidates without a table read.
+_ROUTING_DISPATCH = (
+    "routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
+    "budget", "routingBudget", "routerRetryIntervalSeconds", "decisionModel", "routingBoundary",
+)
 _ROUTING_BRIEF = ("status", "source", "reason", "selectedBuddy", "decisionId",
-                  "routingMode", "requestedRoutingMode", "fallback", "constraints", "requiredCapabilities", "routingBasis")
+                  "routingMode", "requestedRoutingMode", "fallback", "constraints", "requiredCapabilities", "routingBasis",
+                  *_ROUTING_DISPATCH)
 _WORKSPACE_BRIEF = ("path", "kind", "access", "inputCommit")
 _OUTPUT_ARTIFACT = (
     "artifactId",
@@ -146,14 +148,12 @@ _PLAN_BRIEF = ("planId", "state", "eligible", "reasons", "path", "kind", "expire
 
 
 def _integration_brief(row: Any) -> dict:
-    if not isinstance(row, dict):
-        return row
     brief = _pick(row, ("integrationId", "artifactId", "state", "strategy", "note", "afterCommit"))
     target = row.get("target")
-    if isinstance(target, dict):
+    if target is not None:
         brief["target"] = _pick(target, ("path", "ref"))
     verification = row.get("verification")
-    if isinstance(verification, dict) and verification:
+    if verification:
         # The verification record can be large; its outcome fields are enough to act on.
         brief["verification"] = _pick(verification, ("matchingPathsCount", "differingPathsCount",
                                                      "missingPathsCount", "hostPathsCount", "hostPaths", "note"))
@@ -161,26 +161,22 @@ def _integration_brief(row: Any) -> dict:
 
 
 def _plan_brief(plan: Any) -> Any:
-    if not isinstance(plan, dict):
-        return plan
     brief = _pick(plan, _PLAN_BRIEF)
     retention = plan.get("retention")
-    if isinstance(retention, dict):
+    if retention is not None:
         brief["retained"] = {
-            key: len(value) if isinstance(value, list) else True
+            key: len(value)
             for key, value in retention.items()
             if key in ("artifactIds", "fixedRefs", "outputPatches") and _present(value)
         }
     result = plan.get("result")
-    if isinstance(result, dict):
+    if result is not None:
         brief["result"] = _pick(result, ("alreadyRemoved",))
     return brief
 
 
 def _request_brief(request: Any) -> Any:
     """An open boundary keeps every reported field the Host needs to decide."""
-    if not isinstance(request, dict):
-        return request
     return {key: value for key, value in request.items()
             if key in ("summary", "reason") or value is not None and value != []}
 
@@ -189,7 +185,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
     """Brief projection of the compact micro-task view."""
     if view["task"]["lineage"]["kind"] not in ("micro-task", "helper"):
         brief = {"runId": view.get("runId")}
-        if isinstance(view.get("task"), dict):
+        if view.get("task") is not None:
             brief["task"] = task_brief(view["task"])
         for key in ("routingHistory",):
             if key in view:
@@ -231,16 +227,17 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
         )
     )
     routing = view.get("routing")
-    if isinstance(routing, dict):
-        brief["routing"] = _pick(routing, _ROUTING_BRIEF)
+    if routing is not None:
+        brief["routing"] = {key: routing[key] for key in _ROUTING_BRIEF
+                            if key in routing and (key in _ROUTING_DISPATCH or _present(routing[key]))}
     workspace = view.get("workspace")
-    if isinstance(workspace, dict):
+    if workspace is not None:
         brief["workspace"] = _pick(workspace, _WORKSPACE_BRIEF)
     scope = view.get("scope")
-    if isinstance(scope, dict):
+    if scope is not None:
         brief["scope"] = _pick(scope, ("scopeVersion", "writeScope"))
     turn = view.get("currentTurn")
-    if isinstance(turn, dict):
+    if turn is not None:
         current = _pick(turn, _TURN_BRIEF)
         if turn_summary:
             current.update(_pick(turn, ("summary", "summaryTruncated", "remaining")))
@@ -248,17 +245,17 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
         brief["currentTurn"] = current
     if view.get("activeRequest") is not None:
         brief["activeRequest"] = _request_brief(view["activeRequest"])
-    counts = view.get("counts") if isinstance(view.get("counts"), dict) else {}
+    counts = view.get("counts", {})
     pending = view.get("pendingRequests")
-    if isinstance(pending, list) and len(pending) > 1:
-        brief["pendingRequests"] = [_pick(row, ("requestId", "kind", "state")) for row in pending]
+    if pending is not None and len(pending) > 1:
+        brief["pendingRequests"] = [_pick(row, ("requestId", "kind", "state", "routingBoundary")) for row in pending]
     if counts.get("openRequests", 0) > 1:
         brief["openRequests"] = counts["openRequests"]
     children = view.get("children")
-    if isinstance(children, list) and children:
+    if children:
         brief["children"] = [_pick(row, _CHILD_BRIEF) for row in children]
     artifacts = view.get("artifacts")
-    if isinstance(artifacts, list) and artifacts:
+    if artifacts:
         # Output artifacts carry what integration and acceptance need; pinned inputs
         # and turn manifests are counted and stay readable in the full view.
         outputs = [
@@ -268,17 +265,17 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
         if len(outputs) < len(artifacts):
             brief["otherArtifacts"] = len(artifacts) - len(outputs)
     conflicts = view.get("workspaceConflicts")
-    if isinstance(conflicts, list) and conflicts:
+    if conflicts:
         brief["workspaceConflicts"] = [_pick(row, _CONFLICT_BRIEF) for row in conflicts]
     integrations = view.get("integrations")
-    if isinstance(integrations, list) and integrations:
+    if integrations:
         brief["integrations"] = [_integration_brief(row) for row in integrations]
     if view.get("cleanup") is not None:
         brief["cleanup"] = _plan_brief(view["cleanup"])
     if view.get("finalArtifactId") is not None:
         brief["finalArtifactId"] = view["finalArtifactId"]
     task = view.get("task")
-    if isinstance(task, dict):
+    if task is not None:
         brief.update(_pick(task, ("acceptedAt", "terminationReason", "interruptionEvidence")))
     if "shutdown" in view:
         brief["shutdown"] = _shutdown(view["shutdown"])
@@ -295,7 +292,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
 
 def micro_task_receipt(response: dict) -> dict:
     """A mutation receipt: the resulting state plus the operation's own result."""
-    if response.get("task", {}).get("lineage", {}).get("kind") not in ("micro-task", "helper"):
+    if response["task"]["lineage"]["kind"] not in ("micro-task", "helper"):
         return response
     receipt = micro_task_brief(response, turn_summary=False)
     receipt["view"] = "receipt"
@@ -304,9 +301,9 @@ def micro_task_receipt(response: dict) -> dict:
     for key in ("verdict", "integrationId", "removed", "controlFile"):
         if key in response and _present(response[key]):
             receipt[key] = response[key]
-    if isinstance(response.get("integration"), dict):
+    if response.get("integration") is not None:
         receipt["integration"] = _integration_brief(response["integration"])
-    if isinstance(response.get("reclaim"), dict):
+    if response.get("reclaim") is not None:
         # The retention evidence stays in the service view; a receipt carries the
         # outcome and, when blocked, the concrete reasons.
         receipt["reclaim"] = _pick(response["reclaim"], ("removed", "alreadyRemoved", "reasons", "path", "planId"))
@@ -314,7 +311,7 @@ def micro_task_receipt(response: dict) -> dict:
         receipt["plan"] = _plan_brief(response["plan"])
         receipt.pop("cleanup", None)
     control = response.get("control")
-    if isinstance(control, dict):
+    if control is not None:
         receipt["control"] = _pick(control, ("hostId", "ownerGeneration", "controlFile"))
     target_run = response.get("targetRunId")
     if target_run is not None and target_run != response.get("runId"):
@@ -434,15 +431,15 @@ def task_brief(view: dict) -> dict:
     """Brief projection of one execution task view (no spec, task text or runner payload)."""
     brief = _pick(view, (*_TASK_BRIEF, "fixes", "fixedBy"))
     lineage = view.get("lineage")
-    if isinstance(lineage, dict):
+    if lineage is not None:
         buddy = lineage.get("buddy")
-        if isinstance(buddy, dict):
+        if buddy is not None:
             brief["buddy"] = _pick(buddy, ("harness", "provider", "model", "effort"))
         else:
             brief["buddy"] = None
         brief.update(_pick(lineage, ("kind", "parentRunId", "leadOwnership")))
     workflow = view.get("workflow")
-    if isinstance(workflow, dict):
+    if workflow is not None:
         brief["workflow"] = _pick(
             workflow,
             ("state", "awaitingHost", "ownerGeneration", "revision", "continuationCount", "activeRequestId",
@@ -454,10 +451,10 @@ def task_brief(view: dict) -> dict:
     if view.get("quotaFailure") is not None:
         brief["quotaFailure"] = view["quotaFailure"]
     activity = view.get("activity")
-    if isinstance(activity, dict) and activity:
+    if activity:
         brief["activity"] = activity
     inquiries = view.get("inquiries")
-    if isinstance(inquiries, dict) and inquiries:
+    if inquiries:
         brief["inquiries"] = inquiries
     title = _title(view.get("task") or (view.get("spec") or {}).get("task"), None)
     if title:
@@ -469,21 +466,19 @@ def task_brief(view: dict) -> dict:
 def list_brief(response: dict) -> dict:
     rows = response["runs"]
     brief_rows = []
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
+    for row in rows:
         entry = _pick(row, ("runId", "requestId", "adapter", "status", "workflowState", "awaitingHost", "createdAt"))
         lineage = row.get("lineage")
-        if isinstance(lineage, dict):
+        if lineage is not None:
             buddy = lineage.get("buddy")
             entry["buddy"] = _pick(buddy, ("harness", "provider", "model", "effort")) if buddy else None
-            if isinstance(buddy, dict) and buddy.get("model"):
+            if buddy is not None and buddy.get("model"):
                 entry["model"] = buddy["model"]
             entry.update(_pick(lineage, ("kind", "parentRunId", "currentHostId", "leadOwnership")))
-        workflow = row.get("workflow") if isinstance(row.get("workflow"), dict) else {}
+        workflow = row.get("workflow") or {}
         title = _title(row.get("task") or (row.get("spec") or {}).get("task"), workflow.get("resultSummary"))
         explicit = workflow.get("title")
-        if isinstance(explicit, str) and explicit.strip():
+        if explicit is not None and explicit.strip():
             title = explicit.strip()[:_TITLE_LIMIT]
         if title:
             entry["title"] = title
@@ -504,10 +499,10 @@ def result_brief(response: dict) -> dict:
     # artifact records (kind, location, content hash, size).
     brief.update(_pick(response, ("attemptId", "resultDelivered", "artifacts")))
     meta = response.get("resultMeta")
-    if isinstance(meta, dict):
+    if meta is not None:
         # Commit metadata stays whole except the artifact list, which `artifacts` reads.
         brief["resultMeta"] = {key: value for key, value in meta.items() if key != "artifacts" and value is not None}
-        if isinstance(meta.get("artifacts"), list):
+        if meta.get("artifacts") is not None:
             brief["resultMeta"]["artifactCount"] = len(meta["artifacts"])
     if response.get("workflowState") is not None:
         from .blocking import _micro_task_result_view
@@ -526,11 +521,11 @@ _AWAIT_DROP = frozenset({"maxWaitSeconds", "createdAt", "cwd"})
 
 
 def _await_result(result: Any) -> Any:
-    if not isinstance(result, dict):
+    if result is None:
         return result
     brief = {key: value for key, value in result.items() if value is not None}
     turn = brief.get("turn")
-    if isinstance(turn, dict):
+    if turn is not None:
         brief["turn"] = {key: value for key, value in turn.items() if value is not None and value != []}
         if turn.get("summary"):
             # The structured turn summary is the execution's report; the runner's stdout
@@ -548,9 +543,8 @@ def _await_result(result: Any) -> Any:
 
 def await_brief(envelope: dict) -> dict:
     brief = {key: value for key, value in envelope.items() if key not in _AWAIT_DROP and value is not None}
-    for key in ("timedOut", "reconnects"):
-        if not brief.get(key):
-            brief.pop(key, None)
+    if not brief.get("timedOut"):
+        brief.pop("timedOut", None)
     if "shutdown" in brief:
         brief["shutdown"] = _shutdown(brief["shutdown"])
     if brief.get("ok") is True:
@@ -558,7 +552,7 @@ def await_brief(envelope: dict) -> dict:
         brief.pop("logPaths", None)
     if "result" in brief:
         result = _await_result(brief["result"])
-        if isinstance(result, dict):
+        if result is not None:
             # A micro-task envelope lifts turn, artifacts and the result command to the
             # top level; the nested copies are identical and printed once.
             for key in ("turn", "artifacts", "resultCommand"):
@@ -567,7 +561,7 @@ def await_brief(envelope: dict) -> dict:
             if brief.get("ok") is True:
                 result.pop("logPaths", None)
         brief["result"] = result
-    if isinstance(brief.get("turn"), dict):
+    if brief.get("turn") is not None:
         brief["turn"] = {key: value for key, value in brief["turn"].items() if value is not None and value != []}
     if brief.get("artifacts") == []:
         brief.pop("artifacts")

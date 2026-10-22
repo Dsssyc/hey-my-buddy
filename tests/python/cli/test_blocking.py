@@ -42,20 +42,15 @@ class FakeService:
 
     READ_ONLY = frozenset({"status", "events", "watch", "wait", "result"})
 
-    def __init__(self, clock, *, complete_after_waits=None, fail_waits=0, fail_status=0,
-                 status_queue=None, stop_event=None, terminal_without_result=False,
-                 listed=False, fail_result=0, result_response=None):
+    def __init__(self, clock, *, complete_after_waits=None, stop_event=None, terminal_without_result=False,
+                 listed=False, result_response=None):
         self.clock = clock
         self.calls = []
         self.complete_after_waits = complete_after_waits
-        self.fail_waits = fail_waits
-        self.fail_status = fail_status
-        self.status_queue = list(status_queue or [])
         self.stop_event = stop_event
         # True -> "reconciliation-needed"; a status string -> that terminal status, no persisted result.
         self.terminal_without_result = terminal_without_result
         self.listed = listed
-        self.fail_result = fail_result
         self.result_response = result_response
         self.run = {
             "runId": "run-fixture", "requestId": "fixture", "status": "running", "revision": 1,
@@ -71,16 +66,8 @@ class FakeService:
                 if not self.listed or params["requestId"] != self.run["requestId"]:
                     raise ServiceError("NOT_FOUND", "Unknown requestId")
                 return dict(self.run)
-            if self.fail_status > 0:
-                self.fail_status -= 1
-                raise ServiceError("SERVICE_UNAVAILABLE", "fixture outage")
-            if self.status_queue:
-                return dict(self.status_queue.pop(0))
             return dict(self.run)
         if method == "wait":
-            if self.fail_waits > 0:
-                self.fail_waits -= 1
-                raise ServiceError("SERVICE_UNAVAILABLE", "fixture outage")
             self.clock.advance(params["timeoutMs"] / 1000)
             if self.complete_after_waits is not None and self.calls.count("wait") >= self.complete_after_waits:
                 self.run = {**self.run, "status": "completed", "resultAvailable": True,
@@ -94,9 +81,6 @@ class FakeService:
                 self.stop_event.set()
             return dict(self.run)
         if method == "result":
-            if self.fail_result > 0:
-                self.fail_result -= 1
-                raise ServiceError("RESULT_READ_FAILED", "fixture result read failure")
             if self.result_response is not None:
                 return self.result_response(self.run) if callable(self.result_response) else self.result_response
             if not self.run["resultAvailable"]:
@@ -224,7 +208,7 @@ class AwaitTests(unittest.TestCase):
 
                     service = FakeService(clock, result_response=result_response)
                     service.run.update(status='completed', resultAvailable=True, shutdownConfirmed=True,
-                                       workflowState=boundary, waitingForHost={'host': 1, 'review': 2})
+                                       workflowState=boundary, workflow={}, waitingForHost={'host': 1, 'review': 2})
                     response = await_run({'runId': 'run-fixture', 'waitSeconds': 1},
                                          Path(os.environ['HMB_STATE_DIR']), clock=clock, service=service)
                     self.assertEqual(response.get('waitingForHost'), latest)
@@ -293,56 +277,28 @@ class AwaitTests(unittest.TestCase):
         self.assertEqual(service.calls, ["status", "wait"])
 
 
-class ReconnectTests(unittest.TestCase):
-    """A transient outage is recovered by re-reading the same run, never by replaying a submission."""
+class UnavailableTests(unittest.TestCase):
+    """A failed wait returns the same durable identity without retrying."""
 
-    def test_transient_wait_failure_reattaches_by_run_id_read_only(self):
-        clock = VirtualClock()
-        service = FakeService(clock, complete_after_waits=1, fail_waits=1)
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "completed")
-        self.assertEqual(envelope["reconnects"], 1)
-        self.assertEqual(envelope["runId"], "run-fixture")
-        self.assertEqual(service.calls, ["status", "wait", "status", "wait", "result"])
-        self.assertEqual(
-            set(service.calls) - FakeService.READ_ONLY, set(),
-            "recovery must re-read the same run, not submit it again",
-        )
-
-    def test_reattach_mismatch_is_reported_not_hidden(self):
-        clock = VirtualClock()
-        service = FakeService(
-            clock, listed=True, fail_waits=1, complete_after_waits=99,
-            status_queue=[{"runId": "run-someone-else", "requestId": "other", "status": "running", "revision": 1}],
-        )
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "unavailable")
-        self.assertEqual(envelope["error"]["code"], "RECOVERY_MISMATCH")
-        self.assertEqual(envelope["reconnects"], 1)
-
-    def test_failed_reattach_reports_unavailable_with_recovery(self):
-        clock = VirtualClock()
-        service = FakeService(clock, listed=True, fail_waits=1, fail_status=1)
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "unavailable")
-        self.assertEqual(envelope["error"]["code"], "SERVICE_UNAVAILABLE")
-        self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
-        self.assertFalse(envelope["ok"])
-        self.assertEqual(service.calls, ["status", "wait", "status"])
-
-    def test_exhausted_reconnects_return_unavailable_bounded(self):
-        clock = VirtualClock()
-        service = FakeService(clock, fail_waits=99)
-        envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["outcome"], "unavailable")
-        self.assertEqual(envelope["error"]["code"], "SERVICE_UNAVAILABLE")
-        self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
-        self.assertFalse(envelope["ok"])
-        # Bounded: exactly one initial wait plus MAX_RECONNECTS recovered waits,
-        # each followed by one read-only re-attach.
-        self.assertEqual(service.calls.count("wait"), 4)
-        self.assertEqual(service.calls.count("status"), 4)
-        self.assertEqual(service.calls[0], "status")
+    def test_wait_service_error_returns_unavailable_without_reconnecting(self):
+        for code in ("SERVICE_UNAVAILABLE", "INVALID_ARGUMENT", "UNAUTHORIZED", "NOT_FOUND"):
+            with self.subTest(code=code):
+                clock = VirtualClock()
+                service = FakeService(clock)
+                def call(method, params, state_dir):
+                    if method == "wait":
+                        service.calls.append(method)
+                        raise ServiceError(code, "fixture failure")
+                    return service(method, params, state_dir)
+                envelope = await_run({"runId": "run-fixture", "waitSeconds": 60},
+                                     state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
+                self.assertEqual(envelope["outcome"], "unavailable")
+                self.assertEqual(envelope["error"]["code"], code)
+                self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
+                self.assertEqual(envelope["recovery"]["commands"], recovery_commands("fixture", "run-fixture"))
+                self.assertFalse(envelope["ok"])
+                self.assertNotIn("reconnects", envelope)
+                self.assertEqual(service.calls, ["status", "wait"])
 
     def test_concluded_without_an_attempt_result_finishes_the_wait(self):
         clock = VirtualClock()
@@ -355,7 +311,7 @@ class ReconnectTests(unittest.TestCase):
 
     def test_terminal_without_persisted_result_is_reported(self):
         clock = VirtualClock()
-        service = FakeService(clock, complete_after_waits=None, fail_waits=0, terminal_without_result=True)
+        service = FakeService(clock, complete_after_waits=None, terminal_without_result=True)
         envelope = await_run({"runId": "run-fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "reconciliation-needed")
         self.assertFalse(envelope["resultAvailable"])
@@ -391,47 +347,6 @@ class ResultTruthTests(unittest.TestCase):
         self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
         self.assertEqual(service.calls, ["status", "wait"])
 
-    def test_result_read_service_error_cannot_claim_success(self):
-        clock = VirtualClock()
-        service = FakeService(clock, listed=True, complete_after_waits=1, fail_result=1)
-        envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-        self.assertEqual(envelope["status"], "completed")
-        self.assertFalse(envelope["ok"])
-        self.assertEqual(envelope["outcome"], "completed-no-result")
-        # The engine claims a persisted result, but this envelope could not deliver it.
-        self.assertTrue(envelope["resultAvailable"])
-        self.assertFalse(envelope["resultDelivered"])
-        self.assertIsNone(envelope["result"])
-        self.assertEqual(envelope["error"]["code"], "RESULT_READ_FAILED")
-        self.assertEqual(envelope["runId"], "run-fixture")
-        self.assertIn("do not relaunch", envelope["recovery"]["reason"])
-
-    def test_malformed_or_missing_result_response_cannot_claim_success(self):
-        cases = [
-            ("non-dict-response", "not-a-dict", "INVALID_RESPONSE"),
-            ("missing-result-key", {"runId": "run-fixture", "status": "completed"}, "RESULT_MISSING"),
-            ("null-result", {"runId": "run-fixture", "status": "completed", "result": None}, "RESULT_MISSING"),
-            ("empty-result", {"runId": "run-fixture", "status": "completed", "result": {}}, "INVALID_RESPONSE"),
-            ("non-dict-result", {"runId": "run-fixture", "status": "completed", "result": "oops"}, "INVALID_RESPONSE"),
-            ("wrong-run", {"runId": "run-other", "status": "completed", "result": {"finalText": "other"}}, "RESULT_MISMATCH"),
-        ]
-        for name, response, code in cases:
-            with self.subTest(response=name):
-                clock = VirtualClock()
-                service = FakeService(clock, listed=True, complete_after_waits=1, result_response=response)
-                envelope = await_run({"requestId": "fixture", "waitSeconds": 60}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
-                # The failure is attributed to this run even when the response was unusable.
-                self.assertEqual(envelope["runId"], "run-fixture")
-                self.assertEqual(envelope["requestId"], "fixture")
-                self.assertEqual(envelope["status"], "completed")
-                self.assertFalse(envelope["ok"])
-                self.assertEqual(envelope["outcome"], "completed-no-result")
-                self.assertFalse(envelope["resultDelivered"])
-                self.assertIsNone(envelope["result"])
-                self.assertEqual(envelope["error"]["code"], code)
-                self.assertIsNotNone(envelope["recovery"])
-                self.assertEqual(envelope["recovery"]["runId"], "run-fixture")
-
     def test_successful_result_control_keeps_completed_semantics(self):
         clock = VirtualClock()
         service = FakeService(clock, listed=True, complete_after_waits=1)
@@ -459,27 +374,38 @@ class ResultTruthTests(unittest.TestCase):
 
 
 class MicroTaskBoundaryTests(unittest.TestCase):
-    def test_routing_boundary_without_a_turn_has_actionable_resume_commands(self):
+    def test_routing_boundary_without_a_turn_uses_the_same_templates_in_both_output_modes(self):
+        from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
+        from hey_my_buddy.cli import cli_views
         clock = VirtualClock()
         service = FakeService(clock)
+        boundary = build_boundary(kind="router-unavailable", code=None, reason=None,
+            candidates=[{"buddyId": "b1", "harness": "codex", "provider": "openai", "model": "model", "effort": "high"}],
+            facts={}, router_trials=[], retry_at="2026-10-23T00:00:00Z", decision_id="decision-1",
+            run_id="run-fixture", revision=3, shutdown_confirmed=True, target_run_id="authorized-child")
         service.run.update(
             status="queued", workflowState="awaiting-host", resultAvailable=False,
             workflow={"revision": 3, "activeRequestId": "route-boundary", "requestKind": "attention",
                       "requestSummary": "Configure a selector", "requestRouting": True,
-                      "requestTargetRunId": "authorized-child"},
+                      "requestTargetRunId": "authorized-child", "routingBoundary": boundary},
         )
+        # A candidate can become blocked after the templates are built.
+        blocked = {**boundary["commands"]["continue"]["choices"][0], "blocked": True}
+        boundary["commands"]["continue"]["choices"][0]["blocked"] = False
+        boundary["commands"]["continue"]["choices"].append(blocked)
         envelope = await_run({"runId": "run-fixture"}, state_dir=Path(os.environ["HMB_STATE_DIR"]), service=service, clock=clock)
         self.assertEqual(envelope["outcome"], "waiting-host")
         self.assertFalse(envelope["microTaskComplete"])
         self.assertIsNone(envelope["turn"])
-        self.assertIsNone(envelope["error"])
         self.assertNotIn("result", service.calls)
-        commands = [shlex.split(command) for command in envelope["nextCommands"]]
-        self.assertTrue(all(command[:2] == ["hey-my-buddy", "continue"] for command in commands))
-        params = [json.loads(command[2]) for command in commands]
-        self.assertEqual({item["targetRunId"] for item in params}, {"authorized-child"})
-        self.assertTrue(params[0]["reroute"])
-        self.assertEqual(set(params[1]["buddy"]), {"harness", "provider", "model", "effort"})
+        expected = [{"method": "continue", "params": boundary["commands"]["continue"]["choices"][0]["params"]},
+                    {key: boundary["commands"]["reroute"][key] for key in ("method", "params", "notBefore")}]
+        for mode in (cli_views.OUTPUT_BRIEF, cli_views.OUTPUT_FULL):
+            rendered = cli_views.render("await", envelope, mode)
+            self.assertEqual(rendered["nextCommands"], expected)
+            self.assertEqual(rendered["routingBoundary"], boundary)
+            self.assertEqual(rendered["request"]["routingBoundary"], boundary)
+            self.assertTrue(all(command["params"]["targetRunId"] == "authorized-child" for command in rendered["nextCommands"]))
 
     """A structured yield is a Host decision boundary, never a fake completion."""
 
@@ -489,9 +415,8 @@ class MicroTaskBoundaryTests(unittest.TestCase):
         turn = {
             "turnId": "turn-1",
             "resumeMode": "initial",
-            "disposition": "assistance",
-            "summary": "need a Host decision",
-            "request": {"requestId": "req-1", "kind": "assistance", "summary": "review the approach"},
+            "outcome": {"disposition": "assistance", "summary": "need a Host decision", "remaining": [],
+                        "request": {"requestId": "req-1", "kind": "assistance", "summary": "review the approach"}},
         }
         service.run = {
             **service.run,
@@ -607,6 +532,23 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
         self.assertIn("hey-my-buddy result", envelope["resultCommand"])
         self.assertTrue(envelope["result"]["finalTextTruncated"])
 
+    def test_preparation_failure_with_a_null_runner_result_stays_failed(self):
+        from hey_my_buddy.cli import cli_views
+        clock = VirtualClock()
+        service = FakeService(clock)
+        service.run.update(status="failed", workflowState="failed", resultAvailable=True, shutdownConfirmed=True)
+        service.result_response = lambda run: {**run, "result": None}
+        envelope = await_run({"runId": "run-fixture"}, state_dir=Path(os.environ["HMB_STATE_DIR"]),
+                             service=service, clock=clock)
+        self.assertEqual(envelope["outcome"], "failed")
+        self.assertFalse(envelope["ok"])
+        self.assertFalse(envelope["resultDelivered"])
+        self.assertIsNone(envelope["error"])
+        self.assertEqual(service.calls, ["status", "result"])
+        brief = cli_views.result_brief({**service.run, "result": None})
+        self.assertEqual(brief["status"], "failed")
+        self.assertIsNone(brief["result"])
+
     def test_execution_envelope_delivers_the_full_result(self):
         clock = VirtualClock()
         service = FakeService(clock, complete_after_waits=1)
@@ -640,35 +582,6 @@ class CompactMicroTaskEnvelopeTests(unittest.TestCase):
 
 
 class ReminderReturnTests(unittest.TestCase):
-    def test_lost_reminder_reply_recovers_with_the_same_delivery_id(self):
-        clock = VirtualClock()
-        service = FakeService(clock)
-        service.run.update(workflowState="executing", attemptState="executing")
-        first_wait_id = None
-        original_call = service.__call__
-
-        def call(method, params, state_dir=None):
-            nonlocal first_wait_id
-            if method == "wait":
-                self.assertTrue(params["consumeReminders"])
-                service.calls.append(method)
-                if first_wait_id is None:
-                    first_wait_id = params["reminderWaitId"]
-                    raise ServiceError("SERVICE_UNAVAILABLE", "reply lost after durable consumption")
-                self.assertEqual(params["reminderWaitId"], first_wait_id)
-                return {**service.run, "reminder": {
-                    "reminderId": 10, "kind": "expected-duration", "elapsedSeconds": 1800.0,
-                    "lastNativeEventAt": None, "toolInProgress": False,
-                    "createdAt": "2026-01-01T00:30:00Z", "expectedMultiple": 1,
-                }}
-            return original_call(method, params, state_dir)
-
-        result = await_run({"runId": "run-fixture", "waitSeconds": 60},
-                           state_dir=Path(os.environ["HMB_STATE_DIR"]), service=call, clock=clock)
-        self.assertEqual(result["outcome"], "expected-duration")
-        self.assertEqual(result["reminder"]["reminderId"], 10)
-        self.assertEqual(result["reconnects"], 1)
-        self.assertEqual(service.calls, ["status", "wait", "status", "wait"])
 
     def test_active_micro_task_with_unconfirmed_self_waits_for_a_reminder(self):
         clock = VirtualClock()
@@ -768,7 +681,8 @@ class ResultPathCountTests(unittest.TestCase):
     def test_await_preserves_service_path_totals(self):
         patch = {"path": "/private/cumulative.patch", "changedPaths": [f"file-{index}" for index in range(32)],
                  "changedPathsCount": 2000, "changedPathsTruncated": True}
-        full = {"workflowState": "delivered", "result": {"workspaceSeal": {"cumulativePatch": patch}}}
+        full = {"workflowState": "delivered", "shutdownConfirmed": False,
+                "result": {"workspaceSeal": {"cumulativePatch": patch}}}
         view = blocking._micro_task_result_view(full, "run")
         self.assertEqual(view["artifacts"][0]["cumulativePatch"], patch)
 

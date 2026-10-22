@@ -771,18 +771,27 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
                 self.assertEqual(raised.exception.code, "ANCESTOR_TERMINAL")
 
     def test_cli_brief_get_and_await_retain_only_existing_boundary_data(self):
-        from hey_my_buddy.cli import main as cli, cli_views
+        from hey_my_buddy.cli import blocking, cli_views
+        from hey_my_buddy.protocol.transport import METHOD_MAP
         view = self.routed()
         boundary = view["routing"]["routingBoundary"]
-        rendered = cli._render_output("get", view, cli_views.OUTPUT_BRIEF)
+        rendered = cli_views.render("get", view, cli_views.OUTPUT_BRIEF)
         self.assertEqual(rendered["routing"]["routingBoundary"], boundary)
-        await_response = {"workflow": {"routingBoundary": boundary}, "request": {"routing": True},
-                          "nextCommands": [{"method": "continue", "params": {"buddy": "old-placeholder"}}]}
-        awaited = cli._render_output("await", await_response, cli_views.OUTPUT_BRIEF)
-        self.assertEqual(awaited["routingBoundary"], boundary)
-        self.assertEqual(awaited["request"]["routingBoundary"], boundary)
-        self.assertTrue(all(isinstance(item["params"]["buddy"], dict)
-                            for item in awaited["nextCommands"] if "buddy" in item.get("params", {})))
+
+        def service(method, params, state_dir):
+            response = self.board_.call(METHOD_MAP[method][1], params)
+            return response["task"] if method == "status" else response
+
+        envelope = blocking.await_run({"runId": view["runId"]}, self.board_.directory, service=service)
+        full = cli_views.render("await", envelope, cli_views.OUTPUT_FULL)
+        brief = cli_views.render("await", envelope, cli_views.OUTPUT_BRIEF)
+        self.assertEqual(brief["nextCommands"], full["nextCommands"])
+        self.assertTrue(brief["nextCommands"])
+        for awaited in (brief, full):
+            self.assertEqual(awaited["routingBoundary"], boundary)
+            self.assertEqual(awaited["request"]["routingBoundary"], boundary)
+            self.assertTrue(all(isinstance(item["params"]["buddy"], dict)
+                                for item in awaited["nextCommands"] if "buddy" in item["params"]))
 
 
     def test_micro_task_valid_abstention_payload_has_program_nature_before_answered_notification(self):

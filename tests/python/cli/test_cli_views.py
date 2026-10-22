@@ -183,6 +183,16 @@ class CliViewTests(RealWorkspaceTestCase):
         portable_text = text.replace(json.dumps(str(self.directory))[1:-1], "<fixture-root>")
         self.assertLess(len(portable_text), 4000)
 
+    def test_suggest_returns_its_service_acknowledgement_in_both_output_modes(self):
+        submitted, _ = self.delivered()
+        for mode in ("brief", "full"):
+            code, receipt, _ = self.cli("suggest", {"runId": submitted["runId"], "body": "One bounded suggestion", "output": mode})
+            self.assertEqual(code, 0, receipt)
+            self.assertTrue(receipt["recorded"])
+            self.assertEqual(receipt["runId"], submitted["runId"])
+            self.assertTrue(receipt["suggestionId"].startswith("sug-"))
+            self.assertNotIn("view", receipt)
+
     def test_list_status_result_and_await_drop_duplicates(self):
         submitted, _view = self.delivered()
         run_id = submitted["runId"]

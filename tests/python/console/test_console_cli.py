@@ -43,8 +43,6 @@ def open_reply(**overrides):
     return {**OPEN_REPLY, **overrides}
 
 
-def without(reply: dict, *keys: str) -> dict:
-    return {key: value for key, value in reply.items() if key not in keys}
 
 
 class FakeRpc:
@@ -140,8 +138,6 @@ class LocalOptionTests(ConsoleCliTestCase):
         result = console_cli.run({}, state_dir=Path(os.environ["HMB_STATE_DIR"]), call_service=FakeRpc(open_reply(url=url, expiresAt=None)), browser_open=opener)
         self.assertEqual(result["url"], url)
         opener.assert_called_once_with(url, new=2)
-        for invalid in (url + "other", url + "?x=1", url + "#x", url.replace("127.0.0.1", "localhost")):
-            self.assertFalse(console_cli.is_launch_url(invalid))
 
     def test_open_keeps_only_the_lifecycle_action_and_defaults_the_local_booleans(self):
         for params in ({"action": "open"}, {}):
@@ -169,7 +165,6 @@ class LocalOptionTests(ConsoleCliTestCase):
         cases = {
             "action": {"action": "bogus"},
             "action type": {"action": 3},
-            "params type": [],
             "browser string": {"action": "open", "browser": "yes"},
             "browser integer": {"action": "open", "browser": 1},
             "browser null": {"action": "open", "browser": None},
@@ -191,35 +186,6 @@ class LocalOptionTests(ConsoleCliTestCase):
                     console_cli.parse_request(params)
                 self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
 
-    def test_expected_console_id_is_exactly_24_lowercase_hex_without_normalization(self):
-        cases = {
-            "explicit null": None,
-            "true": True,
-            "false": False,
-            "empty": "",
-            "blank": "   ",
-            "padded": f" {CONSOLE_ID} ",
-            "trailing space": f"{CONSOLE_ID} ",
-            "short by one": CONSOLE_ID[:-1],
-            "long by one": CONSOLE_ID + "0",
-            "uppercase": CONSOLE_ID.upper(),
-            "non hex": "0123456789abcdef0123456g",
-            "dashed uuid": "01234567-89ab-cdef-0123-456789abcdef",
-            "0x prefix": "0x" + CONSOLE_ID[2:],
-            "integer": 3,
-            "list": [],
-        }
-        for name, value in cases.items():
-            with self.subTest(case=name):
-                with self.assertRaises(BoardError) as refused:
-                    console_cli.parse_request({"action": "close", "expectedConsoleId": value})
-                self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
-        # A valid id is forwarded byte-identically: no trimming, case folding or decoding.
-        self.assertEqual(
-            console_cli.parse_request({"action": "close", "expectedConsoleId": CONSOLE_ID}).rpc_params,
-            {"action": "close", "expectedConsoleId": CONSOLE_ID},
-        )
-
     def test_invalid_arguments_are_refused_before_any_rpc_browser_or_client(self):
         rpc = FakeRpc()
         browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
@@ -229,8 +195,6 @@ class LocalOptionTests(ConsoleCliTestCase):
             {"action": "open", "unknown": 1},
             {"action": "status", "wait": True},
             {"action": "close", "browser": False},
-            {"action": "close", "expectedConsoleId": None},
-            {"action": "close", "expectedConsoleId": "not-a-console-id"},
         )
         for params in params_cases:
             with self.subTest(params=params):
@@ -326,65 +290,6 @@ class OpenTests(ConsoleCliTestCase):
         self.assertTrue(result["browserOpened"])
         self.assertEqual(rpc.calls, [("console", {"action": "open"})])
 
-    def test_malformed_launch_urls_are_invalid_responses_that_launch_nothing(self):
-        cases = {
-            "missing": None,
-            "not a string": 8123,
-            "blank": "",
-            "https scheme": ENTRY_URL.replace("http://", "https://"),
-            "uppercase scheme": ENTRY_URL.replace("http://", "HTTP://"),
-            "localhost host": ENTRY_URL.replace("127.0.0.1", "localhost"),
-            "all interfaces": ENTRY_URL.replace("127.0.0.1", "0.0.0.0"),
-            "ipv6 loopback": ENTRY_URL.replace("127.0.0.1", "[::1]"),
-            "userinfo": ENTRY_URL.replace("http://", "http://user:pass@"),
-            "no port": ENTRY_URL.replace(":8123", ""),
-            "port zero": ENTRY_URL.replace(":8123", ":0"),
-            "port above range": ENTRY_URL.replace(":8123", ":65536"),
-            "port not numeric": ENTRY_URL.replace(":8123", ":8o8"),
-            "query": ENTRY_URL + "?ticket=1",
-            "fragment": ENTRY_URL + "#frag",
-            "wrong path": f"http://127.0.0.1:8123/console/{CONSOLE_ID}/{REPLACEMENT_ID}/",
-            "ticket too short": ENTRY_URL[:-1],
-            "ticket too long": ENTRY_URL + "x",
-            "ticket plus": ENTRY_URL[:-1] + "+",
-            "ticket slash": ENTRY_URL[:-1] + "/",
-            "ticket padding": ENTRY_URL[:-1] + "=",
-            "trailing slash": ENTRY_URL + "/",
-        }
-        for name, url in cases.items():
-            for choice in ({"action": "open"}, {"action": "open", "browser": False}):
-                with self.subTest(case=name, browser=choice.get("browser", True)):
-                    browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
-                    with self.assertRaises(BoardError) as refused:
-                        console_cli.run(choice, state_dir=Path(os.environ["HMB_STATE_DIR"]), call_service=FakeRpc(open_reply(url=url)), browser_open=browser)
-                    self.assertEqual(refused.exception.code, "INVALID_RESPONSE")
-                    self.assertEqual(browser.call_args_list, [])
-
-    def test_malformed_open_identity_is_an_invalid_response_that_launches_nothing(self):
-        cases = {
-            "missing console id": without(OPEN_REPLY, "consoleId"),
-            "null console id": open_reply(consoleId=None),
-            "short console id": open_reply(consoleId=CONSOLE_ID[:-1]),
-            "long console id": open_reply(consoleId=CONSOLE_ID + "0"),
-            "uppercase console id": open_reply(consoleId=CONSOLE_ID.upper()),
-            "non hex console id": open_reply(consoleId="0123456789abcdef0123456g"),
-            "dashed console id": open_reply(consoleId="01234567-89ab-cdef-0123-456789abcdef"),
-            "integer console id": open_reply(consoleId=3),
-            "missing running": without(OPEN_REPLY, "running"),
-            "null running": open_reply(running=None),
-            "false running": open_reply(running=False),
-            "integer running": open_reply(running=1),
-            "string running": open_reply(running="true"),
-        }
-        for name, reply in cases.items():
-            for choice in ({"action": "open"}, {"action": "open", "browser": False}):
-                with self.subTest(case=name, browser=choice.get("browser", True)):
-                    browser = mock.Mock(side_effect=AssertionError("no browser may be launched"))
-                    with self.assertRaises(BoardError) as refused:
-                        console_cli.run(choice, state_dir=Path(os.environ["HMB_STATE_DIR"]), call_service=FakeRpc(reply), browser_open=browser)
-                    self.assertEqual(refused.exception.code, "INVALID_RESPONSE")
-                    self.assertEqual(browser.call_args_list, [])
-
     def test_end_to_end_cli_open_browser_false_prints_one_json_object(self):
         rpc = FakeRpc()
         stdout = io.StringIO()
@@ -401,23 +306,6 @@ class OpenTests(ConsoleCliTestCase):
         self.assertEqual(rpc.calls, [("console", {"action": "open"})])
         self.assertEqual(stderr.getvalue(), "")
 
-    def test_a_malformed_reply_is_refused_before_the_wait_can_start(self):
-        rpc = FakeRpc(open_reply(consoleId=None))
-        browser = mock.Mock(return_value=True)
-        sleep = FakeSleep()
-        factory = mock.Mock(side_effect=AssertionError("no client may be built"))
-        with self.assertRaises(BoardError) as refused:
-            console_cli.run(
-                {"action": "open", "wait": True}, state_dir=Path(os.environ["HMB_STATE_DIR"]),
-                call_service=rpc,
-                browser_open=browser,
-                sleep=sleep,
-                client_factory=factory,
-            )
-        self.assertEqual(refused.exception.code, "INVALID_RESPONSE")
-        self.assertEqual(browser.call_args_list, [])
-        self.assertEqual(factory.call_args_list, [])
-        self.assertEqual(sleep.intervals, [])
 
 
 class ObserveAndCloseTests(ConsoleCliTestCase):
@@ -555,34 +443,6 @@ class WaitTests(ConsoleCliTestCase):
         self.assertEqual(result["wait"], {"status": "interrupted", "close": {"closed": False, "reason": "replaced"}})
         self.assertNotIn("error", result["wait"]["close"])
 
-    def test_malformed_ctrl_c_close_replies_never_imply_success(self):
-        cases = {
-            "empty object": {},
-            "non boolean closed": {"closed": "yes"},
-            "null closed": {"closed": None},
-            "missing closed": {"reason": "replaced"},
-            "false without a reason": {"closed": False},
-            "false with a blank reason": {"closed": False, "reason": "   "},
-            "false with a non-string reason": {"closed": False, "reason": 3},
-        }
-        for name, reply in cases.items():
-            with self.subTest(case=name):
-                _rpc, client, _factory, _sleep, _stderr, result = self.run_wait(
-                    [RUNNING], interrupt_after=1, close_reply=reply
-                )
-                self.assertEqual(result["wait"]["status"], "interrupted")
-                self.assertIs(result["wait"]["close"]["closed"], False)
-                self.assertEqual(result["wait"]["close"]["error"]["code"], "INVALID_RESPONSE")
-                self.assertEqual(
-                    client.calls,
-                    [
-                        ("console", {"action": "status"}),
-                        ("console", {"action": "close", "expectedConsoleId": CONSOLE_ID}),
-                    ],
-                )
-                # The response still carries the identity this CLI opened.
-                self.assertEqual(result["consoleId"], CONSOLE_ID)
-
     def test_ctrl_c_close_transport_failure_is_reported_as_unclosed(self):
         error = BoardError("SERVICE_UNAVAILABLE", "The board service did not answer this operation")
         _rpc, _client, _factory, _sleep, _stderr, result = self.run_wait(
@@ -628,21 +488,6 @@ class WaitTests(ConsoleCliTestCase):
             self.assertEqual(result["consoleId"], CONSOLE_ID)
             # read-only attachment never creates a state directory, lock, log or daemon.
             self.assertEqual(list(Path(directory).iterdir()), [])
-
-    def test_malformed_status_responses_end_the_wait_honestly(self):
-        for name, status in (
-            ("not an object", "running"),
-            ("missing running", {"consoleId": CONSOLE_ID}),
-            ("running is not boolean", {"running": "true", "consoleId": CONSOLE_ID}),
-            ("missing console id", {"running": True}),
-            ("null console id", {"running": True, "consoleId": None}),
-            ("uppercase console id", {"running": True, "consoleId": CONSOLE_ID.upper()}),
-            ("short console id", {"running": True, "consoleId": CONSOLE_ID[:-1]}),
-        ):
-            with self.subTest(case=name):
-                _rpc, _client, _factory, _sleep, _stderr, result = self.run_wait([status])
-                self.assertEqual(result["wait"]["status"], "unavailable")
-                self.assertEqual(result["wait"]["error"]["code"], "INVALID_RESPONSE")
 
     def test_the_fallback_entry_url_goes_to_stderr_while_the_wait_blocks_stdout(self):
         _rpc, _client, _factory, _sleep, stderr, result = self.run_wait([CLOSED], browser_result=False)

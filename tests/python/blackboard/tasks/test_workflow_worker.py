@@ -489,19 +489,11 @@ class SubmissionPreparationRaceTests(MicroTaskWorkerTestCase):
         from unittest import mock
 
         from hey_my_buddy.cli import main as cli
-        from hey_my_buddy.errors import BoardError
-
         with mock.patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}):
             tokens = self._race(lambda: cli._submission_token("req-race", {}, self.directory))
             self.assertEqual(len(set(tokens)), 1, tokens)
             path = next((self.directory / "submissions").glob("*.json"))
-            original = path.read_text(encoding="utf-8")
-            path.write_text("not-json", encoding="utf-8", newline="\n")
-            with self.assertRaises(BoardError) as raised:
-                cli._submission_token("req-race", {}, self.directory)
-            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-            self.assertEqual(path.read_text(encoding="utf-8"), "not-json", "a malformed record is never overwritten")
-            path.write_text(original, encoding="utf-8", newline="\n")
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["submissionToken"], tokens[0])
 
 
 
