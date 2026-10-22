@@ -72,6 +72,16 @@ class FakeClock:
 
 
 class ActivityValidation(BoardTestCase):
+    def test_native_tool_names_fit_the_activity_contract(self):
+        for raw in (None, "", "   ", "tool\0name"):
+            with self.subTest(raw=raw):
+                self.assertIsNone(activity_module.native_tool_name(raw))
+        name = "mcp__" + "s" * 60 + "__tool"
+        projected = activity_module.native_tool_name("  " + name + "  ")
+        self.assertEqual(projected, name[:activity_module.MAX_TOOL_NAME])
+        self.assertEqual(normalize_activity({"phase": "tool-running", "eventSeq": 1,
+                                             "toolName": projected})["toolName"], projected)
+
     def test_the_whitelist_accepts_the_bounded_projection(self):
         payload = {
             "phase": "tool-running",

@@ -23,7 +23,7 @@ from pathlib import Path
 from ....protocol.usage import identifier as _identifier
 from ..native_observations import bound_native_text, native_counter
 from ....json_codec import canonical_json, decode_strict_json
-from ..native_support import NATIVE_TOOL_NAME_CHARS, truncate_text
+from ....protocol.activity import native_tool_name
 
 _WINDOWS_PIPE = os.name == "nt"
 
@@ -245,7 +245,7 @@ def model_usage_keys(result: dict) -> list[str]:
     usage = result.get("modelUsage")
     if not isinstance(usage, dict):
         return []
-    keys = sorted(key for key in usage if isinstance(key, str) and key and len(key) <= 128)
+    keys = sorted(key for key in usage if isinstance(key, str) and key)
     return keys
 
 
@@ -387,7 +387,7 @@ class TurnEvidence:
                          if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("name"), str)]
                 if names:
                     self.tool_calls += len(names)
-                    return "tool-running", truncate_text(names[0], NATIVE_TOOL_NAME_CHARS)
+                    return "tool-running", native_tool_name(names[0])
             if root_session:
                 self._observe_output_tokens(message.get("usage") if isinstance(message, dict) else None)
             return "streaming-model", None

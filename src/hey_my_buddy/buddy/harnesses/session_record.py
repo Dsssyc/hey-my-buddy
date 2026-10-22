@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -91,7 +92,7 @@ class SessionRecord:
             try:
                 os.close(fd)
             except Exception:
-                pass
+                logging.getLogger(__name__).exception("Failed to close session record after its first failure")
 
     def append(self, update: SessionUpdate) -> None:
         if self.failure is not None:

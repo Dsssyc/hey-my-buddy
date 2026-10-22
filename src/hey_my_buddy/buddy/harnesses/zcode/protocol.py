@@ -15,7 +15,7 @@ from ..native_observations import bound_native_text, native_counter
 from ..session_receipts import (refusal_shaped, verify_receipt, verify_tool_refusal,
                                 verify_inquiry_receipt)
 from ....json_codec import canonical_json, decode_strict_json
-from ....protocol.activity import MAX_TOOL_NAME, PHASES
+from ....protocol.activity import PHASES, native_tool_name
 from ....protocol.reasons import reason as make_reason
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -126,7 +126,7 @@ class ActivityProjection:
                     self.phase = "tool-running"
                     name = data.get("toolName")
                     if isinstance(name, str) and name:
-                        self.tool_name = name.strip()[:MAX_TOOL_NAME]
+                        self.tool_name = native_tool_name(name)
                     self.last_tool_activity_at = _now()
                 elif data.get("kind") in ("result", "error"):
                     self.phase = "streaming-model"

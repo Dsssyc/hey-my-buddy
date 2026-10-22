@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from ....json_codec import canonical_json
 from ....protocol.activity import (
     MAX_EVENT_SEQ,
-    MAX_TOOL_NAME,
+    native_tool_name,
 )
 from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
 from ..session_receipts import refusal_shaped, verify_inquiry_receipt, verify_receipt, verify_tool_refusal
@@ -223,7 +223,7 @@ class DshActivity:
                     self.phase = "tool-running"
                     name = _bounded_text(update.get("title"))
                     if name:
-                        self.tool_name = name[:MAX_TOOL_NAME]
+                        self.tool_name = native_tool_name(name)
                     self.last_tool_activity_at = _now()
                 elif kind == "tool_call_update" and isinstance(update.get("status"), str) \
                         and update["status"] in _TERMINAL_STATUS:

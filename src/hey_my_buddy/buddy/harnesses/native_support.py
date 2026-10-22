@@ -139,7 +139,6 @@ def halt_owned_group(process: subprocess.Popen, handle: ProcessHandle, deadline:
 
 
 # Native facts retain the existing byte/character budgets at their input boundary.
-NATIVE_TOOL_NAME_CHARS = 80
 NATIVE_ID_CHARS = 256
 NATIVE_SUMMARY_BYTES = 512
 NATIVE_METHOD_BYTES = 96

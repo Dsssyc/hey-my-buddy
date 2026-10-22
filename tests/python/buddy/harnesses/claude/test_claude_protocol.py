@@ -65,7 +65,7 @@ class QuotaParsingTests(unittest.TestCase):
         result = {"modelUsage": {"claude-opus-5": {}, "claude-haiku-4-5": {}, "zzz-other": {}}}
         self.assertEqual(model_usage_keys(result), ["claude-haiku-4-5", "claude-opus-5", "zzz-other"])
         self.assertEqual(len(model_usage_keys({"modelUsage": {str(i): {} for i in range(40)}})), 40)
-        self.assertEqual(model_usage_keys({"modelUsage": {"x" * 129: {}}}), [])
+        self.assertEqual(model_usage_keys({"modelUsage": {"x" * 129: {}}}), ["x" * 129])
         self.assertEqual(model_usage_keys({}), [])
 
 

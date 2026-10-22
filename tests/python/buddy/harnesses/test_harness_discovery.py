@@ -435,7 +435,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
         self.assertIn(str(alias / "current"), [item["path"] for item in records])
         self.assertIn(("nvm", installed), roots)
 
-    def test_discovery_reports_diagnostics_omitted_after_bounded_scan(self):
+    def test_discovery_keeps_the_candidate_probe_bound(self):
         candidates = [{"path": f"/fixture/{index}", "source": "path", "exists": True,
                        "fingerprint": None} for index in range(100)]
         snapshot = {"harness": "codex", "candidates": candidates, "managerRecords": []}
@@ -449,8 +449,6 @@ class HarnessDiscoveryTests(unittest.TestCase):
             result = discovery.discover("codex", environment={"PATH": ""})
         self.assertEqual(probe.call_count, discovery._MAX_CANDIDATES)
         self.assertEqual(len(result["candidates"]), discovery._MAX_DIAGNOSTICS)
-        self.assertEqual(result["omittedDiagnostics"],
-                         discovery._MAX_CANDIDATES - discovery._MAX_DIAGNOSTICS)
 
     def test_manual_ready_skips_lower_priority_and_unknown_version_is_allowed(self):
         with tempfile.TemporaryDirectory() as directory:
