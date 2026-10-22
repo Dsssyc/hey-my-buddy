@@ -6,7 +6,7 @@ This page is the per-part checklist for integrating another coding harness besid
 
 Add the name to `HARNESS_NAMES` in `src/hey_my_buddy/protocol/harness_names.py`, the one tuple the sides share, and to the `HarnessName` literal in `src/hey_my_buddy/buddy/harnesses/run_contract.py`, which is a separate list and is not derived from it. Create the package `src/hey_my_buddy/buddy/harnesses/<name>/`. The file layout is an organization, not a contract: `adapter.py`, `config.py`, `protocol.py`, `native_run.py` and `tool_evidence.py` are the shape three of the four share, but DSH keeps its tool projection in `protocol.py` (`DshToolFacts`) and spreads configuration and launch over `native_run.py` and `acp/launch.py`, with no `config.py` or `tool_evidence.py`; Codex adds `account_probe.py` and DSH `session_records.py`. The contract is the interface set the roles actually call, listed under the Worker turn below.
 
-Register both halves in `src/hey_my_buddy/buddy/harnesses/registry.py`: import the adapter class into `BUILT_IN`, import the run module and call `register_run_seam(name, module)` beside the four existing calls. Registration is the only way into the seam and qualifies callable `run` and `run_discovery` operations — which is a floor, not the full interface set. The seam rules are guarded by `RunSeamRegistrationTests` in `tests/python/buddy/roles/test_role_controller.py`; registration coverage for every name is guarded by the conformance check.
+Register both halves in `src/hey_my_buddy/buddy/harnesses/registry.py`: import the adapter class into `BUILT_IN`, import the run module and add it to the `RUN_SEAMS` dictionary under the harness name, beside the four existing entries. `run_seam(name)` reads only from that dictionary. `RegisteredAppDiscoveryTests` in `tests/python/buddy/harnesses/test_harness_discovery.py` checks that `RUN_SEAMS` names exactly the harnesses in `HARNESS_NAMES` and that each declares its CLI and an app entry for every platform; registration coverage for every name is guarded by the conformance check.
 
 ## Capability declaration and the four tool scopes
 
@@ -135,7 +135,7 @@ The same four names are listed separately in the following places; the backlog h
 - `src/hey_my_buddy/protocol/harness_names.py` — `HARNESS_NAMES`, the one shared tuple.
 - `src/hey_my_buddy/buddy/harnesses/run_contract.py` — the `HarnessName` literal of the run contract.
 - `src/hey_my_buddy/protocol/capabilities.py` — `ADAPTER_CAPABILITIES` and the `PERMISSION_LEVELS` keys.
-- `src/hey_my_buddy/buddy/harnesses/registry.py` — `BUILT_IN`, the four `register_run_seam` calls, and the name-keyed helpers (`worker_format`, `worker_message_source`, `worker_receipt_options`, `fast_evidence_is_top_level`).
+- `src/hey_my_buddy/buddy/harnesses/registry.py` — `BUILT_IN`, the `RUN_SEAMS` dictionary, and the name-keyed helpers (`worker_format`, `worker_message_source`, `worker_receipt_options`, `fast_evidence_is_top_level`).
 - `src/hey_my_buddy/buddy/harnesses/discovery.py` — the `HARNESSES` tuple, the executable-name map, the macOS app-bundle paths and the configuration-variable allowlist in `native_environment`.
 - `src/hey_my_buddy/blackboard/service/harness_health.py` — the `HARNESSES` tuple; `blackboard/service/service.py` names the four inline in three places, and `buddy/runtime/execution.py` validates against the health tuple and keeps its own set for post-stop credential cleanup.
 - `src/hey_my_buddy/blackboard/store/db.py` — the `harness_health` CHECK constraint, which writes the names into the stored form.
