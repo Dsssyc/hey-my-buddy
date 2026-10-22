@@ -2,7 +2,7 @@
 
 2026-10-21，设计候选，修订基线 `92031c1deb30e302b9f60e571524c146a367060d`。依据为[分批计划](plan.md)、[清单](inventory.md)、[进程实验](windows-experiments-process.md)、[文件实验](windows-experiments-files.md)、当前源码、AGENTS.md、[架构](../../reference/architecture.md)、[ADR-007](../../decisions/007-neutral-core-and-single-current-contract.md)及 [ADR-031](../../decisions/031-one-process-per-execution.md)。实验结论只覆盖记录中的 Windows 11 x64、NTFS、令牌与启动形式；本轮没有运行新实验或检查套件。实验文档引用的原始输出在本检出中未提供，本文采用其逐项摘录及明确的未验证边界，不声称重新核验过原始包。
 
-支持范围为 Windows 11 x64、本地 NTFS、同一 Windows 会话、Python `>=3.12.4,<3.13`；Python 下限已由开发者同意，阶段 B 落地。Windows 系统服务、网络盘、FAT/exFAT、Windows ARM 不在首发范围。三系统共用任务身份、事实发布、结果接收及最终结算；Windows 的 ACL、Job、会话与文件共享行为在系统边界实现。Linux/macOS 脱离进程组的后代留在另一批，本批不宣称解决。
+支持范围为 Windows 11 x64、本地 NTFS、同一 Windows 会话、Python `>=3.12,<3.13`；阶段 B 一度把下限提到 3.12.4，只为 Windows 上 `mkdir(0o700)` 的受保护 ACL，第 2 节不再用它，下限随精简回到 3.12。Windows 系统服务、网络盘、FAT/exFAT、Windows ARM 不在首发范围。三系统共用任务身份、事实发布、结果接收及最终结算；Windows 的 ACL、Job、会话与文件共享行为在系统边界实现。Linux/macOS 脱离进程组的后代留在另一批，本批不宣称解决。
 
 ADR-031 第 13 条已经定为开发流程约束：开发使用真实数据只经导出工具取得已验收微任务，用完即删。产品不增加状态目录身份，不为看板副本增加接回、停止或结算围栏，也不实现目录文件 ID 的读取或副本验收。下面的 Windows 会话核对服务于 `Local\` Job 的定位，与状态目录无关。
 
@@ -12,31 +12,27 @@ ADR-031 第 13 条已经定为开发流程约束：开发使用真实数据只�
 
 无 kill-on-close 的命名 Job 关闭最后句柄后，原成员仍以原创建 FILETIME 存活，`OpenJobObjectW` 返回错误 2；同名再建得到一个空 Job，原成员不在其中。同名对象尚有句柄时，`CreateJobObjectW` 返回有效句柄并报告 183。根/native Job 嵌套、native 最后句柄关闭使成员退出、禁止脱离时显式 breakaway 返回错误 5、四条 shell/uv/Node 孙进程路径的根 Job 成员关系都有本机记录。它们没有验证本设计的新根句柄持有次序。
 
-文件实验中，提权的 Python 3.12.13 用 `mkdir(0o700)` 得到受保护 DACL，主体为 SYSTEM、Administrators、OWNER RIGHTS；3.12.3 的同一参数仍继承父 ACL。新目录、普通文件及 SQLite 文件的 owner 为 Administrators。普通用户、交替提权使用尚未验证；实验没有运行恰好 3.12.4，不能用这组数据证明变更精确始于哪个补丁。锁定运行时在源目录被替换后仍可正常导入 `win32security`，但尚未执行拟新增 ACL bootstrap 的全部入口。
+文件实验中，提权的 Python 3.12.13 用 `mkdir(0o700)` 得到受保护 DACL，主体为 SYSTEM、Administrators、OWNER RIGHTS；3.12.3 的同一参数仍继承父 ACL。这正是第 2 节不在 Windows 上用 0o700 的原因。新目录、普通文件及 SQLite 文件的 owner 为 Administrators。普通用户、交替提权使用尚未验证；实验没有运行恰好 3.12.4，不能用这组数据证明变更精确始于哪个补丁。锁定运行时在源目录被替换后仍可正常导入 `win32security`，但尚未执行拟新增 ACL bootstrap 的全部入口。
 
 私有事实发布与备份阶段 C 已实现、验收并合入 `516c6d5d`；当前入口是 `private_files.py:publish_bytes`，三系统备份共用 journal，exchange 分支及以只读句柄补刷盘的循环已删，gzip 尾部由写者刷盘。`e1e4d1d6` 修复发布测试的 Windows 挂起：握手改为字节协议，避免 CRLF 不匹配后阻塞读 stderr；写者直接用基础解释器，避免只杀掉 venv 转发器。此为测试修复，不能据此声称产品执行启动链已经修好。
 
-私有目录与文件的阶段 B 已实现、验收并合入 `755c476c`（[验收记录](../../acceptance/cross-platform/phase-b.md)）：Python 下限 3.12.4，pywin32 为直接依赖；`windows_files.py` 持有句柄层与唯一 ACL 规则，私有入口逐级以 0700 新建并在各级句柄上校验，句柄的最终路径须是请求路径的长名；服务、执行、启动器与 CLI 在提权令牌下先把默认属主设为当前用户。测试机上的独立复跑量到：提权与普通令牌交替在同一状态目录上起停私有服务，每个私有对象（含 SQLite 的 WAL、SHM）的属主都是当前用户，ACE 只有普通 allow 且受托者在白名单内，WAL、SHM 在每次换令牌后重新建出。它在 Windows 上把安装发布路径也送进了私有边界，由阶段 C 后续改回（见第 2 节末与验收记录）。
+私有目录与文件的阶段 B 已实现、验收并合入 `755c476c`（[验收记录](../../acceptance/cross-platform/phase-b.md)）：Python 下限 3.12.4，pywin32 为直接依赖；`windows_files.py` 持有句柄层与唯一 ACL 规则，私有入口逐级以 0700 新建并在各级句柄上校验，句柄的最终路径须是请求路径的长名；服务、执行、启动器与 CLI 在提权令牌下先把默认属主设为当前用户。测试机上的独立复跑量到：提权与普通令牌交替在同一状态目录上起停私有服务，每个私有对象（含 SQLite 的 WAL、SHM）的属主都是当前用户，ACE 只有普通 allow 且受托者在白名单内，WAL、SHM 在每次换令牌后重新建出。它在 Windows 上把安装发布路径也送进了私有边界。同日开发者认为这套私有边界层层设防、与要防的情形不相称，定为精简：第 2 节重写，阶段 B2 删去逐次固定私有路径的祖先、逐次 ACL 校验、私有路径的名称比对、提权进程改默认属主与 Windows 上的 0o700（第 8 节）。
 
 Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试文件已过 168 个，不能称为整轮通过。本批剩余失败按入口处理：私有目录/文件的 mode 判断归 B，Job 生存期及身份归 D/E，检查运行器用 `ps` 观察收尾而退出 3、`test_native_process_journal.py` 使用 `/bin/sleep` 归 F。旧第十轮错误行的粗计数不再作为实施依据。
 
-## 2. 私有目录与文件：一次句柄级属主及 ACL 校验
+## 2. 私有目录与文件：继承 profile 的 ACL，边界上查一次
 
-源码中的边界仍不统一：`private_dirs.py:ensure_private_dir` 与 `protocol/transport.py:_private_directory` 在 Windows 上未验证 DACL；execution 私有 JSON 跳过 uid/mode，console session 与 fast Router 空 cwd 却仍以 `st_mode & 0o077` 拒绝路径。`private_dirs.py:open_regular_fd` 的 Windows 分支先检查路径、普通打开、再检查路径，turn_io 也没有 POSIX 固定祖先 fd 的等价保证。修复在公共边界完成，调用点删除重复或相矛盾的 mode 判断。
+私有状态指状态目录里的看板、令牌、凭据、控制文件、会话，以及安装的私有文件（active 指针、启动设置、安装日志、锁与备份）。私有规则防得住的只有同一台机器上的其他普通账户：本账户和它起的进程（包括 Worker）本来就能读，SYSTEM 与管理员也挡不住。Windows 给每个账户的 profile 目录（`C:\Users\<name>`）配的 ACL 只有本账户、SYSTEM 与 Administrators，其他普通账户进不去；状态目录默认在 `%LOCALAPPDATA%` 之下，继承这张 ACL 就满足要求。这一节 2026-10-22 由开发者定，取代阶段 B 的逐次句柄校验（第 9 节）。
 
-将 `pywin32; sys_platform == 'win32'` 声明为直接依赖并锁定版本；当前锁文件因 portalocker 已含 pywin32 312。pywin32 用于句柄上的 GetSecurityInfo、ACE 遍历、SID 比较及新建对象的 owner 设置，不自写安全描述符解析。现有 `blackboard/tasks/windows_paths.py:WindowsFileAPI` 的 ctypes 打开、固定、fd 转移、关闭和错误映射原样搬到根包 `windows_files.py`，工作树政策留在原处；私有入口复用唯一句柄层，不另留回退实现。Job 的 ctypes 层不借此重写。
+Windows 上的私有目录与文件照常创建，继承上层的 ACL，不传 0o700。Python 3.12.4 起，`mkdir(0o700)` 在 Windows 上写一张受保护、不点名用户的 ACL（SYSTEM、Administrators、OWNER RIGHTS），访问随属主走：提权终端建出的对象属主是 Administrators，同一账户的普通终端打不开（[桌面实验记录](windows-experiments-desktop.md)）。继承来的 profile ACL 明确写着本账户，提权与普通终端都能用，不需要改令牌的默认属主。POSIX 照旧逐级以 0700 新建。
 
-唯一 ACL 接受规则为：owner 是当前用户 SID 或本机 Administrators；DACL 存在且非 NULL；全部 ACE 均为普通 allow，受托者仅为当前用户、SYSTEM、Administrators、OWNER RIGHTS。只作用于子对象或继承的 ACE 同样遍历；其他 owner、deny、未知、对象、条件 ACE 与白名单外主体拒绝。空 DACL 和 NULL DACL 区分，不另算有效权限、不要求特定掩码或 protected 标志，实际访问交系统决定。实验已覆盖部分正反例及 SQLite sidecar 继承；DACL 缺失、对象/条件/未知 ACE 用合成列表和安全查询结果做边界单元测试，不要求本机逐个构造。junction 竞态及实际句柄安全查询保留原生验证。
+状态根在安装与冷启动时查一次：路径上没有链接（符号链接或目录联接）；属主是本账户或 Administrators；DACL 存在且非 NULL，全部 ACE 是普通 allow，受托者只有本账户、SYSTEM、Administrators 与 OWNER RIGHTS。查不过就拒绝并说出原因，例如状态目录被设到了共享位置。这一条对应 POSIX 的“状态目录 0700、属于本人、上层不能被他人替换、路径上没有链接”。状态目录之内的读写不再逐次校验。凭据经继承的文件描述符转交时只核对它是普通文件，POSIX 另照旧核对属主与 mode。ACL 的查询用 pywin32，它仍是直接依赖；DACL 缺失与对象、条件、未知 ACE 等形状用合成列表写单元测试。
 
-新私有目录使用 Python 的 mkdir(mode=0o700)，文件继承父目录，不自造 DACL。当前 `ensure_private_dir` 的 mkdir(mode=0o700, parents=True) 只把 mode 用于叶子，中间目录不能据此认定私有；阶段 B 必须从已固定的既有祖先开始，逐级创建需要私有的新目录，每一级单独传 0700 并在该句柄边界完成创建校验。普通用户目录与磁盘根只固定路径，不要求全都私有；既有私有目录按唯一规则校验，不自动修改其 owner 或 ACL。
+安装发布路径不属私有：skill 目录与它的运行时提示、运行时根及其清单与 READY，两个系统同一政策，允许上层目录是链接，不按私有 ACL 校验（`tests/python/install/test_publication_paths.py`）。
 
-提权创建的对象需要让同一用户的普通令牌继续可用。实测 SSH 是提权令牌，0700 DACL 仅有 SYSTEM、Administrators、OWNER RIGHTS，owner 又是 Administrators；普通令牌中的 Administrators 为 deny-only，不能由“同一账户”推出普通进程可访问。问题不只在首次创建：提权运行的服务重建 SQLite 的 WAL/SHM、写新的私有文件，同样会留下普通令牌打不开的对象，而 SQLite 自己建的文件不经过本项目的创建入口。政策定为：服务、执行与启动器在提权令牌下启动时，先在进程边界用 `SetTokenInformation(TokenOwner)` 把本进程令牌的默认属主设为当前用户 SID；此后它创建的全部对象，包括 SQLite 自行创建的文件和它启动的子进程所建的对象，属主都是当前用户，DACL 仍由 Python 创建或父目录继承。普通令牌不需要这一步。不新增受托者，不对既有对象自动改权限。
+工作树不同：Worker 在工作树里有写权限，可能放下联接，把服务骗到工作树之外读写。工作树的文件操作因此仍以 `GENERIC_READ`、不共享删除固定每一级上层目录，拒绝重解析点并核对名称（`blackboard/tasks/windows_paths.py`，句柄层在根包的 `windows_files.py`）；POSIX 用 dir_fd 与 O_NOFOLLOW 做同一件事。补充实验证实，只请求 `FILE_READ_ATTRIBUTES` 的句柄挡不住改名，以 `GENERIC_READ` 固定后改名以错误 32 失败（[a3 记录](windows-experiments-a3.md)）。
 
-这一步在进程启动时做一次，不在各个创建入口逐个改属主；补项 1 验证提权与普通令牌交替使用同一状态目录，包括 WAL/SHM 重建。如果系统拒绝设置默认属主，就在提权启动的边界明确拒绝并报告原因，由普通令牌运行；不能以扩充白名单、改既有 ACL 或每次打开时修权限替代。桌面实验已实测这一政策（[桌面实验记录](windows-experiments-desktop.md)）：设置成功，两种令牌可交替使用同一批目录、凭据、SQLite 及其 WAL/SHM。它不改变唯一 ACL 接受规则，也不承诺隔离管理员或同一用户的任意 shell。
-
-固定祖先沿用 `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`，以 `GENERIC_READ` 打开且不允许删除共享，核对真实类型、重解析属性和最终名称。只请求 `FILE_READ_ATTRIBUTES` 的句柄不参与共享检查：补充实验里这样固定的祖先照样被改名并换成目录联接，下一层打开已落到私有根外，靠最终名称核对才拒绝；以 `GENERIC_READ` 固定后，改名以错误 32 失败（[a3 记录](windows-experiments-a3.md)）。叶子使用同一句柄校验普通文件及 ACL。新文件独占创建，CRT fd 使用二进制和不可继承标志，句柄所有权只转移一次。事实读者允许删除共享，能否换代另受第 3 节 API 选择约束。普通源检出复用路径政策，不套私有 ACL；POSIX 继续使用 dir_fd、O_NOFOLLOW、uid/mode。
-
-接入范围包括 `cli/main.py` 的 Host 控制能力及提交令牌、`install/launcher.py` 的 agent credential 文件与继承 fd、read_private、transport 的 token/endpoint、execution 的 startup/live/receipt、turn_io 私有输入输出、console session、fast Router 空 cwd、备份及安装私有文件。继承 fd 按原生句柄校验，不按路径重开。空 cwd 仍须真实、私有且为空，不要求磁盘根和普通用户目录全都私有。Windows 安全依赖按需加载，launcher 首次 bootstrap、active 指针及源替换后的稳定运行时入口都要验证；导入失败直接报告，不能跳过安全校验。安装的私有文件指状态目录里的 active 指针、启动设置、安装日志、锁与备份；skill 目录与它的运行时提示、运行时根及其清单与 READY 是安装发布路径，不属私有：两个系统同一政策，允许上层目录是链接，不按私有 ACL 校验（`tests/python/install/test_publication_paths.py`）。阶段 B 在 Windows 上把后者也送进了私有边界，2026-10-22 验收时由 CI 发现，交阶段 C 后续改回；那个测试里 active 指针的一半属于私有状态，随之删去。
+事实的发布与读者由第 3 节规定：FileRenameInfoEx 按句柄换代，产品自己的读者允许删除共享。这是让有人读着的文件也能换代的功能要求，不是安全层。
 
 ## 3. 事实发布、Windows 换代与开机会话
 
@@ -46,7 +42,7 @@ Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试
 
 文件实验的四个单文件窗口各重复三次：写完未 fsync、fsync 后、替换前被杀都读到完整 OLD，替换后被杀读到完整 NEW。此证据没有覆盖 native journal、多文件绑定、gzip 尾部、备份恢复器或断电；阶段 C 的验收也不能替拟换代的 Windows API 完成验收。当前 `publish_bytes` 的 Windows 可变发布仍调用 `os.replace`，finally 会清理其临时文件；不能写成当前产品已经保留失败的临时文件或支持带读者换代。
 
-Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInfoEx, POSIX_SEMANTICS | REPLACE_IF_EXISTS)`，先做实验再落地。它在临时文件句柄上用一条路径覆盖目标缺席的首次发布和已有目标的换代，带过去的是已在该临时文件句柄上校验的 owner/DACL；新实现写完后仍保留该句柄，flush/fsync 后按句柄改名，完成后关闭。不可变对象继续 compare-and-create，备份的目录 journal 协议保持现状。不实现 delete-then-rename，不保留多套替换 API 的运行时回退。桌面实验已选定这一机制（[桌面实验记录](windows-experiments-desktop.md)）：普通令牌下连续发布 1000 次、无重试、零错误；首次发布、无读者与允许删除共享的读者都成功；禁止删除共享的读者让发布以错误 32 失败，目标带 READONLY 时为错误 5，所以产品自己的读者一律允许删除共享，产品也不给自己的文件设 READONLY。实验时机器上的实时扫描来自联想预装的杀毒软件（火绒引擎），Defender 处于被动状态，未测。
+Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInfoEx, POSIX_SEMANTICS | REPLACE_IF_EXISTS)`，先做实验再落地。它在临时文件句柄上用一条路径覆盖目标缺席的首次发布和已有目标的换代，带过去的是临时文件从目录继承的 ACL；新实现写完后仍保留该句柄，flush/fsync 后按句柄改名，完成后关闭。不可变对象继续 compare-and-create，备份的目录 journal 协议保持现状。不实现 delete-then-rename，不保留多套替换 API 的运行时回退。桌面实验已选定这一机制（[桌面实验记录](windows-experiments-desktop.md)）：普通令牌下连续发布 1000 次、无重试、零错误；首次发布、无读者与允许删除共享的读者都成功；禁止删除共享的读者让发布以错误 32 失败，目标带 READONLY 时为错误 5，所以产品自己的读者一律允许删除共享，产品也不给自己的文件设 READONLY。实验时机器上的实时扫描来自联想预装的杀毒软件（火绒引擎），Defender 处于被动状态，未测。
 
 现有文件实验只证明：允许删除共享的目标读者持有时，os.replace 和 `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` 各三次错误 5，ReplaceFileW 三次成功；POSIX 语义改名尚未试过。Host 本轮审查指出 ReplaceFileW 对目标缺席需要另一条路径，且会把被替换文件的 ACL、属性与对象 ID 合到新文件，因此先试按句柄的 POSIX 语义改名。上述新 API 的完整性、元数据与耐久性均未在测试机验证，不能由选型推导已可用。
 
@@ -102,7 +98,7 @@ Windows 用禁止脱离的根/native Job 覆盖自然派生后代；通过既有
 
 ## 6. 忙文件、运行时保留与测试收尾
 
-事实读者关闭自己不用的句柄并允许删除共享，读取校验针对持有的那一代；换代由第 3 节唯一实现承担。固定祖先的作用域在删除或改名目录自身前退出。普通读者和外部禁止删除共享者阻止删除/替换，实验实际出现错误 5 与 32，不能把 5 一律当 ACL 或把所有忙错误预设为 32；错误保留原始码、操作及受限相对路径。长期占用报忙并保留可恢复现场，不无限重试或删除目标再发布。
+事实读者关闭自己不用的句柄并允许删除共享，读取校验针对持有的那一代；换代由第 3 节唯一实现承担。工作树操作固定的祖先，作用域在删除或改名目录自身前退出。普通读者和外部禁止删除共享者阻止删除/替换，实验实际出现错误 5 与 32，不能把 5 一律当 ACL 或把所有忙错误预设为 32；错误保留原始码、操作及受限相对路径。长期占用报忙并保留可恢复现场，不无限重试或删除目标再发布。
 
 `Database.connect` 缓存连接，退出事务不等于 close；daemon cleanup 已调用 db.close，不能说产品没有关闭数据库。恢复替换 board/sidecar 前让唯一所有者全部连接关闭、释放操作句柄，WAL checkpoint 和安装协调围栏保留。实验中只读、读写 SQLite 连接都阻止删除/改名，关闭后成功；外部查看器占用时保留 journal 和备份，不删 WAL/SHM 绕过错误。释放占用后继续同一恢复计划。
 
@@ -120,7 +116,7 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 阶段 A 已完成上述两份模型无关实验，相关结论逐项并入本文；剩余实验如下，不包含目录身份或电源操作。每项在新的独立实验根运行，记录源码、Python/CLI/工具版本、令牌、会话、完整身份、Job flags/成员、原始输出、错误码及最后收尾。显式安装探针 Python 使用私有根及 uv 的 `--no-bin --no-registry`，不触碰日常服务、看板和环境。只用模型无关替身及版本命令，不调用模型。
 
-1. 桌面普通令牌与交替提权：开发者同一用户打开普通及管理员 PowerShell，分别记录 TokenElevation、TokenOwner 和组，特别记录普通令牌 Administrators 的 deny-only 属性；固定 Python 3.12.13，在宽继承父目录和默认父目录逐级用 0700 建根，读回每级 owner/DACL/继承。先测原样提权创建后普通访问，再测提权进程先把令牌默认属主设为当前用户的政策；普通建根后管理员创建子目录、凭据及 SQLite/WAL/SHM，普通窗口重新访问，再反向重复，另测 WAL/SHM 重建。覆盖默认状态目录及 PowerShell 先建目录的入口。若这一政策使两种令牌均可用就按此落地；若设置被拒，就采用第 2 节在提权启动边界拒绝的分支，不加主体、不自动修既有 ACL。已完成（[桌面实验记录](windows-experiments-desktop.md)）：提权进程把默认属主设为当前用户之后，目录、凭据、SQLite 及其 WAL/SHM 在两种令牌间可交替访问和重建；不设时普通令牌打不开管理员属主的对象。阶段 B 按这一政策落地。
+1. 桌面普通令牌与交替提权：开发者同一用户打开普通及管理员 PowerShell，分别记录 TokenElevation、TokenOwner 和组，特别记录普通令牌 Administrators 的 deny-only 属性；固定 Python 3.12.13，在宽继承父目录和默认父目录逐级用 0700 建根，读回每级 owner/DACL/继承。先测原样提权创建后普通访问，再测提权进程先把令牌默认属主设为当前用户的政策；普通建根后管理员创建子目录、凭据及 SQLite/WAL/SHM，普通窗口重新访问，再反向重复，另测 WAL/SHM 重建。覆盖默认状态目录及 PowerShell 先建目录的入口。若这一政策使两种令牌均可用就按此落地；若设置被拒，就采用第 2 节在提权启动边界拒绝的分支，不加主体、不自动修既有 ACL。已完成（[桌面实验记录](windows-experiments-desktop.md)）：提权进程把默认属主设为当前用户之后，目录、凭据、SQLite 及其 WAL/SHM 在两种令牌间可交替访问和重建；不设时普通令牌打不开管理员属主的对象。阶段 B 按这一政策落地；2026-10-22 起改为 Windows 上不用 0o700、继承 profile 的 ACL，两种令牌都直接可用，不再改默认属主（第 2 节）。
 
 2. 桌面启动方和窗口：开发者分别从 PowerShell、VS Code 终端及已有 Host CLI 工具 shell 启动私有服务替身，独立观察方登记真实 PID/FILETIME、会话和 Job，再关闭启动窗口/shell。服务使用 detached/new-group/breakaway；在可确认不属于 Job 的启动方核实额外 breakaway 是否被忽略，并测允许/禁止脱离的外层，决定是否可以一律加标志。执行和 native 保留 NO_WINDOW/new-group，观察其窗口、HWND、conhost，以及它们经 cmd/pwsh/git 起控制台孙进程的窗口和成员；不安排执行/native 的 detached 对照。服务及后代独立存活且窗口行为满足要求才验收相应入口，拒绝脱离的外层明确不支持。实际 Host shell 若不能在无模型调用条件下取得，该入口继续未验证。部分完成（[桌面实验记录](windows-experiments-desktop.md)）：两个入口的启动 shell 都已在某个 Job 里，带 breakaway 的服务替身创建成功；外层禁止脱离时创建以错误 5 失败，按上文明确不支持。服务替身的子进程弹出了窗口，结论见第 4 节。启动窗口关掉之后服务是否继续存活，这次没有采到重叠时段，留到阶段 D 用真实服务验收；Host CLI 工具 shell 未观察。
 
@@ -130,13 +126,15 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 5. Defender 与文件换代：开发者打开实时扫描，首尾保存 Get-MpComputerStatus 均为 RealTimeProtectionEnabled=True，保持普通令牌和锁定环境。在独立根先对 SetFileInformationByHandle 的 FileRenameInfoEx 加 POSIX_SEMANTICS/REPLACE_IF_EXISTS 做第 3 节全矩阵、强杀窗口及实际恢复器；失败才对 ReplaceFileW 做同矩阵，另核对其首次发布分支和元数据合并，最后只选一个机制。选定机制再至少 1000 次无受控读者、无重试连续发布，分开统计人为占用和热路径异常、errno/winerror及迭代号。异常时保留实际文件和摘要，释放已知读者后记录继续结果；无偶发不加重试，有证据才定唯一边界的一次有界重试，未满足完整性/ACL 就不采用。开发者只需安排设置与桌面，探针由后续实施任务执行并保存原始输出。已完成，Defender 除外（[桌面实验记录](windows-experiments-desktop.md)）：选定 FileRenameInfoEx，结论见第 3 节；产品恢复器的接入与 Defender 开启条件留给阶段 C 的后续。
 
-6. 私有边界与会话补项：DACL 缺失、对象/条件/未知 ACE 用合成 ACE 列表及查询结果写单元测试，不在测试机构造；目录联接与叶子重解析竞态已由补充实验完成，结论见第 2 节；新增 ACL bootstrap 的首次、active 指针及源替换入口在实现后原生补测，记录接受/拒绝与句柄关闭。SSH 会话的 sessionId 为 0，桌面会话与它不同，可以实测跨会话。若当前桌面与 SSH 的 ProcessIdToSessionId 确实不同，用一边持有的 Local Job 在另一边尝试打开，再回原会话核对原成员仍活；两边相同就不称跨会话实测，不要求注销或新建会话。不同会话未取得时保留原生证据缺口，代码仍拒绝把另一会话的错误 2 当停止。此项不依赖重启、快速启动、睡眠或休眠实验。
+6. 私有边界与会话补项：DACL 缺失、对象/条件/未知 ACE 用合成 ACE 列表及查询结果写单元测试，不在测试机构造；目录联接与叶子重解析竞态已由补充实验完成，结论用于工作树的固定祖先（第 2 节）；新增 ACL bootstrap 的首次、active 指针及源替换入口在实现后原生补测，记录接受/拒绝与句柄关闭。SSH 会话的 sessionId 为 0，桌面会话与它不同，可以实测跨会话。若当前桌面与 SSH 的 ProcessIdToSessionId 确实不同，用一边持有的 Local Job 在另一边尝试打开，再回原会话核对原成员仍活；两边相同就不称跨会话实测，不要求注销或新建会话。不同会话未取得时保留原生证据缺口，代码仍拒绝把另一会话的错误 2 当停止。此项不依赖重启、快速启动、睡眠或休眠实验。
 
 ## 8. 实施阶段、文件与契约升级
 
 阶段 A：已有进程/文件实验已完成，补充清单见第 7 节；只产出实验记录，不改契约、存储形式或版本，不开待执行升级。相关补项是 B、C 后续、D、E 各自落地的前提，不重复已取得的证据。
 
 阶段 B：已完成，合入 `755c476c`（[验收记录](../../acceptance/cross-platform/phase-b.md)），留给阶段 C 后续的五件顺带项在验收记录末尾。原定：落地已同意的 Python `>=3.12.4,<3.13`、直接 pywin32 依赖、逐级私有创建及句柄/ACL 边界。依赖 A 已有 ACL/稳定 runtime 证据及补项 1、6；改 pyproject.toml、uv.lock、private_dirs.py、新增 windows_files.py、搬移 windows_paths 文件能力及第 2 节列出的 CLI/launcher/transport/turn_io/session/fast cwd 入口，服务、执行与启动器的进程入口落实提权时的默认属主政策或明确拒绝分支。验收单一 ACL 规则、每级 0700、提权建后普通访问、SQLite sidecar 重建、祖先固定、fd 单次转移、bootstrap 及 POSIX 回归；ACE 形状反例用单元测试，实际 owner/继承及路径竞态用原生证据。不改消息/事实格式或 SQLite 存储形式，单独安装只移动末号，不开待执行升级。
+
+阶段 B2（精简，2026-10-22 开发者定）：照第 2 节删去私有路径逐次固定祖先、逐次 ACL 校验、私有路径的名称比对、提权进程改默认属主（连同 `PRIVATE_OWNER_SETUP_FAILED`）与 Windows 上的 0o700；状态根在安装与冷启动时查一次；Python 下限回到 `>=3.12,<3.13`。句柄层留给工作树与第 3 节的发布。阶段 C 后续的顺带项 1、2（安装发布路径进了私有边界、整条路径比对）随之不再成立。排在阶段 C 后续合入之后；删守卫的差异按惯例另请一次独立审查。不改消息、事实或存储形式。
 
 阶段 C：已完成，合入 `516c6d5d`，测试挂起修复合入 `e1e4d1d6`。共用 `private_files.py:publish_bytes` 及三系统唯一备份 journal 是现状，不再依赖 B 才算完成。其实现没有改跨进程事实或看板存储形式，不因此开升级或移动 CONTRACT_VERSION；测试修复本身不移动版本。这里只留 Windows 带读者换代后续：依赖 B 的句柄边界和补项 5，通过实验门槛后改 `windows_files.py`、`private_files.py` 的可变文件换代及失败清理，复跑 private publication、native journal、`test_backup_publication.py`、upgrade 恢复的相应中断用例。事实形式不变，单独安装移动末号，不因换 API 开升级。
 
@@ -167,3 +165,5 @@ Windows 换代先试 FileRenameInfoEx 的 POSIX 语义改名，失败才测 Repl
 2026-10-22 按补充实验（[a3 记录](windows-experiments-a3.md)）：补项 3 完成，保留 venv 入口，不改启动链；固定祖先改以 `GENERIC_READ` 打开，因为只请求 `FILE_READ_ATTRIBUTES` 的句柄挡不住改名；补项 6 的目录竞态完成。
 
 2026-10-22 按桌面实验（[桌面实验记录](windows-experiments-desktop.md)）：补项 1 完成，阶段 B 采用提权进程设默认属主的政策；补项 5 选定 FileRenameInfoEx；服务起的每个控制台子进程都带 CREATE_NO_WINDOW；跨会话的错误 2 不是停止证据，已实测；启动窗口关闭后服务的存活留到阶段 D 验收。
+
+2026-10-22 晚，开发者认为私有边界层层设防、与要防的情形不相称：私有规则防得住的只有同机的其他普通账户，而 profile 目录的 ACL 已经挡住他们；提权默认属主那一层原是 Windows 上 0o700 造成的问题。第 2 节重写为继承 profile 的 ACL、状态根在边界上查一次，阶段 B2 照此删去多余的层次，Python 下限回到 3.12。工作树的固定祖先与第 3 节的发布不变。
