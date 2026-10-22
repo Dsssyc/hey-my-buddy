@@ -4,19 +4,14 @@ from __future__ import annotations
 import hashlib
 import os
 import queue
-import re
 import select
 import threading
 import time
 
 from ....json_codec import canonical_json, decode_strict_json
+from ..native_support import NATIVE_SUMMARY_BYTES, truncate_utf8
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
-#: The whole native-refusal text — the ``Codex rejected <method>:`` prefix
-#: included — is bounded to the UTF-8 byte budget the public ``RunEnd.message``
-#: keeps, so a long native reason travels cut but readable, never dropped for
-#: size. Nothing past ``error.message`` is expanded (no ``error.data``).
-MAX_NATIVE_REFUSAL_BYTES = 512
 _WINDOWS_PIPE = os.name == "nt"
 _UNREADABLE_RESULT = "rpc/result-unreadable"
 
@@ -26,12 +21,6 @@ class CodexProtocolError(Exception):
         super().__init__(message)
         self.code = code
         self.native_error = native_error
-
-
-#: The one shared strict decode (duplicate members and non-finite numbers,
-#: including the ``1e999`` overflow, refused); the caller keeps its own error
-#: mapping around the ``ValueError`` this raises.
-decode_json = decode_strict_json
 
 
 class Connection:
@@ -58,7 +47,7 @@ class Connection:
             while raw := self.process.stdout.readline(MAX_FRAME_BYTES + 1):
                 if len(raw) > MAX_FRAME_BYTES:
                     raise ValueError("oversized native frame")
-                message = decode_json(raw)
+                message = decode_strict_json(raw)
                 if not isinstance(message, dict):
                     raise ValueError("native frame is not an object")
                 self.messages.put(message)
@@ -140,15 +129,17 @@ class Connection:
                     or not isinstance(error.get("message"), str)):
                 raise CodexProtocolError("invalid-protocol", "Codex returned an invalid RPC error")
             native_error = {"code": error["code"], "message": error["message"]}
+            # The whole native-refusal text — the ``Codex rejected <method>:`` prefix
+            # included — is bounded to the UTF-8 byte budget the public ``RunEnd.message``
+            # keeps, so a long native reason travels cut but readable, never dropped for
+            # size. Nothing past ``error.message`` is expanded (no ``error.data``).
             text = f"Codex rejected {method}: {error['message']}"
-            text = text.encode("utf-8")[:MAX_NATIVE_REFUSAL_BYTES].decode("utf-8", errors="ignore")
+            text = truncate_utf8(text, NATIVE_SUMMARY_BYTES)
             raise CodexProtocolError("native-rpc-error", text, native_error=native_error)
         result = response.get("result")
         self.last_result_readable = isinstance(result, dict)
         if not self.last_result_readable:
             label = f"{_UNREADABLE_RESULT}/{method}"
-            if not re.fullmatch(r"[A-Za-z0-9/._-]{1,64}", label):
-                label = _UNREADABLE_RESULT
             self.on_notification({"method": label})
             return {}
         return result
@@ -301,7 +292,7 @@ class TurnEvidence:
             parsable = False
             if raw is not None:
                 try:
-                    decode_json(raw)
+                    decode_strict_json(raw)
                 except (ValueError, RecursionError):
                     pass
                 else:

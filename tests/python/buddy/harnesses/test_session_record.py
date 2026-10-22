@@ -1,5 +1,6 @@
 """Session display failures stay separate from native execution facts."""
 from pathlib import Path
+import json
 import tempfile
 import unittest
 from unittest import mock
@@ -36,6 +37,18 @@ class SessionRecordTests(unittest.TestCase):
         self.assertEqual(self.record.failure["params"]["category"], "_BoardValueError")
         self.assertFalse(self.path.exists())
 
+    def test_reopen_trims_interrupted_line_before_appending(self):
+        self.record.append(self.update("first"))
+        self.record.close()
+        with self.path.open("ab") as stream:
+            stream.write(b'{"broken":')
+        resumed = SessionRecord(self.path, "attempt")
+        self.addCleanup(resumed.close)
+        resumed.append(self.update("second"))
+        lines = [json.loads(line) for line in self.path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(len(lines), 3)
+        self.assertEqual([line["update"]["content"]["text"] for line in lines[1:]], ["first", "second"])
+
     def test_projector_validation_failure_disables_further_projection(self):
         def invalid_projection():
             MessageChunk(session_update="agent_message_chunk", content={"type": "text", "text": 3})
@@ -71,14 +84,14 @@ class SessionRecordTests(unittest.TestCase):
         self.assertEqual(self.record.failure["params"]["category"], "ValueError")
         self.assertIsNone(self.record._fd)
 
-    def test_cleanup_error_is_recorded_beside_first_failure(self):
+    def test_cleanup_error_does_not_replace_first_failure(self):
         self.record.append(self.update())
         descriptor = self.record._fd
         with mock.patch("hey_my_buddy.buddy.harnesses.session_record.os.close", side_effect=KeyError("cleanup")):
             self.record.project(mock.Mock(side_effect=ValueError("first error")))
         os.close(descriptor)
         self.assertEqual(self.record.failure["params"], {
-            "category": "ValueError", "message": "first error; close failed: 'cleanup'", "truncated": False})
+            "category": "ValueError", "message": "first error", "truncated": False})
 
     def test_cancellation_is_not_a_projection_failure(self):
         for cancellation in (KeyboardInterrupt(), SystemExit()):

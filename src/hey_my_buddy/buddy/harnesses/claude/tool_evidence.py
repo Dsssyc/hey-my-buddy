@@ -35,9 +35,6 @@ STRUCTURED_OUTPUT_TOOL = "StructuredOutput"
 #: The identity bound the shared package itself enforces; IDs are bounded here
 #: the same way so nothing is collected that could never be observed.
 _MAX_ID_LENGTH = 512
-#: A start's name is correlated to its call so a later ``tool_result`` can name
-#: its own end; the bound keeps a runaway stream growing the table without end.
-_MAX_CORRELATED_CALLS = 512
 #: Delivery candidates and their retained inputs are bounded the same way: a
 #: pathological retry loop cannot grow the collector without end, and a dropped
 #: input simply leaves its call unverifiable — it stays an ordinary tool fact.
@@ -325,8 +322,7 @@ class ReadOnlyToolEvidence:
             # reach the same flag.
             if call_id is not None:
                 shared_key = (canonical_json(identity), call_id)
-                if len(self._delivery_incomplete) < _MAX_CORRELATED_CALLS:
-                    self._delivery_incomplete.add(shared_key)
+                self._delivery_incomplete.add(shared_key)
                 candidate = self._delivery_candidates.get(shared_key)
                 if candidate is not None:
                     candidate["incomplete"] = True
@@ -343,8 +339,7 @@ class ReadOnlyToolEvidence:
                 candidate = self._delivery_candidates.get((canonical_json(identity), call_id))
                 if candidate is not None:
                     candidate["names"].add(event["toolName"])
-            if len(self._correlated) < _MAX_CORRELATED_CALLS:
-                self._correlated[key] = event["toolName"]
+            self._correlated[key] = event["toolName"]
 
 
 def _native_id(value) -> str | None:

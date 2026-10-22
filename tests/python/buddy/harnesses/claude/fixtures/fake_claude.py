@@ -103,7 +103,8 @@ def initialize_response(case):
     if case == "empty-catalog":
         response["models"] = []
     if case == "oversized-catalog":
-        response["models"] = [{}] * 201
+        response["models"] = [{"value": f"model-{index}", "resolvedModel": f"model-{index}",
+                               "supportedEffortLevels": ["high"] * 20} for index in range(201)]
     if case != "missing-account":
         response["account"] = None if case == "null-account" else account
     return response

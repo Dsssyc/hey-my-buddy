@@ -136,12 +136,7 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
                     if not version or re.fullmatch(r"v?\d+(?:\.\d+){0,2}", version):
                         break
                     alias = home / ".nvm/alias" / version
-                    alias_root = home / ".nvm/alias"
-                    try:
-                        allowed = alias.resolve().is_relative_to(alias_root.resolve()) and alias.is_file()
-                    except (OSError, RuntimeError):
-                        allowed = False
-                    if not allowed:
+                    if not alias.is_file():
                         break
                     records.append({"manager": "nvm", "path": str(alias),
                                     "fingerprint": file_fingerprint(alias)})
@@ -1056,11 +1051,14 @@ def _discover(harness: str, *, manual_path: str | None = None,
             reason = failure["reason"] if failure else "not-found"
         else:
             status, reason = "ready", selected["reason"]
-        diagnostics = [{"path": item["path"], "source": item["source"], "status": item["status"],
-                        "reason": item["reason"]} for item in attempts[:_MAX_DIAGNOSTICS]]
-        if not attempts:
+        if attempts:
+            diagnostics = [{"path": item["path"], "source": item["source"], "status": item["status"],
+                            "reason": item["reason"]} for item in attempts[:_MAX_DIAGNOSTICS]]
+            omitted_diagnostics = len(attempts) - len(diagnostics)
+        else:
             diagnostics = [{"path": item["path"], "source": item["source"], "status": "missing",
                             "reason": _probe_reason("not-found")} for item in snapshot["candidates"][:_MAX_DIAGNOSTICS]]
+            omitted_diagnostics = len(snapshot["candidates"]) - len(diagnostics)
         return {"harness": harness, "status": status, "available": selected is not None,
                 "command": selected["command"] if selected else [],
                 "executable": selected["path"] if selected else None,
@@ -1068,6 +1066,7 @@ def _discover(harness: str, *, manual_path: str | None = None,
                 "source": selected["source"] if selected else None,
                 "fingerprint": selected["fingerprint"] if selected else None,
                 "scanFingerprint": _scan_hash(snapshot), "candidates": diagnostics,
+                "omittedDiagnostics": omitted_diagnostics,
                 **({"billingByProvider": selected["billingByProvider"]}
                    if selected is not None and "billingByProvider" in selected else {}),
                 "reason": _probe_reason(reason)}

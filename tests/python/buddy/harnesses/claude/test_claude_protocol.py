@@ -15,7 +15,6 @@ from hey_my_buddy.buddy.harnesses.claude.protocol import (
     Connection,
     QuotaRejected,
     TurnEvidence,
-    decode_json,
     model_usage_keys,
     result_quota_denial,
 )
@@ -52,19 +51,6 @@ class FakeProcess:
         self.native_writes = os.fdopen(stdout_write, "wb", buffering=0)
 
 
-class DecodeTests(unittest.TestCase):
-    def test_duplicate_members_and_non_finite_numbers_are_rejected(self):
-        with self.assertRaises(ValueError):
-            decode_json('{"type":"result","type":"result"}')
-        with self.assertRaises(ValueError):
-            decode_json('{"cost":NaN}')
-        with self.assertRaises(ValueError):
-            decode_json('{"cost":Infinity}')
-        with self.assertRaises(ValueError):
-            decode_json('{"cost":1e999}')
-        self.assertEqual(decode_json('{"a":1}'), {"a": 1})
-
-
 class QuotaParsingTests(unittest.TestCase):
     def test_result_quota_denial_uses_structured_fields_only(self):
         self.assertTrue(result_quota_denial({"api_error_status": 429}))
@@ -75,10 +61,10 @@ class QuotaParsingTests(unittest.TestCase):
                                               "result": "quota exhausted according to the message"}))
         self.assertFalse(result_quota_denial({}))
 
-    def test_model_usage_keys_form_a_bounded_observed_set(self):
+    def test_model_usage_keys_retain_the_observed_set(self):
         result = {"modelUsage": {"claude-opus-5": {}, "claude-haiku-4-5": {}, "zzz-other": {}}}
         self.assertEqual(model_usage_keys(result), ["claude-haiku-4-5", "claude-opus-5", "zzz-other"])
-        self.assertEqual(len(model_usage_keys({"modelUsage": {str(i): {} for i in range(40)}})), 16)
+        self.assertEqual(len(model_usage_keys({"modelUsage": {str(i): {} for i in range(40)}})), 40)
         self.assertEqual(model_usage_keys({"modelUsage": {"x" * 129: {}}}), [])
         self.assertEqual(model_usage_keys({}), [])
 
@@ -246,12 +232,23 @@ class TurnEvidenceTests(unittest.TestCase):
         self.assertEqual(notified.unsettled_background_tasks(), ["<unnamed>"])
         self.assertEqual(notified.unsettled_background_tasks(), updated.unsettled_background_tasks())
 
-    def test_background_overflow_cannot_hide_an_unsettled_task(self):
+    def test_background_tasks_beyond_the_old_limit_stay_observable(self):
         evidence = TurnEvidence("session-1", "/tmp/checkout-a")
-        for index in range(32):
+        for index in range(33):
             evidence.observe({"type": "system", "subtype": "task_started", "task_id": str(index)})
-        with self.assertRaises(ClaudeProtocolError):
-            evidence.observe({"type": "system", "subtype": "task_started", "task_id": "overflow"})
+        self.assertEqual(len(evidence.unsettled_background_tasks()), 33)
+        evidence.observe({"type": "system", "subtype": "task_notification",
+                          "task_id": "32", "status": "completed"})
+        self.assertEqual(len(evidence.unsettled_background_tasks()), 32)
+        self.assertNotIn("32", evidence.unsettled_background_tasks())
+
+    def test_fallback_usage_keeps_messages_beyond_the_old_limit(self):
+        evidence = TurnEvidence("session-1", "/tmp/checkout-a")
+        for index in range(257):
+            evidence.observe({"type": "assistant", "session_id": "session-1",
+                              "message": {"id": f"msg-{index}", "usage": {"input_tokens": 1}}})
+        self.assertEqual(len(evidence.assistant_usage), 257)
+        self.assertEqual(evidence.assistant_usage["msg-256"], {"input_tokens": 1})
 
 
 class ConnectionTests(unittest.TestCase):
@@ -372,16 +369,16 @@ class ConnectionTests(unittest.TestCase):
         self.assertEqual([item["requestId"] for item in facts["samples"]], ["hey-my-buddy-1", "hey-my-buddy-2", "hey-my-buddy-3"])
         self.assertNotIn("credential-fragment", json.dumps(facts))
 
-    def test_control_request_resource_bounds_still_reject(self):
-        self.connection.pending = {str(i): None for i in range(16)}
-        with self.assertRaises(ClaudeProtocolError) as pending:
-            self.connection.call({"subtype": "initialize"})
-        self.assertEqual(pending.exception.code, "invalid-protocol")
-        self.connection.pending.clear()
+    def test_control_request_identity_continues_past_the_old_budget(self):
         self.connection.next_id = 100000
-        with self.assertRaises(ClaudeProtocolError) as budget:
-            self.connection.call({"subtype": "initialize"})
-        self.assertEqual(budget.exception.code, "invalid-protocol")
+        def respond():
+            frame = json.loads(self.process.native_reads.readline())
+            self.assertEqual(frame["request_id"], "hey-my-buddy-100000")
+            self._write_frame({"type": "control_response", "response": {
+                "subtype": "success", "request_id": frame["request_id"], "response": {"models": []}}})
+        threading.Thread(target=respond, daemon=True).start()
+        self.assertEqual(self.connection.call({"subtype": "initialize"}), {"models": []})
+        self.assertEqual(self.connection.next_id, 100001)
 
     def test_oversized_native_frame_still_rejects(self):
         # A separate reader sees the small test bound before reading its frame.

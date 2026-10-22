@@ -66,6 +66,36 @@ def launch_with_environment(harness, environment=None):
     return command, result
 
 
+_FIXTURE_ENVIRONMENT = {
+    harness: tuple(f'HMB_{harness.upper()}_FIXTURE_{suffix}' for suffix in ('CASE', 'STATE'))
+    for harness in ('codex', 'claude')
+}
+
+
+def _copy_fixture_environment(source, target, harnesses):
+    for harness in harnesses:
+        for key in _FIXTURE_ENVIRONMENT[harness]:
+            if key in source:
+                target[key] = source[key]
+
+
+def launch(harness, unavailable_type, environment=None):
+    """Translate a selected native launch into a harness-specific refusal."""
+    from .discovery import EntryUnavailable
+
+    try:
+        command, result = launch_with_environment(harness, environment)
+    except BoardError as error:
+        raise unavailable_type(error.message) from None
+    except EntryUnavailable as error:
+        failure = unavailable_type(str(error))
+        failure.reason = error.reason
+        raise failure from None
+    if environment is not None and os.environ.get('HMB_DEV_SOURCE') == '1':
+        _copy_fixture_environment(environment, result, (harness,))
+    return command, result
+
+
 def controller_environment(directory, environment=None, *, read_only=False):
     """Only trusted Python controllers receive the private command selection."""
     source = (_environment.get() or os.environ) if environment is None else environment
@@ -84,11 +114,10 @@ def controller_environment(directory, environment=None, *, read_only=False):
                 env[key] = source[key]
     if source.get('HMB_DEV_SOURCE') == '1':
         for key in ('HMB_DEV_SOURCE', 'HMB_CLAUDE_CLI', 'HMB_CODEX_CLI', 'HMB_ZCODE_CLI', 'HMB_DSH_CLI',
-                    'HMB_NODE', 'HMB_CODEX_FIXTURE_CASE', 'HMB_CODEX_FIXTURE_STATE',
-                    'HMB_CLAUDE_FIXTURE_CASE', 'HMB_CLAUDE_FIXTURE_STATE',
-                    'HMB_ZCODE_TEST_CASE'):
+                    'HMB_NODE', 'HMB_ZCODE_TEST_CASE'):
             if key in source:
                 env[key] = source[key]
+        _copy_fixture_environment(source, env, ('codex', 'claude'))
     records = _records.get()
     if records is not None:
         from ..roles.turn_io import private_json
