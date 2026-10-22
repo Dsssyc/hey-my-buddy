@@ -71,6 +71,30 @@ class BoundaryReadingTests(RouterDispatchTestCase):
                 self.assertEqual(TRIAL_FIELDS, set(trial), trial)
         return result
 
+    def test_old_decision_without_snapshot_projects_through_get_and_list(self):
+        decision_id = "dec-before-schema-16"
+        requested = {"kind": "select", "task": "Historical Router decision", "routerCalled": True,
+                     "routingMode": "fast", "routerBuddyIds": [A],
+                     "routerIdentities": [{"harness": "dsh", "provider": "fixture", "model": "alpha", "effort": "max"}]}
+        self.assertNotIn("routerRetryIntervalSeconds", requested)
+        with self.board_.store.db.write() as db:
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at) VALUES(?,'failed',?,?)",
+                       (decision_id, requested["task"], T0))
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at) "
+                       "VALUES(?,'before-schema-16','historical',?,?)", (decision_id, canonical_json(requested), T0))
+            self.assertIsNone(router_sequence.request_snapshot(db, decision_id))
+        with patch("hey_my_buddy.blackboard.routing.router_boundary_data._state",
+                   side_effect=AssertionError("An old snapshotless decision has no Router state to project")):
+            fetched = self.board_.call("selection_get", {"decisionId": decision_id, "includeAudit": True})["decision"]
+            listed = self.board_.call("selection_list", {"limit": 10})["decisions"]
+        self.assertEqual(fetched["decisionId"], decision_id)
+        self.assertEqual(fetched["requested"], requested)
+        self.assertEqual([row["decisionId"] for row in listed], [decision_id])
+        for view in (fetched, listed[0]):
+            self.assertEqual(view["status"], "failed")
+            self.assertEqual(view["routerTrials"], [])
+            self.assertNotIn("routingBoundary", view)
+
     def finish_all(self):
         request, first = self.start()
         self.report(first, self.failure(first), status="failed")
@@ -429,7 +453,10 @@ class BoundaryReadingTests(RouterDispatchTestCase):
         with self.board_.store.db.write() as db:
             db.execute("UPDATE buddies SET enabled=0")
         no_candidate = self.request(request_id="none-legal")
-        self.assertIsNone(self.boundary(no_candidate["decisionId"]))
+        zero = self.boundary(no_candidate["decisionId"])
+        self.assertEqual(zero["kind"], "routing-changed")
+        self.assertEqual(zero["candidates"], [])
+        self.assertEqual(zero["routerTrials"], [])
         self.assertIsNone(self.snapshot_of(no_candidate["decisionId"]))
 
     def test_cancelled_dispatch_stays_cancelled_without_new_router_failure(self):
@@ -527,6 +554,51 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         self.assertEqual(continued["runId"], view["runId"])
         self.assertFalse(continued["awaitingHost"])
         self.assertTrue(self.board_.call("workflow_continue", host_params)["duplicate"])
+
+    def test_zero_candidates_offer_only_an_explicit_buddy_continue_template(self):
+        from hey_my_buddy.cli import main as cli, cli_views
+        from hey_my_buddy.blackboard.routing.quota_routing import record_rejection
+        for mode in ("disabled", "cooling"):
+            with self.subTest(mode=mode):
+                with self.board_.store.db.write() as db:
+                    if mode == "disabled":
+                        db.execute("UPDATE buddies SET enabled=0")
+                    else:
+                        db.execute("UPDATE buddies SET enabled=1")
+                        record_rejection(db, "dsh", "fixture", {"code": "quota-exceeded",
+                            "nativeCode": "fixture-denied", "source": "synthetic/zero-candidates",
+                            "observedAt": T0, "resetsAt": None,
+                            "rejectionPhase": "before-model"}, now=T0)
+                view = self.routed("zero-" + mode)
+                boundary = view["routing"]["routingBoundary"]
+                self.assertEqual(boundary["candidates"], [])
+                self.assertEqual(boundary["routerTrials"], [])
+                command = boundary["commands"]["continue"]
+                self.assertFalse(command["blocked"])
+                self.assertEqual(len(command["choices"]), 1)
+                choice = command["choices"][0]
+                self.assertIsNone(choice["buddyId"])
+                self.assertEqual(choice["params"]["buddy"],
+                                 {key: f"<{key}>" for key in ("harness", "provider", "model", "effort")})
+                self.assertEqual(choice["params"]["runId"], view["runId"])
+                self.assertEqual(choice["params"]["expectedRevision"], view["revision"])
+                self.assertTrue(boundary["commands"]["reroute"]["blocked"])
+                self.assertIsNone(boundary["commands"]["reroute"]["params"])
+                rendered = cli._render_output("await", {"workflow": {"routingBoundary": boundary},
+                    "request": {"routing": True}, "nextCommands": []}, cli_views.OUTPUT_BRIEF)
+                self.assertEqual(rendered["nextCommands"], [{"method": "continue", "params": choice["params"]}])
+                with self.board_.store.db.read() as db:
+                    self.assertEqual(db.execute("SELECT COUNT(*) FROM router_dispatches").fetchone()[0], 0)
+                    self.assertIsNone(router_sequence.request_snapshot(db, view["routing"]["decisionId"]))
+                if mode == "disabled":
+                    with self.board_.store.db.write() as db:
+                        db.execute("UPDATE buddies SET enabled=1")
+                    params = self.template_params(view, choice["params"], note="Host supplies the now enabled buddy")
+                    params["buddy"] = {"harness": "dsh", "provider": "fixture", "model": "bravo", "effort": "max"}
+                    continued = self.board_.call("workflow_continue", params)
+                    self.assertEqual(continued["runId"], view["runId"])
+                    self.assertEqual(continued["buddy"], params["buddy"])
+                    self.assertFalse(continued["awaitingHost"])
 
     def test_buddy_required_error_explains_same_boundary_commands(self):
         view = self.routed()
