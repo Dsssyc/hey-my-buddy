@@ -11,7 +11,7 @@ test closes that gap:
    Python re-implementation — through ``createApi(...).snapshot()``,
    ``.macroTasks()``, ``.macroTaskTimeline()``, the ``workflow_get`` command
    path and ``parseWorkflowReply``, and the resulting report is asserted here.
-   Four preview scenarios (normal/readonly/truncated/error) stay covered, and
+   Three preview scenarios (normal/truncated/error) stay covered, and
    deliberately incompatible shapes are refused instead of silently accepted.
 
 The frontend check needs the console's dev dependencies (``npm ci`` in
@@ -160,11 +160,9 @@ class PreviewFixtureTest(unittest.TestCase):
                 outcomes[entry["path"]]["facts"]["buddyEffortRanks"],
             )
 
-        # All four preview scenarios stay covered, and the error scenario stays visible.
+        # Current preview scenarios stay covered, and the error scenario stays visible.
         scenarios = {entry["scenario"] for entry in manifest["files"]}
-        self.assertEqual({"normal", "readonly", "truncated", "error", "incompatible"}, scenarios)
-        readonly = outcomes["readonly/console.json"]
-        self.assertEqual("INVALID_RESPONSE", readonly["code"])
+        self.assertEqual({"normal", "truncated", "error", "incompatible"}, scenarios)
         truncated = outcomes["truncated/timeline-macro-a.json"]
         self.assertTrue(truncated["facts"]["truncated"]["rows"])
         for path in ("error/timeline-macro-a.json", "error/workflow-preview-run-a1.json"):
@@ -718,17 +716,16 @@ class PreviewDeletionTest(unittest.TestCase):
             self.assertEqual(after, self.call(server, "/api/macro-tasks")[1])
             self.assertEqual(before, self.call(untouched, "/api/macro-tasks")[1])
 
-    def test_readonly_and_error_scenarios_never_apply_a_deletion(self) -> None:
-        for scenario, expected in (("readonly", (403, "CONSOLE_READ_ONLY")), ("error", (503, "SERVICE_UNAVAILABLE"))):
-            with self.subTest(scenario=scenario), self.server(scenario) as server:
-                before = self.call(server, "/api/macro-tasks")
-                for operation in ("macro_task_deletion_preview", "macro_task_delete"):
-                    params = {"macroTaskId": self.preview.MACRO_C}
-                    if operation == "macro_task_delete":
-                        params.update(microTaskCount=2, confirm=True)
-                    status, response = self.call(server, "/api/command", operation, params)
-                    self.assertEqual(expected, (status, response["error"]["code"]))
-                self.assertEqual(before, self.call(server, "/api/macro-tasks"))
+    def test_error_scenario_never_applies_a_deletion(self) -> None:
+        with self.server("error") as server:
+            before = self.call(server, "/api/macro-tasks")
+            for operation in ("macro_task_deletion_preview", "macro_task_delete"):
+                params = {"macroTaskId": self.preview.MACRO_C}
+                if operation == "macro_task_delete":
+                    params.update(microTaskCount=2, confirm=True)
+                status, response = self.call(server, "/api/command", operation, params)
+                self.assertEqual((503, "SERVICE_UNAVAILABLE"), (status, response["error"]["code"]))
+            self.assertEqual(before, self.call(server, "/api/macro-tasks"))
 
 
 if __name__ == "__main__":

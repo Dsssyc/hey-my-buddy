@@ -690,6 +690,8 @@ class Console:
             def _handle_request(self, dispatch) -> None:
                 try:
                     dispatch()
+                except (ConnectionError, TimeoutError):
+                    raise
                 except Exception:
                     logging.getLogger(__name__).exception("Console request failed")
                     self._error(500, "INTERNAL_ERROR", "The console request failed inside the service")
@@ -747,6 +749,8 @@ class Console:
             def _asset(self, relative: str) -> None:
                 target = console.resolve_asset(relative)
                 if target is None:
+                    return self._error(404, "NOT_FOUND", "Not found")
+                if not target.is_file():
                     # Standard single-page-app fallback: an extension-less navigation
                     # path outside the asset and API prefixes serves the same index
                     # document. Directories, /assets and /api are never guessed.
@@ -902,14 +906,11 @@ class Console:
 
     # -- assets --------------------------------------------------------------
     def resolve_asset(self, relative: str) -> Path | None:
-        """Resolve one static asset inside the asset root, never a directory."""
-        root = self.assets_dir.resolve()
-        try:
-            resolved = (root / relative.lstrip("/")).resolve()
-            resolved.relative_to(root)
-        except (OSError, ValueError):
+        """Validate the URL path before constructing a path under the asset root."""
+        parts = relative.removeprefix("/").split("/")
+        if any(part in ("", ".", "..") or any(char in part for char in "\\:\0") for part in parts):
             return None
-        return resolved if resolved.is_file() else None
+        return self.assets_dir.joinpath(*parts)
 
 
 __all__ = ["Console", "CONSOLE_OPERATIONS", "assets_ready", "default_assets_dir"]

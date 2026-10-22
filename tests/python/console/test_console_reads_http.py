@@ -216,6 +216,25 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         )
         self.assertEqual(status, 304)
         self.assertEqual(body, b"")
+    def test_nested_discovery_timestamps_do_not_break_snapshot_or_conditional_reads(self):
+        board = self.board()
+        foreign = {"expiresAt": "tomorrow", "coolingUntil": 123, "skipUntil": {},
+                   "retryAt": [], "scanAfter": "2026-10-07T12:00:01Z"}
+        with board.store.db.write() as writer:
+            writer.execute("UPDATE harness_health SET record_json=json_set(record_json,'$.discovery',json(?)) "
+                           "WHERE harness='dsh'", (json.dumps(foreign),))
+        projection = self.count_projection(board)
+        browser = self.open(board)
+        status, headers, body = browser.get("/api/console")
+        self.assertEqual(status, 200, body)
+        health = next(item for item in json.loads(body)["harnesses"] if item["harness"] == "dsh")
+        self.assertEqual(health["discovery"], foreign)
+        before = projection.call_count
+        status, _, body = browser.get("/api/console", headers={"If-None-Match": headers["etag"]})
+        self.assertEqual(status, 304, body)
+        self.assertEqual(body, b"")
+        self.assertEqual(projection.call_count, before)
+
     def test_idle_polling_keeps_borrowing_the_health_scan(self):
         """A cache hit must not starve the 180-second harness scan (R01).
 
@@ -235,7 +254,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         def stamp(delta):
             return datetime.fromtimestamp(now[0] + delta, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
-        health = [{"harness": "codex", "status": "ready",
+        health = [{"harness": "codex", "status": "ready", "providers": [],
                    "scanAfter": stamp(180), "expiresAt": stamp(3600)}]
         board.service.automatic_discovery = True
         with mock.patch.object(board.service.harnesses, "all", return_value=health), \
@@ -274,7 +293,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
         now = [time.time()]
         board.console._clock = lambda: now[0]
         board.console.read_cache._clock = lambda: now[0]
-        health = [{"harness": "codex", "status": "unknown",
+        health = [{"harness": "codex", "status": "unknown", "providers": [],
                    "scanAfter": None, "expiresAt": None}]
         board.service.automatic_discovery = True
         with mock.patch.object(board.service.harnesses, "all", return_value=health), \
