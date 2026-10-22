@@ -202,10 +202,13 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertIn('author', old_columns)
         self.assertIn('recipient', old_columns)
         self.assertIn('attempts_count', old_columns)
-        retained = [tuple(row) for row in connection.execute(
-            'SELECT ' + ','.join(schema_upgrade.RETAINED_MESSAGE_COLUMNS) + ' FROM messages')]
+        at = '2026-10-22T12:00:00.000Z'
+        plan = schema_upgrade.plan_inquiry_settlement(connection, state, at)
+        retained = [tuple({**dict(row), **plan['updates'].get(row['message_id'], {})}[key]
+                          for key in schema_upgrade.RETAINED_MESSAGE_COLUMNS)
+                    for row in connection.execute('SELECT * FROM messages')]
         event_stock = [tuple(row) for row in connection.execute('SELECT * FROM events ORDER BY seq')]
-        before = upgrade.idle_snapshot(state)
+        before = upgrade.idle_snapshot(state, inquiry_settlement_at=at)
         files = {p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                  if p.is_file() and not p.name.startswith('board.sqlite3')}
         self.assertEqual(before['schema'], upgrade.UPGRADE_BASE_SCHEMA)
@@ -215,7 +218,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         with self.assertRaises(BoardError) as caught:
             upgrade.preflight(state, contract_changed=False)
         self.assertEqual(caught.exception.code, 'UNSUPPORTED_SCHEMA')
-        schema_upgrade.migrate_schema(state)
+        schema_upgrade.migrate_schema(state, inquiry_settlement_at=at)
         schema_upgrade.migrate_schema(state)
         fresh = Database(self.root / 'fresh')
         fresh.initialize()
@@ -233,13 +236,70 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual([tuple(row) for row in connection.execute(
             'SELECT ' + ','.join(schema_upgrade.RETAINED_MESSAGE_COLUMNS) + ' FROM messages')], retained)
         self.assertEqual([tuple(row) for row in connection.execute(
-            'SELECT author_role,author_id FROM messages')], [(None, None)])
+            'SELECT author_role,author_id FROM messages')], [(None, None)] * len(retained))
         self.assertEqual([tuple(row) for row in connection.execute('SELECT * FROM events ORDER BY seq')], event_stock)
         self.assertEqual(upgrade.idle_snapshot(state)['tables'], before['tables'])
-        self.assertEqual(upgrade.idle_snapshot(state, message_columns=schema_upgrade.RETAINED_MESSAGE_COLUMNS)
-                         ['fingerprints']['messages'], before['fingerprints']['messages'])
+        self.assertEqual(upgrade.idle_snapshot(state)['fingerprints']['messages'],
+                         before['expectedMessagesSha256'])
         self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+
+    def test_every_inquiry_conversion_case_has_base_rows_and_journal_stock(self):
+        fixture, connection = self.restored('inquiry-stock')
+        stock = fixture['inquiryStock']
+        original = {row['message_id']: dict(row) for row in connection.execute('SELECT * FROM messages')}
+        self.assertEqual(set(stock), {'journalAnsweredEarlier', 'journalAnsweredQueued',
+            'journalAnsweredDelivered', 'journalAnsweredClaimed', 'journalDeliveredOnly',
+            'journalNoEntry', 'dbDeliveredNoEntry', 'journalBindingMismatch',
+            'missingJournal', 'unavailableOtherReason', 'existingUnavailable'})
+        self.assertEqual({original[stock[key]['messageId']]['state'] for key in
+                          ('journalAnsweredEarlier', 'journalAnsweredQueued',
+                           'journalAnsweredDelivered', 'journalAnsweredClaimed')},
+                         {'unavailable', 'queued', 'delivered', 'claimed'})
+        earlier = stock['journalAnsweredEarlier']
+        selected = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?',
+                                      (earlier['taskId'],)).fetchone()[0]
+        self.assertNotEqual(selected, earlier['attemptId'])
+        journal = fixture['state'] / earlier['journal']
+        self.assertTrue(journal.is_file())
+        self.assertFalse((fixture['state'] / stock['missingJournal']['journal']).exists())
+        saved_journal = journal.read_bytes()
+        at = '2026-10-22T12:00:00.000Z'
+        events = [tuple(row) for row in connection.execute('SELECT * FROM events ORDER BY seq')]
+        schema_upgrade.migrate_schema(fixture['state'], inquiry_settlement_at=at)
+        changed = {'journalAnsweredEarlier', 'journalAnsweredQueued', 'journalAnsweredDelivered',
+                   'journalAnsweredClaimed', 'journalDeliveredOnly', 'dbDeliveredNoEntry', 'missingJournal'}
+        for key, item in stock.items():
+            with self.subTest(case=key):
+                row = dict(connection.execute('SELECT * FROM messages WHERE message_id=?',
+                                               (item['messageId'],)).fetchone())
+                prior = original[item['messageId']]
+                self.assertEqual(row['state'], item['expectedState'])
+                self.assertEqual(row['reason_code'], item.get('expectedReason'))
+                if key in changed:
+                    self.assertEqual(row['revision'], prior['revision'] + 1)
+                    self.assertEqual(row['updated_at'], at)
+                else:
+                    self.assertEqual({name: row[name] for name in schema_upgrade.RETAINED_MESSAGE_COLUMNS},
+                                     {name: prior[name] for name in schema_upgrade.RETAINED_MESSAGE_COLUMNS})
+                for name in ('delivery_json', 'answer_json', 'reason_params_json'):
+                    if key in changed and row[name]:
+                        self.assertEqual(row[name], _json(json.loads(row[name])))
+                if item.get('expectedAnswer'):
+                    self.assertEqual(json.loads(row['answer_json']), {
+                        'text': item['expectedAnswer'], 'bytes': len(item['expectedAnswer'].encode()),
+                        'truncated': False, 'source': 'bridge-journal',
+                        'via': 'tool:hey_my_buddy_answer_inquiry',
+                        'toolCallId': 'fixture-tool-' + key, 'at': fixture['fixedTimestamp']})
+                    self.assertIsNone(row['reason_params_json'])
+                elif key in changed:
+                    self.assertIsNone(row['answer_json'])
+                    self.assertEqual(row['reason_params_json'], '{}')
+                if item.get('expectedDelivery'):
+                    self.assertEqual(json.loads(row['delivery_json'])['deliveredAt'], fixture['fixedTimestamp'])
+                    self.assertEqual(json.loads(row['delivery_json'])['via'], 'native:in-turn')
+        self.assertEqual(journal.read_bytes(), saved_journal)
+        self.assertEqual([tuple(row) for row in connection.execute('SELECT * FROM events ORDER BY seq')], events)
 
     def test_in_progress_deletion_removes_its_commands_events_and_fence(self):
         from hey_my_buddy.blackboard.tasks import macro_task_deletion
@@ -433,8 +493,8 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_started_verification_rejects_rewritten_command_receipts(self):
         fixture, connection = self.restored()
-        before = upgrade.idle_snapshot(fixture['state'])
-        schema_upgrade.migrate_schema(fixture['state'])
+        before = upgrade.idle_snapshot(fixture['state'], inquiry_settlement_at='2026-10-22T00:00:00.000Z')
+        schema_upgrade.migrate_schema(fixture['state'], inquiry_settlement_at=before['inquirySettlementAt'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         with mock.patch.object(upgrade, 'command', return_value={'leaks': []}):

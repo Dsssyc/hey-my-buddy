@@ -1,7 +1,7 @@
 {
-  "boundary": "Base BoardService operations and current store writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. The only SQL stock write seeds retired message recipient and attempts_count after the base operation. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+  "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. SQL seeds retired message recipient/count and one stale queued state after attempt settlement. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
   "catalogSha256": "a8c23bc839691370939c3e35b3f91b4b7845f1460d93c5d618a05a521ef5fcfe",
-  "dependencyMode": "base-frozen-uv-environment",
+  "dependencyMode": "prepared-read-only-interpreter",
   "dependencyVersions": {
     "c-two": "0.7.6",
     "portalocker": "3.2.0",
@@ -10,8 +10,141 @@
   },
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
-  "generationCommand": "python packaging/generate-upgrade-fixture.py --offline --work-dir tmp/version-fixture/base-049-final --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "5aafd7b4eb6fd6804d8fae25090548a2a60824fb46a649ead44119094574e43e",
+  "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/inquiry-fixture-final3-20261022 --output-dir tests/fixtures/upgrade-base",
+  "generatorSha256": "bb4920d1d016e3e8d14c09272ddf66cb6147f8fa36848319a99bd1038ad4c295",
+  "inquiryStock": {
+    "dbDeliveredNoEntry": {
+      "attemptId": "00000000-0000-0000-0000-000000000055",
+      "expectedDelivery": true,
+      "expectedReason": "inquiry-delivered-at-attempt-end",
+      "expectedState": "unavailable",
+      "inquiryId": "fixture-dbDeliveredNoEntry",
+      "journal": "attempts/00000000-0000-0000-0000-000000000052/00000000-0000-0000-0000-000000000055/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-00000000005d",
+      "sourceReason": null,
+      "sourceState": "delivered",
+      "taskId": "00000000-0000-0000-0000-000000000052"
+    },
+    "existingUnavailable": {
+      "attemptId": "00000000-0000-0000-0000-000000000010",
+      "expectedReason": "inquiry-no-live-agent",
+      "expectedState": "unavailable",
+      "inquiryId": "fixture-inquiry",
+      "messageId": "00000000-0000-0000-0000-000000000038",
+      "sourceReason": "inquiry-no-live-agent",
+      "sourceState": "unavailable",
+      "taskId": "00000000-0000-0000-0000-00000000000c"
+    },
+    "journalAnsweredClaimed": {
+      "attemptId": "00000000-0000-0000-0000-000000000055",
+      "expectedAnswer": "Fixture claimed answer",
+      "expectedDelivery": true,
+      "expectedState": "answered",
+      "inquiryId": "fixture-journalAnsweredClaimed",
+      "journal": "attempts/00000000-0000-0000-0000-000000000052/00000000-0000-0000-0000-000000000055/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-00000000005f",
+      "sourceReason": null,
+      "sourceState": "claimed",
+      "taskId": "00000000-0000-0000-0000-000000000052"
+    },
+    "journalAnsweredDelivered": {
+      "attemptId": "00000000-0000-0000-0000-000000000055",
+      "expectedAnswer": "Fixture delivered answer",
+      "expectedDelivery": true,
+      "expectedState": "answered",
+      "inquiryId": "fixture-journalAnsweredDelivered",
+      "journal": "attempts/00000000-0000-0000-0000-000000000052/00000000-0000-0000-0000-000000000055/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-00000000005a",
+      "sourceReason": null,
+      "sourceState": "delivered",
+      "taskId": "00000000-0000-0000-0000-000000000052"
+    },
+    "journalAnsweredEarlier": {
+      "attemptId": "00000000-0000-0000-0000-000000000055",
+      "expectedAnswer": "Fixture durable answer",
+      "expectedDelivery": true,
+      "expectedState": "answered",
+      "inquiryId": "fixture-journalAnsweredEarlier",
+      "journal": "attempts/00000000-0000-0000-0000-000000000052/00000000-0000-0000-0000-000000000055/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-000000000058",
+      "selectedAttempt": "later",
+      "sourceReason": "inquiry-queued-at-attempt-end",
+      "sourceState": "unavailable",
+      "taskId": "00000000-0000-0000-0000-000000000052"
+    },
+    "journalAnsweredQueued": {
+      "attemptId": "00000000-0000-0000-0000-000000000055",
+      "expectedAnswer": "Fixture queued answer",
+      "expectedDelivery": true,
+      "expectedState": "answered",
+      "inquiryId": "fixture-journalAnsweredQueued",
+      "journal": "attempts/00000000-0000-0000-0000-000000000052/00000000-0000-0000-0000-000000000055/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-000000000059",
+      "sourceReason": null,
+      "sourceState": "queued",
+      "taskId": "00000000-0000-0000-0000-000000000052"
+    },
+    "journalBindingMismatch": {
+      "attemptId": "00000000-0000-0000-0000-000000000055",
+      "expectedReason": "inquiry-queued-at-attempt-end",
+      "expectedState": "unavailable",
+      "inquiryId": "fixture-journalBindingMismatch",
+      "journal": "attempts/00000000-0000-0000-0000-000000000052/00000000-0000-0000-0000-000000000055/inquiry.results.jsonl",
+      "journalRejection": "journal-task-mismatch",
+      "messageId": "00000000-0000-0000-0000-00000000005e",
+      "sourceReason": "inquiry-queued-at-attempt-end",
+      "sourceState": "unavailable",
+      "taskId": "00000000-0000-0000-0000-000000000052"
+    },
+    "journalDeliveredOnly": {
+      "attemptId": "00000000-0000-0000-0000-000000000055",
+      "expectedDelivery": true,
+      "expectedReason": "inquiry-delivered-at-attempt-end",
+      "expectedState": "unavailable",
+      "inquiryId": "fixture-journalDeliveredOnly",
+      "journal": "attempts/00000000-0000-0000-0000-000000000052/00000000-0000-0000-0000-000000000055/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-00000000005b",
+      "sourceReason": "inquiry-queued-at-attempt-end",
+      "sourceState": "unavailable",
+      "taskId": "00000000-0000-0000-0000-000000000052"
+    },
+    "journalNoEntry": {
+      "attemptId": "00000000-0000-0000-0000-000000000055",
+      "expectedReason": "inquiry-queued-at-attempt-end",
+      "expectedState": "unavailable",
+      "inquiryId": "fixture-journalNoEntry",
+      "journal": "attempts/00000000-0000-0000-0000-000000000052/00000000-0000-0000-0000-000000000055/inquiry.results.jsonl",
+      "messageId": "00000000-0000-0000-0000-00000000005c",
+      "sourceReason": "inquiry-queued-at-attempt-end",
+      "sourceState": "unavailable",
+      "taskId": "00000000-0000-0000-0000-000000000052"
+    },
+    "missingJournal": {
+      "attemptId": "00000000-0000-0000-0000-000000000069",
+      "expectedDelivery": true,
+      "expectedReason": "inquiry-delivered-at-attempt-end",
+      "expectedState": "unavailable",
+      "inquiryId": "fixture-missing-journal",
+      "journal": "attempts/00000000-0000-0000-0000-000000000066/00000000-0000-0000-0000-000000000069/inquiry.results.jsonl",
+      "journalReason": "journal-not-written",
+      "messageId": "00000000-0000-0000-0000-00000000006c",
+      "sourceReason": null,
+      "sourceState": "delivered",
+      "taskId": "00000000-0000-0000-0000-000000000066"
+    },
+    "unavailableOtherReason": {
+      "attemptId": "00000000-0000-0000-0000-000000000055",
+      "expectedReason": "inquiry-observe-only",
+      "expectedState": "unavailable",
+      "inquiryId": "fixture-unavailableOtherReason",
+      "journal": "attempts/00000000-0000-0000-0000-000000000052/00000000-0000-0000-0000-000000000055/inquiry.results.jsonl",
+      "journalAnswer": "Answer that must not replace the refusal",
+      "messageId": "00000000-0000-0000-0000-000000000060",
+      "sourceReason": "inquiry-observe-only",
+      "sourceState": "unavailable",
+      "taskId": "00000000-0000-0000-0000-000000000052"
+    }
+  },
   "loadedSourceModules": [
     "src/hey_my_buddy/blackboard/__init__.py",
     "src/hey_my_buddy/blackboard/catalog/__init__.py",
@@ -154,10 +287,10 @@
     "src/hey_my_buddy/protocol/usage.py",
     "src/hey_my_buddy/protocol/windows_process.py"
   ],
-  "operationsSha256": "2853e5e8c61683dbc945892935467d37f0bf69d9c69c696738838584b2bdab57",
-  "pythonInterpreter": "<fixture-root>/base/.venv/bin/python",
+  "operationsSha256": "6e899c5d9a3be48f0f6d4ad23542af4edfaca10408d2356c5d00d1e72c442d3d",
+  "pythonInterpreter": "<prepared-python>",
   "pythonVersion": "3.14.5",
-  "resourcesSha256": "d6a10d4fa8e5e63c1b19e50cc5c4df123963fd38a97f5317b385f6be8bcf02f8",
+  "resourcesSha256": "e67385a77946330d24bf92ca052fc8deb9af7a9f149cb990d8c2d26203239d8d",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 27; baseline only after return",
   "retiredMessageStock": {
     "attemptsCount": 3,
@@ -360,7 +493,7 @@
   },
   "sourceTree": "c053a3a7021bcb97be5d5ef173d38cfa9ec61c41",
   "sourceVersion": "0.49.0",
-  "sqlSha256": "c6cb0a8be05c7ed098d496c1ad106e15995d3569206e829b5cd1fa0447ea444e",
+  "sqlSha256": "35eac501281a9633c9022cd5c47f520a718629fb46f6f59afc4318c5c3c1b4e4",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-00000000001b",
     "cancelled": "00000000-0000-0000-0000-000000000035",
@@ -368,10 +501,10 @@
     "failed": "00000000-0000-0000-0000-000000000026"
   },
   "stockIds": {
-    "adopted": "00000000-0000-0000-0000-000000000038",
-    "helper": "00000000-0000-0000-0000-00000000005c",
-    "helperParent": "00000000-0000-0000-0000-000000000051",
-    "verified": "00000000-0000-0000-0000-000000000045"
+    "adopted": "00000000-0000-0000-0000-000000000039",
+    "helper": "00000000-0000-0000-0000-000000000066",
+    "helperParent": "00000000-0000-0000-0000-000000000052",
+    "verified": "00000000-0000-0000-0000-000000000046"
   },
   "tableRowCounts": {
     "agent_credentials": 8,
@@ -391,13 +524,13 @@
     "evaluation_catalog": 3,
     "evaluation_decisions": 3,
     "evaluation_preferences": 2,
-    "events": 129,
+    "events": 149,
     "execution_issues": 0,
     "harness_account_reads": 1,
     "harness_health": 4,
     "macro_task_deletions": 1,
     "macro_tasks": 1,
-    "messages": 1,
+    "messages": 11,
     "meta": 2,
     "model_service_concurrency": 1,
     "model_service_notes": 1,

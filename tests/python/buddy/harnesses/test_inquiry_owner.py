@@ -286,6 +286,10 @@ class InquiryJournalProjectionTests(unittest.TestCase):
                                  "records": [], "rejections": []})
         with mock.patch.object(journal, "read_shared_snapshot", return_value=None):
             self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-unreadable")
+        with mock.patch.object(journal.os, "read", side_effect=OSError("journal read failed")):
+            self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-unreadable")
+        with mock.patch.object(journal.locking, "lock", side_effect=OSError("journal lock failed")):
+            self.assertEqual(journal.read_inquiry_journal(RUN, self.path)["reason"], "journal-unreadable")
         self.assertEqual(journal.read_inquiry_journal(RUN, self.directory)["reason"], "journal-unreadable")
         with self.path.open("r+b") as stream:
             stream.truncate(MAX_JOURNAL_BYTES + 1)
