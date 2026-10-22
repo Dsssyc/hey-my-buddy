@@ -23,6 +23,7 @@ from ...paths import is_absolute_path
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir
+from ...private_files import read_bytes, read_text
 from ...protocol import usage
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.base import AdapterOutcome, ExecutionContext
@@ -373,7 +374,7 @@ def worker_delivery(result, *, delegation_authority: bool = False) -> tuple[dict
 def worker_request(control: dict, module):
     """Project one micro task control file into the frozen request and services."""
     invocation_root = Path(control["privateRoot"])
-    turn_input = decode_strict_json(Path(control["inputFile"]).read_bytes())
+    turn_input = decode_strict_json(read_bytes(Path(control["inputFile"])))
     if not isinstance(turn_input, dict):
         raise BoardError("INVALID_ARGUMENT", "the micro task input is not an object")
     identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
@@ -383,7 +384,7 @@ def worker_request(control: dict, module):
         raise BoardError("UNAUTHORIZED", "A Lead turn requires its attempt credential file")
     inquiry = control.get("inquiry") if isinstance(control.get("inquiry"), dict) else None
     attention_path = Path(control["directory"]) / "attention.json"
-    task_text = Path(control["taskFile"]).read_text(encoding="utf-8")
+    task_text = read_text(Path(control["taskFile"]))
     from ..harnesses.registry import worker_format
     format = worker_format(control["harness"])
     permission = turn_input["executionWorkspace"].get("access", "write")
@@ -800,9 +801,13 @@ def _artifacts(context: ExecutionContext, handle: InlineRunHandle) -> list[dict]
     paths = [("task-specification", context.task_file()), ("turn-result", context.turn_output_file()),
              ("native-attention", context.directory / "attention.json"),
              *(("runner-" + key, Path(value)) for key, value in handle.log_paths.items() if key in ("stdout", "stderr"))]
-    return [{"kind": kind, "location": str(path.resolve()), "sizeBytes": path.stat().st_size,
-             "contentHash": hashlib.sha256(path.read_bytes()).hexdigest()}
-            for kind, path in paths if path.is_file()]
+    artifacts = []
+    for kind, path in paths:
+        if path.is_file():
+            raw = read_bytes(path) if kind in ("task-specification", "native-attention") else path.read_bytes()
+            artifacts.append({"kind": kind, "location": str(path.resolve()), "sizeBytes": path.stat().st_size,
+                              "contentHash": hashlib.sha256(raw).hexdigest()})
+    return artifacts
 
 
 def discover_models(name: str) -> dict:

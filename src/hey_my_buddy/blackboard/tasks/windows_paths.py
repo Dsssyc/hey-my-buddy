@@ -46,10 +46,15 @@ def validate_unique(paths):
             folded[key] = prefix
 
 
-def _checked(api, handle, name, *, directory=False, allow_symlink=False):
+def _checked(api, handle, name, *, directory=False, allow_symlink=False, long_name=False):
     attributes, tag = api.info(handle)
-    if name is not None and api.name(handle) != name:
-        raise BoardError("WORKSPACE_UNSUPPORTED", "A Windows short-name or case alias is not a workspace path", path=name)
+    if name is not None:
+        expected = Path(api.long_path(name)).name if long_name else name
+        observed = api.name(handle)
+        different = observed.casefold() != expected.casefold() if long_name else observed != expected
+        if different:
+            raise BoardError("WORKSPACE_UNSUPPORTED", "A Windows short-name or case alias is not a workspace path",
+                             path=str(name))
     if attributes & FILE_ATTRIBUTE_REPARSE_POINT:
         if allow_symlink and tag == IO_REPARSE_TAG_SYMLINK:
             return "symlink"
@@ -64,13 +69,14 @@ def _checked(api, handle, name, *, directory=False, allow_symlink=False):
 
 
 @contextmanager
-def parent(path, *, create=False, api=None):
+def parent(path, *, create=False, api=None, repository=None):
     """Pin the volume root and each parent until the leaf operation finishes."""
     api = api if api is not None else WindowsFileAPI()
     path = Path(path)
     if not is_absolute_path(path) or path.name in ("", ".", ".."):
         raise BoardError("INVALID_WORKSPACE", "A Windows workspace file needs an absolute path")
     parent_path = path.parent
+    repository = Path(repository).absolute() if repository is not None else None
     ancestors = list(reversed(parent_path.parents)) + [parent_path]
     handles = []
     try:
@@ -82,7 +88,10 @@ def parent(path, *, create=False, api=None):
                     pass
             handle = api.open_dir(current)
             handles.append(handle)
-            _checked(api, handle, current.name or None, directory=True)
+            outside_git = (repository is not None and bool(current.name)
+                           and (current == repository or current in repository.parents))
+            _checked(api, handle, current if outside_git else current.name or None,
+                     directory=True, long_name=outside_git)
         yield api, path
     finally:
         close_error = None
@@ -106,9 +115,9 @@ def _open_checked(api, path, *, action="read", allow_symlink=False):
         raise
 
 
-def read(path, *, allow_symlink=False, missing_ok=True, api=None):
+def read(path, *, allow_symlink=False, missing_ok=True, api=None, repository=None):
     """Read a held regular file, or the text of an explicitly allowed Git link."""
-    with parent(path, api=api) as (api, path):
+    with parent(path, api=api, repository=repository) as (api, path):
         try:
             handle, kind = _open_checked(api, path, allow_symlink=allow_symlink)
         except FileNotFoundError:
@@ -146,9 +155,9 @@ def _write_held(api, path, data):
         stream.write(data)
 
 
-def write_new(path, data, *, api=None, create_parents=False):
+def write_new(path, data, *, api=None, create_parents=False, repository=None):
     # The Git mode remains in the index; Windows chmod cannot set its execute bit.
-    with parent(path, create=create_parents, api=api) as (api, path):
+    with parent(path, create=create_parents, api=api, repository=repository) as (api, path):
         _write_held(api, path, data)
 
 
@@ -165,14 +174,14 @@ def _remove_held(api, path, *, missing_ok=False):
         api.close(handle)
 
 
-def remove(path, *, missing_ok=False, api=None, create_parents=False):
-    with parent(path, create=create_parents, api=api) as (api, path):
+def remove(path, *, missing_ok=False, api=None, create_parents=False, repository=None):
+    with parent(path, create=create_parents, api=api, repository=repository) as (api, path):
         _remove_held(api, path, missing_ok=missing_ok)
 
 
-def restore(path, data, *, symlink_target=None, api=None):
+def restore(path, data, *, symlink_target=None, api=None, repository=None):
     """Replace one recovery leaf while retaining every parent handle."""
-    with parent(path, create=True, api=api) as (api, path):
+    with parent(path, create=True, api=api, repository=repository) as (api, path):
         _remove_held(api, path, missing_ok=True)
         if symlink_target is not None:
             api.symlink(symlink_target, path, directory=(path.parent / symlink_target).is_dir())
@@ -180,15 +189,15 @@ def restore(path, data, *, symlink_target=None, api=None):
             _write_held(api, path, data)
 
 
-def symlink(path, target, *, api=None):
-    with parent(path, create=True, api=api) as (api, path):
+def symlink(path, target, *, api=None, repository=None):
+    with parent(path, create=True, api=api, repository=repository) as (api, path):
         # Windows needs this type bit at creation; the Git entry remains link text.
         directory = (path.parent / target).is_dir()
         api.symlink(target, path, directory=directory)
 
 
-def lock_fd(path, *, create=True, api=None):
-    with parent(path, api=api) as (api, path):
+def lock_fd(path, *, create=True, api=None, repository=None):
+    with parent(path, api=api, repository=repository) as (api, path):
         handle, _ = _open_checked(api, path, action="lock" if create else "lock-existing")
         try:
             return api.fd(handle, os.O_RDWR)
@@ -200,8 +209,9 @@ def lock_fd(path, *, create=True, api=None):
 class _WorkspacePublishOperations:
     """Use the workspace's held Windows handles for shared byte publication."""
 
-    def __init__(self, api):
+    def __init__(self, api, repository):
         self.api = api
+        self.repository = repository
 
     def open(self, path):
         handle, _ = _open_checked(self.api, path, action="create")
@@ -212,7 +222,7 @@ class _WorkspacePublishOperations:
             raise
 
     def read(self, path):
-        contents = read(path, api=self.api)
+        contents = read(path, api=self.api, repository=self.repository)
         if contents is None:
             raise FileNotFoundError(path)
         return contents
@@ -221,7 +231,7 @@ class _WorkspacePublishOperations:
         self.api.link(source, target)
 
     def unlink(self, path):
-        remove(path, missing_ok=True, api=self.api)
+        remove(path, missing_ok=True, api=self.api, repository=self.repository)
 
 
 @contextmanager
@@ -234,8 +244,8 @@ def artifact_publication(path):
                          path=str(path)) from error
 
 
-def write_once(path, data, *, api=None):
+def write_once(path, data, *, api=None, repository=None):
     """Publish an immutable artifact under the held Windows workspace parent."""
-    with parent(path, api=api) as (api, path), artifact_publication(path):
+    with parent(path, api=api, repository=repository) as (api, path), artifact_publication(path):
         private_files.publish_bytes(path, data, immutable=True,
-                                    operations=_WorkspacePublishOperations(api))
+                                    operations=_WorkspacePublishOperations(api, repository))

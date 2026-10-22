@@ -108,6 +108,13 @@ if os.name == "nt":
         if creating: hold("after_create")
         return result
     windows_files.WindowsFileAPI._open = intercept_windows_open
+    real_windows_rename = windows_files.WindowsFileAPI.rename
+    def intercept_windows_rename(self, descriptor, target):
+        hold("before_replace")
+        result = real_windows_rename(self, descriptor, target)
+        hold("after_replace")
+        return result
+    windows_files.WindowsFileAPI.rename = intercept_windows_rename
 os.open, os.fdopen = intercept_open, intercept_fdopen
 os.fsync, os.replace = intercept_fsync, intercept_replace
 os.link, os.unlink = intercept_link, intercept_unlink
@@ -214,12 +221,21 @@ sys.stdin.buffer.read(1)
                     process = _spawn(path, content_path, stage, "mutable")
                     try:
                         _wait_for_writer(process, stage)
-                        observed = path.read_bytes() if path.exists() else None
+                        observed = private_files.read_bytes(path) if path.exists() else None
                         self.assertEqual(observed, expected)
                         self.assertIn(observed, (None, OLD, NEW))
                         process.kill()
                         process.communicate(timeout=5)
-                        self.assertEqual(path.read_bytes() if path.exists() else None, expected)
+                        self.assertEqual(private_files.read_bytes(path) if path.exists() else None, expected)
+                        if os.name == 'nt' and stage in {'after_writer_fsync', 'before_replace', 'after_replace'}:
+                            bootstrap = 'import site; ' + '; '.join(
+                                f'site.addsitedir({value!r})' for value in site.getsitepackages()) + '\n'
+                            reader = subprocess.run([sys._base_executable, '-c', bootstrap +
+                                'from pathlib import Path; import sys; from hey_my_buddy.private_files import read_bytes; '
+                                'p=Path(sys.argv[1]); sys.stdout.buffer.write(read_bytes(p) if p.exists() else b"MISSING")',
+                                str(path)], capture_output=True, timeout=10)
+                            self.assertEqual(reader.returncode, 0, reader.stderr)
+                            self.assertEqual(reader.stdout, expected if expected is not None else b'MISSING')
                         if stage in {"after_cleanup", "before_directory_fsync",
                                      "after_directory_fsync", "after_success"}:
                             self.assertEqual(list(Path(root).glob(".*.tmp")), [])
@@ -274,6 +290,79 @@ sys.stdin.buffer.read(1)
                 private_files.publish_bytes(path, NEW, immutable=True)
             self.assertEqual(path.read_bytes(), OLD)
             self.assertEqual(list(Path(root).glob(".*.tmp")), [])
+
+    def test_failed_mutable_rename_keeps_complete_synced_candidate_and_original_error(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'fact.json'
+            private_files.publish_bytes(path, OLD)
+            failure = OSError('injected publication failure')
+            if os.name == 'nt':
+                from hey_my_buddy.windows_files import WindowsFileAPI
+                replacement = mock.patch.object(WindowsFileAPI, 'rename', side_effect=failure)
+            else:
+                replacement = mock.patch.object(os, 'replace', side_effect=failure)
+            with replacement as replace:
+                with self.assertRaises(OSError) as raised:
+                    private_files.publish_bytes(path, NEW)
+                self.assertIs(raised.exception, failure)
+                replace.assert_called_once()
+            self.assertEqual(private_files.read_bytes(path), OLD)
+            candidates = list(Path(root).glob('.*.tmp'))
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(private_files.read_bytes(candidates[0]), NEW)
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows publication and sharing')
+    def test_windows_publishes_exact_names_with_different_utf16_lengths(self):
+        with tempfile.TemporaryDirectory() as root:
+            names = ('.runtime-python', 'daemon.json', 'native-process-journal.json', '中文-😀.json')
+            for generation in range(25):
+                for name in names:
+                    path = Path(root) / name
+                    content = f'{name}:{generation}'.encode('utf-8')
+                    private_files.publish_bytes(path, content)
+                    self.assertEqual(private_files.read_bytes(path), content)
+            self.assertEqual({path.name for path in Path(root).iterdir()}, set(names))
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows publication and sharing')
+    def test_windows_product_reader_keeps_old_generation_during_replacement(self):
+        from hey_my_buddy import private_dirs
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'fact.json'
+            private_files.publish_bytes(path, OLD)
+            with os.fdopen(private_dirs.open_regular_fd(path, os.O_RDONLY), 'rb') as reader:
+                private_files.publish_bytes(path, NEW)
+                self.assertEqual(reader.read(), OLD)
+                self.assertEqual(private_files.read_bytes(path), NEW)
+            with private_files.open_read(path) as reader:
+                private_dirs.validate_private_fd(reader.fileno())
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows errors 32 and 5')
+    def test_windows_sharing_and_readonly_failures_preserve_candidates_without_retry(self):
+        import stat
+        from hey_my_buddy import windows_files
+        for kind, code in (('sharing', 32), ('readonly', 5)):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as root:
+                path = Path(root) / 'fact.json'
+                private_files.publish_bytes(path, OLD)
+                api = windows_files.WindowsFileAPI()
+                reader = api._open(path, windows_files.GENERIC_READ, windows_files.OPEN_EXISTING) if kind == 'sharing' else None
+                if kind == 'readonly':
+                    path.chmod(stat.S_IREAD)
+                try:
+                    with self.assertRaises(OSError) as raised:
+                        private_files.publish_bytes(path, NEW)
+                    self.assertEqual(raised.exception.winerror, code)
+                    self.assertEqual(private_files.read_bytes(path), OLD)
+                    candidates = list(Path(root).glob('.*.tmp'))
+                    self.assertEqual(len(candidates), 1)
+                    self.assertEqual(private_files.read_bytes(candidates[0]), NEW)
+                finally:
+                    if reader is not None:
+                        api.close(reader)
+                    if kind == 'readonly':
+                        path.chmod(stat.S_IWRITE)
+                private_files.publish_bytes(path, NEW)
+                self.assertEqual(private_files.read_bytes(path), NEW)
 
     def test_killed_conflicting_immutable_writer_keeps_existing_fact(self):
         for stage in ("before_link", "before_cleanup", "after_cleanup"):
@@ -359,7 +448,9 @@ sys.stdin.buffer.read(1)
             self.assertEqual(len(synced), 1)
             self.assertIn(synced[0], writable)
             self.assertEqual(path.read_bytes(), OLD)
-            self.assertEqual(list(Path(root).glob(".*.tmp")), [])
+            candidates = list(Path(root).glob('.*.tmp'))
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(private_files.read_bytes(candidates[0]), NEW)
 
     def test_windows_directory_sync_does_not_open_directory(self):
         with mock.patch.object(private_files.os, "name", "nt"), \

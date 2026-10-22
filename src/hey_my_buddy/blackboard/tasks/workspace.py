@@ -223,7 +223,7 @@ def _parent(root, relative, *, create=False):
     """Open each parent by directory descriptor, never following symlinks."""
     if _WINDOWS:
         _relative(relative)
-        with windows_paths.parent(Path(root) / relative, create=create) as (api, path):
+        with windows_paths.parent(Path(root) / relative, create=create, repository=root) as (api, path):
             yield api, path
         return
     descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -249,7 +249,7 @@ def _file(root, relative, *, mode_hint=None):
     try:
         if _WINDOWS:
             _relative(relative)
-            item = windows_paths.read(Path(root) / relative, allow_symlink=True)
+            item = windows_paths.read(Path(root) / relative, allow_symlink=True, repository=root)
             # Windows cannot represent Git's executable bit in chmod. The index
             # remains authoritative for a tracked regular file's Git mode.
             if item is not None and item[0] != "120000" and mode_hint in ("100644", "100755"):
@@ -513,10 +513,10 @@ def _diff(root, before, after):
                 "--no-color", "--src-prefix=a/", "--dst-prefix=b/", before, after, "--")
 
 
-def _read(path):
+def _read(path, *, repository=None):
     try:
         if _WINDOWS:
-            return windows_paths.read(path)
+            return windows_paths.read(path, repository=repository)
         with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
             return stream.read()
     except FileNotFoundError:
@@ -533,9 +533,9 @@ def _record(path):
         raise BoardError("WORKSPACE_CONFLICT", "A workspace recovery record is malformed", path=str(path)) from error
 
 
-def _write_once(path, data):
+def _write_once(path, data, *, repository=None):
     if _WINDOWS:
-        windows_paths.write_once(path, data)
+        windows_paths.write_once(path, data, repository=repository)
         return
     with windows_paths.artifact_publication(path):
         private_files.publish_bytes(path, data, immutable=True,
@@ -544,7 +544,7 @@ def _write_once(path, data):
 
 @contextmanager
 def _lock(directory, *, create=True):
-    descriptor = (windows_paths.lock_fd(directory / ".lock", create=create) if _WINDOWS else
+    descriptor = (windows_paths.lock_fd(directory / ".lock", create=create, repository=directory) if _WINDOWS else
                   os.open(directory / ".lock", os.O_RDWR | (os.O_CREAT if create else 0) | os.O_NOFOLLOW, 0o600))
     try:
         try:
@@ -684,9 +684,9 @@ def _materialize(root, entries):
             _relative(path)
             target = Path(root) / path
             if mode == "120000":
-                windows_paths.symlink(target, os.fsdecode(data))
+                windows_paths.symlink(target, os.fsdecode(data), repository=root)
             else:
-                windows_paths.write_new(target, data, create_parents=True)
+                windows_paths.write_new(target, data, create_parents=True, repository=root)
         return
     for (path, (mode, _oid)), data in zip(entries.items(), contents):
         with _parent(root, path, create=True) as (parent, name):
@@ -741,7 +741,7 @@ def _prepare_worktree(source, target, pinned, reason):
 def _new_worktree_identity(target, source):
     # Git wrote this regular pointer as part of worktree add. Capture the B1
     # git-dir identity and the physical directory before materialization.
-    pointer = _read(target / ".git").decode().strip()
+    pointer = _read(target / ".git", repository=target).decode().strip()
     if not pointer.startswith("gitdir: "):
         raise BoardError("WORKSPACE_UNSAFE", "The new checkout has no Git directory pointer")
     git_dir = Path(pointer[len("gitdir: "):])
@@ -1535,7 +1535,8 @@ def _write_path(root, path, entry, data=None):
         if data is None and entry is not None:
             data = _git(root, "cat-file", "blob", entry["oid"])
         windows_paths.restore(target, None if entry is None or entry["mode"] == "120000" else data,
-                              symlink_target=os.fsdecode(data) if entry is not None and entry["mode"] == "120000" else None)
+                              symlink_target=os.fsdecode(data) if entry is not None and entry["mode"] == "120000" else None,
+                              repository=root)
         return
     with _parent(root, path, create=True) as (parent, name):
         try:
@@ -2251,7 +2252,7 @@ def _cleanup_resume_registration(repository, checkout_root, allocation, manifest
 def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed):
     """Restore only missing retained files, then use the ordinary cleanup proof."""
     if not _path_present(checkout_root / ".git"):
-        _write_once(checkout_root / ".git", os.fsencode(f"gitdir: {git_dir}\n"))
+        _write_once(checkout_root / ".git", os.fsencode(f"gitdir: {git_dir}\n"), repository=checkout_root)
     tree = sealed["tree"] if sealed is not None else manifest["inputTree"]
     missing = {}
     for path, entry in _entries(repository, tree).items():

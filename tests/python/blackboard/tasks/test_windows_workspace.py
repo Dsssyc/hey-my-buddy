@@ -1,4 +1,4 @@
-"""Injectable Windows path boundary checks on a POSIX filesystem."""
+"""Injectable Windows path boundary checks on the host filesystem."""
 from __future__ import annotations
 
 import os
@@ -11,7 +11,7 @@ from unittest import mock
 
 from hey_my_buddy.blackboard.tasks import windows_paths, workspace
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.windows_files import _link_print_name
+from hey_my_buddy.windows_files import WindowsFileAPI, _link_print_name
 
 
 class FakeHandle:
@@ -21,6 +21,7 @@ class FakeHandle:
 
 class FakeWindowsAPI:
     def __init__(self):
+        self.native = WindowsFileAPI() if os.name == "nt" else None
         self.events = []
         self.open = []
         self.reparse = set()
@@ -30,19 +31,28 @@ class FakeWindowsAPI:
     def _track(self, path, fd=None):
         if self.fail_on == Path(path):
             if fd is not None:
-                os.close(fd)
+                self._close_resource(fd)
             raise OSError("injected open failure")
         handle = FakeHandle(path, fd)
         self.open.append(handle)
         self.events.append(("open", str(path)))
         return handle
 
+    def _close_resource(self, resource):
+        if self.native is not None:
+            self.native.close(resource)
+        else:
+            os.close(resource)
+
     def open_dir(self, path):
-        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        fd = (self.native.open_dir(path) if self.native is not None else
+              os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
         return self._track(path, fd)
 
     def open_leaf(self, path, *, action="read"):
-        if action == "create":
+        if self.native is not None:
+            fd = self.native.open_leaf(path, action=action)
+        elif action == "create":
             fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
         elif action in ("lock", "lock-existing") and not Path(path).is_symlink():
             fd = os.open(path, os.O_RDWR | (os.O_CREAT if action == "lock" else 0), 0o600)
@@ -54,41 +64,58 @@ class FakeWindowsAPI:
         return self._track(path, fd)
 
     def info(self, handle):
-        mode = os.lstat(handle.path).st_mode
-        attributes = windows_paths.FILE_ATTRIBUTE_DIRECTORY if stat.S_ISDIR(mode) else 0
-        if stat.S_ISLNK(mode) or handle.path in self.reparse:
+        if self.native is not None:
+            attributes, tag = self.native.info(handle.fd)
+        else:
+            mode = os.lstat(handle.path).st_mode
+            attributes = windows_paths.FILE_ATTRIBUTE_DIRECTORY if stat.S_ISDIR(mode) else 0
+            if stat.S_ISLNK(mode):
+                attributes |= windows_paths.FILE_ATTRIBUTE_REPARSE_POINT
+                tag = windows_paths.IO_REPARSE_TAG_SYMLINK
+            else:
+                tag = 0
+        if handle.path in self.reparse:
             attributes |= windows_paths.FILE_ATTRIBUTE_REPARSE_POINT
-        tag = (0xA0000003 if handle.path in self.reparse else
-               windows_paths.IO_REPARSE_TAG_SYMLINK if stat.S_ISLNK(mode) else 0)
+            tag = 0xA0000003
         return attributes, tag
 
     def name(self, handle):
         return self.aliases.get(handle.path, handle.path.name)
 
-    def file_type(self, _handle):
-        return windows_paths.FILE_TYPE_DISK
+    def long_path(self, path):
+        path = Path(path)
+        return path.with_name(self.aliases[path]) if path in self.aliases else path
+
+    def file_type(self, handle):
+        return (self.native.file_type(handle.fd) if self.native is not None else
+                windows_paths.FILE_TYPE_DISK)
 
     def fd(self, handle, _flags):
-        result = handle.fd
+        result = (self.native.fd(handle.fd, _flags) if self.native is not None else
+                  handle.fd)
         handle.fd = None
         self.open.remove(handle)
         return result
 
     def delete(self, handle):
-        os.unlink(handle.path)
+        if self.native is not None:
+            self.native.delete(handle.fd)
+        else:
+            os.unlink(handle.path)
         self.events.append(("delete", str(handle.path)))
 
     def close(self, handle):
         self.events.append(("close", str(handle.path)))
         if handle.fd is not None:
-            os.close(handle.fd)
+            self._close_resource(handle.fd)
         self.open.remove(handle)
 
     def mkdir(self, path):
         os.mkdir(path)
 
     def readlink(self, handle):
-        return os.readlink(handle.path)
+        return (self.native.readlink(handle.fd) if self.native is not None else
+                os.readlink(handle.path))
 
     def symlink(self, target, path, *, directory=False):
         os.symlink(target, path, target_is_directory=directory)
@@ -111,7 +138,7 @@ class WindowsWorkspaceTests(unittest.TestCase):
             self.assertEqual(self.api.open[-1].path, target.parent)
             self.assertIn(self.root, [handle.path for handle in self.api.open])
         self.assertEqual(self.api.open, [])
-        self.assertEqual(self.api.events[-1], ("close", "/"))
+        self.assertEqual(self.api.events[-1], ("close", str(Path(self.root.anchor))))
 
     def test_reparse_parent_is_rejected_and_all_handles_close(self):
         middle = self.root / "junction"
@@ -157,6 +184,27 @@ class WindowsWorkspaceTests(unittest.TestCase):
         self.api.aliases[file] = "LongFilename"
         with self.assertRaises(BoardError) as error:
             windows_paths.read(file, api=self.api)
+        self.assertEqual(error.exception.code, "WORKSPACE_UNSUPPORTED")
+        self.assertEqual(self.api.open, [])
+
+    def test_outer_short_names_and_case_aliases_keep_git_paths_exact(self):
+        outer = self.root / "LONGFI~1"
+        folder = outer / "REPOSI~1" / "folder"
+        folder.mkdir(parents=True)
+        item = folder / "item"
+        item.write_bytes(b"content")
+        self.api.aliases[self.root] = self.root.name.upper()
+        self.api.aliases[outer] = "LongFolder"
+        self.api.aliases[folder.parent] = "Repository"
+        with self.assertRaises(BoardError):
+            windows_paths.read(item, api=self.api)
+        self.assertEqual(windows_paths.read(item, api=self.api, repository=folder.parent), b"content")
+        created = folder / "new"
+        windows_paths.write_new(created, b"fresh", api=self.api, repository=folder.parent)
+        self.assertEqual(created.read_bytes(), b"fresh")
+        self.api.aliases[folder] = "Folder"
+        with self.assertRaises(BoardError) as error:
+            windows_paths.read(item, api=self.api, repository=folder.parent)
         self.assertEqual(error.exception.code, "WORKSPACE_UNSUPPORTED")
         self.assertEqual(self.api.open, [])
 

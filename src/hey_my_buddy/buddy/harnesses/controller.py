@@ -14,6 +14,7 @@ from ...errors import BoardError
 from ...protocol.process_controller import launch_controller
 from ...protocol.process_handle import ProcessHandle
 from ...json_codec import decode_strict_json
+from ...private_files import open_read
 from ..roles.turn_io import guard_private_path
 
 #: The strict discovery result and retained native evidence bound.
@@ -55,7 +56,7 @@ def read_plain_evidence(path: Path) -> object:
     metadata = path.lstat()
     if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > ROUTER_EVIDENCE_BYTES:
         raise BoardError("PRIVATE_PATH_UNSAFE", "Evidence must be bounded ordinary JSON", path=str(path))
-    with path.open("rb") as stream:
+    with open_read(path) as stream:
         raw = stream.read(ROUTER_EVIDENCE_BYTES + 1)
     if len(raw) > ROUTER_EVIDENCE_BYTES:
         raise BoardError("PRIVATE_PATH_UNSAFE", "Evidence exceeds its byte bound", path=str(path))

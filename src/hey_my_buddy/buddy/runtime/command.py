@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ...paths import is_absolute_path
 from ...errors import BoardError
+from ...private_files import read_bytes
 from ...protocol.capabilities import adapter_capabilities
 from ..harnesses.base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
 from ...protocol.owned_process import owned_popen
@@ -147,7 +148,7 @@ def _artifacts(handle: ProcessHandle, context: ExecutionContext) -> list[dict]:
             {
                 "kind": "task-specification",
                 "location": str(task_file.resolve()),
-                "contentHash": hashlib.sha256(task_file.read_bytes()).hexdigest(),
+                "contentHash": hashlib.sha256(read_bytes(task_file)).hexdigest(),
                 "sizeBytes": task_file.stat().st_size,
             }
         )

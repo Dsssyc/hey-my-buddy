@@ -51,6 +51,7 @@ from ..c_two_live import CTwoLiveEndpoint
 from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
+from ....private_files import read_bytes
 from ...roles.turn_io import canonical_json, guard_private_path, private_json
 from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ..version import VersionShutdownError, probe_version
@@ -641,11 +642,11 @@ def _write_binding(root: Path, thread_id: str, binding: dict) -> None:
 
 def _read_binding(root: Path, thread_id: str) -> dict:
     try:
-        value = decode_json(_binding_path(root, thread_id).read_bytes())
+        value = decode_json(read_bytes(_binding_path(root, thread_id)))
         if not isinstance(value, dict):
             raise ValueError("invalid binding")
         return value
-    except (OSError, ValueError):
+    except (OSError, ValueError, BoardError):
         raise CodexProtocolError("native-resume-unavailable",
                                  "the Codex thread has no private micro task binding") from None
 

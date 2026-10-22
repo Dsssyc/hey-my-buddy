@@ -16,6 +16,7 @@ from hey_my_buddy.protocol import process_identity as identity
 
 
 BINDING = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
+PYTHON = getattr(sys, "_base_executable", sys.executable)
 
 
 class NativeProcessJournalTests(unittest.TestCase):
@@ -34,7 +35,8 @@ class NativeProcessJournalTests(unittest.TestCase):
             try:
                 with mock.patch.object(identity, "_active_native_journal", journal):
                     for _ in range(2):
-                        process = owned_popen(["/bin/sleep", "30"], start_new_session=True)
+                        process = owned_popen([PYTHON, "-c", "import time; time.sleep(30)"],
+                                              start_new_session=True)
                         handles.append(ProcessHandle(process, own_group=True, log_paths={}))
                 evidence = identity.read_native_process_journal(path, BINDING)
                 self.assertIsNotNone(evidence)
@@ -66,7 +68,7 @@ class NativeProcessJournalTests(unittest.TestCase):
             journal = identity.NativeProcessJournal(path, BINDING)
             with mock.patch.object(identity, "_active_native_journal", journal):
                 with self.assertRaises(FileNotFoundError):
-                    owned_popen(["/nonexistent/hey-my-buddy-test-command"], start_new_session=True)
+                    owned_popen([str(Path(directory) / "missing-command")], start_new_session=True)
             self.assertEqual(identity.read_native_process_journal(path, BINDING),
                              {"identities": [], "pending": 0})
 
