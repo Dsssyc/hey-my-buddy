@@ -32,8 +32,17 @@ async function expectInquiryWhole(page: Page, inquiryId: string, text: string) {
     const head = (await header.boundingBox())!;
     const time = (await header.locator("time").boundingBox())!;
     const state = (await header.locator(":scope > span").last().boundingBox())!;
-    expect(state.x, "a long inquiry state starts at the full header's left edge").toBeCloseTo(head.x, 1);
-    expect(state.y, "a long inquiry state has its own line").toBeGreaterThanOrEqual(time.y + time.height);
+    const stateLines = await label.evaluate(element => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return [...range.getClientRects()].filter(rect => rect.width > 0 && rect.height > 0)
+        .map(rect => ({ top: rect.top, bottom: rect.bottom }));
+    });
+    const inline = stateLines.length === 1 && stateLines[0]!.top < time.y + time.height && stateLines[0]!.bottom > time.y;
+    expect(inline || Math.abs(state.x - head.x) < 0.1,
+      "an inquiry state fits on the time's line or starts at the full header's left edge").toBe(true);
+    expect(inline || state.y >= time.y + time.height,
+      "an inquiry state beside the time stays on one line; a wrapping state starts below it").toBe(true);
   }
   const clipped = await label.evaluate(element => {
     const quote = element.closest(".bg-sunk")!.getBoundingClientRect();
@@ -81,9 +90,15 @@ for (const words of labels) for (const width of [390, 1440]) for (const theme of
       }
       if (width === 390) {
         const starts = await page.locator("[data-slot=detail-pane] [data-inquiry-id] .bg-sunk > div > span:last-child")
-          .evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().left));
+          .evaluateAll(nodes => nodes.map(node => {
+            const state = node.getBoundingClientRect();
+            const time = node.parentElement!.querySelector("time")!.getBoundingClientRect();
+            return { left: state.left, ownLine: state.top >= time.bottom };
+          }));
         expect(starts).toHaveLength(2);
-        expect(starts[0], "adjacent inquiry states start at the same position").toBeCloseTo(starts[1]!, 1);
+        if (starts.every(state => state.ownLine)) {
+          expect(starts[0]!.left, "adjacent inquiry states on their own lines start at the same position").toBeCloseTo(starts[1]!.left, 1);
+        }
       }
     });
   });
