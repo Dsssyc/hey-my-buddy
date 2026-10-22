@@ -377,10 +377,12 @@ function parseInquiry(value: unknown): Inquiry {
   const answer = recOrNull(message.answer, "message.answer");
   return {
     messageId: str(message.messageId, "message.messageId"), inquiryId: str(message.inquiryId, "message.inquiryId"), attemptId: strOrNull(message.attemptId, "message.attemptId"),
-    question: str(message.question, "message.question"), author: str(message.author, "message.author"),
+    question: str(message.question, "message.question"),
     createdAt: str(message.createdAt, "message.createdAt"), state: oneOf(message.state, INQUIRY_STATES, "message.state"),
     reason: reasonOrNull(message.reason, "message.reason"),
     note: strOrNull(message.note, "message.note"),
+    deliveryMode: delivery?.admittedDelivery == null ? null : oneOf(delivery.admittedDelivery,
+      ["realtime", "cooperative-checkpoint", "unsupported"] as const, "message.delivery.admittedDelivery"),
     deliveredAt: delivery ? strOrNull(delivery.deliveredAt, "message.delivery") : null,
     answer: answer && { text: str(answer.text, "message.answer"), at: strOrNull(answer.at, "message.answer"), truncated: bool(answer.truncated, "message.answer") },
   };

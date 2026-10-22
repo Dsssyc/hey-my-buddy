@@ -48,7 +48,7 @@ class CurrentCoreTests(BoardTestCase):
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
         signature = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "contract_signatures.json").read_text(encoding="utf-8"))
         self.assertEqual(CONTRACT_VERSION, signature["contractVersion"])
-        self.assertEqual(SCHEMA_VERSION, 27)
+        self.assertEqual(SCHEMA_VERSION, 28)
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
@@ -79,6 +79,7 @@ class CurrentCoreTests(BoardTestCase):
         self.assertEqual(sorted(writes), sorted([
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES('schema_version', ?)"),
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES(?, ?)"),
+            ("blackboard/store/upgrade.py", "UPDATE meta SET value=? WHERE key='schema_version'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:
@@ -162,7 +163,7 @@ class CurrentCoreTests(BoardTestCase):
             board.call("workflow_get", {"runId": "current-run", "taskId": "silently-ignored-target"})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
-    def test_result_settles_only_its_queued_questions_and_replay_adds_no_events(self):
+    def test_result_settles_only_its_unanswered_questions_and_replay_adds_no_events(self):
         for status, confirmed in (("ok", True), ("failed", True), ("cancelled", True)):
             with self.subTest(status=status, shutdownConfirmed=confirmed):
                 board = self.board()
@@ -187,12 +188,14 @@ class CurrentCoreTests(BoardTestCase):
                 pending = client.get_message("q-pending", runId=task["taskId"])
                 self.assertEqual(pending["state"], "unavailable")
                 self.assertEqual(pending["reason"], {"code": "inquiry-queued-at-attempt-end", "params": {}})
-                self.assertEqual(client.get_message("q-delivered", runId=task["taskId"])["state"], "delivered")
+                delivered = client.get_message("q-delivered", runId=task["taskId"])
+                self.assertEqual(delivered["state"], "unavailable")
+                self.assertEqual(delivered["reason"], {"code": "inquiry-delivered-at-attempt-end", "params": {}})
                 self.assertEqual(client.get_message("q-answered", runId=task["taskId"])["answer"]["text"], "Still working")
                 events = client.read_events(taskId=task["taskId"])
                 unavailable = [e for e in events["events"] if e["kind"] == "message.updated"
                                and e["payload"].get("state") == "unavailable"]
-                self.assertEqual(len(unavailable), 1)
+                self.assertEqual(len(unavailable), 2)
                 self.assertEqual(unavailable[0]["attemptId"], attempt["attemptId"])
                 head = board.store.head()
                 client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)

@@ -15,7 +15,7 @@ import tempfile
 import time
 import zlib
 
-from .db import SCHEMA_VERSION, utc_now
+from .db import SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, utc_now
 from ...protocol.contracts import CONTRACT_VERSION
 from ...errors import BoardError
 from ... import private_dirs, private_files
@@ -116,7 +116,8 @@ def _private_copy(source: Path, target: Path) -> None:
         os.fsync(dst.fileno())
 
 
-def database_snapshot(connection, *, event_head: int | None = None) -> dict:
+def database_snapshot(connection, *, event_head: int | None = None,
+                      column_projections: dict[str, tuple[str, ...]] | None = None) -> dict:
     """Hash the historical sorted JSON format with SQLite's bounded sorter.
 
     Python retains one row at a time.
@@ -135,7 +136,9 @@ def database_snapshot(connection, *, event_head: int | None = None) -> dict:
             return json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex())
 
         quoted = '"' + name.replace('"','""') + '"'
-        columns = [column[0] for column in connection.execute('SELECT * FROM ' + quoted + ' LIMIT 0').description]
+        columns = (column_projections or {}).get(name)
+        if columns is None:
+            columns = [column[0] for column in connection.execute('SELECT * FROM ' + quoted + ' LIMIT 0').description]
         arguments = ','.join('"' + column.replace('"', '""') + '"' for column in columns)
         limit = connection.getlimit(sqlite3.SQLITE_LIMIT_FUNCTION_ARG)
         wide = len(columns) > limit
@@ -196,7 +199,7 @@ def _verify(directory: Path) -> dict:
                 'databaseSnapshot', 'runtime', 'pluginCommit', 'pluginCommitStatus', 'files'}
     if not isinstance(manifest, dict) or not required <= manifest.keys() or not isinstance(manifest['files'], dict):
         raise BoardError('BACKUP_INVALID', 'Backup manifest is incomplete')
-    if manifest.get('format') != 1 or manifest.get('schema') != SCHEMA_VERSION:
+    if manifest.get('format') != 1 or manifest.get('schema') not in (UPGRADE_BASE_SCHEMA, SCHEMA_VERSION):
         raise BoardError('BACKUP_INVALID', 'Unsupported backup format or schema')
     allowed = {'board.sqlite3.gz', *(str(Path('state') / name) for name in STATE_FILES)}
     if 'board.sqlite3.gz' not in manifest['files'] or set(manifest['files']) - allowed:

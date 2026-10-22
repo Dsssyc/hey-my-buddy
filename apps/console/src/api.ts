@@ -340,7 +340,6 @@ function validTimelineSpans(spans: unknown): boolean {
         inquiry && typeof inquiry === "object" && !Array.isArray(inquiry)
         && typeof inquiry.inquiryId === "string" && inquiry.inquiryId.length > 0
         && typeof inquiry.createdAt === "string" && Number.isFinite(Date.parse(inquiry.createdAt))
-        && typeof inquiry.author === "string" && inquiry.author.length > 0
         && typeof inquiry.state === "string" && inquiry.state.length > 0)) return false;
     const reminders = entry.reminders;
     return reminders === null || !!reminders && typeof reminders === "object" && !Array.isArray(reminders)

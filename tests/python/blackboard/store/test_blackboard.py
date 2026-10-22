@@ -899,18 +899,21 @@ class TestDelivery(BoardTestCase):
             self.assertEqual(read["message"]["answer"]["text"], "still running")
 
     def test_answers_require_the_correlated_id(self):
-        from hey_my_buddy.blackboard.tasks.inquiry import _apply_journal
-
         board = self.board()
         client = board.client()
         cwd = self.workdir()
         task = board.submit_execution(requestId="inq-2", task="do", cwd=str(cwd), adapter="command", argv=["/bin/sleep", "5"])["task"]
         pass  # Admission is owned by the service.
-        admit_execution(client, "a" * 32)
+        attempt = admit_execution(client, "a" * 32)["claim"]["attempt"]
         board.store._message_post(task["runId"], "q-known", "hello?")
-        self.assertEqual(_apply_journal(board.store, task["runId"], "q-unknown",
-                                         {"answer": {"text": "hi", "bytes": 2}}),
-                         "journal-question-unknown")
+        directory = board.directory / "attempts" / task["runId"] / attempt["attemptId"]
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "inquiry.results.jsonl").write_text(json.dumps({"version": 1, "taskId": task["runId"],
+            "attemptId": attempt["attemptId"], "generation": attempt["generation"], "turnId": None,
+            "inquiryId": "q-unknown", "state": "answered", "answer": {"text": "hi"}}) + "\n", encoding="utf-8")
+        with board.store.db.write() as connection:
+            result = board.store._import_inquiry_journal(connection, board.store._attempt_row(connection, attempt["attemptId"]))
+        self.assertEqual(result["rejections"]["q-unknown"], "journal-question-unknown")
         self.assertIsNone(client.get_message("q-known", runId=task["runId"])["answer"])
 
 

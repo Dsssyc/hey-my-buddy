@@ -519,6 +519,11 @@ def populate(args):
             "note": "Fixture Host concluded helper parent", **helper_parent["control"]})
         call("inquiry_observe", {"runId": ids["delivered"], "inquiryId": "fixture-inquiry",
                               "question": "fixture question after the execution ended"})
+        # The base writer fixes author to cli and leaves these retired fields
+        # at their defaults. Give the pending upgrade non-default stock to drop.
+        with store.db.write() as connection:
+            connection.execute("UPDATE messages SET recipient=?,attempts_count=? WHERE inquiry_id=?",
+                               ("fixture-retired-recipient", 3, "fixture-inquiry"))
         # A successful routed call ended the earlier refusal sequence. Retain a
         # fresh synthetic refusal through the base's transaction writer, then
         # exercise the named re-detection operation on it.
@@ -615,7 +620,9 @@ def populate(args):
             "stableIds": ids, "stockIds": stock_ids, "tableRowCounts": row_counts,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService operations and current store writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. No SQL stock writes. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+            "boundary": "Base BoardService operations and current store writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. The only SQL stock write seeds retired message recipient and attempts_count after the base operation. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+            "retiredMessageStock": {"recipient": "fixture-retired-recipient", "attemptsCount": 3,
+                "author": "cli", "authorBoundary": "The base's sole messages INSERT in blackboard/store/store.py fixes author to cli; no base writer records a non-cli author."},
             "pythonVersion": sys.version.split()[0],
             "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
@@ -734,6 +741,8 @@ def verify(output, restored):
         assert connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE state='consumed'").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM attempt_interruptions WHERE state='settled'").fetchone()[0] == 1
         assert set(dict(connection.execute("SELECT key,value FROM meta"))) == {"schema_version", "capability_secret"}
+        assert connection.execute("SELECT author,recipient,attempts_count FROM messages").fetchall() == [
+            ("cli", "fixture-retired-recipient", 3)]
         states = dict(connection.execute("SELECT run_id,state FROM workflow_runs"))
         assert states == {**{metadata["stableIds"][key]: value for key, value in
                             (("delivered", "concluded"), ("accepted", "accepted"), ("failed", "concluded"), ("cancelled", "cancelled"))},

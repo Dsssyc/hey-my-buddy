@@ -733,13 +733,13 @@ def _run_spans(store, connection, row) -> list[dict]:
     selected_id = row["active_attempt_id"] or row["selected_attempt_id"]
     inquiries_by_attempt: dict[str, list[dict]] = {}
     for question in connection.execute(
-        "SELECT attempt_id, inquiry_id, created_at, author, state FROM messages"
+        "SELECT attempt_id, inquiry_id, created_at, state FROM messages"
         " WHERE task_id=? AND direction='question' AND attempt_id IS NOT NULL"
         " ORDER BY created_at, message_id", (run_id,),
     ):
         inquiries_by_attempt.setdefault(question["attempt_id"], []).append({
             "inquiryId": question["inquiry_id"], "createdAt": question["created_at"],
-            "author": question["author"], "state": question["state"],
+            "state": question["state"],
         })
     continuations = {
         item["attempt_id"]: item for item in connection.execute(

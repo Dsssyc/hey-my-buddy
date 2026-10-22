@@ -355,7 +355,7 @@ describe("a turn", () => {
     expect(text()).toContain("读到哪里了？");
     expect(text()).toContain("已答复");
     expect(text()).toContain("读到第二个文件。");
-    expect(text()).toContain("无法送达");
+    expect(text()).toContain("问询已结束");
     expect(text()).not.toContain("第二轮的问询");
     await waitFor(() => expect(text()).toContain("第一轮：读完了旧的详情"));
     // The band of the seal: kind, short commit, base to output, files; it opens to the evidence.
@@ -371,7 +371,7 @@ describe("a turn", () => {
     expect(text()).toContain("docs/console.md");
     expect(text()).toContain("无需整合");
     // The reason an inquiry could not be delivered is in its hint.
-    await f.user.hover(within(pane()).getByText("无法送达"));
+    await f.user.hover(within(pane()).getByText("问询已结束"));
     expect((await screen.findAllByText("没有可接收问询的活动代理。"))[0]).toBeTruthy();
   });
 
@@ -757,7 +757,7 @@ describe("the detail is only read", () => {
 it("opens and highlights the exact inquiry in its turn, then scrolls it into view", async () => {
   const found = timeline();
   const containing = found.spans.find(item => item.attemptId === "att-1" && item.kind === "execution")!;
-  containing.inquiries = [{ inquiryId: "inq-1", createdAt: at("10:20"), author: "host", state: "delivered" }];
+  containing.inquiries = [{ inquiryId: "inq-1", createdAt: at("10:20"), state: "delivered" }];
   found.spans.unshift({ ...containing, spanId: "another-task-question", runId: "another-task" });
   const scroll = vi.fn();
   const original = HTMLElement.prototype.scrollIntoView;

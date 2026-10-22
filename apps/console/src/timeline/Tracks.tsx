@@ -26,7 +26,7 @@ export function eventReadout(event: TimelineEvent): string {
 
 export function markerReadout(marker: TimelineMarker): string {
   return marker.kind === "event" ? eventReadout(marker.event) : i18n.t("tasks:drawing.inquiryReadout", {
-    author: marker.inquiry.author, at: clockTime(marker.inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${marker.inquiry.state}`),
+    at: clockTime(marker.inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${marker.inquiry.state}`),
   });
 }
 
@@ -42,7 +42,7 @@ export function spanReadout(span: TimelineSpan, nowMs: number, buddies?: readonl
     start !== null && end !== null && end >= start ? formatDuration(end - start) : null, buddyLabel(span.buddy, buddies), outcome === "unknown" ? i18n.t("tasks:drawing.stopUnconfirmed") : outcomeLabel(span, outcome),
     span.expectedSeconds === null ? null : i18n.t("tasks:drawing.expected", { duration: formatDuration(span.expectedSeconds * 1000) }),
     reminders?.possiblyStuck ? i18n.t("tasks:drawing.silent", { duration: formatDuration(nowMs - instant(reminders.lastNativeEventAt ?? span.startAt)!) }) : null,
-    ...(span.inquiries ?? []).map(inquiry => i18n.t("tasks:drawing.inquiryReadout", { author: inquiry.author, at: clockTime(inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${inquiry.state}`) })),
+    ...(span.inquiries ?? []).map(inquiry => i18n.t("tasks:drawing.inquiryReadout", { at: clockTime(inquiry.createdAt), state: i18n.t(`taskDetail:inquiry.${inquiry.state}`) })),
   ].filter(Boolean).join(" · ");
 }
 

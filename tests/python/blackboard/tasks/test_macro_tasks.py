@@ -642,7 +642,7 @@ class MacroTaskReadTests(WorkflowTestCase):
                          board.call('task_get', {'runId': run_id})['task']['selectedAttempt']['reminders'])
         self.assertEqual(execution['inquiries'], [{
             'inquiryId': 'during-turn', 'createdAt': asked['createdAt'],
-            'author': 'cli', 'state': asked['state'],
+            'state': asked['state'],
         }])
         self.assertNotIn('Sensitive question body', json.dumps(timeline))
         for span in timeline['spans']:

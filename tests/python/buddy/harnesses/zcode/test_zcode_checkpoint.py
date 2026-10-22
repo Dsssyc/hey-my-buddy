@@ -24,7 +24,7 @@ from pathlib import Path
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 
-from hey_my_buddy.blackboard.tasks import inquiry as inquiry_module
+from hey_my_buddy.protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records, normalize_inquiry_record
 from hey_my_buddy.private_dirs import context_root
 
 
@@ -128,9 +128,9 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertEqual(outcome.result["inquiry"]["answered"], 1)
         self.assertEqual(outcome.result["inquiry"]["queued"], 0)
         # The real board importer can read the real journal of this attempt.
-        journal = inquiry_module.read_journal(str(self.inquiry_results_path(context)))
-        self.assertEqual(journal["entries"]["q-1"]["state"], "answered")
-        answer = inquiry_module.normalize_journal_answer(journal["entries"]["q-1"])
+        journal = read_inquiry_journal({key: records[0][key] for key in ("taskId", "attemptId", "generation", "turnId")}, str(self.inquiry_results_path(context)))
+        self.assertEqual(merged_inquiry_records(journal["records"])["q-1"]["state"], "answered")
+        answer = normalize_inquiry_record(merged_inquiry_records(journal["records"])["q-1"])["answer"]
         self.assertEqual(answer["text"], "fixture answer for q-1")
         self.assertEqual(answer["toolCallId"], "call-answer-q-1")
 

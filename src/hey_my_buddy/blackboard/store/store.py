@@ -535,8 +535,7 @@ class BoardStore:
             "attemptId": row["attempt_id"],
             "inquiryId": row["inquiry_id"],
             "direction": row["direction"],
-            "author": row["author"],
-            "recipient": row["recipient"],
+            **({"author": {"role": row["author_role"], "id": row["author_id"]}} if row["author_role"] else {}),
             "question": row["body"],
             "questionBytes": len(row["body"].encode("utf-8")),
             "questionSha256": row["payload_hash"],
@@ -544,7 +543,6 @@ class BoardStore:
             "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
             "delivery": json.loads(row["delivery_json"]) if row["delivery_json"] else None,
             "answer": json.loads(row["answer_json"]) if row["answer_json"] else None,
-            "attempts": row["attempts_count"],
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
             "revision": row["revision"],
@@ -1520,6 +1518,8 @@ class BoardStore:
                 fromState=attempt["execution_state"],
                 toState=state,
             )
+        if state == "finished" and attempt["execution_state"] != "finished":
+            self._settle_attempt_inquiries(connection, attempt)
         now = self.now()
         cursor = connection.execute(
             "UPDATE attempts SET execution_state=?, updated_at=?, revision=revision+1 WHERE attempt_id=? AND revision=?",
@@ -1527,22 +1527,51 @@ class BoardStore:
         )
         if cursor.rowcount != 1:
             raise BoardError("REVISION_CONFLICT", "The attempt changed concurrently; re-read it and retry")
-        if state == "finished" and attempt["execution_state"] != "finished":
-            queued_questions = connection.execute(
-                "SELECT message_id,inquiry_id FROM messages WHERE attempt_id=? AND state='queued'",
-                (attempt["attempt_id"],),
-            ).fetchall()
-            if queued_questions:
-                task = connection.execute("SELECT revision FROM tasks WHERE task_id=?", (attempt["task_id"],)).fetchone()
-                for question in queued_questions:
-                    connection.execute(
-                        "UPDATE messages SET state='unavailable',reason_code=?,reason_params_json='{}',updated_at=?,revision=revision+1 WHERE message_id=?",
-                        ("inquiry-queued-at-attempt-end", now, question["message_id"]),
-                    )
-                    self._append_event(connection, "message.updated", task_id=attempt["task_id"],
-                        attempt_id=attempt["attempt_id"], revision=task["revision"],
-                        payload={"inquiryId": question["inquiry_id"], "state": "unavailable",
-                                 "actor": {"role": "service", "id": "attempt-finished"}})
+
+    def _inquiry_journal(self, connection, attempt):
+        from ...protocol.inquiry_journal import read_inquiry_journal
+
+        turn = connection.execute("SELECT turn_id FROM workflow_turns WHERE attempt_id=?",
+                                  (attempt["attempt_id"],)).fetchone()
+        identity = {"taskId": attempt["task_id"], "attemptId": attempt["attempt_id"],
+                    "generation": attempt["generation"], "turnId": turn["turn_id"] if turn else None}
+        path = self.directory / "attempts" / attempt["task_id"] / attempt["attempt_id"] / "inquiry.results.jsonl"
+        return read_inquiry_journal(identity, path)
+
+    def _import_inquiry_journal(self, connection, attempt):
+        from ...protocol.inquiry_journal import merged_inquiry_records, normalize_inquiry_record
+
+        journal = self._inquiry_journal(connection, attempt)
+        rejections = {item["questionId"]: item["reason"] for item in journal["rejections"]}
+        imported = []
+        for inquiry_id, record in merged_inquiry_records(journal["records"]).items():
+            row = connection.execute("SELECT * FROM messages WHERE task_id=? AND inquiry_id=?",
+                                     (attempt["task_id"], inquiry_id)).fetchone()
+            if row is None:
+                rejections[inquiry_id] = "journal-question-unknown"
+            elif row["attempt_id"] != attempt["attempt_id"]:
+                rejections[inquiry_id] = "journal-attempt-mismatch"
+            elif record.get("questionSha256") != row["payload_hash"]:
+                rejections[inquiry_id] = "journal-record-invalid"
+            else:
+                patch = normalize_inquiry_record(record, was_delivered=row["state"] == "delivered")
+                if patch is None:
+                    rejections[inquiry_id] = "journal-record-invalid"
+                else:
+                    self._update_message(connection, row, actor="bridge-journal", **patch)
+                    imported.append(inquiry_id)
+        return {"imported": imported, "available": journal["available"], "reason": journal["reason"], "entries": journal["entries"],
+                **({"rejections": rejections} if rejections else {})}
+
+    def _settle_attempt_inquiries(self, connection, attempt):
+        # The journal belongs to this attempt's private directory, not its result
+        # payload. Import before settlement in the same result/recovery transaction.
+        self._import_inquiry_journal(connection, attempt)
+        for row in connection.execute("SELECT * FROM messages WHERE attempt_id=? AND state IN ('queued','claimed','delivered')",
+                                      (attempt["attempt_id"],)).fetchall():
+            reason = make_reason("inquiry-delivered-at-attempt-end" if row["state"] == "delivered"
+                                 else "inquiry-queued-at-attempt-end")
+            self._update_message(connection, row, actor="attempt-finished", state="unavailable", reason=reason)
 
     # -- service admission ---------------------------------------------------
     def admit_execution(self, nonce: str, task_id: str | None = None) -> dict:
@@ -2609,6 +2638,14 @@ class BoardStore:
     # -- messages ------------------------------------------------------------
     def _message_post(self, task_id: str, inquiry_id: str, question: str) -> dict:
         """Retain the validated question admitted by inquire."""
+        from ..tasks.workflow import current_scope
+
+        scope = current_scope() or {}
+        author_role = author_id = None
+        if scope.get("kind") == "console":
+            author_role, author_id = "console", scope["sessionId"]
+        elif scope.get("kind") == "agent" and scope["delegationAuthority"]:
+            author_role, author_id = "lead", scope["credentialId"]
         payload_hash = sha256_text(question)
         question_bytes = len(question.encode("utf-8"))
         with self.db.write() as connection:
@@ -2637,12 +2674,14 @@ class BoardStore:
                     )
                 attempt = self._selected_attempt(connection, task)
                 now = self.now()
-                active = task["state"] in ("running", "cancelling")
+                active = task["state"] in ("running", "cancelling") and attempt is not None and attempt["execution_state"] != "finished"
                 state = "queued" if active else "unavailable"
-                reason_code = None if state == "queued" else "inquiry-no-live-agent"
+                reason_code = (None if active else "inquiry-root-turn-ended"
+                               if attempt is not None and attempt["execution_state"] == "finished"
+                               else "inquiry-no-live-agent")
                 message_id = str(uuid.uuid4())
                 connection.execute(
-                    "INSERT INTO messages(message_id, task_id, attempt_id, inquiry_id, direction, author, recipient,"
+                    "INSERT INTO messages(message_id, task_id, attempt_id, inquiry_id, direction, author_role, author_id,"
                     " body, payload_hash, state, reason_code, reason_params_json, created_at, updated_at, revision)"
                     " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)",
                     (
@@ -2651,8 +2690,8 @@ class BoardStore:
                         attempt["attempt_id"] if attempt else None,
                         inquiry_id,
                         "question",
-                        "cli",
-                        None,
+                        author_role,
+                        author_id,
                         question,
                         payload_hash,
                         state,
@@ -2681,49 +2720,48 @@ class BoardStore:
                         delivery: dict | None = None, answer: dict | None = None) -> dict:
         """Apply the service's normalized delivery and answer facts."""
         with self.db.write() as connection:
-            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
             row = connection.execute("SELECT * FROM messages WHERE task_id=? AND inquiry_id=?",
                                      (task_id, inquiry_id)).fetchone()
-            candidate = self._message_view(row)
-            answered = candidate["answer"] is not None
-            terminal = candidate["state"] in ("answered", "discarded", "unavailable")
-            if state is not None and not terminal:
-                candidate["state"] = state
-            if reason is not None:
-                candidate["reason"] = reason
-            if delivery is not None:
-                candidate["delivery"] = {**(candidate["delivery"] or {}), **delivery}
-            if answer is not None and not answered:
-                candidate["answer"] = answer
-                candidate["state"] = "answered"
-            if candidate["state"] not in ("delivered", "unavailable"):
-                candidate["reason"] = None
-            now = self.now()
-            connection.execute(
-                "UPDATE messages SET state=?, reason_code=?, reason_params_json=?, delivery_json=?, answer_json=?, attempts_count=attempts_count+1,"
-                " updated_at=?, revision=revision+1 WHERE message_id=?",
-                (
-                    candidate["state"],
-                    candidate["reason"]["code"] if candidate["reason"] else None,
-                    canonical_json(candidate["reason"]["params"]) if candidate["reason"] else None,
-                    canonical_json(candidate["delivery"]) if candidate["delivery"] else None,
-                    canonical_json(candidate["answer"]) if candidate["answer"] else None,
-                    now,
-                    row["message_id"],
-                ),
-            )
-            self._append_event(
-                connection,
-                "message.updated",
-                task_id=row["task_id"],
-                attempt_id=row["attempt_id"],
-                revision=task["revision"],
-                payload={"inquiryId": row["inquiry_id"], "state": candidate["state"], "actor": {"role": "bridge", "id": actor}},
-            )
-            updated = connection.execute("SELECT * FROM messages WHERE message_id=?", (row["message_id"],)).fetchone()
+            updated = self._update_message(connection, row, actor=actor, state=state, reason=reason,
+                                           delivery=delivery, answer=answer)
             head = self._head_of(connection)
         self._notify(head)
         return {"message": self._message_view(updated)}
+
+    def _update_message(self, connection, row, *, actor: str, state: str | None = None,
+                        reason: dict | None = None, delivery: dict | None = None, answer: dict | None = None):
+        """Write a changed value once, inside its caller's business transaction."""
+        current = self._message_view(row)
+        candidate = dict(current)
+        answered = current["answer"] is not None
+        terminal = current["state"] in ("answered", "discarded", "unavailable")
+        if state is not None and not terminal:
+            candidate["state"] = state
+        if reason is not None and current["state"] != "answered":
+            candidate["reason"] = reason
+        if delivery is not None:
+            candidate["delivery"] = {**(current["delivery"] or {}), **delivery}
+        if answer is not None and not answered:
+            candidate["answer"] = answer
+            candidate["state"] = "answered"
+        if candidate["state"] not in ("delivered", "unavailable"):
+            candidate["reason"] = None
+        if candidate == current:
+            return row
+        now = self.now()
+        connection.execute(
+            "UPDATE messages SET state=?, reason_code=?, reason_params_json=?, delivery_json=?, answer_json=?,"
+            " updated_at=?, revision=revision+1 WHERE message_id=?",
+            (candidate["state"], candidate["reason"]["code"] if candidate["reason"] else None,
+             canonical_json(candidate["reason"]["params"]) if candidate["reason"] else None,
+             canonical_json(candidate["delivery"]) if candidate["delivery"] else None,
+             canonical_json(candidate["answer"]) if candidate["answer"] else None, now, row["message_id"]),
+        )
+        task = connection.execute("SELECT revision FROM tasks WHERE task_id=?", (row["task_id"],)).fetchone()
+        self._append_event(connection, "message.updated", task_id=row["task_id"], attempt_id=row["attempt_id"],
+            revision=task["revision"], payload={"inquiryId": row["inquiry_id"], "state": candidate["state"],
+                "actor": {"role": "service" if actor == "attempt-finished" else "bridge", "id": actor}})
+        return connection.execute("SELECT * FROM messages WHERE message_id=?", (row["message_id"],)).fetchone()
 
     def message_get(self, params: dict) -> dict:
         schemas.reject_unknown(params, {"runId", "taskId", "requestId", "inquiryId", "messageId"}, "message.get")

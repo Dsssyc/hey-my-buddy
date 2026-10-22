@@ -1,16 +1,13 @@
 """Project live facts through the owning Worker and retain terminal journal evidence."""
 from __future__ import annotations
 
-import json
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ...protocol import schemas
 from ...protocol.reasons import reason as make_reason
 from ...errors import BoardError
-from ..store.store import BoardStore, MESSAGE_STATES
-from ...private_dirs import attempt_root
+from ..store.store import BoardStore
 from ...protocol.inquiry import (
     BRIDGE_ERRORS,
     DEFAULT_TRANSPORT_TIMEOUT_MS,
@@ -25,7 +22,6 @@ if TYPE_CHECKING:
     from ..service.live_registry import LiveRegistry
 
 MAX_WAIT_MS = 30000
-MAX_JOURNAL_BYTES = 1024 * 1024
 POLL_INTERVAL_SECONDS = 0.3
 
 #: These refusals cannot leave a question queued: either its turn ended or the
@@ -70,35 +66,6 @@ def observe_capable(adapter: str) -> bool:
     return "inquiry" in capabilities or "observe" in capabilities
 
 
-def read_journal(results_path: str | None) -> dict:
-    """Import the bridge journal as idempotent transport evidence."""
-    if not results_path:
-        return {"available": False, "reason": "no-journal-path", "entries": {}}
-    path = Path(results_path)
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return {"available": False, "reason": "journal-not-written", "entries": {}}
-    if size > MAX_JOURNAL_BYTES:
-        return {"available": False, "reason": "journal-exceeds-limit", "entries": {}}
-    try:
-        text = path.read_text(errors="replace", encoding="utf-8")
-    except OSError:
-        return {"available": False, "reason": "journal-unreadable", "entries": {}}
-    entries: dict[str, dict] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue  # a torn line is ignored, never fatal
-        if isinstance(record, dict) and isinstance(record.get("inquiryId"), str):
-            entries[record["inquiryId"]] = record
-    return {"available": True, "reason": None, "entries": entries}
-
-
 def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> dict:
     """One bounded inquiry operation: observe, ask, or read a correlated answer."""
     schemas.reject_unknown(params, {"runId", "taskId", "inquiryId", "question", "timeoutMs", "waitMs"}, "inquire")
@@ -115,8 +82,8 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
     view = store.task_get({k: params[k] for k in ("runId", "taskId") if k in params})["task"]
     attempt = view.get("selectedAttempt") or {}
     adapter = view.get("adapter")
-    recorded = None
     duplicate = False
+    recorded = None
     if inquiry_id is not None:
         posted = store._message_post(view["taskId"], inquiry_id, question)
         recorded = posted["message"]
@@ -130,8 +97,8 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
 
     extracted_live = live_binding(adapter) is not None
     channel = None if attempt_ended else _live_channel(live_registry, view)
-    # A restarted service waits for the original holder to attach. Active facts
-    # never fall back to files or a directly addressed controller.
+    # A restarted service waits for the original holder to attach before it
+    # admits active inquiry traffic or reads that attempt's journal.
     unbound_live = extracted_live and not attempt_ended and channel is None
     bridge = {"enabled": channel is not None, "observed": False, "reason": None, "error": None,
               "canObserve": can_observe, "canAsk": can_ask}
@@ -141,18 +108,20 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
         "unavailable": ["sessionId", "agentStatus", "inbox", "lastEvent", "activity", "replyTool"],
         "limits": LIMITS,
     }
-    if not can_observe or attempt_ended:
+    if attempt_ended:
         pass
     elif inquiry_id is not None and not can_ask:
         # The adapter can be observed but cannot ask: record the honest capability
         # refusal instead of sending a question the native protocol cannot carry.
         bridge["capability"] = "observe"
-        _mark_unavailable(store, view["taskId"], inquiry_id, "unsupported")
+        _mark_unavailable(store, view["taskId"], inquiry_id, "unsupported" if can_observe else "unsupported-method")
+    elif not can_observe:
+        pass
     elif channel is not None:
-        # The registered live binding of this very run: the question, the
-        # observation and the journal projection all go through one channel
-        # instead of a second reader beside it.
-        if inquiry_id is not None:
+        # Only the registered binding may inject into this attempt's native turn.
+        # Durable question facts are imported from its private journal below.
+        if (recorded is not None and recorded["state"] in ("queued", "claimed", "delivered")
+                and recorded["attemptId"] == attempt.get("attemptId")):
             reply = channel.request(
                 LiveRequest(identity=channel.identity, request_id=inquiry_id, kind="inquiry",
                             payload=InquiryPayload(question_id=inquiry_id, question=question)),
@@ -162,7 +131,6 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
                 # it is — a withdrawn question's replay carries ``discarded``
                 # and its delivery evidence, never a transport refusal.
                 bridge["observed"] = True
-                _apply_bridge_answer(store, view["taskId"], inquiry_id, _live_ask_value(reply))
             else:
                 code = reply.error_code or reply.reason_code
                 bridge["reason"] = "bridge-refused" if code in BRIDGE_ERRORS else reply.reason_code
@@ -171,7 +139,7 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
                     # The owned turn already ended: the question is refused, never
                     # injected into a new or idle turn and never left looking pending.
                     _mark_unavailable(store, view["taskId"], inquiry_id, code)
-        else:
+        elif inquiry_id is None:
             snapshot = channel.observe(after_seq=None, limit=MAX_OBSERVE_LIMIT, timeout_ms=timeout_ms,
                                        fields=("observation",))
             if snapshot.observed is True and snapshot.observation is not None:
@@ -182,86 +150,39 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
                 bridge["error"] = snapshot.error
     elif unbound_live:
         bridge["reason"] = "channel-unbound"
-    evidence_journal = (store.directory / "attempts" / view["taskId"] / attempt["attemptId"] /
-                        "inquiry.results.jsonl") if attempt.get("attemptId") else None
-    rejections: dict[str, str] = {}
-    projected: dict[str, Any] = {}
-    if channel is not None:
-        # The live run's journal facts come through the channel's bound
-        # projection, consumed to the end of its pagination; no second reader
-        # opens the same live source beside it, and the frame bound stays.
-        journal = None
-        after: int | None = None
-        for _page in range(64):
-            projection = channel.observe(after_seq=after, limit=MAX_OBSERVE_LIMIT,
-                                         timeout_ms=timeout_ms, fields=("inquiries",))
-            if "journal-unavailable" in (projection.unavailable or ""):
-                break
-            if projection.journal is not None:
-                journal = {"available": projection.journal.available,
-                           "reason": projection.journal.reason,
-                           "entries": projection.journal.entries}
-                rejections = {item.question_id: item.reason
-                              for item in projection.journal.rejections}
-            for entry in projection.inquiries:
-                projected[entry.question_id] = entry
-            if not projection.truncated or not projection.inquiries:
-                break
-            after = max(entry.seq for entry in projection.inquiries)
-        if journal is None:
-            journal = {"available": False, "reason": "journal-unavailable", "entries": 0}
-    elif unbound_live:
-        journal = {"available": False, "reason": "channel-unbound", "entries": 0}
-    else:
-        journal = (read_journal(str(evidence_journal) if evidence_journal else None) if attempt_ended
-                   else {"available": False, "reason": "no-live-channel", "entries": {}})
-    # Import every existing question's latest source fact even for run-only
-    # observation. Unknown ids are rejected before the internal writer runs, so
-    # orphan records cannot create questions or consume the inquiry allowance.
-    records = ({key: _journal_record(entry) for key, entry in projected.items()}
-               if channel is not None else journal["entries"]
-               if isinstance(journal["entries"], dict) else {})
-    if inquiry_id in rejections:
-        bridge["journalRejected"] = rejections[inquiry_id]
-    for question_id, record in records.items():
-        if question_id in rejections:
-            continue
-        mismatch = (_journal_identity_mismatch(record, view["taskId"], attempt.get("attemptId"))
-                    if channel is None else None)
-        if mismatch is not None:
-            rejections[question_id] = mismatch
-            if question_id == inquiry_id:
-                bridge["journalRejected"] = mismatch
-            continue
-        rejected = _apply_journal(store, view["taskId"], question_id, record)
-        if rejected is not None:
-            rejections[question_id] = rejected
-            if question_id == inquiry_id:
-                bridge["journalRejected"] = rejected
-        elif question_id == inquiry_id:
-            bridge["journalImported"] = True
 
+    def import_journal():
+        with store.db.write() as connection:
+            stored_attempt = store._attempt_row(connection, attempt["attemptId"])
+            journal = store._import_inquiry_journal(connection, stored_attempt)
+            head = store._head_of(connection)
+        store._notify(head)
+        return journal
+
+    # Durable question facts use the same attempt-bound reader while active and
+    # finished. A missing active connection still grants no file-only fallback.
+    if channel is not None or attempt_ended and attempt.get("attemptId"):
+        journal = import_journal()
+    else:
+        journal = {"available": False, "reason": "channel-unbound" if unbound_live else "no-live-channel", "entries": 0}
     if inquiry_id is not None and wait_ms:
         deadline = time.monotonic() + wait_ms / 1000.0
         while time.monotonic() < deadline:
             current = store.message_get({"runId": view["taskId"], "inquiryId": inquiry_id})["message"]
-            if current["state"] in ("answered", "delivered", "discarded", "unavailable"):
+            if current["state"] in ("answered", "discarded", "unavailable"):
                 break
-            if channel is None:
-                break
+            time.sleep(min(POLL_INTERVAL_SECONDS, max(0, deadline - time.monotonic())))
             if channel is not None:
-                # The wait queries only this one question's native answer, the
-                # same single roundtrip the direct path made.
-                answer_view = channel.observe(inquiry_id=inquiry_id, timeout_ms=timeout_ms)
-                if answer_view.inquiries:
-                    rejected = _apply_bridge_answer(store, view["taskId"], inquiry_id,
-                                                    _live_answer_value(answer_view.inquiries[0]))
-                    if rejected is not None:
-                        rejections[inquiry_id] = rejected
-                        bridge["journalRejected"] = rejected
-                    break
-            time.sleep(POLL_INTERVAL_SECONDS)
+                journal = import_journal()
 
+    rejections = journal.get("rejections", {})
+    if inquiry_id in rejections:
+        bridge["journalRejected"] = rejections[inquiry_id]
+    elif inquiry_id in journal.get("imported", []):
+        bridge["journalImported"] = True
+    view = store.task_get({"runId": view["taskId"]})["task"]
+    attempt = view.get("selectedAttempt") or {}
+    terminal = view["state"] in ("completed", "concluded", "failed", "cancelled")
     message = None
     if inquiry_id is not None:
         message = store.message_get({"runId": view["taskId"], "inquiryId": inquiry_id})["message"]
@@ -292,11 +213,10 @@ def observe(store: BoardStore, params: dict, *, live_registry: LiveRegistry) -> 
         "pendingInquiries": [
             {"inquiryId": item["inquiryId"], "state": item["state"], "submittedAt": item["createdAt"]}
             for item in pending
-            if item["state"] not in ("answered", "discarded")
+            if item["state"] in ("queued", "claimed", "delivered")
         ],
         "journal": {"available": journal["available"], "reason": journal["reason"],
-                    "entries": (journal["entries"] if isinstance(journal["entries"], int)
-                                else len(journal["entries"])),
+                    "entries": journal["entries"],
                     **({"rejections": rejections} if rejections else {})},
         "limits": LIMITS,
     }
@@ -321,31 +241,6 @@ class _ExecutionChannel:
         return LiveSnapshot.from_payload(self.channel.observe(**kwargs))
 
 
-def _live_ask_value(reply) -> dict:
-    """The ask reply's committed value, in the bridge's own ask-value shape.
-
-    An observed reply projects its actual committed state — a withdrawn
-    question's ``discarded`` included — with its delivery record from the correlation.
-    """
-    correlation = reply.native_correlation.value if reply.native_correlation is not None else {}
-    value: dict[str, Any] = {"state": reply.state or reply.status}
-    if isinstance(correlation.get("delivery"), dict):
-        value["delivery"] = correlation["delivery"]
-    return value
-
-
-def _live_answer_value(entry) -> dict:
-    """One projected answer entry back in the native answer view's shape."""
-    value: dict[str, Any] = {"state": entry.status}
-    if entry.answer is not None:
-        value["answer"] = {"available": True, "text": entry.answer, "bytes": entry.bytes,
-                           "via": entry.via, "toolCallId": entry.tool_call_id, "at": entry.at,
-                           "truncated": entry.truncated is True}
-    else:
-        value["answer"] = {"available": False}
-    return value
-
-
 def _observation_value(observation) -> dict:
     """The bridge's raw observation value, rebuilt from the channel's typed model.
 
@@ -358,48 +253,10 @@ def _observation_value(observation) -> dict:
     return value
 
 
-def _journal_record(entry: Any) -> dict:
-    """One journal entry back in the record shape the existing importer reads.
-
-    A projected channel entry carries its answer's own source fields; the
-    importer's normalization and refusal rules are applied to that record
-    unchanged.
-    """
-    if isinstance(entry, dict):
-        return entry
-    record: dict[str, Any] = {"inquiryId": entry.question_id, "state": entry.status}
-    if entry.answer is not None:
-        record["answer"] = {"text": entry.answer, "bytes": entry.bytes, "via": entry.via,
-                            "toolCallId": entry.tool_call_id, "at": entry.at,
-                            "truncated": entry.truncated is True}
-    if entry.delivery is not None:
-        record["delivery"] = entry.delivery.value
-    return record
-
-
-def _journal_identity_mismatch(record: dict, task_id: str, attempt_id: str | None) -> str | None:
-    """Reject journal transport evidence bound to another task or attempt."""
-    for key, expected, label in (("taskId", task_id, "task"), ("attemptId", attempt_id, "attempt")):
-        value = record.get(key)
-        if value in (None, ""):
-            continue
-        if not isinstance(value, str) or value != expected:
-            return "journal-task-mismatch" if label == "task" else "journal-attempt-mismatch"
-    if not record.get("taskId") or not record.get("attemptId"):
-        return "journal-attempt-unbound"
-    return None
-
-
-def _known_question(store: BoardStore, task_id: str, inquiry_id: str) -> bool:
-    with store.db.read() as connection:
-        return connection.execute(
-            "SELECT 1 FROM messages WHERE task_id=? AND inquiry_id=?", (task_id, inquiry_id)
-        ).fetchone() is not None
-
-
 def _mark_unavailable(store: BoardStore, task_id: str, inquiry_id: str, code: str) -> None:
     """Record the refusal of the question just posted by observe."""
     reason = (make_reason("inquiry-observe-only") if code == "unsupported"
+              else make_reason("inquiry-root-turn-ended") if code in ("agent-gone", "agent-not-running")
               else make_reason("bridge-refused", errorCode=code))
     store._message_update(task_id, inquiry_id, actor="live-bridge", state="unavailable", reason=reason)
     return None
@@ -424,65 +281,6 @@ def _inquiry_view(message: dict, duplicate: bool) -> dict:
         ),
         "correlation": "inquiryId",
     }
-
-
-def _apply_bridge_answer(store: BoardStore, task_id: str, inquiry_id: str, value: dict) -> str | None:
-    return _apply_inquiry_record(store, task_id, inquiry_id, value, actor="live-bridge")
-
-
-def normalize_journal_answer(record: dict) -> dict | None:
-    """Read the bridge's nested answer object."""
-    answer = record.get("answer")
-    if not isinstance(answer, dict):
-        return None
-    text = answer.get("text")
-    if not isinstance(text, str) or not text.strip():
-        return None
-    size = len(text.encode("utf-8"))
-    return {
-        "text": text,
-        "bytes": size,
-        "via": answer.get("via") if isinstance(answer.get("via"), str) else None,
-        "toolCallId": answer.get("toolCallId") if isinstance(answer.get("toolCallId"), str) else None,
-        "at": answer.get("at") if isinstance(answer.get("at"), str) else None,
-        "truncated": answer.get("truncated") is True,
-        "source": "bridge-journal",
-    }
-
-
-def _apply_journal(store: BoardStore, task_id: str, inquiry_id: str, record: dict) -> str | None:
-    if not _known_question(store, task_id, inquiry_id):
-        return "journal-question-unknown"
-    return _apply_inquiry_record(store, task_id, inquiry_id, record, actor="bridge-journal")
-
-
-def _apply_inquiry_record(store: BoardStore, task_id: str, inquiry_id: str, record: dict, *, actor: str) -> str | None:
-    state = record.get("state")
-    if state not in MESSAGE_STATES:
-        return "journal-record-invalid"
-    answer = normalize_journal_answer(record)
-    if answer is not None and answer["bytes"] > schemas.MAX_ANSWER_BYTES:
-        return "journal-record-invalid"
-    patch: dict[str, Any] = {}
-    if isinstance(record.get("delivery"), dict):
-        patch["delivery"] = {
-            key: str(value)[:200] for key in (
-                "messageId", "agentStatusAtInject", "injectedAt", "insertedAt", "claimedAt",
-                "deliveredAt", "observedAt", "observedAgentStatus")
-            if (value := record["delivery"].get(key)) not in (None, "")
-        }
-    if answer is not None:
-        patch["answer"] = {**answer, "source": actor}
-    reason = None
-    if state == "answered" and answer is None:
-        patch["state"] = "delivered"
-        reason = make_reason("inquiry-answer-empty")
-    else:
-        patch["state"] = state
-        if state == "unavailable":
-            reason = make_reason("inquiry-root-turn-ended")
-    store._message_update(task_id, inquiry_id, actor=actor, reason=reason, **patch)
-    return None
 
 
 def _activity_metadata(value: Any) -> list[dict]:

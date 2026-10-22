@@ -12,13 +12,13 @@ const languages = [
   {
     locale: "zh-CN", refresh: "重新读取", turn: (n: number) => `回合 ${n}`, delegate: "委派", acceptance: "验收",
     running: "进行中", stuck: "可能卡住", overdue: "已超过预期", waitingHost: "等待 Host", failed: "失败", mode: "快速",
-    answered: "已答复", unavailable: "无法送达", delivered: "已送达，等待答复", conclusion: "Host 的结论", notCounted: "不计入验收",
+    answered: "已答复", unavailable: "问询已结束", delivered: "已送达，等待答复", conclusion: "Host 的结论", notCounted: "不计入验收",
     integration: "整合", reported: /上报 \d+ 分钟前/, handoff: "换手", unsure: "结束未确认", helperDone: "已完成", ask: "上一轮停下了吗？",
   },
   {
     locale: "en-US", refresh: "Read again", turn: (n: number) => `Turn ${n}`, delegate: "Delegate", acceptance: "Acceptance",
     running: "Running", stuck: "Possibly stuck", overdue: "Overdue", waitingHost: "Waiting for Host", failed: "Failed", mode: "Fast",
-    answered: "Answered", unavailable: "Could not be delivered", delivered: "Delivered, awaiting answer", conclusion: "Host's conclusion", notCounted: "not counted as accepted",
+    answered: "Answered", unavailable: "Unavailable", delivered: "Delivered, awaiting answer", conclusion: "Host's conclusion", notCounted: "not counted as accepted",
     integration: "Integration", reported: /Reported \d+ min ago/, handoff: "Handoff", unsure: "Stop not confirmed", helperDone: "Done", ask: "上一轮停下了吗？",
   },
 ];

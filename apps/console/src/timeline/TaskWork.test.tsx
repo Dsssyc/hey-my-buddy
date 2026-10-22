@@ -538,7 +538,7 @@ it("assigns colours by the buddy's full identity and keeps them across a later p
 it("retains an opened inquiry's own readout after the pointer leaves", () => {
   const timeline = macroTaskTimelineFixture();
   const span = timeline.spans.find(span => span.kind === "execution")!;
-  span.inquiries = [{ inquiryId: "selected-question", createdAt: span.endAt!, author: "host-select", state: "answered" }];
+  span.inquiries = [{ inquiryId: "selected-question", createdAt: span.endAt!, state: "answered" }];
   const { props } = setup({ timeline });
   const mark = document.querySelector('[data-key="inquiry:selected-question"]')!;
   fireEvent.pointerEnter(mark);
@@ -547,7 +547,7 @@ it("retains an opened inquiry's own readout after the pointer leaves", () => {
   fireEvent.pointerLeave(mark);
   expect(props.onOpen).toHaveBeenCalledWith(span.runId, "inquiry:selected-question");
   expect(status()).toBe(hovered);
-  expect(status()).toContain("host-select");
+  expect(status()).toContain("已答复");
   expect(row(span.runId).className).toContain("bg-selected-row");
 });
 
@@ -555,14 +555,14 @@ it("resolves a selected inquiry inside its own micro task when another task uses
   const timeline = macroTaskTimelineFixture();
   const executions = timeline.spans.filter(span => span.kind === "execution");
   const first = executions[0]!, second = executions.find(span => span.runId !== first.runId)!;
-  for (const [span, author] of [[first, "first-host"], [second, "second-host"]] as const) {
-    span.inquiries = [{ inquiryId: "shared-question", createdAt: span.endAt!, author, state: "answered" }];
+  for (const [span, state] of [[first, "answered"], [second, "queued"]] as const) {
+    span.inquiries = [{ inquiryId: "shared-question", createdAt: span.endAt!, state }];
   }
   timeline.events = [];
   setup({ timeline });
   fireEvent.click(document.querySelector(`[data-slot=timeline-row][data-run-id="${second.runId}"] [data-key="inquiry:shared-question"]`)!);
-  expect(status()).toContain("second-host");
-  expect(status()).not.toContain("first-host");
+  expect(status()).toContain("排队");
+  expect(status()).not.toContain("已答复");
 });
 
 describe("one shared scroll area", () => {

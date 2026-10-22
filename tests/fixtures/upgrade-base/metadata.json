@@ -1,5 +1,5 @@
 {
-  "boundary": "Base BoardService operations and current store writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. No SQL stock writes. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+  "boundary": "Base BoardService operations and current store writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. The only SQL stock write seeds retired message recipient and attempts_count after the base operation. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
   "catalogSha256": "a8c23bc839691370939c3e35b3f91b4b7845f1460d93c5d618a05a521ef5fcfe",
   "dependencyMode": "base-frozen-uv-environment",
   "dependencyVersions": {
@@ -10,8 +10,8 @@
   },
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
-  "generationCommand": "python packaging/generate-upgrade-fixture.py --offline --work-dir tmp/upgrade-base-049-final --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "769f6ae5c8c726fe2149a9da8b8c20f4b10ec804fd82ef12f50647905470d116",
+  "generationCommand": "python packaging/generate-upgrade-fixture.py --offline --work-dir tmp/version-fixture/base-049-final --output-dir tests/fixtures/upgrade-base",
+  "generatorSha256": "5aafd7b4eb6fd6804d8fae25090548a2a60824fb46a649ead44119094574e43e",
   "loadedSourceModules": [
     "src/hey_my_buddy/blackboard/__init__.py",
     "src/hey_my_buddy/blackboard/catalog/__init__.py",
@@ -154,11 +154,17 @@
     "src/hey_my_buddy/protocol/usage.py",
     "src/hey_my_buddy/protocol/windows_process.py"
   ],
-  "operationsSha256": "8cef49e91c4ce36be2f832f356a6c007fb57ca0a6a75e4403a860bb37436e58c",
+  "operationsSha256": "2853e5e8c61683dbc945892935467d37f0bf69d9c69c696738838584b2bdab57",
   "pythonInterpreter": "<fixture-root>/base/.venv/bin/python",
   "pythonVersion": "3.14.5",
-  "resourcesSha256": "240ea5a0e39640410a688f6a7f45d9f8881cf45ea085beaf85a370c71a9e1d52",
+  "resourcesSha256": "d6a10d4fa8e5e63c1b19e50cc5c4df123963fd38a97f5317b385f6be8bcf02f8",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 27; baseline only after return",
+  "retiredMessageStock": {
+    "attemptsCount": 3,
+    "author": "cli",
+    "authorBoundary": "The base's sole messages INSERT in blackboard/store/store.py fixes author to cli; no base writer records a non-cli author.",
+    "recipient": "fixture-retired-recipient"
+  },
   "routerBuddyIds": [
     "codex:openai:fixture-alpha:high",
     "codex:openai:fixture-beta:high"
@@ -354,7 +360,7 @@
   },
   "sourceTree": "c053a3a7021bcb97be5d5ef173d38cfa9ec61c41",
   "sourceVersion": "0.49.0",
-  "sqlSha256": "2794b048b48e4627c0ed0cc24e634579b687efdb04d09e1819c2f8ca31bd29a8",
+  "sqlSha256": "c6cb0a8be05c7ed098d496c1ad106e15995d3569206e829b5cd1fa0447ea444e",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-00000000001b",
     "cancelled": "00000000-0000-0000-0000-000000000035",

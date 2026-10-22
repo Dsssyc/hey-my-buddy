@@ -118,7 +118,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
     } }),
     span("s-r2-e1", "r2", "execution", "2026-09-26T01:24:00Z", "2026-09-26T02:10:00Z",
       { turnIndex: 1, attemptId: "att-r2a", buddy: CODEX, shutdownConfirmed: true,
-        inquiries: [{ inquiryId: "inq-r2a", createdAt: "2026-09-26T01:50:00Z", author: "codex-desktop", state: "answered" }] }),
+        inquiries: [{ inquiryId: "inq-r2a", createdAt: "2026-09-26T01:50:00Z", state: "answered" }] }),
     span("s-r2-w", "r2", "host", "2026-09-26T02:10:00Z", "2026-09-26T03:00:00Z",
       { state: "approved", requestId: "req-schema", summary: "schema 版本号需与性能优化的合入顺序对齐" }),
     span("s-r2-e2", "r2", "execution", "2026-09-26T03:00:00Z", "2026-09-26T03:10:00Z",

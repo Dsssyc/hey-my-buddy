@@ -181,11 +181,11 @@ export type Inquiry = {
   inquiryId: string;
   attemptId: string | null;
   question: string;
-  author: string;
   createdAt: string;
   state: InquiryState;
   reason: Reason | null;
   note: string | null;
+  deliveryMode: "realtime" | "cooperative-checkpoint" | "unsupported" | null;
   deliveredAt: string | null;
   answer: { text: string; at: string | null; truncated: boolean } | null;
 };

@@ -209,7 +209,7 @@ class InquiryJournalRejection(InternalModel):
     """
 
     question_id: Identifier
-    reason: Literal["journal-task-mismatch", "journal-attempt-mismatch", "journal-attempt-unbound"]
+    reason: Literal["journal-task-mismatch", "journal-attempt-mismatch", "journal-attempt-unbound", "journal-record-invalid"]
 
 
 class LiveJournal(InternalModel):
@@ -304,6 +304,10 @@ def _record_facts(entry: dict) -> dict:
     # there is an answer. A bare answer string has no supported source form.
     tool_source = entry if answer is None else source
     text = source.get("text")
+    delivery = dict(entry["delivery"]) if isinstance(entry.get("delivery"), dict) else {}
+    for key in ("deliveredAt", "via", "toolCallId", "nativeCorrelation"):
+        if entry.get(key) is not None:
+            delivery[key] = entry[key]
     facts: dict[str, Any] = {
         "answer": text if isinstance(text, str) and text else None,
         "bytes": _bounded_bytes(source.get("bytes")),
@@ -311,7 +315,7 @@ def _record_facts(entry: dict) -> dict:
         "tool_call_id": _bounded_word(tool_source.get("toolCallId")),
         "at": _bounded_word(source.get("at")),
         "truncated": source.get("truncated") if isinstance(source.get("truncated"), bool) else None,
-        "delivery": entry.get("delivery") if isinstance(entry.get("delivery"), dict) else None,
+        "delivery": delivery or None,
     }
     return facts
 
@@ -343,6 +347,8 @@ def _journal_states(entries: Any) -> tuple[InquiryState, ...]:
         for key, value in states[question_id].items():
             if key != "status" and merged.get(key) is None:
                 merged[key] = value
+        if states[question_id].get("delivery") and merged.get("delivery"):
+            merged["delivery"] = {**states[question_id]["delivery"], **merged["delivery"]}
         states[question_id] = merged
     if len(states) > MAX_INQUIRIES_PER_RUN:
         raise fail("the inquiry journal carries more than "

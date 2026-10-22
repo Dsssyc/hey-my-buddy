@@ -14,6 +14,7 @@ from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.blackboard.store import upgrade as schema_upgrade
 from hey_my_buddy.install import upgrade
 
 
@@ -30,7 +31,8 @@ class UpgradeCutoverTests(BoardTestCase):
         shutil.copytree(old_backup, self.retained_archive)
         self.archive_bytes = {path.relative_to(self.retained_archive): path.read_bytes()
                               for path in self.retained_archive.rglob("*") if path.is_file()}
-        self.assertEqual(backup.verify(self.retained_archive)["schema"], SCHEMA_VERSION)
+        self.assertEqual(backup.verify(self.retained_archive)["schema"], upgrade.UPGRADE_BASE_SCHEMA)
+        schema_upgrade.migrate_schema(self.state)
         self.evidence = self.state / "attempts" / "fixture-run" / "fixture-attempt" / "result.json"
         self.evidence.parent.mkdir(parents=True, exist_ok=True)
         self.evidence.write_text('{"retained":"evidence"}', encoding="utf-8", newline="\n")
@@ -134,6 +136,25 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], SCHEMA_VERSION)
         self.assert_history_preserved()
         self.assertEqual(self.started_runtimes, [first, second])
+
+    def test_schema_27_cutover_migrates_after_archiving_the_old_board(self):
+        upgrade.restore(self.state, self.retained_archive)
+        before = upgrade.idle_snapshot(self.state)
+        self.assertEqual(before['schema'], upgrade.UPGRADE_BASE_SCHEMA)
+        target = self.runtime_root / ("b" * 32)
+        result = self.cutover(self.previous, target)
+        self.assertTrue(result['upgraded'], result)
+        self.assertEqual(result['backup']['schema'], upgrade.UPGRADE_BASE_SCHEMA)
+        self.assertEqual(result['verification']['schemaVersion'], SCHEMA_VERSION)
+        with sqlite3.connect(self.state / 'board.sqlite3') as connection:
+            self.assertEqual(connection.execute(
+                "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
+            columns = {row[1] for row in connection.execute('PRAGMA table_info(messages)')}
+            self.assertFalse({'author', 'recipient', 'attempts_count'} & columns)
+            self.assertTrue({'author_role', 'author_id'} <= columns)
+            self.assertEqual(connection.execute('SELECT author_role,author_id FROM messages').fetchone(),
+                             (None, None))
+        self.assertEqual(backup.verify(Path(result['backup']['path']))['schema'], upgrade.UPGRADE_BASE_SCHEMA)
 
     def test_failed_new_runtime_returns_to_previous_runtime_with_history(self):
         target = self.runtime_root / ("b" * 32)

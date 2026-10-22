@@ -10,12 +10,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import stat
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 from ... import locking
+from ...protocol.inquiry_journal import (INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BYTES,
+                                         read_inquiry_journal, read_shared_snapshot)
 from ...errors import BoardError
 from ...json_codec import canonical_json
 from ..roles.turn_io import private_json
@@ -27,15 +28,11 @@ from .live import (
     _journal_states,
 )
 from .c_two_live import CTwoLiveEndpoint
-from .run_contract import RunIdentity
 from .session_receipts import (
-    INQUIRY_JOURNAL_VERSION,
     MAX_ANSWER_BYTES,
     MAX_INQUIRIES,
     MAX_INQUIRY_ID_BYTES,
-    MAX_JOURNAL_BYTES,
     MAX_QUESTION_BYTES,
-    read_shared_snapshot,
 )
 
 #: States a checkpoint may deliver and an answer may act on.
@@ -560,103 +557,9 @@ def _observation_view(value: dict) -> dict:
     return view
 
 
-def _journal_rejection_reason(record: dict, bound: dict) -> str:
-    for key, reason in (("taskId", "journal-task-mismatch"),
-                        ("attemptId", "journal-attempt-mismatch")):
-        value = record.get(key)
-        if value in (None, ""):
-            continue
-        if not isinstance(value, str) or value != bound[key]:
-            return reason
-    return "journal-attempt-unbound"
-
-
-def read_inquiry_journal(identity: RunIdentity | dict, journal_path: str | Path | None) -> dict:
-    """The journal as one availability fact over the shared-locked snapshot read.
-
-    The availability reasons follow the direct reader's own semantics,
-    decided by a minimal state check beside the shared-locked read: no
-    path, not written (the state check itself fails), unreadable (the state
-    check passed but the locked open did not), actually over the byte cap,
-    and — a real, readable file — empty with zero entries. ``entries`` is
-    the reader's own deduplicated per-question count over every
-    well-formed record, rejected ones included.
-
-    Each question's fact follows its final effective record, the same
-    last-record-per-id rule the direct reader applies: a latest legal
-    record clears the id's older rejection and contributes its bound
-    records (their source continuity intact), a latest foreign record
-    contributes exactly one rejection with its own reason — never an
-    accumulation of every historical refusal, and never an assumption that
-    the last write was legal.
-    """
-    if not journal_path:
-        return {"available": False, "reason": "no-journal-path", "entries": 0,
-                "records": [], "rejections": []}
-    try:
-        info = os.stat(journal_path)
-    except OSError:
-        return {"available": False, "reason": "journal-not-written", "entries": 0,
-                "records": [], "rejections": []}
-    if not stat.S_ISREG(info.st_mode):
-        return {"available": False, "reason": "journal-unreadable", "entries": 0,
-                "records": [], "rejections": []}
-    if info.st_size > MAX_JOURNAL_BYTES:
-        return {"available": False, "reason": "journal-exceeds-limit", "entries": 0,
-                "records": [], "rejections": []}
-    raw = read_shared_snapshot(journal_path, MAX_JOURNAL_BYTES)
-    if raw is None:
-        # The state check passed and the locked open still failed: the
-        # direct reader called this unreadable, not missing.
-        return {"available": False, "reason": "journal-unreadable", "entries": 0,
-                "records": [], "rejections": []}
-    if len(raw) > MAX_JOURNAL_BYTES:
-        return {"available": False, "reason": "journal-exceeds-limit", "entries": 0,
-                "records": [], "rejections": []}
-    bound = (identity if isinstance(identity, dict) else
-             {"taskId": identity.task_id, "attemptId": identity.attempt_id,
-              "generation": identity.generation, "turnId": identity.turn_id})
-    bound_records: dict[str, list[dict]] = {}
-    rejection: dict[str, str] = {}
-    for line in raw.decode("utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except ValueError:
-            continue  # a torn line is ignored, never fatal
-        if not isinstance(record, dict):
-            continue
-        question_id = record.get("inquiryId")
-        if not isinstance(question_id, str) or not question_id:
-            continue
-        if record.get("version") != INQUIRY_JOURNAL_VERSION or any(
-                key not in record or record[key] != bound[key]
-                for key in ("taskId", "attemptId", "generation", "turnId")):
-            rejection[question_id] = _journal_rejection_reason(record, bound)
-            continue
-        # This legal record is the id's latest fact: it clears any older
-        # rejection and keeps the id's valid-record source continuity.
-        bound_records.setdefault(question_id, []).append(record)
-        rejection.pop(question_id, None)
-    # The final effective record per id decides, exactly like the direct
-    # reader's last-record rule: an id whose latest record was foreign
-    # contributes its one rejection and none of its earlier records.
-    records = [record for question_id, question_records in bound_records.items()
-               if question_id not in rejection
-               for record in question_records]
-    rejections = [{"questionId": question_id, "reason": rejection[question_id]}
-                  for question_id in rejection]
-    return {"available": True, "reason": None,
-            "entries": len(bound_records.keys() | rejection.keys()),
-            "records": records, "rejections": rejections}
-
-
-
 def _owner_response(ok: bool, *, value: dict | None = None, error: str | None = None) -> dict:
     """Local transition result; this is never a wire envelope."""
     return {"ok": ok, **({"value": value} if ok else {"error": error or "internal"})}
 
 
-__all__ = ["ANSWERABLE_STATES", "InquiryBridge", "read_inquiry_journal"]
+__all__ = ["ANSWERABLE_STATES", "InquiryBridge"]
