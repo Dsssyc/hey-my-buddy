@@ -109,7 +109,7 @@ def _private_copy(source: Path, target: Path) -> None:
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source changed to a linked or special file', path=str(source))
     if _linked_component(target):
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup destination cannot be linked', path=str(target))
-    target.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    private_dirs.ensure_private_dir(target.parent)
     with _open(source, 'rb') as src, _open(target, 'xb') as dst:
         shutil.copyfileobj(src, dst)
         dst.flush()
@@ -389,7 +389,7 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
         raise BoardError('BACKUP_INVALID', 'Exact stopped-board archive requires a checkpointed WAL')
     root = state / 'backups'
     incoming, current, previous, journal = _backup_paths(root)
-    root.mkdir(mode=0o700, exist_ok=True)
+    private_dirs.ensure_private_dir(root)
     os.chmod(root, 0o700)
     lock = _open_fd(root / '.lock', os.O_CREAT | os.O_RDWR)
     try:
@@ -402,7 +402,7 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
         # An unpublished candidate can be removed after recovery.
         if incoming.exists():
             shutil.rmtree(incoming)
-        incoming.mkdir(mode=0o700)
+        private_dirs.ensure_private_dir(incoming)
         snapshot = incoming / 'board.sqlite3'
         # The coordinator owns both writer locks and has detached every owner.
         # Copy the stopped database verbatim so the archive preserves its bytes.

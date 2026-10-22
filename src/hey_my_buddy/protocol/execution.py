@@ -30,7 +30,7 @@ BUDGET = "execution-budget.json"
 
 def fsync_json(path: Path, value: dict, *, immutable: bool = False) -> None:
     """Serialize the execution envelope unchanged and publish complete bytes."""
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ensure_private_dir(path.parent)
     publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"), immutable=immutable)
 
 
@@ -57,7 +57,7 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
     handle = None
     try:
         ensure_private_dir(directory)
-        evidence.mkdir(mode=0o700, parents=True, exist_ok=True)
+        ensure_private_dir(evidence)
         fsync_json(evidence / "spawn.intent", binding)
         startup = directory / STARTUP
         fsync_json(startup, {"claim": claim, "stateDir": str(state_dir), "nonce": nonce,

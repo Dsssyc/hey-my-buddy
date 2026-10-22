@@ -231,8 +231,8 @@ def _control_path(run_id: str, generation: int, state_dir: Path) -> Path:
     if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
         raise BoardError("INVALID_ARGUMENT", "ownerGeneration must be a positive integer")
     directory = state_dir / "controls"
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory.chmod(0o700)
+    from ..private_dirs import ensure_private_dir
+    ensure_private_dir(directory)
     return control_file_path(state_dir, run_id, generation)
 
 
@@ -268,26 +268,18 @@ def _read_control(path_value: str) -> dict:
     if not isinstance(path_value, str) or not path_value.strip():
         raise BoardError("INVALID_ARGUMENT", "controlFile must be a nonempty path string")
     path = Path(path_value).expanduser()
+    from ..private_dirs import open_regular_fd
     try:
-        info = os.lstat(path)
+        fd = open_regular_fd(path, os.O_RDONLY)
     except FileNotFoundError as exc:
         raise BoardError("INVALID_ARGUMENT", "controlFile does not exist") from exc
-    except OSError as exc:
-        raise BoardError("INSECURE_CONTROL_FILE", "The control file could not be inspected") from exc
-    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-        raise BoardError("INSECURE_CONTROL_FILE", "The control file must be a regular file, not a symlink")
-    if os.name != 'nt' and info.st_uid != os.geteuid():
-        raise BoardError("INSECURE_CONTROL_FILE", "The control file must be owned by the current user")
-    if os.name != 'nt' and stat.S_IMODE(info.st_mode) != 0o600:
-        raise BoardError("INSECURE_CONTROL_FILE", "The control file must have mode 0600")
-    try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    except OSError as exc:
+    except (OSError, BoardError) as exc:
         raise BoardError("INSECURE_CONTROL_FILE", "The control file could not be opened safely") from exc
     try:
-        opened = os.fstat(fd)
-        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino) or (os.name != 'nt' and opened.st_uid != os.geteuid()):
-            raise BoardError("INSECURE_CONTROL_FILE", "The control file changed while it was being opened")
+        if os.name != 'nt':
+            info = os.fstat(fd)
+            if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600:
+                raise BoardError('INSECURE_CONTROL_FILE', 'The control file must be owned by the current user with mode 0600')
         raw = b""
         while len(raw) <= MAX_CONTROL_FILE_BYTES:
             chunk = os.read(fd, 65536)
@@ -352,8 +344,8 @@ def _submission_token(request_id: object, params: dict, state_dir: Path) -> str:
     if not isinstance(request_id, str) or not request_id:
         raise BoardError("INVALID_ARGUMENT", "submit requires requestId before a submission token")
     directory = state_dir / "submissions"
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    directory.chmod(0o700)
+    from ..private_dirs import ensure_private_dir
+    ensure_private_dir(directory)
     path = submission_file_path(state_dir, request_id)
     token = secrets.token_hex(32)
     payload = json.dumps({"requestId": request_id, "submissionToken": token}, sort_keys=True).encode("utf-8")
@@ -368,7 +360,8 @@ def _submission_token(request_id: object, params: dict, state_dir: Path) -> str:
 
 def _read_submission_token(path: Path, request_id: str) -> str:
     try:
-        saved = json.loads(path.read_text(encoding="utf-8"))
+        from ..install.launcher import read_private
+        saved = read_private(path)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         raise BoardError(
             "INVALID_ARGUMENT", "The saved submission token is unreadable; refusing to overwrite it"
@@ -481,6 +474,8 @@ def _help_command(arguments: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DOCUMENT) -> int:
+    from ..windows_files import initialize_process_owner
+    initialize_process_owner()
     # The CLI emits UTF-8 JSON through pipes as well as the native console.
     # A caller-supplied in-memory text stream has no byte encoding to configure.
     for stream in (sys.stdout, sys.stderr):

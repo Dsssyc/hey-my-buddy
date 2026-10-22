@@ -6,12 +6,12 @@ Service processes are started from the explicit allowlist below, never from the
 whole Host session.
 """
 from __future__ import annotations
+from contextlib import contextmanager, nullcontext
 import io
 import json
 import os
 from pathlib import Path
 import re
-import stat
 import sys
 import tempfile
 
@@ -129,10 +129,9 @@ def take_agent_credential_document() -> dict | None:
         fd = int(descriptor)
         if fd < 3:
             raise BoardError('UNAUTHORIZED', 'The attempt credential descriptor is invalid')
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or (hasattr(os, 'getuid') and info.st_uid != os.getuid()) or (os.name != 'nt' and info.st_mode & 0o077):
-            raise BoardError('UNAUTHORIZED', 'The attempt credential descriptor is not private')
+        from hey_my_buddy.private_dirs import validate_private_fd
         with os.fdopen(fd, 'rb') as stream:
+            validate_private_fd(stream.fileno())
             raw = stream.read(65537)
         value = json.loads(raw)
     except (OSError, ValueError, OverflowError) as error:
@@ -146,14 +145,14 @@ def credential_state_dir(value: dict | None = None) -> Path | None:
 
 def read_private(path: Path) -> dict | None:
     from hey_my_buddy.errors import BoardError
+    from hey_my_buddy.private_dirs import open_regular_fd, validate_private_fd
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
+        fd = open_regular_fd(path, os.O_RDONLY)
     except FileNotFoundError:
         return None
     try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or (hasattr(os, 'getuid') and info.st_uid != os.getuid()) or (os.name != 'nt' and info.st_mode & 0o077):
-            raise BoardError('LAUNCH_SETTINGS_INVALID', 'Runtime selection metadata must be owner-private')
+        if os.name != 'nt':
+            validate_private_fd(fd)
         data = json.loads(os.read(fd, 65537))
         if not isinstance(data, dict):
             raise ValueError('Expected an object')
@@ -216,15 +215,11 @@ def _runtime_ready(target: Path) -> bool:
     if runtime is not None:
         return runtime.is_ready(target)
     try:
-        marker = read_private(target / 'READY.json')
-    except Exception:
-        # The runtime marker need not use active-pointer permissions.
-        try:
-            if not stat.S_ISREG(os.lstat(target / 'READY.json').st_mode):
-                return False
-            marker = json.loads((target / 'READY.json').read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return False
+        from hey_my_buddy.private_dirs import open_regular_fd
+        with os.fdopen(open_regular_fd(target / 'READY.json', os.O_RDONLY), 'rb') as stream:
+            marker = json.load(stream)
+    except (OSError, ValueError):
+        return False
     return isinstance(marker, dict) and marker.get('state') == 'READY' and marker.get('contentId') == target.name and _runtime_python(target).is_file()
 
 
@@ -322,12 +317,42 @@ def bootstrap_contract_version() -> str:
     return match.group(1) if match else 'unknown'
 
 
+@contextmanager
+def _inherited_credential(fd: int):
+    # dup creates a CRT entry that the Windows venv launcher can carry onward;
+    # setting the temporary file's native handle inheritable alone is insufficient.
+    descriptor = os.dup(fd) if os.name == 'nt' else fd
+    try:
+        os.set_inheritable(descriptor, True)
+        yield descriptor
+    finally:
+        if os.name == 'nt':
+            os.close(descriptor)
+
+
+def _exec_runtime(python: str, arguments: list[str], environment: dict[str, str]) -> None:
+    if os.name == 'nt':
+        # Windows CPython 3.12.13 crashed in execve with the inherited environment
+        # in the stable-runtime probe. The CRT spawn path inherits this process's
+        # environment and fd table. P_WAIT preserves the command's exit status;
+        # each argument needs Win32 command-line quoting before the CRT joins it.
+        import subprocess
+        os.environ.clear()
+        os.environ.update(environment)
+        arguments = [subprocess.list2cmdline([argument]) for argument in arguments]
+        raise SystemExit(os.spawnv(os.P_WAIT, python, arguments))
+    else:
+        os.execve(python, arguments, environment)
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
             stream.reconfigure(encoding="utf-8", newline="\n")
     args = list(sys.argv[1:] if argv is None else argv)
     try:
+        from hey_my_buddy.windows_files import initialize_process_owner
+        initialize_process_owner()
         clean_host_environment()
         from hey_my_buddy.home import default_state_dir
         credential = agent_credential_document()
@@ -347,13 +372,17 @@ def main(argv: list[str] | None = None) -> int:
                 if credential is not None:
                     # The source file was read once. Transfer its validated contents
                     # through an anonymous private descriptor across exec, never argv/env.
-                    with tempfile.TemporaryFile(mode='w+b') as transfer:
+                    from hey_my_buddy.windows_files import parent as private_parent
+                    from hey_my_buddy.private_dirs import validate_private_fd
+                    with (private_parent(state / '.credential-transfer') if os.name == 'nt' else nullcontext()), \
+                            tempfile.TemporaryFile(mode='w+b', dir=state) as transfer:
+                        validate_private_fd(transfer.fileno())
                         transfer.write(json.dumps(credential).encode('utf-8'))
                         transfer.seek(0)
-                        os.set_inheritable(transfer.fileno(), True)
-                        environment['HMB_AGENT_CREDENTIAL_FD'] = str(transfer.fileno())
-                        os.execve(python, [python, '-P', '-m', entry_modules(target)['cli'], *args], environment)
-                os.execve(python, [python, '-P', '-m', entry_modules(target)['cli'], *args], environment)
+                        with _inherited_credential(transfer.fileno()) as descriptor:
+                            environment['HMB_AGENT_CREDENTIAL_FD'] = str(descriptor)
+                            _exec_runtime(python, [python, '-P', '-m', entry_modules(target)['cli'], *args], environment)
+                _exec_runtime(python, [python, '-P', '-m', entry_modules(target)['cli'], *args], environment)
         from hey_my_buddy.cli.main import main as cli_main
         return cli_main(args, credential_document=credential)
     except Exception as error:

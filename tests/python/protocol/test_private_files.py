@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import queue
+import site
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,16 @@ def intercept_unlink(path, *args, **kwargs):
     finally:
         if str(path).endswith(".tmp"): hold("after_cleanup")
 
+if os.name == "nt":
+    from hey_my_buddy import windows_files
+    real_windows_open = windows_files.WindowsFileAPI._open
+    def intercept_windows_open(self, path, access, disposition, **kwargs):
+        creating = disposition == windows_files.CREATE_NEW
+        if creating: hold("before_create")
+        result = real_windows_open(self, path, access, disposition, **kwargs)
+        if creating: hold("after_create")
+        return result
+    windows_files.WindowsFileAPI._open = intercept_windows_open
 os.open, os.fdopen = intercept_open, intercept_fdopen
 os.fsync, os.replace = intercept_fsync, intercept_replace
 os.link, os.unlink = intercept_link, intercept_unlink
@@ -133,10 +144,10 @@ def _spawn(path: Path, content_path: Path, stage: str, mode: str) -> subprocess.
         "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
         "HMB_AGENT_CREDENTIAL_FILE", "HMB_AGENT_CREDENTIAL_FD", "VIRTUAL_ENV",
         "UV_PROJECT_ENVIRONMENT"}}
-    # Windows venv python.exe redirects to another process. The stdlib-only
-    # writer must run directly so killing this handle stops the writer itself;
-    # the check runner's PYTHONPATH supplies this checkout's private_files.
-    return subprocess.Popen([sys._base_executable, "-c", WRITER, str(path), stage, mode,
+    # Run the actual writer directly, while loading the same locked dependencies
+    # as this test environment (including pywin32's .pth bootstrap on Windows).
+    bootstrap = "import site; " + "; ".join(f"site.addsitedir({value!r})" for value in site.getsitepackages()) + "\n"
+    return subprocess.Popen([sys._base_executable, "-c", bootstrap + WRITER, str(path), stage, mode,
                              str(content_path)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, env=environment)
 
@@ -331,8 +342,18 @@ sys.stdin.buffer.read(1)
                     raise OSError("injected writer fsync failure")
                 return real_fsync(descriptor)
 
-            with mock.patch.object(os, "open", side_effect=capture_open), \
-                 mock.patch.object(os, "fsync", side_effect=fail_writer_sync):
+            if os.name == 'nt':
+                from hey_my_buddy.windows_files import WindowsFileAPI
+                real_fd = WindowsFileAPI.fd
+                def capture_fd(api, handle, flags):
+                    descriptor = real_fd(api, handle, flags)
+                    if flags & os.O_WRONLY:
+                        writable.add(descriptor)
+                    return descriptor
+                opener = mock.patch.object(WindowsFileAPI, 'fd', capture_fd)
+            else:
+                opener = mock.patch.object(os, "open", side_effect=capture_open)
+            with opener, mock.patch.object(os, "fsync", side_effect=fail_writer_sync):
                 with self.assertRaisesRegex(OSError, "writer fsync failure"):
                     private_files.publish_bytes(path, NEW)
             self.assertEqual(len(synced), 1)

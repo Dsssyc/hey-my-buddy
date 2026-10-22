@@ -74,6 +74,22 @@ def publish_bytes(path: Path, content: bytes, *, immutable: bool = False,
     existing path policy supply its opener, operations or POSIX directory fd.
     """
     path = Path(path)
+    if os.name == "nt" and operations is None and directory_fd is None:
+        from . import windows_files
+        with windows_files.parent(path) as (api, path):
+            try:
+                handle = api._open(path, windows_files.READ_CONTROL | windows_files.FILE_READ_ATTRIBUTES,
+                                   windows_files.OPEN_EXISTING, share_delete=True)
+            except FileNotFoundError:
+                pass
+            else:
+                try:
+                    windows_files._check(api, handle, path, directory=False, private=True)
+                finally:
+                    api.close(handle)
+            return publish_bytes(path, content, immutable=immutable,
+                                 operations=_PathOperations(None, None,
+                                     lambda target, flags, mode: windows_files.open_held_regular_fd(api, target, flags)))
     operations = operations if operations is not None else _PathOperations(directory_fd, validate, open_file)
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     descriptor = operations.open(temporary)

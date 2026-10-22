@@ -334,7 +334,7 @@ class Execution:
         spec = task["spec"]
         from ...private_dirs import ensure_private_dir
         directory = ensure_private_dir(self.directory)
-        self.evidence_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        ensure_private_dir(self.evidence_directory)
         pending = read_receipt(directory)
         if pending is not None:
             return pending
@@ -798,6 +798,8 @@ class _ExecutionControl(threading.Thread):
 
 
 def main():
+    from ...windows_files import initialize_process_owner
+    initialize_process_owner()
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
             stream.reconfigure(encoding="utf-8", newline="\n")
@@ -805,7 +807,9 @@ def main():
     parser.add_argument("--startup", required=True)
     args = parser.parse_args()
     from ..roles.turn_io import guard_private_path
-    material = decode_strict_json(guard_private_path(Path(args.startup)).read_bytes())
+    from ...private_dirs import open_regular_fd
+    with os.fdopen(open_regular_fd(Path(args.startup), os.O_RDONLY), 'rb') as stream:
+        material = decode_strict_json(stream.read())
     execution = Execution(material["claim"], Path(material["stateDir"]), material["nonce"],
                           session_record_path=material["sessionRecordPath"],
                           log=lambda message: print(message, flush=True))

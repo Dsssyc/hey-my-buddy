@@ -67,6 +67,9 @@ def _guard_parents(path: Path) -> None:
 def open_regular_fd(path: Path, flags: int, mode: int = 0o600) -> int:
     """Open a guarded ordinary file, pinning real ancestors on POSIX."""
     path = _absolute(path)
+    if os.name == 'nt':
+        from .windows_files import open_regular_fd as windows_open
+        return windows_open(path, flags, mode)
     _guard_parents(path)
     if '..' in path.parts or flags & os.O_TRUNC and not flags & os.O_EXCL:
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Unsafe ordinary-file open', path=str(path))
@@ -146,8 +149,20 @@ def context_root(context, adapter: str | None = None) -> Path:
 
 def ensure_private_dir(path: Path) -> Path:
     path = _absolute(path)
+    if os.name == 'nt':
+        from .windows_files import ensure_directory
+        return ensure_directory(path)
     _guard_parents(path)
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    missing = []
+    current = path
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
     _guard_parents(path)
     if not path.is_dir():
         raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path is not a directory', path=str(path))
@@ -256,3 +271,32 @@ def cleanup_attempt_credentials(state: Path, adapter: str, task_id: str, attempt
 
     inspect(root)
     return {'count': len(removed), 'paths': removed[:20]}
+
+
+def validate_private_fd(fd: int) -> None:
+    """Validate an already opened file without reopening its path."""
+    if os.name == 'nt':
+        import msvcrt
+        from .windows_files import validate_private_handle, WindowsFileAPI
+        api = WindowsFileAPI()
+        handle = msvcrt.get_osfhandle(fd)
+        attributes, _ = api.info(handle)
+        if attributes & (0x10 | 0x400) or api.file_type(handle) != 1:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'Private descriptor is not an ordinary file')
+        validate_private_handle(handle)
+    else:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'File must be owner-private')
+
+
+def validate_private_dir(path: Path) -> None:
+    path = _absolute(path)
+    if os.name == 'nt':
+        from .windows_files import validate_directory
+        validate_directory(path)
+    else:
+        _guard_parents(path)
+        info = path.stat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'Directory must be owner-private', path=str(path))

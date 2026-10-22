@@ -120,19 +120,10 @@ def encode_message(value: Any) -> str:
 
 def _private_directory(directory: Path) -> bool:
     """True only for a real directory this user owns with no group/other access."""
-    if private_dirs.linked_component(directory) is not None:
-        return False
     try:
-        info = os.lstat(directory)
-        if os.name == 'nt':
-            return stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode)
-        return (
-            stat.S_ISDIR(info.st_mode)
-            and not stat.S_ISLNK(info.st_mode)
-            and info.st_uid == os.geteuid()
-            and not info.st_mode & 0o077
-        )
-    except OSError:
+        private_dirs.validate_private_dir(directory)
+        return True
+    except (OSError, BoardError):
         return False
 
 
@@ -159,7 +150,7 @@ def _private_primary_group(gid: int) -> bool:
 def _trusted_ancestors(directory: Path) -> bool:
     """True when no ancestor above the state directory can be swapped by another user."""
     if os.name == 'nt':
-        return True  # Windows ACL ownership needs a native acceptance probe.
+        return True  # _private_directory pins and checks the Windows ancestors.
     try:
         current = directory.parent
         while True:
@@ -188,14 +179,13 @@ def _trusted_directory(directory: Path) -> bool:
 
 def _read_endpoint(directory: Path) -> dict | None:
     """Read control.json without following links and without touching permissions."""
-    if not _private_directory(directory) or not _trusted_ancestors(directory):
+    if os.name != 'nt' and (not _private_directory(directory) or not _trusted_ancestors(directory)):
         return None
     fd = -1
     try:
-        fd = os.open(directory / "control.json", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode) or (os.name != 'nt' and (info.st_uid != os.geteuid() or info.st_mode & 0o077)):
-            return None
+        fd = private_dirs.open_regular_fd(directory / "control.json", os.O_RDONLY)
+        if os.name != 'nt':
+            private_dirs.validate_private_fd(fd)
         value = json.loads(os.read(fd, MAX_MESSAGE_BYTES + 1))
         if (
             not isinstance(value, dict)
@@ -206,7 +196,7 @@ def _read_endpoint(directory: Path) -> dict | None:
         ):
             return None
         return value
-    except (OSError, ValueError):
+    except (OSError, ValueError, BoardError):
         return None
     finally:
         if fd >= 0:
@@ -316,12 +306,11 @@ def _cold_start_preflight(directory: Path) -> None:
     address = None
     try:
         rpc_config._validate_path(directory)
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        directory.chmod(0o700)
+        private_dirs.ensure_private_dir(directory)
         rpc_config.configure_local_endpoint(directory)
         if not _trusted_directory(directory):
             raise OSError('State directory is not owner-private')
-        fd = os.open(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        fd = private_dirs.open_regular_fd(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         if os.name == 'nt':
             listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -383,7 +372,7 @@ def _retire_stale_endpoint(directory: Path) -> None:
     locks = []
     try:
         for name in ('control-daemon.lock', 'board-owner.lock'):
-            fd = os.open(directory / name, os.O_CREAT | os.O_RDWR, 0o600)
+            fd = private_dirs.open_regular_fd(directory / name, os.O_CREAT | os.O_RDWR, 0o600)
             locks.append(fd)
             try:
                 locking.lock(fd, blocking=False)
@@ -407,7 +396,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
         # An installer holds this existing lock until verification and recovery
         # finish. Do not probe writes or IPC while its journal is present.
         try:
-            lock_fd = os.open(directory / "control-start.lock", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            lock_fd = private_dirs.open_regular_fd(directory / "control-start.lock", os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         except OSError:
             _refuse_upgrade_cold_start(directory)
             raise
@@ -419,7 +408,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
             # A wait may never cold-start a service: waiting on nothing would be a lie.
             raise ServiceError("SERVICE_UNAVAILABLE", "No board service is running in this state directory")
         _cold_start_preflight(directory)
-        lock_fd = os.open(directory / "control-start.lock", os.O_CREAT | os.O_RDWR, 0o600)
+        lock_fd = private_dirs.open_regular_fd(directory / "control-start.lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
         locking.lock(lock_fd)
         _refuse_upgrade_cold_start(directory)
@@ -452,7 +441,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
             env.pop("PYTHONPATH", None)
         if target["stable"]:
             env["HMB_RUNTIME"] = target["runtime"]["runtimeDir"]
-        log_fd = os.open(directory / "control.log", os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
+        log_fd = private_dirs.open_regular_fd(directory / "control.log", os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
             child = subprocess.Popen(
                 [target["python"], "-m", ENTRY_MODULES['hey_my_buddy']['daemon']],

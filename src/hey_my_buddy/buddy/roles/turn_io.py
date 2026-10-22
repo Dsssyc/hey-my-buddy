@@ -46,6 +46,9 @@ def private_json(path: Path, value: object, *, exclusive: bool = False) -> None:
 
 
 def _private_bytes(path: Path, raw: bytes, *, exclusive: bool = False) -> None:
+    if os.name == "nt":
+        publish_bytes(path, raw, immutable=exclusive)
+        return
     path = guard_private_path(path)
     try:
         metadata = path.lstat()

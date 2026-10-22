@@ -5,12 +5,14 @@ from dataclasses import dataclass, field
 import hashlib
 import hmac
 import json
+import os
 from pathlib import Path
 import secrets
 import time
 from typing import Callable
 
 from ..private_files import publish_bytes
+from ..private_dirs import open_regular_fd, validate_private_fd
 from ..errors import BoardError
 
 ENTRY_SECONDS = 10 * 60
@@ -44,10 +46,11 @@ class ConsoleSessions:
         self.entries: dict[str, float] = {}
         self.sessions: dict[str, BrowserSession] = {}
         if path is not None and path.exists():
-            if path.is_symlink() or path.stat().st_mode & 0o077:
-                raise BoardError("CONSOLE_SESSION_STORE", "Session file must be a private regular file")
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
+                with os.fdopen(open_regular_fd(path, os.O_RDONLY), "r", encoding="utf-8") as stream:
+                    if os.name != 'nt':
+                        validate_private_fd(stream.fileno())
+                    data = json.load(stream)
                 if data.get("version") != 1 or len(data["sessions"]) > MAX_SESSIONS:
                     raise ValueError("invalid session store")
                 for row in data["sessions"]:

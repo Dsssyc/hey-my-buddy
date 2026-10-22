@@ -238,7 +238,8 @@ def install(params: dict) -> dict:
             try:
                 claude = _link_claude(target)
                 created_link = claude["status"] == "linked"
-                state.mkdir(mode=0o700, parents=True, exist_ok=True)
+                from ..private_dirs import ensure_private_dir
+                ensure_private_dir(state)
                 write_runtime_hint(target, Path(installed['runtimeDir']))
                 write_active_runtime(state, Path(installed["runtimeDir"]))
             except Exception:
