@@ -396,7 +396,7 @@ def worker_request(control: dict, module):
             inquiry=inquiry, inquiry_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry"),
             validate_outcome=partial(validate_outcome, delegation_authority=delegation_authority),
             delegation_authority=delegation_authority,
-            native_stderr=str(Path(control["directory"]) / "native.stderr.log"))
+            native_stderr=str(invocation_root / "native-stderr.log"))
         prompt = worker_services.micro_task_prompt(
             task_text, turn_input, binding.completion_tool,
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool,

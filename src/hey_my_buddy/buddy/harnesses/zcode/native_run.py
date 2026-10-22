@@ -95,7 +95,7 @@ from .config import cli_command, launch, load_runtime_preferences, provider_acce
 from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import ReceiptError
 from ..c_two_live import CTwoLiveEndpoint
-from ....protocol.activity import ActivityPublisher
+from ....protocol.activity import ActivityPublisher, MAX_SESSION_ID
 from .protocol import (
     ActivityProjection,
     NATIVE_EVENT_TYPES,
@@ -844,6 +844,8 @@ def _checked_root_session(snapshot: dict, cwd: str, *, previous: str | None, mod
     if (not isinstance(session_id, str) or not session_id or session.get("parentSessionId")
             or require_interactive and session.get("sessionKind") not in (None, "interactive")):
         raise NativeError("wrong-native-session", "ZCode did not create or restore a root session")
+    if len(session_id) > MAX_SESSION_ID:
+        raise NativeError("invalid-protocol", "ZCode root session identity exceeds the activity bound")
     if mode == "native-session" and session_id != previous:
         raise NativeError("wrong-native-session", "ZCode resumed a different native session")
     if mode == "reconstructed-new-session" and session_id == previous:
@@ -1138,10 +1140,6 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                 if classified is not None:
                     state.quota_failure = {**classified, "source": "zcode/session-turn-failed",
                                            "observedAt": utc_now()}
-            # Retain optional usage after a native failure while the connection
-            # still accepts RPCs; errors from observers continue to propagate.
-            if outcome.attempt_usage is not None and spawn is not None and error.code not in ("cancelled", "timeout", "native-disconnected"):
-                outcome.attempt_usage.capture_final(spawn.connection)
             outcome.record = None
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
             state.status = "error"
@@ -1332,6 +1330,7 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
                                                      attention_path=mount.bridge.get("attentionPath"),
                                                      live=services.live)
         outcome.inquiry_bridge.attention = outcome.attention_recorder.requests
+        outcome.attention_recorder.on_record = outcome.inquiry_bridge.publish_attention
         outcome.inquiry_bridge.start()
         state.inquiry = outcome.inquiry_bridge.report()
 

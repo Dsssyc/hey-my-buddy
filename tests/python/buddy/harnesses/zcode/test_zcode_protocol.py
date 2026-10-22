@@ -21,7 +21,6 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     NativeRpcError,
     RootTurnEvidence,
     ZcodeAttemptUsage,
-    decode_json,
     decode_native_failure,
     verify_inquiry_receipt,
     verify_receipt,
@@ -745,7 +744,48 @@ class OptionalNativeMetadataTests(unittest.TestCase):
         usage.capture_final(connection)
         self.assertEqual(usage.message_usage()["nativeRecords"], 70)
         self.assertEqual(usage.message_usage()["completeness"], "complete")
-        self.assertEqual(connection.cursors, [None, "m-63", "m-69", "m-133"])
+        self.assertEqual(connection.cursors, [None, "m-63", "m-69", "m-69", "m-133", "m-139"])
+
+    def test_short_message_page_does_not_end_the_read(self):
+        class Connection:
+            deadline = time.monotonic() + 30
+
+            def __init__(self):
+                self.cursors = []
+
+            def call(self, method, params):
+                self.cursors.append(params.get("afterMessageId"))
+                pages = {None: ["m-0"], "m-0": ["m-1"], "m-1": []}
+                return {"messages": [{"info": {"sessionId": "root", "messageId": item}, "parts": []}
+                                     for item in pages[params.get("afterMessageId")]]}
+
+        connection = Connection()
+        usage = ZcodeAttemptUsage("root", resumed=False)
+        usage.capture_baseline(connection)
+        self.assertTrue(usage.baseline_ready)
+        self.assertFalse(usage.read_incomplete)
+        self.assertEqual(usage.baseline_ids, {"m-0", "m-1"})
+        self.assertEqual(connection.cursors, [None, "m-0", "m-1"])
+
+    def test_seen_message_cursor_marks_read_incomplete(self):
+        class Connection:
+            deadline = time.monotonic() + 30
+
+            def __init__(self):
+                self.cursors = []
+
+            def call(self, method, params):
+                after = params.get("afterMessageId")
+                self.cursors.append(after)
+                repeated = {None: "m-0", "m-0": "m-1", "m-1": "m-0"}[after]
+                return {"messages": [{"info": {"sessionId": "root", "messageId": repeated}, "parts": []}]}
+
+        connection = Connection()
+        usage = ZcodeAttemptUsage("root", resumed=False)
+        usage.capture_baseline(connection)
+        self.assertFalse(usage.baseline_ready)
+        self.assertTrue(usage.read_incomplete)
+        self.assertEqual(connection.cursors, [None, "m-0", "m-1"])
 
 
 class BuddyTests(unittest.TestCase):

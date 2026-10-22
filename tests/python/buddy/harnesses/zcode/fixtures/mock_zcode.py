@@ -464,6 +464,8 @@ def handle_message(message):
             requested_mode = params.get("mode", "build")
             plan_active = requested_mode == "plan"
             permission_mode = "build" if plan_active else requested_mode
+            if case == "oversized-session":
+                session_id = "s" * 257
         pending_create = request_id
         send({"id": "server-preferences", "method": "session/requestRuntimePreferences", "params": {"sessionId": session_id, "scope": "runtime-materialization"}})
         return

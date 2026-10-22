@@ -270,10 +270,11 @@ class ZcodeNativeRecordTests(unittest.TestCase):
 
     def test_new_root_messages_are_bound_by_the_pre_model_cursor(self):
         attempt = self.usage(resumed=True)
-        connection = ScriptedConnection([ZCODE_NATIVE["baselineMessages"], ZCODE_NATIVE["finalMessages"]])
+        connection = ScriptedConnection([ZCODE_NATIVE["baselineMessages"], {"messages": []},
+                                         ZCODE_NATIVE["finalMessages"], {"messages": []}])
         attempt.capture_baseline(connection)
         attempt.capture_final(connection)
-        self.assertEqual(connection.calls[1][1], {"sessionId": ZCODE_SESSION, "limit": 64,
+        self.assertEqual(connection.calls[2][1], {"sessionId": ZCODE_SESSION, "limit": 64,
                                                   "afterMessageId": "old-assistant-0001"})
         expected = ZCODE_NATIVE["expectedMessages"]
         token_usage = usage.normalize_token_usage(attempt.raw_usage())
@@ -335,14 +336,14 @@ class ZcodeNativeRecordTests(unittest.TestCase):
         lost = self.usage(resumed=True)
         combined = {"messages": [*ZCODE_NATIVE["baselineMessages"]["messages"],
                                  *ZCODE_NATIVE["finalMessages"]["messages"]]}
-        connection = ScriptedConnection([ZCODE_NATIVE["baselineMessages"], combined])
+        connection = ScriptedConnection([ZCODE_NATIVE["baselineMessages"], {"messages": []}, combined, {"messages": []}])
         lost.capture_baseline(connection)
         lost.capture_final(connection)
         self.assertIsNone(lost.message_usage())
 
     def test_a_resumed_session_without_a_cursor_is_refused(self):
         attempt = self.usage(resumed=True)
-        connection = ScriptedConnection([{"messages": []}, ZCODE_NATIVE["finalMessages"]])
+        connection = ScriptedConnection([{"messages": []}, ZCODE_NATIVE["finalMessages"], {"messages": []}])
         attempt.capture_baseline(connection)
         self.assertIsNone(attempt.baseline_last)
         attempt.capture_final(connection)
@@ -351,7 +352,7 @@ class ZcodeNativeRecordTests(unittest.TestCase):
 
     def test_child_work_marks_the_root_only_sum_partial(self):
         attempt = self.usage()
-        connection = ScriptedConnection([{"messages": []}, ZCODE_NATIVE["finalMessages"]])
+        connection = ScriptedConnection([{"messages": []}, ZCODE_NATIVE["finalMessages"], {"messages": []}])
         attempt.capture_baseline(connection)
         attempt.observe({"method": "session/event", "params": {
             "type": "tool.updated", "sessionId": ZCODE_SESSION, "turnId": ZCODE_TURN, "seq": 9,
@@ -367,7 +368,7 @@ class ZcodeNativeRecordTests(unittest.TestCase):
                                                                      "cache": {"read": 0}}},
              "parts": [{"type": "text", "text": "partial native record", "partId": "p", "messageId":
                         "new-assistant-broken", "sessionId": ZCODE_SESSION}]}]}
-        connection = ScriptedConnection([{"messages": []}, page])
+        connection = ScriptedConnection([{"messages": []}, page, {"messages": []}])
         attempt.capture_baseline(connection)
         attempt.capture_final(connection)
         self.assertIsNone(attempt.message_usage())
@@ -376,7 +377,7 @@ class ZcodeNativeRecordTests(unittest.TestCase):
 
     def test_reasoning_and_tool_parts_are_never_assistant_text(self):
         attempt = self.usage()
-        connection = ScriptedConnection([{"messages": []}, ZCODE_NATIVE["finalMessages"]])
+        connection = ScriptedConnection([{"messages": []}, ZCODE_NATIVE["finalMessages"], {"messages": []}])
         attempt.capture_baseline(connection)
         attempt.capture_final(connection)
         self.assertNotIn("reasoning", attempt.last_assistant_message["text"])
@@ -508,7 +509,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertEqual(outcome.result["tokenUsage"]["source"], ZCODE_NATIVE["expectedDelta"]["source"])
 
-    def test_a_failed_quota_turn_keeps_its_native_code_and_last_message(self):
+    def test_a_failed_quota_turn_keeps_its_native_code_and_observed_delta(self):
         _, outcome = self.execute("usage-quota")
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         failure = outcome.result["quotaFailure"]
@@ -516,9 +517,9 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(failure["code"], ZCODE_NATIVE["quotaFailureTurn"]["expectedClass"])
         self.assertEqual(failure["source"], "zcode/session-turn-failed")
         self.assertEqual(failure["rejectionPhase"], "during-model")
-        self.assertIsNotNone(outcome.result["tokenUsage"])
-        self.assertEqual(outcome.result["lastAssistantMessage"]["text"],
-                         ZCODE_NATIVE["expectedMessages"]["lastAssistantText"])
+        self.assertEqual(outcome.result["tokenUsage"]["source"], ZCODE_NATIVE["expectedDelta"]["source"])
+        self.assertEqual(outcome.result["tokenUsage"]["completeness"], "partial")
+        self.assertIsNone(outcome.result.get("lastAssistantMessage"))
         self.assertNotIn("provider wording", json.dumps(outcome.result))
 
     def test_a_stalled_optional_read_cannot_change_the_turn(self):

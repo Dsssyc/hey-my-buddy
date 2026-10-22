@@ -95,10 +95,13 @@ class NativeAttentionTests(WorkerServicesCase):
         from hey_my_buddy.buddy.roles.attention import AttentionRecorder
         from unittest import mock
 
-        recorder = AttentionRecorder(self.attention, identity=IDENTITY)
+        publish = mock.Mock()
+        recorder = AttentionRecorder(self.attention, identity=IDENTITY, on_record=publish)
         with mock.patch("hey_my_buddy.buddy.roles.attention.private_json", side_effect=OSError("disk full")):
             with self.assertRaisesRegex(OSError, "disk full"):
                 recorder.record({"method": "session/request_permission"})
+        publish.assert_not_called()
+        self.assertEqual(recorder.requests, [])
 
 
 class MicroTaskPromptTests(unittest.TestCase):

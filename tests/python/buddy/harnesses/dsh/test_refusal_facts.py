@@ -20,6 +20,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     RunContinuation,
 )
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.activity import MAX_SESSION_ID
 
 from .test_native_run import NativeRunCase
 
@@ -245,6 +246,16 @@ class RefusalFactsTests(NativeRunCase):
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.client.shutdown.assert_called_once()
 
+    def test_oversized_root_session_id_is_a_protocol_error_with_stop_evidence(self):
+        self.session_value["sessionId"] = "s" * (MAX_SESSION_ID + 1)
+        result = self.run_final()
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "invalid-protocol")
+        self.assertIsNone(result.native_identity)
+        self.assertNotIn("session/prompt", self.methods)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.client.shutdown.assert_called_once()
+
     def test_unknown_catalog_shape_reports_an_unknown_read_with_reason(self):
         self.session_value["configOptions"] = {}
         catalog = native_run.run_discovery(cwd=str(self.base / "cwd"),
@@ -252,7 +263,7 @@ class RefusalFactsTests(NativeRunCase):
                                            native_root=self.root, timeout_seconds=30, cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"],
                          [{"harness": "dsh", "status": "unknown", "accountStatus": "not-applicable",
-                           "reason": {"code": native_run.UNREAD_CATALOG_REASON, "params": {}}}])
+                           "reason": {"code": "config-options-shape-unreadable", "params": {}}}])
         self.assertEqual(catalog["providers"], [])
         self.assertEqual(catalog["warnings"], [])
         self.assertNotIn("session/prompt", self.methods)

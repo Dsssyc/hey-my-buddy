@@ -88,6 +88,8 @@ for line in sys.stdin:
     elif method == 'session/messages':
         if case == 'quota-read-error' and subscribed and prompt_sent:
             result = {'messages':'invalid'}
+        elif p.get('afterMessageId') == f'a-{session}' and subscribed and prompt_sent:
+            result = {'messages':[]}
         elif case in ('usage-ok', 'usage-quota', 'usage-projection-quota', 'usage-correct',
                     'usage-correct-quota', 'quota-truncated') and subscribed and prompt_sent:
             result = {'messages':[{'info':{'sessionId':f's-{session}', 'messageId':f'a-{session}',
@@ -145,6 +147,11 @@ for line in sys.stdin:
             send({'method':'v4/telemetry/event','params':{'sessionId':f's-{session}',
                   'turnId':f't-{session}','kind':'turn.started','eventSeq':1}})
         event('turn.started',1,{'inputId':ident})
+        if case in ('usage-quota', 'usage-projection-quota', 'usage-correct-quota'):
+            send({'method':'v4/telemetry/event','params':{'version':1,'eventId':f'usage-{session}',
+                  'eventSeq':3,'sessionId':f's-{session}','turnId':f't-{session}',
+                  'kind':'usage.delta','inputTokens':12,'outputTokens':3,'totalTokens':15,
+                  'reasoningTokens':1,'cacheReadTokens':2,'cacheWriteTokens':1}})
         if case == 'native-stream':
             send({'method':'process/mcpTelemetry','params':{'status':'connected'}})
             send({'method':'process/mcpResourceSamples','params':{'samples':[]}})
