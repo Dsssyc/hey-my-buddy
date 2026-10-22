@@ -22,18 +22,13 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
-from typing import Callable
-
-from ....errors import BoardError
-from ....json_codec import canonical_json, decode_strict_json
+from ....json_codec import canonical_json
 from ....protocol.activity import (
     MAX_EVENT_SEQ,
-    MAX_SESSION_ID,
-    MAX_TOOL_NAME,
+    native_tool_name,
 )
 from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
-from .. import session_receipts
-from ..session_receipts import refusal_shaped
+from ..session_receipts import refusal_shaped, verify_inquiry_receipt, verify_receipt, verify_tool_refusal
 
 HARNESS = "dsh"
 
@@ -65,61 +60,8 @@ class NativeError(Exception):
         self.failure = failure
 
 
-decode_json = decode_strict_json
-
-
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-# -- the session-tool receipt verification ---------------------------------------
-#
-# ADR-025 step 5: the finish receipt, the signed tool-refusal envelope and the
-# inquiry receipts verify through exactly the shared implementation in
-# :mod:`hey_my_buddy.buddy.harnesses.session_receipts` — one signature rule,
-# one attempt-identity judgment and one byte budget for every harness,
-# ZCode's included. These names run it, pass this driver's registered rule
-# bundle, and only convert the shared failure into this protocol's own
-# :class:`NativeError`, so the run's stop handling and every caller keep the
-# failure type they already catch. ``refusal_shaped`` is the shared dispatch
-# function itself.
-
-
-def _receipt_failure(error: session_receipts.ReceiptError) -> NativeError:
-    """The shared verification failure as this protocol's own native error."""
-    return NativeError(error.code, str(error))
-
-
-def verify_finish_receipt(raw: object, configuration: dict,
-                          validate_outcome: Callable[[object], str | None]) -> dict:
-    """Verify the signed finish receipt through the shared implementation."""
-    try:
-        return session_receipts.verify_receipt(raw, configuration, validate_outcome)
-    except session_receipts.ReceiptError as error:
-        raise _receipt_failure(error) from None
-
-
-def verify_tool_refusal(raw: object, configuration: dict, native_tool: str | None,
-                        mounted_tools: tuple[str, ...] | list[str]) -> dict:
-    """Verify one signed tool-refusal envelope through the shared implementation.
-
-    This driver's registered rule type-checks the refusal detail and refuses a
-    non-string native tool name at the envelope stage.
-    """
-    try:
-        return session_receipts.verify_tool_refusal(raw, configuration, native_tool, mounted_tools,
-                                                    rules=session_receipts.TYPED_REFUSAL_DETAIL)
-    except session_receipts.ReceiptError as error:
-        raise _receipt_failure(error) from None
-
-
-def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:
-    """Verify one signed checkpoint or answer receipt through the shared implementation."""
-    try:
-        return session_receipts.verify_inquiry_receipt(raw, configuration, kind,
-                                                       rules=session_receipts.TYPED_REFUSAL_DETAIL)
-    except session_receipts.ReceiptError as error:
-        raise _receipt_failure(error) from None
 
 
 # -- the tool-fact projection -----------------------------------------------------
@@ -201,14 +143,9 @@ class DshToolFacts:
                     self._incomplete(identity, call_id, name, phase)
                     return
                 self._names.setdefault(key, name)
-            try:
-                event = normalize_tool_event(HARNESS, {
-                    "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": phase})
-            except BoardError:
-                self._incomplete(identity, call_id, name, phase)
-                return
-            if event is not None:
-                self.evidence.observe(event)
+            event = normalize_tool_event(HARNESS, {
+                "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": phase})
+            self.evidence.observe(event)
             return
         self._incomplete(identity, call_id, name, phase)
 
@@ -250,7 +187,7 @@ class DshActivity:
     """
 
     def __init__(self, session_id: str | None = None):
-        self.session_id = session_id[:MAX_SESSION_ID] if isinstance(session_id, str) else None
+        self.session_id = session_id if isinstance(session_id, str) else None
         self.phase = "starting"
         self.event_seq = 0
         self.observed_at = _now()
@@ -286,7 +223,7 @@ class DshActivity:
                     self.phase = "tool-running"
                     name = _bounded_text(update.get("title"))
                     if name:
-                        self.tool_name = name[:MAX_TOOL_NAME]
+                        self.tool_name = native_tool_name(name)
                     self.last_tool_activity_at = _now()
                 elif kind == "tool_call_update" and isinstance(update.get("status"), str) \
                         and update["status"] in _TERMINAL_STATUS:
@@ -297,9 +234,7 @@ class DshActivity:
 
     def payload(self) -> dict:
         return {
-            "phase": self.phase if self.phase in (
-                "starting", "waiting-model", "streaming-model", "tool-running",
-                "waiting-external", "waiting-host", "finishing", "unknown") else "unknown",
+            "phase": self.phase,
             "observedAt": self.observed_at,
             "eventSeq": self.event_seq,
             "nativeSessionId": self.session_id,
@@ -328,8 +263,8 @@ class RootTurnEvidence:
 
     def __init__(self, session_id: str, tool_name: str, bridge: dict, *,
                  checkpoint_name: str | None = None, answer_name: str | None = None,
-                 on_delivery=None, on_answer=None, validate_outcome=None,
-                 mounted_tools: tuple[str, ...] | list[str] = ()):
+                 validate_outcome, mounted_tools: tuple[str, ...] | list[str],
+                 on_delivery=None, on_answer=None):
         self.session_id, self.tool_name, self.bridge = session_id, tool_name, bridge
         self.checkpoint_name, self.answer_name = checkpoint_name, answer_name
         self.on_delivery, self.on_answer = on_delivery, on_answer
@@ -409,12 +344,6 @@ class RootTurnEvidence:
         proof. The role owns what this record means, the same way it owns the
         outcome.
         """
-        if not (self.receipt and self.stop_reason == "end_turn" and self.call_id
-                and self.call_ordinal is not None and self.result_ordinal is not None
-                and self.settled_ordinal is not None
-                and self.call_ordinal < self.result_ordinal <= self.settled_ordinal <= close_ordinal):
-            raise NativeError("invalid-provenance",
-                              "the native root result lacks ordered tool, turn and session settlement evidence")
         return {
             "version": 1,
             "harness": HARNESS, "tool": "hey_my_buddy_finish_turn", "nativeTool": self.tool_name,
@@ -462,7 +391,7 @@ class RootTurnEvidence:
         if content is None:
             raise NativeError("invalid-finish",
                               "the completed finish tool result carried no verifiable receipt content")
-        self.receipt = verify_finish_receipt(content, self.bridge, self.validate_outcome)
+        self.receipt = verify_receipt(content, self.bridge, self.validate_outcome)
         self.verified_delivery_calls.add(self.call_id)
         self.result_ordinal = ordinal
 
@@ -542,5 +471,5 @@ def _content_text(update: dict) -> str | None:
 __all__ = [
     "HARNESS", "MODEL_ACTIVITY_KINDS", "UPDATE_KINDS", "DshActivity", "DshToolFacts",
     "NativeError", "RootTurnEvidence", "refusal_shaped", "text_blocks",
-    "verify_finish_receipt", "verify_inquiry_receipt", "verify_tool_refusal",
+    "verify_receipt", "verify_inquiry_receipt", "verify_tool_refusal",
 ]

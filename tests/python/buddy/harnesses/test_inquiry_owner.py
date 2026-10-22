@@ -19,6 +19,7 @@ from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses import inquiry_bridge as ib
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
+from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError, RootTurnEvidence
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.roles import turn_io
@@ -299,7 +300,7 @@ class InquiryOwnerTests(unittest.TestCase):
         self.assertEqual(direct_request(self.endpoint).status, "queued")
         native.tool(child=True)
         self.assertEqual(direct_snapshot(self.endpoint).inquiries[0].status, "queued")
-        with self.assertRaises(NativeError):
+        with self.assertRaises(ReceiptError):
             native.tool(tampered=True)
         self.assertEqual(direct_snapshot(self.endpoint).inquiries[0].status, "queued")
         self.assertEqual([item["state"] for item in records(self.bridge.journal_path)], ["queued"])
@@ -309,15 +310,6 @@ class InquiryOwnerTests(unittest.TestCase):
         self.assertEqual(ended.inquiries[0].status, "unavailable")
         self.assertEqual(ended.observation.agent_status, "ended")
         self.assertIsNone(ended.unavailable)
-
-    def test_attention_write_failure_fails_the_native_turn_with_its_cause(self):
-        self.start()
-        with mock.patch.object(ib, "private_json", side_effect=OSError("disk full")):
-            with self.assertRaises(NativeError) as caught:
-                self.bridge.note_attention({"kind": "unsupported-interactive-request"})
-        self.assertEqual(caught.exception.code, "attention-record-unavailable")
-        self.assertIsInstance(caught.exception.__cause__, OSError)
-        self.assertEqual(str(caught.exception.__cause__), "disk full")
 
     def test_local_bridge_maintains_native_journal_without_a_second_channel(self):
         local = make_bridge(new_material_directory())

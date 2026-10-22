@@ -55,7 +55,7 @@ from ....protocol.reasons import reason as make_reason
 from ....errors import BoardError
 from ....json_codec import canonical_json
 from ....private_dirs import ensure_private_dir
-from ....protocol.activity import ActivityPublisher
+from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
 from ..in_turn_inquiry import INQUIRY_TOOLS, InquiryServices, prepare_inquiry_services
 from ..inquiry_bridge import InquiryBridge
@@ -70,6 +70,12 @@ from ..native_support import (
     halt_owned_group as _halt_owned_group,
     identity_or_none,
     utc_now,
+    truncate_utf8,
+    truncate_text,
+    NATIVE_ID_CHARS,
+    NATIVE_SUMMARY_BYTES,
+    INQUIRY_TOOL_NAME_CHARS,
+    INQUIRY_FAILURE_BYTES,
 )
 from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ..run_contract import (
@@ -106,7 +112,6 @@ from .config import (
     permission_sandbox_settings,
 )
 from .protocol import (
-    QUOTA_REJECTED_ERROR,
     ClaudeProtocolError,
     Connection,
     QuotaRejected,
@@ -123,7 +128,6 @@ from .session_content import ClaudeSessionProjector
 _SETTINGS_FILE = "settings.json"
 _NATIVE_STDERR_FILE = "native.stderr.log"
 _MAX_EARLY_FRAMES = 128
-_MAX_DENIED_REQUESTS = 32
 _DRAIN_SECONDS = 10.0
 
 
@@ -154,8 +158,6 @@ def _catalog(initialize: dict | None, version: str) -> dict:
         status = "unknown"
         warnings.append({"reason": make_reason("catalog.model-list-unreadable", shape=type(entries).__name__)})
         entries = []
-    if len(entries) > 200:
-        raise ClaudeProtocolError("invalid-catalog", "Claude model list exceeds the catalog bound")
     for item in entries:
         if not isinstance(item, dict) or item.get("value") == DEFAULT_MODEL_ALIAS:
             continue
@@ -169,7 +171,7 @@ def _catalog(initialize: dict | None, version: str) -> dict:
         levels = item.get("supportedEffortLevels")
         if levels is None or levels == []:
             efforts = [DEFAULT_EFFORT]
-        elif not isinstance(levels, list) or len(levels) > 16 or any(
+        elif not isinstance(levels, list) or any(
                 level not in ("low", "medium", "high", "xhigh", "max") for level in levels):
             warnings.append({"reason": make_reason("catalog.effort-directory-omitted")})
             continue
@@ -276,9 +278,6 @@ def _prepare(request: RunRequest, inquiry: InquiryServices | None = None) -> _Pr
     invocation_root = ensure_private_dir(Path(request.private_state.invocation_root))
     native_root = ensure_private_dir(Path(request.private_state.native_root))
     session_id = str(uuid.uuid4())
-    if request.continuation is not None and request.continuation.previous_session_id == session_id:
-        raise ClaudeProtocolError("wrong-native-session",
-                                  "a reconstructed claude turn must allocate a fresh session id")
     deadline = execution_deadline(request.budget.timeout_seconds)
     incoming = dict(environment_for())
     command, environment = launch(incoming)
@@ -455,13 +454,10 @@ class _TurnCollector:
         if self.root_stop_requested:
             # The owned group has been stopped at its root result. Never
             # answer a callback belonging to an unadmitted follow-up query.
-            self.post_root_requests = min(128, self.post_root_requests + 1)
+            self.post_root_requests += 1
             return
         request = frame.get("request") or {}
         if request.get("subtype") == "can_use_tool":
-            if len(self.denied) >= _MAX_DENIED_REQUESTS:
-                raise ClaudeProtocolError("native-request-limit",
-                                          "Claude exceeded the native permission request bound")
             tool = request.get("tool_name")
             tool_id = request.get("tool_use_id")
             request_id = frame.get("request_id")
@@ -472,17 +468,17 @@ class _TurnCollector:
                     if isinstance(inputs.get(key), str) and inputs[key]:
                         operation = inputs[key]
                         break
-            name = tool[:80] if isinstance(tool, str) and tool else "<unknown>"
+            name = (native_tool_name(tool) if isinstance(tool, str) else None) or "<unknown>"
             summary = "\n".join(filter(None, (self.denied_operation_summary, name + ": " + operation)))
             # The native-input boundary owns the one UTF-8 bound; role code
             # consumes this already-bounded fact without interpreting inputs.
-            self.denied_operation_summary = summary.encode("utf-8", errors="replace")[:512].decode("utf-8", errors="ignore")
+            self.denied_operation_summary = truncate_utf8(summary, NATIVE_SUMMARY_BYTES, errors="replace")
             self.denied.append({
-                "toolName": tool[:80] if isinstance(tool, str) and tool else "<unknown>",
-                "toolUseId": tool_id[:256] if isinstance(tool_id, str) and tool_id else None,
+                "toolName": name,
+                "toolUseId": truncate_text(tool_id, NATIVE_ID_CHARS) if isinstance(tool_id, str) and tool_id else None,
                 # The control request's own identity: the durable correlation
                 # for a denial when the native frame carried no tool_use_id.
-                "requestId": request_id[:256] if isinstance(request_id, str) and request_id else "<missing>"})
+                "requestId": truncate_text(request_id, NATIVE_ID_CHARS) if isinstance(request_id, str) and request_id else "<missing>"})
             self._connection.send(_native_request_response(frame))
             # The retained fact reaches the role before any further native
             # waiting, so a stop takes effect at once after the peer's answer.
@@ -527,7 +523,7 @@ class _TurnCollector:
                 self.bridge.close()
                 return
             if self.followup_init_observed:
-                self.followup_messages = min(128, self.followup_messages + 1)
+                self.followup_messages += 1
                 return
         # Projection precedes every check: a frame a later rule rejects keeps
         # its tool facts, and the evidence observation follows the same rule.
@@ -632,8 +628,8 @@ class _TurnCollector:
                     raise ClaudeProtocolError(error.code, str(error)) from None
 
     def _retain_inquiry_failure(self, call_id: str, name: str, value: str) -> None:
-        self.inquiry_tool_failures.append({"toolCallId": call_id[:256], "toolName": name[:160],
-            "error": value.encode("utf-8", errors="replace")[:4000].decode("utf-8", errors="ignore")})
+        self.inquiry_tool_failures.append({"toolCallId": truncate_text(call_id, NATIVE_ID_CHARS), "toolName": truncate_text(name, INQUIRY_TOOL_NAME_CHARS),
+            "error": truncate_utf8(value, INQUIRY_FAILURE_BYTES, errors="replace")})
         self.inquiry_tool_failures_dropped += max(0, len(self.inquiry_tool_failures) - 8)
         del self.inquiry_tool_failures[:-8]
 
@@ -645,16 +641,12 @@ class _TurnCollector:
                    "nativeSessionId": self.evidence.session_id, "lastNativeActivityAt": now,
                    "counts": {"modelTurns": self.evidence.model_messages,
                               "toolCalls": self.evidence.tool_calls}}
+        tool = native_tool_name(tool)
         if tool:
             payload["lastToolActivityAt"] = now
-            payload["toolName"] = tool[:80]
+            payload["toolName"] = tool
         self.last_activity = payload
-        try:
-            self._publisher.publish(payload)
-        except BoardError:
-            # Metadata must never fail the native turn; the last payload stays
-            # the run's own activity fact even when live publication is refused.
-            return
+        self._publisher.publish(payload)
 
     def settled_notify(self, native_result: dict) -> None:
         if "structured_output" not in native_result:
@@ -674,8 +666,6 @@ class _TurnCollector:
             # delivers keep their projected facts but no further feedback.
             return
         feedback = self._observer(self.facts(settled=settled, raw=raw))
-        if not isinstance(feedback, RunFeedback):
-            raise BoardError("INVALID_ARGUMENT", "the observer must answer with one RunFeedback")
         if feedback.action == "correct":
             raise BoardError("INVALID_ARGUMENT",
                              "claude takes no in-run correction; the native -p turn ends at its result")
@@ -742,7 +732,7 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
     native_result = evidence.result
     result_denials = native_result.get("permission_denials")
     if isinstance(result_denials, list):
-        evidence.permission_denials = min(len(result_denials), 128)
+        evidence.permission_denials = len(result_denials)
     if not evidence.init_observed:
         raise ClaudeProtocolError("native-init-missing", "Claude did not report the session initialization")
     if native_result.get("session_id") != session_id:
@@ -770,14 +760,7 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, int | None]:
     """Close, wait, then terminate; report only what the owned group confirmed."""
-    try:
-        spawn.process.stdin.close()
-    except OSError:
-        pass
-    spawn.handle.wait(min(3.0, max(0.0, deadline - time.monotonic())))
-    if not spawn.handle.shutdown_confirmed(settle_seconds=0.2):
-        spawn.handle.terminate(grace_seconds=1.0)
-    shutdown = spawn.handle.shutdown_confirmed(settle_seconds=0.5)
+    shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, deadline)
     try:
         spawn.process.stdout.close()
     except OSError:
@@ -824,7 +807,7 @@ def _native_observations(collector: _TurnCollector, native_result: dict | None,
     observations = {"sessionModel": collector.evidence.session_model if collector.evidence else None,
                     "observedModels": model_usage_keys(native_result) if native_result is not None else [],
                     "totalCostUsd": total_cost_usd(native_result) if native_result is not None else None,
-                    "unsupportedNativeRequests": min(collector.unsupported_requests, 128)}
+                    "unsupportedNativeRequests": collector.unsupported_requests}
     if collector._connection is not None:
         observations["protocol"] = collector._connection.observations()
     if state.catalog is not None:
@@ -884,7 +867,7 @@ def _native_turn_facts(collector: _TurnCollector, session_id: str, subtype: str)
                              "deniedToolUseIds": [item["toolUseId"] for item in collector.denied
                                                   if item["toolUseId"]]}
     if collector.denied:
-        facts["deniedToolNames"] = [item["toolName"] for item in collector.denied[:32]]
+        facts["deniedToolNames"] = [item["toolName"] for item in collector.denied]
         facts["deniedOperationSummary"] = collector.denied_operation_summary
     return facts
 
@@ -1081,10 +1064,6 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
 def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedback],
         services: Any, cancelled: Callable[[], bool]) -> RunResult:
     """Run one native Claude Code execution: the single native path of this harness."""
-    if request.harness != "claude":
-        raise BoardError("INVALID_ARGUMENT", "this run module drives claude", harness=request.harness)
-    if services is not None and not isinstance(services, RunServices):
-        raise BoardError("INVALID_ARGUMENT", "claude requires its own run service binding")
     if request.session_services:
         raise BoardError("INVALID_ARGUMENT",
                          "claude has no native session service; the value carrier is the native schema")
@@ -1178,7 +1157,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             # Quota exhaustion is infrastructure unavailability: no retry, no outcome.
             state.status = "error"
             state.reason = "harness-error"
-            state.error_text = QUOTA_REJECTED_ERROR
+            state.error_text = "the Claude provider quota rejected this execution"
             state.quota_failure = {"code": "quota-exceeded", "nativeCode": error.rate_limit_type,
                                    "source": error.source, "observedAt": utc_now(),
                                    "resetsAt": error.resets_at,
@@ -1364,15 +1343,14 @@ def validate_turn_provenance(record: dict) -> str | None:
     if type(p.get("eventSeq")) is not int or p["eventSeq"] < 2:
         return "the Claude result lacks native event evidence"
     usage = p.get("modelUsage")
-    if not isinstance(usage, list) or len(usage) > 16 or any(not isinstance(item, str) or not item or len(item) > 128
-                                                             for item in usage):
+    if not isinstance(usage, list) or any(not isinstance(item, str) or not item for item in usage):
         return "the Claude observed model set is invalid"
-    if type(p.get("permissionDenials")) is not int or p["permissionDenials"] < 0 or p["permissionDenials"] > 128:
+    if type(p.get("permissionDenials")) is not int or p["permissionDenials"] < 0:
         return "the Claude permission denial count is invalid"
     if p.get("controllerAttention") is True:
         ids = p.get("deniedControlRequestIds")
-        bound = bool(isinstance(ids, list) and 0 < len(ids) <= 32
-                     and all(isinstance(item, str) and item and len(item) <= 256 for item in ids))
+        bound = bool(isinstance(ids, list) and ids
+                     and all(isinstance(item, str) and item for item in ids))
         unanswered = p.get("unansweredDeliveredInquiries")
         if not bound and p.get("permissionDenials") <= 0 and not (
                 type(unanswered) is int and unanswered > 0):

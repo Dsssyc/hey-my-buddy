@@ -19,7 +19,6 @@ from ...protocol.inquiry_journal import (INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BY
                                          read_inquiry_journal, read_shared_snapshot)
 from ...errors import BoardError
 from ...json_codec import canonical_json
-from ..roles.turn_io import private_json
 from .live import (
     LiveJournal,
     LiveObservation,
@@ -434,26 +433,9 @@ class InquiryBridge:
             "extendsDeadline": False,
         }
 
-    def note_attention(self, record: dict) -> None:
-        """Keep one bounded record and make it readable while the turn is still live.
-
-        The session-private finish tool refuses a ``completed`` outcome while an
-        unsupported interactive request is outstanding, so the file has to exist
-        before the tool call, not only in the driver's final report.
-        """
+    def publish_attention(self) -> None:
+        """Publish the attention list after its independent recorder committed it."""
         with self.lock:
-            self.attention.append(record)
-            del self.attention[:-8]
-            if self.attention_path is not None:
-                try:
-                    private_json(self.attention_path, {
-                        "version": 1,
-                        **{k: self.identity.get(k) for k in ("taskId", "attemptId", "generation", "turnId")},
-                        "requests": self.attention,
-                    })
-                except OSError as error:
-                    raise self.error_factory("attention-record-unavailable",
-                        "the native attention record could not be written") from error
             self._publish()
 
     def attention_report(self) -> dict:

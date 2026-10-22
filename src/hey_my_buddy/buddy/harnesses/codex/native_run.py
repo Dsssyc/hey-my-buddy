@@ -45,8 +45,9 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from ....errors import BoardError
+from ....json_codec import decode_strict_json
 from ....protocol.reasons import reason as make_reason
-from ....protocol.activity import ActivityPublisher
+from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
 from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
@@ -65,6 +66,11 @@ from ..native_support import (
     identity_or_none,
     shape_guard,
     utc_now,
+    bounded_utf8,
+    truncate_utf8,
+    NATIVE_METHOD_BYTES,
+    NATIVE_ERROR_DETAIL_BYTES,
+    NATIVE_SUMMARY_BYTES,
 )
 from ..run_contract import (
     ActivityPackage,
@@ -101,6 +107,7 @@ from ..run_contract import (
 )
 from .config import (
     CodexUnavailable,
+    INIT_CLIENT,
     cli_command,
     launch,
     native_provider,
@@ -110,7 +117,6 @@ from .protocol import (
     Connection,
     TurnEvidence,
     attempt_token_usage,
-    decode_json,
     turn_failure_code,
 )
 from .tool_evidence import (
@@ -132,7 +138,6 @@ MAX_CHECKPOINT_MESSAGE_BYTES = 65536
 _REFUSAL_MESSAGE = ("This Buddy Worker cannot approve interactive requests; "
                     "report attention in the structured outcome")
 _REFUSED_REQUEST_KEYS = ("threadId", "turnId", "itemId", "command", "cwd", "reason")
-_INIT_CLIENT = {"clientInfo": {"name": "hey_my_buddy", "title": "Hey My Buddy", "version": "0.9.0"}}
 _BOUND_NOTIFICATIONS = 128
 
 
@@ -420,9 +425,10 @@ class _ActivityWriter:
         if evidence is None:
             return
         state, tick, now = self.state, time.monotonic(), utc_now()
+        tool = native_tool_name(tool)
         if tool:
             state["lastToolActivityAt"] = now
-            state["toolName"] = tool[:80]
+            state["toolName"] = tool
         if state.get("phase") == phase and tick - state.get("lastWrite", 0) < 2:
             return
         payload = {"phase": phase, "observedAt": now, "eventSeq": evidence.event_seq,
@@ -436,10 +442,7 @@ class _ActivityWriter:
         # ActivityPublisher adds canonical validation and monotone publication.
         state.update(phase=phase, lastWrite=tick)
         self.last_payload = payload
-        try:
-            self.publisher.publish(payload)
-        except BoardError:
-            return
+        self.publisher.publish(payload)
 
 
 # -- phase 1: preparation (private evidence roots and environment) ----------------------
@@ -514,13 +517,6 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
     return _Spawn(process=process, handle=handle, connection=connection)
 
 
-CATALOG_READ_REASONS: dict[str, str] = {
-    "model-list-shape-unreadable": "model-list-shape-unreadable",
-    "model-cursor-shape-unreadable": "model-cursor-shape-unreadable",
-    "config-shape-unreadable": "config-shape-unreadable",
-}
-
-
 def _catalog(connection: Connection, version: str | None, provider: str | None) -> tuple[dict, set[str]]:
     data, cursor, seen = [], None, set()
     read_status, read_reason = "complete", None
@@ -531,16 +527,14 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
         page = connection.call("model/list", params)
         entries = page.get("data")
         if not isinstance(entries, list):
-            read_status, read_reason = "unknown", "model-list-shape-unreadable"
+            read_status, read_reason = "unknown", make_reason("model-list-shape-unreadable")
             break
         data.extend(entries)
-        if len(data) > 200:
-            raise CodexProtocolError("invalid-catalog", "Codex model list exceeds the catalog bound")
         cursor = page.get("nextCursor")
         if cursor is None:
             break
         if not isinstance(cursor, str) or not cursor:
-            read_status, read_reason = "unknown", "model-cursor-shape-unreadable"
+            read_status, read_reason = "unknown", make_reason("model-cursor-shape-unreadable")
             break
         if cursor in seen:
             raise CodexProtocolError("invalid-catalog", "Codex model cursor did not advance")
@@ -548,7 +542,7 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
     models = []
     warnings = []
     if provider is None:
-        read_status, read_reason = "unknown", "config-shape-unreadable"
+        read_status, read_reason = "unknown", make_reason("config-shape-unreadable")
     listed_ids: set[str] = set()
     for item in data if provider is not None else []:
         if not isinstance(item, dict) or item.get("hidden") is True:
@@ -576,7 +570,7 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
                             if provider is not None else [],
                "warnings": warnings,
                "discoveries": [{"harness": "codex", "status": read_status,
-                                **({"reason": make_reason(CATALOG_READ_REASONS[read_reason])} if read_reason else {})}]}
+                                **({"reason": read_reason} if read_reason else {})}]}
     return catalog, listed_ids
 
 
@@ -612,7 +606,7 @@ def _initialize(connection: Connection, prep: _Preparation, mode: str, spec: dic
     this run's public fact, and the real native error decides the failure.
     """
     experimental = {"capabilities": {"experimentalApi": True}}
-    connection.call("initialize", {**_INIT_CLIENT, **experimental})
+    connection.call("initialize", {**INIT_CLIENT, **experimental})
     connection.send({"method": "initialized", "params": {}})
     connection.call("account/read", {"refreshToken": False})
     configured = connection.call("config/read", {"cwd": prep.cwd, "includeLayers": False}).get("config")
@@ -642,7 +636,7 @@ def _write_binding(root: Path, thread_id: str, binding: dict) -> None:
 
 def _read_binding(root: Path, thread_id: str) -> dict:
     try:
-        value = decode_json(read_bytes(_binding_path(root, thread_id)))
+        value = decode_strict_json(read_bytes(_binding_path(root, thread_id)))
         if not isinstance(value, dict):
             raise ValueError("invalid binding")
         return value
@@ -727,7 +721,7 @@ def _configure_worker(connection: Connection, request: RunRequest, prep: _Prepar
     provider = response.get("modelProvider")
     if isinstance(provider, str) and provider != requested["provider"]:
         raise CodexProtocolError("buddy-mismatch", "Codex acknowledged a different Worker provider")
-    state.native_provider = _bounded(provider, 128)
+    state.native_provider = bounded_utf8(provider, 128)
     state.thread_opened = True
     state.thread_id = thread_id
     state.configured = True
@@ -763,7 +757,7 @@ def _configure_review(connection: Connection, request: RunRequest,
     state.policy_checks["threadReceipt"] = {
         "status": "confirmed" if (isinstance(sandbox, dict)
                                   and sandbox.get("type") == "readOnly") else "unknown"}
-    state.native_model = _bounded(response.get("model"), 128)
+    state.native_model = bounded_utf8(response.get("model"), 128)
     state.policy_checks["selectedModel"] = {"status": "confirmed" if state.native_model == spec["model"] else "unknown"}
     if not isinstance(sandbox, dict) or sandbox.get("type") != "readOnly":
         raise CodexProtocolError("readonly-policy-unverified",
@@ -786,7 +780,7 @@ def _configure_review(connection: Connection, request: RunRequest,
     state.thread_id = thread_id
     state.configured = True
     state.requested = spec
-    state.native_provider = _bounded(response.get("modelProvider"), 128)
+    state.native_provider = bounded_utf8(response.get("modelProvider"), 128)
     return thread_id
 
 
@@ -807,7 +801,7 @@ def _configure_fast(connection: Connection, request: RunRequest, state: _RunStat
     thread = response.get("thread")
     thread_id = thread.get("id") if isinstance(thread, dict) else None
     state.fast_receipt = {key: _readback_fact(response.get(key)) for key in ("model", "modelProvider", "approvalPolicy")}
-    state.native_model = _bounded(response.get("model"), 128)
+    state.native_model = bounded_utf8(response.get("model"), 128)
     state.policy_checks["selectedModel"] = {"status": "confirmed" if state.native_model == spec["model"] else "unknown"}
     state.policy_checks["threadReceipt"] = {"status": "confirmed" if response.get("approvalPolicy") == "never" else "unknown"}
     if isinstance(response.get("model"), str) and response["model"] != spec["model"]:
@@ -824,7 +818,7 @@ def _configure_fast(connection: Connection, request: RunRequest, state: _RunStat
     state.thread_id = thread_id
     state.configured = True
     state.requested = spec
-    state.native_provider = _bounded(response.get("modelProvider"), 128)
+    state.native_provider = bounded_utf8(response.get("modelProvider"), 128)
     return thread_id
 
 
@@ -986,7 +980,7 @@ class _FastProtocol:
 
     def __call__(self, message: dict) -> None:
         method = message.get("method")
-        label = _truncate_utf8(method if isinstance(method, str) else "unknown", 96)
+        label = truncate_utf8(method if isinstance(method, str) else "unknown", NATIVE_METHOD_BYTES)
         params = message.get("params")
         if method == "thread/started" and isinstance(params, dict):
             thread = params.get("thread")
@@ -1082,10 +1076,10 @@ def _checkpoint(request: RunRequest, evidence: TurnEvidence) -> dict:
     checkpoint["supersededFinalAnswers"] = {
         "count": len(evidence.superseded_final_answers),
         "records": list(evidence.superseded_final_answers)}
-    item = evidence.final_item or getattr(evidence, "last_agent_item", None)
+    item = evidence.final_item or evidence.last_agent_item
     if isinstance(item, dict) and isinstance(item.get("id"), str) and isinstance(item.get("text"), str):
         raw = item["text"].encode()
-        text = raw[:MAX_CHECKPOINT_MESSAGE_BYTES].decode("utf-8", errors="ignore")
+        text = truncate_utf8(item["text"], MAX_CHECKPOINT_MESSAGE_BYTES)
         while len(canonical_json(text).encode()) > MAX_CHECKPOINT_MESSAGE_BYTES:
             text = text[:len(text) // 2]
         checkpoint["lastAssistantMessage"] = {
@@ -1100,10 +1094,6 @@ def _checkpoint(request: RunRequest, evidence: TurnEvidence) -> dict:
 def run(request: RunRequest, *, observer: Callable[[Mapping], RunFeedback],
         services: Any, cancelled: Callable[[], bool]) -> RunResult:
     """Run one native Codex execution: the single native path of this harness."""
-    if request.harness != "codex":
-        raise BoardError("INVALID_ARGUMENT", "this run module drives codex", harness=request.harness)
-    if services is not None and not isinstance(services, RunServices):
-        raise BoardError("INVALID_ARGUMENT", "codex accepts its own narrow run service binding")
     binding = services if services is not None else RunServices()
     mode = _mode(request)
     return _run(request, binding, mode, observer, cancelled)
@@ -1256,8 +1246,6 @@ def _wire(connection: Connection, chain: _EventChain, facts: _RunFacts,
 
 
 def _take_feedback(feedback: Any, mode: str, *, settled: bool) -> RunFeedback:
-    if not isinstance(feedback, RunFeedback):
-        raise BoardError("INVALID_ARGUMENT", "the observer must answer with one RunFeedback")
     if feedback.action == "correct":
         if not settled:
             raise BoardError("INVALID_ARGUMENT", "a correction is only answerable at a settled run")
@@ -1626,14 +1614,6 @@ def _readback_fact(value):
     return {"status": "unknown", "reason": "readback-exceeds-evidence-bound", "sizeBytes": size}
 
 
-def _bounded(value: str | None, limit: int) -> str | None:
-    return value if isinstance(value, str) and len(value.encode()) <= limit else None
-
-
-def _truncate_utf8(value: str, limit: int) -> str:
-    return value.encode()[:limit].decode("utf-8", errors="ignore")
-
-
 def _event_turn(params: dict):
     turn = params.get("turn")
     if isinstance(turn, dict) and turn.get("id") is not None:
@@ -1662,7 +1642,7 @@ def _capture_native_error(state: _RunState, message: dict, thread_id: str, turn_
     for key in ("message", "additionalDetails"):
         value = error.get(key)
         if isinstance(value, str):
-            retained[key] = _truncate_utf8(value, 4096)
+            retained[key] = truncate_utf8(value, NATIVE_ERROR_DETAIL_BYTES)
             if retained[key] != value:
                 retained[key + "Truncated"] = True
     info = error.get("codexErrorInfo")
@@ -1843,7 +1823,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
                                and checkpoint.get("nativeTurnStatus") == "completed")
         tool_package = projector.finish(stream_complete)
     value = None
-    if _bounded(state.raw_answer, MAX_VALUE_BYTES) is not None:
+    if bounded_utf8(state.raw_answer, MAX_VALUE_BYTES) is not None:
         value = RunValue(schema_status="unknown",
                          raw=state.raw_answer, correction_count=state.correction_count)
     completion = None
@@ -1858,7 +1838,7 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
         identity=request.identity, harness="codex",
         end=RunEnd(status=state.status, reason_code=state.reason,
                    native_exit_code=state.exit_code,
-                   message=_bounded(state.error_text, 512)),
+                   message=bounded_utf8(state.error_text, NATIVE_SUMMARY_BYTES)),
         harness_version=state.version,
         native_event_count=state.event_count or None,
         model_started=True if state.model_started else None,
@@ -1956,7 +1936,7 @@ def _control_connection(*, cwd: str, invocation_root: Path, native_root: Path,
             facts = _RunFacts()
             classifier = _Classifier(facts)
             connection.on_notification = classifier.observe
-            connection.call("initialize", _INIT_CLIENT)
+            connection.call("initialize", INIT_CLIENT)
             connection.send({"method": "initialized", "params": {}})
             yield connection, version, facts
         finally:
@@ -2012,8 +1992,7 @@ def check_preparation(spec: dict, environment: dict) -> None:
                          reason=getattr(error, "reason", None)) from None
 
 
-def prepare_run_services(*, tool_scope: str = "write",
-                         inquiry: ClientInquiryServices | None = None) -> RunServices:
+def prepare_run_services(*, inquiry: ClientInquiryServices | None = None) -> RunServices:
     """Bind the harness's native services without selecting credentials."""
     return RunServices(inquiry=inquiry)
 
@@ -2085,7 +2064,7 @@ def native_evidence(result: RunResult) -> dict:
     """Project this run's real native evidence; no missing fact is invented.
 
     The fast posture comes from the public policy fact; the review
-    acknowledgment and configuration readback come from this run's integrity-checked
+    acknowledgment and configuration readback come from this run's
     evidence references, retained as the native side actually answered — a
     policy whose restrictions are unverified keeps its real readback and is never
     dressed up as enforced. The interrupt facts keep the legacy true keys and
@@ -2136,17 +2115,16 @@ def native_evidence(result: RunResult) -> dict:
 
 
 def _read_evidence_ref(result: RunResult, kind: str) -> dict | None:
-    """One verified evidence reference of this run, or None when absent."""
+    """Read this run's retained evidence file, or None when absent."""
     from ..controller import STRICT_RESULT_BYTES
     for ref in result.evidence_refs:
         if ref.kind != kind:
             continue
         with guard_private_path(Path(ref.location)).open("rb") as stream:
             raw = stream.read(STRICT_RESULT_BYTES + 1)
-        if (len(raw) > STRICT_RESULT_BYTES or ref.size_bytes != len(raw)
-                or ref.sha256 != hashlib.sha256(raw).hexdigest()):
+        if len(raw) > STRICT_RESULT_BYTES:
             raise BoardError("INVALID_ARGUMENT", "The native evidence reference no longer matches its content")
-        value = decode_json(raw)
+        value = decode_strict_json(raw)
         return value if isinstance(value, dict) else None
     return None
 

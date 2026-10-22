@@ -33,6 +33,7 @@ from hey_my_buddy.buddy.roles.worker_services import attention_requests, pending
 from hey_my_buddy.buddy.harnesses.session_receipts import (
     MAX_ANSWER_BYTES,
     MAX_INQUIRIES,
+    ReceiptError,
     sign_receipt,
 )
 from hey_my_buddy.buddy.roles.session_mcp import respond
@@ -572,14 +573,43 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(answer["toolCallId"], "root-answer-call")
         self.assertEqual(answer["via"], "tool:hey_my_buddy_answer_inquiry")
 
-    def test_attention_is_bounded_and_readable_while_the_turn_is_live(self):
-        for index in range(10):
-            self.harness.bridge.note_attention({"kind": "unsupported-native-request", "method": f"interaction/{index}",
-                                                "at": "2026-01-01T00:00:00Z", "outcome": "refused-with-jsonrpc-error"})
-        self.assertEqual(self.harness.bridge.attention_report()["requests"], 8)
+    def test_attention_is_recorded_and_published_without_another_native_event(self):
+        from hey_my_buddy.buddy.roles.attention import AttentionRecorder
+        from unittest import mock
+
+        bridge = self.harness.bridge
+        published = []
+        recorder = AttentionRecorder(self.harness.attention_path, identity=IDENTITY,
+                                     requests=bridge.attention, on_record=bridge.publish_attention)
+        def capture():
+            written = json.loads(self.harness.attention_path.read_text(encoding="utf-8"))
+            published.append((bridge.attention_report()["requests"], len(written["requests"])))
+        with mock.patch.object(bridge, "_publish", side_effect=capture):
+            for index in range(10):
+                recorder.record({"kind": "unsupported-native-request", "method": f"interaction/{index}",
+                                 "at": "2026-01-01T00:00:00Z", "outcome": "refused-with-jsonrpc-error"})
+        self.assertEqual(published, [(count, count) for count in range(1, 11)])
+        self.assertEqual(bridge.attention_report()["requests"], 10)
         written = json.loads(self.harness.attention_path.read_text(encoding="utf-8"))
         self.assertEqual(written["requests"][-1]["method"], "interaction/9")
         self.assertEqual(written["attemptId"], "attempt-1")
+
+    def test_failed_attention_write_cannot_publish_on_bridge_close(self):
+        from hey_my_buddy.buddy.roles.attention import AttentionRecorder
+        from unittest import mock
+
+        bridge = self.harness.bridge
+        recorder = AttentionRecorder(self.harness.attention_path, identity=IDENTITY,
+                                     requests=bridge.attention, on_record=bridge.publish_attention)
+        published = []
+        with mock.patch("hey_my_buddy.buddy.roles.attention.private_json", side_effect=OSError("disk full")), \
+             mock.patch.object(bridge, "_publish", side_effect=lambda: published.append(bridge.attention_report())):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                recorder.record({"kind": "unsupported-native-request", "method": "interaction/permission"})
+            self.assertEqual(published, [])
+            bridge.close()
+        self.assertTrue(published)
+        self.assertTrue(all(view["requests"] == 0 for view in published))
 
 
 class JournalBarrierTests(unittest.TestCase):
@@ -797,9 +827,9 @@ class FinishToolTests(unittest.TestCase):
         # A tampered receipt must fail controller verification.
         tampered = json.loads(accepted["content"][0]["text"])
         tampered["answer"] = "changed after signing"
-        with self.assertRaises(NativeError):
+        with self.assertRaises(ReceiptError):
             verify_inquiry_receipt(json.dumps(tampered), self.config, "inquiry-answer")
-        with self.assertRaises(NativeError):
+        with self.assertRaises(ReceiptError):
             verify_inquiry_receipt(accepted["content"][0]["text"], {**self.config, "key": "d" * 64}, "inquiry-answer")
 
     def test_an_answered_inquiry_cannot_be_reanswered(self):
@@ -917,7 +947,7 @@ class FinishToolTests(unittest.TestCase):
         self.assertEqual(receipt["outcome"]["disposition"], "completed")
         tampered = json.loads(accepted["content"][0]["text"])
         tampered["outcome"]["summary"] = "changed"
-        with self.assertRaises(NativeError):
+        with self.assertRaises(ReceiptError):
             verify_receipt(json.dumps(tampered), self.config, turn_io.validate_outcome)
 
     def test_unknown_tools_and_invalid_outcomes_are_bounded_errors(self):
@@ -947,14 +977,14 @@ class FinishToolTests(unittest.TestCase):
                 self.assertEqual(envelope["inputSha256"], self.config["inputSha256"])
                 # The envelope is bound to its exact tool: another tool's native
                 # name must not verify it.
-                with self.assertRaises(NativeError) as error:
+                with self.assertRaises(ReceiptError) as error:
                     verify_tool_refusal(result["content"][0]["text"], self.config, "mcp__buddy_x__hey_my_buddy_checkpoint"
                                         if tool != "hey_my_buddy_checkpoint" else "mcp__buddy_x__hey_my_buddy_finish_turn",
                                         ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"))
                 self.assertEqual(error.exception.code, "invalid-tool-refusal")
         # A foreign attempt configuration cannot verify another attempt's refusal.
         foreign = {**self.config, "identity": OTHER_IDENTITY, "key": "e" * 64}
-        with self.assertRaises(NativeError):
+        with self.assertRaises(ReceiptError):
             verify_tool_refusal(self.call("hey_my_buddy_finish_turn", self.outcome("completed"))["content"][0]["text"],
                                 foreign, "mcp__buddy_x__hey_my_buddy_finish_turn",
                                 ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"))

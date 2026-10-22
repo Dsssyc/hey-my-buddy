@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import os
+import logging
 from contextlib import contextmanager
 from pathlib import Path
 
-from ...errors import BoardError
 from ...json_codec import canonical_json
 from ...private_dirs import ensure_private_dir, open_regular_fd
 from ...protocol.reasons import reason
@@ -58,37 +58,30 @@ class SessionRecord:
 
     def _open(self) -> int:
         ensure_private_dir(self.path.parent)
-        fd = open_regular_fd(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
+        fd = open_regular_fd(self.path, os.O_RDWR | os.O_CREAT | os.O_APPEND)
         self._fd = fd
-        # Bind a protected reader to the write-only inode, then trim an
-        # interrupted final line on the pinned writer fd before appending.
-        read_fd = open_regular_fd(self.path, os.O_RDONLY)
-        try:
-            writer_stat, reader_stat = os.fstat(fd), os.fstat(read_fd)
-            if (writer_stat.st_dev, writer_stat.st_ino) != (reader_stat.st_dev, reader_stat.st_ino):
-                raise BoardError("PRIVATE_PATH_UNSAFE", "Session record changed while opening")
-            end = writer_stat.st_size
-            complete = 0
-            while end > 0:
-                start = max(0, end - 8192)
-                os.lseek(read_fd, start, os.SEEK_SET)
-                chunk = os.read(read_fd, end - start)
-                newline = chunk.rfind(b"\n")
-                if newline >= 0:
-                    complete = start + newline + 1
-                    break
-                end = start
-            if complete != writer_stat.st_size:
-                os.ftruncate(fd, complete)
-        finally:
-            os.close(read_fd)
-        if os.fstat(fd).st_size == 0:
+        # Trim an interrupted final line on the same descriptor used to append.
+        size = os.fstat(fd).st_size
+        end = size
+        complete = 0
+        while end > 0:
+            start = max(0, end - 8192)
+            os.lseek(fd, start, os.SEEK_SET)
+            chunk = os.read(fd, end - start)
+            newline = chunk.rfind(b"\n")
+            if newline >= 0:
+                complete = start + newline + 1
+                break
+            end = start
+        if complete != size:
+            os.ftruncate(fd, complete)
+        if complete == 0:
             self._write(fd, self._line(SESSION_FORMAT))
         return fd
 
     def _failed(self, error: Exception) -> None:
         if self.failure is None:
-            encoded = self._error_text(error)
+            encoded = str(error).encode("utf-8", errors="backslashreplace")
             category = type(error).__name__.encode("utf-8", errors="backslashreplace")
             self.failure = reason("session-record-write-failed",
                                   category=category[:128].decode("utf-8", errors="ignore"),
@@ -98,20 +91,8 @@ class SessionRecord:
         if fd is not None:
             try:
                 os.close(fd)
-            except Exception as close_error:
-                params = self.failure["params"]
-                encoded = (params["message"].encode("utf-8") + b"; close failed: "
-                           + self._error_text(close_error))
-                params["message"] = encoded[:8192].decode("utf-8", errors="ignore")
-                params["truncated"] = params["truncated"] or len(encoded) > 8192
-
-    @staticmethod
-    def _error_text(error: Exception) -> bytes:
-        try:
-            message = str(error)
-        except Exception:
-            message = "exception message unavailable"
-        return message.encode("utf-8", errors="backslashreplace")
+            except Exception:
+                logging.getLogger(__name__).exception("Failed to close session record after its first failure")
 
     def append(self, update: SessionUpdate) -> None:
         if self.failure is not None:

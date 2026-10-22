@@ -11,7 +11,7 @@ from pathlib import Path
 from ...private_dirs import ensure_private_dir
 from ..roles.turn_io import private_json
 from .session_receipts import (
-    BOUNDED_REFUSAL_DETAIL, ReceiptError, refusal_shaped,
+    ReceiptError, refusal_shaped,
     verify_inquiry_receipt, verify_tool_refusal,
 )
 
@@ -38,11 +38,10 @@ class InquiryServices:
         if tool_name not in qualified:
             raise ReceiptError("invalid-inquiry-evidence", "the inquiry tool belongs to another session service")
         if refusal_shaped(raw_text):
-            verify_tool_refusal(raw_text, self.configuration, tool_name, INQUIRY_TOOLS,
-                                rules=BOUNDED_REFUSAL_DETAIL)
+            verify_tool_refusal(raw_text, self.configuration, tool_name, INQUIRY_TOOLS)
             return
         kind = "inquiry-answer" if qualified[tool_name] == INQUIRY_TOOLS[1] else "inquiry-checkpoint"
-        receipt = verify_inquiry_receipt(raw_text, self.configuration, kind, rules=BOUNDED_REFUSAL_DETAIL)
+        receipt = verify_inquiry_receipt(raw_text, self.configuration, kind)
         if kind == "inquiry-answer":
             bridge.record_answer(receipt, call_id)
         else:

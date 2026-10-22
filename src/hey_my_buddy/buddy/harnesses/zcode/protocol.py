@@ -8,27 +8,19 @@ import select
 import subprocess
 import threading
 import time
-from collections import deque
 from datetime import datetime, timezone
 from typing import Callable
 
-from .. import session_receipts
 from ..native_observations import bound_native_text, native_counter
-from ..session_receipts import refusal_shaped
+from ..session_receipts import (refusal_shaped, verify_receipt, verify_tool_refusal,
+                                verify_inquiry_receipt)
 from ....json_codec import canonical_json, decode_strict_json
-from ....protocol.activity import MAX_SESSION_ID, MAX_TOOL_NAME, PHASES
+from ....protocol.activity import PHASES, native_tool_name
 from ....protocol.reasons import reason as make_reason
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
 
-#: Bound on the pre-model ``session/messages`` cursor read: enough to prove which
-#: messages already existed, never an unbounded history read.
-MAX_BASELINE_MESSAGES = 32
-#: Bound on the post-settlement ``session/messages`` page. A page at this bound is
-#: treated as possibly truncated, so a long turn is published as partial.
-MAX_MESSAGE_PAGE = 64
-#: Bound on the deduplicated root ``usage.delta`` identities of one attempt.
-MAX_USAGE_DELTA_RECORDS = 4096
+MESSAGE_PAGE_SIZE = 64
 #: Every optional native metadata read gets its own wall-clock budget at most this
 #: long and always restores the main execution deadline afterwards.
 NATIVE_METADATA_TIMEOUT_SECONDS = 2.0
@@ -44,14 +36,6 @@ USAGE_DELTA_COUNTERS = ("inputTokens", "outputTokens", "totalTokens", "reasoning
 QUOTA_FAILURE_CODE_FIELDS = ("code", "errorType")
 QUOTA_FAILURE_ATTRIBUTION_FIELDS = ("providerErrorCode", "reason")
 
-#: Bounded retention for completed inquiry tool calls inside one native turn.
-#: Only the most recent terminal call identities per tool are kept (to reject an
-#: immediate duplicate terminal result); a verified receipt is handed to its
-#: callback instead of being retained. Pending scheduled calls are never evicted
-#: and no cumulative call count ever ends a long unbounded turn.
-MAX_RETAINED_INQUIRY_CALLS = 64
-
-
 _WINDOWS_PIPE = os.name == "nt"
 
 # The fact vocabulary is finite even if a native event invents many type names.
@@ -61,12 +45,16 @@ _FACT_RPC_METHODS = frozenset({
     "session/resume", "session/send", "session/setModel", "session/setThoughtLevel",
     "session/subscribe",
 })
-_FACT_EVENT_TYPES = frozenset({
+NATIVE_EVENT_TYPES = frozenset({
     "turn.started", "turn.completed", "turn.failed", "tool.updated",
     "message.upserted", "message.removed", "part.started", "part.delta",
     "part.upserted", "part.removed", "model.streaming", "permission.requested",
     "userInput.requested", "session.created", "session.resumed", "session.updated",
     "session.titleUpdated", "session.closed",
+})
+NATIVE_NOTIFICATION_METHODS = frozenset({
+    "startup/storageState", "process/mcpTelemetry", "process/mcpResourceSamples", "process/resourceSample",
+    "session/event", "state.updated", "computer-use/operation-event", "v4/telemetry/event",
 })
 
 
@@ -77,10 +65,8 @@ class NativeError(Exception):
         self.failure = failure
 
 
-#: The one shared strict decode (duplicate members and non-finite numbers,
-#: including the ``1e999`` overflow, refused); the caller keeps its own error
-#: mapping around the ``ValueError`` this raises.
-decode_json = decode_strict_json
+class NativeRpcError(NativeError):
+    """A failure raised by the current RPC, rather than by an observer."""
 
 
 #: How this adapter carries Host questions, stated once and reported verbatim.
@@ -103,7 +89,7 @@ class ActivityProjection:
     PHASES = PHASES
 
     def __init__(self, session_id: str | None = None):
-        self.session_id = session_id[:MAX_SESSION_ID] if isinstance(session_id, str) else None
+        self.session_id = session_id
         self.phase = "starting"
         self.event_seq = 0
         self.observed_at = _now()
@@ -140,7 +126,7 @@ class ActivityProjection:
                     self.phase = "tool-running"
                     name = data.get("toolName")
                     if isinstance(name, str) and name:
-                        self.tool_name = name.strip()[:MAX_TOOL_NAME]
+                        self.tool_name = native_tool_name(name)
                     self.last_tool_activity_at = _now()
                 elif data.get("kind") in ("result", "error"):
                     self.phase = "streaming-model"
@@ -154,7 +140,7 @@ class ActivityProjection:
 
     def payload(self) -> dict:
         return {
-            "phase": self.phase if self.phase in PHASES else "unknown",
+            "phase": self.phase,
             "observedAt": self.observed_at,
             "eventSeq": self.event_seq,
             "nativeSessionId": self.session_id,
@@ -188,57 +174,9 @@ def _unknown_shape(value: object) -> str:
 def _unknown_label(prefix: str, name: object, value: object) -> str:
     # Native method names are observed input. Only a short identifier reaches
     # retained evidence; values, object keys and unknown free text never do.
-    allowed = _FACT_RPC_METHODS if prefix == "rpc-result" else _FACT_EVENT_TYPES
+    allowed = _FACT_RPC_METHODS if prefix == "rpc-result" else NATIVE_EVENT_TYPES
     safe_name = name if isinstance(name, str) and name in allowed else "unknown"
     return f"{prefix}/{safe_name}/{_unknown_shape(value)}"
-
-
-# -- the shared session-receipt verification --------------------------------------
-#
-# ADR-025 step 5: the finish receipt, the signed tool-refusal envelope and the
-# inquiry receipts verify through exactly the shared implementation in
-# :mod:`hey_my_buddy.buddy.harnesses.session_receipts` — one signature rule,
-# one attempt-identity judgment and one byte budget for every harness. These
-# names run it, pass this driver's registered rule bundle, and only convert
-# the shared failure into this protocol's own :class:`NativeError`, so the
-# run's stop handling and every caller keep the failure type they already
-# catch. ``refusal_shaped`` is the shared dispatch function itself.
-
-
-def _receipt_failure(error: session_receipts.ReceiptError) -> NativeError:
-    """The shared verification failure as this protocol's own native error."""
-    return NativeError(error.code, str(error))
-
-
-def verify_receipt(raw: object, configuration: dict, validate_outcome: Callable[[object], str | None]) -> dict:
-    """Verify the signed finish receipt through the shared implementation."""
-    try:
-        return session_receipts.verify_receipt(raw, configuration, validate_outcome)
-    except session_receipts.ReceiptError as error:
-        raise _receipt_failure(error) from None
-
-
-def verify_tool_refusal(raw: object, configuration: dict, native_tool: str | None,
-                        mounted_tools: tuple[str, ...] | list[str]) -> dict:
-    """Verify one signed tool-refusal envelope through the shared implementation.
-
-    This driver's registered rule keeps the detail bounded and judges a
-    non-string native tool name at the tool-binding stage.
-    """
-    try:
-        return session_receipts.verify_tool_refusal(raw, configuration, native_tool, mounted_tools,
-                                                    rules=session_receipts.BOUNDED_REFUSAL_DETAIL)
-    except session_receipts.ReceiptError as error:
-        raise _receipt_failure(error) from None
-
-
-def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:
-    """Verify one signed checkpoint or answer receipt through the shared implementation."""
-    try:
-        return session_receipts.verify_inquiry_receipt(raw, configuration, kind,
-                                                       rules=session_receipts.BOUNDED_REFUSAL_DETAIL)
-    except session_receipts.ReceiptError as error:
-        raise _receipt_failure(error) from None
 
 
 #: The failure attribution this adapter imports from the exported native
@@ -262,24 +200,18 @@ MAX_NATIVE_FAILURE_TEXT = 160
 MAX_NATIVE_FAILURE_SUMMARY = 240
 
 
-def _failure_text(value: object, *, truncate: bool = False) -> str | None:
-    """One bounded, printable failure identifier.
-
-    Values the exported schema bounds to 160 characters are dropped rather than
-    truncated when they exceed that bound (a longer value could not have come
-    from the live protocol); natively unbounded strings are truncated.
-    """
+def _failure_text(value: object) -> str | None:
+    """One bounded, printable failure identifier."""
     if not isinstance(value, str):
         return None
     text = value.strip()
     if not text:
         return None
-    # Exported identifier fields must not become a second free-text error
-    # channel. Reject URLs, prose and recognizable credential prefixes.
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", text) or text.lower().startswith(("sk-", "sk_", "bearer", "eyj")):
+    # Exported identifier fields must not become a second free-text error channel.
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]+", text):
         return None
     if len(text) > MAX_NATIVE_FAILURE_TEXT:
-        return text[:MAX_NATIVE_FAILURE_TEXT] if truncate else None
+        return None
     return text
 
 
@@ -332,9 +264,9 @@ def decode_native_failure(payload: object) -> dict | None:
         retryable = error.get("retryable")
     if type(retryable) is bool:
         attribution["retryable"] = retryable
-    failure = {"errorType": _failure_text(error.get("type"), truncate=True),
-               "code": _failure_text(error.get("code"), truncate=True),
-               "turnPhase": _failure_text(payload.get("turnPhase"), truncate=True),
+    failure = {"errorType": _failure_text(error.get("type")),
+               "code": _failure_text(error.get("code")),
+               "turnPhase": _failure_text(payload.get("turnPhase")),
                "attribution": attribution}
     failure["summary"] = _failure_summary(failure) or "no structured failure attribution was exported"
     return failure
@@ -373,8 +305,7 @@ def optional_native_call(connection, method: str, params: dict,
                          *, timeout: float = NATIVE_METADATA_TIMEOUT_SECONDS) -> dict | None:
     """One optional native metadata read with its own bounded wall-clock budget.
 
-    Native usage and message metadata must never change the business result or
-    hang the execution: a refused, malformed or timed-out read returns ``None``,
+    A rejected or timed-out RPC returns ``None``; observer failures propagate,
     and the main execution deadline is restored immediately afterwards. The read
     is bounded by the smaller of its own budget and the main deadline, so it can
     never extend the execution either.
@@ -383,8 +314,7 @@ def optional_native_call(connection, method: str, params: dict,
     connection.deadline = min(original, time.monotonic() + max(0.0, timeout))
     try:
         return connection.call(method, params)
-    except (NativeError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
-        # An optional metadata read is never allowed to become the turn's result.
+    except NativeRpcError:
         return None
     finally:
         connection.deadline = original
@@ -393,8 +323,8 @@ def optional_native_call(connection, method: str, params: dict,
 def _bounded_message_page(response: object, *, session_id: str, limit: int) -> list[dict] | None:
     """One validated ``session/messages`` page, or ``None`` when unusable.
 
-    Every entry must belong to the root session and carry a bounded string
-    ``messageId``; a page larger than the requested bound is refused rather than
+    Every entry must belong to the root session and carry a nonempty string
+    ``messageId``; a page larger than the requested size is refused rather than
     trimmed, because the native server honours its own limit.
     """
     if not isinstance(response, dict):
@@ -407,9 +337,31 @@ def _bounded_message_page(response: object, *, session_id: str, limit: int) -> l
         if not isinstance(info, dict) or info.get("sessionId") != session_id:
             return None
         message_id = info.get("messageId")
-        if not isinstance(message_id, str) or not message_id or len(message_id) > 128:
+        if not isinstance(message_id, str) or not message_id:
             return None
     return page
+
+
+def _message_pages(connection, session_id: str, after: str | None = None) -> list[dict] | None:
+    """Read every native page through its afterMessageId cursor."""
+    messages: list[dict] = []
+    seen_cursors = {after} if after is not None else set()
+    while True:
+        params = {"sessionId": session_id, "limit": MESSAGE_PAGE_SIZE}
+        if after is not None:
+            params["afterMessageId"] = after
+        response = optional_native_call(connection, "session/messages", params)
+        page = _bounded_message_page(response, session_id=session_id, limit=MESSAGE_PAGE_SIZE)
+        if page is None:
+            return None
+        if not page:
+            return messages
+        cursor = page[-1]["info"]["messageId"]
+        if cursor in seen_cursors:
+            return None
+        seen_cursors.add(cursor)
+        messages.extend(page)
+        after = cursor
 
 
 def _root_assistant_tokens(message: dict) -> dict | None:
@@ -444,7 +396,7 @@ def _root_assistant_text(message: dict) -> dict | None:
     if not isinstance(message_id, str) or not message_id:
         return None
     parts = message.get("parts")
-    if not isinstance(parts, list) or len(parts) > 256:
+    if not isinstance(parts, list):
         return None
     texts = []
     for part in parts:
@@ -488,7 +440,6 @@ class ZcodeAttemptUsage:
         self.baseline_last: str | None = None
         self.message_counters: dict | None = None
         self.message_records = 0
-        self.message_truncated = False
         self.message_complete = False
         self.read_incomplete = False
         self.last_assistant_message: dict | None = None
@@ -526,7 +477,7 @@ class ZcodeAttemptUsage:
         if native_turn != turn_id:
             return
         event_id = params.get("eventId")
-        if isinstance(event_id, str) and 0 < len(event_id) <= 128:
+        if isinstance(event_id, str) and event_id:
             key = "event:" + event_id
         else:
             sequence = params.get("eventSeq")
@@ -544,8 +495,6 @@ class ZcodeAttemptUsage:
             if existing != counters:
                 # One native identity with two different payloads cannot be summed.
                 self.delta_conflict = True
-            return
-        if len(self.delta_records) >= MAX_USAGE_DELTA_RECORDS:
             return
         self.delta_records[key] = counters
 
@@ -565,10 +514,8 @@ class ZcodeAttemptUsage:
 
     # -- message boundary reads ---------------------------------------------
     def capture_baseline(self, connection) -> None:
-        """One bounded pre-model read of the messages that already existed."""
-        response = optional_native_call(connection, "session/messages",
-                                        {"sessionId": self.session_id, "limit": MAX_BASELINE_MESSAGES})
-        page = _bounded_message_page(response, session_id=self.session_id, limit=MAX_BASELINE_MESSAGES)
+        """Read the complete pre-model cursor of messages that already existed."""
+        page = _message_pages(connection, self.session_id)
         if page is None:
             self.read_incomplete = True
             return
@@ -577,18 +524,14 @@ class ZcodeAttemptUsage:
         self.baseline_ready = True
 
     def capture_final(self, connection) -> None:
-        """One bounded post-settlement read of this attempt's new root messages."""
+        """Read all post-settlement pages of this attempt's new root messages."""
         if not self.baseline_ready or (self.baseline_last is None and self.resumed):
             # Without a provable cursor nothing may be attributed to this attempt:
             # a resumed session whose read lost its cursor would otherwise be
             # counted from its beginning.
             self.read_incomplete = True
             return
-        params = {"sessionId": self.session_id, "limit": MAX_MESSAGE_PAGE}
-        if self.baseline_last is not None:
-            params["afterMessageId"] = self.baseline_last
-        response = optional_native_call(connection, "session/messages", params)
-        page = _bounded_message_page(response, session_id=self.session_id, limit=MAX_MESSAGE_PAGE)
+        page = _message_pages(connection, self.session_id, self.baseline_last)
         if page is None:
             self.read_incomplete = True
             return
@@ -597,7 +540,6 @@ class ZcodeAttemptUsage:
             # whole conversation; no entry in this page is provably new.
             self.read_incomplete = True
             return
-        self.message_truncated = len(page) >= MAX_MESSAGE_PAGE
         new_messages = [item for item in page
                         if item["info"].get("role") == "assistant"
                         and isinstance(item["info"].get("parentMessageId"), str)
@@ -623,7 +565,7 @@ class ZcodeAttemptUsage:
         if contributing:
             self.message_counters = totals
             self.message_records = contributing
-            self.message_complete = usable and not self.message_truncated and not self.child_activity
+            self.message_complete = usable and not self.child_activity
 
     def message_usage(self) -> dict | None:
         if self.message_counters is None:
@@ -685,7 +627,7 @@ class NativeConnection:
             while raw := self.process.stdout.readline(MAX_MESSAGE_BYTES + 1):
                 if len(raw) > MAX_MESSAGE_BYTES:
                     raise ValueError("oversized native frame")
-                message = decode_json(raw)
+                message = decode_strict_json(raw)
                 if not isinstance(message, dict):
                     raise ValueError("native frame is not an object")
                 self.messages.put(message)
@@ -704,7 +646,7 @@ class NativeConnection:
                     raise NativeError("cancelled", "the owned ZCode execution was cancelled")
                 remaining = self.deadline - time.monotonic()
                 if remaining <= 0:
-                    raise NativeError("timeout", "the owned ZCode execution exceeded its deadline")
+                    raise NativeRpcError("timeout", "the owned ZCode execution exceeded its deadline")
                 try:
                     count = os.write(self.process.stdin.fileno(), raw)
                     raw = raw[count:]
@@ -733,7 +675,7 @@ class NativeConnection:
             raise NativeError("cancelled", "the owned ZCode execution was cancelled")
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
-            raise NativeError("timeout", "the owned ZCode execution exceeded its deadline")
+            raise NativeRpcError("timeout", "the owned ZCode execution exceeded its deadline")
         try:
             message = self.messages.get(timeout=min(remaining, 0.2))
         except queue.Empty:
@@ -779,8 +721,6 @@ class NativeConnection:
             self.send({"id": message["id"], "error": {"code": -32601, "message": "This Buddy execution requires a structured attention outcome"}})
             return
         if "id" in message:
-            if len(self.responses) >= 16:
-                raise NativeError("invalid-protocol", "too many unclaimed native responses")
             self.responses[message["id"]] = message
         else:
             self.observe(message, self.ordinal)
@@ -803,7 +743,7 @@ class NativeConnection:
             "modelContextBudgetStrategy": {"value": "preflight-v1", "source": "harness-controller"}}
 
     def attention_request(self, message: dict, *, outcome: str = "refused-with-jsonrpc-error") -> None:
-        """Record one unsupported interactive request; never raises on its own."""
+        """Record one unsupported interactive request."""
         method = message.get("method")
         record = {
             "kind": "unsupported-native-request",
@@ -812,10 +752,7 @@ class NativeConnection:
             "outcome": outcome,
             "hostAction": "no interactive Host is attached; the turn must report assistance or attention in its own structured outcome",
         }
-        try:
-            self.attention(record)
-        except Exception:  # noqa: BLE001 - recording must never break the pump loop
-            pass
+        self.attention(record)
 
     def call(self, method: str, params: dict) -> dict:
         request_id = self.next_id
@@ -827,7 +764,7 @@ class NativeConnection:
         if "error" in response:
             # Native errors can contain provider request details. Keep them in the
             # native private logs; public failures identify only the operation.
-            raise NativeError("native-rpc-error", f"ZCode rejected {method}")
+            raise NativeRpcError("native-rpc-error", f"ZCode rejected {method}")
         result = response.get("result")
         if not isinstance(result, dict):
             self.on_unknown(_unknown_label("rpc-result", method, result))
@@ -882,8 +819,6 @@ class RootTurnEvidence:
         self.completed_ordinal = self.settled_ordinal = self.close_ordinal = 0
         self.checkpoint_calls: dict[str, dict] = {}
         self.answer_calls: dict[str, dict] = {}
-        self._terminal_checkpoint_calls: deque[str] = deque()
-        self._terminal_answer_calls: deque[str] = deque()
 
     def observe(self, message: dict, ordinal: int) -> None:
         p = message.get("params")
@@ -990,11 +925,11 @@ class RootTurnEvidence:
                 self.result_seq = seq
             return
         if kind in ("result", "error") and tool_call_id in self.checkpoint_calls:
-            self._inquiry_result(self.checkpoint_calls, self._terminal_checkpoint_calls, data, kind,
+            self._inquiry_result(self.checkpoint_calls, data, kind,
                                  "inquiry-checkpoint", tool_call_id)
             return
         if kind in ("result", "error") and tool_call_id in self.answer_calls:
-            self._inquiry_result(self.answer_calls, self._terminal_answer_calls, data, kind,
+            self._inquiry_result(self.answer_calls, data, kind,
                                  "inquiry-answer", tool_call_id)
             return
 
@@ -1008,18 +943,7 @@ class RootTurnEvidence:
         identity = canonical_json({"sessionId": self.session_id, "turnId": self.turn_id})
         return frozenset((identity, call_id) for call_id in self.verified_delivery_calls)
 
-    def _retain_terminal(self, calls: dict[str, dict], terminal: deque[str], tool_call_id: str) -> None:
-        """Keep only the most recent terminal call identities, never a payload.
-
-        Pending scheduled calls are never evicted; an evicted terminal identity
-        means a much later duplicate result for it is simply ignored (never
-        imported) instead of raising, and no cumulative count limits the turn.
-        """
-        terminal.append(tool_call_id)
-        while len(terminal) > MAX_RETAINED_INQUIRY_CALLS:
-            calls.pop(terminal.popleft(), None)
-
-    def _inquiry_result(self, calls: dict[str, dict], terminal: deque[str], data: dict, kind: str,
+    def _inquiry_result(self, calls: dict[str, dict], data: dict, kind: str,
                         receipt_kind: str, tool_call_id: str) -> None:
         """Import one checkpoint/answer tool result under root-turn authority.
 
@@ -1038,7 +962,6 @@ class RootTurnEvidence:
             raise NativeError("invalid-provenance", f"the native {receipt_kind} call produced a duplicate terminal result")
         if kind == "error":
             call["result"] = "tool-error"
-            self._retain_terminal(calls, terminal, tool_call_id)
             return
         result = data.get("result") or {}
         if result.get("truncated") is not False:
@@ -1052,18 +975,15 @@ class RootTurnEvidence:
             # result failed.
             verify_tool_refusal(content, self.bridge, native_name, self.mounted_tools)
             call["result"] = "tool-refusal"
-            self._retain_terminal(calls, terminal, tool_call_id)
             self.verified_delivery_calls.add(tool_call_id)
             return
         if result.get("success") is False:
             call["result"] = "tool-error"
-            self._retain_terminal(calls, terminal, tool_call_id)
             return
         if result.get("success") is not True:
             raise NativeError("invalid-inquiry-receipt", f"the native {receipt_kind} result has no explicit success evidence")
         receipt = verify_inquiry_receipt(content, self.bridge, receipt_kind)
         call["result"] = "receipt-verified"
-        self._retain_terminal(calls, terminal, tool_call_id)
         self.verified_delivery_calls.add(tool_call_id)
         callback = self.on_delivery if receipt_kind == "inquiry-checkpoint" else self.on_answer
         if callback is not None:
@@ -1081,9 +1001,6 @@ class RootTurnEvidence:
         self.call_id, self.call_seq = None, -1
 
     def provenance(self) -> dict:
-        if not (self.receipt and self.turn_id and self.call_id and self.start_seq < self.call_seq < self.result_seq < self.end_seq
-                and 0 < self.completed_ordinal < self.settled_ordinal < self.close_ordinal):
-            raise NativeError("invalid-provenance", "the native root result lacks ordered tool, turn and session settlement evidence")
         return {
             "harness": "zcode", "tool": "hey_my_buddy_finish_turn", "turnEnd": "completed", "rootSessionMatched": True,
             "inputId": self.input_id, "nativeSessionId": self.session_id, "nativeTurnId": self.turn_id,

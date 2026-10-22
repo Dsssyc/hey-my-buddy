@@ -52,6 +52,14 @@ _TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.(?P<fraction>
 DEFAULT_MIN_INTERVAL_SECONDS = 2.0
 
 
+def native_tool_name(value: str | None) -> str | None:
+    """Project a native tool label into the activity contract at its boundary."""
+    if value is None:
+        return None
+    value = value.strip()
+    return value[:MAX_TOOL_NAME] if value and "\0" not in value else None
+
+
 def _invalid(message: str, **details: Any) -> BoardError:
     return BoardError("INVALID_ARGUMENT", message, **details)
 

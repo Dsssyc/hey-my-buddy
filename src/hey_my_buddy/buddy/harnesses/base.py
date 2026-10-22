@@ -42,10 +42,10 @@ class ExecutionContext:
     def cwd(self) -> str:
         """The effective execution directory: the resolved workspace path when present."""
         turn_input = self.turn_input
-        if isinstance(turn_input, dict):
+        if turn_input is not None:
             manifest = turn_input.get("executionWorkspace")
-            if isinstance(manifest, dict) and manifest.get("path"):
-                return str(manifest["path"])
+            if manifest:
+                return manifest["path"]
         return self.spec["cwd"]
 
     @property
@@ -54,17 +54,11 @@ class ExecutionContext:
 
     @property
     def turn_input(self) -> dict | None:
-        if not isinstance(self.turn, dict):
-            return None
-        value = self.turn.get("input")
-        return value if isinstance(value, dict) else None
+        return self.turn["input"] if self.turn is not None else None
 
     @property
     def turn_id(self) -> str | None:
-        if not isinstance(self.turn, dict):
-            return None
-        value = self.turn.get("turnId")
-        return value if isinstance(value, str) and value else None
+        return self.turn["turnId"] if self.turn is not None else None
 
     def task_file(self) -> Path:
         return self.directory / "task.txt"

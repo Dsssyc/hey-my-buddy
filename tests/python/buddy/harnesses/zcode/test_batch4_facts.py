@@ -68,19 +68,20 @@ class NoToolShapeTests(unittest.TestCase):
             protocol.observe(self.event("turn.completed", payload, seq=3), 3)
         self.assertEqual(error.exception.code, "wrong-native-turn")
 
-    def test_metadata_identity_and_sequence_still_reject(self):
+    def test_metadata_identity_and_sequence_do_not_decide_the_turn(self):
         for params in ({"sessionId": "foreign", "turnId": "turn", "kind": "future", "eventSeq": 1},
                        {"sessionId": "root", "turnId": "foreign", "kind": "future", "eventSeq": 1},
                        {"sessionId": "root", "turnId": "turn", "kind": "future", "eventSeq": False}):
             protocol, _facts = self.start()
-            with self.subTest(params=params), self.assertRaises(NativeError):
+            with self.subTest(params=params):
                 protocol.observe({"method": "v4/telemetry/event", "params": params}, 2)
+                self.assertFalse(protocol.completed)
 
     def test_unknown_session_metadata_without_turn_identity_is_a_fact(self):
         protocol, facts = self.start()
         protocol.observe({"method": "v4/telemetry/event", "params": {
             "sessionId": "root", "kind": "future", "eventSeq": 1}}, 2)
-        self.assertEqual(facts.unknown_counts, {"metadata-kind-unrecognized": 1})
+        self.assertEqual(facts.unknown_counts, {})
         self.assertFalse(protocol.completed)
 
     def test_missing_lifecycle_parameters_and_payload_still_cannot_prove_identity(self):

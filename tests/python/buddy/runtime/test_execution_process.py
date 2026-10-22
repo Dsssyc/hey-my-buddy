@@ -14,7 +14,8 @@ from unittest import mock
 
 from process_observation import wait_for_unreaped_child
 
-from hey_my_buddy.buddy.runtime.execution import Execution
+from hey_my_buddy.buddy.runtime.execution import Execution, validate_claim_turn
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import execution as launch_protocol
@@ -26,6 +27,36 @@ from hey_my_buddy.buddy.harnesses.live import LiveRequest, InquiryPayload
 
 
 class ExecutionEndpointTests(unittest.TestCase):
+    def test_service_claim_turn_shape_is_checked_at_process_boundary(self):
+        claim = {"turn": {"turnId": "turn-1", "input": {
+            "executionWorkspace": {"path": "/workspace"}}}}
+        validate_claim_turn({})  # Internal command and decision executions have no turn.
+        validate_claim_turn(claim)
+        for bad in (None, [], {"turnId": "", "input": claim["turn"]["input"]},
+                    {"turnId": "turn-1", "input": []},
+                    {"turnId": "turn-1", "input": {"executionWorkspace": []}},
+                    {"turnId": "turn-1", "input": {"executionWorkspace": {"path": ""}}}):
+            with self.subTest(turn=bad), self.assertRaises(BoardError) as refused:
+                validate_claim_turn({"turn": bad})
+            self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
+
+    def test_context_uses_validated_turn_and_optional_private_adapter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = ExecutionContext("task", "attempt", 1, {"adapter": "command", "cwd": directory},
+                root / "attempt", {}, {"HMB_STATE_DIR": directory})
+            self.assertIsNone(context.turn_input)
+            self.assertIsNone(context.turn_id)
+            self.assertEqual(context.cwd, directory)
+            context.turn = {"turnId": "turn-1", "input": {
+                "executionWorkspace": {"path": "/workspace"}}}
+            self.assertEqual(context.turn_id, "turn-1")
+            self.assertEqual(context.turn_input, context.turn["input"])
+            self.assertEqual(context.cwd, "/workspace")
+            self.assertEqual(context.credential_file().name, "agent-credential.json")
+            context.private_adapter = "codex"
+            self.assertIn("codex", context.credential_file().parts)
+
     @unittest.skipUnless(sys.platform in {"darwin", "linux"}, "POSIX unreaped child failure")
     def test_missing_native_creation_time_becomes_harness_error_with_stop_proof(self):
         with tempfile.TemporaryDirectory() as directory:

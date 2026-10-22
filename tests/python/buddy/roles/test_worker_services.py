@@ -78,6 +78,32 @@ class WorkerServicesCase(unittest.TestCase):
                                      "generation": identity["generation"], "turnId": identity["turnId"]}) + "\n")
 
 
+class NativeAttentionTests(WorkerServicesCase):
+    def test_native_attention_blocks_completion_without_an_inquiry_bridge(self):
+        from hey_my_buddy.buddy.roles.attention import AttentionRecorder
+
+        recorder = AttentionRecorder(self.attention, identity=IDENTITY)
+        for index in range(12):
+            recorder.record({"method": "session/request_permission", "ordinal": index})
+        saved = json.loads(self.attention.read_text())
+        self.assertEqual(len(saved["requests"]), 12)
+        self.assertEqual(saved["requests"][0]["ordinal"], 0)
+        refused = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
+        self.assertEqual(self.envelope(refused, "hey_my_buddy_finish_turn")["reason"], "attention-outstanding")
+
+    def test_native_attention_write_failure_escapes(self):
+        from hey_my_buddy.buddy.roles.attention import AttentionRecorder
+        from unittest import mock
+
+        publish = mock.Mock()
+        recorder = AttentionRecorder(self.attention, identity=IDENTITY, on_record=publish)
+        with mock.patch("hey_my_buddy.buddy.roles.attention.private_json", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                recorder.record({"method": "session/request_permission"})
+        publish.assert_not_called()
+        self.assertEqual(recorder.requests, [])
+
+
 class MicroTaskPromptTests(unittest.TestCase):
     def test_scope_reminds_shared_git_ownership_without_rewriting_turn_protocol(self):
         for resume in ("initial", "reconstructed-new-session", "native-session"):

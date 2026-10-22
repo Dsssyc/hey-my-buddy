@@ -193,12 +193,28 @@ class MockNativeCase(ZcodeFixtureCase):
 
 
 class FastSeamTests(NativeRunCase):
+    def test_native_failure_survives_a_disconnected_final_metadata_read(self):
+        fixture = Path(__file__).parent / "fixtures/mock_zcode_usage.py"
+        select_fixture(self.environment, self.root, "zcode", fixture)
+        os.environ.update(self.environment)
+        os.environ["HMB_ZCODE_TEST_CASE"] = "usage-quota"
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
+        with mock.patch("hey_my_buddy.buddy.harnesses.zcode.protocol.ZcodeAttemptUsage.capture_final",
+                        side_effect=native_run.NativeError("native-disconnected", "fixture disconnect")) as final:
+            result = run(self.fast_request(prompt), observer=FastCorrection(SCHEMA, prompt).observer,
+                         services=None, cancelled=lambda: False)
+        final.assert_not_called()
+        self.assertEqual(result.end.reason_code, "native-turn-failed")
+        self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
+        self.assertEqual(result.usage.value["completeness"], "partial")
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_router_quota_phase_uses_current_root_output_tokens(self):
         prompt = structured_prompt("Choose a buddy", SCHEMA)
         for case, expected in (("quota-before", "before-model"),
                                ("usage-quota", "during-model"),
-                               ("quota-truncated", "unknown"),
-                               ("quota-read-error", "unknown")):
+                               ("quota-truncated", "before-model"),
+                               ("quota-read-error", "before-model")):
             with self.subTest(case=case):
                 os.environ["HMB_ZCODE_TEST_CASE"] = case
                 result = run(self.fast_request(prompt), observer=FastCorrection(SCHEMA, prompt).observer,
@@ -572,6 +588,15 @@ def evidence_call(result):
 
 
 class WorkerSeamTests(MockNativeCase):
+    def test_oversized_native_session_identity_fails_before_activity(self):
+        os.environ.update(self.environment)
+        os.environ["HMB_ZCODE_TEST_CASE"] = "oversized-session"
+        request, services = self.worker_request(self.turn_input())
+        result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
+        self.assertEqual(result.end.reason_code, "invalid-protocol")
+        self.assertIsNone(result.activity.value.get("nativeSessionId"))
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_quota_phase_tracks_root_output_not_turn_start_or_native_turn_phase(self):
         os.environ.update(self.environment)
         for case, expected in (("turn-failed-quota", "before-model"),
@@ -941,16 +966,6 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual({ref.kind for ref in result.evidence_refs},
                          {"inquiry-report", "native-stderr", "denied-interactions", "attention-report", "native-runtime-preferences"} & {ref.kind for ref in result.evidence_refs})
 
-    def test_the_request_refuses_mismatched_service_descriptions(self):
-        os.environ.update(self.environment)
-        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
-        turn_input = self.turn_input()
-        request, services = self.worker_request(turn_input)
-        broken = request.model_copy(update={"session_services": (
-            SessionService(tool_names=["mcp__other__hey_my_buddy_finish_turn"]),)})
-        with self.assertRaises(BoardError):
-            run(broken, observer=worker_observer, services=services, cancelled=lambda: False)
-
     def test_foreign_same_name_finish_calls_stay_facts_only_verified_delivery_leaves(self):
         # The Host's refusal-argument scenario through the real run: a child
         # relay and a foreign session both call a finish-named tool before the
@@ -1008,23 +1023,6 @@ class WorkerSeamTests(MockNativeCase):
                                           if ref.kind == "turn-provenance")).read_bytes())
         self.assertTrue(provenance["receiptVerified"])
         self.assertEqual(provenance["toolCallId"], evidence_call(result))
-
-    def test_a_request_schema_differring_from_the_mounted_contract_is_refused(self):
-        os.environ.update(self.environment)
-        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
-        turn_input = self.turn_input()
-        request, services = self.worker_request(turn_input)
-        # The completion mechanism serves exactly the role session-tool
-        # contract; a different requested schema is refused before any native
-        # work, so a verified receipt can never stand in for another schema.
-        payload = request.to_payload()
-        payload["outputSchema"] = {"type": "object", "additionalProperties": False,
-                                   "required": ["answer"], "properties": {"answer": {"type": "string"}}}
-        foreign = RunRequest.from_payload(payload)
-        with self.assertRaises(BoardError) as caught:
-            run(foreign, observer=worker_observer, services=services, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("mounted completion contract", caught.exception.message)
 
     def test_a_read_permission_uses_plan_mode_with_the_worker_service(self):
         os.environ.update(self.environment)

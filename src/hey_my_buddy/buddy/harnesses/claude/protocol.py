@@ -23,15 +23,11 @@ from pathlib import Path
 from ....protocol.usage import identifier as _identifier
 from ..native_observations import bound_native_text, native_counter
 from ....json_codec import canonical_json, decode_strict_json
+from ....protocol.activity import native_tool_name
 
 _WINDOWS_PIPE = os.name == "nt"
 
 MAX_FRAME_BYTES = 8 * 1024 * 1024
-MAX_PENDING_RESPONSES = 16
-MAX_BACKGROUND_TASKS = 32
-#: Bound on the deduplicated native assistant usage records kept for the fallback
-#: sum of one attempt.
-MAX_ASSISTANT_USAGE_RECORDS = 256
 
 #: The exact closed set of statuses that settle one reported native background
 # task or workflow. Substring matching would wrongly settle "incomplete" or
@@ -41,12 +37,6 @@ MAX_ASSISTANT_USAGE_RECORDS = 256
 # ``completed``, ``failed`` or ``stopped`` per the Claude Agent SDK types.
 BACKGROUND_TASK_TERMINAL_STATUSES = ("completed", "succeeded", "failed", "cancelled", "canceled",
                                      "error", "aborted", "done", "stopped")
-
-#: Quota exhaustion is temporary infrastructure unavailability, never a model
-#: capability result. The existing evaluation-store exclusion matches error text
-#: containing ``HARNESS_UNAVAILABLE``, so this honest constant keeps quota
-#: failures out of capability statistics without core evaluation edits.
-QUOTA_REJECTED_ERROR = "HARNESS_UNAVAILABLE: Claude provider quota rejected"
 
 
 class ClaudeProtocolError(Exception):
@@ -63,12 +53,6 @@ class QuotaRejected(Exception):
         self.rate_limit_type = rate_limit_type
         self.resets_at = resets_at
         self.source = source
-
-
-#: The one shared strict decode (duplicate members, non-finite numbers and the
-#: ``1e999`` overflow refused); the caller keeps its own error mapping around
-#: the ``ValueError`` this raises.
-decode_json = decode_strict_json
 
 
 class Connection:
@@ -92,7 +76,7 @@ class Connection:
             while raw := self.process.stdout.readline(MAX_FRAME_BYTES + 1):
                 if len(raw) > MAX_FRAME_BYTES:
                     raise ValueError("oversized native frame")
-                message = decode_json(raw)
+                message = decode_strict_json(raw)
                 if not isinstance(message, dict):
                     raise ValueError("native frame is not an object")
                 self.messages.put(message)
@@ -221,12 +205,8 @@ class Connection:
                 "samplesTruncated": self.unknown_events + self.unread_responses > len(self.shape_observations)}
 
     def call(self, request: dict) -> dict | None:
-        if len(self.pending) >= MAX_PENDING_RESPONSES:
-            raise ClaudeProtocolError("invalid-protocol", "too many pending Claude control requests")
         request_id = f"hey-my-buddy-{self.next_id}"
         self.next_id += 1
-        if self.next_id > 100000:
-            raise ClaudeProtocolError("invalid-protocol", "the Claude control request budget is exhausted")
         self.pending[request_id] = None
         self.send({"type": "control_request", "request_id": request_id, "request": request})
         while self.pending[request_id] is None:
@@ -261,12 +241,12 @@ def result_quota_denial(result: dict) -> bool:
 
 
 def model_usage_keys(result: dict) -> list[str]:
-    """The bounded observed-model set; never one attested model identity."""
+    """The observed-model set; never one attested model identity."""
     usage = result.get("modelUsage")
     if not isinstance(usage, dict):
         return []
-    keys = sorted(key for key in usage if isinstance(key, str) and key and len(key) <= 128)
-    return keys[:16]
+    keys = sorted(key for key in usage if isinstance(key, str) and key)
+    return keys
 
 
 def total_cost_usd(result: dict) -> float | None:
@@ -373,10 +353,8 @@ class TurnEvidence:
                     # Without an identity a later status cannot prove which
                     # task stopped. Keep the unresolved observation sticky.
                     self.anonymous_task_starts = 1
-                elif identity in self.background_tasks or len(self.background_tasks) < MAX_BACKGROUND_TASKS:
-                    self.background_tasks[identity] = "running"
                 else:
-                    raise ClaudeProtocolError("invalid-protocol", "Claude exceeded the background task bound")
+                    self.background_tasks[identity] = "running"
                 return None
             if subtype in ("task_updated", "task_notification"):
                 # The native CLI ends a foreground task that ran long enough to
@@ -392,10 +370,8 @@ class TurnEvidence:
                         del self.background_tasks[identity]
                     else:
                         self.background_tasks[identity] = status or "running"
-                elif not terminal and len(self.background_tasks) < MAX_BACKGROUND_TASKS:
-                    self.background_tasks[identity] = status or "running"
                 elif not terminal:
-                    raise ClaudeProtocolError("invalid-protocol", "Claude exceeded the background task bound")
+                    self.background_tasks[identity] = status or "running"
                 return None
             return None
         if frame_type == "assistant":
@@ -411,7 +387,7 @@ class TurnEvidence:
                          if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("name"), str)]
                 if names:
                     self.tool_calls += len(names)
-                    return "tool-running", names[0][:80]
+                    return "tool-running", native_tool_name(names[0])
             if root_session:
                 self._observe_output_tokens(message.get("usage") if isinstance(message, dict) else None)
             return "streaming-model", None
@@ -489,8 +465,6 @@ class TurnEvidence:
         if message_id in self.assistant_usage:
             # A replay with different counters stays unprovable; the first
             # observation is kept and the fallback is published as partial.
-            return
-        if len(self.assistant_usage) >= MAX_ASSISTANT_USAGE_RECORDS:
             return
         self.assistant_usage[message_id] = usage
 

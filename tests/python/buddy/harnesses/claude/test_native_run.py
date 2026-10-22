@@ -353,16 +353,31 @@ class Batch4FactsTests(NativeRunCase):
                     self.assertNotIn("samples", json.dumps(payload))
                     self.assertNotIn("credential-fragment", json.dumps(payload))
 
-    def test_oversized_catalog_still_refuses_with_confirmed_stop(self):
+    def test_large_catalog_is_retained_after_confirmed_discovery_stop(self):
         self.fixture_case("oversized-catalog")
-        with self.assertRaises(native_run.ClaudeProtocolError) as caught:
-            run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
-                          native_root=self.base / "discovery-native", timeout_seconds=10,
-                          cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "invalid-catalog")
-        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+        catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
+                                native_root=self.base / "discovery-native", timeout_seconds=10,
+                                cancelled=lambda: False)
+        models = catalog["providers"][0]["models"]
+        self.assertEqual(len(models), 201)
+        self.assertEqual(models[-1]["id"], "model-200")
+        self.assertEqual(models[-1]["efforts"], ["high"])
 
-    def test_initialization_and_permission_request_bounds_still_refuse(self):
+    def test_permission_requests_keep_all_denial_correlations(self):
+        from hey_my_buddy.protocol.activity import ActivityPublisher
+        collector = native_run._TurnCollector(self.request(), ActivityPublisher(None),
+                                             lambda _facts: FEEDBACK_CONTINUE)
+        connection = mock.Mock()
+        connection.observations.return_value = {"unknownEvents": 0, "unreadResponses": 0}
+        collector.install(connection)
+        for index in range(160):
+            collector.on_request({"type": "control_request", "request_id": str(index),
+                                  "request": {"subtype": "can_use_tool", "tool_name": "Bash"}})
+        self.assertEqual(connection.send.call_count, 160)
+        self.assertEqual(collector.facts(settled=False, raw=None)["deniedInteractions"], 160)
+        self.assertEqual(collector.denied[-1]["requestId"], "159")
+
+    def test_initialization_frame_bound_still_refuses(self):
         from hey_my_buddy.protocol.activity import ActivityPublisher
         collector = native_run._TurnCollector(self.request(), ActivityPublisher(None),
                                              lambda _facts: FEEDBACK_CONTINUE)
@@ -374,14 +389,6 @@ class Batch4FactsTests(NativeRunCase):
         with self.assertRaises(native_run.ClaudeProtocolError) as frames:
             collector.buffer({"type": "future"})
         self.assertEqual(frames.exception.code, "invalid-protocol")
-        for index in range(32):
-            collector.on_request({"type": "control_request", "request_id": str(index),
-                                  "request": {"subtype": "can_use_tool", "tool_name": "Bash"}})
-        with self.assertRaises(native_run.ClaudeProtocolError) as requests:
-            collector.on_request({"type": "control_request", "request_id": "overflow",
-                                  "request": {"subtype": "can_use_tool", "tool_name": "Bash"}})
-        self.assertEqual(requests.exception.code, "native-request-limit")
-
     def test_unknown_interrupt_reply_does_not_confirm_acknowledgement(self):
         connection = mock.Mock()
         connection.call.return_value = None
@@ -473,10 +480,20 @@ class Batch4FactsTests(NativeRunCase):
         record = {"sessionId": result.native_identity.session_id, "provenance": provenance,
                   "resumeMode": "initial", "previousSessionId": None}
         self.assertIsNone(native_run.validate_turn_provenance(record))
-        for change in ({"resultSubtype": "future"}, {"resultIsError": None}, {"resultIsError": True}):
+        self.assertIsNone(native_run.validate_turn_provenance({**record, "provenance": {
+            **provenance, "permissionDenials": 160, "modelUsage": [f"model-{i}" for i in range(40)]}}))
+        for change in ({"resultSubtype": "future"}, {"resultIsError": None}, {"resultIsError": True},
+                       {"permissionDenials": -1}, {"modelUsage": [""]}):
             with self.subTest(change=change):
                 self.assertIsNotNone(native_run.validate_turn_provenance(
                     {**record, "provenance": {**provenance, **change}}))
+
+        attention = {**record, "outcome": {"disposition": "attention"}, "provenance": {
+            **provenance, "controllerAttention": True, "structuredOutputValidated": False,
+            "permissionDenials": 0, "deniedControlRequestIds": [""]}}
+        self.assertIsNotNone(native_run.validate_turn_provenance(attention))
+        attention["provenance"]["deniedControlRequestIds"] = ["request-" + "x" * 300] * 160
+        self.assertIsNone(native_run.validate_turn_provenance(attention))
 
 
 class WorkerCarrierTests(NativeRunCase):
@@ -536,6 +553,20 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(self.fixture_state()["userTurns"], 0)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
+
+    def test_long_native_tool_name_returns_the_result_and_stop_evidence(self):
+        self.fixture_case("long-tool-name")
+        endpoint = mock.Mock(spec=CTwoLiveEndpoint)
+        endpoint.publish_activity.return_value = True
+        result = run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
+                     services=native_run.RunServices(live=endpoint), cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertIsNotNone(result.value)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        activity = [call.args[0] for call in endpoint.publish_activity.call_args_list
+                    if call.args[0].get("toolName")]
+        self.assertTrue(activity)
+        self.assertEqual(activity[0]["toolName"], ("mcp__" + "s" * 60 + "__tool")[:64])
 
     def test_the_activity_fact_and_observed_evidence_survive_the_run(self):
         result = self.execute(self.request())
@@ -705,11 +736,8 @@ class ReadCarrierTests(NativeRunCase):
 
 
 class RequestGateTests(NativeRunCase):
-    def test_this_harness_rejects_unbound_services_and_native_resume(self):
+    def test_session_services_refuse_and_reconstruction_never_resumes_natively(self):
         request = self.request()
-        with self.assertRaises(BoardError):
-            run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
-                services=object(), cancelled=lambda: False)
         with self.assertRaises(BoardError):
             self.execute(request.model_copy(update={"session_services": (
                 SessionService(tool_names=["mcp__x__y"]),)}))
@@ -825,7 +853,7 @@ class SettlementGuardTests(NativeRunCase):
         result = self.execute(self.request(timeout=20))
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "harness-error")
-        self.assertIn("HARNESS_UNAVAILABLE", result.end.message)
+        self.assertEqual(result.end.message, "the Claude provider quota rejected this execution")
         failure = result.native_failure.value
         self.assertEqual(failure["nativeCode"], "five_hour")
         self.assertEqual(failure["code"], "quota-exceeded")
@@ -1151,9 +1179,6 @@ class RoleSurfaceTests(NativeRunCase):
                      services=native_run.RunServices(live=endpoint), cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(endpoint.publish_activity.call_args.args[0], result.activity.value)
-        with self.assertRaises(BoardError):
-            run(self.request(), observer=lambda _facts: FEEDBACK_CONTINUE,
-                services={"live": endpoint}, cancelled=lambda: False)
 
     def test_session_facts_report_disabled_persistence(self):
         facts = native_run.session_facts(self.base / "native", "session-x")

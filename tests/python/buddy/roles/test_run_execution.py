@@ -266,18 +266,6 @@ class CodexModelCheckProjectionTests(unittest.TestCase):
         self.assertEqual(payload["sessionRecordFailure"], {
             "code": "session-record-write-failed", "params": {"category": "OSError", "message": "file write unavailable", "truncated": False}})
 
-    def test_a_changed_evidence_reference_is_refused(self):
-        request = self._request("none")
-        result = self._result(request, with_ref=True)
-        changed = rc.RunResult(
-            identity=request.identity, harness="codex", end=result.end,
-            evidence_refs=[rc.EvidenceRef(kind="model-check",
-                                          location=result.evidence_refs[0].location,
-                                          size_bytes=result.evidence_refs[0].size_bytes,
-                                          sha256="0" * 64)])
-        from hey_my_buddy.buddy.harnesses.registry import run_seam
-        with self.assertRaises(BoardError):
-            run_seam("codex").native_evidence(changed)
 
 
 if __name__ == "__main__":

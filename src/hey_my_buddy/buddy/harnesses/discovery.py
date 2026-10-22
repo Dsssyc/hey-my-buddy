@@ -136,12 +136,7 @@ def _manager_records(home: Path) -> tuple[list[dict], list[tuple[str, Path]]]:
                     if not version or re.fullmatch(r"v?\d+(?:\.\d+){0,2}", version):
                         break
                     alias = home / ".nvm/alias" / version
-                    alias_root = home / ".nvm/alias"
-                    try:
-                        allowed = alias.resolve().is_relative_to(alias_root.resolve()) and alias.is_file()
-                    except (OSError, RuntimeError):
-                        allowed = False
-                    if not allowed:
+                    if not alias.is_file():
                         break
                     records.append({"manager": "nvm", "path": str(alias),
                                     "fingerprint": file_fingerprint(alias)})
@@ -1056,9 +1051,10 @@ def _discover(harness: str, *, manual_path: str | None = None,
             reason = failure["reason"] if failure else "not-found"
         else:
             status, reason = "ready", selected["reason"]
-        diagnostics = [{"path": item["path"], "source": item["source"], "status": item["status"],
-                        "reason": item["reason"]} for item in attempts[:_MAX_DIAGNOSTICS]]
-        if not attempts:
+        if attempts:
+            diagnostics = [{"path": item["path"], "source": item["source"], "status": item["status"],
+                            "reason": item["reason"]} for item in attempts[:_MAX_DIAGNOSTICS]]
+        else:
             diagnostics = [{"path": item["path"], "source": item["source"], "status": "missing",
                             "reason": _probe_reason("not-found")} for item in snapshot["candidates"][:_MAX_DIAGNOSTICS]]
         return {"harness": harness, "status": status, "available": selected is not None,

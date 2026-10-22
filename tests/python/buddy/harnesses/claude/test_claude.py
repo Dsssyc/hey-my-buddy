@@ -28,7 +28,6 @@ from hey_my_buddy.buddy.roles import controller, run_execution, turn_io
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.native_run import validate_turn_provenance
-from hey_my_buddy.buddy.harnesses.claude.protocol import QUOTA_REJECTED_ERROR
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.private_dirs import context_root
 
@@ -209,7 +208,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(native_session["nativeAppVisibility"], "none")
         self.assertFalse(native_session["resumable"])
 
-    def test_observed_model_identity_stays_null_with_a_bounded_observed_set(self):
+    def test_observed_model_identity_stays_null_with_the_observed_set(self):
         outcome = self.execute(self.context())
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertIsNone(outcome.result["observed"])
@@ -401,8 +400,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "harness-error")
-        self.assertEqual(outcome.error, QUOTA_REJECTED_ERROR)
-        self.assertIn("HARNESS_UNAVAILABLE", outcome.error)
+        self.assertEqual(outcome.error, "the Claude provider quota rejected this execution")
         failure = outcome.result["quotaFailure"]
         self.assertEqual(set(failure), {"code", "nativeCode", "source", "observedAt", "resetsAt", "rejectionPhase"})
         self.assertEqual(failure["code"], "quota-exceeded")
@@ -421,7 +419,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 outcome = self.execute(self.context(case, index=index))
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
                 self.assertEqual(outcome.result["code"], "harness-error")
-                self.assertEqual(outcome.error, QUOTA_REJECTED_ERROR)
+                self.assertEqual(outcome.error, "the Claude provider quota rejected this execution")
                 self.assertEqual(outcome.result["quotaFailure"]["nativeCode"], "unknown")
                 self.assertEqual(outcome.result["quotaFailure"]["rejectionPhase"], "during-model")
                 self.assertIsNone(outcome.result["quotaFailure"]["resetsAt"])
@@ -447,7 +445,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_quota_warning_survives_a_later_rejection(self):
         outcome = self.execute(self.context("warning-then-rejected"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
-        self.assertEqual(outcome.error, QUOTA_REJECTED_ERROR)
+        self.assertEqual(outcome.error, "the Claude provider quota rejected this execution")
         self.assertNotIn("rateLimitObservations", outcome.result)
         self.assertEqual(outcome.result["quotaFailure"]["rejectionPhase"], "before-model")
         self.assertNotIn("turn", outcome.result)

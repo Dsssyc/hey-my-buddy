@@ -83,13 +83,6 @@ class NativeFactsTests(unittest.TestCase):
         self.assertEqual(catalog["providers"][0]["provider"], "openai")
         self.assertEqual(listed, set())
 
-    def test_catalog_count_budget_still_refuses(self):
-        connection = mock.Mock()
-        connection.call.return_value = {"data": [{}] * 201}
-        with self.assertRaises(CodexProtocolError) as caught:
-            native_run._catalog(connection, "version", "openai")
-        self.assertEqual(caught.exception.code, "invalid-catalog")
-
     def test_catalog_repeated_cursor_still_refuses(self):
         connection = mock.Mock()
         connection.call.return_value = {"data": [], "nextCursor": "same"}

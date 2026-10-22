@@ -12,18 +12,20 @@ from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.harnesses.run_contract import RunBuddy
-from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
+from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError, sign_receipt
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     ActivityProjection,
     NativeConnection,
     NativeError,
+    NativeRpcError,
     RootTurnEvidence,
-    decode_json,
+    ZcodeAttemptUsage,
     decode_native_failure,
     verify_inquiry_receipt,
     verify_receipt,
     verify_tool_refusal,
+    optional_native_call,
 )
 from hey_my_buddy.buddy.harnesses.zcode.native_run import catalog, configure_session, execution_deadline
 from hey_my_buddy.json_codec import canonical_json
@@ -262,7 +264,7 @@ class ReceiptTests(unittest.TestCase):
                                           validate_outcome=validate_outcome, mounted_tools=("hey_my_buddy_finish_turn",))
                 self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
                 self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
-                with self.assertRaises(NativeError) as error:
+                with self.assertRaises(ReceiptError) as error:
                     self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
                         "result": {"success": True, "truncated": False, "content": content}})
                 self.assertEqual(error.exception.code, "invalid-tool-refusal")
@@ -290,7 +292,7 @@ class ReceiptTests(unittest.TestCase):
                                           validate_outcome=validate_outcome, mounted_tools=("hey_my_buddy_finish_turn",))
                 self.root_event(tracker, 1, "turn.started", {"inputId": "input-root"})
                 self.root_event(tracker, 2, "tool.updated", {"kind": "scheduled", "toolName": finish, "toolCallId": "bad"})
-                with self.assertRaises(NativeError) as error:
+                with self.assertRaises(ReceiptError) as error:
                     self.root_event(tracker, 3, "tool.updated", {"kind": "result", "toolCallId": "bad",
                         "result": {"success": False, "truncated": False, "content": content}})
                 self.assertEqual(error.exception.code, "invalid-tool-refusal")
@@ -310,9 +312,7 @@ class ReceiptSeamTests(unittest.TestCase):
 
     Since the step-5 merge the judgment lives in
     ``harnesses.session_receipts`` (pinned by ``test_session_receipts``); these
-    witnesses prove the ZCode names still verify genuine receipts and convert
-    every shared failure into this protocol's own NativeError — the same
-    shared guards the DSH seam witnesses run.
+    witnesses prove genuine receipts and the shared verification failures.
     """
 
     def setUp(self):
@@ -326,14 +326,14 @@ class ReceiptSeamTests(unittest.TestCase):
                       self.bridge)["result"]["content"][0]["text"]
         self.assertEqual(verify_receipt(raw, self.bridge, validate_outcome)["outcome"], self.outcome)
         other = {**self.bridge, "identity": {**self.bridge["identity"], "attemptId": "other"}}
-        with self.assertRaises(NativeError) as error:
+        with self.assertRaises(ReceiptError) as error:
             verify_receipt(raw, other, validate_outcome)
         self.assertEqual(error.exception.code, "invalid-finish")
         answer = {"version": 1, "kind": "inquiry-answer", "identity": self.bridge["identity"],
                   "inquiryId": "q-1", "questionSha256": "c" * 64, "answer": "this", "receiptId": "e" * 32}
         answer["signature"] = sign_receipt(answer, self.bridge["key"])
         self.assertEqual(verify_inquiry_receipt(json.dumps(answer), self.bridge, "inquiry-answer")["answer"], "this")
-        with self.assertRaises(NativeError) as error:
+        with self.assertRaises(ReceiptError) as error:
             verify_inquiry_receipt(json.dumps(answer), other, "inquiry-answer")
         self.assertEqual(error.exception.code, "invalid-inquiry-receipt")
         envelope = {"version": 1, "kind": "tool-refusal", "identity": self.bridge["identity"],
@@ -343,7 +343,7 @@ class ReceiptSeamTests(unittest.TestCase):
         envelope["signature"] = sign_receipt(envelope, self.bridge["key"])
         self.assertEqual(verify_tool_refusal(json.dumps(envelope), self.bridge, self.native, MOUNTED_TOOLS)["tool"],
                          "hey_my_buddy_finish_turn")
-        with self.assertRaises(NativeError) as error:
+        with self.assertRaises(ReceiptError) as error:
             verify_tool_refusal(json.dumps({**envelope, "detail": "changed after signing"}), self.bridge, self.native,
                                 MOUNTED_TOOLS)
         self.assertEqual(error.exception.code, "invalid-tool-refusal")
@@ -459,7 +459,7 @@ class InquiryEvidenceTests(unittest.TestCase):
                                                   "content": header + self.refusal_text("hey_my_buddy_answer_inquiry", "unknown-inquiry")}})
         self.assertEqual(self.tracker.answer_calls["ans-false"]["result"], "tool-refusal")
         self.assertEqual(self.answers, [])
-        with self.assertRaises(NativeError) as error:
+        with self.assertRaises(ReceiptError) as error:
             self.event(6, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_checkpoint",
                                            "toolCallId": "ckpt-forged"})
             self.event(7, "tool.updated", {"kind": "result", "toolCallId": "ckpt-forged",
@@ -468,7 +468,7 @@ class InquiryEvidenceTests(unittest.TestCase):
         self.assertEqual(error.exception.code, "invalid-tool-refusal")
         forged = json.loads(self.refusal_text("hey_my_buddy_checkpoint", "inquiry-channel-absent"))
         forged["detail"] = "changed after signing"
-        with self.assertRaises(NativeError) as error:
+        with self.assertRaises(ReceiptError) as error:
             self.event(8, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_answer_inquiry",
                                            "toolCallId": "ans-forged"})
             self.event(9, "tool.updated", {"kind": "result", "toolCallId": "ans-forged",
@@ -502,7 +502,7 @@ class InquiryEvidenceTests(unittest.TestCase):
         self.event(7, "tool.updated", {"kind": "result", "toolCallId": "ckpt-good",
                                        "result": {"success": True, "truncated": False, "content": content}})
         self.assertEqual(len(self.deliveries), 1)
-        with self.assertRaises(NativeError) as error:
+        with self.assertRaises(ReceiptError) as error:
             self.event(8, "tool.updated", {"kind": "scheduled", "toolName": "mcp__buddy_x__hey_my_buddy_answer_inquiry",
                                            "toolCallId": "ans-forged"})
             self.event(9, "tool.updated", {"kind": "result", "toolCallId": "ans-forged",
@@ -536,7 +536,7 @@ class InquiryEvidenceTests(unittest.TestCase):
                     tracker.observe({"method": "session/event", "params": {
                         "sessionId": "sess-root", "turnId": "native-turn", "seq": 3, "type": "tool.updated",
                         "payload": {"kind": "result", "toolCallId": "ckpt-1", "result": good}}}, 3)
-                with self.assertRaises(NativeError) as error:
+                with self.assertRaises((NativeError, ReceiptError)) as error:
                     tracker.observe({"method": "session/event", "params": {
                         "sessionId": "sess-root", "turnId": "native-turn", "seq": 4, "type": "tool.updated",
                         "payload": {"kind": "result", "toolCallId": "ckpt-1", "result": result}}}, 4)
@@ -558,13 +558,9 @@ class InquiryEvidenceTests(unittest.TestCase):
                                            "toolCallId": "late-ckpt"})
         self.assertEqual(error.exception.code, "duplicate-finish")
 
-    def test_thousands_of_inquiry_calls_stay_bounded_and_functional(self):
-        # An unbounded turn may checkpoint constantly. Every
-        # verified receipt is handed to its callback and never retained, only a
-        # bounded recent window of terminal call identities is kept, and no
-        # cumulative count ever ends the turn.
-        from hey_my_buddy.buddy.harnesses.zcode.protocol import MAX_RETAINED_INQUIRY_CALLS
-
+    def test_thousands_of_inquiry_calls_keep_duplicate_detection(self):
+        # A long turn may checkpoint constantly. Receipts reach the callback
+        # while call identities remain available for duplicate detection.
         self.started()
         content = self.receipt_text("inquiry-checkpoint", {"inquiries": []})
         total = 1200
@@ -576,7 +572,7 @@ class InquiryEvidenceTests(unittest.TestCase):
                                                        "result": {"success": True, "truncated": False,
                                                                   "content": content}})
         self.assertEqual(len(self.deliveries), total)
-        self.assertLessEqual(len(self.tracker.checkpoint_calls), MAX_RETAINED_INQUIRY_CALLS)
+        self.assertEqual(len(self.tracker.checkpoint_calls), total)
         self.assertTrue(all(call["result"] in (None, "tool-error", "tool-refusal", "receipt-verified")
                             for call in self.tracker.checkpoint_calls.values()),
                         "a verified checkpoint receipt payload must never be retained")
@@ -594,25 +590,25 @@ class InquiryEvidenceTests(unittest.TestCase):
             self.event(2 * total + 4, "tool.updated", {"kind": "result", "toolCallId": "ckpt-live",
                                                        "result": {"success": True, "truncated": False,
                                                                   "content": content}})
-        # ...and a result for an evicted ancient call identity is ignored (never
-        # imported) instead of raising or delivering again.
-        self.event(2 * total + 5, "tool.updated", {"kind": "result", "toolCallId": "ckpt-0",
-                                                   "result": {"success": True, "truncated": False,
-                                                              "content": content}})
+        # ...and an ancient duplicate is still detected.
+        with self.assertRaises(NativeError):
+            self.event(2 * total + 5, "tool.updated", {"kind": "result", "toolCallId": "ckpt-0",
+                                                       "result": {"success": True, "truncated": False,
+                                                                  "content": content}})
         self.assertEqual(len(self.deliveries), total + 1)
 
 
 class NativeFailureAttributionTests(unittest.TestCase):
-    def test_structured_labels_cannot_smuggle_urls_prose_or_credential_prefixes(self):
+    def test_structured_labels_require_identifier_characters(self):
         failure = decode_native_failure({"error": {
             "type": "https://private.invalid/path", "code": "Bearer-private-token",
             "attribution": {"source": {"bad": "shape"}, "reason": "private prompt text",
                             "providerId": "sk-private-key", "providerErrorCode": "1308", "statusCode": 429},
         }})
         self.assertIsNone(failure["errorType"])
-        self.assertIsNone(failure["code"])
-        self.assertEqual(failure["attribution"], {"providerErrorCode": "1308", "statusCode": 429})
-        self.assertNotIn("private", json.dumps(failure))
+        self.assertEqual(failure["code"], "Bearer-private-token")
+        self.assertEqual(failure["attribution"], {"providerId": "sk-private-key",
+                                                   "providerErrorCode": "1308", "statusCode": 429})
 
     """Only whitelisted exported turn.failed fields become observable."""
 
@@ -661,7 +657,7 @@ class NativeFailureAttributionTests(unittest.TestCase):
                                                                     "errorPhase": "telemetry",
                                                                     "providerId": None, "modelId": 5}},
                                          "turnPhase": b"bytes"})
-        self.assertEqual(failure["errorType"], "E" * 160)
+        self.assertIsNone(failure["errorType"])
         self.assertEqual(failure["attribution"], {})
         self.assertIsNone(failure["code"])
         self.assertIsNone(failure["turnPhase"])
@@ -669,6 +665,7 @@ class NativeFailureAttributionTests(unittest.TestCase):
         # A boolean retryable on the error itself is still in the exported schema.
         fallback = decode_native_failure({"error": {"type": "T", "retryable": True}, "turnPhase": "p"})
         self.assertIs(fallback["attribution"]["retryable"], True)
+
 
     def test_a_root_turn_failed_event_carries_attribution_a_prompt_failure_does_not(self):
         bridge = {"identity": {"taskId": "g", "attemptId": "a", "generation": 1, "turnId": "t"},
@@ -698,6 +695,97 @@ class NativeFailureAttributionTests(unittest.TestCase):
                            "reason": "prompt_failed", "patch": {"anything": "opaque"}}}, 2)
         self.assertEqual(prompt_error.exception.code, "native-turn-failed")
         self.assertIsNone(prompt_error.exception.failure)
+
+
+class OptionalNativeMetadataTests(unittest.TestCase):
+    def test_only_the_current_rpc_failure_is_optional(self):
+        connection = mock.Mock(deadline=time.monotonic() + 30)
+        original = connection.deadline
+        for error in (NativeRpcError("native-rpc-error", "rejected"),
+                      NativeRpcError("timeout", "late")):
+            connection.call.side_effect = error
+            self.assertIsNone(optional_native_call(connection, "session/messages", {}))
+            self.assertEqual(connection.deadline, original)
+        for error in (NativeError("invalid-provenance", "observer failed"),
+                      NativeError("native-rpc-error", "observer failed")):
+            connection.call.side_effect = error
+            with self.assertRaises(NativeError) as caught:
+                optional_native_call(connection, "session/messages", {})
+            self.assertIs(caught.exception, error)
+            self.assertEqual(connection.deadline, original)
+
+    def test_message_reads_follow_every_cursor_page(self):
+        def message(index, *, assistant=False):
+            info = {"sessionId": "root", "messageId": f"m-{index}"}
+            if assistant:
+                info.update(role="assistant", parentMessageId="parent",
+                            tokens={"input": 1, "output": 2, "reasoning": 0,
+                                    "cache": {"read": 0, "write": 0}})
+            return {"info": info, "parts": []}
+
+        class Connection:
+            def __init__(self):
+                self.deadline = time.monotonic() + 30
+                self.messages = [message(index) for index in range(70)]
+                self.cursors = []
+
+            def call(self, method, params):
+                self.cursors.append(params.get("afterMessageId"))
+                after = params.get("afterMessageId")
+                start = next((index + 1 for index, item in enumerate(self.messages)
+                              if item["info"]["messageId"] == after), 0) if after else 0
+                return {"messages": self.messages[start:start + params["limit"]]}
+
+        connection = Connection()
+        usage = ZcodeAttemptUsage("root", resumed=True)
+        usage.capture_baseline(connection)
+        self.assertEqual(len(usage.baseline_ids), 70)
+        connection.messages.extend(message(index, assistant=True) for index in range(70, 140))
+        usage.capture_final(connection)
+        self.assertEqual(usage.message_usage()["nativeRecords"], 70)
+        self.assertEqual(usage.message_usage()["completeness"], "complete")
+        self.assertEqual(connection.cursors, [None, "m-63", "m-69", "m-69", "m-133", "m-139"])
+
+    def test_short_message_page_does_not_end_the_read(self):
+        class Connection:
+            deadline = time.monotonic() + 30
+
+            def __init__(self):
+                self.cursors = []
+
+            def call(self, method, params):
+                self.cursors.append(params.get("afterMessageId"))
+                pages = {None: ["m-0"], "m-0": ["m-1"], "m-1": []}
+                return {"messages": [{"info": {"sessionId": "root", "messageId": item}, "parts": []}
+                                     for item in pages[params.get("afterMessageId")]]}
+
+        connection = Connection()
+        usage = ZcodeAttemptUsage("root", resumed=False)
+        usage.capture_baseline(connection)
+        self.assertTrue(usage.baseline_ready)
+        self.assertFalse(usage.read_incomplete)
+        self.assertEqual(usage.baseline_ids, {"m-0", "m-1"})
+        self.assertEqual(connection.cursors, [None, "m-0", "m-1"])
+
+    def test_seen_message_cursor_marks_read_incomplete(self):
+        class Connection:
+            deadline = time.monotonic() + 30
+
+            def __init__(self):
+                self.cursors = []
+
+            def call(self, method, params):
+                after = params.get("afterMessageId")
+                self.cursors.append(after)
+                repeated = {None: "m-0", "m-0": "m-1", "m-1": "m-0"}[after]
+                return {"messages": [{"info": {"sessionId": "root", "messageId": repeated}, "parts": []}]}
+
+        connection = Connection()
+        usage = ZcodeAttemptUsage("root", resumed=False)
+        usage.capture_baseline(connection)
+        self.assertFalse(usage.baseline_ready)
+        self.assertTrue(usage.read_incomplete)
+        self.assertEqual(connection.cursors, [None, "m-0", "m-1"])
 
 
 class BuddyTests(unittest.TestCase):
@@ -734,6 +822,7 @@ class BuddyTests(unittest.TestCase):
             ({}, "high"),
             ({"options": {"reasoningLevel": "low"}}, "high"),
             ({"options": {"reasoningLevel": "high"}}, "low"),
+            ({"options": {"reasoningLevel": "low"}}, "x" * 129),
         ):
             with self.subTest(current=current, thought=thought):
                 connection = mock.Mock()
@@ -746,7 +835,7 @@ class BuddyTests(unittest.TestCase):
                                  ["session/setModel", "session/setThoughtLevel"])
 
     def test_unrecognized_thought_level_is_unknown_and_buddy_continues(self):
-        for thought in (None, [], False, "", " \t", "x" * 129):
+        for thought in (None, [], False, "", " \t"):
             with self.subTest(thought=thought):
                 unknown = []
                 connection = mock.Mock()
@@ -849,7 +938,7 @@ class NativeConnectionShapeTests(unittest.TestCase):
         self.assertNotIn("secret", str(error.exception))
         self.assertEqual(unknown, [])
 
-    def test_sixteen_unclaimed_native_responses_remain_a_resource_cap(self):
+    def test_unclaimed_native_responses_are_retained(self):
         connection = NativeConnection.__new__(NativeConnection)
         connection.cancelled = threading.Event()
         connection.deadline = math.inf
@@ -857,10 +946,8 @@ class NativeConnectionShapeTests(unittest.TestCase):
         connection.messages.put({"id": 17, "result": {}})
         connection.responses = {index: {"result": {}} for index in range(1, 17)}
         connection.ordinal = 0
-        with self.assertRaises(NativeError) as error:
-            connection._pump()
-        self.assertEqual(error.exception.code, "invalid-protocol")
-        self.assertEqual(len(connection.responses), 16)
+        connection._pump()
+        self.assertEqual(len(connection.responses), 17)
 
 
 class OwnedProcessEvidenceTests(unittest.TestCase):

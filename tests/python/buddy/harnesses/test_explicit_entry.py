@@ -14,6 +14,18 @@ from hey_my_buddy.buddy.harnesses.zcode import config as zcode
 
 
 class ExplicitEntryTests(unittest.TestCase):
+    def test_shared_launch_passes_only_its_development_fixture_values(self):
+        with mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"}), mock.patch.object(
+                runtime_selection, "launch_with_environment", side_effect=lambda *_args: (["native"], {})):
+            for name, config in (("claude", claude), ("codex", codex)):
+                with self.subTest(harness=name):
+                    own = f"HMB_{name.upper()}_FIXTURE_"
+                    other = "HMB_CODEX_FIXTURE_CASE" if name == "claude" else "HMB_CLAUDE_FIXTURE_CASE"
+                    command, child = config.launch({own + "CASE": "ok", own + "STATE": "/fixture/state",
+                                                    other: "other"})
+                    self.assertEqual(command, ["native"])
+                    self.assertEqual(child, {own + "CASE": "ok", own + "STATE": "/fixture/state"})
+
     def test_each_override_uses_the_shared_resolver_and_preserves_refusal(self):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"}):
             entry = Path(temporary) / "native-entry.exe"

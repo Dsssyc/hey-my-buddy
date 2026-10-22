@@ -396,13 +396,15 @@ def worker_request(control: dict, module):
             inquiry=inquiry, inquiry_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry"),
             validate_outcome=partial(validate_outcome, delegation_authority=delegation_authority),
             delegation_authority=delegation_authority,
-            native_stderr=str(Path(control["directory"]) / "native.stderr.log"))
+            native_stderr=str(invocation_root / "native-stderr.log"))
         prompt = worker_services.micro_task_prompt(
             task_text, turn_input, binding.completion_tool,
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool,
             credential_file=credential_file)
         services, descriptions = binding.services, (binding.description,)
-        schema = worker_services.outcome_schema_for(delegation_authority=delegation_authority)
+        mount = services.mount
+        schema = next(tool["inputSchema"] for tool in mount.tool_contracts
+                      if f"mcp__{mount.server_name}__{tool['name']}" == binding.completion_tool)
     else:
         format = format.for_turn(turn_input)
         prompt, schema = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema
