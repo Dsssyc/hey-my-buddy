@@ -48,7 +48,7 @@ Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInf
 
 采用前在同一私有 NTFS 根验证：临时文件的改名访问权和共享方式；目标缺席及已存在；普通 Python、允许删除共享、外部禁止删除共享的读者；发布后旧句柄读 OLD、新打开读 NEW，目标不暴露半份或无故缺席；失败后的目标/临时文件、原始错误码和摘要；临时文件与目标的 owner/DACL、属性及文件 ID；fsync 后、API 前、调用中竞争窗口及 API 后强杀写者，再用新进程检查摘要；最后跑实际 native/备份/安装 journal 的恢复用例。调用中窗口未命中就标未覆盖，不能冒充逐指令覆盖。正常事实读者允许删除共享；禁止共享的外部读者应明确报忙，释放后可继续。
 
-若 POSIX 语义改名满足上述门槛，只落地该机制；若不满足，保存具体失败事实后才对 ReplaceFileW 做同一矩阵，并额外验证目标缺席的发布路径和目标元数据合并的影响，再选择一个机制。两个候选均未通过就不安装 Windows 换代后续，不在运行时自动换 API。进程中断后的恢复按实际文件和摘要判定，失败时保留仍存在且恢复需要的完整文件，不在 finally 无条件删除唯一候选；不承诺 Windows 目录项的断电耐久性。Defender 条件见第 7 节，不因错误 5 一律重试。
+若 POSIX 语义改名满足上述门槛，只落地该机制；若不满足，保存具体失败事实后才对 ReplaceFileW 做同一矩阵，并额外验证目标缺席的发布路径和目标元数据合并的影响，再选择一个机制。两个候选均未通过就不安装 Windows 换代后续，不在运行时自动换 API。进程中断后的恢复按实际文件和摘要判定。一次发布调用失败时，目标里的旧版本完好，临时文件没有读者，一律删掉（2026-10-22 起；阶段 C 后续曾为“恢复可能需要”保留它，B2 删去）；写者进程被强杀留下的临时文件只是残留，不参与恢复。不承诺 Windows 目录项的断电耐久性。Defender 条件见第 7 节，不因错误 5 一律重试。
 
 当前 Windows boot_id() 读取 BootIdentifier，实验只证明同次开机五次短间隔稳定；跨重启、快速启动、睡眠、休眠如何变化不再安排实测。相同值不能证明旧进程还在，不同值也不用于推断旧进程已停；“保留进程却改变标识”若被解释成已停，会产生假停止。既然两种比较都不参与 Windows 判断，阶段 D 删除 Windows BootIdentifier 的读取、记录与比较，不存一个不起作用的值。Windows 只用真实执行 PID、内核创建 FILETIME、sessionId 与根 Job，按第 4 节停止规则恢复；Linux 的 boot UUID、macOS 的 bootsessionuuid 保持既有规则。重启后的停止结算和后续调度不依赖电源实验，也不因没有全空采样而永远占用资源。
 
@@ -136,7 +136,7 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 阶段 B2（精简，2026-10-22 开发者定）：照第 2 节删去私有路径逐次固定祖先、逐次 ACL 校验、私有路径的名称比对、提权进程改默认属主（连同 `PRIVATE_OWNER_SETUP_FAILED`）与 Windows 上的 0o700；状态根在安装与冷启动时查一次；Python 下限回到 `>=3.12,<3.13`。句柄层留给工作树与第 3 节的发布。阶段 C 后续的顺带项 1、2（安装发布路径进了私有边界、整条路径比对）随之不再成立。排在阶段 C 后续合入之后；删守卫的差异按惯例另请一次独立审查。不改消息、事实或存储形式。
 
-阶段 C：已完成，合入 `516c6d5d`，测试挂起修复合入 `e1e4d1d6`。共用 `private_files.py:publish_bytes` 及三系统唯一备份 journal 是现状，不再依赖 B 才算完成。其实现没有改跨进程事实或看板存储形式，不因此开升级或移动 CONTRACT_VERSION；测试修复本身不移动版本。这里只留 Windows 带读者换代后续：依赖 B 的句柄边界和补项 5，通过实验门槛后改 `windows_files.py`、`private_files.py` 的可变文件换代及失败清理，复跑 private publication、native journal、`test_backup_publication.py`、upgrade 恢复的相应中断用例。事实形式不变，单独安装移动末号，不因换 API 开升级。
+阶段 C：已完成，合入 `516c6d5d`，测试挂起修复合入 `e1e4d1d6`；Windows 带读者换代的后续也已完成，合入 `0dc799a5`（[验收记录](../../acceptance/cross-platform/phase-c-followup.md)），原生行为的独立复跑随 B2 一起做。共用 `private_files.py:publish_bytes` 及三系统唯一备份 journal 是现状，不再依赖 B 才算完成。其实现没有改跨进程事实或看板存储形式，不因此开升级或移动 CONTRACT_VERSION；测试修复本身不移动版本。这里只留 Windows 带读者换代后续：依赖 B 的句柄边界和补项 5，通过实验门槛后改 `windows_files.py`、`private_files.py` 的可变文件换代及失败清理，复跑 private publication、native journal、`test_backup_publication.py`、upgrade 恢复的相应中断用例。事实形式不变，单独安装移动末号，不因换 API 开升级。
 
 阶段 D：修复 Windows 服务重启及同契约安装会杀执行的现存缺陷，完成独立服务启动、真实身份、根句柄归属及会话接回。依赖 B、C 的既有发布及 Windows 换代后续、补项 2 与补项 6 的跨会话部分（补项 3 已完成）；改 transport、install 的 launcher/runtime/upgrade:start、protocol/windows_process.py、owned_process、process_controller、process_identity、execution、buddy/runtime/execution.py、调度/interruption 和 store/db。保留已存在的 kill-on-close，补 183 拒绝、唯一长期执行句柄、临时停止句柄、真实 PID/sessionId 和同会话名字缺席停止判断；删除 Windows BootIdentifier 读取、记录及比较，不加长期观察句柄。服务在执行进程之外做发现时，`buddy/harnesses/discovery.py:probe` 不走 owned_popen，而是普通 Popen 加 CREATE_NEW_PROCESS_GROUP，在 Windows 上不进任何 Job，后代不受管（2026-10-21 Windows 复跑时观察到，当时无残留）；阶段 D 让这些探针同样在 kill-on-close、禁止脱离的 Job 里运行，结束时终止并观察全空，与执行用同一条停止证据。验收真实链显式/无标志脱离矩阵、服务重启与同契约安装保活、执行强杀、先后崩溃、最后句柄关闭后的错误 2 和全成员缺席、重启后结算继续调度、marker 前及跨会话/查询失败 unknown。扩充 Windows process、process identity、execution recovery、transport 冷启动、安装回滚与执行围栏测试。
 
