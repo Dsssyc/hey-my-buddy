@@ -128,9 +128,11 @@ class CodexSchemaTests(unittest.TestCase):
                             "turnId": "turn", "executionWorkspace": {"access": access}}
                     (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
                     (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
-                    binding = SimpleNamespace(services=None,
+                    mount = SimpleNamespace(server_name="test", tool_contracts=[
+                        {"name": "finish", "inputSchema": {"type": "object"}}])
+                    binding = SimpleNamespace(services=SimpleNamespace(mount=mount),
                                               description=SessionService(tool_names=("mcp__test__finish",)),
-                                              completion_tool="finish", checkpoint_tool="checkpoint",
+                                              completion_tool="mcp__test__finish", checkpoint_tool="checkpoint",
                                               answer_tool="answer")
                     module = SimpleNamespace(prepare_services=lambda **_kwargs: binding)
                     control = {"harness": harness, "privateRoot": str(root), "directory": str(root),

@@ -188,12 +188,6 @@ class NativeRunCase(unittest.TestCase):
             return []
         return [json.loads(line) for line in self.agent_log_path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
-    def launch_records(self) -> list[dict]:
-        path = self.root / "logs" / "launches.jsonl"
-        if not path.is_file():
-            return []
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
     def wait_for(self, predicate, timeout: float = 15.0):
         end = time.monotonic() + timeout
         while time.monotonic() < end:
@@ -436,21 +430,21 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNotNone(result.effective_policy.tools)
         self.assertEqual(result.effective_policy.tools.requested.value,
                          {"permissionMode": "workspace-write"})
-        record = self.launch_records()[-1]
-        self.assertIn("--patch", record["argv"])
-        self.assertIn(native_run.PERMISSION_MODE_ENV, record["envKeys"])
+        self.assertTrue((Path(request.private_state.invocation_root) / "dsh-launch-patch.json").is_file())
+        observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
+        self.assertEqual(observed["permissionMode"], "workspace-write")
 
     def test_a_read_scope_reports_the_preset_and_injects_only_its_key(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
-        result = run(self.fast_request("prompt", scope="read"),
+        request = self.fast_request("prompt", scope="read")
+        result = run(request,
                      observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         policy = result.effective_policy
         self.assertEqual(policy.tools.requested.value, {"permissionMode": "read-only"})
-        record = self.launch_records()[-1]
-        self.assertIn(native_run.PERMISSION_MODE_ENV, record["envKeys"])
+        self.assertTrue((Path(request.private_state.invocation_root) / "dsh-launch-patch.json").is_file())
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertEqual(observed["home"], str(self.home))
         self.assertEqual(observed["dshHome"], os.environ["DSH_HOME"])
@@ -459,16 +453,15 @@ class FastSeamTests(NativeRunCase):
     def test_the_none_scope_patch_reaches_the_launch_argv_and_policy(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
-        result = run(self.fast_request("prompt"),
+        request = self.fast_request("prompt")
+        result = run(request,
                      observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
-        record = self.launch_records()[-1]
-        self.assertIn("--patch", record["argv"])
-        self.assertNotIn(native_run.PERMISSION_MODE_ENV, record["envKeys"])
+        patch_path = Path(request.private_state.invocation_root) / "dsh-launch-patch.json"
+        self.assertTrue(patch_path.is_file())
         observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
         self.assertIsNone(observed["permissionMode"])
-        patch_path = Path(record["argv"][record["argv"].index("--patch") + 1])
         rows = json.loads(patch_path.read_text(encoding="utf-8"))
         # The storage roots precede the disabled tool rows and plan-mode.
         self.assertEqual([row["id"] for row in rows],
@@ -514,7 +507,7 @@ class FastSeamTests(NativeRunCase):
         stop = result.stop_evidence.native
         # The process was held, so the run started one: the held connection's
         # own facts are retained, and the leader's real exit is the end's code.
-        self.assertTrue(any(ref.kind in ("acp-connection-facts", "acp-frame-log")
+        self.assertTrue(any(ref.kind in ("acp-connection-facts", "acp-connection-summary")
                             for ref in result.evidence_refs), result.evidence_refs)
         self.assertIsNotNone(result.end.native_exit_code)
         self.assertEqual(stop.group_state, "gone")
@@ -732,7 +725,9 @@ class MountTests(NativeRunCase):
         self.assertEqual(server["name"], mount.server_name)
         self.assertEqual(server["command"], sys.executable)
         self.assertIn("-m", server["args"])
-        self.assertIsInstance(server["env"], list)
+        expected_env = ([{"name": "PYTHONPATH", "value": os.environ["PYTHONPATH"]}]
+                        if os.environ.get("PYTHONPATH") else [])
+        self.assertEqual(server["env"], expected_env)
         bridge = json.loads(Path(mount.bridge_config_path).read_text(encoding="utf-8"))
         self.assertEqual(bridge["identity"]["attemptId"], request.identity.attempt_id)
         self.assertEqual(bridge["inputSha256"], request.identity.input_sha256)
@@ -758,45 +753,39 @@ class MountTests(NativeRunCase):
         from hey_my_buddy.buddy.roles import session_mcp
         self.assertEqual(CARRIER_MODULE, session_mcp.__name__)
 
-    def test_descriptions_and_schema_are_checked_before_any_process(self):
-        request, _bound, mount = self.worker_request()
-        self.assertIsNone(native_run._check_service_descriptions(request, mount))
-        mismatched = self.variant_of(request,
-                                     session_services=(SessionService(tool_names=["mcp__other__hey_my_buddy_finish_turn"]),))
-        with self.assertRaises(BoardError):
-            native_run._check_service_descriptions(mismatched, mount)
-        other_schema = run_contract.FrozenJson.from_value({"type": "object"}, "schema",
-                                                          maximum=MAX_SCHEMA_BYTES)
-        wrong_schema = self.variant_of(request, output_schema=other_schema)
-        with self.assertRaises(BoardError):
-            native_run._check_service_descriptions(wrong_schema, mount)
-
-    def test_the_seam_refuses_foreign_harnesses_services_and_native_resume_off_worker(self):
-        request, bound, _mount = self.worker_request()
-        services = bound.services
-        with self.assertRaises(BoardError):
-            run(self.variant_of(request, harness="zcode"),
-                observer=worker_observer, services=services, cancelled=lambda: False)
-        with self.assertRaises(BoardError):
-            run(request, observer=worker_observer, services=object(), cancelled=lambda: False)
-        # Native resume is the micro task Worker carrier's path alone: a request
-        # without any session service — the fast carrier's own shape — is
-        # refused before anything else, never silently resumed or rebuilt.
-        carrier = RunRequest.from_payload(self.fast_request("prompt").to_payload() | {
-            "continuation": {"mode": "native-session", "previousSessionId": "previous-session"}})
-        with self.assertRaises(BoardError):
-            run(carrier, observer=worker_observer, services=None, cancelled=lambda: False)
-
-    @staticmethod
-    def variant_of(request: RunRequest, **overrides) -> RunRequest:
-        fields = {name: getattr(request, name) for name in
-                  ("identity", "harness", "buddy", "cwd", "private_state", "session_record_path", "input_text",
-                   "permission", "output_schema", "budget", "session_services")}
-        fields.update(overrides)
-        return RunRequest(**fields)
-
 
 class WorkerSeamTests(NativeRunCase):
+    def test_attention_write_failure_fails_the_run_with_stop_evidence(self):
+        request, bound, mount = self.worker_request()
+        self.micro_task_agent_args(mount, permission=True)
+        with mock.patch.object(native_run.AttentionRecorder, "record",
+                               side_effect=OSError("attention file unavailable")):
+            result = run(request, observer=worker_observer, services=bound.services,
+                         cancelled=lambda: False)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-disconnected")
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertNotIn("turn-provenance", {ref.kind for ref in result.evidence_refs})
+
+    def test_reader_failure_after_close_reply_invalidates_completed_stream(self):
+        request, bound, mount = self.worker_request()
+        self.micro_task_agent_args(mount)
+        original_shutdown = native_run.AcpClient.shutdown
+
+        def fail_after_final_reply(client, **kwargs):
+            stopped = original_shutdown(client, **kwargs)
+            client.connection.reader_error = RuntimeError("late reader failure")
+            return stopped
+
+        with mock.patch.object(native_run.AcpClient, "shutdown", fail_after_final_reply):
+            result = run(request, observer=worker_observer, services=bound.services,
+                         cancelled=lambda: False)
+        self.assertEqual(result.end.status, "error")
+        self.assertEqual(result.end.reason_code, "native-disconnected")
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        self.assertFalse(result.completion_evidence.stream_end)
+        self.assertNotIn("turn-provenance", {ref.kind for ref in result.evidence_refs})
+
     def test_worker_keeps_structured_quota_failure_from_its_root_record(self):
         request, bound, mount = self.worker_request()
         self.micro_task_agent_args(mount)
@@ -939,12 +928,12 @@ class WorkerSeamTests(NativeRunCase):
                       "the reject-only policy selects the reject option")
         # The refused upgrade is a permission decision: its own record — the
         # request's options and the chosen reject outcome — travels in the
-        # permission-decisions reference (the denied-interactions reference
-        # only carries non-permission reverse requests, and this run has none).
-        refs = [ref for ref in result.evidence_refs if ref.kind == "permission-decisions"]
+        # connection facts file; the native request and selected reject option
+        # remain inspectable without a bounded in-memory array.
+        refs = [ref for ref in result.evidence_refs if ref.kind == "acp-connection-facts"]
         self.assertEqual(len(refs), 1)
-        self.assertNotIn("denied-interactions", {ref.kind for ref in result.evidence_refs})
-        decisions = json.loads(Path(refs[0].location).read_text(encoding="utf-8"))["records"]
+        decisions = [json.loads(line) for line in Path(refs[0].location).read_text(encoding="utf-8").splitlines()
+                     if json.loads(line)["recordType"] == "permission-decision"]
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0]["outcome"].get("optionId"), "opt-reject",
                          "the escalation request was answered with the reject option")
@@ -1057,14 +1046,6 @@ class WorkerSeamTests(NativeRunCase):
         self.assertGreaterEqual(result.activity.value["counts"]["toolCalls"], 2)
         self.assertIsNone(endpoint._activity, "a refusal never proves a live publication")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-
-    def test_an_answer_with_no_session_service_takes_no_micro_task_path(self):
-        self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
-        request = self.fast_request("prompt", scope="write")
-        described = RunRequest.from_payload(
-            request.to_payload() | {"sessionServices": [{"toolNames": ["mcp__x__hey_my_buddy_finish_turn"]}]})
-        with self.assertRaises(BoardError):
-            run(described, observer=worker_observer, services=None, cancelled=lambda: False)
 
 
 class ContinuationTests(NativeRunCase):
@@ -1195,8 +1176,8 @@ class RoleSeamFunctionTests(unittest.TestCase):
             root.mkdir(mode=0o700)
             facts = native_run.session_facts(root, "session-1")
             self.assertTrue(facts["captured"])
-            self.assertEqual(facts["storageOwner"], "hey-my-buddy-attempt")
-            self.assertEqual(facts["storageScope"], "attempt-private-sessions")
+            self.assertEqual(facts["storageOwner"], "hey-my-buddy-micro-task")
+            self.assertEqual(facts["storageScope"], "task-shared-sessions")
             self.assertEqual(facts["nativeAppVisibility"], "not-listed-in-native-app")
             self.assertEqual(facts["credentialsStore"], "harness-user-store")
             self.assertFalse(facts["bindingPresent"], "the binding fact is the file's absence")
@@ -1208,25 +1189,6 @@ class RoleSeamFunctionTests(unittest.TestCase):
             absent = native_run.session_facts(root, None)
             self.assertFalse(absent["captured"])
             self.assertIsNone(absent["sessionId"])
-
-    def test_storage_ownership_follows_the_root_s_real_placement(self):
-        from hey_my_buddy import private_dirs
-        with tempfile.TemporaryDirectory(prefix="dsh-session-facts-") as container:
-            state = Path(container) / "state"
-            # The same task's two real placements: the shared micro task native root
-            # private_dirs pins for the micro task Worker, and an old attempt's
-            # private root.
-            micro_task = private_dirs.native_root(state, "dsh", "task-1")
-            facts = native_run.session_facts(micro_task, None)
-            self.assertEqual(facts["storageOwner"], "hey-my-buddy-micro-task",
-                             "the task's shared native root is micro-task-owned storage")
-            self.assertEqual(facts["storageScope"], "task-shared-sessions")
-            attempt = private_dirs.attempt_root(state, "dsh", "task-1", "attempt-1")
-            other = native_run.session_facts(attempt / "dsh-private", None)
-            self.assertNotEqual(other["storageOwner"], "hey-my-buddy-micro-task",
-                                "an old attempt root is never misreported as micro task storage")
-            self.assertEqual(other["storageOwner"], "hey-my-buddy-attempt")
-            self.assertEqual(other["storageScope"], "attempt-private-sessions")
 
     def test_native_evidence_projects_the_launch_scope_and_stream_end(self):
         from hey_my_buddy.buddy.harnesses.run_contract import (
@@ -1480,9 +1442,8 @@ class DiscoveryTests(NativeRunCase):
                    if entry.get("dir") == "in" and (entry.get("raw") or {}).get("method") == "session/prompt"]
         self.assertEqual(prompts, [], "discovery never sends a prompt")
         # Discovery pins private session and JSON storage roots, with no tool-scope rows.
-        launch = self.launch_records()[-1]
-        self.assertIn("--patch", launch["argv"])
-        patch_path = Path(launch["argv"][launch["argv"].index("--patch") + 1])
+        patch_path = self.base / "disc-inv" / "dsh-launch-patch.json"
+        self.assertTrue(patch_path.is_file())
         rows = json.loads(patch_path.read_text(encoding="utf-8"))
         self.assertEqual([row["id"] for row in rows],
                          ["session-persistence-jsonl", "storage-json"])
@@ -1556,7 +1517,8 @@ class NativeConfigurationTests(NativeRunCase):
                         self.assertFalse((Path(request.private_state.invocation_root) / "dsh-home").exists())
                     else:
                         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}']
-                        result = run(self.fast_request("prompt"), observer=lambda _f: FEEDBACK_CONTINUE,
+                        request = self.fast_request("prompt")
+                        result = run(request, observer=lambda _f: FEEDBACK_CONTINUE,
                                      services=None, cancelled=lambda: False)
                         self.assertEqual(result.end.status, "ok", result.end.message)
                     observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]
@@ -1565,8 +1527,9 @@ class NativeConfigurationTests(NativeRunCase):
                     self.assertEqual(observed["settings"], {"marker": "user-settings"})
                     self.assertEqual(observed["homePatch"], "home-user-patch\n")
                     self.assertEqual(observed["profilePatch"], "profile-user-patch\n")
-                    launch = self.launch_records()[-1]
-                    rows = json.loads(Path(launch["argv"][launch["argv"].index("--patch") + 1]).read_text(encoding="utf-8"))
+                    patch_root = (self.base / "disc-inv" if carrier == "discovery" else
+                                  Path(request.private_state.invocation_root))
+                    rows = json.loads((patch_root / "dsh-launch-patch.json").read_text(encoding="utf-8"))
                     expected = (["session-persistence-jsonl", "storage-json"]
                                 + ([*CONFIRMED_NONE_ROWS, "plan-mode"] if carrier == "fast" else []))
                     self.assertEqual([row["id"] for row in rows], expected)

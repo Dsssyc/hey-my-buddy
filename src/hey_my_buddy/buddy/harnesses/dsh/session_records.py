@@ -3,8 +3,8 @@
 The optional ``session.v3`` rollout a DSH process writes under the pinned
 sessions root is this harness's only source of the observed model identity,
 the per-step usage and the retained root assistant text. Everything here is
-bounded and streaming — the project's pinned ``zstandard`` library for the
-compressed variant, proportionate total/line/step caps, a bound stop marks the
+streaming — the project's pinned ``zstandard`` library for the
+compressed variant, proportionate total/line caps, a bound stop marks the
 read truncated instead of pretending the file ended — and every failure mode
 keeps the known facts standing: a missing, foreign, malformed or truncated
 record is an unknown or partial fact, never a zero and never a run failure.
@@ -26,22 +26,19 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
-import os
 from pathlib import Path
 from typing import Iterator
+import zstandard
 
 from .protocol import decode_json
 
-#: The record file suffixes and header version the scan and the fold accept.
+#: The record file suffixes and header version the lookup and fold accept.
 _RECORD_SUFFIXES = (".v3.jsonl.zstd", ".v3.jsonl")
 _RECORD_VERSION = 3
-_MAX_RECORD_FILES = 64
-_MAX_RECORD_DEPTH = 4
 #: Decompressed proportionate bounds: a record is read streaming, never wholly
 #: into memory, and a bound stop is an honestly partial fact, never a guess.
 _MAX_RECORD_TOTAL_BYTES = 64 * 1024 * 1024
 _MAX_RECORD_LINE_BYTES = 4 * 1024 * 1024
-_MAX_RECORD_STEPS = 512
 _RECORD_USAGE_FIELDS = ("inputTokens", "outputTokens", "totalTokens",
                         "cacheReadTokens", "cacheWriteTokens", "reasoningTokens")
 
@@ -85,7 +82,7 @@ class RecordStream:
                     pending = b""
             if pending.strip():
                 yield pending
-        except Exception:  # noqa: BLE001 - an unreadable record is a partial fact, never a run failure
+        except (OSError, zstandard.ZstdError):
             self.truncated = True
 
     def _plain(self) -> Iterator[bytes]:
@@ -94,7 +91,6 @@ class RecordStream:
                 yield chunk
 
     def _decompressed(self) -> Iterator[bytes]:
-        import zstandard
         with self.path.open("rb") as handle:
             reader = zstandard.ZstdDecompressor().stream_reader(handle)
             while chunk := reader.read(262144):
@@ -145,8 +141,7 @@ class RecordAccumulator:
                     self.missed.add(field)
             if usable:
                 self.records += 1
-                if len(self.steps) < _MAX_RECORD_STEPS:
-                    self.steps.append(entry)
+                self.steps.append(entry)
                 return
         self.missing_usage = True
 
@@ -179,32 +174,29 @@ class RecordAccumulator:
         return projected
 
 
-def record_candidates(root: Path) -> list[Path]:
-    """The bounded, deterministic scan for record files under the sessions root."""
-    found: list[Path] = []
+def record_candidates(root: Path, session_id: str) -> list[Path]:
+    """Locate only this session's known rollout names in the pinned root."""
+    if not session_id or session_id in (".", "..") or "/" in session_id or "\\" in session_id:
+        return []
+    names = (f"{session_id}.v3.jsonl", f"{session_id}.v3.jsonl.zstd")
+    paths = [root / name for name in names]
+    paths.extend(root / session_id / f"session{suffix}" for suffix in _RECORD_SUFFIXES)
+    # DSH can put a session directory under one encoded working-directory
+    # component. Inspect that one level, then only the target session's names.
+    for work_dir in root.iterdir():
+        if work_dir.is_symlink() or not work_dir.is_dir():
+            continue
+        paths.extend(work_dir / session_id / f"session{suffix}" for suffix in _RECORD_SUFFIXES)
 
-    def walk(directory: Path, depth: int) -> None:
-        if depth > _MAX_RECORD_DEPTH or len(found) >= _MAX_RECORD_FILES:
-            return
-        try:
-            with os.scandir(directory) as entries:
-                ordered = sorted(entries, key=lambda entry: entry.name)
-        except OSError:
-            return
-        for entry in ordered:
-            if len(found) >= _MAX_RECORD_FILES:
-                return
-            try:
-                if entry.is_file(follow_symlinks=False):
-                    if entry.name.endswith(_RECORD_SUFFIXES):
-                        found.append(Path(entry.path))
-                elif entry.is_dir(follow_symlinks=False):
-                    walk(Path(entry.path), depth + 1)
-            except OSError:
-                continue
+    def regular_candidate(path: Path) -> bool:
+        current = root
+        for part in path.relative_to(root).parts[:-1]:
+            current /= part
+            if current.is_symlink() or not current.is_dir():
+                return False
+        return not path.is_symlink() and path.is_file()
 
-    walk(root, 0)
-    return found
+    return sorted(path for path in paths if regular_candidate(path))
 
 
 def _record_text(value: object) -> str:
@@ -306,7 +298,8 @@ def session_record_facts(sessions_root: Path, session_ids) -> dict | None:
         return None
     acc = RecordAccumulator()
     try:
-        candidates = record_candidates(root)
+        candidates = sorted({path for session in sessions
+                             for path in record_candidates(root, session)})
     except OSError:
         return None
     try:
@@ -390,7 +383,7 @@ def _matching_lines(path: Path, session_id: str) -> tuple[tuple[str, ...], bool]
 def _matching_files(root: Path, session_id: str) -> tuple[list[tuple[Path, tuple[str, ...]]], bool]:
     """Every matching record file under the root, with an overall reliability fact."""
     try:
-        candidates = record_candidates(root)
+        candidates = record_candidates(root, session_id)
     except OSError:
         return [], False
     matched: list[tuple[Path, tuple[str, ...]]] = []
@@ -454,7 +447,7 @@ def resumed_session_record_facts(sessions_root: Path, baseline: RecordBaseline) 
     if not root.is_dir():
         return _unknown_resumed_facts(baseline, "sessions-root-missing", 0)
     try:
-        records_read = len(record_candidates(root))
+        records_read = len(record_candidates(root, baseline.session_id))
     except OSError:
         records_read = 0
     matched, final_clean = _matching_files(root, baseline.session_id)

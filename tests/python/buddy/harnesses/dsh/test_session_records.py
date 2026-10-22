@@ -121,7 +121,9 @@ class FreshFoldTests(SessionRecordCase):
 
     def test_a_plain_rollout_folds_like_a_compressed_one(self):
         self.write_rollout(turn_one(), compressed=False)
-        self.write_rollout(turn_one(), name=f"{SESSION}-b.v3.jsonl.zstd")
+        second = self.sessions / SESSION
+        second.mkdir()
+        self.write_rollout(turn_one(), name=str(second / "session.v3.jsonl.zstd"))
         facts = session_record_facts(self.sessions, [SESSION])
         self.assertEqual(facts["usage"]["inputTokens"], 200)
         self.assertEqual(facts["usage"]["nativeRecords"], 2)
@@ -136,13 +138,43 @@ class FreshFoldTests(SessionRecordCase):
         self.assertIsNone(session_record_facts(self.root / "absent", [SESSION]))
         self.assertIsNone(session_record_facts(self.sessions, []))
 
-    def test_the_scan_finds_nested_cwd_layouts_and_bounds_itself(self):
+    def test_targeted_lookup_finds_nested_cwd_layout(self):
         nested = self.sessions / "--encoded-cwd--" / SESSION
         nested.mkdir(parents=True)
         self.write_rollout(turn_one(), name=str(nested / "session.v3.jsonl.zstd"))
-        self.assertEqual(len(record_candidates(self.sessions)), 1)
+        self.assertEqual(len(record_candidates(self.sessions, SESSION)), 1)
         facts = session_record_facts(self.sessions, [SESSION])
         self.assertEqual(facts["usage"]["inputTokens"], 100)
+
+    def test_old_sessions_do_not_hide_the_target_after_sixty_four_files(self):
+        for index in range(70):
+            self.write_rollout(foreign_rollout(f"old-{index}"),
+                               name=f"old-{index}.v3.jsonl", compressed=False)
+        self.write_rollout(turn_one())
+        facts = session_record_facts(self.sessions, [SESSION])
+        self.assertEqual(facts["recordsRead"], 1)
+        self.assertEqual(facts["usage"]["inputTokens"], 100)
+
+    def test_session_id_cannot_select_a_file_outside_the_pinned_root(self):
+        outside = self.root / "escape.v3.jsonl"
+        outside.write_text(json.dumps(turn_one()[0]) + "\n", encoding="utf-8")
+        self.assertEqual(record_candidates(self.sessions, "../escape"), [])
+
+    def test_symlinked_matching_record_and_parent_are_not_selected(self):
+        outside = self.root / "outside.v3.jsonl"
+        outside.write_text("".join(json.dumps(event) + "\n" for event in turn_one()),
+                           encoding="utf-8")
+        nested = self.root / SESSION
+        nested.mkdir()
+        (nested / "session.v3.jsonl").write_bytes(outside.read_bytes())
+        try:
+            (self.sessions / f"{SESSION}.v3.jsonl").symlink_to(outside)
+            linked_dir = self.sessions / "--linked-cwd--"
+            linked_dir.symlink_to(self.root, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"symlink creation unavailable: {error}")
+        self.assertEqual(record_candidates(self.sessions, SESSION), [])
+        self.assertIsNone(session_record_facts(self.sessions, [SESSION]))
 
 
 class ResumeBoundaryTests(SessionRecordCase):
@@ -227,8 +259,10 @@ class ResumeBoundaryTests(SessionRecordCase):
         self.write_rollout([*turn_one(), *turn_two_append()])
         # A second file whose header claims the same session: a rotation or a
         # rewrite into a new name, and nothing proves its lines are new.
+        second = self.sessions / SESSION
+        second.mkdir()
         self.write_rollout([turn_one()[0], *turn_two_append()],
-                           name=f"{SESSION}-second.v3.jsonl.zstd")
+                           name=str(second / "session.v3.jsonl.zstd"))
         facts = resumed_session_record_facts(self.sessions, baseline)
         self.assertEqual(facts["resumeBoundary"]["reason"], "matching-record-set-changed")
         self.assertIsNone(facts["usage"])
@@ -280,7 +314,7 @@ class ResumeBoundaryTests(SessionRecordCase):
         self.assertTrue(boundary["proven"])
         self.assertEqual(boundary["baselineLines"], 4)
         self.assertEqual(boundary["appendedLines"], 3)
-        self.assertEqual(facts["recordsRead"], 3)
+        self.assertEqual(facts["recordsRead"], 1)
         self.assertEqual(facts["usage"]["inputTokens"], 40,
                          "the foreign records' usage never mixes in")
         self.assertEqual(facts["usage"]["nativeRecords"], 1)
@@ -305,8 +339,7 @@ class ResumeBoundaryTests(SessionRecordCase):
         # cannot be attributed to any session, so the boundary stays honestly
         # unknown instead of assuming the file absent or foreign.
         self.write_rollout(turn_one())
-        (self.sessions / "junk.v3.jsonl").write_bytes(b"not a record header at all\n")
-        (self.sessions / "empty.v3.jsonl.zstd").write_bytes(b"")
+        (self.sessions / f"{SESSION}.v3.jsonl").write_bytes(b"not a record header at all\n")
         baseline = self.freeze()
         self.assertFalse(baseline.reliable)
         self.write_rollout([*turn_one(), *turn_two_append()])

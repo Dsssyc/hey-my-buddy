@@ -17,7 +17,6 @@ from collections.abc import Iterable
 import json
 import os
 from pathlib import Path
-import stat
 
 from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
 
@@ -87,13 +86,6 @@ class ZcodeToolFacts:
                 identity[key] = value
         if len(identity) == 2 and identity not in self.roots:
             self.roots.append(identity)
-
-    def observe_with(self, observer):
-        """Wrap a controller observer so facts are projected before its checks."""
-        def wrapped(message: dict, ordinal: int) -> None:
-            self.observe(message)
-            observer(message, ordinal)
-        return wrapped
 
     # -- projection ------------------------------------------------------------
     def observe(self, message: dict) -> None:
@@ -267,11 +259,8 @@ class ZcodeToolFacts:
             return
         for path in sorted(self._native_log_dir.glob("zcode-*.jsonl")):
             try:
-                descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-                with os.fdopen(descriptor, "rb") as stream:
+                with path.open("rb") as stream:
                     details = os.fstat(stream.fileno())
-                    if not stat.S_ISREG(details.st_mode):
-                        raise ValueError("native log is not a regular file")
                     offset = self._log_offsets.get(path.name, 0)
                     if details.st_size < offset:
                         raise ValueError("native log was truncated")

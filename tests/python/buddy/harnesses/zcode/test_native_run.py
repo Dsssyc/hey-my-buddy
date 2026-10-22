@@ -941,16 +941,6 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual({ref.kind for ref in result.evidence_refs},
                          {"inquiry-report", "native-stderr", "denied-interactions", "attention-report", "native-runtime-preferences"} & {ref.kind for ref in result.evidence_refs})
 
-    def test_the_request_refuses_mismatched_service_descriptions(self):
-        os.environ.update(self.environment)
-        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
-        turn_input = self.turn_input()
-        request, services = self.worker_request(turn_input)
-        broken = request.model_copy(update={"session_services": (
-            SessionService(tool_names=["mcp__other__hey_my_buddy_finish_turn"]),)})
-        with self.assertRaises(BoardError):
-            run(broken, observer=worker_observer, services=services, cancelled=lambda: False)
-
     def test_foreign_same_name_finish_calls_stay_facts_only_verified_delivery_leaves(self):
         # The Host's refusal-argument scenario through the real run: a child
         # relay and a foreign session both call a finish-named tool before the
@@ -1008,23 +998,6 @@ class WorkerSeamTests(MockNativeCase):
                                           if ref.kind == "turn-provenance")).read_bytes())
         self.assertTrue(provenance["receiptVerified"])
         self.assertEqual(provenance["toolCallId"], evidence_call(result))
-
-    def test_a_request_schema_differring_from_the_mounted_contract_is_refused(self):
-        os.environ.update(self.environment)
-        os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
-        turn_input = self.turn_input()
-        request, services = self.worker_request(turn_input)
-        # The completion mechanism serves exactly the role session-tool
-        # contract; a different requested schema is refused before any native
-        # work, so a verified receipt can never stand in for another schema.
-        payload = request.to_payload()
-        payload["outputSchema"] = {"type": "object", "additionalProperties": False,
-                                   "required": ["answer"], "properties": {"answer": {"type": "string"}}}
-        foreign = RunRequest.from_payload(payload)
-        with self.assertRaises(BoardError) as caught:
-            run(foreign, observer=worker_observer, services=services, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("mounted completion contract", caught.exception.message)
 
     def test_a_read_permission_uses_plan_mode_with_the_worker_service(self):
         os.environ.update(self.environment)

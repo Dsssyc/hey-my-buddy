@@ -5,8 +5,8 @@ accepted public ACP client only - what a cross-process native resume can do
 today. Two separately rooted owned launches share one micro-task sessions root
 (``private_dirs.native_root(state, "dsh", <fake task>)/sessions``), which every
 launch patch pins through DSH's own public ``session-persistence-jsonl`` row;
-each attempt keeps its patch, launch log and frame metadata
-log inside its own ``private_dirs.attempt_root``. Attempt A initializes,
+each attempt keeps its patch and connection-fact journal
+inside its own ``private_dirs.attempt_root``. Attempt A initializes,
 creates one empty root session, reads back the declared configuration (and
 switches one option and reads it back), lists sessions, closes the session and
 stops with the owned group observed gone. Attempt B initializes in its own
@@ -17,8 +17,8 @@ nonexistent session, closes what it resumed and stops the same way.
 The probe never sends a prompt, never calls ``authenticate``, never calls a
 model and never reads a credential file's content: DSH inherits the user's
 HOME and DSH_HOME and loads its own settings, credentials and ACP profile. Every client call is logged by method name before it is
-sent, and the per-attempt frame metadata log plus the connection facts must
-agree with that log, so the report can prove what crossed the wire. The
+sent; connection facts retain protocol faults, native requests and notification
+counts beside that operation log. The
 mounted MCP service is the minimal embedded stub in this same file (it answers
 ``initialize`` and ``tools/list`` and nothing else); its handshake evidence
 file is the mount observation, never a tool-execution proof. Native
@@ -148,24 +148,6 @@ class OperationLog:
         sent = [method for method in self.methods() if method in FORBIDDEN_METHODS]
         if sent:
             raise ProbeError(f"{self.label}: a forbidden method was called: {sorted(set(sent))}")
-
-
-def frame_log_counts(path: Path) -> dict:
-    """Direction counts and byte size of one frame metadata log (metadata only)."""
-    counts = {"in": 0, "out": 0, "lines": 0, "bytes": path.stat().st_size if path.is_file() else 0}
-    if not path.is_file():
-        return counts
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if not line.strip():
-            continue
-        try:
-            entry = json.loads(line)
-        except ValueError:
-            continue
-        counts["lines"] += 1
-        if entry.get("dir") in ("in", "out"):
-            counts[entry["dir"]] += 1
-    return counts
 
 
 def stub_evidence_lines(path: Path, since_epoch: float | None = None) -> list[dict]:
@@ -314,7 +296,6 @@ class Probe:
         """One separately rooted owned launch with its own patch and stub."""
         from hey_my_buddy.buddy.harnesses.dsh.acp import AcpClient
         from hey_my_buddy.buddy.harnesses.dsh.acp.client import PermissionPolicy
-        from hey_my_buddy.buddy.harnesses.dsh.acp.connection import FrameMetaLog
         from hey_my_buddy.buddy.harnesses.discovery import discover
         from hey_my_buddy.buddy.harnesses.runtime_selection import selected
         from hey_my_buddy.buddy.roles.turn_io import private_json
@@ -345,7 +326,6 @@ class Probe:
             "patchSessionRoot": str(sessions_root),
             "patchStorageRoot": str(sessions_root.parent / "storages"),
             "sourceHome": os.environ.get("DSH_HOME") or str(Path.home() / ".dsh"),
-            "launchLog": str(logs / "launches.jsonl"), "frameLog": str(logs / "frames.jsonl"),
             "stubEvidence": str(stub_evidence), "stubServerName": f"r1_{attempt_id}",
             "mcpServer": {
                 "name": f"r1_{attempt_id}", "command": sys.executable,
@@ -365,8 +345,6 @@ class Probe:
 
         try:
             client = AcpClient.start(argv, private_root=root, cwd=cwd,
-                                     launch_log=Path(entry["launchLog"]),
-                                     frame_log=FrameMetaLog(Path(entry["frameLog"])),
                                      permission_policy=PermissionPolicy())
         except LaunchOwnershipError as error:
             # The child existed and the accepted wrapper kept its ownership:
@@ -442,9 +420,9 @@ class Probe:
     def connection_facts(client) -> dict:
         facts = client.facts()
         return {key: facts[key] for key in (
-            "protocolFaultCount", "unmatchedResponseCount", "permissionDecisions",
-            "deniedInteractions", "observationFailureCount", "notificationCounts",
-            "writeFailureCount", "writeUncertain", "eof") if key in facts}
+            "protocolFaultCount", "unmatchedResponseCount", "permissionDecisionCount",
+            "deniedInteractionCount", "notificationCounts", "factsPath",
+            "writeFailureCount", "eof") if key in facts}
 
 
 def production_anchor() -> dict:
@@ -497,7 +475,7 @@ def run_attempt_a(probe: Probe, sessions_root: Path, cwd: Path) -> dict:
             "config": entry["configOptions"], "mcpServerSent": entry["stubServerName"]})
         entry["sessionsRootAfterNew"] = sessions_root_listing(sessions_root)
 
-        listed = ops.call("session/list", lambda: client.list_sessions())
+        listed = ops.call("session/list", lambda: client.connection.request("session/list", {}, 15.0))
         entry["listBeforeClose"] = _list_ids(listed)
         probe.finding("session-list-before-close-a", "confirmed", {
             "listedSessionIds": entry["listBeforeClose"],
@@ -505,13 +483,13 @@ def run_attempt_a(probe: Probe, sessions_root: Path, cwd: Path) -> dict:
 
         entry["configSwitch"] = _switch_effort(probe, client, ops, session_id, snapshot, "a")
 
-        listed = ops.call("session/list", lambda: client.list_sessions())
+        listed = ops.call("session/list", lambda: client.connection.request("session/list", {}, 15.0))
         entry["listAfterSwitch"] = _list_ids(listed)
 
         ops.call("session/close", lambda: client.close_session(session_id))
         entry["closeAcknowledged"] = True
         probe.finding("session-close-a", "confirmed", {"sessionId": "<attempt-a-session>"})
-        listed = ops.call("session/list", lambda: client.list_sessions())
+        listed = ops.call("session/list", lambda: client.connection.request("session/list", {}, 15.0))
         entry["listAfterClose"] = _list_ids(listed)
         probe.finding("session-list-after-close-a", "confirmed", {
             "listedSessionIds": entry["listAfterClose"],
@@ -525,7 +503,6 @@ def run_attempt_a(probe: Probe, sessions_root: Path, cwd: Path) -> dict:
     finally:
         result["stop"] = probe.stop("a", client)
         entry["connectionFacts"] = probe.connection_facts(client)
-        entry["frameLogCounts"] = frame_log_counts(Path(entry["frameLog"]))
         entry["operations"] = ops.entries
         entry["stubHandshake"] = stub_handshake(Path(entry["stubEvidence"]),
                                                 STUB_HANDSHAKE_SECONDS)
@@ -555,7 +532,7 @@ def run_attempt_b(probe: Probe, sessions_root: Path, cwd: Path, session_id: str)
         }
         probe.finding("agent-capabilities-b", "confirmed", entry["initialize"])
 
-        listed = ops.call("session/list", lambda: client.list_sessions())
+        listed = ops.call("session/list", lambda: client.connection.request("session/list", {}, 15.0))
         entry["listBeforeResume"] = _list_ids(listed)
         probe.finding("session-list-before-resume-b", "confirmed", {
             "listedSessionIds": entry["listBeforeResume"],
@@ -588,7 +565,7 @@ def run_attempt_b(probe: Probe, sessions_root: Path, cwd: Path, session_id: str)
                 "responseCarriesNoSessionId": True,
                 "identityAvailableOnlyThrough": "session/list (the resume response carries no id)"})
 
-        listed = ops.call("session/list", lambda: client.list_sessions())
+        listed = ops.call("session/list", lambda: client.connection.request("session/list", {}, 15.0))
         entry["listAfterResume"] = _list_ids(listed)
         probe.finding("session-list-after-resume-b", "confirmed", {
             "listedSessionIds": entry["listAfterResume"],
@@ -617,7 +594,7 @@ def run_attempt_b(probe: Probe, sessions_root: Path, cwd: Path, session_id: str)
                 entry["closeRefusal"] = {"code": error.error.get("code"),
                                          "message": str(error.error.get("message", ""))[:300]}
                 probe.finding("session-close-b", "refused", entry["closeRefusal"])
-            listed = ops.call("session/list", lambda: client.list_sessions())
+            listed = ops.call("session/list", lambda: client.connection.request("session/list", {}, 15.0))
             entry["listAfterCloseB"] = _list_ids(listed)
             probe.finding("session-list-after-close-b", "confirmed", {
                 "listedSessionIds": entry["listAfterCloseB"],
@@ -626,7 +603,6 @@ def run_attempt_b(probe: Probe, sessions_root: Path, cwd: Path, session_id: str)
     finally:
         result["stop"] = probe.stop("b", client)
         entry["connectionFacts"] = probe.connection_facts(client)
-        entry["frameLogCounts"] = frame_log_counts(Path(entry["frameLog"]))
         entry["operations"] = ops.entries
         entry["stubHandshake"] = stub_handshake(Path(entry["stubEvidence"]),
                                                 STUB_HANDSHAKE_SECONDS)
@@ -684,16 +660,11 @@ def _list_ids(listed) -> list[str]:
 
 def _finish_attempt(probe: Probe, attempt_id: str, client, ops: OperationLog,
                     result: dict) -> None:
-    """The per-attempt integrity ledger: no forbidden call, counts agree."""
+    """The per-attempt integrity ledger and observed native stop."""
     entry = probe.evidence["attempts"][attempt_id]
     ops.assert_no_forbidden()
     sent = len(ops.entries)
-    outbound = entry["frameLogCounts"].get("out", 0)
     entry["operationCount"] = sent
-    entry["outboundFrameCount"] = outbound
-    if sent != outbound:
-        probe.integrity(f"attempt {attempt_id}: {sent} operations logged but "
-                        f"{outbound} outbound frames recorded")
     facts = entry["connectionFacts"]
     stop = result["stop"]
     stop_confirmed = bool(stop.get("stopConfirmed"))
@@ -709,13 +680,13 @@ def _finish_attempt(probe: Probe, attempt_id: str, client, ops: OperationLog,
                                 "by this free probe")})
     probe.finding(f"no-model-calls-{attempt_id}", "confirmed", {
         "operations": ops.methods(), "forbiddenMethodsSent": [],
-        "outboundFrames": outbound, "operationCount": sent,
-        "permissionDecisions": len(facts.get("permissionDecisions") or []),
+        "operationCount": sent,
+        "permissionDecisions": facts.get("permissionDecisionCount", 0),
         "notificationCounts": facts.get("notificationCounts")})
-    if facts.get("permissionDecisions") or facts.get("deniedInteractions"):
+    if facts.get("permissionDecisionCount") or facts.get("deniedInteractionCount"):
         probe.finding(f"unexpected-agent-requests-{attempt_id}", "unknown", {
-            "permissionDecisions": len(facts.get("permissionDecisions") or []),
-            "deniedInteractions": len(facts.get("deniedInteractions") or [])})
+            "permissionDecisions": facts.get("permissionDecisionCount", 0),
+            "deniedInteractions": facts.get("deniedInteractionCount", 0)})
 
 
 # -- entry -------------------------------------------------------------------------------

@@ -7,22 +7,18 @@ the native side independently verifies the signature, the attempt binding and
 the root evidence, and both use one HMAC signing rule, one canonical JSON
 encoder, one set of wire byte budgets and one shared-locked journal read. There
 is deliberately no second canonical encoder, decoder, or journal reader here —
-``json_codec`` and ``locking`` stay the single implementations. Since the
-ADR-025 step-5 cleanup the finish-receipt, tool-refusal and inquiry-receipt
-verification of the native drivers also lives only here: both protocol modules
-run exactly the functions below and merely convert :class:`ReceiptError` into
-their own failure type at their seam. The drivers' few genuinely different
-judgments are carried as registered :class:`ReceiptRules` values the callers
-pass and the shared core reads — never a harness-name branch and never a
-second implementation.
+``json_codec`` and ``locking`` stay the single implementations. The finish-receipt,
+tool-refusal and inquiry-receipt verification lives here;
+all callers use the same rules and receive :class:`ReceiptError` on failure.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
-from typing import Callable, NamedTuple
+from typing import Callable
 
 from ...json_codec import canonical_json, decode_strict_json
+from ...protocol.schemas import MAX_ANSWER_BYTES, MAX_INQUIRIES_PER_RUN as MAX_INQUIRIES, MAX_QUESTION_BYTES
 
 #: The byte bound of one micro task outcome document, shared by the Worker role's
 #: six-field validator, the MCP carrier's input frames and the refusal budgets
@@ -31,12 +27,8 @@ from ...json_codec import canonical_json, decode_strict_json
 #: also enforces.
 MAX_OUTCOME_BYTES = 65536
 
-#: Shared inquiry bounds, identical to the board and the DSH bridge. The role's
-#: session tools, the native verification and the observation bridge all enforce
-#: the same budget so a bounded value can never be rejected after mutation.
-MAX_QUESTION_BYTES = 4000
-MAX_ANSWER_BYTES = 4000
-MAX_INQUIRIES = 32
+#: Inquiry budgets come from the board operation contract; both native bridges
+#: and their receipt verifiers consume those same values.
 MAX_INQUIRY_ID_BYTES = 128
 
 #: Honest bounds of the signed inquiry receipts the session tools return. A
@@ -95,57 +87,12 @@ MAX_FINISH_RECEIPT_BYTES = 70000
 class ReceiptError(Exception):
     """One failed shared receipt verification: a run reason code and bounded message.
 
-    The native protocol modules keep their own ``NativeError`` types for their
-    run loops, so each converts this failure at its own seam; the code and the
-    message cross unchanged, and no judgment is duplicated.
+    Native run loops handle this failure alongside their own native errors.
     """
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
         self.code = code
-
-
-class ReceiptRules(NamedTuple):
-    """The registered judgment differences of the native drivers' receipt rules.
-
-    The two drivers verify with one shared implementation, but they genuinely
-    registered different judgments on three points, so each driver's seam passes
-    its own value of this bundle and every field is read by the core: whether a
-    refusal ``detail`` is bounded beyond its type (non-blank,
-    ``MAX_TOOL_REFUSAL_DETAIL_BYTES``, no NUL), which message the
-    reason/receiptId/detail stage raises, whether a non-string native tool name
-    is refused at the envelope stage or falls through to the tool-binding stage,
-    and whether an inquiry id is judged after stripping whitespace. The bundles
-    are data, not branches on a harness name. ZCode registers
-    :data:`BOUNDED_REFUSAL_DETAIL`, DSH registers :data:`TYPED_REFUSAL_DETAIL`.
-    """
-
-    detail_bounded: bool
-    refusal_record_error: str
-    refuse_unusable_native_tool: bool
-    strip_inquiry_ids: bool
-
-
-#: The rule with a bounded refusal detail: the detail must be non-blank, within
-#: its byte budget and NUL-free, and the record stage names the bound it failed;
-#: a non-string native tool name is trusted to fail at the tool-binding stage
-#: and inquiry ids are judged by their byte content.
-BOUNDED_REFUSAL_DETAIL = ReceiptRules(
-    detail_bounded=True,
-    refusal_record_error="the tool refusal envelope failed its bounded reason validation",
-    refuse_unusable_native_tool=False,
-    strip_inquiry_ids=False,
-)
-
-#: The rule with a type-checked refusal detail: only ``isinstance`` is judged and
-#: the record stage names the unusable record; a non-string native tool name is
-#: refused at the envelope stage and inquiry ids are judged after stripping.
-TYPED_REFUSAL_DETAIL = ReceiptRules(
-    detail_bounded=False,
-    refusal_record_error="the tool refusal envelope carries an unusable refusal record",
-    refuse_unusable_native_tool=True,
-    strip_inquiry_ids=True,
-)
 
 
 def verify_receipt(raw: object, configuration: dict,
@@ -218,7 +165,7 @@ def refusal_shaped(raw: object) -> bool:
 
 
 def verify_tool_refusal(raw: object, configuration: dict, native_tool: str | None,
-                        mounted_tools: tuple[str, ...] | list[str], *, rules: ReceiptRules) -> dict:
+                        mounted_tools: tuple[str, ...] | list[str]) -> dict:
     """Verify one signed tool-refusal envelope against this attempt, input and tool.
 
     The session tools mint these for expected argument, attention and inquiry
@@ -230,15 +177,11 @@ def verify_tool_refusal(raw: object, configuration: dict, native_tool: str | Non
     session tools this run actually mounted — never a fixed global set — so a
     refusal verifies only for the service the driver really bound. A verified
     refusal only ever means "correct the call and retry in this same native
-    turn"; it can never carry an outcome or mutate state. The ``rules`` bundle
-    carries the caller's registered differences: whether a non-string native
-    tool name fails at this envelope stage or at the tool-binding stage below,
-    and whether the refusal record stage bounds the detail beyond its type —
-    with each stage's message kept exactly as the registering driver raised it.
+    turn"; it can never carry an outcome or mutate state.
     """
     tool = native_tool.rsplit("__", 1)[-1] if isinstance(native_tool, str) else None
     envelope = _refusal_payload(raw)
-    if envelope is None or (rules.refuse_unusable_native_tool and tool is None):
+    if envelope is None or tool is None:
         raise ReceiptError("invalid-tool-refusal", "the session tool returned no bounded JSON refusal envelope")
     try:
         if set(envelope) != {"version", "kind", "identity", "inputSha256",
@@ -254,14 +197,13 @@ def verify_tool_refusal(raw: object, configuration: dict, native_tool: str | Non
         if (not isinstance(envelope["tool"], str) or envelope["tool"] not in tuple(mounted_tools)
                 or envelope["tool"] != tool or not native_tool.endswith("__" + envelope["tool"])):
             raise ReceiptError("invalid-tool-refusal", "the tool refusal envelope was signed for a different session tool")
-        detail_usable = isinstance(envelope["detail"], str) and (
-            not rules.detail_bounded or (bool(envelope["detail"].strip())
-                                         and len(envelope["detail"].encode()) <= MAX_TOOL_REFUSAL_DETAIL_BYTES
-                                         and "\0" not in envelope["detail"]))
+        detail_usable = (isinstance(envelope["detail"], str) and bool(envelope["detail"].strip())
+                         and len(envelope["detail"].encode()) <= MAX_TOOL_REFUSAL_DETAIL_BYTES
+                         and "\0" not in envelope["detail"])
         if (envelope["reason"] not in TOOL_REFUSAL_REASONS
                 or not isinstance(envelope["receiptId"], str) or len(envelope["receiptId"]) != 32
                 or not detail_usable):
-            raise ReceiptError("invalid-tool-refusal", rules.refusal_record_error)
+            raise ReceiptError("invalid-tool-refusal", "the tool refusal envelope failed its bounded reason validation")
         return envelope
     except ReceiptError:
         raise
@@ -269,31 +211,21 @@ def verify_tool_refusal(raw: object, configuration: dict, native_tool: str | Non
         raise ReceiptError("invalid-tool-refusal", "the tool refusal envelope was malformed") from None
 
 
-def _valid_inquiry_id(value: object, rules: ReceiptRules) -> bool:
-    """A bounded inquiry identifier under the caller's registered blank rule.
-
-    Both rules refuse an over-bound id; the registered difference is the
-    emptiness judgment — byte content (:data:`BOUNDED_REFUSAL_DETAIL`) or
-    stripped content (:data:`TYPED_REFUSAL_DETAIL`, which refuses whitespace-only
-    ids).
-    """
-    if not isinstance(value, str) or len(value.encode()) > MAX_INQUIRY_ID_BYTES:
-        return False
-    return bool(value.strip()) if rules.strip_inquiry_ids else len(value.encode()) > 0
+def _valid_inquiry_id(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip()) and len(value.encode()) <= MAX_INQUIRY_ID_BYTES
 
 
 def _valid_question_sha(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
-def verify_inquiry_receipt(raw: object, configuration: dict, kind: str, *, rules: ReceiptRules) -> dict:
+def verify_inquiry_receipt(raw: object, configuration: dict, kind: str) -> dict:
     """Verify one signed checkpoint or answer receipt from the session tools.
 
     The session tool only ever returns a tentative signed receipt; this is the
     controller-side authority check. The signature binds the attempt identity
     and the exact payload, so a tampered, stale or cross-attempt receipt fails
-    here before any bridge state changes. ``rules`` carries the caller's
-    registered inquiry-id blank rule; every other stage is the shared judgment.
+    here before any bridge state changes.
     """
     if kind not in ("inquiry-checkpoint", "inquiry-answer"):
         raise ValueError("unknown inquiry receipt kind")
@@ -318,7 +250,7 @@ def verify_inquiry_receipt(raw: object, configuration: dict, kind: str, *, rules
         if not isinstance(receipt["receiptId"], str) or len(receipt["receiptId"]) != 32:
             raise ReceiptError("invalid-inquiry-receipt", f"the {kind} receipt has no usable receipt identity")
         if kind == "inquiry-answer":
-            if (not _valid_inquiry_id(receipt["inquiryId"], rules) or not _valid_question_sha(receipt["questionSha256"])
+            if (not _valid_inquiry_id(receipt["inquiryId"]) or not _valid_question_sha(receipt["questionSha256"])
                     or not isinstance(receipt["answer"], str) or not receipt["answer"].strip()
                     or len(receipt["answer"].encode()) > MAX_ANSWER_BYTES):
                 raise ReceiptError("invalid-inquiry-receipt", f"the {kind} receipt failed its answer binding")
@@ -330,7 +262,7 @@ def verify_inquiry_receipt(raw: object, configuration: dict, kind: str, *, rules
                 if (not isinstance(item, dict)
                         or set(item) - {"inquiryId", "question", "questionSha256", "state", "askedAt", "deliveredAt"}
                         or not {"inquiryId", "question", "questionSha256", "state", "askedAt"} <= set(item)
-                        or not _valid_inquiry_id(item["inquiryId"], rules) or not _valid_question_sha(item["questionSha256"])
+                        or not _valid_inquiry_id(item["inquiryId"]) or not _valid_question_sha(item["questionSha256"])
                         or item["state"] not in ("queued", "delivered")
                         or not isinstance(item["question"], str) or not item["question"].strip()
                         or len(item["question"].encode()) > MAX_QUESTION_BYTES

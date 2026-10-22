@@ -29,7 +29,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from hey_my_buddy.buddy.harnesses.dsh.acp.launch import real_user_home
+
+def real_user_home() -> Path:
+    if os.name == "nt":
+        return Path.home()
+    import pwd
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
 
 
 def log(log_path: Path, event: dict) -> None:

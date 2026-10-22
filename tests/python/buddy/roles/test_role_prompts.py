@@ -80,8 +80,10 @@ class RolePromptTests(unittest.TestCase):
                     "ROLE": "Host override from input"}
             (root / "task.txt").write_text(task, encoding="utf-8", newline="\n")
             turn_io.private_json(root / "input.json", turn)
-            binding = SimpleNamespace(completion_tool="hey_my_buddy_finish_turn", checkpoint_tool="hey_my_buddy_checkpoint",
-                                      answer_tool="hey_my_buddy_answer_inquiry", services={},
+            mount = SimpleNamespace(server_name="test", tool_contracts=[
+                {"name": "hey_my_buddy_finish_turn", "inputSchema": {"type": "object"}}])
+            binding = SimpleNamespace(completion_tool="mcp__test__hey_my_buddy_finish_turn", checkpoint_tool="hey_my_buddy_checkpoint",
+                                      answer_tool="hey_my_buddy_answer_inquiry", services=SimpleNamespace(mount=mount),
                                       description=SessionService(tool_names=("hey_my_buddy_finish_turn", "hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")))
             module = SimpleNamespace(prepare_services=mock.Mock(return_value=binding))
             for name, authority in ((name, authority) for name in ("codex", "claude", "dsh", "zcode")
