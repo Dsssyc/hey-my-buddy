@@ -15,8 +15,7 @@ What the coordinator adds is durable governance around it:
 * attempt-scoped credentials that the service enforces, and console-user authority
   that only a registered console session can present.
 
-The workspace module (``hey_my_buddy.blackboard.tasks.workspace``) performs all Git/filesystem work and is
-delivered separately. Preparation and sealing happen outside a database transaction;
+The workspace module (``hey_my_buddy.blackboard.tasks.workspace``) performs all Git/filesystem work. Preparation and sealing happen outside a database transaction;
 immutable manifests are pinned in authoritative records afterwards. Revoking an
 unregistered allocation holds the database writer fence through final proof and
 exact removal so concurrent admission cannot register a checkout being removed.
@@ -46,21 +45,14 @@ from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 from ... import private_dirs
 
-try:  # The workspace module is owned and delivered separately.
-    from . import workspace as _workspace_module
-except ImportError:  # pragma: no cover - exercised by tests without the module
-    _workspace_module = None
+from . import workspace as _workspace_module
 
 # Errors from _requeue and its automatic-path callees: lineage, admission and
 # task/run transitions. Manual workspace reclamation is not on either path.
-_AUTO_CONTINUE_FAILURE_CODES = {
-    "ANCESTOR_TERMINAL": "ANCESTOR_TERMINAL",
-    "CONFLICT": "CONFLICT",
-    "SHUTDOWN_UNCONFIRMED": "SHUTDOWN_UNCONFIRMED",
-    "REVISION_CONFLICT": "REVISION_CONFLICT",
-    "UPGRADE_IN_PROGRESS": "UPGRADE_IN_PROGRESS",
-    "ILLEGAL_TRANSITION": "ILLEGAL_TRANSITION",
-}
+_AUTO_CONTINUE_FAILURE_CODES = frozenset({
+    "ANCESTOR_TERMINAL", "CONFLICT", "SHUTDOWN_UNCONFIRMED", "REVISION_CONFLICT",
+    "UPGRADE_IN_PROGRESS", "ILLEGAL_TRANSITION",
+})
 
 
 #: Operations an attempt-scoped credential may call at all.
@@ -189,69 +181,45 @@ def console_authority_from_scope() -> dict | None:
 
 
 def workspace_module():
-    """The workspace implementation, or an explicit unsupported error."""
-    if _workspace_module is None:
-        raise BoardError(
-            "UNSUPPORTED",
-            "The workspace module is not part of this build, so no micro-task workspace can be prepared or sealed",
-        )
+    """The workspace implementation, with one module replacement seam for tests."""
     return _workspace_module
 
 
-def _turn_input_context(input_json: Any) -> dict:
-    """The frozen context object of one turn input, or an empty object when unreadable."""
-    try:
-        document = json.loads(input_json) if input_json else None
-    except (TypeError, ValueError):
-        return {}
-    if isinstance(document, dict) and (type(document.get("version")) is not int
-                                      or document["version"] not in (1, TURN_INPUT_VERSION)):
+def _turn_input_context(input_json: str) -> dict:
+    """The frozen context object of one supported turn input."""
+    document = json.loads(input_json)
+    if type(document["version"]) is not int or document["version"] not in (1, TURN_INPUT_VERSION):
         raise BoardError("TURN_INVALID", "The frozen turn input version is not supported")
-    context = document.get("context") if isinstance(document, dict) else None
-    return context if isinstance(context, dict) else {}
+    return document["context"]
 
 
 def _frozen_turn_routing(context: dict) -> dict | None:
-    """The routing identity frozen in one turn input, or ``None`` when it has none.
-
-    A turn that predates the binding has no routing identity. It is never guessed
-    from the current run, timestamps or a matching model name, and a malformed
-    binding is reported as absent rather than invented.
-    """
-    routing = context.get("routing")
-    if not isinstance(routing, dict) or "decisionId" not in routing:
+    """The routing identity frozen in a turn, absent only in older turn inputs."""
+    if "routing" not in context:
         return None
-    decision_id = routing.get("decisionId")
-    revision = routing.get("buddyRevision")
-    if decision_id is not None and (not isinstance(decision_id, str) or not decision_id.strip()):
-        return None
-    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
-        return None
-    return {"decisionId": decision_id, "buddyRevision": revision}
+    routing = context["routing"]
+    return {"decisionId": routing["decisionId"], "buddyRevision": routing["buddyRevision"]}
 
 
 def _frozen_turn_shared_stash(context: dict, *, compact: bool = False) -> dict | None:
-    """The shared-stash observation frozen in one turn input, or ``None``.
+    """The frozen stash observation, absent only in older turn inputs.
 
-    A turn that predates the freezing has no stash fact; it is never re-derived
-    from a later reading, wall-clock time or the current repository state. A
-    malformed binding is reported as absent rather than invented, and the
-    compact view carries states and counts only — the complete bounded record
-    stays in the frozen input itself.
+    The compact view carries states and counts; the complete record stays in the
+    frozen input. An unknown observation has no entry list.
     """
-    value = context.get("sharedStash")
-    if not isinstance(value, dict) or not isinstance(value.get("start"), dict):
+    if "sharedStash" not in context:
         return None
+    value = context["sharedStash"]
     start = value["start"]
-    entries = start.get("entries")
+    entries = start["entries"]
     summary = {
-        "repositoryPath": value.get("repositoryPath") if isinstance(value.get("repositoryPath"), str) else None,
-        "manifestSha256": value.get("manifestSha256") if isinstance(value.get("manifestSha256"), str) else None,
-        "start": {"state": start.get("state"), "entryCount": len(entries) if isinstance(entries, list) else None,
-                  "totalCount": start.get("totalCount"), "truncated": bool(start.get("truncated"))},
+        "repositoryPath": value["repositoryPath"],
+        "manifestSha256": value["manifestSha256"],
+        "start": {"state": start["state"], "entryCount": len(entries) if entries is not None else None,
+                  "totalCount": start["totalCount"], "truncated": start["truncated"]},
     }
     if not compact:
-        summary["start"]["entries"] = entries if isinstance(entries, list) else None
+        summary["start"]["entries"] = entries
     return summary
 
 
@@ -319,14 +287,7 @@ class WorkflowCoordinator:
         context = _turn_input_context(row["input_json"])
         adapter = row["execution_adapter"]
         frozen_buddy = context.get("buddy")
-        if adapter in schemas.CODING_HARNESSES:
-            buddy = schemas.normalize_buddy(frozen_buddy)
-            if buddy["harness"] != adapter:
-                raise BoardError("TURN_INVALID", "The frozen buddy does not match the turn's execution harness")
-        elif adapter in ("command", "external") and frozen_buddy == {"adapter": adapter}:
-            buddy = None
-        else:
-            raise BoardError("TURN_INVALID", "The turn has an unknown execution or frozen buddy shape")
+        buddy = frozen_buddy if adapter in schemas.CODING_HARNESSES else None
         view = {
             "turnId": row["turn_id"],
             "turnIndex": row["turn_index"],
@@ -354,16 +315,16 @@ class WorkflowCoordinator:
             # This turn's own frozen shared-stash observation, taken before the turn
             # started; never re-derived, and absent for turns that predate it.
             "sharedStash": _frozen_turn_shared_stash(context, compact=compact),
-            "tokenUsage": (json.loads(row["token_usage_json"]) if "token_usage_json" in row.keys() and row["token_usage_json"] else None),
+            "tokenUsage": (json.loads(row["token_usage_json"]) if row["token_usage_json"] else None),
         }
         if compact:
             # The default view is an index: the full input/outcome/provenance is in audit.
             return view
         if outcome is not None:
             summary = outcome.get("summary") or ""
-            view["summary"] = summary if include_audit else summary[:2000]
+            view["summary"] = summary if include_audit else summary[:MAX_RESULT_SUMMARY]
             if not include_audit:
-                view["summaryTruncated"] = len(summary) > 2000
+                view["summaryTruncated"] = len(summary) > MAX_RESULT_SUMMARY
             view["remaining"] = outcome.get("remaining", [])
             if include_audit:
                 view["request"] = outcome.get("request")
@@ -392,8 +353,7 @@ class WorkflowCoordinator:
             target_id = (payload.get("origin") or {}).get("runId") or row["run_id"]
             target = self._run_optional(connection, target_id)
             decision = self.board.decisions._row(connection, decision_id)
-            if target is not None and decision is not None:
-                boundary = self._routing_boundary(connection, decision, target, now=now)
+            boundary = self._routing_boundary(connection, decision, target, now=now)
         if compact:
             view = {
                 "requestId": row["request_id"],
@@ -510,12 +470,7 @@ class WorkflowCoordinator:
             "manifestSha256": row["manifest_sha256"],
             "createdAt": row["created_at"],
         }
-        try:
-            manifest = json.loads(row["manifest_json"])
-        except (TypeError, ValueError):
-            return view
-        if not isinstance(manifest, dict):
-            return view
+        manifest = json.loads(row["manifest_json"])
         if row["kind"] in ("output", "resolved-output", "partial-output"):
             if row["kind"] == "partial-output":
                 view.update(partial=True, verified=False, final=False)
@@ -581,7 +536,7 @@ class WorkflowCoordinator:
             )
         return {"scopeVersion": row["scope_version"], "writeScope": json.loads(row["write_scope_json"]),
                 "inputManifestSha256": row["manifest_sha256"], "actor": {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None, "note": row["note"],
-                "recorded": True, "updatedAt": row["created_at"]}
+                "updatedAt": row["created_at"]}
 
     def _open_conflict(self, connection, run_id: str):
         return connection.execute(
@@ -831,7 +786,6 @@ class WorkflowCoordinator:
             "finalAttemptId": run_row["final_attempt_id"],
             "createdAt": run_row["created_at"],
             "updatedAt": run_row["updated_at"],
-            "auditAvailable": True,
             "shutdown": self.shutdown_summary(connection, run_row["run_id"]),
             "task": self._task_summary(connection, task_row),
         }
@@ -853,7 +807,7 @@ class WorkflowCoordinator:
     def _micro_task_view(micro_task: dict, fingerprint: str) -> dict:
         """The bounded micro task summary; the immutable original spec is in audit."""
         task = micro_task.get("task") if isinstance(micro_task.get("task"), str) else ""
-        limit = 2000
+        limit = MAX_RESULT_SUMMARY
         return {
             "task": task if len(task) <= limit else task[:limit],
             "taskTruncated": len(task) > limit,
@@ -984,13 +938,6 @@ class WorkflowCoordinator:
                               (scope["credentialId"],)).fetchone() is None:
             raise BoardError("UNAUTHORIZED", "The Lead execution credential was revoked before the operation committed")
 
-    def role_for(self, connection, payload: dict) -> str | None:
-        """Classify a run as a parent run or a helper run."""
-        row = connection.execute(
-            "SELECT parent_run_id FROM workflow_children WHERE child_task_id=?", (payload["runId"],)
-        ).fetchone()
-        return "helper" if row is not None else "parent"
-
     def resolve_credential(self, token: str) -> dict:
         """Resolve an attempt-scoped credential; never falls back to service authority."""
         if not isinstance(token, str) or not token:
@@ -1068,6 +1015,14 @@ class WorkflowCoordinator:
             params["runId"] = scope["runId"]
 
     # -- workspace reservations ---------------------------------------------
+    @staticmethod
+    def _applying_cleanup(connection, path, checkout_id=None):
+        return connection.execute(
+            "SELECT plan_id, checkout_id, path FROM workspace_cleanup_plans WHERE (checkout_id=? OR path=?)"
+            " AND state='applying' ORDER BY rowid DESC LIMIT 1",
+            (checkout_id, path),
+        ).fetchone()
+
     def _cleanup_fence(self, path: str | None) -> None:
         """Refuse a source capture on a checkout whose cleanup plan is applying.
 
@@ -1079,11 +1034,7 @@ class WorkflowCoordinator:
         if not path:
             return
         with self.db.read() as connection:
-            plan = connection.execute(
-                "SELECT plan_id, checkout_id FROM workspace_cleanup_plans WHERE path=? AND state='applying'"
-                " ORDER BY rowid DESC LIMIT 1",
-                (str(Path(path).resolve()),),
-            ).fetchone()
+            plan = self._applying_cleanup(connection, str(Path(path).resolve()))
         if plan is not None:
             raise BoardError(
                 "PREPARATION_CONFLICT",
@@ -1101,7 +1052,7 @@ class WorkflowCoordinator:
         ).fetchone()
 
     def _unproven_checkout_holder(self, connection, manifest, checkout_id):
-        """Refuse a conflicting reservation that records the same checkout path."""
+        """Keep one checkout path exclusive even when rebuilding it changes its identity."""
         root = manifest.get("checkoutRoot")
         if not root:
             return None
@@ -1116,12 +1067,8 @@ class WorkflowCoordinator:
         for row in rows:
             roots = []
             for field in ("run_manifest", "child_manifest", "initial_manifest"):
-                try:
-                    recorded = json.loads(row[field] or "{}")
-                except (ValueError, TypeError):
-                    continue
-                if isinstance(recorded, dict):
-                    roots.append(recorded.get("checkoutRoot"))
+                recorded = json.loads(row[field] or "{}")
+                roots.append(recorded.get("checkoutRoot"))
             if root in roots or row["path"] == manifest.get("path"):
                 return row
         return None
@@ -1146,11 +1093,7 @@ class WorkflowCoordinator:
         # plan in ``applying`` has already passed its inspection but its removal has not
         # finished, so no new writer may take the checkout across that boundary; the
         # check and the insert below commit in the same SQLite write transaction.
-        cleanup = connection.execute(
-            "SELECT plan_id, path FROM workspace_cleanup_plans WHERE (checkout_id=? OR path=?)"
-            " AND state='applying' ORDER BY rowid DESC LIMIT 1",
-            (checkout_id, manifest.get("checkoutRoot")),
-        ).fetchone()
+        cleanup = self._applying_cleanup(connection, manifest.get("checkoutRoot"), checkout_id)
         if cleanup is not None:
             raise BoardError(
                 "PREPARATION_CONFLICT",
@@ -1171,12 +1114,6 @@ class WorkflowCoordinator:
             (checkout_id,),
         ).fetchall()
         writers = [row for row in held if row["access"] == "write"]
-        if len(writers) > 1:
-            raise BoardError(
-                "PREPARATION_CONFLICT", "Several reservations still hold this checkout; resolve their ownership before claiming it",
-                checkoutId=checkout_id,
-                holderTaskIds=sorted({row["holder_task_id"] for row in writers}),
-            )
         writer = writers[0] if writers else None
         if access == "write":
             if writer is not None and writer["holder_task_id"] != holder_task_id:
@@ -1203,9 +1140,6 @@ class WorkflowCoordinator:
                         checkoutId=checkout_id,
                     )
         existing = [row for row in held if row["holder_task_id"] == holder_task_id]
-        if len(existing) > 1:
-            raise BoardError("PREPARATION_CONFLICT", "This owner has duplicate reservations for one checkout",
-                             checkoutId=checkout_id, holderTaskId=holder_task_id)
         if existing:
             if (existing[0]["path"] != manifest.get("path") or existing[0]["access"] != access
                     or existing[0]["repository_id"] != manifest.get("repositoryId")):
@@ -1218,7 +1152,7 @@ class WorkflowCoordinator:
             " released_at) VALUES(?,?,?,?,?,?,?,?,?,?,'held',?,NULL)",
             (
                 str(uuid.uuid4()),
-                manifest.get("workspaceId") or checkout_id,
+                manifest["workspaceId"],
                 checkout_id,
                 manifest.get("repositoryId"),
                 manifest.get("path"),
@@ -1279,7 +1213,7 @@ class WorkflowCoordinator:
 
     def _stopped_parent(self, connection, run_id: str) -> bool:
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
-        if task is None or task["active_attempt_id"] is not None:
+        if task["active_attempt_id"] is not None:
             return False
         attempt = self.board._selected_attempt(connection, task)
         return attempt is not None and attempt["execution_state"] == "finished" and bool(attempt["shutdown_confirmed"])
@@ -1366,18 +1300,14 @@ class WorkflowCoordinator:
         """Project a frozen decision with the current owning Host's command fence."""
         from ..routing.router_boundary_data import routing_boundary
 
-        owner, seen = run, set()
-        while owner["run_id"] not in seen:
-            seen.add(owner["run_id"])
+        owner = run
+        while True:
             parent = connection.execute(
                 "SELECT parent_run_id FROM workflow_children WHERE child_task_id=?", (owner["run_id"],)
             ).fetchone()
             if parent is None:
                 break
-            candidate = self._run_optional(connection, parent["parent_run_id"])
-            if candidate is None:
-                break
-            owner = candidate
+            owner = self._run_row(connection, parent["parent_run_id"])
         # Establishing the leaf boundary increments its revision and propagates
         # one boundary transition to each ancestor in the same transaction.
         increment = 1 if post_transition else 0
@@ -1867,14 +1797,9 @@ class WorkflowCoordinator:
 
     @contextmanager
     def _submission_preparation(self, request_id, intent, *, shared_locks=None):
-        module = workspace_module()
-        preparation = getattr(module, "submission_preparation", None)
-        if preparation is None:
-            # The test workspace stand-in has no physical allocation.
-            yield {"manifest": module.prepare(self.board.directory, request_id, intent), "newAllocation": False}
-        else:
-            with preparation(self.board.directory, request_id, intent, shared_locks=shared_locks) as prepared:
-                yield prepared
+        with workspace_module().submission_preparation(
+                self.board.directory, request_id, intent, shared_locks=shared_locks) as prepared:
+            yield prepared
 
     def _revoke_submission_allocation(self, request_id, manifest, original_error):
         """Preserve admission failure while revoking this call's unregistered checkout.
@@ -2255,13 +2180,6 @@ class WorkflowCoordinator:
                         requestId=request_id,
                         activeRequestId=run_row["active_request_id"],
                     )
-                if request_row["expected_revision"] > run_row["revision"]:
-                    raise BoardError(
-                        "REVISION_CONFLICT",
-                        "The run changed after this request was recorded; re-read it before deciding",
-                        expectedRevision=request_row["expected_revision"],
-                        currentRevision=run_row["revision"],
-                    )
                 if request_row["child_task_id"]:
                     # The parent Host answers on behalf of a helper that yielded: the
                     # child is resumed with the recorded decision using only the parent's
@@ -2515,9 +2433,7 @@ class WorkflowCoordinator:
 
     def _propagate_boundary(self, connection, source, now):
         """Persist a correlated proxy at every owned ancestor in this transaction."""
-        seen = set()
-        while source["run_id"] not in seen:
-            seen.add(source["run_id"])
+        while True:
             child = connection.execute("SELECT * FROM workflow_children WHERE child_task_id=?", (source["run_id"],)).fetchone()
             if child is None:
                 return
@@ -2543,9 +2459,8 @@ class WorkflowCoordinator:
             self._sync_boundary(connection, parent["run_id"], now)
 
     def _attention_chain(self, connection, run, request):
-        chain, seen = [], set()
-        while request["request_id"] not in seen:
-            seen.add(request["request_id"])
+        chain = []
+        while True:
             self._assert_lineage_open(connection, run["run_id"])
             if request["state"] != "open" or run["state"] in ("cancelled", "accepted", "concluded"):
                 raise BoardError("CONFLICT", "The proxied Host boundary is no longer open")
@@ -2562,13 +2477,10 @@ class WorkflowCoordinator:
                 raise BoardError("CONFLICT", "The proxy source does not match its owned child")
             source_id = proxy.get("requestId") if proxy is not None else run["active_request_id"]
             request = self._request_row(connection, child_id, source_id)
-        raise BoardError("CONFLICT", "The Host boundary proxy chain contains a cycle")
 
     def _close_proxy_ancestors(self, connection, source, now):
         """A local Host/console answer also closes its exact ancestor proxies."""
-        seen = set()
-        while source["state"] != "open" and source["run_id"] not in seen:
-            seen.add(source["run_id"])
+        while source["state"] != "open":
             link = connection.execute("SELECT parent_run_id FROM workflow_children WHERE child_task_id=?", (source["run_id"],)).fetchone()
             if link is None:
                 return
@@ -2699,7 +2611,6 @@ class WorkflowCoordinator:
                 turn_id=None,
                 now=now,
             )
-            child_run = self._run_optional(connection, helper_task_id)
             connection.execute(
                 "INSERT INTO workflow_children(child_task_id, parent_run_id, request_id, decision_command_id, role,"
                 " integrator, state, workspace_manifest_json,"
@@ -2730,7 +2641,7 @@ class WorkflowCoordinator:
                     "requestId": item["requestId"],
                     "integrator": item["integrator"],
                     "workspaceId": manifest.get("workspaceId"),
-                    "runId": child_run["run_id"] if child_run is not None else None,
+                    "runId": helper_task_id,
                     "artifact": artifact_id,
                 }
             )
@@ -2746,14 +2657,12 @@ class WorkflowCoordinator:
         request_id = item["requestId"]
         existing = connection.execute("SELECT * FROM tasks WHERE request_id=?", (request_id,)).fetchone()
         if existing is not None:
-            if existing["input_fingerprint"] != fingerprint:
-                raise BoardError(
-                    "CONFLICT",
-                    "A helper requestId already belongs to a different task input",
-                    requestId=request_id,
-                    existingTaskId=existing["task_id"],
-                )
-            return
+            raise BoardError(
+                "CONFLICT",
+                "A helper requestId already belongs to another task",
+                requestId=request_id,
+                existingTaskId=existing["task_id"],
+            )
         connection.execute(
             "INSERT INTO tasks(task_id, request_id, owner, spec_json, input_fingerprint,"
             " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, expected_seconds,"
@@ -2832,9 +2741,6 @@ class WorkflowCoordinator:
                 child["child_task_id"] for child in self._owned_children(connection, owner["run_id"], include_lead=include_lead)}:
             raise BoardError("UNAUTHORIZED", "targetRunId must be an authorized descendant of this owning Micro task")
         return self._run_row(connection, target_id)
-
-    def _continuation_target(self, connection, owner, target_id: str):
-        return self._target_run(connection, owner, target_id)
 
     @staticmethod
     def _buddy_matches_micro_task(connection, run, buddy: dict | None) -> None:
@@ -2943,7 +2849,7 @@ class WorkflowCoordinator:
             if receipt is not None:
                 return {**receipt, "duplicate": True}
             self._expect_revision(run, expected)
-            target_snapshot = self._continuation_target(connection, run, target_id)
+            target_snapshot = self._target_run(connection, run, target_id)
             self._buddy_matches_micro_task(connection, target_snapshot, supplied_buddy)
             current_choice = json.loads(target_snapshot["execution_workspace_json"])
             if target_snapshot["delegation_authority"]:
@@ -2970,7 +2876,7 @@ class WorkflowCoordinator:
             reject_deleting_run(connection, owner_run_id)
             reject_deleting_run(connection, target_id)
             self._expect_revision(owner, expected)
-            run_row = self._continuation_target(connection, owner, target_id)
+            run_row = self._target_run(connection, owner, target_id)
             self._expect_revision(run_row, target_snapshot["revision"])
             self._buddy_matches_micro_task(connection, run_row, buddy)
             self._require_enabled_buddy(connection, buddy)
@@ -3610,8 +3516,6 @@ class WorkflowCoordinator:
         rows = self._owned_children(connection, run_id, include_lead=include_lead)
         for child in rows:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (child["child_task_id"],)).fetchone()
-            if task is None:
-                continue
             if active_only and self._run_row(connection, task["task_id"])["state"] not in IN_PROGRESS_STATES:
                 continue
             if self._cancel_owned_run(connection, task, now, actor=actor, initiator=initiator):
@@ -3849,27 +3753,6 @@ class WorkflowCoordinator:
         )
 
     # -- acknowledge ---------------------------------------------------------
-    def _recorded_acceptance_integration(self, connection, run_id: str) -> str | None:
-        """The integration record the recorded acceptance was bound to, if any.
-
-        The acceptance event is append-only and carries the exact integration id
-        that was current when the verdict was recorded, so a later command can
-        never relabel an accepted outcome with a different claimed integration.
-        """
-        row = connection.execute(
-            "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.acknowledged'"
-            " ORDER BY seq DESC LIMIT 1",
-            (run_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        try:
-            payload = json.loads(row["payload_json"])
-        except (TypeError, ValueError):
-            return None
-        value = payload.get("integrationId") if isinstance(payload, dict) else None
-        return value if isinstance(value, str) and value else None
-
     def accept(self, params: dict, *, console_authority: dict | None = None) -> dict:
         """Accept one delivered artifact: verify its integration, record, reclaim.
 
@@ -3902,8 +3785,6 @@ class WorkflowCoordinator:
         artifact_id = schemas.required_string(params, "artifactId", max_length=128)
         note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
         not_required = params.get("notRequired")
-        if not_required is not None and (not isinstance(not_required, str) or not not_required.strip()):
-            raise BoardError("INVALID_ARGUMENT", "notRequired must be a nonempty note string")
         not_required = (schemas.bounded_text(params, "notRequired", max_bytes=schemas.MAX_NOTE_BYTES)[0]
                         if not_required is not None else None)
         adjusted = schemas.optional_bool(params, "adjusted", False)
@@ -3916,8 +3797,6 @@ class WorkflowCoordinator:
                 raise BoardError("INVALID_ARGUMENT", "A not-required acceptance cannot name an integration target")
             if adjusted or host_paths or before_commit:
                 raise BoardError("INVALID_ARGUMENT", "A not-required acceptance cannot carry adjustment evidence")
-            if host_paths and not before_commit:
-                raise BoardError("INVALID_ARGUMENT", "hostPaths verification requires the beforeCommit baseline")
         else:
             if host_paths and not before_commit:
                 raise BoardError("INVALID_ARGUMENT", "hostPaths verification requires the beforeCommit baseline")
@@ -4023,8 +3902,6 @@ class WorkflowCoordinator:
         Checked before any Git work: a changed payload against a reviewed outcome
         is a conflict, never a relabel, and never a second integration attempt.
         """
-        if connection.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone() is None:
-            return False
         task = connection.execute("SELECT accepted_at, acceptance_note FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         if not task["accepted_at"]:
             return False
@@ -4057,8 +3934,6 @@ class WorkflowCoordinator:
             raise BoardError("NOT_FOUND", "No sealed output artifact of this run has that identity",
                              artifactId=artifact_id)
         manifest = json.loads(artifact["manifest_json"])
-        if manifest.get("snapshotSha256") != artifact["manifest_sha256"]:
-            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The retained output identity changed")
         original = connection.execute(
             "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
             (run_id,),
@@ -4067,16 +3942,13 @@ class WorkflowCoordinator:
             "SELECT * FROM workflow_turns WHERE run_id=? AND turn_id=? AND attempt_id=?",
             (run_id, artifact["turn_id"], artifact["attempt_id"]),
         ).fetchone()
-        if (original is None or turn is None
-                or (turn["input_sha256"] is not None
-                    and sha256_text(turn["input_json"]) != turn["input_sha256"])):
+        if original is None or turn is None:
             raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output has no proven input manifest")
         original_manifest = json.loads(original["manifest_json"])
         final_manifest = json.loads(turn["input_json"]).get("executionWorkspace")
         if not isinstance(final_manifest, dict):
             raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final turn has no execution workspace")
-        if (original_manifest.get("manifestSha256") != original["manifest_sha256"]
-                or final_manifest.get("manifestSha256") != manifest.get("manifestSha256")):
+        if final_manifest.get("manifestSha256") != manifest.get("manifestSha256"):
             raise BoardError("WORKSPACE_MANIFEST_CHANGED", "A retained input manifest identity changed")
         return original_manifest, final_manifest, manifest
 
@@ -4091,7 +3963,7 @@ class WorkflowCoordinator:
         module = workspace_module()
         verification = module.integration_verify(
             manifest, original_input=original_input, final_input=final_input,
-            path=target["path"], ref=target["ref"], strategy="patch", before_commit=before_commit,
+            path=target["path"], ref=target["ref"], before_commit=before_commit,
             repository_id=target.get("repositoryId"), checkout_id=target.get("checkoutId"),
             host_paths=host_paths, note=note, _confirm_adjustments=adjusted,
         )
@@ -4407,8 +4279,7 @@ class WorkflowCoordinator:
         response = {**view, "verdict": "accepted", "duplicate": False,
                     "targetRunId": run_id, "targetRevision": run_row["revision"],
                     "integrationId": integration["integration_id"]}
-        if integration is not None:
-            response["integration"] = self._integration_view(connection, integration)
+        response["integration"] = self._integration_view(connection, integration)
         if resolution is not None:
             response["resolutionDelivery"] = self._resolution_delivery_result(resolution)
         self.board._store_receipt(
@@ -4430,17 +4301,13 @@ class WorkflowCoordinator:
         module = workspace_module()
         adopted: set[str] = set()
         for row in connection.execute(
-            "SELECT manifest_json, manifest_sha256 FROM workflow_artifacts WHERE run_id=? AND kind='resolved-output'",
+            "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='resolved-output'",
             (run_id,),
         ).fetchall():
-            try:
-                record = json.loads(row["manifest_json"])
-            except (TypeError, ValueError):
+            record = json.loads(row["manifest_json"])
+            if record.get("kind") != "resolution" or record.get("action") != "adopt":
                 continue
-            if not isinstance(record, dict) or record.get("kind") != "resolution" or record.get("action") != "adopt":
-                continue
-            if (record.get("snapshotSha256") != row["manifest_sha256"]
-                    or record.get("manifestSha256") != manifest["manifestSha256"]):
+            if record.get("manifestSha256") != manifest["manifestSha256"]:
                 continue
             try:
                 module.verify_sealed_output(manifest, manifest, record)
@@ -4448,13 +4315,7 @@ class WorkflowCoordinator:
                 if error.code == "WORKSPACE_GIT_UNKNOWN":
                     raise
                 continue
-            values = record.get("adoptedPaths")
-            if not isinstance(values, list):
-                snapshot = record.get("snapshot")
-                values = snapshot.get("adoptedPaths") if isinstance(snapshot, dict) else None
-            if not isinstance(values, list):
-                continue
-            candidates = {value for value in values if isinstance(value, str) and value}
+            candidates = set(record["adoptedPaths"])
             if candidates and candidates <= set(record.get("changedPaths") or []):
                 adopted |= candidates
         return sorted(adopted)
@@ -4862,11 +4723,6 @@ class WorkflowCoordinator:
         if not rows:
             return None
         record = rows[0]
-        artifact = connection.execute("SELECT * FROM workflow_artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
-        manifest = json.loads(artifact["manifest_json"]) if artifact is not None else {}
-        if record["source_commit"] and manifest.get("commit") and record["source_commit"] != manifest.get("commit"):
-            raise BoardError("CONFLICT", "The integration record was verified against a different artifact",
-                             integrationId=record["integration_id"], artifactCommit=manifest.get("commit"))
         return record
 
     def _lineage_stop_evidence(self, connection, run_row, action: str) -> dict:
@@ -5004,13 +4860,7 @@ class WorkflowCoordinator:
         if conflict["turn_id"]:
             turn = connection.execute("SELECT * FROM workflow_turns WHERE turn_id=?", (conflict["turn_id"],)).fetchone()
             if turn is not None:
-                try:
-                    document = json.loads(turn["input_json"])
-                except (TypeError, ValueError):
-                    document = {}
-                candidate = document.get("executionWorkspace") if isinstance(document, dict) else None
-                if isinstance(candidate, dict):
-                    execution = candidate
+                execution = json.loads(turn["input_json"])["executionWorkspace"]
         manifest_sha = json.loads(conflict["evidence_json"])["manifestSha256"]
         if execution.get("manifestSha256") != manifest_sha:
             execution = json.loads(run_row["workspace_manifest_json"] or "{}")
@@ -5054,11 +4904,8 @@ class WorkflowCoordinator:
         ).fetchone()
         if attempt is None or attempt["result_json"] is None or not attempt["shutdown_confirmed"]:
             return None
-        try:
-            stored = json.loads(attempt["result_json"])
-        except (TypeError, ValueError):
-            return None
-        if not isinstance(stored, dict) or stored.get("status") != "failed":
+        stored = json.loads(attempt["result_json"])
+        if stored["status"] != "failed":
             return None
         envelope_error = stored.get("error")
         if not isinstance(envelope_error, str) or not envelope_error.startswith("WORKSPACE_SCOPE_VIOLATION:"):
@@ -5110,7 +4957,7 @@ class WorkflowCoordinator:
         ).fetchall()
         for conflict in conflicts:
             delivery = self._resolution_delivery_view(conflict)
-            if delivery is None or conflict["artifact_id"] != artifact["artifact_id"]:
+            if delivery is None:
                 continue
             proof = self._resolution_native_completion(connection, run_row, conflict)
             if proof is None or proof["disposition"] != "completed":
@@ -5392,45 +5239,28 @@ class WorkflowCoordinator:
 
     @staticmethod
     def _allocation_provenance(connection, run_row) -> list[dict]:
-        """Authoritative retained manifests that can prove one run's physical allocation.
+        """All retained allocation manifests, once per manifest digest.
 
-        Only material the board already pinned for this run is used: pinned input
-        artifacts, the canonical input of every turn and every prepared
-        continuation manifest. A bare cwd that happens to sit under
-        ``state/workspaces`` is never provenance, and a helper run that merely
-        borrowed its parent's checkout has no worktree manifest of its own.
+        Provenance comes from pinned artifacts, frozen turn inputs and prepared
+        continuations. A path under private state alone never proves ownership.
         """
-        manifests: list[dict] = []
-        seen: set[str] = set()
-        for query in (
-            "SELECT manifest_json AS body FROM workflow_artifacts WHERE run_id=? ORDER BY rowid LIMIT 128",
-            "SELECT input_json AS body FROM workflow_turns WHERE run_id=? ORDER BY turn_index LIMIT 128",
-            "SELECT workspace_manifest_json AS body FROM workflow_continuations WHERE run_id=? ORDER BY rowid LIMIT 128",
-        ):
-            for row in connection.execute(query, (run_row["run_id"],)).fetchall():
-                body = row["body"]
-                if not body:
-                    continue
-                try:
-                    document = json.loads(body)
-                except (TypeError, ValueError):
-                    continue
-                if not isinstance(document, dict):
-                    continue
-                candidate = document.get("executionWorkspace")
-                if not isinstance(candidate, dict):
-                    candidate = document if "workspaceId" in document and "snapshot" in document else None
-                if not isinstance(candidate, dict):
-                    continue
-                identity = str(candidate.get("manifestSha256") or candidate.get("workspaceId") or "")
-                if identity and identity in seen:
-                    continue
-                seen.add(identity)
-                manifests.append(candidate)
-        return manifests
+        rows = connection.execute(
+            "WITH candidates(body, source, position) AS ("
+            " SELECT manifest_json, 0, rowid FROM workflow_artifacts WHERE run_id=:run_id"
+            " UNION ALL SELECT json_extract(input_json,'$.executionWorkspace'), 1, turn_index"
+            " FROM workflow_turns WHERE run_id=:run_id"
+            " UNION ALL SELECT workspace_manifest_json, 2, rowid"
+            " FROM workflow_continuations WHERE run_id=:run_id),"
+            " manifests AS (SELECT body, source, position, ROW_NUMBER() OVER ("
+            " PARTITION BY json_extract(body,'$.manifestSha256') ORDER BY source, position) AS occurrence"
+            " FROM candidates WHERE body IS NOT NULL AND json_type(body,'$.workspaceId') IS NOT NULL"
+            " AND json_type(body,'$.snapshot') IS NOT NULL)"
+            " SELECT body FROM manifests WHERE occurrence=1 ORDER BY source, position",
+            {"run_id": run_row["run_id"]},
+        ).fetchall()
+        return [json.loads(row["body"]) for row in rows]
 
-    def _cleanup_reasons(self, connection, run_row, task, manifest: dict, *,
-                         allocation: dict | None = None) -> tuple[list[str], dict, dict]:
+    def _cleanup_reasons(self, connection, run_row, task, manifest: dict) -> tuple[list[str], dict, dict]:
         """Everything that must hold before one disposable checkout may be removed."""
         reasons = []
         conclusion = host_conclusions.current(connection, run_row)
@@ -5485,23 +5315,16 @@ class WorkflowCoordinator:
             "integrationId": integration["integration_id"] if integration is not None else None,
         }
         retention = {
-            # The physical allocation owns the disposable worktree; the logical
-            # directory of the current turn/input snapshot is retained alongside it.
-            "workspaceDirectory": str(self.board.directory / "workspaces"
-                                      / ((allocation or {}).get("workspaceId") or manifest.get("workspaceId") or "")),
             "logicalWorkspaceDirectory": str(self.board.directory / "workspaces" / (manifest.get("workspaceId") or "")),
             "fixedRefs": [],
             "outputPatches": [],
             "artifactIds": [],
         }
         for row in connection.execute(
-            "SELECT * FROM workflow_artifacts WHERE run_id=? ORDER BY rowid LIMIT 64", (run_row["run_id"],)
+            "SELECT * FROM workflow_artifacts WHERE run_id=? ORDER BY rowid", (run_row["run_id"],)
         ).fetchall():
             retention["artifactIds"].append(row["artifact_id"])
-            try:
-                pinned = json.loads(row["manifest_json"])
-            except (TypeError, ValueError):
-                continue
+            pinned = json.loads(row["manifest_json"])
             if isinstance(pinned.get("diffPath"), str):
                 retention["outputPatches"].append(pinned["diffPath"])
             cumulative = pinned.get("cumulativePatch")
@@ -5565,9 +5388,8 @@ class WorkflowCoordinator:
                 reasons.append("unsafe-path")
         elif not module._inside(manifest["path"], allocation["path"]):
             reasons.append("unsafe-path")
-        if allocation is not None:
-            retention["workspaceDirectory"] = str(self.board.directory / "workspaces"
-                                                  / allocation["workspaceId"])
+        retention["workspaceDirectory"] = str(self.board.directory / "workspaces"
+                                              / (allocation or manifest)["workspaceId"])
         reasons = sorted(set(reasons))
         retention["checkoutRoot"] = workspace["path"]
         retention["cwd"] = workspace["cwd"]
@@ -5621,7 +5443,6 @@ class WorkflowCoordinator:
         return response
 
     def _expiry(self, seconds: int) -> str:
-        from datetime import datetime, timedelta
         moment = datetime.fromisoformat(self.now()) + timedelta(seconds=seconds)
         return moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -5853,9 +5674,9 @@ class WorkflowCoordinator:
             raise BoardError("CONFLICT", "The cleanup plan no longer matches the run's workspace allocation",
                              planId=plan["plan_id"])
         resume = plan["state"] == "applying"
-        reasons, _evidence, _retention = self._cleanup_reasons(connection, run_row, task, manifest, allocation=allocation)
+        reasons, _evidence, _retention = self._cleanup_reasons(connection, run_row, task, manifest)
         planned = json.loads(plan["evidence_json"])
-        if ((not resume and planned.get("ownerGeneration", run_row["owner_generation"]) != run_row["owner_generation"])
+        if ((not resume and planned["ownerGeneration"] != run_row["owner_generation"])
                 or planned["acceptance"]["state"] != run_row["state"]):
             reasons.append("review-changed")
         if reasons:
@@ -5927,7 +5748,7 @@ class WorkflowCoordinator:
                 extension["requestSummary"] = request["summary"]
                 payload = json.loads(request["payload_json"])
                 extension["requestRouting"] = payload.get("source") == "routing"
-                extension["requestTargetRunId"] = (payload.get("origin") or {}).get("runId") or payload.get("childTaskId")
+                extension["requestTargetRunId"] = (payload.get("origin") or {}).get("runId")
                 boundary = self._request_view(request, connection=connection).get("routingBoundary")
                 if boundary is not None:
                     extension["routingBoundary"] = boundary
@@ -6006,131 +5827,86 @@ class WorkflowCoordinator:
     _CLAIM_STASH_REPOSITORIES = 8
 
     def collect_claim_stash_facts(self, params: dict, *, selector: str | None = None) -> dict:
-        """Read the shared stash state of the claim's actual candidates, outside every transaction.
+        """Observe the claim candidates' shared stash outside every transaction.
 
-        The candidate set mirrors the claim scan itself — the same bounded
-        queued-candidate window in the same arrival order (model service exclusions are
-        not repeated: they can only shrink the claim's own choice, and the
-        retry below covers any drift) — so the observation the claim's write
-        transaction freezes is normally the observation of exactly the run it
-        admits, and changes that happened while the task merely sat queued are
-        already part of the starting fact. An explicit ``selector`` reads only
-        that run's repository: the retry pass after a coverage miss uses it to
-        collect the chosen run itself. Git is never read inside a write
-        transaction, and a repository that cannot be read keeps an honest
-        per-repository ``unknown``. Collection itself never fails a claim.
+        Collection uses the claim's candidate window and repository bound. A
+        coverage retry reads the selected run explicitly; failed Git reads stay
+        honest unknown observations rather than inventing an empty stash.
         """
-        target = selector if isinstance(selector, str) and selector else None
-        if target is None:
-            target = params.get("taskId") or params.get("runId")
-            target = target if isinstance(target, str) and target else None
+        target = selector or params.get("taskId") or params.get("runId")
+        with self.db.read() as connection:
+            if target is not None:
+                rows = connection.execute(
+                    "SELECT r.workspace_manifest_json FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
+                    " WHERE t.state='queued' AND r.workspace_manifest_json IS NOT NULL AND r.run_id=?",
+                    (target,),
+                ).fetchall()
+            else:
+                from .scheduling import DECISION_ADAPTER
+                rows = []
+                for class_predicate in ("t.adapter IS NOT ?", "t.adapter IS ?"):
+                    rows.extend(connection.execute(
+                        "SELECT r.workspace_manifest_json, t.created_at, t.task_id"
+                        " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
+                        f" WHERE t.state='queued' AND r.workspace_manifest_json IS NOT NULL AND {class_predicate}"
+                        " ORDER BY t.created_at, t.task_id LIMIT ?",
+                        (DECISION_ADAPTER, self.board.CLAIM_CANDIDATE_LIMIT),
+                    ).fetchall())
+                rows.sort(key=lambda row: (row["created_at"], row["task_id"]))
+        repositories: dict[str, dict | None] = {}
+        for row in rows:
+            manifest = json.loads(row["workspace_manifest_json"])
+            path = manifest["snapshot"]["repositoryPath"]
+            if path not in repositories and len(repositories) < self._CLAIM_STASH_REPOSITORIES:
+                repositories[path] = None
+        module = workspace_module()
+        pass_reason = None
         try:
-            with self.db.read() as connection:
-                if target is not None:
-                    rows = connection.execute(
-                        "SELECT r.workspace_manifest_json FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
-                        " WHERE t.state='queued' AND r.workspace_manifest_json IS NOT NULL AND r.run_id=?",
-                        (target,),
-                    ).fetchall()
-                else:
-                    # The claim scan's own candidate window: both adapter classes
-                    # in arrival order under the same LIMIT the claim uses.
-                    from .scheduling import DECISION_ADAPTER
-                    rows = []
-                    for class_predicate in ("t.adapter IS NOT ?", "t.adapter IS ?"):
-                        rows.extend(connection.execute(
-                            "SELECT r.workspace_manifest_json, t.created_at, t.task_id"
-                            " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
-                            f" WHERE t.state='queued' AND r.workspace_manifest_json IS NOT NULL AND {class_predicate}"
-                            " ORDER BY t.created_at, t.task_id LIMIT ?",
-                            (DECISION_ADAPTER, self.board.CLAIM_CANDIDATE_LIMIT),
-                        ).fetchall())
-                    rows.sort(key=lambda row: (row["created_at"], row["task_id"]))
-            repositories: dict[str, dict | None] = {}
-            for row in rows:
-                try:
-                    manifest = json.loads(row["workspace_manifest_json"])
-                except (TypeError, ValueError):
-                    continue
-                path = (manifest.get("snapshot") or {}).get("repositoryPath") if isinstance(manifest, dict) else None
-                if isinstance(path, str) and path and path not in repositories and len(repositories) < self._CLAIM_STASH_REPOSITORIES:
-                    repositories[path] = None
-            module = workspace_module()
-            if not hasattr(module, "shared_stash_inventory"):
-                return {"repositories": repositories}
-            pass_reason = None
-            try:
-                for path in list(repositories):
-                    repositories[path] = module.shared_stash_inventory(path)
-            except BoardError as error:
-                pass_reason = _head(f"{error.code}: {error.message}", 512)
-            except (OSError, TypeError, ValueError) as error:
-                pass_reason = _head(str(error), 512)
-            if pass_reason is not None and hasattr(module, "stash_observation_unknown"):
-                # A failed reading is an honest per-repository ``unknown`` whose
-                # key is present, exactly like a repository that answered with a
-                # failure of its own: the claim may start on it, and a coverage
-                # miss can never hide inside a failed pass.
-                for path, value in repositories.items():
-                    if not isinstance(value, dict):
-                        repositories[path] = module.stash_observation_unknown(path, pass_reason)
-            return {"repositories": repositories}
+            for path in repositories:
+                repositories[path] = module.shared_stash_inventory(path)
         except BoardError as error:
-            return {"repositories": {}, "state": "unknown", "reason": _head(f"{error.code}: {error.message}", 512)}
-        except (OSError, TypeError, ValueError) as error:
-            return {"repositories": {}, "state": "unknown", "reason": _head(str(error), 512)}
+            pass_reason = _head(f"{error.code}: {error.message}", 512)
+        except OSError as error:
+            pass_reason = _head(str(error), 512)
+        if pass_reason is not None:
+            for path, value in repositories.items():
+                if value is None:
+                    repositories[path] = module.stash_observation_unknown(path, pass_reason)
+        return {"repositories": repositories}
 
     def run_repository_path(self, connection, task_id: str) -> str | None:
-        """The shared repository path of one micro-task run's current workspace manifest."""
+        """The shared repository of one run's current workspace manifest."""
         row = connection.execute(
             "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (task_id,)
         ).fetchone()
         if row is None or not row["workspace_manifest_json"]:
             return None
-        try:
-            manifest = json.loads(row["workspace_manifest_json"])
-        except (TypeError, ValueError):
-            return None
-        path = (manifest.get("snapshot") or {}).get("repositoryPath") if isinstance(manifest, dict) else None
-        return path if isinstance(path, str) and path else None
+        return json.loads(row["workspace_manifest_json"])["snapshot"]["repositoryPath"]
 
     def collect_result_stash_facts(self, params: dict) -> dict | None:
-        """Read the sealing side's shared stash state outside every transaction.
+        """Observe a micro-task result's shared stash outside its write transaction.
 
-        Called by the result path before its write transaction, so the turn's
-        seal boundary records what the repository actually exposes at import
-        time. ``None`` means no micro-task workspace applies; the turn-side pin
-        then records an honest ``unknown`` instead of inventing a reading.
+        None means no micro-task workspace applies. A Git read failure keeps its
+        own reason so that settlement can pin an honest unknown seal observation.
         """
-        attempt_id = params.get("attemptId")
-        if not isinstance(attempt_id, str) or not attempt_id:
+        with self.db.read() as connection:
+            row = connection.execute(
+                "SELECT r.workspace_manifest_json FROM attempts a JOIN workflow_runs r ON r.run_id=a.task_id"
+                " WHERE a.attempt_id=?",
+                (params["attemptId"],),
+            ).fetchone()
+        if row is None or not row["workspace_manifest_json"]:
             return None
+        manifest = json.loads(row["workspace_manifest_json"])
+        path = manifest["snapshot"]["repositoryPath"]
+        module = workspace_module()
         try:
-            with self.db.read() as connection:
-                row = connection.execute(
-                    "SELECT r.workspace_manifest_json FROM attempts a JOIN workflow_runs r ON r.run_id=a.task_id"
-                    " WHERE a.attempt_id=?",
-                    (attempt_id,),
-                ).fetchone()
-            if row is None or not row["workspace_manifest_json"]:
-                return None
-            manifest = json.loads(row["workspace_manifest_json"])
-        except (OSError, TypeError, ValueError):
-            return None
-        path = (manifest.get("snapshot") or {}).get("repositoryPath") if isinstance(manifest, dict) else None
-        if not isinstance(path, str) or not path:
-            return None
-        try:
-            module = workspace_module()
-            if not hasattr(module, "shared_stash_inventory"):
-                return None
-            return {"repositoryPath": path, "inventory": module.shared_stash_inventory(path)}
+            inventory = module.shared_stash_inventory(path)
         except BoardError as error:
-            # The reading itself failed for a workspace that does apply: keep the
-            # failure visible as the seal side's honest unknown reason.
             return {"repositoryPath": path, "failure": _head(f"{error.code}: {error.message}", 512)}
-        except (OSError, TypeError, ValueError) as error:
+        except OSError as error:
             return {"repositoryPath": path, "failure": _head(str(error), 512)}
+        return {"repositoryPath": path, "inventory": inventory}
 
     def seal_interrupted_turn(self, attempt_id: str) -> dict | None:
         """Seal a proven-stopped turn's checkout before its recovery transaction.
@@ -6466,13 +6242,9 @@ class WorkflowCoordinator:
             (run_row["run_id"], run_row["run_id"]),
         ):
             sealed = json.loads(row["manifest_json"])
-            # Real seals bind the immutable execution manifest by digest; unlike
-            # the early workspace double, they do not repeat checkoutId themselves.
             execution = json.loads(row["input_json"]).get("executionWorkspace") or {}
             if (execution.get("checkoutId") == checkout_id
-                    and execution.get("manifestSha256") == sealed.get("manifestSha256")
-                    and (sealed.get("checkoutId") is None
-                         or sealed.get("checkoutId") == checkout_id)):
+                    and execution.get("manifestSha256") == sealed.get("manifestSha256")):
                 return sealed
         return None
 
@@ -6544,7 +6316,7 @@ class WorkflowCoordinator:
             return None
         # A permission-only continuation before any seal keeps the original
         # explicit untracked input selectors when it re-prepares the allocation.
-        included = (sealed.get("includedUntracked") or (sealed.get("snapshot") or {}).get("included") or []
+        included = (sealed["includedUntracked"]
                     if sealed is not None else list((manifest.get("snapshot") or {}).get("executionSelectors") or []))
         sealed = sealed or {}
         return {
@@ -6675,7 +6447,7 @@ class WorkflowCoordinator:
                         # A replay's on-disk input needs a fresh execution proof;
                         # a new preparation has just observed this same checkout.
                         workspace_module().verify(manifest, require_unchanged=True)
-                except Exception as error:
+                except (BoardError, OSError) as error:
                     if isinstance(error, BoardError) and error.code in {"WORKSPACE_BUSY", "WORKSPACE_GIT_UNKNOWN"}:
                         # Another worker is preparing the same continuation. Leave it
                         # queued so that worker can publish, or a later claim can recover
@@ -6798,9 +6570,11 @@ class WorkflowCoordinator:
             self._requeue(connection, task, lead, actor={"role": "workflow", "id": "auto"},
                           now=now, continuation_id=continuation_id)
         except BoardError as error:
+            if error.code not in _AUTO_CONTINUE_FAILURE_CODES:
+                raise KeyError(error.code) from error
             connection.execute("UPDATE workflow_continuations SET state='recorded' WHERE continuation_id=?",
                                (continuation_id,))
-            self._record_helper_report(connection, lead, [], reason=make_reason(_AUTO_CONTINUE_FAILURE_CODES[error.code]), now=now)
+            self._record_helper_report(connection, lead, [], reason=make_reason(error.code), now=now)
             return
         self.board._append_event(connection, "workflow.auto_continued", task_id=lead["run_id"],
                                  revision=lead["revision"] + 1,
@@ -7195,7 +6969,7 @@ class WorkflowCoordinator:
                 canonical_json(turn.get("provenance")),
                 turn.get("sessionId"),
                 turn.get("promptSha256"),
-                turn.get("inputSha256") or turn_row["input_sha256"],
+                turn["inputSha256"],
                 self.result_payload(payload).get("turnResultPath"),
                 canonical_json(self._sealed_artifacts(payload)),
                 now,
@@ -7343,18 +7117,9 @@ class WorkflowCoordinator:
         """
         if turn_row is None:
             return []
-        try:
-            module = workspace_module()
-        except BoardError:
-            return []
-        if not hasattr(module, "scope_conflicts"):
-            return []
-        try:
-            document = json.loads(turn_row["input_json"])
-        except (TypeError, ValueError):
-            document = {}
-        execution = document.get("executionWorkspace") if isinstance(document, dict) else None
-        manifest = execution if isinstance(execution, dict) else {}
+        module = workspace_module()
+        document = json.loads(turn_row["input_json"])
+        manifest = document["executionWorkspace"]
         if not manifest.get("manifestSha256"):
             manifest = json.loads(run_row["workspace_manifest_json"] or "{}")
         if not manifest.get("manifestSha256"):
@@ -7496,25 +7261,6 @@ class WorkflowCoordinator:
         return sha256_text(canonical_json({key: value for key, value in payload.items()
                                            if key != "manifestSha256"}))
 
-    @classmethod
-    def verify_shared_refs_record(cls, record) -> dict:
-        """Re-derive one pinned shared-stash record and refuse any drift.
-
-        The pinned record is fixed evidence bound to one run/attempt/turn; this
-        check recomputes its digest from the stored payload and rejects a record
-        whose contents no longer match the identity it was pinned under.
-        """
-        if (not isinstance(record, dict) or record.get("version") != 1
-                or record.get("kind") != cls.SHARED_REFS_KIND
-                or not isinstance(record.get("taskId"), str) or not isinstance(record.get("attemptId"), str)
-                or not isinstance(record.get("turnId"), str) or not isinstance(record.get("turnInputSha256"), str)
-                or not isinstance(record.get("repositoryPath"), str)):
-            raise BoardError("WORKSPACE_INVALID", "The pinned shared-stash record has an unknown shape")
-        digest = record.get("manifestSha256")
-        if not isinstance(digest, str) or cls.shared_refs_record_digest(record) != digest:
-            raise BoardError("WORKSPACE_MANIFEST_CHANGED",
-                             "The pinned shared-stash record digest does not match its contents")
-        return record
 
     def _pin_shared_refs(self, connection, run_row, attempt, turn_row, seal_stash, now: str) -> dict | None:
         """Freeze the seal-side shared-stash fact of one micro-task turn.
@@ -7526,36 +7272,25 @@ class WorkflowCoordinator:
         record carries the full-entry comparison with, for every entry that
         disappeared, its commit, its description, a safe ``git stash store``
         recovery command and the explicit cause-unknown note. Its
-        ``manifestSha256`` is recomputed from the payload itself (every field
-        except the digest) and re-verified before pinning, and the executed
-        workspace manifest keeps its own digest under
+        ``manifestSha256`` is computed from every payload field except the
+        digest, and the executed workspace manifest keeps its own digest under
         ``workspaceManifestSha256``. It is evidence only: it restores nothing,
         judges nothing, and can neither fail this import nor any later seal or
         verification. Turns whose input predates the freezing have no start
         fact and pin nothing — a start observation is never invented from a
         later reading.
         """
-        try:
-            module = workspace_module()
-        except BoardError:
+        module = workspace_module()
+        context = json.loads(turn_row["input_json"])["context"]
+        if "sharedStash" not in context:
             return None
-        if not hasattr(module, "shared_stash_comparison") or not hasattr(module, "stash_observation_unknown"):
-            return None
-        try:
-            document = json.loads(turn_row["input_json"])
-        except (TypeError, ValueError):
-            return None
-        frozen = document.get("context", {}).get("sharedStash") if isinstance(document, dict) else None
-        if not isinstance(frozen, dict) or not isinstance(frozen.get("start"), dict):
-            return None
-        repository_path = frozen.get("repositoryPath") if isinstance(frozen.get("repositoryPath"), str) else None
+        frozen = context["sharedStash"]
+        repository_path = frozen["repositoryPath"]
         start = frozen["start"]
-        if repository_path is None:
-            return None
-        if (isinstance(seal_stash, dict) and seal_stash.get("repositoryPath") == repository_path
-                and isinstance(seal_stash.get("inventory"), dict)):
+        if (seal_stash is not None and seal_stash["repositoryPath"] == repository_path
+                and "inventory" in seal_stash):
             seal = seal_stash["inventory"]
-        elif isinstance(seal_stash, dict) and isinstance(seal_stash.get("failure"), str):
+        elif seal_stash is not None and "failure" in seal_stash:
             # The collection ran for this attempt and failed: its own reason, not
             # a claim that nothing was collected.
             seal = module.stash_observation_unknown(repository_path, seal_stash["failure"])
@@ -7576,7 +7311,6 @@ class WorkflowCoordinator:
             "comparison": module.shared_stash_comparison(start, seal),
         }
         record["manifestSha256"] = self.shared_refs_record_digest(record)
-        self.verify_shared_refs_record(record)
         self._pin_artifact(
             connection,
             run_id=run_row["run_id"],
@@ -7591,18 +7325,18 @@ class WorkflowCoordinator:
     @classmethod
     def _shared_refs_summary(cls, record: dict | None) -> dict | None:
         """The bounded Host projection of one pinned shared-stash record."""
-        if not isinstance(record, dict):
+        if record is None:
             return None
-        comparison = record.get("comparison") if isinstance(record.get("comparison"), dict) else {}
+        comparison = record["comparison"]
 
         def side(name):
-            value = record.get(name) if isinstance(record.get(name), dict) else {}
-            entries = value.get("entries")
-            return {"state": value.get("state"), "reason": value.get("reason"),
-                    "entryCount": len(entries) if isinstance(entries, list) else None}
+            value = record[name]
+            entries = value["entries"]
+            return {"state": value["state"], "reason": value.get("reason"),
+                    "entryCount": len(entries) if entries is not None else None}
 
-        lost = [item for item in (comparison.get("lostEntries") or []) if isinstance(item, dict)][:16]
-        new = [item for item in (comparison.get("newEntries") or []) if isinstance(item, dict)][:16]
+        lost = comparison.get("lostEntries", [])[:16]
+        new = comparison.get("newEntries", [])[:16]
         return {
             "turnId": record.get("turnId"),
             "attemptId": record.get("attemptId"),
@@ -7636,7 +7370,7 @@ class WorkflowCoordinator:
                 # ``snapshotSha256`` is the output identity that was pinned.
                 "manifestSha256": seal.get("manifestSha256"),
                 "snapshotSha256": seal.get("snapshotSha256"),
-                "outputCommit": seal.get("commit") or seal.get("outputCommit"),
+                "outputCommit": seal["commit"],
                 "tree": seal.get("tree"),
                 "changedPaths": seal.get("changedPaths", []),
                 "outsideScope": seal.get("outsideScope", []),
@@ -7778,13 +7512,15 @@ class WorkflowCoordinator:
                     payload={"continuationId": auto["continuation_id"], "helpers": [item["taskId"] for item in outcomes]},
                 )
             except BoardError as error:
+                if error.code not in _AUTO_CONTINUE_FAILURE_CODES:
+                    raise KeyError(error.code) from error
                 # One-use authority stays recorded if the run cannot continue yet
                 # (for example the parent's stop is not proven); the Host decides.
                 connection.execute(
                     "UPDATE workflow_continuations SET state='recorded' WHERE continuation_id=?",
                     (auto["continuation_id"],),
                 )
-                self._record_helper_report(connection, parent, outcomes, reason=make_reason(_AUTO_CONTINUE_FAILURE_CODES[error.code]), now=now)
+                self._record_helper_report(connection, parent, outcomes, reason=make_reason(error.code), now=now)
             return
         if parent["state"] == "waiting-helpers":
             self._record_helper_report(connection, parent, outcomes, reason=make_reason("helpers-settled"), now=now)
@@ -7802,9 +7538,7 @@ class WorkflowCoordinator:
         self._release_reservations(connection, task["task_id"], now)
         for reservation in reservations:
             parent_id = child["parent_run_id"]
-            seen = {task["task_id"]}
-            while parent_id not in seen:
-                seen.add(parent_id)
+            while True:
                 parent = self._run_row(connection, parent_id)
                 parent_task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (parent_id,)).fetchone()
                 closed = parent["state"] in ("accepted", "concluded", "cancelled") or self._terminal_ancestor(connection, parent_id) is not None

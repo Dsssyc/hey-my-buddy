@@ -35,6 +35,35 @@ def replay(board, kind, response):
 
 
 class WorkflowReceiptTests(WorkflowTestCase):
+    def test_cleanup_keeps_all_retained_artifacts_and_distinct_allocation_manifests(self):
+        from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+
+        board = self.board()
+        submitted = self.submit(board)
+        claimed = self.claim(board)
+        coordinator = board.store.workflow
+        original = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        digests = {original["manifestSha256"]}
+        with board.store.db.write() as connection:
+            for index in range(140):
+                manifest = {**original, "workspaceId": f"ws-retained-{index}"}
+                manifest.pop("manifestSha256")
+                manifest["manifestSha256"] = sha256_text(canonical_json(manifest))
+                digests.add(manifest["manifestSha256"])
+                coordinator._pin_artifact(connection, run_id=submitted["runId"], kind="input",
+                                          manifest=manifest, attempt_id=None, turn_id=None, now=coordinator.now())
+            run = coordinator._run_row(connection, submitted["runId"])
+            task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (submitted["runId"],)).fetchone()
+            retained = coordinator._allocation_provenance(connection, run)
+            _reasons, _evidence, retention = coordinator._cleanup_reasons(connection, run, task, original)
+            artifact_ids = {row[0] for row in connection.execute(
+                "SELECT artifact_id FROM workflow_artifacts WHERE run_id=?", (submitted["runId"],))}
+        # The original appears in both a pinned artifact and its frozen turn.
+        self.assertEqual(len(retained), len(digests))
+        self.assertEqual({item["manifestSha256"] for item in retained}, digests)
+        self.assertEqual(set(retention["artifactIds"]), artifact_ids)
+        self.assertGreater(len(artifact_ids), 128)
+
     def test_deleted_decision_and_cancel_commands_are_removed_with_the_run(self):
         board = self.board()
         submitted = self.submit(board, request_id="delete-replay", macroTask={"title": "Disposable"})

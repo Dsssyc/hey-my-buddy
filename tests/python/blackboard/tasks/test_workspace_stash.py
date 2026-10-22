@@ -387,7 +387,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
                 (run_id,)).fetchone()[0])
         from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
         self.assertEqual(pinned["workspaceManifestSha256"], manifest["manifestSha256"])
-        self.assertEqual(WorkflowCoordinator.verify_shared_refs_record(pinned), pinned)
+        self.assertEqual(pinned["manifestSha256"], WorkflowCoordinator.shared_refs_record_digest(pinned))
         # The board touched no branch, tag or stash ref, and the recorded command
         # restores the dropped entry in the real repository.
         self.assertEqual(self.git("stash", "list", "--format=%H").splitlines(), [oid])

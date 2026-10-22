@@ -142,7 +142,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                     self.assertEqual(_sha(Path(output['diffPath']).read_bytes()), output['diffSha256'])
                     self.assertEqual(_sha(_json(output['snapshot']).encode()), output['snapshotSha256'])
                 elif artifact['kind'] == 'shared-refs':
-                    WorkflowCoordinator.verify_shared_refs_record(json.loads(artifact['manifest_json']))
+                    record = json.loads(artifact['manifest_json'])
+                    self.assertEqual(record['manifestSha256'], WorkflowCoordinator.shared_refs_record_digest(record))
         self.assertEqual(connection.execute('SELECT COUNT(*) FROM workflow_host_conclusions').fetchone()[0], 3)
         self.assertEqual({row[0] for row in connection.execute('SELECT enabled FROM buddies')}, {0, 1})
         self.assertEqual({row[0] for row in connection.execute(

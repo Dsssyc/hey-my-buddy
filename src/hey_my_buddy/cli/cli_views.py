@@ -368,7 +368,6 @@ _KNOWN_MICRO_TASK_FIELDS = frozenset(
         "finalAttemptId",
         "createdAt",
         "updatedAt",
-        "auditAvailable",
         "shutdown",
         "task",
         "duplicate",

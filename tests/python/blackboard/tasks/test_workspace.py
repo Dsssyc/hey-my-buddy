@@ -408,7 +408,7 @@ class WorkspaceTests(unittest.TestCase):
         integrated = self.root / "integrated"
         self.git("worktree", "add", "--detach", str(integrated), output["commit"])
         result = workspace.integration_verify(output, original_input=manifest, final_input=manifest,
-                                              path=str(integrated), ref="HEAD", strategy="patch")
+                                              path=str(integrated), ref="HEAD")
         self.assertTrue(result["verified"])
         cleanup = workspace.cleanup_inspect(self.state, manifest, output)
         self.assertFalse(cleanup["eligible"])
