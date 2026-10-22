@@ -291,7 +291,7 @@ sys.stdin.buffer.read(1)
             self.assertEqual(path.read_bytes(), OLD)
             self.assertEqual(list(Path(root).glob(".*.tmp")), [])
 
-    def test_failed_mutable_rename_keeps_complete_synced_candidate_and_original_error(self):
+    def test_failed_mutable_rename_cleans_candidate_and_keeps_original_error(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root) / 'fact.json'
             private_files.publish_bytes(path, OLD)
@@ -308,8 +308,7 @@ sys.stdin.buffer.read(1)
                 replace.assert_called_once()
             self.assertEqual(private_files.read_bytes(path), OLD)
             candidates = list(Path(root).glob('.*.tmp'))
-            self.assertEqual(len(candidates), 1)
-            self.assertEqual(private_files.read_bytes(candidates[0]), NEW)
+            self.assertEqual(candidates, [])
 
     @unittest.skipUnless(os.name == 'nt', 'native Windows publication and sharing')
     def test_windows_publishes_exact_names_with_different_utf16_lengths(self):
@@ -337,7 +336,7 @@ sys.stdin.buffer.read(1)
                 private_dirs.validate_private_fd(reader.fileno())
 
     @unittest.skipUnless(os.name == 'nt', 'native Windows errors 32 and 5')
-    def test_windows_sharing_and_readonly_failures_preserve_candidates_without_retry(self):
+    def test_windows_sharing_and_readonly_failures_clean_candidates_without_retry(self):
         import stat
         from hey_my_buddy import windows_files
         for kind, code in (('sharing', 32), ('readonly', 5)):
@@ -354,8 +353,7 @@ sys.stdin.buffer.read(1)
                     self.assertEqual(raised.exception.winerror, code)
                     self.assertEqual(private_files.read_bytes(path), OLD)
                     candidates = list(Path(root).glob('.*.tmp'))
-                    self.assertEqual(len(candidates), 1)
-                    self.assertEqual(private_files.read_bytes(candidates[0]), NEW)
+                    self.assertEqual(candidates, [])
                 finally:
                     if reader is not None:
                         api.close(reader)
@@ -449,8 +447,7 @@ sys.stdin.buffer.read(1)
             self.assertIn(synced[0], writable)
             self.assertEqual(path.read_bytes(), OLD)
             candidates = list(Path(root).glob('.*.tmp'))
-            self.assertEqual(len(candidates), 1)
-            self.assertEqual(private_files.read_bytes(candidates[0]), NEW)
+            self.assertEqual(candidates, [])
 
     def test_windows_directory_sync_does_not_open_directory(self):
         with mock.patch.object(private_files.os, "name", "nt"), \

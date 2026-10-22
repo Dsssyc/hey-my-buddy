@@ -161,6 +161,7 @@ class ReadOnlyAttachTests(AttachFixture):
         recorder.assert_no_mutation()
         self.assertEqual(before, snapshot(self.directory), "read-only attach changed the filesystem")
 
+    @unittest.skipIf(os.name == "nt", "POSIX directory write modes")
     def test_attach_succeeds_when_the_directory_cannot_be_written(self):
         self.directory.chmod(0o500)
         self.addCleanup(self.directory.chmod, 0o700)
@@ -235,12 +236,14 @@ class TrustBoundaryTests(AttachFixture):
         self.assertGreaterEqual(len(calls), 3, "health must be re-checked after spawning")
         self.assertEqual(requests_before_spawn, [0], "no RPC may run against an untrusted endpoint")
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_group_or_world_accessible_directory_is_not_trusted(self):
         self.directory.chmod(0o755)
         self.assert_rejected_by_validation()
         self.assert_falls_back_to_cold_start()
         self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_group_writable_state_directory_is_not_trusted_even_with_private_group(self):
         self.directory.chmod(0o770)
         with patch.object(transport, "_private_primary_group", return_value=True) as group:
@@ -261,6 +264,7 @@ class TrustBoundaryTests(AttachFixture):
                 self.assertEqual(_trusted_directory(directory), private)
                 group.assert_any_call(parent.stat().st_gid)
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_private_but_unreadable_directory_is_not_trusted(self):
         self.directory.chmod(0o000)
         self.addCleanup(self.directory.chmod, 0o700)
@@ -268,12 +272,14 @@ class TrustBoundaryTests(AttachFixture):
         self.assertIsNone(_read_endpoint(self.directory))
         self.request.assert_not_called()
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_symlinked_state_directory_is_not_trusted(self):
         link = Path(self.temp.name) / "state-link"
         link.symlink_to(self.directory)
         self.assertFalse(_trusted_directory(link))
         self.assertIsNone(_attach_read_only(link))
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_state_directory_under_a_sticky_shared_parent_is_trusted(self):
         """POSIX sticky semantics: another user cannot rename this user's entry.
 
@@ -294,6 +300,7 @@ class TrustBoundaryTests(AttachFixture):
         self.assertTrue(_trusted_directory(nested))
         self.assertEqual(_read_endpoint(nested), ENDPOINT)
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_state_directory_under_a_non_sticky_shared_parent_is_not_trusted(self):
         """Without the sticky bit another user can rename the entry, so refuse it."""
         shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
@@ -308,6 +315,7 @@ class TrustBoundaryTests(AttachFixture):
         self.assertFalse(_trusted_directory(nested))
         self.assertIsNone(_read_endpoint(nested))
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_sticky_shared_parent_owned_by_a_foreign_user_is_not_trusted(self):
         """A foreign owner of the sticky parent could still rename this user's entry."""
         shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
@@ -339,6 +347,7 @@ class TrustBoundaryTests(AttachFixture):
         self.assertFalse(stat.S_ISREG(self.endpoint_file.lstat().st_mode))
         self.assert_rejected_by_validation()
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_foreign_owner_is_not_trusted(self):
         def as_other_owner(result):
             fields = [result[index] for index in range(10)]
@@ -351,11 +360,13 @@ class TrustBoundaryTests(AttachFixture):
         with patch("hey_my_buddy.protocol.transport.os.fstat", side_effect=lambda *args, **kwargs: as_other_owner(real_fstat(*args, **kwargs))):
             self.assertIsNone(_read_endpoint(self.directory))
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_unsafe_endpoint_file_mode_is_not_trusted(self):
         self.write_endpoint(ENDPOINT, 0o644)
         self.assert_rejected_by_validation()
         self.assert_falls_back_to_cold_start()
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_endpoint_outside_a_private_directory_is_not_trusted(self):
         self.directory.chmod(0o750)
         self.assert_rejected_by_validation()
@@ -415,9 +426,10 @@ class ColdStartTests(unittest.TestCase):
         self.assertEqual(health.call_count, 3, "cold start must re-check health after spawning")
         self.assertEqual(health.call_args_list, [call(self.directory.resolve())] * 3, "cold start and attach must share one trust rule with no bypass argument")
         self.assertEqual(self.spawn.call_count, 1)
-        self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
-        self.assertEqual((self.directory / "control-start.lock").stat().st_mode & 0o777, 0o600)
-        self.assertEqual((self.directory / "control.log").stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(self.directory.stat().st_mode & 0o777, 0o700)
+            self.assertEqual((self.directory / "control-start.lock").stat().st_mode & 0o777, 0o600)
+            self.assertEqual((self.directory / "control.log").stat().st_mode & 0o777, 0o600)
         self.assertEqual(Path(self.spawn.call_args.args[0][2]).name, "hey_my_buddy.blackboard.service.daemon")
 
     def test_orphan_upgrade_journal_without_startup_lock_refuses_without_preflight(self):
@@ -495,6 +507,7 @@ class ColdStartTests(unittest.TestCase):
         self.assertTrue((self.directory / "control-start.lock").exists())
         self.spawn.assert_not_called()
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_existing_service_under_a_shared_sticky_parent_attaches_read_only(self):
         """Regression: a service under a root-owned sticky /tmp is reused, not re-spawned."""
         shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
@@ -530,6 +543,7 @@ class ColdStartTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, "SERVICE_START_FAILED")
         self.assertEqual(self.spawn.call_count, 1)
 
+    @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_cold_start_and_later_attach_share_the_same_trust_rule_under_a_shared_parent(self):
         """A /tmp-style state dir is trusted by cold start and by every later attach."""
         shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
@@ -551,6 +565,7 @@ if __name__ == "__main__":
     unittest.main()
 
 
+@unittest.skipIf(os.name == "nt", "POSIX IPC directories; Windows uses named pipes")
 class RpcReadOnlySetupTests(unittest.TestCase):
     """The real RPC setup boundary must preserve missing or unsafe IPC paths."""
 

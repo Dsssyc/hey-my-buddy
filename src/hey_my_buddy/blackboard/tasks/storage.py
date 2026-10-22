@@ -723,7 +723,7 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
 def locked(store):
     path = store.directory / 'storage'
     _guard_storage(path)
-    path.mkdir(mode=0o700, exist_ok=True)
+    path.mkdir(mode=0o777 if os.name == 'nt' else 0o700, exist_ok=True)
     _guard_storage(path)
     if not path.is_dir():
         raise BoardError('STORAGE_UNSAFE', 'Storage plan root must be a directory', path=str(path))

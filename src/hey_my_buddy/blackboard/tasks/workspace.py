@@ -611,14 +611,14 @@ def _actor_identity(value, label, roles=("host", "lead", "console")):
 def _mkdir(path):
     if path.is_symlink():
         raise BoardError("WORKSPACE_CONFLICT", "A workspace state directory is a symlink", path=str(path))
-    path.mkdir(mode=0o700, exist_ok=True)
+    path.mkdir(mode=0o777 if os.name == 'nt' else 0o700, exist_ok=True)
 
 
 def _workspace_directory(state_dir, request_id):
     if not isinstance(request_id, str) or not request_id or "\0" in request_id:
         raise BoardError("INVALID_WORKSPACE", "request_id must be a nonempty stable identity")
     state_dir = Path(state_dir).resolve()
-    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    state_dir.mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True, exist_ok=True)
     workspace_id = "ws-" + _sha(_json([str(state_dir), request_id]))[:32]
     _mkdir(state_dir / "workspaces")
     directory = state_dir / "workspaces" / workspace_id

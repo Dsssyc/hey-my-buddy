@@ -15,7 +15,7 @@ from support import BoardTestCase
 class PrivateDirectoryTests(BoardTestCase):
     def test_concurrent_private_directory_creator_is_accepted_and_checked(self):
         if os.name == 'nt':
-            self.skipTest('POSIX mkdir race; Windows creation is tested at its handle boundary')
+            self.skipTest('POSIX mkdir race; Windows inherits the parent ACL')
         raced = self.directory / 'concurrent-parent'
         target = raced / 'leaf'
         original = Path.mkdir
@@ -33,7 +33,7 @@ class PrivateDirectoryTests(BoardTestCase):
 
     def test_concurrent_creator_cannot_replace_a_private_directory_with_a_file(self):
         if os.name == 'nt':
-            self.skipTest('POSIX mkdir race; Windows validates the directory handle')
+            self.skipTest('POSIX mkdir race; Windows uses ordinary mkdir')
         target = self.directory / 'concurrent-file'
         original = Path.mkdir
         def create_file(path, mode=0o777, parents=False, exist_ok=False):

@@ -174,7 +174,7 @@ class FrameMetaLog:
 
     def start(self) -> None:
         if self._handle is None:
-            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self.path.parent.mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True, exist_ok=True)
             self._handle = private_dirs.open_regular_fd(
                 Path(self.path),
                 os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)

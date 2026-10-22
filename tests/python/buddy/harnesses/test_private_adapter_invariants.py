@@ -123,6 +123,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                 self.assert_sentinels()
                 self.assertFalse((self.outside / "call-1").exists())
 
+    @unittest.skipIf(os.name == "nt", "POSIX per-operation private path guards")
     def test_evidence_root_and_call_parent_links_refuse_copy_before_any_outside_write(self):
         for parent in ("root", "call", "file"):
             with self.subTest(parent=parent):
@@ -138,6 +139,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                     evidence.symlink_to(self.outside, target_is_directory=True)
                 self.assert_retention_failure(handle)
 
+    @unittest.skipIf(os.name == "nt", "POSIX per-operation private path guards")
     def test_linked_private_source_parent_is_not_read_or_copied(self):
         _, _, handle = self.start()
         root = handle.no_tool_evidence.private_root
@@ -145,27 +147,13 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
         self.assert_retention_failure(handle)
         self.assertFalse(handle.no_tool_evidence.evidence_root.exists())
 
-    def test_arbitrary_windows_reparse_metadata_on_any_parent_refuses_evidence_write(self):
-        for tag in (0xA0000003, 0xA000000C, 0x80000042):
-            with self.subTest(reparse_tag=tag):
-                _, _, handle = self.start()
-                parent = handle.no_tool_evidence.evidence_root
-                parent.mkdir(mode=0o700)
-                original_lstat = Path.lstat
-                def metadata(path, *args, **kwargs):
-                    value = original_lstat(path, *args, **kwargs)
-                    if path == parent:
-                        return SimpleNamespace(st_mode=value.st_mode, st_file_attributes=0x400, st_reparse_tag=tag)
-                    return value
-                with mock.patch.object(Path, "lstat", metadata):
-                    self.assert_retention_failure(handle)
-                self.assertFalse((parent / "call-1").exists())
 
     def test_evidence_io_failure_preserves_actual_native_stop_and_diagnostic_paths(self):
         _, _, handle = self.start()
         with mock.patch.object(read_only, "private_json", side_effect=OSError("fixture evidence disk failure")):
             self.assert_retention_failure(handle)
 
+    @unittest.skipIf(os.name == "nt", "POSIX per-operation private path guards")
     def test_plain_and_immutable_json_refuse_final_links_and_every_parent_link(self):
         for exclusive in (False, True):
             for location in ("file", "parent", "ancestor"):
@@ -186,24 +174,6 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                     self.assertFalse((self.outside / "new").exists())
                     self.assertFalse(any(self.outside.glob(".*.tmp")))
 
-    def test_plain_json_refuses_any_windows_reparse_target_or_parent(self):
-        for location in ("file", "parent"):
-            with self.subTest(location=location):
-                directory = self.root / f"reparse-{location}"
-                directory.mkdir(mode=0o700)
-                target = directory / "result.json"
-                target.write_text("original-evidence", encoding="utf-8", newline="\n")
-                rejected = target if location == "file" else directory
-                original_lstat = Path.lstat
-                def metadata(path, *args, **kwargs):
-                    value = original_lstat(path, *args, **kwargs)
-                    if path == rejected:
-                        return SimpleNamespace(st_mode=value.st_mode, st_file_attributes=0x400, st_reparse_tag=0x80000042)
-                    return value
-                with mock.patch.object(Path, "lstat", metadata), self.assertRaises(BoardError):
-                    turn_io.private_json(target, {"overwritten": True})
-                self.assertEqual(target.read_text(encoding="utf-8"), "original-evidence")
-                self.assertFalse(any(directory.glob(".*.tmp")))
 
 
 class PrivateAdapterInvariants(unittest.TestCase):

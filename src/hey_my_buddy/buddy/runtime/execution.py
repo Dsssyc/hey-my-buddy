@@ -798,8 +798,6 @@ class _ExecutionControl(threading.Thread):
 
 
 def main():
-    from ...windows_files import initialize_process_owner
-    initialize_process_owner()
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
             stream.reconfigure(encoding="utf-8", newline="\n")

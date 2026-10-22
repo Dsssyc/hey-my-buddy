@@ -1150,8 +1150,9 @@ class Database:
             fresh = not self.path.exists()
             if not fresh:
                 self._require_current_schema()
-            self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-            os.chmod(self.directory, 0o700)
+            self.directory.mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True, exist_ok=True)
+            if os.name != 'nt':
+                os.chmod(self.directory, 0o700)
             with self.connect() as connection:
                 if fresh:
                     connection.executescript(SCHEMA)

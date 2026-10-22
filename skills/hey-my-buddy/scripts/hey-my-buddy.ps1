@@ -38,7 +38,12 @@ if (($args.Count -gt 0 -and $args[0] -in @('install', 'upgrade')) -or $env:HMB_D
     $result = Invoke-HeyMyBuddyProcess $uv (@('run', '--frozen', '--python', '3.12', '--project', $project, 'python', $launcher) + $args)
 } else {
     $hint = Join-Path $skill '.runtime-python'
-    $python = if ($env:HMB_BOOTSTRAP_PYTHON) { $env:HMB_BOOTSTRAP_PYTHON } elseif (Test-Path $hint) { (Get-Content -Raw $hint).Trim() } else { 'python' }
+    $python = if ($env:HMB_BOOTSTRAP_PYTHON) { $env:HMB_BOOTSTRAP_PYTHON } elseif (Test-Path $hint) { $stream = [System.IO.File]::Open($hint, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+        try {
+            $reader = [System.IO.StreamReader]::new($stream, [System.Text.Encoding]::UTF8)
+            try { $reader.ReadToEnd().Trim() } finally { $reader.Dispose() }
+        } finally { $stream.Dispose() } } else { 'python' }
     $result = Invoke-HeyMyBuddyProcess $python (@($launcher) + $args)
 }
 exit $result

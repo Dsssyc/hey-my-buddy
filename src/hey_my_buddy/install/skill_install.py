@@ -12,11 +12,10 @@ import json
 import os
 from pathlib import Path
 import shutil
-import tempfile
 import uuid
 import sys
 
-from .. import locking
+from .. import locking, private_dirs
 from ..protocol import schemas
 from . import skill_package
 from ..errors import BoardError
@@ -46,7 +45,7 @@ def write_runtime_hint(skill: Path, target: Path) -> None:
     """Bootstrap with a stable interpreter; active-runtime remains authority."""
     from .runtime import runtime_python
     from ..private_files import publish_bytes
-    publish_bytes(skill / '.runtime-python', (str(runtime_python(target)) + '\n').encode("utf-8"), private=False)
+    publish_bytes(skill / '.runtime-python', (str(runtime_python(target)) + '\n').encode("utf-8"))
 
 
 def _is_product_skill(path: Path) -> bool:
@@ -87,7 +86,7 @@ def _place(source: Path, target: Path, marker: dict) -> tuple[str, Path | None]:
         return "already-current", None
     if target.is_symlink() or (target.exists() and not current and not _is_product_skill(target)):
         raise BoardError("SKILL_TARGET_CONFLICT", f"{target} exists and is not a hey-my-buddy skill; move it away first")
-    staged = Path(tempfile.mkdtemp(prefix=".hey-my-buddy-install-", dir=target.parent))
+    staged = private_dirs.make_temporary_dir(prefix=".hey-my-buddy-install-", directory=target.parent)
     previous = target.with_name(f".hey-my-buddy-install-previous-{uuid.uuid4().hex}") if target.exists() else None
     try:
         shutil.copytree(source, staged / SKILL, symlinks=True)
@@ -152,6 +151,9 @@ def install(params: dict) -> dict:
         raise BoardError("UNAUTHORIZED", "A Worker cannot install the shared skill")
     home = agent_skills_home()
     state = get_state_dir()
+    if os.name == 'nt':
+        from ..windows_files import validate_state_root
+        validate_state_root(state, create=True)
     from .runtime import runtime_root
     planned_paths = [str(home / SKILL), str(claude_skills_home() / SKILL), str(state), str(runtime_root())]
     from ..protocol.contracts import CONTRACT_VERSION
@@ -174,7 +176,7 @@ def install(params: dict) -> dict:
         _check_claude_link(target)
         source = packaged_skill()
         if source is None:
-            built = Path(tempfile.mkdtemp(prefix=".hey-my-buddy-source-"))
+            built = private_dirs.make_temporary_dir(prefix=".hey-my-buddy-source-")
             skill_package.assemble(project_root(), built / SKILL)
             source = built / SKILL
         marker = _marker(source)

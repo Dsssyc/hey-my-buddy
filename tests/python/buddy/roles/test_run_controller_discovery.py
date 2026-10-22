@@ -61,7 +61,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
         record = {'harness': 'codex', 'status': 'unavailable', 'command': [],
                   'reason': {'code': 'harness.not-found', 'params': {'operation': 'probe'}}}
         with patch.dict(os.environ, environment, clear=True), \
-             patch.object(run_execution.tempfile, 'tempdir', str(self.root)), \
+             patch.object(tempfile, 'tempdir', str(self.root)), \
              bound([record], environment=environment):
             return run_execution.discover_models('codex')
 

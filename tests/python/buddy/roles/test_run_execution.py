@@ -116,7 +116,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
 
     def test_directory_creation_failure_proves_no_controller_created(self):
         error = OSError('fixture catalog directory refused')
-        with mock.patch.object(run_execution.tempfile, 'mkdtemp', side_effect=error), \
+        with mock.patch.object(run_execution, 'make_temporary_dir', side_effect=error), \
              mock.patch.object(run_execution, 'launch_controller') as launch, \
              mock.patch.object(run_execution.shutil, 'rmtree') as remove:
             with self.assertRaises(OSError) as caught:
@@ -160,7 +160,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=os.environ.get('HMB_CHECKS_TMPDIR', '/tmp')) as temporary:
             directory = Path(temporary) / 'catalog'
             directory.mkdir()
-            with mock.patch.object(run_execution.tempfile, 'mkdtemp', return_value=str(directory)), \
+            with mock.patch.object(run_execution, 'make_temporary_dir', return_value=directory), \
                  mock.patch.object(run_execution.shutil, 'rmtree', wraps=run_execution.shutil.rmtree) as remove:
                 with self.assertRaises(BoardError) as caught:
                     self._discover({'status': 'error', 'error': 'fixture unknown stop'},

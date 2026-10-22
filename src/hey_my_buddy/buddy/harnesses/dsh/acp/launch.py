@@ -144,7 +144,7 @@ def record_launch(log_path: Path, argv: list[str], environment: dict, *, spawn_c
         "rejected": rejected,
         "pid": pid,
     }
-    log_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    log_path.parent.mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True, exist_ok=True)
     fd = private_dirs.open_regular_fd(
         Path(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:

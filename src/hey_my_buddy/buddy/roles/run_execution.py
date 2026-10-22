@@ -11,7 +11,6 @@ import os
 import shutil
 import secrets
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -22,8 +21,8 @@ from pathlib import Path
 from ...paths import is_absolute_path
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
-from ...private_dirs import context_root, native_root, ensure_private_dir
-from ...private_files import read_bytes, read_text
+from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
+from ...private_files import open_read, read_bytes, read_text
 from ...protocol import usage
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.base import AdapterOutcome, ExecutionContext
@@ -115,7 +114,7 @@ class InlineRunHandle:
 def _evidence(result, kind: str) -> dict | None:
     for ref in result.evidence_refs:
         if ref.kind == kind:
-            with guard_private_path(Path(ref.location)).open("rb") as stream:
+            with open_read(guard_private_path(Path(ref.location))) as stream:
                 raw = stream.read(STRICT_RESULT_BYTES + 1)
             if (len(raw) > STRICT_RESULT_BYTES or ref.size_bytes != len(raw)
                     or ref.sha256 != hashlib.sha256(raw).hexdigest()):
@@ -837,7 +836,7 @@ def _native_operation(name: str, operation: str, **arguments) -> dict:
             if module is None or not callable(getattr(module, specification["seam"], None)):
                 raise BoardError(specification["unavailableCode"],
                                  f"The harness has no registered {operation} operation", harness=name)
-            directory = Path(tempfile.mkdtemp(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-"))
+            directory = make_temporary_dir(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-")
             control = directory / _NATIVE_CONTROL
             private_json(control, {"operation": operation, "arguments": arguments,
                                    "harness": name,

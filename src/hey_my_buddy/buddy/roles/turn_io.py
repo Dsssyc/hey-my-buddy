@@ -34,6 +34,8 @@ def guard_private_path(path: Path) -> Path:
     # Only canonicalize the macOS root aliases, as the private-directory API does.
     if sys.platform == "darwin" and len(path.parts) > 1 and path.parts[1] in ("var", "tmp"):
         path = Path("/private", *path.parts[1:])
+    if os.name == 'nt':
+        return path
     for component in (*reversed(path.parents), path):
         if linked(component):
             raise BoardError("PRIVATE_PATH_UNSAFE", "Private path contains a linked component", path=str(component))

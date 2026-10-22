@@ -56,7 +56,7 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
         # Public standalone selection has no filesystem input. Freeze an empty
         # private directory rather than borrowing any caller checkout.
         root = directory / "frozen-input"
-        root.mkdir(mode=0o700)
+        root.mkdir(mode=0o777 if os.name == 'nt' else 0o700)
         try:
             return root, _digest(root, deadline)
         except BoardError:
@@ -73,7 +73,7 @@ def prepare(manifest: dict | None, directory: Path) -> tuple[Path, str]:
         raise BoardError(code, "The frozen Router input could not be verified") from None
     _remaining(deadline)
     root = directory / "frozen-input"
-    root.mkdir(mode=0o700)
+    root.mkdir(mode=0o777 if os.name == 'nt' else 0o700)
     environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update(GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1", GIT_TERMINAL_PROMPT="0")
     def git(*arguments):

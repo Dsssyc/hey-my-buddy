@@ -4,7 +4,6 @@ Security dependencies load only when a Windows boundary is used.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 import ctypes
 from ctypes import wintypes
 import errno
@@ -210,13 +209,13 @@ def validate_acl(owner, user, dacl_present, aces):
     """
     allowed = {user, SYSTEM_SID, ADMINISTRATORS_SID, OWNER_RIGHTS_SID}
     if owner not in {user, ADMINISTRATORS_SID}:
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private object has a foreign owner')
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'State root has a foreign owner')
     if not dacl_present or aces is None:
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private object must have a non-NULL DACL')
+        raise BoardError('PRIVATE_PATH_UNSAFE', 'State root must have a non-NULL DACL')
     for ace in aces:
         if (len(ace) != 3 or len(ace[0]) != 2 or ace[0][0] != 0
                 or ace[2] not in allowed):
-            raise BoardError('PRIVATE_PATH_UNSAFE', 'Private object has an unsupported or foreign ACE')
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'State root has an unsupported or foreign ACE')
 
 
 def _security():
@@ -226,7 +225,7 @@ def _security():
     return win32api, win32con, win32security
 
 
-def validate_private_handle(handle):
+def _validate_root_acl(handle):
     api, con, security = _security()
     token = security.OpenProcessToken(api.GetCurrentProcess(), con.TOKEN_QUERY)
     try:
@@ -246,125 +245,47 @@ def validate_private_handle(handle):
                  bool(control & security.SE_DACL_PRESENT), aces)
 
 
-_owner_initialized = False
-
-
-def initialize_process_owner():
-    """Set an elevated process's default owner once, before creating private state."""
-    global _owner_initialized
-    if os.name != 'nt' or _owner_initialized:
-        return
-    api, con, security = _security()
-    try:
-        token = security.OpenProcessToken(api.GetCurrentProcess(), con.TOKEN_QUERY | con.TOKEN_ADJUST_DEFAULT)
-        try:
-            if security.GetTokenInformation(token, security.TokenElevation):
-                user = security.GetTokenInformation(token, security.TokenUser)[0]
-                security.SetTokenInformation(token, security.TokenOwner, user)
-        finally:
-            token.Close()
-    except Exception as error:
-        raise BoardError('PRIVATE_OWNER_SETUP_FAILED',
-                         'Cannot set the elevated process default owner to the current user',
-                         reason=str(error)) from error
-    _owner_initialized = True
-
-
-def _check(api, handle, path, *, directory, private=False):
-    attributes, _ = api.info(handle)
-    if (attributes & FILE_ATTRIBUTE_REPARSE_POINT
-            or bool(attributes & FILE_ATTRIBUTE_DIRECTORY) != directory
-            or api.file_type(handle) != FILE_TYPE_DISK):
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path has a reparse point or invalid type', path=str(path))
-    # Volume/share roots have no level name. A subst root's final handle path
-    # can name a directory on another drive; the pinned root is the boundary.
-    if ntpath.basename(str(path).rstrip('\\')):
-        expected = ntpath.basename(api.long_path(path).rstrip('\\'))
-        if api.name(handle).casefold() != expected.casefold():
-            raise BoardError('PRIVATE_PATH_UNSAFE', 'Private handle does not name the requested path', path=str(path))
-    if private:
-        validate_private_handle(handle)
-
-
-@contextmanager
-def parent(path, *, create=False, api=None):
-    """Hold every real ancestor without delete sharing; validate the private parent.
-
-    Existing volume/user ancestors need only be real. Each new directory and the
-    final private parent are ACL-checked while their handles remain held.
-    """
-    api = api if api is not None else WindowsFileAPI()
+def validate_state_root(path, *, create=False):
+    """Check the Windows state boundary once at installation or cold start."""
+    from .private_dirs import _guard_parents
     path = Path(path).absolute()
-    if '..' in path.parts:
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Private path contains a parent traversal', path=str(path))
-    handles = []
+    _guard_parents(path)
+    if create:
+        path.mkdir(parents=True, exist_ok=True)
+    api = WindowsFileAPI()
+    handle = api._open(path, READ_CONTROL | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
     try:
-        for current in (*reversed(path.parent.parents), path.parent):
-            created = False
-            try:
-                handle = api.open_dir(current)
-            except FileNotFoundError:
-                if not create:
-                    raise
-                try:
-                    current.mkdir(mode=0o700)
-                except FileExistsError:
-                    pass
-                created = True
-                handle = api.open_dir(current)
-            handles.append(handle)
-            _check(api, handle, current, directory=True, private=created or current == path.parent)
-        yield api, path
+        attributes, _ = api.info(handle)
+        if attributes & FILE_ATTRIBUTE_REPARSE_POINT or not attributes & FILE_ATTRIBUTE_DIRECTORY:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'State root must be a real directory', path=str(path))
+        _validate_root_acl(handle)
+    except BoardError as error:
+        error.details['path'] = str(path)
+        raise
     finally:
-        close_error = None
-        for handle in reversed(handles):
-            try:
-                api.close(handle)
-            except OSError as error:
-                if close_error is None:
-                    close_error = error
-        if close_error is not None:
-            raise close_error
+        api.close(handle)
 
 
-def open_regular_fd(path, flags, mode=0o600):
-    """Open under held ancestors, then transfer the checked leaf to the CRT."""
-    with parent(path) as (api, path):
-        return open_held_regular_fd(api, path, flags)
-
-
-def open_held_regular_fd(api, path, flags, *, private=True, delete=False):
-    """Open one leaf while the caller retains its checked parent handles."""
-    if flags & os.O_TRUNC and not flags & os.O_EXCL:
-        raise BoardError('PRIVATE_PATH_UNSAFE', 'Unsafe ordinary-file open', path=str(path))
-    access = READ_CONTROL | (DELETE if delete else 0)
+def open_regular_fd(path, flags, mode=0o600, *, delete=False, api=None):
+    """Open an ordinary path with delete sharing and transfer ownership to the CRT."""
+    api = api if api is not None else WindowsFileAPI()
+    access = DELETE if delete else 0
     if flags & os.O_RDWR:
         access |= GENERIC_READ | GENERIC_WRITE
     elif flags & os.O_WRONLY:
         access |= GENERIC_WRITE
     else:
         access |= GENERIC_READ
-    disposition = CREATE_NEW if flags & os.O_EXCL else OPEN_ALWAYS if flags & os.O_CREAT else OPEN_EXISTING
+    disposition = (CREATE_NEW if flags & os.O_EXCL else
+                   2 if flags & os.O_CREAT and flags & os.O_TRUNC else
+                   OPEN_ALWAYS if flags & os.O_CREAT else
+                   5 if flags & os.O_TRUNC else OPEN_EXISTING)
     handle = api._open(path, access, disposition, share_delete=True)
     try:
-        _check(api, handle, path, directory=False, private=private)
+        attributes, _ = api.info(handle)
+        if attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) or api.file_type(handle) != FILE_TYPE_DISK:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'Path is not an ordinary file', path=str(path))
         return api.fd(handle, flags)
     except BaseException:
         api.close(handle)
         raise
-
-
-def open_public_regular_fd(path, flags):
-    """Installation files allow linked ancestors and have no private ACL policy."""
-    return open_held_regular_fd(WindowsFileAPI(), Path(path), flags, private=False)
-
-
-def validate_directory(path):
-    with parent(Path(path) / '.private-directory-check'):
-        pass
-
-
-def ensure_directory(path):
-    with parent(Path(path) / '.private-directory-check', create=True):
-        pass
-    return Path(path)
