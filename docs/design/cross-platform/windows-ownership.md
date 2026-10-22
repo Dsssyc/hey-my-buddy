@@ -16,6 +16,8 @@ ADR-031 第 13 条已经定为开发流程约束：开发使用真实数据只�
 
 私有事实发布与备份阶段 C 已实现、验收并合入 `516c6d5d`；当前入口是 `private_files.py:publish_bytes`，三系统备份共用 journal，exchange 分支及以只读句柄补刷盘的循环已删，gzip 尾部由写者刷盘。`e1e4d1d6` 修复发布测试的 Windows 挂起：握手改为字节协议，避免 CRLF 不匹配后阻塞读 stderr；写者直接用基础解释器，避免只杀掉 venv 转发器。此为测试修复，不能据此声称产品执行启动链已经修好。
 
+私有目录与文件的阶段 B 已实现、验收并合入 `755c476c`（[验收记录](../../acceptance/cross-platform/phase-b.md)）：Python 下限 3.12.4，pywin32 为直接依赖；`windows_files.py` 持有句柄层与唯一 ACL 规则，私有入口逐级以 0700 新建并在各级句柄上校验，句柄的最终路径须是请求路径的长名；服务、执行、启动器与 CLI 在提权令牌下先把默认属主设为当前用户。测试机上的独立复跑量到：提权与普通令牌交替在同一状态目录上起停私有服务，每个私有对象（含 SQLite 的 WAL、SHM）的属主都是当前用户，ACE 只有普通 allow 且受托者在白名单内，WAL、SHM 在每次换令牌后重新建出。它在 Windows 上把安装发布路径也送进了私有边界，由阶段 C 后续改回（见第 2 节末与验收记录）。
+
 Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试文件已过 168 个，不能称为整轮通过。本批剩余失败按入口处理：私有目录/文件的 mode 判断归 B，Job 生存期及身份归 D/E，检查运行器用 `ps` 观察收尾而退出 3、`test_native_process_journal.py` 使用 `/bin/sleep` 归 F。旧第十轮错误行的粗计数不再作为实施依据。
 
 ## 2. 私有目录与文件：一次句柄级属主及 ACL 校验
@@ -34,7 +36,7 @@ Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试
 
 固定祖先沿用 `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`，以 `GENERIC_READ` 打开且不允许删除共享，核对真实类型、重解析属性和最终名称。只请求 `FILE_READ_ATTRIBUTES` 的句柄不参与共享检查：补充实验里这样固定的祖先照样被改名并换成目录联接，下一层打开已落到私有根外，靠最终名称核对才拒绝；以 `GENERIC_READ` 固定后，改名以错误 32 失败（[a3 记录](windows-experiments-a3.md)）。叶子使用同一句柄校验普通文件及 ACL。新文件独占创建，CRT fd 使用二进制和不可继承标志，句柄所有权只转移一次。事实读者允许删除共享，能否换代另受第 3 节 API 选择约束。普通源检出复用路径政策，不套私有 ACL；POSIX 继续使用 dir_fd、O_NOFOLLOW、uid/mode。
 
-接入范围包括 `cli/main.py` 的 Host 控制能力及提交令牌、`install/launcher.py` 的 agent credential 文件与继承 fd、read_private、transport 的 token/endpoint、execution 的 startup/live/receipt、turn_io 私有输入输出、console session、fast Router 空 cwd、备份及安装私有文件。继承 fd 按原生句柄校验，不按路径重开。空 cwd 仍须真实、私有且为空，不要求磁盘根和普通用户目录全都私有。Windows 安全依赖按需加载，launcher 首次 bootstrap、active 指针及源替换后的稳定运行时入口都要验证；导入失败直接报告，不能跳过安全校验。
+接入范围包括 `cli/main.py` 的 Host 控制能力及提交令牌、`install/launcher.py` 的 agent credential 文件与继承 fd、read_private、transport 的 token/endpoint、execution 的 startup/live/receipt、turn_io 私有输入输出、console session、fast Router 空 cwd、备份及安装私有文件。继承 fd 按原生句柄校验，不按路径重开。空 cwd 仍须真实、私有且为空，不要求磁盘根和普通用户目录全都私有。Windows 安全依赖按需加载，launcher 首次 bootstrap、active 指针及源替换后的稳定运行时入口都要验证；导入失败直接报告，不能跳过安全校验。安装的私有文件指状态目录里的 active 指针、启动设置、安装日志、锁与备份；skill 目录与它的运行时提示、运行时根及其清单与 READY 是安装发布路径，不属私有：两个系统同一政策，允许上层目录是链接，不按私有 ACL 校验（`tests/python/install/test_publication_paths.py`）。阶段 B 在 Windows 上把后者也送进了私有边界，2026-10-22 验收时由 CI 发现，交阶段 C 后续改回；那个测试里 active 指针的一半属于私有状态，随之删去。
 
 ## 3. 事实发布、Windows 换代与开机会话
 
@@ -134,7 +136,7 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 阶段 A：已有进程/文件实验已完成，补充清单见第 7 节；只产出实验记录，不改契约、存储形式或版本，不开待执行升级。相关补项是 B、C 后续、D、E 各自落地的前提，不重复已取得的证据。
 
-阶段 B：落地已同意的 Python `>=3.12.4,<3.13`、直接 pywin32 依赖、逐级私有创建及句柄/ACL 边界。依赖 A 已有 ACL/稳定 runtime 证据及补项 1、6；改 pyproject.toml、uv.lock、private_dirs.py、新增 windows_files.py、搬移 windows_paths 文件能力及第 2 节列出的 CLI/launcher/transport/turn_io/session/fast cwd 入口，服务、执行与启动器的进程入口落实提权时的默认属主政策或明确拒绝分支。验收单一 ACL 规则、每级 0700、提权建后普通访问、SQLite sidecar 重建、祖先固定、fd 单次转移、bootstrap 及 POSIX 回归；ACE 形状反例用单元测试，实际 owner/继承及路径竞态用原生证据。不改消息/事实格式或 SQLite 存储形式，单独安装只移动末号，不开待执行升级。
+阶段 B：已完成，合入 `755c476c`（[验收记录](../../acceptance/cross-platform/phase-b.md)），留给阶段 C 后续的五件顺带项在验收记录末尾。原定：落地已同意的 Python `>=3.12.4,<3.13`、直接 pywin32 依赖、逐级私有创建及句柄/ACL 边界。依赖 A 已有 ACL/稳定 runtime 证据及补项 1、6；改 pyproject.toml、uv.lock、private_dirs.py、新增 windows_files.py、搬移 windows_paths 文件能力及第 2 节列出的 CLI/launcher/transport/turn_io/session/fast cwd 入口，服务、执行与启动器的进程入口落实提权时的默认属主政策或明确拒绝分支。验收单一 ACL 规则、每级 0700、提权建后普通访问、SQLite sidecar 重建、祖先固定、fd 单次转移、bootstrap 及 POSIX 回归；ACE 形状反例用单元测试，实际 owner/继承及路径竞态用原生证据。不改消息/事实格式或 SQLite 存储形式，单独安装只移动末号，不开待执行升级。
 
 阶段 C：已完成，合入 `516c6d5d`，测试挂起修复合入 `e1e4d1d6`。共用 `private_files.py:publish_bytes` 及三系统唯一备份 journal 是现状，不再依赖 B 才算完成。其实现没有改跨进程事实或看板存储形式，不因此开升级或移动 CONTRACT_VERSION；测试修复本身不移动版本。这里只留 Windows 带读者换代后续：依赖 B 的句柄边界和补项 5，通过实验门槛后改 `windows_files.py`、`private_files.py` 的可变文件换代及失败清理，复跑 private publication、native journal、`test_backup_publication.py`、upgrade 恢复的相应中断用例。事实形式不变，单独安装移动末号，不因换 API 开升级。
 
