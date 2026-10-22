@@ -16,6 +16,7 @@ import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase, FakeClock
+from hey_my_buddy.blackboard.catalog import catalog
 from hey_my_buddy.blackboard.routing import router, router_history, router_sequence
 from hey_my_buddy.blackboard.store.db import canonical_json
 
@@ -234,15 +235,6 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         self.assertEqual(row["task_id"], second_task)
         self.assertEqual(row["input_sha256"], second["inputSha256"])
         self.assertEqual(json.loads(row["requested_json"])["task"], "fix the parser")
-        # The same duplicate dispatch is not queued twice.
-        with self.board_.store.db.read() as db:
-            decision_row = self.board_.store.decisions._row(db, result["decisionId"])
-            resolution = router.current_router(db, frozen=self.snapshot_of(result["decisionId"])["facts"],
-                                               after_index=0, now=self.clock.value)
-        with self.board_.store.db.write() as db:
-            again = self.board_.store.decisions._queue_router_dispatch(db, decision_row, resolution=resolution,
-                                                                       now=self.clock.value)
-        self.assertEqual(again, second_task)
         self.assertEqual(len(self.tasks(state="queued")), 1)
 
     def test_changed_settings_keep_the_frozen_router_dispatch(self):
@@ -302,10 +294,17 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                 " VALUES('retry-1','retry','host','{}','digest',1,'dsh','/work',60,'running',1,?,?)",
                 (T0, T0))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES('att-retry','retry-1',1,'nonce','executing','dsh','dsh','fixture','alpha',?,?,?)", (T0, T0, T0))
-            self.board_.store._append_event(db, "router.claimed", task_id="retry-1", attempt_id="att-retry",
-                                            payload={"buddyId": A, "plane": "routing", "requestId": "route-elsewhere",
-                                                     "routerIndex": 0, "taskId": "retry-1", "attemptId": "att-retry",
-                                                     "generation": 1})
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at)"
+                       " VALUES('dec-retry','queued','task',?)", (T0,))
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at)"
+                       " VALUES('dec-retry','route-retry','digest','{}',?)", (T0,))
+            router_sequence.freeze_request(db, "dec-retry", snapshot={"facts": {}, "baseInput": {}, "inspections": []}, now=T0)
+            buddy = db.execute("SELECT * FROM buddies WHERE buddy_id=?", (A,)).fetchone()
+            router_sequence.reserve_dispatch(db, decision_id="dec-retry", task_id="retry-1", router_index=0,
+                                             buddy={"buddyId": A, **{key: buddy[key] for key in
+                                                   ("harness", "provider", "model", "effort")}},
+                                             document={}, now=T0)
+            router_sequence.record_claim(db, task_id="retry-1", attempt_id="att-retry", generation=1, now=T0)
         blocked = self.claim("retry")
         self.assertIsNone(blocked["claim"])
         self.assertEqual(blocked["reason"], "router-retry-in-progress")
@@ -492,12 +491,12 @@ class HostReviewRegressionTests(RouterDispatchTestCase):
         self.assertEqual(tuple(after), original)
 
     def catalog_read(self, *, changed=False):
-        return self.board_.evaluation.record_catalog({
+        return self.board_.evaluation.record_catalog(catalog.canonical_payload({
             'source': 'routing-reread-fixture',
             'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
             'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': [
                 {'id': model, 'efforts': ['max'], 'description': 'changed' if changed else ''}
-                for model in ('alpha', 'bravo')]}]})
+                for model in ('alpha', 'bravo')]}]}))
 
     def test_noop_catalog_read_preserves_frozen_dispatch(self):
         self.catalog_read()

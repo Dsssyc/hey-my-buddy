@@ -12,8 +12,8 @@ Safety boundary:
   to host ``127.0.0.1`` without a port, so emitting one here could clobber a
   real private console on another port; the fixed synthetic session and CSRF
   strings exist only inside the JSON snapshot.
-* ``POST /api/command`` serves the
-  read-only operations the real console allows (``workflow_get``,
+* ``POST /api/command`` serves
+  read operations (``workflow_get``,
   ``message_list``, ``selection_get``, ``selection_list``, ``buddy_list``)
   with fixed-shape fixture payloads, and answers a
   check of the harnesses (``capabilities``) with the same synthetic rows
@@ -21,7 +21,7 @@ Safety boundary:
   0.15.1 browser allowlist removed (decide/continue/acknowledge/takeover/
   per-run cancel/retry and friends) answer ``METHOD_NOT_FOUND`` exactly like
   the real console; the still-allowed writes (settings operations and
-  ``macro_task_stop``) are refused here with ``CONSOLE_READ_ONLY``. The deletion
+  ``macro_task_stop``) are refused here with ``FORBIDDEN``. The deletion
   preview and confirmed deletion, plus provider cooldown clearing, operate only
   on an instance's in-memory synthetic records; no files, processes, sessions
   or Git objects are removed.
@@ -40,8 +40,7 @@ Usage::
     python tests/probes/macro_task_console_preview.py --check
     python tests/probes/macro_task_console_preview.py --emit-fixtures DIR
 
-Scenarios: ``normal`` (complete, writable-seeming), ``readonly`` (superseded
-session), ``truncated`` (explicit row/span/event truncation), ``error``
+Scenarios: ``normal`` (complete), ``truncated`` (explicit row/span/event truncation), ``error``
 (timeline reads fail with a 503 envelope while the list stays readable).
 
 ``--emit-fixtures DIR`` writes the deterministic fixture tree a frontend
@@ -102,7 +101,7 @@ from typing import Any
 
 PREVIEW_HEADER = "X-Hey-My-Buddy-Preview"
 PREVIEW_VALUE = "synthetic-fixture-data"
-SCENARIOS = ("normal", "readonly", "truncated", "error")
+SCENARIOS = ("normal", "truncated", "error")
 SYNTHETIC_CSRF = "synthetic-preview-csrf-not-a-credential"
 SYNTHETIC_SESSION_ID = "synthetic-preview-session-not-a-credential"
 HOST_A = "synthetic-host-alpha"
@@ -188,7 +187,7 @@ TOKEN_USAGE_KEYS = {"inputTokens", "cachedInputTokens", "outputTokens", "source"
 #: ``--emit-fixtures`` manifest: the scenario order and exact fixture files
 #: (entries are sorted by scenario, then path).
 EMIT_SOURCE = "tests/probes/macro_task_console_preview.py"
-EMIT_SCENARIOS = ("normal", "readonly", "truncated", "error")
+EMIT_SCENARIOS = ("normal", "truncated", "error")
 EMIT_LAYOUT = {
     "normal": ("console.json", "macro-tasks.json", "messages-preview-run-a1.json", "messages-preview-run-a3.json",
                "messages-preview-run-b8.json", "messages-preview-run-b9.json",
@@ -201,7 +200,6 @@ EMIT_LAYOUT = {
                "workflow-preview-run-b4.json", "workflow-preview-run-b5.json",
                "workflow-preview-run-b6.json", "workflow-preview-run-b7.json", "workflow-preview-run-b8.json",
                "workflow-preview-run-b9.json", "workflow-preview-run-d1.json", "workflow-preview-run-d2.json"),
-    "readonly": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "truncated": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "error": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "incompatible": ("snapshot-legacy-single-router.json", "snapshot-missing-session.json",
@@ -227,13 +225,11 @@ REMOVED_OPERATIONS = (
     "workflow_acknowledge", "workflow_scope_amend", "workflow_workspace_resolve",
     "workflow_integration_record", "workspace_cleanup_plan", "workspace_cleanup_apply", "workflow_suggest",
 )
-#: The exact read-only operation set of the real console (console_sessions.py).
-#: A 403 CONSOLE_READ_ONLY would latch the browser session as read-only, so every
-#: one of them must be answered instead of refused.
-READ_OPERATIONS = ("workflow_get", "message_list", "selection_get", "selection_list", "buddy_list")
+#: Reads served by the synthetic preview.
+PREVIEW_READ_OPERATIONS = ("workflow_get", "message_list", "selection_get", "selection_list", "buddy_list")
 
 STATUS_BY_CODE = {"INVALID_ARGUMENT": 400, "METHOD_NOT_FOUND": 404, "NOT_FOUND": 404, "FORBIDDEN": 403,
-                  "CONSOLE_READ_ONLY": 403, "UNSUPPORTED": 501, "SERVICE_UNAVAILABLE": 503,
+                  "UNSUPPORTED": 501, "SERVICE_UNAVAILABLE": 503,
                   "INTERNAL_ERROR": 500, "MESSAGE_TOO_LARGE": 413,
                   "REVISION_CONFLICT": 409, "MACRO_TASK_NOT_SETTLED": 409,
                   "SESSION_NOT_INTEGRATED": 501, "SESSION_NOT_RECORDED": 404,
@@ -2137,7 +2133,7 @@ def tree_order(entries: list[dict]) -> list[tuple[dict, int]]:
     return ordered
 
 
-CAPS = {"normal": (200, 800, 800), "readonly": (200, 800, 800), "error": (200, 800, 800),
+CAPS = {"normal": (200, 800, 800), "error": (200, 800, 800),
         "truncated": (3, 3, 3)}
 
 
@@ -2318,20 +2314,17 @@ def router_records(buddies: list[dict]) -> list[dict]:
 def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | None = None) -> dict:
     buddies = buddy_views()
     routers = router_records(buddies)
-    writable = scenario != "readonly"
     return {
         "csrfToken": SYNTHETIC_CSRF,
         "eventCursor": state.cursor if state is not None else FIXTURES["head"],
         "consoleAccess": {"requireLogin": False, "revision": 0, "sessions": []},
         "reminderSettings": {"silenceSeconds": 900, "revision": 1, "updatedAt": instant(0, 0)},
-        "consoleSession": {"id": SYNTHETIC_SESSION_ID, "canWrite": writable,
-                           "reason": None if writable else "superseded"},
+        "consoleSession": {"id": SYNTHETIC_SESSION_ID},
         "configuration": {"routerBuddyIds": [entry["buddyId"] for entry in routers],
                           "routerRetryIntervalSeconds": 600,
                           "defaultRoutingMode": "fast", "routingBudget": "standard",
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
                                                   "toolCalls": 24, "bytesRead": 524288}},
-        "configurationError": None,
         "buddies": buddies,
         "modelServiceConcurrency": concurrency_rows(),
         "harnesses": harness_rows(state),
@@ -2487,8 +2480,6 @@ def command_result(scenario: str, operation: str, params: Any, state: PreviewSta
         if set(params) != {"requestId", "harness", "provider"} or not all(
                 isinstance(params[key], str) and params[key] for key in ("requestId", "harness", "provider")):
             raise PreviewError("INVALID_ARGUMENT", "requestId, harness and provider are required")
-        if scenario == "readonly":
-            raise PreviewError("CONSOLE_READ_ONLY", "This synthetic preview session has no write authority")
         if state is None:
             raise PreviewError("INVALID_ARGUMENT", "a server instance is required")
         previous = state.clear_receipts.get(params["requestId"])
@@ -2521,8 +2512,6 @@ def command_result(scenario: str, operation: str, params: Any, state: PreviewSta
             count = params.get("microTaskCount")
             if type(count) is not int or count < 0:
                 raise PreviewError("INVALID_ARGUMENT", "microTaskCount must be a nonnegative integer")
-        if scenario == "readonly":
-            raise PreviewError("CONSOLE_READ_ONLY", "This synthetic preview session has no write authority")
         if scenario == "error" or operation == "macro_task_deletion_preview":
             preview = deletion_preview(group, state)
             if scenario == "error":
@@ -2541,15 +2530,15 @@ def command_result(scenario: str, operation: str, params: Any, state: PreviewSta
         if len(str(params.get("note") or "")) > 500:
             raise PreviewError("INVALID_ARGUMENT", "note is too long")
     # A check of the harnesses changes nothing here: it answers synthetic rows, and nothing is probed.
-    checking = operation == "capabilities" and scenario != "readonly"
+    checking = operation == "capabilities"
     if checking:
         unknown = sorted(set(params) - {"refresh", "harness"})
         if unknown:
             raise PreviewError("INVALID_ARGUMENT", f"Unknown parameter: {unknown[0]}")
-    if operation not in READ_OPERATIONS and not checking:
+    if operation not in PREVIEW_READ_OPERATIONS and not checking:
         # Only synthetic deletion and cooldown clearing change this preview's in-memory records.
         # Other allowed product writes retain the preview's refusal.
-        raise PreviewError("CONSOLE_READ_ONLY",
+        raise PreviewError("FORBIDDEN",
                            "This synthetic preview simulates deletion only; other writes are refused")
     if operation == "workflow_get":
         result = workflow_get(params, state)
@@ -3363,7 +3352,6 @@ def validate_fixtures() -> list[str]:
         problems.append("manifest.json header differs from the documented shape")
     rejected = {item["path"]: "INVALID_RESPONSE" for item in plan if item["scenario"] == "incompatible"
                 and item["manifest"]["expected"] == "rejected"}
-    rejected["readonly/console.json"] = "INVALID_RESPONSE"
     rejected["error/timeline-macro-a.json"] = "SERVICE_UNAVAILABLE"
     rejected["error/workflow-preview-run-a1.json"] = "SERVICE_UNAVAILABLE"
     for entry in manifest["files"]:
@@ -3448,18 +3436,11 @@ def emit_fixture_files() -> list[dict]:
                             "preview-run-b2", "preview-run-b3", "preview-run-b4", "preview-run-b5",
                             "preview-run-b6", "preview-run-b7", "preview-run-b8", "preview-run-b9", "preview-run-b10",
                             "preview-run-d1", "preview-run-d2"),
-                 "readonly": ("preview-run-a1",), "truncated": ("preview-run-a1",),
+                 "truncated": ("preview-run-a1",),
                  "error": ("preview-run-a1",)}
     for scenario in EMIT_SCENARIOS:
-        if scenario == "readonly":
-            # 0.18 removed read-only console sessions, so the superseded-session
-            # snapshot shape is deliberately no longer valid for the parser.
-            add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "rejected",
-                console_snapshot(scenario, assets_ready=False), request={},
-                expected_code="INVALID_RESPONSE")
-        else:
-            add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "accepted",
-                console_snapshot(scenario, assets_ready=False), request={})
+        add(scenario, "console.json", "console-snapshot", "GET /api/console", 200, "accepted",
+            console_snapshot(scenario, assets_ready=False), request={})
         if scenario == "normal":
             # Settings reads version facts separately from the slim snapshot.
             add(scenario, "runtime-version.json", "runtime-version", "GET /api/runtime-version",
@@ -3508,8 +3489,7 @@ def emit_fixture_files() -> list[dict]:
                 add(scenario, name, "workflow-get", workflow_endpoint, 200, "accepted",
                     workflow_get({"runId": run_id}), request={"runId": run_id})
 
-    # Deliberately wrong shapes for the strict frontend parser. The readonly
-    # snapshot covers the retired superseded-session shape.
+    # Deliberately wrong shapes for the strict frontend parser.
     normal = console_snapshot("normal", assets_ready=False)
     legacy = clone(normal)
     for key in ("routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode"):
@@ -3706,7 +3686,7 @@ def smoke(assets: Path, scenario: str) -> int:
             "operation": "macro_task_stop",
             "params": {"macroTaskId": MACRO_A, "commandId": "synthetic-stop-command-1"}})
         check("macro_task_stop is allowed-but-refused by the preview", status == 403
-              and stop["error"]["code"] == "CONSOLE_READ_ONLY", f"status={status}")
+              and stop["error"]["code"] == "FORBIDDEN", f"status={status}")
         status, _, _headers = call("POST", "/api/command", payload={
             "operation": "macro_task_stop", "params": {"macroTaskId": "macro-not-a-real-group",
                                                      "commandId": "synthetic-stop-command-2"}})
@@ -3720,9 +3700,6 @@ def smoke(assets: Path, scenario: str) -> int:
         status, _missing, _headers = call(
             "GET", "/api/macro-tasks/macro-ffffffff-ffff-4fff-8fff-ffffffffffff/timeline")
         check("unknown macro task is 404", status == 404, f"status={status}")
-        if scenario == "readonly":
-            check("readonly scenario reports a superseded session",
-                  snapshot["consoleSession"]["canWrite"] is False)
     finally:
         server.shutdown()
         server.server_close()

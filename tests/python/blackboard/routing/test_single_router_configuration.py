@@ -32,7 +32,7 @@ class SingleRouterConfigurationTests(BoardTestCase):
         self.assertEqual(settings['routingBudget'], 'standard')
         self.assertNotIn('fastRouterBuddyId', settings)
         self.assertNotIn('reviewRouterBuddyId', settings)
-        self.assertIsNone(snapshot['configurationError'])
+        self.assertNotIn("configurationError", snapshot)
 
     def test_budget_patch_and_clear_preserve_other_settings(self):
         self.configure({'routerBuddyIds': [BUDDY]}, enable=True)

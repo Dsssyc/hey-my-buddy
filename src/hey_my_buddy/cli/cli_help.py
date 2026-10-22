@@ -25,7 +25,6 @@ the error envelope from a rejected request remains the authoritative boundary.
 from __future__ import annotations
 
 import ast
-import copy
 import difflib
 from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
@@ -45,7 +44,6 @@ SUMMARIES: dict[str, str] = {
     "quota-redetect": "Clear a provider's current cooling period while retaining its rejection count; no model or balance query.",
     "accounts": "Read cached native login status and billing type without a native refresh.",
     "runtime": "Installed-runtime identity, description and source-leak report.",
-    "upgrade": "Coordinated skill, launcher and runtime upgrade; requires separate installation authorization.",
     "install": "Install the shared skill and its runtime; requires separate user authorization.",
     "paths": "Skill, launcher, data and runtime locations; reads files only and starts nothing.",
     "storage-plan": "Read-only storage reclamation plan.",
@@ -96,23 +94,14 @@ SUMMARIES: dict[str, str] = {
 LOCAL_ROOTS: dict[str, tuple[str, str]] = {
     "await": ("cli.blocking", "await_run"),
     "install": ("install.skill_install", "install"),
-    "upgrade": ("install.skill_install", "install"),
     "paths": ("install.skill_install", "paths"),
     "console": ("cli.console_cli", "run"),
 }
-
-#: Local methods whose validated dict is not the first parameter.
-LOCAL_POSITIONS: dict[str, int] = {}
-
-#: Printed in place of a method summary a newly added method has not written yet: the
-#: index still lists every method instead of failing, and the test suite fails on it.
-MISSING_SUMMARY = "(no one-sentence summary yet; add one to cli_help.SUMMARIES)"
 
 #: Prose notes that describe a CLI-level choice the validators cannot show.
 METHOD_NOTES: dict[str, tuple[str, ...]] = {
     "stop": ("the CLI name fixes action to 'stop'; restart and status are separate CLI names",),
     "restart": ("the CLI name fixes action to 'restart'; stop and status are separate CLI names",),
-    "upgrade": ("runs the same installer as install with the upgrade coordinator",),
     "quota-redetect": ("reuse requestId after a lost reply; changed inputs conflict; clearing cooling does not claim quota recovery",),
     "accept": ("keyed by run and artifact: the same payload replays its recorded response and any changed payload conflicts",),
     "conclude": ("keyed by run: the same note replays and a changed note conflicts",),
@@ -195,13 +184,6 @@ _HELPERS = frozenset(
     }
 )
 
-#: Validation functions that return one nested sub-object of their first argument.
-#: Naming the nested key keeps sub-object fields under their parent instead of
-#: leaking them to the top level. ``_spec_fields`` no longer extracts a nested
-#: object: since ADR-021 decision 17 it is a flat restriction of its argument, so
-#: its result keeps the argument's own field identity (see ``_FLAT_RESTRICTIONS``).
-_NESTED_EXTRACTORS: dict[str, str] = {}
-
 #: Validation functions whose result is their first argument restricted to the
 #: ordinary submit fields. The result keeps the argument's tracked field identity,
 #: so the ordinary spec's bounds land where the fields are actually given.
@@ -216,7 +198,7 @@ _HELPER_NOTES: dict[str, tuple[str, ...]] = {
         "(schemas.normalize_control)",
     ),
     "expected_duration": (
-        "expectedSeconds is a positive expected duration, defaults to 1800 seconds and never stops execution; timeoutSeconds has been renamed",
+        "expectedSeconds is a positive expected duration, defaults to 1800 seconds and never stops execution",
     ),
 }
 
@@ -254,10 +236,7 @@ def _attribute_parts(node: ast.AST) -> list[str] | None:
 
 
 def _expression_text(node: ast.AST) -> str:
-    try:
-        return ast.unparse(node)
-    except Exception:  # pragma: no cover - defensive
-        return "<expression>"
+    return ast.unparse(node)
 
 
 class _SourceIndex:
@@ -283,10 +262,7 @@ class _SourceIndex:
             name = ".".join(relative.parts)
             if name.endswith(".__init__"):
                 name = name[: -len(".__init__")]
-            try:
-                tree = ast.parse(path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, SyntaxError):
-                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
             self.trees[name] = tree
             self.paths[name] = path
             self.functions[name] = {}
@@ -554,9 +530,6 @@ class _Facts:
         self.required_paths: set[str] = set()
         #: Un-decoded rejection conditions, kept as readable expressions with source.
         self.raw: dict[str, tuple[str, str, bool]] = {}
-        #: ``spec``-like nested owners and the parent whose allowed set also names
-        #: their fields (the documented flat-or-nested spelling of ``_spec_fields``).
-        self.mirror_owners: dict[str, str | None] = {}
 
     def required(self, field: str) -> bool:
         return any(field == path or field.startswith(f"{path}.") for path in self.required_paths)
@@ -651,14 +624,13 @@ class _Extractor:
         #: ``for name in ("model", "provider", "effort")``.
         self._bindings: dict[str, str] = {}
 
-    def collect(self, module: str, function: str, container: str | None, position: int | None = None) -> tuple[list[Parameter], list[str], list[str], list[str], list[str]]:
+    def collect(self, module: str, function: str, container: str | None) -> tuple[list[Parameter], list[str], list[str], list[str], list[str]]:
         facts = _Facts()
         node = self.index.function_node(module, function, container)
         if node is None:
             facts.notes.append(f"validation function not found: {module}.{function}")
             return (facts.parameters, [], facts.opaque, facts.locations, facts.notes)
-        if position is None:
-            position = self._params_position(node, container)
+        position = self._params_position(node, container)
         self._walk_function(node, module, container, position, None, False, facts, set())
         return self._absorb(facts)
 
@@ -677,7 +649,7 @@ class _Extractor:
         previous_bindings = self._bindings
         self._container = container
         self._bindings = dict(bindings or {})
-        tracked, local_sets, no_default = self._tracked_objects(node, module, params_var, owner, facts)
+        tracked, local_sets, no_default = self._tracked_objects(node, module, params_var, owner)
         if required and owner and params_var is not None:
             # The caller read ``params.get("owner")`` without a default and passed it
             # here, so absence arrives as ``None``; whether that is rejected is the
@@ -716,7 +688,7 @@ class _Extractor:
         offset = 1 if names and names[0] in ("self", "cls") else 0
         return offset if len(names) > offset else None
 
-    def _tracked_objects(self, node, module, params_var: str | None, owner: str | None = None, facts: _Facts | None = None) -> tuple[dict[str, _TrackedValue], dict[str, object], set[str]]:
+    def _tracked_objects(self, node, module, params_var: str | None, owner: str | None = None) -> tuple[dict[str, _TrackedValue], dict[str, object], set[str]]:
         """Objects, lengths and no-default reads reachable from the params dict."""
         tracked: dict[str, _TrackedValue] = {}
         local_sets: dict[str, object] = {}
@@ -779,12 +751,6 @@ class _Extractor:
                         if self._read_without_default(child.value.args[0], params_var):
                             no_default.add(name)
                         continue
-                nested = self._nested_extractor(child.value, params_var, tracked, owner)
-                if nested is not None:
-                    tracked[name] = _TrackedValue(nested[0])
-                    if facts is not None:
-                        facts.mirror_owners[nested[0]] = nested[1]
-                    continue
                 if (isinstance(child.value, ast.Call) and isinstance(child.value.func, ast.Name)
                         and child.value.func.id in _FLAT_RESTRICTIONS and child.value.args
                         and isinstance(child.value.args[0], ast.Name)):
@@ -810,29 +776,6 @@ class _Extractor:
                 if isinstance(value, (set, frozenset, list, tuple)) and all(isinstance(item, str) for item in value):
                     local_sets[name] = value
         return tracked, local_sets, no_default
-
-    def _nested_extractor(self, node, params_var: str, tracked: dict[str, _TrackedValue], owner: str | None) -> tuple[str, str | None] | None:
-        """``_spec_fields(entry, nested_key="spec")`` -> ``("helpers.spec", "helpers")``."""
-        if not isinstance(node, ast.Call):
-            return None
-        parts = _attribute_parts(node.func)
-        keyword_name = _NESTED_EXTRACTORS.get(parts[-1]) if parts else None
-        if keyword_name is None or not node.args:
-            return None
-        literal = None
-        for keyword in node.keywords:
-            if keyword.arg == keyword_name and isinstance(keyword.value, ast.Constant) and isinstance(keyword.value.value, str):
-                literal = keyword.value.value
-        if literal is None:
-            return None
-        first = node.args[0]
-        if isinstance(first, ast.Name) and first.id == params_var:
-            base = owner
-        elif isinstance(first, ast.Name) and first.id in tracked:
-            base = tracked[first.id].field
-        else:
-            base = None
-        return (_nested(base, literal), _owner_field(base)) if base else (literal, None)
 
     def _length_reference(self, node: ast.AST, tracked: dict[str, _TrackedValue]) -> tuple[str, str] | None:
         """``size = len(text.encode("utf-8"))`` -> ``("input", "bytes")``."""
@@ -952,7 +895,7 @@ class _Extractor:
             arguments = [argument.arg for argument in node.args.args]
             nested_params = arguments[0] if arguments else params_var
             nested_body = [node.body] if isinstance(node, ast.Lambda) else node.body
-            nested_tracked, nested_sets, nested_no_default = self._tracked_objects(node, module, nested_params, owner, facts)
+            nested_tracked, nested_sets, nested_no_default = self._tracked_objects(node, module, nested_params, owner)
             self._walk_body(nested_body, module, function, nested_params, owner, conditional, facts, nested_tracked, nested_sets, nested_no_default, visited)
             return
         if isinstance(node, ast.If):
@@ -1677,7 +1620,6 @@ class _Extractor:
             for parameter in nested:
                 self._attach_parameter(facts.parameters, parameter.name, parameter)
         children = {owner: self._finalize(list(items)) for owner, items in facts.children.items()}
-        self._mirror_flat_spellings(facts, children)
         for owner in sorted(children):
             self._attach(facts.parameters, owner, children[owner])
         inline: list[str] = []
@@ -1700,23 +1642,6 @@ class _Extractor:
         self._sort(facts.parameters)
         locations = list(dict.fromkeys(facts.locations))
         return (facts.parameters, inline, facts.opaque, locations, facts.notes)
-
-    def _mirror_flat_spellings(self, facts: _Facts, children: dict[str, list[Parameter]]) -> None:
-        """``_spec_fields`` accepts one field both flat and inside its nested object."""
-        for nested, parent in sorted(facts.mirror_owners.items()):
-            items = facts.children.get(nested)
-            if not items:
-                continue
-            allowed = facts.allowed.get(parent) or set()
-            if parent is None:
-                target = facts.parameters
-            else:
-                target = children.setdefault(parent, [])
-            for item in items:
-                if item.name in allowed and not item.name.endswith("[]"):
-                    facts.merge(target, _copy_parameter(item))
-            if parent is None:
-                self._sort(target)
 
     def _apply_raw(self, facts: _Facts, prefix: str = "", parameters: list[Parameter] | None = None) -> None:
         """Attach a readable condition where no concrete bound was extracted."""
@@ -1781,11 +1706,6 @@ class _Extractor:
 
     def _sort(self, items: list[Parameter]) -> None:
         items.sort(key=lambda parameter: (not parameter.required, parameter.name))
-
-
-def _copy_parameter(parameter: Parameter) -> Parameter:
-    """An independent copy so a mirrored spelling has its own children."""
-    return copy.deepcopy(parameter)
 
 
 def _scoped_field(owner: str | None, field: str) -> str:
@@ -2011,17 +1931,17 @@ def reset_index() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _root(method: str) -> tuple[str, str, str | None, str, int | None] | None:
-    """``(module, function, container, operation, position)`` for one CLI method."""
+def _root(method: str) -> tuple[str, str, str | None, str] | None:
+    """``(module, function, container, operation)`` for one CLI method."""
     local = LOCAL_ROOTS.get(method)
     if local is not None:
-        return (local[0], local[1], None, local[1], LOCAL_POSITIONS.get(method))
+        return (local[0], local[1], None, local[1])
     target = transport.METHOD_MAP.get(method)
     if target is None:
         return None
     resource, operation = target
     container = "WaitService" if resource == "wait" else "BoardService"
-    return ("blackboard.service.service", operation, container, operation, None)
+    return ("blackboard.service.service", operation, container, operation)
 
 
 def method_help(method: str) -> MethodHelp | None:
@@ -2032,8 +1952,8 @@ def method_help(method: str) -> MethodHelp | None:
     root = _root(method)
     if root is None:
         return None
-    module, function, container, operation, position = root
-    parameters, inline, opaque, locations, notes = _Extractor(_index()).collect(module, function, container, position)
+    module, function, container, operation = root
+    parameters, inline, opaque, locations, notes = _Extractor(_index()).collect(module, function, container)
     if not parameters and not inline and not opaque and not notes:
         notes.append("no top-level parameter validation was found for this method")
     notes.extend(METHOD_NOTES.get(method, ()))
@@ -2090,7 +2010,7 @@ def _render_parameter(parameter: Parameter, depth: int, width: int = 24) -> list
 
 def render_index(methods: tuple[str, ...] | list[str]) -> str:
     """``hey-my-buddy help``: every public method with its one-sentence description."""
-    entries = [(method, SUMMARIES.get(method) or MISSING_SUMMARY) for method in methods]
+    entries = [(method, SUMMARIES[method]) for method in methods]
     entries.append(("help", SUMMARIES["help"]))
     width = max(len(method) for method, _ in entries)
     lines = [
@@ -2111,8 +2031,7 @@ def render_index(methods: tuple[str, ...] | list[str]) -> str:
 
 def render_method(help_: MethodHelp) -> str:
     """``hey-my-buddy help METHOD``: validated parameters, defaults, bounds and conditions."""
-    summary = SUMMARIES.get(help_.method, "")
-    lines = [f"hey-my-buddy {help_.method}" + (f" — {summary}" if summary else "")]
+    lines = [f"hey-my-buddy {help_.method} — {SUMMARIES[help_.method]}"]
     lines.append(f"operation: {help_.operation}")
     if help_.locations:
         shown = help_.locations[:5]

@@ -59,7 +59,7 @@ function buddies(): Buddy[] {
   ];
 }
 
-type Options = { configurationUnavailable?: boolean; routerBuddyId?: string | null; preferences?: Preference[] };
+type Options = { routerBuddyId?: string | null; preferences?: Preference[] };
 
 /**
  * The snapshot's harness health (ADR-017 §15): the Claude harness used by the
@@ -83,11 +83,10 @@ type HarnessSnapshot = Snapshot & { harnesses: HarnessHealth[] };
 function snapshot(options: Options = {}): HarnessSnapshot {
   const base: Snapshot = {
     csrfToken: "csrf", eventCursor: 0,
-    consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    consoleSession: { id: "fixture-session" },
 
-    configuration: options.configurationUnavailable ? null : { routerBuddyIds: options.routerBuddyId === undefined ? [mediumId] : options.routerBuddyId === null ? [] : [options.routerBuddyId],
+    configuration: { routerBuddyIds: options.routerBuddyId === undefined ? [mediumId] : options.routerBuddyId === null ? [] : [options.routerBuddyId],
       routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard" },
-    configurationError: options.configurationUnavailable ? { code: "ROUTER_SETTINGS_UPGRADE_REQUIRED", message: "请先升级设置",} : null,
     buddies: buddies(),
     preferences: options.preferences ?? [],
 

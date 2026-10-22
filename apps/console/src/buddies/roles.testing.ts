@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { expect, vi } from "vitest";
 import { App } from "../App";
 import type { ConsoleApi, HarnessHealth } from "../api";
-import type { Configuration, Buddy, RoutingHealth, Snapshot } from "../types";
+import type { Configuration, Buddy, RoutingHealth, Snapshot, ConsoleSession } from "../types";
 
 /**
  * How the tests build the roles view's world and find things in it. They read
@@ -63,20 +63,19 @@ export type RolesOptions = {
   routers?: string[];
   configuration?: Partial<Configuration> | null;
   routingHealth?: RoutingHealth;
-  canWrite?: boolean;
+  sessionPresent?: boolean;
   extra?: Partial<Snapshot>;
 };
 
 const harnesses: HarnessHealth[] = ["claude", "codex", "dsh", "zcode"].map(harness =>
   ({ harness, status: "ready", revision: 1, manualPath: null, checkedAt: "2026-09-29T09:30:00.000Z", candidates: [] }) as HarnessHealth);
 
-export function snapshot({ routers = [], configuration = {}, routingHealth, canWrite = true, extra = {} }: RolesOptions = {}): Snapshot & { harnesses: HarnessHealth[] } {
+export function snapshot({ routers = [], configuration = {}, routingHealth, sessionPresent = true, extra = {} }: RolesOptions = {}): Snapshot & { harnesses: HarnessHealth[] } {
   return {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite, reason: null },
+    csrfToken: "csrf", eventCursor: 0, consoleSession: sessionPresent ? { id: "fixture-session" } : undefined as unknown as ConsoleSession,
 
     configuration: configuration === null ? null
       : { routerBuddyIds: routers, routerRetryIntervalSeconds: 600, defaultRoutingMode: "review", routingBudget: "standard", ...configuration },
-    configurationError: configuration === null ? { code: "router-settings-upgrade-required", message: "请先升级设置",} : null,
     buddies: buddies(),
     preferences: [], modelServiceNotes: [],
  decisions: [],

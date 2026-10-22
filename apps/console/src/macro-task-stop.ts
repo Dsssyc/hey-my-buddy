@@ -8,7 +8,7 @@ import type { Snapshot } from "./types";
 import type { MacroTaskStopResult, MacroTaskSummary, MacroTaskTimeline } from "./macro-task-types";
 import { errorOfStopReply } from "./macro-task-stop-reply";
 import type { AuthorityLatch } from "./console-session";
-import { LOGIN_EXPIRED_ACTION_REFUSAL } from "./console-session";
+import { LOGIN_EXPIRED_ACTION_REFUSAL, sessionCanWrite } from "./console-session";
 
 /**
  * MacroTask-level stop (0.15.1 U4): the only write this view still offers.
@@ -125,7 +125,7 @@ export function useMacroTaskStop(api: ConsoleApi, snapshot: Snapshot, writesAvai
   // navigate and stop independently.
   const inFlight = useRef<Set<string>>(new Set());
 
-  const writable = writesAvailable && (authority ? authority.writable(snapshot) : snapshot.consoleSession?.canWrite === true);
+  const writable = writesAvailable && (authority ? authority.writable(snapshot) : sessionCanWrite(snapshot));
 
   const patch = useCallback((macroTaskId: string, next: Partial<MacroTaskStopEntry>) => {
     setEntries(previous => {

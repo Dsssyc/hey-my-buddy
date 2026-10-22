@@ -65,7 +65,7 @@ function fixture(options: { staleDecision?: boolean; stalePin?: boolean; pageSiz
   };
   const live = buddies.filter(p => p.available || p.buddyId === decisionId);
   let state: Snapshot = {
-    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session", canWrite: true, reason: null },
+    csrfToken: "csrf", eventCursor: 0, consoleSession: { id: "fixture-session" },
 
     configuration: { routerBuddyIds: [decisionId], routerRetryIntervalSeconds: 600, defaultRoutingMode: "review" as const, routingBudget: "standard"},
     buddies: live,

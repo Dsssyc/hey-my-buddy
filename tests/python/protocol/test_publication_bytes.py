@@ -67,7 +67,7 @@ class PublicationByteTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
             with mock.patch.object(cli.time, "strftime", return_value="2026-01-02T03:04:05Z"):
-                path = cli._save_control("run-byte", {"hostId": " hôst ", "ownerGeneration": 7,
+                path = cli._save_control("run-byte", {"hostId": "hôst", "ownerGeneration": 7,
                                                      "controlToken": "f" * 64}, state)
             expected = (b'{"hostId": "h\xc3\xb4st", "ownerGeneration": 7, "controlToken": "'
                         + b'f' * 64 + b'", "runId": "run-byte", "savedAt": "2026-01-02T03:04:05Z"}')

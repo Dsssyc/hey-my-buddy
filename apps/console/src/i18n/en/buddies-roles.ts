@@ -4,7 +4,6 @@ export default {
   heading: "Router",
   upgrade: {
     title: "Router settings need an upgrade",
-    titleWith: "Router settings need an upgrade: {{message}}",
     locked: "Router settings can be changed once they are upgraded",
   },
   lockedAnd: "{{locked}}. {{own}}",

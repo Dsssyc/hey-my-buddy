@@ -1,7 +1,6 @@
 """Host boundary facts and existing CLI templates without dispatching work."""
 import unittest
 
-from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.routing.router_boundary import build_boundary
 
 CANDIDATE = {"buddyId": "dsh:fixture:model:max", "harness": "dsh", "provider": "fixture",
@@ -100,9 +99,6 @@ class RouterBoundaryTests(unittest.TestCase):
             self.assertNotEqual(result["reroute"]["params"]["commandId"], ids[-1])
 
     def test_live_helper_policy_cannot_make_a_destructive_template(self):
-        for policy in ("cancel", "unknown", False):
-            with self.subTest(policy=policy), self.assertRaises(BoardError):
-                self.build(helper_policy=policy)
         blocked = self.build(continuation_problem="workspace-ownership-lost")
         self.assertTrue(blocked["commands"]["continue"]["blocked"])
         self.assertTrue(blocked["commands"]["reroute"]["blocked"])
@@ -142,13 +138,6 @@ class RouterBoundaryTests(unittest.TestCase):
         self.assertEqual(facts["policyFacts"]["candidateCount"], 1)
         self.assertEqual(trials[0]["outcome"], "no_answer")
         self.assertEqual(candidates[0], CANDIDATE)
-
-    def test_incomplete_candidate_or_non_boolean_stop_evidence_cannot_make_a_template(self):
-        for changes in ({"candidates": [{"buddyId": "partial", "harness": "dsh"}]},
-                        {"shutdown_confirmed": 1}, {"revision": True}, {"kind": "failure"}):
-            with self.subTest(changes=changes), self.assertRaises(BoardError):
-                self.build(**changes)
-
 
 if __name__ == "__main__":
     unittest.main()

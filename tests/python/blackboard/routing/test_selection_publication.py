@@ -105,8 +105,8 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         request, first = self.start(three=True, micro_task=True)
         self.invalidate(B, "disabled")
         coordinator = self.board_.store.decisions
-        with patch.object(coordinator, "_queue_router_dispatch", side_effect=BoardError(
-                "router-input-too-large", "dispatch preparation diagnostic", bytes=200, limit=100)):
+        with patch.object(coordinator, "_queue_router_dispatch", return_value=(
+                None, {"code": "router-input-too-large", "params": {"bytes": 200, "limit": 100}})):
             response = self.report(first, self.answer(first, buddy_id=B))
         self.assertTrue(response["committed"])
         view = self.decision_row(request["decisionId"])

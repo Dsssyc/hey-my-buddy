@@ -105,7 +105,7 @@ it("keeps literal errors literal and translates standard refusal codes after dis
 it("updates an already refused stop while preserving its request identity", async () => {
   const command = vi.fn().mockRejectedValue(new ApiError("REVISION_CONFLICT", "Server detail"));
   const api = { command } as unknown as ConsoleApi;
-  const snapshot = { csrfToken: "csrf", consoleSession: { id: "session", canWrite: true, reason: null } } as Snapshot;
+  const snapshot = { csrfToken: "csrf", consoleSession: { id: "session" } } as Snapshot;
   const summary = macroTaskSummary();
   const { result } = renderHook(() => useMacroTaskStop(api, snapshot, true, undefined, async () => {}));
   await act(async () => result.current.confirmStop(summary));

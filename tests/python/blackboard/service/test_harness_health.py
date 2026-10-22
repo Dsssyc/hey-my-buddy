@@ -5,6 +5,7 @@ import os
 import threading
 from unittest.mock import patch
 
+from hey_my_buddy.blackboard.catalog import catalog
 from hey_my_buddy.blackboard.service.harness_health import HarnessHealth, MAX_PATH_HINTS
 from support import BoardTestCase, FakeClock
 
@@ -285,7 +286,7 @@ class HarnessHealthTests(BoardTestCase):
                    'providers': [{'harness': 'codex', 'provider': 'fixture', 'models': [
                        {'id': 'alpha', 'efforts': ['high']}]}]}
         self.health.catalog_refresh = lambda name, record, catalog_scan_claimed=False: readings.append(
-            evaluation.record_catalog(payload))
+            evaluation.record_catalog(catalog.canonical_payload(payload)))
         self.health.refresh('codex', preflight=True)
         self.snapshot['candidates'][0]['fingerprint'] = {'mtimeNs': 2}
         self.health.refresh('codex', preflight=True)
@@ -297,7 +298,7 @@ class HarnessHealthTests(BoardTestCase):
     def test_ready_record_expires_without_a_location_change(self):
         first = self.health.refresh('codex')
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET expires_at='2000',scan_after='2000' WHERE harness='codex'")
+            db.execute("UPDATE harness_health SET expires_at='2000-01-01T00:00:00Z',scan_after='2000-01-01T00:00:00Z' WHERE harness='codex'")
         result = self.health.refresh('codex', preflight=True)
         self.assertEqual(result['status'], 'ready')
         self.assertEqual(result['locationFingerprint'], first['locationFingerprint'])
@@ -319,7 +320,7 @@ class HarnessHealthTests(BoardTestCase):
         self.health.refresh('codex')
         self.native.assert_called_once()
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET expires_at='2000',scan_after='2000' WHERE harness='codex'")
+            db.execute("UPDATE harness_health SET expires_at='2000-01-01T00:00:00Z',scan_after='2000-01-01T00:00:00Z' WHERE harness='codex'")
         self.discovered = {'harness': 'codex', 'status': 'ready', 'version': '1.0', 'reason': None}
         self.assertEqual(self.health.refresh('codex')['status'], 'ready')
         self.assertEqual(self.native.call_count, 2)
@@ -379,7 +380,7 @@ class CatalogShelfLifeTests(BoardTestCase):
 
     def pass_throttles(self):
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after='2000' WHERE harness='codex'")
+            db.execute("UPDATE harness_health SET scan_after='2000-01-01T00:00:00Z' WHERE harness='codex'")
 
     def expire_catalog_throttle(self):
         """The bounded catalog re-read cadence (SCAN_SECONDS) has passed."""
@@ -432,14 +433,14 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.health.refresh('codex')
         self.set_read_at(60)
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE harness='codex'")
+            db.execute("UPDATE harness_health SET scan_after='2000-01-01T00:00:00Z',expires_at='2000-01-01T00:00:00Z' WHERE harness='codex'")
         self.health.refresh('codex')
         self.assertEqual(self.native.call_count, 2, 'The expired record reprobes the harness')
         self.assertEqual(self.refreshed, ['codex'], 'A fresh catalog needs no re-read')
         self.set_read_at(6 * 3600 + 1)
         self.expire_catalog_throttle()
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE harness='codex'")
+            db.execute("UPDATE harness_health SET scan_after='2000-01-01T00:00:00Z',expires_at='2000-01-01T00:00:00Z' WHERE harness='codex'")
         self.health.refresh('codex')
         self.assertEqual(self.refreshed, ['codex', 'codex'])
 
@@ -459,16 +460,6 @@ class CatalogShelfLifeTests(BoardTestCase):
                          reader=lambda: calls.append('duplicate'), wait=True), 'window')
         self.assertEqual(calls, ['native-read'])
 
-    def test_unparseable_read_time_counts_as_expired(self):
-        self.health.refresh('codex')
-        self.record_native('confirmed')
-        with self.board.db.write() as db:
-            db.execute("UPDATE catalog_current SET read_at='not-a-time' WHERE harness='codex'")
-        self.expire_catalog_throttle()
-        self.pass_throttles()
-        self.health.refresh('codex')
-        self.assertEqual(self.refreshed, ['codex', 'codex'])
-
     def test_cold_start_unknown_reading_still_expires_by_observation_time(self):
         # A full but account-unknown reading seven hours ago leaves no confirmed
         # read time; the observation time must still bring the next health check
@@ -478,7 +469,7 @@ class CatalogShelfLifeTests(BoardTestCase):
         self.assertEqual(self.refreshed, ['codex'])
         self.expire_catalog_throttle()
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_health SET scan_after='2000',expires_at='2000' WHERE harness='codex'")
+            db.execute("UPDATE harness_health SET scan_after='2000-01-01T00:00:00Z',expires_at='2000-01-01T00:00:00Z' WHERE harness='codex'")
         self.health.refresh('codex')
         self.assertEqual(self.native.call_count, 2, 'The expired record reprobes the harness')
         self.assertEqual(self.refreshed, ['codex', 'codex'], 'A never-confirmed catalog is re-read')
@@ -559,10 +550,10 @@ class SharedStaleCatalogFlightTests(BoardTestCase):
             self.addCleanup(stub.stop)
 
     def reading(self, models):
-        return {'source': 'fixture-native',
+        return catalog.canonical_payload({'source': 'fixture-native',
                 'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}],
                 'providers': [{'harness': 'dsh', 'provider': 'fixture',
-                               'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}]}
+                               'models': [{'id': model, 'efforts': ['max'], 'available': True} for model in models]}]})
 
     def finish_thread(self, thread, release):
         release.set()
@@ -702,8 +693,8 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         models = [{'id': 'alpha', 'efforts': list(efforts), 'available': True},
                   {'id': 'gamma', 'efforts': ['max'], 'available': False, 'unavailableReason': {'code': 'catalog.native-unavailable', 'params': {}},
                    'unavailableContent': 'native-disabled'}]
-        return {'source': 'fixture-native', 'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': models}],
-                'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+        return catalog.canonical_payload({'source': 'fixture-native', 'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': models}],
+                'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]})
 
     def buddies(self):
         from hey_my_buddy.blackboard.catalog import catalog_store
@@ -729,7 +720,7 @@ class HealthRecoveryRestoreTests(BoardTestCase):
         self.assertEqual(buddies['dsh:fixture:alpha:high']['unavailableReason']['code'], catalog.RETIRED_EFFORT_REASON)
         self.assertFalse(buddies['dsh:fixture:gamma:max']['available'], 'A native unavailable declaration stays down')
         with self.board.store.db.read() as db:
-            self.assertEqual([row['buddy_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)],
+            self.assertEqual([row['buddy_id'] for row in DecisionCoordinator._scan_candidates(db, [], coding_only=True)[0]],
                              ['dsh:fixture:alpha:max'])
 
 
@@ -765,12 +756,12 @@ class CatalogHealthOwnershipTests(BoardTestCase):
                    'unavailableContent': 'native-disabled'}]
         if beta:
             models.append({'id': 'beta', 'efforts': ['high'], 'available': True})
-        return {'source': 'fixture-native', 'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': models}],
-                'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
+        return catalog.canonical_payload({'source': 'fixture-native', 'providers': [{'harness': 'dsh', 'provider': 'fixture', 'models': models}],
+                'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]})
 
     def unknown_read(self, *args, catalog_scan_claimed=False):
-        self.evaluation.record_catalog({'source': 'fixture-native', 'providers': [],
-            'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]})
+        self.evaluation.record_catalog(catalog.canonical_payload({'source': 'fixture-native', 'providers': [],
+            'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'unknown'}]}))
 
     def buddies(self):
         from hey_my_buddy.blackboard.catalog import catalog_store
@@ -791,7 +782,7 @@ class CatalogHealthOwnershipTests(BoardTestCase):
         self.assertTrue(all(item['enabled'] for item in buddies.values()))
         self.assertEqual(set(buddies), set(self.before), 'Buddy identities survive')
         with self.board.store.db.read() as db:
-            candidates = [row['buddy_id'] for row in DecisionCoordinator._select_candidates(db, [], coding_only=True)]
+            candidates = [row['buddy_id'] for row in DecisionCoordinator._scan_candidates(db, [], coding_only=True)[0]]
             transitions = [row[0] for row in db.execute("SELECT kind FROM events WHERE kind LIKE 'catalog.model_%' ORDER BY seq")]
         self.assertEqual(candidates, ['dsh:fixture:alpha:high'])
         self.assertEqual(transitions, ['catalog.model_pending', 'catalog.model_unavailable'])
@@ -955,7 +946,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
             self.health.refresh('codex', force=True)
             previous = self.board.events_read({'after': 0})['head']
             with self.board.db.write() as db:
-                db.execute("UPDATE harness_account_reads SET checked_at='2000' WHERE harness='codex'")
+                db.execute("UPDATE harness_account_reads SET checked_at='2000-01-01T00:00:00Z' WHERE harness='codex'")
             self.health.refresh('codex', force=True)
         events = self.board.events_read({'after': previous})['events']
         account = [row for row in events if row['kind'] == 'harness.account_observed']
@@ -979,7 +970,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         self.assertEqual(self.events('harness.account_observed'), [])
         self.assertEqual(self.events('harness.invalidated')[0]['reason'], first['reason'])
         with self.board.db.write() as db:
-            db.execute("UPDATE harness_account_reads SET checked_at='2000' WHERE harness='codex'")
+            db.execute("UPDATE harness_account_reads SET checked_at='2000-01-01T00:00:00Z' WHERE harness='codex'")
         with patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=None):
             recovered = self.health.refresh('codex', force=True)
         self.assertEqual(recovered['status'], 'ready')

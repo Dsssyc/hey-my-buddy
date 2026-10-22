@@ -345,7 +345,7 @@ describe("the path dialog", () => {
 describe("a session that cannot write", () => {
   it("leaves every action inert, says why, and sends nothing", async () => {
     const user = userEvent.setup();
-    const f = fixture({ readOnly: true });
+    const f = fixture({ missingSession: true });
     await openHarness(f);
     const buttons = [screen.getByRole("button", { name: "全部检测" }), within(paneBlock("位置")).getByRole("button", { name: "检测" })];
     for (const button of buttons) {
@@ -463,7 +463,7 @@ describe("the account block", () => {
   });
 
   it("keeps native login facts readable in a session that cannot write", async () => {
-    const f = fixture({ harnesses: withAccount(), readOnly: true });
+    const f = fixture({ harnesses: withAccount(), missingSession: true });
     await openHarness(f);
     expect(fieldValue(paneBlock("账户"), "状态").textContent).toContain("ChatGPT");
     expect(within(paneBlock("账户")).queryByRole("button")).toBeNull();

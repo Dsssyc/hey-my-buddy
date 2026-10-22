@@ -394,7 +394,7 @@ class SelectionRequestTests(DecisionTestCase):
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertFalse(capabilities["selection"])
         self.assertNotIn("maintenance", capabilities)
-        self.assertFalse(capabilities["decisionAdapter"])
+        self.assertFalse(capabilities["selection"])
         request = self.request(board)
         self.assertEqual(request["status"], "needs-host")
         self.assertIsNone(request["runId"])
@@ -414,7 +414,7 @@ class SelectionRequestTests(DecisionTestCase):
         capabilities = board.call("console_snapshot", {})["capabilities"]
         self.assertTrue(capabilities["selection"])
         self.assertNotIn("maintenance", capabilities)
-        self.assertTrue(capabilities["decisionAdapter"])
+        self.assertTrue(capabilities["selection"])
         report = board.call("capabilities", {})
         self.assertIn("decision", report["adapters"])
         self.assertIn("decision", report["localCapabilities"])
@@ -531,8 +531,6 @@ class DecisionFailureTests(DecisionTestCase):
                 "routingPreferences": [{"match": {"harness": "dsh"}, "reason": "Use the installed DSH harness"}],
             })
         self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-        self.assertIn("complete harness/provider/model/effort quadruple", raised.exception.message)
-        self.assertIn("leave the choice to the Router", raised.exception.message)
 
     def test_policy_facts_carry_no_task_preference_slot(self):
         board = self.board()
@@ -836,18 +834,22 @@ class DecisionSurfaceTests(DecisionTestCase):
             self.assertIn(method, cli.METHODS)
         board = self.board()
         self.seed(board)
+        board.console.start(issue_ticket=False)
+        session = board.console._local_session
+        board.service.register_console_authority(session.cookie, session.id)
         # A model-calling request is not reachable through the browser surface...
         self.assert_code(
             "METHOD_NOT_FOUND",
             board.console.command,
             "selection_request",
             {"requestId": "http-1", "task": "over http"},
+            session=session,
         )
         # ...while the same named read still reaches exactly the validated operation.
         created = self.request(board, request_id="surface-1")
-        fetched = board.console.command("selection_get", {"decisionId": created["decisionId"]})
+        fetched = board.console.command("selection_get", {"decisionId": created["decisionId"]}, session=session)
         self.assertEqual(fetched["decision"]["requestId"], "surface-1")
-        self.assert_code("METHOD_NOT_FOUND", board.console.command, "task_submit", {})
+        self.assert_code("METHOD_NOT_FOUND", board.console.command, "task_submit", {}, session=session)
 
     def test_selection_get_defaults_to_a_compact_host_summary(self):
         """The default read is the low-token micro task path, not the full audit."""

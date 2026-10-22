@@ -16,26 +16,20 @@ from .router_boundary import build_boundary
 
 _CHANGED_CODES = frozenset({
     "router-input-changed",
-    "router-out-of-bounds", "router-dispatch-unverified", "workflow-routing-fenced",
-    "ACCOUNT_BINDING_CHANGED", "BUDDY_CONFLICT", "router-input-too-large",
+    "router-out-of-bounds", "workflow-routing-fenced", "router-input-too-large",
 })
 
 
 def _json(value, default=None):
-    if value is None:
-        return default
-    try:
-        return json.loads(value)
-    except (ValueError, TypeError):
-        return default
+    return default if value is None else json.loads(value)
 
 
 def _events(connection, row):
     rows = connection.execute(
         "SELECT seq,kind,task_id,attempt_id,created_at,payload_json FROM events WHERE "
         "(kind IN ('router.no_answer','router.answered','router.claimed') AND "
-        "json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,'$.requestId')=?) OR "
-        "(kind LIKE 'decision.%' AND json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END,'$.decisionId')=?) ORDER BY seq",
+        "json_extract(payload_json,'$.requestId')=?) OR "
+        "(kind LIKE 'decision.%' AND json_extract(payload_json,'$.decisionId')=?) ORDER BY seq",
         (row["request_id"], row["decision_id"]))
     return [{**dict(event), "payload": _json(event["payload_json"], {})} for event in rows]
 
@@ -54,10 +48,8 @@ def _stopped(connection, task_id):
 
 
 def _state(connection, buddy_id, facts, now):
-    interval = facts.get("routerRetryIntervalSeconds")
-    if type(interval) is not int or interval < 1:
-        return {}
-    return router_history.router_state(connection, buddy_id=buddy_id, interval_seconds=interval, now=now)
+    return router_history.router_state(connection, buddy_id=buddy_id,
+                                       interval_seconds=facts["routerRetryIntervalSeconds"], now=now)
 
 
 def _cached_available(connection, harness):
@@ -99,8 +91,6 @@ def router_trials(connection, row, *, now):
                          if event["kind"] == "decision.selection_rerouted"), None)
         if rerouted is not None:
             events = [event for event in events if event["seq"] > rerouted]
-    terminal = next((event for event in reversed(events) if event["kind"] in (
-        "decision.completed", "decision.needs_host", "decision.cancelled", "decision.failed")), None)
     inspected = ({item["index"]: item for item in request.get("selectionRetryInspections", [])}
                  if request.get("selectionRetry") else
                  {item["index"]: item for item in snapshot["inspections"]})
@@ -126,7 +116,7 @@ def router_trials(connection, row, *, now):
         buddy_id = doc["buddyId"] if doc else inspection.get("buddyId")
         identities = facts.get("routerIdentities") or []
         identity = doc["buddy"] if doc else inspection.get("identity") or (
-            identities[index] if type(index) is int and index < len(identities) else None)
+            identities[index] if index < len(identities) else None)
         state = _state(connection, buddy_id, facts, now) if buddy_id else {}
         item = {"buddyId": buddy_id, "identity": deepcopy(identity), "index": index,
                 "phase": "preflight", "outcome": "unknown", "code": inspection.get("code"),
@@ -162,21 +152,10 @@ def router_trials(connection, row, *, now):
         task_id = doc["taskId"]
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (task_id,)).fetchone()
         attempts = connection.execute("SELECT * FROM attempts WHERE task_id=? ORDER BY generation", (task_id,)).fetchall()
-        # All claim generations remain visible rather than borrowing the latest
-        # request binding. Usually a Router dispatch has exactly one attempt.
-        bound = []
-        for attempt in attempts:
-            binding = router_sequence.claim(connection, attempt["attempt_id"]) or {}
-            if (binding.get("decisionId") == row["decision_id"] and binding.get("taskId") == task_id
-                    and binding.get("attemptId") == attempt["attempt_id"]
-                    and binding.get("generation") == attempt["generation"]
-                    and binding.get("buddyId") == buddy_id and binding.get("routerIndex") == index):
-                bound.append(attempt)
-        if not bound:
+        # Each attempt is bound to this dispatch in the claim transaction.
+        if not attempts:
             item.update(phase="queued", outcome="queued", code=None)
-            if attempts:
-                item.update(outcome="unknown", code="router-dispatch-unverified")
-            elif (no_answer := next((event for event in reversed(matching)
+            if (no_answer := next((event for event in reversed(matching)
                     if event["kind"] == "router.no_answer" and event["payload"].get("phase") == "preflight"
                     and event["payload"].get("taskId") in (None, task_id)
                     and event["payload"].get("attemptId") is None), None)) is not None:
@@ -188,13 +167,12 @@ def router_trials(connection, row, *, now):
             item["shutdownConfirmed"] = True if _stopped(connection, task_id) else None
             trials.append(item)
             continue
-        for attempt in bound:
+        for attempt in attempts:
             trial = deepcopy(item)
             current_attempt = (row["decision_attempt_id"] == attempt["attempt_id"]
                                and row["decision_generation"] == attempt["generation"])
             receipt = _json(attempt["result_json"], {})
-            output = receipt.get("result") if isinstance(receipt.get("result"), dict) else {}
-            adopted = _json(row["output_json"], {}) if row["decision_task_id"] == task_id else {}
+            output = receipt.get("result") or {}
             own_events = [event for event in matching if event["payload"].get("taskId") == task_id
                           and event["payload"].get("attemptId") == attempt["attempt_id"]
                           and event["kind"] in ("router.no_answer", "router.answered")]
@@ -203,8 +181,8 @@ def router_trials(connection, row, *, now):
                          usage=deepcopy(output.get("usage") or _json(attempt["token_usage_json"])),
                          nativeIdentity=deepcopy(output.get("nativeIdentity")))
             outer_stopped = attempt["execution_state"] == "finished" and attempt["shutdown_confirmed"] == 1
-            stop = output.get("stopEvidence") if isinstance(output.get("stopEvidence"), dict) else {}
-            native = stop.get("native") if isinstance(stop.get("native"), dict) else {}
+            stop = output.get("stopEvidence") or {}
+            native = stop.get("native") or {}
             released = connection.execute(
                 "SELECT 1 FROM events WHERE kind='attempt.released' AND task_id=? AND attempt_id=? LIMIT 1",
                 (task_id, attempt["attempt_id"])).fetchone()
@@ -217,18 +195,6 @@ def router_trials(connection, row, *, now):
             if outcome_event:
                 trial.update(outcome=outcome_event["payload"]["outcome"], phase=outcome_event["payload"].get("phase"),
                              code=outcome_event["payload"].get("code"))
-            elif (current_attempt and row["decision_task_id"] == task_id and terminal is not None
-                  and terminal["kind"] in ("decision.completed", "decision.needs_host")
-                  and row["reason_code"] in (None, "router-abstained") and confirmed
-                  and receipt.get("status") == "ok" and output.get("status") == "ok"
-                  and isinstance(output.get("decision"), dict)
-                  and adopted.get("status") == "ok" and "policyCheck" in adopted
-                  and not adopted.get("code") and adopted.get("decision") == output["decision"]):
-                # _finish publishes its terminal event before notifying the
-                # workflow, then R4 appends router.answered in that transaction.
-                # That program event is sufficient during the notification;
-                # a null result or model prose by itself never proves adoption.
-                trial.update(outcome="answered", phase="publication")
             elif receipt.get("status") == "cancelled" or attempt["cancel_requested_at"] or (task and task["state"] == "cancelled") or (row["decision_task_id"] == task_id and row["status"] == "cancelled"):
                 trial.update(outcome="cancelled")
             elif current_attempt and row["decision_task_id"] == task_id and row["reason_code"] in _CHANGED_CODES:
@@ -308,40 +274,14 @@ def _continuation_context(connection, row, run_id, owner_run_id):
 
 
 def _candidate_problem(connection, candidate, request, run, now):
-    def problem(bound):
-        return {"code": "router-out-of-bounds", "bound": bound}
-
     published = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (candidate["buddyId"],)).fetchone()
-    if published is None:
-        return problem("removed")
-    if any(published[key] != candidate[key] for key in schemas.BUDDY_FIELDS):
-        return problem("identity-changed")
-    if not published["enabled"]:
-        return problem("disabled")
-    if not published["available"]:
-        return problem("unavailable")
-    constraints = request.get("constraints") or {}
+    constraints = request.get("constraints", {})
     if run is not None and run["buddy_locked"]:
         spec = connection.execute("SELECT spec_json FROM tasks WHERE task_id=?", (run["run_id"],)).fetchone()
         constraints = {**constraints, **schemas.buddy_constraints(_json(spec["spec_json"], {}))}
-    if any(candidate.get(key) != value for key, value in constraints.items()):
-        return problem("constraints")
-    from ...protocol.capabilities import buddy_capabilities
-    capabilities = set(buddy_capabilities(published["harness"], _json(published["capabilities_json"], [])))
-    if not set(request.get("requiredCapabilities") or []) <= capabilities:
-        return problem("capability-missing")
-    preference = connection.execute("SELECT mode FROM evaluation_preferences WHERE buddy_id=?", (candidate["buddyId"],)).fetchone()
-    pins = connection.execute("SELECT 1 FROM evaluation_preferences WHERE mode='pin' LIMIT 1").fetchone()
-    if preference and preference[0] == "exclude":
-        return problem("excluded")
-    if pins and (not preference or preference[0] != "pin"):
-        return problem("not-pinned")
-    if not _cached_available(connection, candidate["harness"]):
-        return problem("harness-unavailable")
-    from .quota_routing import cooling
-    if cooling(connection, published, now=now) is not None:
-        return problem("quota-exhausted")
-    return None
+    from .candidate import candidate_bound
+    bound = candidate_bound(connection, published, {**request, "constraints": constraints}, now, frozen=candidate)
+    return {"code": "router-out-of-bounds", "bound": bound} if bound is not None else None
 
 
 def _retry_at(connection, facts, trials, *, now, kind):
@@ -353,7 +293,7 @@ def _retry_at(connection, facts, trials, *, now, kind):
     for index, buddy_id in enumerate(facts.get("routerBuddyIds") or []):
         identity = (facts.get("routerIdentities") or [])[index]
         buddy = connection.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
-        if buddy is None or identity is None or any(buddy[key] != identity[key] for key in schemas.BUDDY_FIELDS) or not buddy["enabled"] or not buddy["available"]:
+        if identity is None or any(buddy[key] != identity[key] for key in schemas.BUDDY_FIELDS) or not buddy["enabled"] or not buddy["available"]:
             continue
         if not _cached_available(connection, buddy["harness"]):
             continue
@@ -394,8 +334,6 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     if request.get("routerCalled") is False or (request.get("routingBasis") or {}).get("candidateCount") == 0:
         return None
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
-    if snapshot is None:
-        return None  # Never reconstruct a legacy packet from today's catalog.
     trials = router_trials(connection, row, now=now)
     code = row["reason_code"] or (request.get("routerProblem") or {}).get("code")
     current = [item for item in trials if item["taskId"] == row["decision_task_id"] and item["outcome"] == "answered"]
@@ -414,7 +352,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
         facts.update(deepcopy(request))
         facts["inspections"] = deepcopy(request.get("selectionRetryInspections", []))
     else:
-        facts = deepcopy(snapshot.get("hostPacket") or snapshot["baseInput"])
+        facts = deepcopy(snapshot["baseInput"])
         facts.update(deepcopy(snapshot["facts"]))
         facts["inspections"] = deepcopy(snapshot["inspections"])
     candidates = facts.get("buddies") or []

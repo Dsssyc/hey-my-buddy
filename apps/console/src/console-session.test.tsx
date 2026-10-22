@@ -52,7 +52,7 @@ function workflow(task: Task, overrides: Workflow = {}): Workflow {
     ...overrides };
 }
 
-const session = (): ConsoleSession => ({ id: "session-writer", canWrite: true, reason: null });
+const session = (): ConsoleSession => ({ id: "session-writer" });
 
 type IdentityOutcome = "expired";
 type PublishOutcome = "ok" | "network" | IdentityOutcome;
@@ -184,32 +184,21 @@ function apiFor(payload: unknown) {
 }
 
 describe("console session descriptor validation", () => {
-  it("accepts only the live service descriptor: canWrite true with a null reason", async () => {
-    await expect(apiFor(envelope({ id: "session-a", canWrite: true, reason: null })).snapshot())
-      .resolves.toMatchObject({ consoleSession: { id: "session-a", canWrite: true, reason: null } });
-    // 0.16: a non-writable or flagged descriptor is no longer a session state;
-    // the board reports an expired login as a 401 refusal instead.
-    await expect(apiFor(envelope({ id: "session-b", canWrite: false, reason: null })).snapshot())
-      .rejects.toBeInstanceOf(ApiError);
-    await expect(apiFor(envelope({ id: "session-c", canWrite: true, reason: "superseded" })).snapshot())
-      .rejects.toBeInstanceOf(ApiError);
+  it("accepts a session identity from the live service", async () => {
+    await expect(apiFor(envelope({ id: "session-a" })).snapshot())
+      .resolves.toMatchObject({ consoleSession: { id: "session-a" } });
   });
 
-  it("fails closed for a missing, malformed or contradictory descriptor", async () => {
+  it("fails closed for a missing or malformed descriptor", async () => {
     const invalid: [string, unknown, boolean][] = [
       ["missing", undefined, false],
       ["null", null, true],
       ["string", "session", true],
       ["array", [], true],
       ["empty object", {}, true],
-      ["empty id", { id: "", canWrite: true, reason: null }, true],
-      ["blank id", { id: "   ", canWrite: true, reason: null }, true],
-      ["numeric id", { id: 7, canWrite: true, reason: null }, true],
-      ["missing canWrite", { id: "session-a", reason: null }, true],
-      ["string canWrite", { id: "session-a", canWrite: "true", reason: null }, true],
-      ["writer with a stale reason", { id: "session-a", canWrite: true, reason: "superseded" }, true],
-      ["non-writable session", { id: "session-a", canWrite: false, reason: null }, true],
-      ["non-writable with a reason", { id: "session-a", canWrite: false, reason: "expired" }, true],
+      ["empty id", { id: "" }, true],
+      ["blank id", { id: "   " }, true],
+      ["numeric id", { id: 7 }, true],
     ];
     for (const [label, value, include] of invalid) {
       const failure = await apiFor(envelope(value, include)).snapshot()
@@ -236,16 +225,16 @@ describe("console session descriptor validation", () => {
 
   it("latches a lost session so an older writable snapshot cannot restore writes", () => {
     const latch = createAuthorityLatch();
-    const writer = { consoleSession: { id: "session-a", canWrite: true, reason: null } } as Snapshot;
-    const staleCopy = { consoleSession: { id: "session-a", canWrite: true, reason: null } } as Snapshot;
-    const readOnly = { consoleSession: { id: "session-a", canWrite: false, reason: null } } as Snapshot;
-    const fresh = { consoleSession: { id: "session-b", canWrite: true, reason: null } } as Snapshot;
+    const writer = { consoleSession: { id: "session-a" } } as Snapshot;
+    const staleCopy = { consoleSession: { id: "session-a" } } as Snapshot;
+    const missing = { consoleSession: undefined } as unknown as Snapshot;
+    const fresh = { consoleSession: { id: "session-b" } } as Snapshot;
     expect(latch.writable(writer)).toBe(true);
     latch.lose("session-a");
     // An older success snapshot for the same session must not re-arm writes.
     expect(latch.writable(writer)).toBe(false);
     expect(latch.writable(staleCopy)).toBe(false);
-    expect(latch.writable(readOnly)).toBe(false);
+    expect(latch.writable(missing)).toBe(false);
     // A genuinely different launch-created session is new authority.
     expect(latch.writable(fresh)).toBe(true);
     // Losing the latch twice (for example both a refusal and a poll) is stable.
@@ -410,7 +399,7 @@ describe("invalid login session (0.16 multi-window: no handoff UX)", () => {
     expect(f.published).toHaveLength(2);
     expect(f.published[1].commandId).toBe(commandId);
     expect(screen.getAllByRole("button", { name: "重试同一保存" }).length).toBeGreaterThan(0);
-    // The snapshot still says canWrite: true, but the refusal latched this
+    // The snapshot still carries this session id, but the refusal latched this
     // session: no takeover copy appears and a later retry is never sent.
     expect(screen.queryByText(bannerNotice)).toBeNull();
     const operations = [...f.operations];

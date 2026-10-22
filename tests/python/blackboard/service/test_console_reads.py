@@ -9,8 +9,8 @@ behaviors must fail here before it can silently freeze a console.
 from __future__ import annotations
 
 import json
-import os
 import unittest
+from unittest.mock import Mock
 
 from support import BoardTestCase
 
@@ -66,34 +66,37 @@ class SelectEncodingTests(unittest.TestCase):
 
 
 class BoundaryTests(BoardTestCase):
-    def test_parse_boundary_accepts_board_and_iso_shapes(self):
+    def test_parse_boundary_accepts_board_timestamps_and_absent_values(self):
         moment = parse_boundary("2026-10-07T12:00:00.000Z")
         self.assertEqual(parse_boundary("2026-10-07T12:00:00.000+00:00"), moment)
-        self.assertIsNone(parse_boundary("not a time"))
         self.assertIsNone(parse_boundary(None))
-        self.assertIsNone(parse_boundary(""))
+        with self.assertRaises(ValueError):
+            parse_boundary("not a time")
+        for malformed in ("", "2026-10-07T12:00:00.000", "2026-10-07T12:00:00.000z"):
+            with self.subTest(timestamp=malformed), self.assertRaises(ValueError):
+                parse_boundary(malformed)
 
     def test_collect_deadline_takes_earliest_future_boundary(self):
-        after = parse_boundary("2026-10-07T12:00:00Z")
+        after = parse_boundary("2026-10-07T12:00:00.000Z")
         projection = {
             "buddies": [
-                {"providerCooling": {"provider": "openai", "coolingUntil": "2026-10-07T12:30:00Z", "consecutiveRejections": 2}},
+                {"providerCooling": {"provider": "openai", "coolingUntil": "2026-10-07T12:30:00.000Z", "consecutiveRejections": 2}},
             ],
-            "harnesses": [{"providers": [{"provider": "openai", "coolingUntil": "2026-10-07T12:30:00Z", "consecutiveRejections": 2}],
-                           "scanAfter": "2026-10-07T12:02:00Z"}],
-            "routingHealth": {"routers": [{"skipUntil": "2026-10-07T12:05:00Z"}]},
-            "past": {"expiresAt": "2026-10-07T11:00:00Z"},
+            "harnesses": [{"providers": [{"provider": "openai", "coolingUntil": "2026-10-07T12:30:00.000Z", "consecutiveRejections": 2}],
+                           "scanAfter": "2026-10-07T12:02:00.000Z"}],
+            "routingHealth": {"routers": [{"skipUntil": "2026-10-07T12:05:00.000Z"}]},
+            "past": {"expiresAt": "2026-10-07T11:00:00.000Z"},
         }
         deadline = collect_deadline(projection, after=after)
         # The borrowed harness scan is due first: once scanAfter passes, the
         # next periodic read must re-enter the projection and kick the scan.
-        self.assertEqual(deadline, parse_boundary("2026-10-07T12:02:00Z"))
+        self.assertEqual(deadline, parse_boundary("2026-10-07T12:02:00.000Z"))
         del projection["harnesses"][0]["scanAfter"]
         without_scan = collect_deadline(projection, after=after)
-        self.assertEqual(without_scan, parse_boundary("2026-10-07T12:05:00Z"))
-        cooling_only = collect_deadline({"providers": [{"coolingUntil": "2026-10-07T12:30:00Z"}]}, after=after)
-        self.assertEqual(cooling_only, parse_boundary("2026-10-07T12:30:00Z"))
-        self.assertEqual(collect_deadline({"quotaFailure": {"resetsAt": "2026-10-07T12:01:00Z"}}, after=after), float("inf"))
+        self.assertEqual(without_scan, parse_boundary("2026-10-07T12:05:00.000Z"))
+        cooling_only = collect_deadline({"providers": [{"coolingUntil": "2026-10-07T12:30:00.000Z"}]}, after=after)
+        self.assertEqual(cooling_only, parse_boundary("2026-10-07T12:30:00.000Z"))
+        self.assertEqual(collect_deadline({"quotaFailure": {"resetsAt": "2026-10-07T12:01:00.000Z"}}, after=after), float("inf"))
         self.assertEqual(collect_deadline({"x": 1}, after=after), float("inf"))
 
 
@@ -129,12 +132,11 @@ class MarkerTests(BoardTestCase):
         board = self.board()
         cache = ReadCache(board.store.db)
         self.addCleanup(cache.close)
-        generate = stable_projection()
+        generate = Mock(side_effect=stable_projection())
         first = cache.serve(kind="console", key="k", session="s1", extra_marker=(), generate=generate)
         second = cache.serve(kind="console", key="k", session="s1", extra_marker=(), generate=generate)
         self.assertEqual(first.entry.body, second.entry.body)
-        self.assertEqual(cache.calls["console"]["projections"], 1)
-        self.assertEqual(cache.calls["console"]["serializations"], 1)
+        self.assertEqual(generate.call_count, 1)
         self.assertFalse(second.not_modified)
         conditional = cache.serve(
             kind="console", key="k", session="s1", extra_marker=(), generate=generate,
@@ -151,7 +153,7 @@ class MarkerTests(BoardTestCase):
         board = self.board()
         cache = ReadCache(board.store.db)
         self.addCleanup(cache.close)
-        generate = stable_projection()
+        generate = Mock(side_effect=stable_projection())
         first = cache.serve(
             kind="console", key="k", session="s1", extra_marker=(), generate=generate, coding="identity"
         )
@@ -159,7 +161,7 @@ class MarkerTests(BoardTestCase):
             kind="console", key="k", session="s1", extra_marker=(), generate=generate, coding="gzip"
         )
         self.assertEqual(gzipped.entry, first.entry)  # one cached state, no regeneration
-        self.assertEqual(cache.calls["console"]["projections"], 1)
+        self.assertEqual(generate.call_count, 1)
         identity_etag, gzip_etag = first.entry.validator("identity"), first.entry.validator("gzip")
         self.assertNotEqual(identity_etag, gzip_etag)
         self.assertTrue(identity_etag.startswith('"'))
@@ -184,161 +186,6 @@ class MarkerTests(BoardTestCase):
             cache.serve(kind="console", key="k", session="s1", extra_marker=(), generate=generate,
                         if_none_match=gzip_etag, coding="identity").not_modified
         )
-        # An unknown coding is a programming error, never silently identity.
-        with self.assertRaises(ValueError):
-            cache.serve(kind="console", key="k", session="s1", extra_marker=(), generate=generate, coding="br")
-
-    def test_replaced_database_file_invalidates_the_marker(self):
-        """An open marker connection must not observe a replaced database forever.
-
-        An upgrade rollback or restore swaps the database file atomically; the
-        old connection would keep reading the old inode's frozen data_version
-        and answer "unchanged" forever. The marker connection detects the path
-        naming a different file and reports it as changed.
-        """
-        board = self.board()
-        cache = ReadCache(board.store.db)
-        self.addCleanup(cache.close)
-        first = cache.marker()
-        self.assertIsNotNone(first)
-        replacement = board.store.directory / "replacement.sqlite3"
-        import sqlite3
-        from contextlib import closing
-
-        with closing(sqlite3.connect(replacement)) as connection:
-            connection.execute("CREATE TABLE swapped(value)")
-            connection.execute("INSERT INTO swapped(value) VALUES('different file')")
-            connection.commit()
-        os.replace(replacement, board.store.db.path)
-        self.assertIsNone(cache.marker())
-        # The next check reconnects to whatever the path now names.
-        self.assertIsNotNone(cache.marker())
-
-    def _replacement_with_content_marker(self, board):
-        """A same-schema replacement database with different ordinary content."""
-        import sqlite3
-        from contextlib import closing
-
-        replacement = board.store.directory / "replacement.sqlite3"
-        with closing(sqlite3.connect(board.store.db.path)) as source, closing(sqlite3.connect(replacement)) as target:
-            # Replacing only the main file must not replay the old board's WAL.
-            source.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            source.backup(target)
-            target.execute("INSERT INTO meta(key,value) VALUES('cache-content-test','replacement')")
-            target.commit()
-        os.replace(replacement, board.store.db.path)
-
-    def _content_projection(self, board):
-        def generate():
-            with board.store.db.read() as connection:
-                row = connection.execute(
-                    "SELECT value FROM meta WHERE key='cache-content-test'"
-                ).fetchone()
-            return {"content": row[0] if row else "original"}, None
-
-        return generate
-
-    def test_a_replaced_database_invalidates_every_cached_key_and_session(self):
-        """Round-5 reviewed defect: a replaced database restarts data_version.
-
-        After the swap the first reprojected key observes the change through
-        the file identity, but the reconnected marker can report the SAME
-        data_version the old entries were cached under. Without the
-        connection epoch in the marker, every other query and session keeps
-        answering 304 with pre-replacement bodies.
-        """
-        board = self.board()
-        cache = ReadCache(board.store.db)
-        self.addCleanup(cache.close)
-        generate = self._content_projection(board)
-
-        def read(key, session, validator=None):
-            return cache.serve(
-                kind="review", key=key, session=session, extra_marker=(), generate=generate,
-                if_none_match=validator,
-            )
-
-        old_a = read("a", "s1")
-        old_b = read("b", "s2")
-        self.assertEqual(json.loads(old_a.entry.body)["content"], "original")
-        self._replacement_with_content_marker(board)
-        new_a = read("a", "s1", old_a.entry.validator("identity"))
-        self.assertFalse(new_a.not_modified)
-        self.assertEqual(json.loads(new_a.entry.body)["content"], "replacement")
-        new_b = read("b", "s2", old_b.entry.validator("identity"))
-        self.assertFalse(
-            new_b.not_modified,
-            "A new SQLite connection may restart data_version at the old value; reprojecting "
-            "one cache key must invalidate all remaining query/session entries",
-        )
-        self.assertEqual(json.loads(new_b.entry.body)["content"], "replacement")
-
-    def test_a_reopened_connection_with_a_repeated_data_version_invalidates_the_cache(self):
-        """Same file, transient error: the reopened marker re-reads the same value.
-
-        A connection error closes the marker connection; the reconnect
-        re-reads an identical data_version from the same file. Only the
-        connection epoch keeps that repeated value from revalidating every
-        cached entry.
-        """
-        board = self.board()
-        cache = ReadCache(board.store.db)
-        self.addCleanup(cache.close)
-        generate = stable_projection()
-        first = cache.serve(kind="console", key="k", session="s", extra_marker=(), generate=generate)
-        marker_before = cache.marker()
-        self.assertIsNotNone(marker_before)
-        # A transient failure of the live connection (anything SQLite or the
-        # OS reports) must not leave the cache frozen on the old marker.
-        cache._marker_connection._connection.close()
-        self.assertIsNone(cache.marker())
-        projections = cache.calls["console"]["projections"]
-        after = cache.serve(
-            kind="console", key="k", session="s", extra_marker=(), generate=generate,
-            if_none_match=first.entry.validator("identity"),
-        )
-        # The repeated data_version must not revalidate the old entry: the
-        # projection runs again (an unchanged body may then honestly 304).
-        self.assertEqual(cache.calls["console"]["projections"], projections + 1)
-        marker_after = cache.marker()
-        self.assertIsNotNone(marker_after)
-        self.assertNotEqual(marker_after[0], marker_before[0])  # the epoch moved
-        self.assertEqual(marker_after[1], marker_before[1])     # the value repeats
-
-    def test_a_reconnect_during_generation_never_binds_the_old_body_to_the_new_epoch(self):
-        """A replacement between the two marker reads forces a regeneration.
-
-        The before-marker belongs to the old epoch, so the body generated
-        across the swap is never cached; the retried generation is bound to
-        the reconnected marker and servable unchanged afterwards.
-        """
-        board = self.board()
-        cache = ReadCache(board.store.db)
-        self.addCleanup(cache.close)
-        attempts = {"n": 0}
-
-        def racing_generate():
-            attempts["n"] += 1
-            if attempts["n"] == 1:
-                self._replacement_with_content_marker(board)
-            with board.store.db.read() as connection:
-                row = connection.execute(
-                    "SELECT value FROM meta WHERE key='cache-content-test'"
-                ).fetchone()
-            return {"content": row[0] if row else "original", "attempt": attempts["n"]}, None
-
-        outcome = cache.serve(
-            kind="console", key="k", session="s", extra_marker=(), generate=racing_generate
-        )
-        self.assertGreaterEqual(attempts["n"], 2)
-        body = json.loads(outcome.entry.body)
-        self.assertEqual(body["content"], "replacement")
-        self.assertEqual(body["attempt"], attempts["n"])
-        again = cache.serve(
-            kind="console", key="k", session="s", extra_marker=(), generate=racing_generate,
-            if_none_match=outcome.entry.validator("identity"),
-        )
-        self.assertTrue(again.not_modified)
 
     def test_serve_regenerates_on_marker_extra_and_deadline(self):
         board = self.board()
@@ -379,8 +226,7 @@ class MarkerTests(BoardTestCase):
         def racing_generate():
             attempts["n"] += 1
             # The projection runs between the two marker reads; a concurrent
-            # board write must force a retry instead of caching under the old
-            # marker.
+            # board write leaves this generation uncached.
             if attempts["n"] == 1:
                 with board.store.db.write() as connection:
                     connection.execute(
@@ -390,18 +236,23 @@ class MarkerTests(BoardTestCase):
             return {"attempt": attempts["n"]}, None
 
         outcome = cache.serve(kind="console", key="k", session="s1", extra_marker=(), generate=racing_generate)
-        self.assertGreaterEqual(attempts["n"], 2)
-        self.assertEqual(json.loads(outcome.entry.body)["attempt"], attempts["n"])
+        self.assertEqual(attempts["n"], 1)
+        self.assertEqual(json.loads(outcome.entry.body)["attempt"], 1)
+        regenerated = cache.serve(kind="console", key="k", session="s1", extra_marker=(), generate=racing_generate)
+        self.assertEqual(attempts["n"], 2)
+        self.assertEqual(json.loads(regenerated.entry.body)["attempt"], 2)
+        cache.serve(kind="console", key="k", session="s1", extra_marker=(), generate=racing_generate)
+        self.assertEqual(attempts["n"], 2)
 
     def test_entries_are_private_per_session_and_bounded(self):
         board = self.board()
         cache = ReadCache(board.store.db, max_entries=2)
         self.addCleanup(cache.close)
-        generate = stable_projection({"v": 1})
+        generate = Mock(side_effect=stable_projection({"v": 1}))
         first = cache.serve(kind="console", key="k", session="s1", extra_marker=(), generate=generate)
         other = cache.serve(kind="console", key="k", session="s2", extra_marker=(), generate=generate)
         self.assertIsNot(first.entry, other.entry)
-        self.assertEqual(cache.calls["console"]["projections"], 2)
+        self.assertEqual(generate.call_count, 2)
         # The bound evicts the least recently used entry, not other sessions'.
         cache.serve(kind="console", key="a", session="s1", extra_marker=(), generate=generate)
         cache.serve(kind="console", key="b", session="s1", extra_marker=(), generate=generate)

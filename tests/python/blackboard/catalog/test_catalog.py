@@ -125,14 +125,14 @@ class CatalogTests(unittest.TestCase):
                 catalog.discovery_payload(value)
             self.assertEqual(caught.exception.code, "CATALOG_INVALID")
 
-    def test_native_warning_limit_keeps_one_normalization_rule_and_diagnostics(self):
+    def test_native_warnings_preserve_all_diagnostics(self):
         value = copy.deepcopy(FIXTURE_CATALOG)
         value["warnings"] = [{"reason": {"code": "catalog.model-shape-unreadable", "params": {}},
                               "diagnostic": {"unknownCount": number}, "harness": ["not-native"], "content": 123}
                              for number in range(20)]
         native = catalog.discovery_payload(value)
         self.assertEqual(native["warnings"], [
-            {"reason": item["reason"], "diagnostic": item["diagnostic"]} for item in value["warnings"][:16]])
+            {"reason": item["reason"], "diagnostic": item["diagnostic"]} for item in value["warnings"]])
         self.assertEqual(catalog.canonical_payload(native)["warnings"], native["warnings"])
 
     def test_capability_report_uses_health_reason_only_for_harnesses(self):
@@ -183,7 +183,7 @@ class CatalogTests(unittest.TestCase):
                                                          "content": None}])
             self.assertEqual(probe.call_count, 2, "Explicit discovery must bypass the old auth failure")
             self.assertTrue(instance.available()[0])
-            buddies = catalog.CatalogView.from_payload(refreshed).proposed_buddies()
+            buddies = catalog.CatalogView(refreshed).proposed_buddies()
             self.assertEqual(len(buddies), 1)
             self.assertFalse(buddies[0]["enabled"], "Discovery cannot grant execution permission")
 
@@ -202,7 +202,7 @@ class CatalogTests(unittest.TestCase):
         return payload
 
     def test_same_provider_and_model_in_different_harnesses_stay_distinct(self):
-        view = catalog.CatalogView.from_payload(self.payload())
+        view = catalog.CatalogView(catalog.canonical_payload(self.payload()))
         self.assertEqual(view.efforts_for("dsh", "deepseek-official", "deepseek-flash"), ["off", "low", "high", "max"])
         self.assertEqual(view.efforts_for("zcode", "deepseek-official", "deepseek-flash"), ["low", "high"])
         self.assertIsNone(view.lookup("command", "deepseek-official", "deepseek-flash"))
@@ -217,13 +217,13 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(unavailable["unavailableContent"], "Unsupported auth")
 
     def test_unknown_native_settings_never_enter_public_catalog_or_proposals(self):
-        view = catalog.CatalogView.from_payload(self.payload())
+        view = catalog.CatalogView(catalog.canonical_payload(self.payload()))
         public = json.dumps([view.metadata(), view.proposed_buddies()])
         for forbidden in ("apiKey", "requestHeaders", "Authorization", "private-provider-secret", "private-model-secret"):
             self.assertNotIn(forbidden, public)
 
     def test_each_model_declares_its_own_legal_efforts(self):
-        view = catalog.CatalogView.from_payload(self.payload())
+        view = catalog.CatalogView(catalog.canonical_payload(self.payload()))
         self.assertEqual(view.efforts_for("zcode", "deepseek-official", "basic"), ["off"])
         self.assertNotIn("max", view.efforts_for("zcode", "deepseek-official", "deepseek-flash"))
 
@@ -232,7 +232,7 @@ class CatalogTests(unittest.TestCase):
             {"harness": name, "provider": "fixture", "models": [{"id": "model", "efforts": ["off"]}]}
             for name in ("claude", "codex", "dsh", "zcode")
         ]}
-        buddies = catalog.CatalogView.from_payload(payload).proposed_buddies()
+        buddies = catalog.CatalogView(catalog.canonical_payload(payload)).proposed_buddies()
         for buddy in buddies:
             self.assertFalse(any(cap.startswith("permission:") or cap in ("decision", "routing:fast") for cap in buddy["capabilities"]))
 
@@ -263,14 +263,14 @@ class CatalogTests(unittest.TestCase):
                 {"id": "claude-haiku-4-5-20251001", "efforts": ["default"]},
             ],
         }]}
-        buddies = catalog.CatalogView.from_payload(payload).proposed_buddies()
+        buddies = catalog.CatalogView(catalog.canonical_payload(payload)).proposed_buddies()
         self.assertEqual([p["model"] for p in buddies], [m["id"] for m in payload["providers"][0]["models"]])
         self.assertEqual(len({p["buddyId"] for p in buddies}), 3)
         for buddy in buddies:
             # These IDs must survive card/preference/evidence publication, whose
             # identifier contract is deliberately narrower than native model IDs.
             schemas.required_string(buddy, "buddyId", max_length=128, pattern=schemas.IDENTIFIER_PATTERN)
-        self.assertEqual(buddies, catalog.CatalogView.from_payload(payload).proposed_buddies())
+        self.assertEqual(buddies, catalog.CatalogView(catalog.canonical_payload(payload)).proposed_buddies())
         self.assertEqual(buddies[2]["effort"], "default")
         self.assertEqual(buddies[2]["buddyId"], "claude:anthropic:claude-haiku-4-5-20251001:default")
 
@@ -280,11 +280,22 @@ class CatalogTests(unittest.TestCase):
         with self.assertRaisesRegex(BoardError, "Repeated catalog provider"):
             catalog.discovery_payload(payload)
 
-    def test_model_bound_refuses_an_incomplete_catalog(self):
+    def test_model_count_does_not_truncate_a_catalog(self):
         payload = copy.deepcopy(FIXTURE_CATALOG)
-        payload["providers"][0]["models"] = [{"id": f"model-{i}"} for i in range(catalog.MAX_MODELS + 1)]
-        with self.assertRaisesRegex(BoardError, "at most"):
-            catalog.discovery_payload(payload)
+        payload["providers"][0]["models"] = [{"id": f"model-{i}", "efforts": ["max"]} for i in range(201)]
+        self.assertEqual(len(catalog.discovery_payload(payload)["providers"][0]["models"]), 201)
+
+    def test_legal_efforts_and_input_capabilities_are_not_truncated(self):
+        payload = copy.deepcopy(FIXTURE_CATALOG)
+        efforts = [f"effort-{index}" for index in range(40)] + ["x" * 129]
+        modalities = [f"modality-{index}" for index in range(40)]
+        payload["providers"][0]["models"][0].update(efforts=efforts, inputModalities=modalities)
+        native = catalog.discovery_payload(payload)
+        self.assertEqual(native["providers"][0]["models"][0]["efforts"], efforts)
+        self.assertEqual(native["providers"][0]["models"][0]["inputModalities"], modalities)
+        proposed = catalog.CatalogView(catalog.canonical_payload(native)).proposed_buddies()
+        self.assertTrue(all(all(f"input:{item}" in row["capabilities"] for item in modalities)
+                            for row in proposed if row["model"] == native["providers"][0]["models"][0]["id"]))
 
     def test_harness_identity_is_required_without_dsh_default(self):
         payload = copy.deepcopy(FIXTURE_CATALOG)

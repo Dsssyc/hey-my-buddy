@@ -23,8 +23,6 @@ ZCODE_BUDDY = {
     "buddyId": ZCODE_ID, "harness": "zcode", "provider": "zai-api",
     "model": "GLM-5.3-Flash", "effort": "max", "enabled": True, "available": True,
 }
-DISABLED_DSH_BUDDY = {**DSH_HIGH_BUDDY, "buddyId": "dsh:deepseek-official:deepseek-v4-pro:high", "enabled": False}
-UNAVAILABLE_ZCODE_BUDDY = {**ZCODE_BUDDY, "buddyId": "zcode:zai-api:GLM-5.3-Flash:low", "effort": "low", "available": False}
 def derived_facts(buddies=(DSH_BUDDY, ZCODE_BUDDY), prefer=(), hard=None):
     return selection_policy.policy_facts(
         buddies=list(buddies), prefer_buddy_ids=list(prefer), hard_constraints=hard or {},
@@ -59,9 +57,9 @@ class PolicyFactsTests(unittest.TestCase):
         self.assertEqual(facts["userPreferredBuddyIds"], [DSH_ID])
         self.assertEqual(selection_policy.expected_policy_check(facts, DSH_ID)["userPreference"], "matched")
 
-    def test_hard_bounds_and_unavailable_buddies_do_not_create_preference_matches(self):
-        facts = derived_facts(buddies=(DSH_BUDDY, DISABLED_DSH_BUDDY, UNAVAILABLE_ZCODE_BUDDY),
-                              prefer=[DISABLED_DSH_BUDDY["buddyId"], UNAVAILABLE_ZCODE_BUDDY["buddyId"]],
+    def test_preferences_outside_frozen_candidates_do_not_match(self):
+        facts = derived_facts(buddies=(DSH_BUDDY,),
+                              prefer=[DSH_HIGH_ID, ZCODE_ID],
                               hard={"effort": "high"})
         self.assertEqual(facts["userPreferredBuddyIds"], [])
         self.assertEqual(facts["hardConstraints"], {"effort": "high"})

@@ -336,15 +336,12 @@ export type RoutingHealth = {
 };
 /**
  * Identity of the authenticated HTTP snapshot's browser session. The live
- * service issues exactly `{id, canWrite: true, reason: null}` for a valid
- * login; a missing, malformed or non-writable descriptor never grants write
- * access, and an expired login is reported by a 401 refusal instead. The
+ * service issues `{id}` for a valid login. A missing or malformed descriptor
+ * never grants write access; an expired login is reported by a 401 refusal. The
  * descriptor never carries a credential; the session CSRF token stays separate.
  */
 export type ConsoleSession = {
   id: string;
-  canWrite: boolean;
-  reason: null;
 };
 export type ConsoleAccess = {
   requireLogin: boolean;
@@ -362,7 +359,6 @@ export type Snapshot = {
   consoleAccess?: ConsoleAccess;
   reminderSettings?: ReminderSettings;
   configuration: Configuration | null;
-  configurationError?: { code: string; message: string } | null;
   buddies: Buddy[];
   /** Preferences for individual buddies. */
   preferences: Preference[];

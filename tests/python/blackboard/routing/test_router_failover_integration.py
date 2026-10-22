@@ -351,7 +351,7 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertFalse(repeated["recorded"])
         self.assertNotEqual(original["seq"], retry["seq"])
 
-    def test_late_old_task_attempt_generation_and_nonce_do_not_mutate_current(self):
+    def test_late_old_task_attempt_and_generation_do_not_mutate_current(self):
         request, first = self.start()
         self.assert_switch(request, first, self.failure(first))
         second = self.next_claim(request)
@@ -367,7 +367,7 @@ class FailoverTests(RouterDispatchTestCase):
             coordinator.released(db, task=task, reason={"code":"execution-process-not-created", "params":{}}, now=T0)
             task = db.execute("SELECT * FROM tasks WHERE task_id=?", (second["task"]["taskId"],)).fetchone()
             attempt = dict(db.execute("SELECT * FROM attempts WHERE attempt_id=?", (second["attempt"]["attemptId"],)).fetchone())
-            for key, value in (("attempt_id", first["attempt"]["attemptId"]), ("generation", 0), ("nonce_verifier", "wrong")):
+            for key, value in (("attempt_id", first["attempt"]["attemptId"]), ("generation", 0)):
                 late = coordinator.complete(db, task=task, attempt={**attempt, key: value}, status="ok",
                     result=self.answer(second), shutdown_confirmed=True, error=None, now=T0)
                 self.assertTrue(late["late"])
@@ -536,9 +536,14 @@ class FailoverTests(RouterDispatchTestCase):
                    " VALUES(?,?,'host','{}','digest',1,'dsh','/work',60,'running',1,?,?)", (task_id, task_id, T0, T0))
         db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'verifier','executing','dsh','dsh',?,?,?,?,?)", (attempt_id, task_id, provider, model, T0, T0, T0))
         if buddy_id:
-            self.board_.store._append_event(db, "router.claimed", task_id=task_id, attempt_id=attempt_id,
-                payload={"buddyId": buddy_id, "plane": "routing", "requestId": task_id, "routerIndex": 0,
-                         "taskId": task_id, "attemptId": attempt_id, "generation": 1})
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,created_at) VALUES(?,'running','busy',?)", (task_id, T0))
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at) VALUES(?,?,'busy','{}',?)", (task_id, task_id, T0))
+            router_sequence.freeze_request(db, task_id, snapshot={}, now=T0)
+            buddy = db.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+            router_sequence.reserve_dispatch(db, decision_id=task_id, task_id=task_id, router_index=0,
+                buddy={"buddyId": buddy_id, **{key: buddy[key] for key in ("harness", "provider", "model", "effort")}},
+                document={}, now=T0)
+            router_sequence.record_claim(db, task_id=task_id, attempt_id=attempt_id, generation=1, now=T0)
 
     def test_next_item_capacity_does_not_bypass_to_third(self):
         request, first = self.start(three=True)

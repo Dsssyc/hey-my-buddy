@@ -154,9 +154,12 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
             error = OSError('file could not be opened')
         with mock.patch('hey_my_buddy.buddy.harnesses.session_record.open_regular_fd', side_effect=error):
             stopped = self.finish_recording_failure(board, run, path, error)
-        page = self.get(browser, route)
-        self.assertEqual((page['events'], page['before'], page['after'], page['stopped']),
-                         ([], 0, 0, stopped))
+        if kind == 'linked-parent':
+            self.get(browser, route, status=500, code='SESSION_UNREADABLE')
+        else:
+            page = self.get(browser, route)
+            self.assertEqual((page['events'], page['before'], page['after'], page['stopped']),
+                             ([], 0, 0, stopped))
         self.assertEqual(set(stopped), {'code', 'params'})
         self.assertEqual(stopped['params']['category'], 'BoardError' if kind == 'linked-parent' else 'OSError')
         if kind == 'linked-parent':
@@ -165,8 +168,15 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
     def test_missing_record_with_failure_returns_an_empty_stopped_page(self):
         self.assert_failure_before_first_line('missing')
 
-    def test_linked_directory_with_failure_returns_an_empty_stopped_page(self):
+    def test_linked_directory_with_failure_is_unreadable(self):
         self.assert_failure_before_first_line('linked-parent')
+
+    def test_stopped_record_permission_failure_is_unreadable(self):
+        board, browser, route, path, _, _, run = self.fixture(record=False)
+        self.finish_recording_failure(board, run, path, OSError('file write unavailable'))
+        with mock.patch.object(private_dirs, 'open_regular_fd', side_effect=PermissionError('private path')):
+            error = self.get(browser, route, status=500, code='SESSION_UNREADABLE')
+        self.assertNotIn('private path', json.dumps(error))
 
     def test_snapshot_excludes_appends_after_the_size_was_fixed(self):
         _, browser, route, path, events, _, _ = self.fixture(count=1)

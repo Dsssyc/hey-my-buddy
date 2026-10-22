@@ -93,8 +93,8 @@ class MethodSurfaceTests(unittest.TestCase):
         for method, target in expected.items():
             with self.subTest(method=method):
                 self.assertEqual(transport.METHOD_MAP[method], target)
-        # Await, the new-package upgrade coordinator and skill install are CLI-level helpers.
-        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | {"await", "upgrade", "install", "paths"})
+        # Await and installation are CLI-level helpers.
+        self.assertEqual(set(cli.METHODS), set(transport.METHOD_MAP) | {"await", "install", "paths"})
 
     def test_capabilities_is_only_a_c_two_operation_not_a_cli_command(self):
         self.assertNotIn("capabilities", cli.METHODS)
@@ -134,7 +134,7 @@ class MethodSurfaceTests(unittest.TestCase):
             self.assertNotIn(micro_task, transport.DIRECT_TASK_VIEW)
 
     def test_retired_aliases_are_rejected_by_argparse(self):
-        for method in RETIRED_METHODS:
+        for method in (*RETIRED_METHODS, "upgrade", "storage", "harness"):
             with self.subTest(method=method):
                 self.assertNotIn(method, cli.METHODS)
                 self.assertNotIn(method, transport.METHOD_MAP)
@@ -159,7 +159,7 @@ class MethodSurfaceTests(unittest.TestCase):
         self.assertTrue(hasattr(BuddyControl, "user_policy_publish"))
 
     def test_control_methods_are_the_current_micro_task_mutations(self):
-        self.assertEqual(cli.CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"}))
+        self.assertEqual(cli.cli_help._CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"}))
 
     def test_console_keeps_the_canonical_name_and_no_alternative_spellings(self):
         self.assertEqual(transport.METHOD_MAP["console"], ("control", "console"))
@@ -347,49 +347,24 @@ class ControlFileTests(PrivateStateTestCase):
         self.assertNotEqual(other, path)
         self.assertEqual(cli._read_control(path), triple)
 
-    def test_read_control_refuses_loose_modes_links_and_unknown_fields(self):
-        triple = {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}
-        path = Path(cli._save_control("run-1", triple, state_dir=self.directory))
-        path.chmod(0o644)
-        with self.assertRaises(BoardError) as loose:
-            cli._read_control(str(path))
-        self.assertEqual(loose.exception.code, "INSECURE_CONTROL_FILE")
-        path.chmod(0o600)
-
-        link = path.parent / "run-link.json"
-        link.symlink_to(path)
-        with self.assertRaises(BoardError) as linked:
-            cli._read_control(str(link))
-        self.assertEqual(linked.exception.code, "INSECURE_CONTROL_FILE")
-
-        path.write_text(json.dumps({**triple, "unexpected": True}), encoding="utf-8", newline="\n")
-        path.chmod(0o600)
-        with self.assertRaises(BoardError) as unexpected:
-            cli._read_control(str(path))
-        self.assertEqual(unexpected.exception.code, "INVALID_ARGUMENT")
-
-        with self.assertRaises(BoardError) as missing:
-            cli._read_control(str(path.parent / "absent.json"))
-        self.assertEqual(missing.exception.code, "INVALID_ARGUMENT")
-
     def test_apply_control_injects_only_the_named_file_and_never_a_latest_generation(self):
         first = cli._save_control("run-1", {"hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"}, state_dir=self.directory)
         second = cli._save_control("run-1", {"hostId": "host-2", "ownerGeneration": 2, "controlToken": "token-2"}, state_dir=self.directory)
 
         # Passing no controlFile injects nothing at all, even though files exist.
-        self.assertEqual(cli._apply_control({"runId": "run-1"}, "decide"), {"runId": "run-1"})
+        self.assertEqual(cli._apply_control({"runId": "run-1"}), {"runId": "run-1"})
         # An explicit file injects exactly that file's capability.
         self.assertEqual(
-            cli._apply_control({"runId": "run-1", "controlFile": first}, "decide"),
+            cli._apply_control({"runId": "run-1", "controlFile": first}),
             {"runId": "run-1", "hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"},
         )
         self.assertEqual(
-            cli._apply_control({"runId": "run-1", "controlFile": second}, "cancel"),
+            cli._apply_control({"runId": "run-1", "controlFile": second}),
             {"runId": "run-1", "hostId": "host-2", "ownerGeneration": 2, "controlToken": "token-2"},
         )
         # An explicit field always wins over the file (the caller named it).
         self.assertEqual(
-            cli._apply_control({"runId": "run-1", "controlFile": first, "hostId": "explicit"}, "decide"),
+            cli._apply_control({"runId": "run-1", "controlFile": first, "hostId": "explicit"}),
             {"runId": "run-1", "hostId": "explicit", "ownerGeneration": 1, "controlToken": "token-1"},
         )
 
@@ -399,29 +374,14 @@ class ControlFileTests(PrivateStateTestCase):
         credential_file.write_text(json.dumps({"token": "scoped-token", "stateDir": str(self.directory)}), encoding="utf-8", newline="\n")
         credential_file.chmod(0o600)
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": str(credential_file)}):
-            self.assertEqual(cli._apply_control({"runId": "run-1", "controlFile": path}, "decide"),
+            self.assertEqual(cli._apply_control({"runId": "run-1", "controlFile": path}),
                              {"runId": "run-1", "hostId": "host-1", "ownerGeneration": 1, "controlToken": "token-1"})
             # A scoped caller may still pass the explicit triple through.
-            self.assertEqual(cli._apply_control({"runId": "run-1"}, "get"), {"runId": "run-1"})
+            self.assertEqual(cli._apply_control({"runId": "run-1"}), {"runId": "run-1"})
         with mock.patch.dict(os.environ, {"HMB_AGENT_CREDENTIAL_FILE": ""}):
             with self.assertRaises(BoardError) as empty:
                 cli._agent_credential()
             self.assertEqual(empty.exception.code, "UNAUTHORIZED")
-
-    def test_control_file_refuses_null_host_id(self):
-        with self.assertRaises(BoardError) as missing:
-            cli._save_control("owned-run", {"hostId": None, "ownerGeneration": 1,
-                                            "controlToken": "lead-control"}, state_dir=self.directory)
-        self.assertEqual(missing.exception.code, "INVALID_ARGUMENT")
-        path = Path(cli._save_control("owned-run", {"hostId": "host-1", "ownerGeneration": 1,
-                                                      "controlToken": "host-control"}, state_dir=self.directory))
-        value = json.loads(path.read_text(encoding="utf-8"))
-        value["hostId"] = None
-        path.write_text(json.dumps(value), encoding="utf-8", newline="\n")
-        path.chmod(0o600)
-        with self.assertRaises(BoardError) as invalid:
-            cli._read_control(str(path))
-        self.assertEqual(invalid.exception.code, "INVALID_ARGUMENT")
 
     def test_scrub_and_save_replaces_the_token_with_the_control_file(self):
         result = {

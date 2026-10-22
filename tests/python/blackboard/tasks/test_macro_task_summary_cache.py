@@ -613,7 +613,6 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.fixture.workspace.dirty = True
         self.fixture.workspace.manifests.clear()
         self.fixture.initial_facts["counts"]["tasks"] = -500
-        self.fixture.board.console.read_cache.calls["fictional-case-only"] = {"projections": 1}
         memo.for_store(self.store).clock = lambda: -500
         self.assertEqual(self.fixture_values, expected_fixture_values,
                          "E1: mutating a case must not contaminate the class seed")
@@ -638,7 +637,6 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 self.assertEqual(vars(restored.workspace), expected_workspace)
                 self.assertGreater(restored.initial_facts["counts"]["tasks"], 0)
                 self.assertEqual(memo.for_store(restored.board.store).entries, {})
-                self.assertEqual(restored.board.console.read_cache.calls, {})
                 self.assertEqual(restored.board.console.read_cache._entries, {})
                 self.assertEqual(restored.launch_guard.call_count, 0)
                 self.assertEqual(macro_tasks.macro_task_list(restored.board.store, {}), initial)

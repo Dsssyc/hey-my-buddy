@@ -17,10 +17,7 @@ that method actually validates (see :mod:`hey_my_buddy.cli.cli_help`).
 import argparse
 import io
 import json
-import os
-import re
 import secrets
-import stat
 import sys
 import time
 from pathlib import Path
@@ -41,7 +38,6 @@ METHODS = [
     "harness-set",
     "quota-redetect",
     "runtime",
-    "upgrade",
     "install",
     "paths",
     "storage-plan",
@@ -205,13 +201,7 @@ def _abandoned(abandoned, commands: list[str]) -> dict:
     }
 
 
-#: Bound on a control file this CLI is willing to read.
-MAX_CONTROL_FILE_BYTES = 64 * 1024
-#: Micro-task mutations whose Host control triple is required by the service.
-CONTROL_METHODS = frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"})
 _CONTROL_TRIPLE = ("hostId", "ownerGeneration", "controlToken")
-_CONTROL_FILE_FIELDS = frozenset({*_CONTROL_TRIPLE, "runId", "savedAt"})
-_RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 _NO_CREDENTIAL_DOCUMENT = object()
@@ -226,10 +216,6 @@ def _agent_credential(document=_NO_CREDENTIAL_DOCUMENT) -> str | None:
 
 def _control_path(run_id: str, generation: int, state_dir: Path) -> Path:
     """The private control path for one run and owner generation, with its 0700 directory."""
-    if not isinstance(run_id, str) or not _RUN_ID_PATTERN.match(run_id):
-        raise BoardError("INVALID_ARGUMENT", "runId must be a plain identifier to locate its control file")
-    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
-        raise BoardError("INVALID_ARGUMENT", "ownerGeneration must be a positive integer")
     directory = state_dir / "controls"
     from ..private_dirs import ensure_private_dir
     ensure_private_dir(directory)
@@ -238,22 +224,15 @@ def _control_path(run_id: str, generation: int, state_dir: Path) -> Path:
 
 def _save_control(run_id: str, control: dict, state_dir: Path) -> str:
     """Atomically save one Host control capability to its own 0600 file."""
-    control = control if isinstance(control, dict) else {}
-    host_id = control.get("hostId")
-    generation = control.get("ownerGeneration")
-    token = control.get("controlToken")
-    if not isinstance(host_id, str) or not host_id.strip():
-        raise BoardError("INVALID_ARGUMENT", "control.hostId must be a nonempty string")
-    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
-        raise BoardError("INVALID_ARGUMENT", "control.ownerGeneration must be a positive integer")
-    if not isinstance(token, str) or not token.strip():
-        raise BoardError("INVALID_ARGUMENT", "control.controlToken must be a nonempty string")
+    host_id = control["hostId"]
+    generation = control["ownerGeneration"]
+    token = control["controlToken"]
     path = _control_path(run_id, generation, state_dir)
     payload = json.dumps(
         {
-            "hostId": host_id.strip(),
+            "hostId": host_id,
             "ownerGeneration": generation,
-            "controlToken": token.strip(),
+            "controlToken": token,
             "runId": run_id,
             "savedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         },
@@ -264,65 +243,28 @@ def _save_control(run_id: str, control: dict, state_dir: Path) -> str:
 
 
 def _read_control(path_value: str) -> dict:
-    """Read one 0600 control file owned by this user and return its Host control triple."""
+    """Read the Host's named control file; the service validates its control triple."""
     if not isinstance(path_value, str) or not path_value.strip():
         raise BoardError("INVALID_ARGUMENT", "controlFile must be a nonempty path string")
     path = Path(path_value).expanduser()
-    from ..private_dirs import open_regular_fd
-    try:
-        fd = open_regular_fd(path, os.O_RDONLY)
-    except FileNotFoundError as exc:
-        raise BoardError("INVALID_ARGUMENT", "controlFile does not exist") from exc
-    except (OSError, BoardError) as exc:
-        raise BoardError("INSECURE_CONTROL_FILE", "The control file could not be opened safely") from exc
-    try:
-        if os.name != 'nt':
-            info = os.fstat(fd)
-            if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o600:
-                raise BoardError('INSECURE_CONTROL_FILE', 'The control file must be owned by the current user with mode 0600')
-        raw = b""
-        while len(raw) <= MAX_CONTROL_FILE_BYTES:
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                break
-            raw += chunk
-    except OSError as exc:
-        raise BoardError("INSECURE_CONTROL_FILE", "The control file could not be read") from exc
-    finally:
-        os.close(fd)
-    if len(raw) > MAX_CONTROL_FILE_BYTES:
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_PARAMS_BYTES + 1)
+    if len(raw) > MAX_PARAMS_BYTES:
         raise BoardError("INVALID_ARGUMENT", "The control file is too large")
     try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
         raise BoardError("INVALID_ARGUMENT", "The control file is not valid JSON") from exc
-    if not isinstance(value, dict):
-        raise BoardError("INVALID_ARGUMENT", "The control file must contain a JSON object")
-    unknown = sorted(set(value) - _CONTROL_FILE_FIELDS)
-    if unknown:
-        raise BoardError("INVALID_ARGUMENT", f"Unknown control file field: {unknown[0]}")
-    host_id = value.get("hostId")
-    generation = value.get("ownerGeneration")
-    token = value.get("controlToken")
-    if not isinstance(host_id, str) or not host_id.strip():
-        raise BoardError("INVALID_ARGUMENT", "controlFile hostId must be a nonempty string")
-    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 1:
-        raise BoardError("INVALID_ARGUMENT", "controlFile ownerGeneration must be a positive integer")
-    if not isinstance(token, str) or not token.strip():
-        raise BoardError("INVALID_ARGUMENT", "controlFile controlToken must be a nonempty string")
-    return {"hostId": host_id.strip(),
-            "ownerGeneration": generation, "controlToken": token.strip()}
+    return {field: value[field] for field in _CONTROL_TRIPLE}
 
 
-def _apply_control(params: object, method: str) -> dict:
+def _apply_control(params: dict) -> dict:
     """Inject the Host control triple from an explicit controlFile or explicit fields.
 
     There is deliberately no implicit "latest generation" lookup: adopting another
     Host's newest saved capability from a shared cache is never authority. A caller
     either presents the full triple, or names the exact controlFile it was given.
     """
-    if not isinstance(params, dict):
-        raise BoardError("INVALID_ARGUMENT", "params must be a JSON object")
     prepared = dict(params)
     path_value = prepared.pop("controlFile", None)
     if path_value is None:
@@ -352,36 +294,21 @@ def _submission_token(request_id: object, params: dict, state_dir: Path) -> str:
     try:
         publish_bytes(path, payload, immutable=True)
     except FileExistsError:
-        return _read_submission_token(path, request_id)
-    except OSError as exc:
-        raise BoardError("INVALID_ARGUMENT", f"The submission token could not be published: {exc}") from exc
+        return _read_submission_token(path)
     return token
 
 
-def _read_submission_token(path: Path, request_id: str) -> str:
-    try:
-        from ..install.launcher import read_private
-        saved = read_private(path)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        raise BoardError(
-            "INVALID_ARGUMENT", "The saved submission token is unreadable; refusing to overwrite it"
-        ) from exc
-    if not isinstance(saved, dict) or saved.get("requestId") != request_id:
-        raise BoardError("CONFLICT", "The saved submission token belongs to a different request")
-    token = saved.get("submissionToken")
-    if not isinstance(token, str) or not token:
-        raise BoardError("INVALID_ARGUMENT", "The saved submission token is malformed; refusing to overwrite it")
-    return token
+def _read_submission_token(path: Path) -> str:
+    from ..install.launcher import read_private
+    return read_private(path)["submissionToken"]
 
 
 def _scrub_and_save(result: dict, state_dir: Path) -> None:
     """Save a returned Host control capability privately and replace its token with the file path."""
     control = result.get("control")
-    if not isinstance(control, dict) or not isinstance(control.get("controlToken"), str) or not control["controlToken"]:
+    if control is None or not control.get("controlToken"):
         return
-    run_id = result.get("runId")
-    if not isinstance(run_id, str) or not run_id:
-        raise BoardError("INVALID_ARGUMENT", "A control result must carry its runId before its token can be saved")
+    run_id = result["runId"]
     path = _save_control(run_id, control, state_dir)
     result["control"] = {
         "hostId": control.get("hostId"),
@@ -401,12 +328,8 @@ def _read_params_source(source: str) -> str:
     """Read one parameter document as UTF-8 bytes, bounded and never through a shell."""
     if source == "-":
         label = "standard input"
-        stream = getattr(sys.stdin, "buffer", None)
         try:
-            if stream is not None:
-                raw = stream.read(MAX_PARAMS_BYTES + 1)
-            else:  # a caller that replaced sys.stdin with a text stream
-                raw = sys.stdin.read(MAX_PARAMS_BYTES + 1).encode("utf-8")
+            raw = sys.stdin.buffer.read(MAX_PARAMS_BYTES + 1)
         except OSError as exc:
             raise BoardError("INVALID_ARGUMENT", f"The parameters on {label} could not be read: {exc}") from exc
     else:
@@ -482,11 +405,6 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["help"]:
         return _help_command(argv[1:])
-    # The two spelling aliases are rewritten before the method name is checked.
-    if len(argv) >= 2 and argv[0] == "storage" and argv[1] in ("plan", "apply"):
-        argv[:2] = ["storage-" + argv[1]]
-    if len(argv) == 4 and argv[:2] == ['harness', 'set']:
-        argv = ['harness-set', json.dumps({'harness': argv[2], 'path': None if argv[3] == '--auto' else argv[3]})]
     if argv and not argv[0].startswith("-") and argv[0] not in METHODS:
         # An unknown method is always a structured CLI error with its closest
         # candidates; it is never forwarded to a service with a guessed operation.
@@ -516,10 +434,7 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
         # `output` is CLI-local: it selects the printed projection and never reaches RPC.
         # Console validates its own local options, so it keeps its complete response.
         mode = cli_views.OUTPUT_FULL if args.method == "console" else cli_views.pop_output_mode(params)
-        if args.method == "upgrade":
-            from ..install.skill_install import install
-            result = install(params)
-        elif args.method == "install":
+        if args.method == "install":
             from ..install.skill_install import install
             result = install(params)
         elif args.method == "paths":
@@ -545,69 +460,19 @@ def main(argv: list[str] | None = None, *, credential_document=_NO_CREDENTIAL_DO
                 return 1
         else:
             if credential is not None:
-                if not isinstance(params, dict):
-                    raise BoardError("INVALID_ARGUMENT", "params must be a JSON object")
                 params["credential"] = credential
-            prepared = _apply_control(params, args.method)
+            prepared = _apply_control(params)
             if args.method == "submit" and not prepared.get("submissionToken"):
                 prepared["submissionToken"] = _submission_token(prepared.get("requestId"), prepared, state_dir)
             result = _call_service(args.method, prepared, state_dir)
             if isinstance(result, dict):
                 _scrub_and_save(result, state_dir)
-        print(_dumps(_render_output(args.method, result, mode)))
+        print(_dumps(cli_views.render(args.method, result, mode)))
         return 1 if isinstance(result, dict) and result.get("error") else 0
     except Exception as error:  # noqa: BLE001 - the CLI converts every failure into one envelope
         payload = error.payload() if isinstance(error, BoardError) else {"code": "SERVICE_ERROR", "message": str(error)}
         print(_dumps({"error": payload}))
         return 1
-
-
-def _render_output(method: str, response, mode: str):
-    """Keep the new routing DTO in brief output without widening other views."""
-    rendered = cli_views.render(method, response, mode)
-    if mode != cli_views.OUTPUT_BRIEF or not isinstance(response, dict) or not isinstance(rendered, dict):
-        return rendered
-    routing = response.get("routing")
-    projected = rendered.get("routing")
-    if isinstance(routing, dict) and isinstance(projected, dict):
-        # cli_views uses a strict key list. Preserve the frozen list alongside
-        # its actual current dispatch identity, including explicit absent actors.
-        fields = (
-            "routerBuddyIds", "routerIdentities", "routerBuddyId", "routerBuddy", "routerIndex",
-            "budget", "routingBudget", "routerRetryIntervalSeconds", "decisionModel", "routingBoundary",
-        )
-        rendered = {**rendered, "routing": {**projected, **{key: routing[key] for key in fields if key in routing}}}
-    pending = response.get("pendingRequests")
-    projected_pending = rendered.get("pendingRequests")
-    if isinstance(pending, list) and isinstance(projected_pending, list):
-        boundaries = {item.get("requestId"): item["routingBoundary"] for item in pending
-                      if isinstance(item, dict) and isinstance(item.get("routingBoundary"), dict)}
-        if boundaries:
-            rendered = {**rendered, "pendingRequests": [
-                {**item, "routingBoundary": boundaries[item.get("requestId")]} if item.get("requestId") in boundaries else item
-                for item in projected_pending
-            ]}
-    if method == "await":
-        workflow = response.get("workflow")
-        boundary = workflow.get("routingBoundary") if isinstance(workflow, dict) else None
-        if isinstance(boundary, dict):
-            rendered = {**rendered, "routingBoundary": boundary}
-            if isinstance(rendered.get("request"), dict):
-                rendered["request"] = {**rendered["request"], "routingBoundary": boundary}
-            # Print the program's complete tuples and blocked metadata instead
-            # of placeholder buddies supplied by the older wait view.
-            commands = boundary.get("commands") or {}
-            next_commands = []
-            continuation = commands.get("continue") or {}
-            for choice in continuation.get("choices", []):
-                if not choice.get("blocked"):
-                    next_commands.append({"method": choice["method"], "params": choice["params"]})
-            reroute = commands.get("reroute") or {}
-            if not reroute.get("blocked") and isinstance(reroute.get("params"), dict):
-                next_commands.append({"method": reroute["method"], "params": reroute["params"],
-                                      "notBefore": reroute.get("notBefore")})
-            rendered["nextCommands"] = next_commands
-    return rendered
 
 
 def _dumps(value) -> str:

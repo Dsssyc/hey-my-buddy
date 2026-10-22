@@ -143,10 +143,13 @@ class CheckHarnessTests(unittest.TestCase):
     def test_the_check_harness_sanitizes_inherited_runtime_variables(self):
         from hey_my_buddy.cli import checks
 
-        inherited = {key: "/production" for key in checks.SANITIZED_VARIABLES}
+        inherited = {key: "/production" for key in (*checks.SANITIZED_VARIABLES,
+            "HMB_CHECKS_TMPDIR", "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+            "HMB_AGENT_CREDENTIAL_FILE", "HMB_AGENT_CREDENTIAL_FD",
+            "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE")}
         with patch.dict(os.environ, inherited, clear=False):
             env = checks.test_environment(ROOT)
-        self.assertEqual(sorted(key for key in checks.SANITIZED_VARIABLES if key in env), [])
+        self.assertEqual(sorted(key for key in inherited if key in env), [])
         self.assertEqual(
             env["PYTHONPATH"].split(os.pathsep)[:2],
             [str(ROOT / "src"), str(ROOT / "tests" / "python")],
