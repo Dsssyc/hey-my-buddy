@@ -417,9 +417,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             sealed = store.workflow._latest_handoff(connection, run, manifest) if not reasons else None
             workspace_inputs.append((run['run_id'], run['revision'], manifest, retained, reasons, sealed))
     home_root = state / 'harnesses/zcode'
-    if private_dirs.linked(home_root):
-        add('zcode', home_root, ['linked-path'])
-    elif home_root.exists():
+    if home_root.exists():
         for path in sorted(home_root.iterdir()):
             if path.name == 'micro-tasks':
                 continue
@@ -429,13 +427,9 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     if harnesses.exists():
         for adapter in sorted(private_dirs.ADAPTERS):
             adapter_root = harnesses / adapter
-            if private_dirs.linked(adapter_root):
-                continue
             if not adapter_root.exists():
                 continue
             micro_tasks = adapter_root / 'micro-tasks'
-            if private_dirs.linked(micro_tasks):
-                continue
             if micro_tasks.exists():
                 for path in sorted(micro_tasks.iterdir()):
                     run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
@@ -560,7 +554,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 continue
             ready = path / 'READY.json'
             if private_dirs.linked(ready):
-                add('runtimes', path, ['linked-path'])
+                add('runtimes', path, ['runtime-format-unsupported'])
                 continue
             try:
                 ready_stat = ready.lstat()
@@ -607,20 +601,14 @@ def inspect(store, *, git_proof: bool = True) -> dict:
 
 def _read_storage_json(path: Path, *, missing_ok: bool = False) -> dict | None:
     try:
-        if os.name == 'nt':
-            from ... import windows_files
-            fd = windows_files.open_regular_fd(path, os.O_RDONLY)
-        else:
-            fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = private_dirs.open_regular_fd(path, os.O_RDONLY, check_parents=False)
     except FileNotFoundError:
         if missing_ok:
             return None
         raise
-    except (BoardError, OSError) as error:
+    except BoardError as error:
         raise BoardError('STORAGE_UNSAFE', 'Storage record is unsafe', path=str(path)) from error
     with os.fdopen(fd, 'r', encoding='utf-8') as stream:
-        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-            raise BoardError('STORAGE_UNSAFE', 'Storage record is not a regular file', path=str(path))
         try:
             value = json.load(stream)
         except ValueError as error:
@@ -681,12 +669,8 @@ def locked(store):
         raise BoardError('STORAGE_UNSAFE', 'Storage plan root must be a directory', path=str(path))
     lock_path = path / '.lock'
     try:
-        if os.name == 'nt':
-            from ... import windows_files
-            fd = windows_files.open_regular_fd(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-        else:
-            fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-    except (BoardError, OSError) as error:
+        fd = private_dirs.open_regular_fd(lock_path, os.O_CREAT | os.O_RDWR, check_parents=False)
+    except BoardError as error:
         raise BoardError('STORAGE_UNSAFE', 'Storage lock is unsafe', path=str(lock_path)) from error
     try:
         locking.lock(fd, blocking=False)

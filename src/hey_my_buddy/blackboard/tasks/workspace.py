@@ -10,7 +10,7 @@ sandbox or a claim that every physical file remains unchanged.
 from contextlib import ExitStack, contextmanager
 from ...paths import is_absolute_path
 from ... import locking
-from ... import private_files
+from ... import private_dirs, private_files
 from collections import Counter
 import hashlib
 import json
@@ -515,10 +515,9 @@ def _diff(root, before, after):
 
 def _read(path, *, repository=None):
     try:
-        if _WINDOWS:
-            return (windows_paths.read(path, repository=repository) if repository is not None
-                    else private_files.read_bytes(path))
-        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+        if _WINDOWS and repository is not None:
+            return windows_paths.read(path, repository=repository)
+        with os.fdopen(private_dirs.open_regular_fd(path, os.O_RDONLY, check_parents=False), "rb") as stream:
             return stream.read()
     except FileNotFoundError:
         return None
@@ -547,11 +546,7 @@ def _write_once(path, data, *, repository=None):
 @contextmanager
 def _lock(directory, *, create=True):
     flags = os.O_RDWR | (os.O_CREAT if create else 0)
-    if _WINDOWS:
-        from ...windows_files import open_regular_fd
-        descriptor = open_regular_fd(directory / ".lock", flags)
-    else:
-        descriptor = os.open(directory / ".lock", flags | os.O_NOFOLLOW, 0o600)
+    descriptor = private_dirs.open_regular_fd(directory / ".lock", flags, check_parents=False)
     try:
         try:
             locking.lock(descriptor, blocking=False)

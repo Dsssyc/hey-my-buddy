@@ -349,7 +349,7 @@ class StorageTests(BoardTestCase):
         self.assertEqual(len(result['removed']), 0)
         self.assertEqual(len(result['skipped']), 11)
 
-    def test_linked_native_root_does_not_read_or_reclaim_external_home(self):
+    def test_linked_native_ancestor_is_listed_without_claiming_ownership(self):
         board=self.board()
         outside=self.directory/'outside-native';outside.mkdir();sentinel=outside/'sessions.sqlite';sentinel.write_bytes(b'outside')
         (board.directory/'harnesses').mkdir()
@@ -359,7 +359,8 @@ class StorageTests(BoardTestCase):
             rows=[r for r in planned['candidates'] if r['category']=='zcode']
             self.assertEqual(len(rows),1)
             self.assertFalse(rows[0]['eligible'])
-            self.assertEqual(rows[0]['bytes'],0)
+            self.assertEqual(rows[0]['bytes'],len(b'outside'))
+            self.assertNotIn('linked-path', rows[0]['reasons'])
             board.call('storage_apply',{'planId':planned['planId'],'commandId':'linked-no-delete','confirm':True})
         self.assertEqual(sentinel.read_bytes(),b'outside')
 
@@ -604,7 +605,11 @@ class StorageTests(BoardTestCase):
         ready.assert_not_called()
         rows = [row for row in planned['candidates'] if row['category'] == 'runtimes']
         self.assertEqual({Path(row['path']).name for row in rows}, {'linked-runtime', 'local-runtime'})
-        self.assertTrue(all('linked-path' in row['reasons'] and not row['eligible'] for row in rows))
+        reasons = {Path(row['path']).name: row['reasons'] for row in rows}
+        self.assertIn('linked-path', reasons['linked-runtime'])
+        self.assertIn('runtime-format-unsupported', reasons['local-runtime'])
+        self.assertNotIn('linked-path', reasons['local-runtime'])
+        self.assertTrue(all(not row['eligible'] for row in rows))
 
     def test_linked_runtime_ancestor_does_not_block_real_runtime_leaf(self):
         board = self.board()
@@ -653,7 +658,7 @@ class StorageTests(BoardTestCase):
                 ready.assert_not_called()
                 row = next(row for row in planned['candidates'] if Path(row['path']).name == candidate.name)
                 self.assertFalse(row['eligible'])
-                self.assertIn('linked-path', row['reasons'])
+                self.assertIn('linked-path' if marked == candidate else 'runtime-format-unsupported', row['reasons'])
         self.assertEqual(ready_path.read_text(encoding="utf-8"), 'retained READY')
 
     def test_unaccepted_unknown_shutdown_reports_both_protections(self):
