@@ -8,7 +8,7 @@ ADR-031 第 13 条已经定为开发流程约束：开发使用真实数据只�
 
 ## 1. 已有证据与本批的起点
 
-阶段 A 的两份实验记录均使用基线 `d5c908aaaed3cfd66c20822222570a1e267ff9f2`。进程实验的基础解释器为 CPython 3.12.13；私有 venv 的 `Scripts\python.exe` 转发器另起真正解释器，曾出现 `Popen.pid=860`、脚本 PID 为 28840，脚本查到当前 Job flags 为 `0x3000`，与探针显式设置不同；这一轮本应被禁止的显式 breakaway 请求还返回了成功。额外 Job 的创建者没有追踪，也未核清该成功请求的成员归属。随后直接用基础解释器复验，Popen PID 与脚本 PID 相同，禁止脱离的请求返回错误 5。系统结论以基础解释器复验为准，真实 venv 链的脱离能力仍须定向测量，不能假定已被根 Job 围住。
+阶段 A 的两份实验记录均使用基线 `d5c908aaaed3cfd66c20822222570a1e267ff9f2`。进程实验的基础解释器为 CPython 3.12.13；私有 venv 的 `Scripts\python.exe` 转发器另起真正解释器，曾出现 `Popen.pid=860`、脚本 PID 为 28840，脚本查到当前 Job flags 为 `0x3000`，与探针显式设置不同；这一轮本应被禁止的显式 breakaway 请求还返回了成功。额外 Job 的创建者没有追踪，也未核清该成功请求的成员归属。随后直接用基础解释器复验，Popen PID 与脚本 PID 相同，禁止脱离的请求返回错误 5。系统结论以基础解释器复验为准，真实 venv 链的脱离能力仍须定向测量，不能假定已被根 Job 围住。补充实验（[a3 记录](windows-experiments-a3.md)，基线 `f7345410`）已经量过：经 venv 转发器，显式请求返回成功，但创建出的进程仍在根 Job 里，32 次创建没有一个离开根，结论见第 4 节。
 
 无 kill-on-close 的命名 Job 关闭最后句柄后，原成员仍以原创建 FILETIME 存活，`OpenJobObjectW` 返回错误 2；同名再建得到一个空 Job，原成员不在其中。同名对象尚有句柄时，`CreateJobObjectW` 返回有效句柄并报告 183。根/native Job 嵌套、native 最后句柄关闭使成员退出、禁止脱离时显式 breakaway 返回错误 5、四条 shell/uv/Node 孙进程路径的根 Job 成员关系都有本机记录。它们没有验证本设计的新根句柄持有次序。
 
@@ -32,7 +32,7 @@ Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试
 
 这一步在进程启动时做一次，不在各个创建入口逐个改属主；补项 1 验证提权与普通令牌交替使用同一状态目录，包括 WAL/SHM 重建。如果系统拒绝设置默认属主，就在提权启动的边界明确拒绝并报告原因，由普通令牌运行；不能以扩充白名单、改既有 ACL 或每次打开时修权限替代。此政策尚未实测，不改变唯一 ACL 接受规则，也不承诺隔离管理员或同一用户的任意 shell。
 
-固定祖先沿用 `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`，父句柄不允许删除共享，核对真实类型、重解析属性和最终名称；叶子使用同一句柄校验普通文件及 ACL。新文件独占创建，CRT fd 使用二进制和不可继承标志，句柄所有权只转移一次。事实读者允许删除共享，能否换代另受第 3 节 API 选择约束。普通源检出复用路径政策，不套私有 ACL；POSIX 继续使用 dir_fd、O_NOFOLLOW、uid/mode。
+固定祖先沿用 `FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS`，以 `GENERIC_READ` 打开且不允许删除共享，核对真实类型、重解析属性和最终名称。只请求 `FILE_READ_ATTRIBUTES` 的句柄不参与共享检查：补充实验里这样固定的祖先照样被改名并换成目录联接，下一层打开已落到私有根外，靠最终名称核对才拒绝；以 `GENERIC_READ` 固定后，改名以错误 32 失败（[a3 记录](windows-experiments-a3.md)）。叶子使用同一句柄校验普通文件及 ACL。新文件独占创建，CRT fd 使用二进制和不可继承标志，句柄所有权只转移一次。事实读者允许删除共享，能否换代另受第 3 节 API 选择约束。普通源检出复用路径政策，不套私有 ACL；POSIX 继续使用 dir_fd、O_NOFOLLOW、uid/mode。
 
 接入范围包括 `cli/main.py` 的 Host 控制能力及提交令牌、`install/launcher.py` 的 agent credential 文件与继承 fd、read_private、transport 的 token/endpoint、execution 的 startup/live/receipt、turn_io 私有输入输出、console session、fast Router 空 cwd、备份及安装私有文件。继承 fd 按原生句柄校验，不按路径重开。空 cwd 仍须真实、私有且为空，不要求磁盘根和普通用户目录全都私有。Windows 安全依赖按需加载，launcher 首次 bootstrap、active 指针及源替换后的稳定运行时入口都要验证；导入失败直接报告，不能跳过安全校验。
 
@@ -64,7 +64,7 @@ Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInf
 
 执行根定义为实际运行 `hey_my_buddy.buddy.runtime.execution`、承载 ExecutionLive 的 Python 进程。当前启动器 `install/launcher.py:_runtime_python`、稳定运行时 `install/runtime.py:runtime_python` 和升级/回滚都指向 `venv\Scripts\python.exe`；transport 使用选定运行时解释器，执行再用 `sys.executable -m ...execution`。实验环境中这条链经过 venv 转发器，基础解释器才运行 Python。服务与执行的真实 PID 由自身报告并取内核创建 FILETIME；Popen PID 是创建的启动进程，只用于回收该句柄，不能冒充真实服务或执行身份。
 
-启动链先保留 venv 入口及其 site/.pth、依赖和固定运行时语义，但必须先量真实链的脱离能力。服务 suspended 创建启动进程，分配到根 Job 再恢复；真正解释器及其孙进程各自尝试带显式 CREATE_BREAKAWAY_FROM_JOB 和不带该标志的创建，对每个成功创建的后代用 IsProcessInJob(root) 核对实际归属。若显式请求被拒绝且未请求脱离的链都留在根内，保留 venv；若显式请求能离开根，或转发器使正常后代脱离，就改启动链，例如直接用基础解释器加载 venv 的 site 配置和包路径，使真实执行从 suspended 创建起就在根中，再复验同一矩阵。不再叠运行时检查补救；新链还须验证 sys.prefix、site/.pth、pywin32、资源路径及源替换后的固定运行时。额外 Job 的 flags 不是根成员关系的替代证据。
+启动链保留 venv 入口及其 site/.pth、依赖和固定运行时语义。服务 suspended 创建启动进程，分配到根 Job 再恢复。补充实验（[a3 记录](windows-experiments-a3.md)，CPython 3.12.13）量了真实链：经 venv 转发器，真正解释器及其孙进程带显式 CREATE_BREAKAWAY_FROM_JOB 的创建都返回成功，但创建出的转发器和真正解释器仍在根 Job 里，不带标志的也都在根里；基础解释器直接在根里时，显式请求以错误 5 失败。32 次创建没有一个离开根。所以显式请求返回成功不说明离开了根，后代归属只以 IsProcessInJob(root) 为准，额外 Job 的 flags 不是根成员关系的替代证据。
 
 根 Job 由本项目创建，使用随机 `Local\HeyMyBuddy-<uuid>` 名字。CreateJobObjectW 返回后立即检查 ERROR_ALREADY_EXISTS=183；已存在就关闭返回句柄并失败，绝不先设置 flags 或接管它。在任何进程加入之前设置 KILL_ON_JOB_CLOSE，禁止 breakaway 与 silent breakaway；实际启动链须通过上段实验，确保自然派生的全部成员都不能脱离。Job 使用令牌默认 DACL，不增显式描述符。启动前 intent/startup 绑定 task/attempt/generation、Windows sessionId 和预分配 Job 名，不记录 Windows BootIdentifier，也不增加状态目录身份。
 
@@ -122,13 +122,13 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 2. 桌面启动方和窗口：开发者分别从 PowerShell、VS Code 终端及已有 Host CLI 工具 shell 启动私有服务替身，独立观察方登记真实 PID/FILETIME、会话和 Job，再关闭启动窗口/shell。服务使用 detached/new-group/breakaway；在可确认不属于 Job 的启动方核实额外 breakaway 是否被忽略，并测允许/禁止脱离的外层，决定是否可以一律加标志。执行和 native 保留 NO_WINDOW/new-group，观察其窗口、HWND、conhost，以及它们经 cmd/pwsh/git 起控制台孙进程的窗口和成员；不安排执行/native 的 detached 对照。服务及后代独立存活且窗口行为满足要求才验收相应入口，拒绝脱离的外层明确不支持。实际 Host shell 若不能在无模型调用条件下取得，该入口继续未验证。
 
-3. 根 Job 与真实 venv 链：以 kill-on-close 且禁止脱离的全新根、最终启动 flags、稳定 venv 启动执行替身，记录 Popen PID、真实解释器 PID/FILETIME、sessionId 和显式根成员关系；让真实解释器及孙进程分别尝试显式 breakaway 和不带标志的创建，逐个用 IsProcessInJob(root) 核对。若能脱离，改基础解释器加 venv site 配置的启动链，复验完整矩阵和固定运行时，不加成员监视兜底。暂停在创建/入 Job、执行打开句柄、marker/身份确认及原生启动前后，验证服务只在确认前持句柄，确认后关闭及服务重启不杀执行。另登记全部实际成员的完整身份，含转发器、解释器、孙进程、嵌套 native 及 conhost；观察者不持原 Job 句柄，让执行正常退出或被强杀使最后句柄关闭，立即按名打开应返回错误 2，全部登记成员须在有界时间内缺席。还要模拟服务在停止观察中崩溃、服务与执行先后崩溃，恢复用错误 2 加根身份缺席结算；marker 前的意图仍 unknown。重名创建必须失败且原 flags 不变。若实验不支持创建不变量或最后句柄语义，D 不验收，保存反例交 Host 重新定机制，不安装错误停止判断。
+3. 根 Job 与真实 venv 链：已由补充实验完成（[a3 记录](windows-experiments-a3.md)）。后代没有离开根，保留 venv 入口（第 4 节）。执行持根句柄、服务确认后关闭创建句柄的次序成立，另一进程能按原名接回且成员身份不变；执行正常退出或被强杀后，按名打开在 0.5 ms 内返回错误 2，全部登记成员在 9.1 ms 内缺席；服务持临时句柄时 TerminateJobObject 后 ActiveProcesses=0。各暂停点上的句柄次序、服务重启与同契约安装不杀执行、停止观察中崩溃与先后崩溃后的结算、marker 前的意图仍 unknown，以及重名创建失败而原 flags 不变，由阶段 D 在产品上验收，不再单列实验；产品上不成立时 D 不验收，保存反例交 Host 重新定机制。
 
-4. conhost 与版本发现：桌面使用 NO_WINDOW/new-group，必要时以 new-console 作可见窗口参照，运行协议停止/强停替身并记录根/native 两层完整成员；按相同最终启动方式复跑 Codex CLI 0.163.0 的产品发现与直接 Node 加 JS 版本命令，保留失败时成员、创建时间和主进程退出时刻。实际 CLI 版本变化须重新注明，不能沿用旧结论。不做执行/native 的 detached 对照；验证协议先行、native 非空再终止、全空才回执、执行退出后根停止证据成立。若产品失败时残留 conhost 才可归因于同一机制；否则追实际失败原因，不过滤计数。DSH shim 实现及其版本发现由另一任务交证据。
+4. conhost 与版本发现：桌面使用 NO_WINDOW/new-group，必要时以 new-console 作可见窗口参照，运行协议停止/强停替身并记录根/native 两层完整成员；按相同最终启动方式复跑 Codex CLI 0.163.0 的产品发现与直接 Node 加 JS 版本命令，保留失败时成员、创建时间和主进程退出时刻。实际 CLI 版本变化须重新注明，不能沿用旧结论。不做执行/native 的 detached 对照；验证协议先行、native 非空再终止、全空才回执、执行退出后根停止证据成立。若产品失败时残留 conhost 才可归因于同一机制；否则追实际失败原因，不过滤计数。DSH shim 实现及其版本发现由另一任务交证据。经 SSH 的部分已完成（[a3 记录](windows-experiments-a3.md)）：NO_WINDOW 下根与 native 两层都计入 conhost；协议停止后 native 有一次还剩 pwsh，终止 native Job 后全空。Codex CLI 0.163.0 与 DSH CLI 的产品发现已在 shim 的独立复跑中得到 ready。桌面上的可见窗口部分仍待做。
 
 5. Defender 与文件换代：开发者打开实时扫描，首尾保存 Get-MpComputerStatus 均为 RealTimeProtectionEnabled=True，保持普通令牌和锁定环境。在独立根先对 SetFileInformationByHandle 的 FileRenameInfoEx 加 POSIX_SEMANTICS/REPLACE_IF_EXISTS 做第 3 节全矩阵、强杀窗口及实际恢复器；失败才对 ReplaceFileW 做同矩阵，另核对其首次发布分支和元数据合并，最后只选一个机制。选定机制再至少 1000 次无受控读者、无重试连续发布，分开统计人为占用和热路径异常、errno/winerror及迭代号。异常时保留实际文件和摘要，释放已知读者后记录继续结果；无偶发不加重试，有证据才定唯一边界的一次有界重试，未满足完整性/ACL 就不采用。开发者只需安排设置与桌面，探针由后续实施任务执行并保存原始输出。
 
-6. 私有边界与会话补项：DACL 缺失、对象/条件/未知 ACE 用合成 ACE 列表及查询结果写单元测试，不在测试机构造；原生补测 junction/叶子重解析竞态和新增 ACL bootstrap 的首次、active 指针及源替换入口，记录接受/拒绝与句柄关闭。若当前桌面与 SSH 的 ProcessIdToSessionId 确实不同，用一边持有的 Local Job 在另一边尝试打开，再回原会话核对原成员仍活；两边相同就不称跨会话实测，不要求注销或新建会话。不同会话未取得时保留原生证据缺口，代码仍拒绝把另一会话的错误 2 当停止。此项不依赖重启、快速启动、睡眠或休眠实验。
+6. 私有边界与会话补项：DACL 缺失、对象/条件/未知 ACE 用合成 ACE 列表及查询结果写单元测试，不在测试机构造；目录联接与叶子重解析竞态已由补充实验完成，结论见第 2 节；新增 ACL bootstrap 的首次、active 指针及源替换入口在实现后原生补测，记录接受/拒绝与句柄关闭。SSH 会话的 sessionId 为 0，桌面会话与它不同，可以实测跨会话。若当前桌面与 SSH 的 ProcessIdToSessionId 确实不同，用一边持有的 Local Job 在另一边尝试打开，再回原会话核对原成员仍活；两边相同就不称跨会话实测，不要求注销或新建会话。不同会话未取得时保留原生证据缺口，代码仍拒绝把另一会话的错误 2 当停止。此项不依赖重启、快速启动、睡眠或休眠实验。
 
 ## 8. 实施阶段、文件与契约升级
 
@@ -138,7 +138,7 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 阶段 C：已完成，合入 `516c6d5d`，测试挂起修复合入 `e1e4d1d6`。共用 `private_files.py:publish_bytes` 及三系统唯一备份 journal 是现状，不再依赖 B 才算完成。其实现没有改跨进程事实或看板存储形式，不因此开升级或移动 CONTRACT_VERSION；测试修复本身不移动版本。这里只留 Windows 带读者换代后续：依赖 B 的句柄边界和补项 5，通过实验门槛后改 `windows_files.py`、`private_files.py` 的可变文件换代及失败清理，复跑 private publication、native journal、`test_backup_publication.py`、upgrade 恢复的相应中断用例。事实形式不变，单独安装移动末号，不因换 API 开升级。
 
-阶段 D：修复 Windows 服务重启及同契约安装会杀执行的现存缺陷，完成独立服务启动、真实身份、根句柄归属及会话接回。依赖 B、C 的既有发布及 Windows 换代后续、补项 2、3、6；改 transport、install 的 launcher/runtime/upgrade:start、protocol/windows_process.py、owned_process、process_controller、process_identity、execution、buddy/runtime/execution.py、调度/interruption 和 store/db。保留已存在的 kill-on-close，补 183 拒绝、唯一长期执行句柄、临时停止句柄、真实 PID/sessionId 和同会话名字缺席停止判断；删除 Windows BootIdentifier 读取、记录及比较，不加长期观察句柄。服务在执行进程之外做发现时，`buddy/harnesses/discovery.py:probe` 不走 owned_popen，而是普通 Popen 加 CREATE_NEW_PROCESS_GROUP，在 Windows 上不进任何 Job，后代不受管（2026-10-21 Windows 复跑时观察到，当时无残留）；阶段 D 让这些探针同样在 kill-on-close、禁止脱离的 Job 里运行，结束时终止并观察全空，与执行用同一条停止证据。验收真实链显式/无标志脱离矩阵、服务重启与同契约安装保活、执行强杀、先后崩溃、最后句柄关闭后的错误 2 和全成员缺席、重启后结算继续调度、marker 前及跨会话/查询失败 unknown。扩充 Windows process、process identity、execution recovery、transport 冷启动、安装回滚与执行围栏测试。
+阶段 D：修复 Windows 服务重启及同契约安装会杀执行的现存缺陷，完成独立服务启动、真实身份、根句柄归属及会话接回。依赖 B、C 的既有发布及 Windows 换代后续、补项 2 与补项 6 的跨会话部分（补项 3 已完成）；改 transport、install 的 launcher/runtime/upgrade:start、protocol/windows_process.py、owned_process、process_controller、process_identity、execution、buddy/runtime/execution.py、调度/interruption 和 store/db。保留已存在的 kill-on-close，补 183 拒绝、唯一长期执行句柄、临时停止句柄、真实 PID/sessionId 和同会话名字缺席停止判断；删除 Windows BootIdentifier 读取、记录及比较，不加长期观察句柄。服务在执行进程之外做发现时，`buddy/harnesses/discovery.py:probe` 不走 owned_popen，而是普通 Popen 加 CREATE_NEW_PROCESS_GROUP，在 Windows 上不进任何 Job，后代不受管（2026-10-21 Windows 复跑时观察到，当时无残留）；阶段 D 让这些探针同样在 kill-on-close、禁止脱离的 Job 里运行，结束时终止并观察全空，与执行用同一条停止证据。验收真实链显式/无标志脱离矩阵、服务重启与同契约安装保活、执行强杀、先后崩溃、最后句柄关闭后的错误 2 和全成员缺席、重启后结算继续调度、marker 前及跨会话/查询失败 unknown。扩充 Windows process、process identity、execution recovery、transport 冷启动、安装回滚与执行围栏测试。
 
 D 改变执行/服务交接事实及 SQLite 身份形式，必须同步改 pyproject.toml 的中间号及 `protocol/contracts.py:CONTRACT_VERSION`，开启显式待执行升级；改 db 升级逻辑和 `tests/python/blackboard/store/upgrade_fixture.py`，由 test_upgrade_fixture 比较新建与升级结果。Windows 身份只含真实执行 pid、原始 startedAt FILETIME、sessionId 和 jobName，不含 bootId；POSIX 保持开机会话、PID/创建值与进程组形式。SQLite 身份表按已有 Job/进程组互斥关系区分：Windows 的 boot_id 为 NULL、session_id 必填，POSIX 相反；Windows boot 值不转换成另一种假标识。startup、intent、marker、live、native journal 及 attempt_process_identities 同步采用唯一新形式；Windows intent 只绑定 session/Job 和 task/attempt/generation，尚无 marker 时仍 unknown。根身份已登记后，根 Job 的停止证据覆盖其全部成员及 native 创建窗口，不靠补造缺失 PID 消除 pending。Popen 启动进程仅留创建者回收用的临时句柄，没有状态目录身份字段或副本用例。
 
@@ -161,3 +161,5 @@ E 的 ACK 语义、保留回执的交接规则和新增接收表均改变契约/
 补入 venv 链中禁止脱离请求却成功的事实，新增真实解释器及孙进程显式/无标志脱离实验，失败就改基础解释器加 venv site 配置的启动链。执行/native 保留 NO_WINDOW/new-group，只有服务用 detached/breakaway；先核实无外层 Job 时 breakaway 被忽略，再省掉启动分支。提权进程启动时把令牌默认属主设为当前用户（Host 合入时改定，代替逐个对象改属主，覆盖 SQLite 自建的文件与提权运行时的重建），设置被拒就在提权启动边界明确拒绝，不改既有 ACL 或白名单；逐级私有目录每级显式建 0700。
 
 Windows 换代先试 FileRenameInfoEx 的 POSIX 语义改名，失败才测 ReplaceFileW，最终只留一个机制；补项 5 和阶段 C 后续随之调整。ACE 形状反例改为单元测试，junction/bootstrap 保留原生补项。修正回滚入口为 upgrade:start，将桌面实验置第 7 节、阶段置第 8 节，顺排节号；ADR 条款与 D 的身份/升级判断同步改写，阶段 E 接收结算及接收表、F 测试收尾和其余阶段版本判断保留。
+
+2026-10-22 按补充实验（[a3 记录](windows-experiments-a3.md)）：补项 3 完成，保留 venv 入口，不改启动链；固定祖先改以 `GENERIC_READ` 打开，因为只请求 `FILE_READ_ATTRIBUTES` 的句柄挡不住改名；补项 6 的目录竞态完成。
