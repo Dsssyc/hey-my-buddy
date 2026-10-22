@@ -70,7 +70,7 @@ export default {
     lastTool: "最近工具活动 {{when}}", lastNative: "最近原生活动 {{when}}", event: "事件序号 {{n}}",
   },
   inquiry: {
-    head: "问询", queued: "排队", queuedCheckpoint: "在 Worker 下次检查点时送达，现在尚未送达", claimed: "正在送达", delivered: "已送达，等待答复", answered: "已答复",
+    head: "问询", queued: "排队", queuedCheckpoint: "在 Worker 下次检查点时送达，现在尚未送达。", claimed: "正在送达", delivered: "已送达，等待答复", answered: "已答复",
     discarded: "已丢弃", unavailable: "问询已结束", truncated: "答复已截断", more: "更早的问询可能没有列出。",
   },
   ending: { cause: "终止原因：{{cause}}", unrecorded: "终止原因未记录" },

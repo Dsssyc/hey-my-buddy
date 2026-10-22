@@ -16,7 +16,7 @@ test("shows both shared scrollbars while hovering or scrolling and hides them wi
   const name = page.locator('[data-slot=timeline-row-name]').first();
   const left = (await name.boundingBox())!.x;
   const frame = (await viewport.boundingBox())!;
-  expect((await vertical.boundingBox())!.x + (await vertical.boundingBox())!.width).toBeCloseTo(frame.x + frame.width, 0);
+  expect((await vertical.boundingBox())!.x).toBeCloseTo(frame.x + frame.width, 0);
   await page.mouse.move(0, 0);
   await expect(vertical).toHaveCSS("opacity", "0"); await expect(horizontal).toHaveCSS("opacity", "0");
   await viewport.evaluate(node => { node.scrollTop = 120; node.scrollLeft = 100; });

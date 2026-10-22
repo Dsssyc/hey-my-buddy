@@ -27,6 +27,7 @@ import type { LaneGroup } from "./lanes";
 import { markerAt, markerKey } from "./MarkerCluster";
 import type { TimelineMarker } from "./MarkerCluster";
 import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
+import { CONCLUSION_OUTSET_PX as SLACK_PX } from "./ConclusionMark";
 
 export type TaskWorkProps = {
   summary: MacroTaskSummary | null; timeline: MacroTaskTimeline | null; displayObservedAt: string | null;
@@ -37,7 +38,6 @@ export type TaskWorkProps = {
   onRetry: () => void; onBackToList: () => void;
 };
 
-const SLACK_PX = 8;
 const LEAD_PX = 60;
 
 /**
@@ -65,11 +65,11 @@ export function TaskWork(props: TaskWorkProps) {
   const [hoveredSpan, setHoveredSpan] = useState<TimelineSpan | null>(null);
   const activeMarker = hoveredMarker ?? (hoveredSpan || hoveredRow ? null : focusedMarker);
   const [collapsedLanes, setCollapsedLanes] = useState<ReadonlySet<string>>(() => new Set());
-  const { viewport: workspace, setViewport: setWorkspace, width } = useViewport<HTMLElement>(1088);
-  const [viewport, setViewport] = useState<HTMLDivElement | null>(null);
+  const { viewport: workspace, setViewport: setWorkspace, width: workspaceWidth } = useViewport<HTMLElement>(1088);
+  const { viewport, setViewport, width } = useViewport(1088);
   const [detailViewport, setDetailViewport] = useState<HTMLDivElement | null>(null);
   const [ruler, setRuler] = useState<HTMLDivElement | null>(null);
-  const narrow = width <= 760;
+  const narrow = workspaceWidth <= 760;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   viewportRef.current = viewport;
   const rowsRef = useRef(new Map<string, HTMLButtonElement>());
@@ -95,7 +95,7 @@ export function TaskWork(props: TaskWorkProps) {
   const highlightedKey = activeMarker ? markerKey(activeMarker) : pointingSpan ? `span:${pointingSpan.spanId}` : pointingRow ? null : selectedKey;
   const macroId = timeline?.macroTask.macroTaskId;
   const buddyColors = useMemo(() => buddyColorsFor(timeline?.spans ?? []), [timeline]);
-  // The scale may fill the whole viewport beside the sticky name column.
+  // Fit the actual scroll viewport, which excludes its reserved scrollbar gutter.
   const originX = narrow ? SLACK_PX : nameWidth + SLACK_PX;
   const available = Math.max(1, width - (narrow ? SLACK_PX * 2 : nameWidth + SLACK_PX * 2));
   const { scale, change: zoom, zoomAt, atMinimum } = useTimelineZoom(input, available, macroId, viewportRef, anchorAt, nowMs, originX);
@@ -258,7 +258,7 @@ export function TaskWork(props: TaskWorkProps) {
     {layout.lanes.length > 0 && layout.ordinary.length > 0 && <div className="mt-6 flex h-9 items-center px-4 text-xs text-ink3">{t("otherMicroTasks")}</div>}
     {layout.ordinary.map(row => renderName(row, { list: true }))}
   </>;
-  const lanesView = <div data-slot="timeline-viewport" className="relative flex min-h-0 min-w-0 flex-1"><ScrollArea className="min-h-0 min-w-0 flex-1 bg-background" orientation="both"
+  const lanesView = <div data-slot="timeline-viewport" className="relative flex min-h-0 min-w-0 flex-1"><ScrollArea className="min-h-0 min-w-0 flex-1 bg-background" orientation="both" reserveScrollbarGutter
     viewportProps={{ ref: setViewport, "data-slot": "timeline-tracks",
       onScroll: event => { lanesScrollLeft.current = event.currentTarget.scrollLeft; namesScrollTop.current = event.currentTarget.scrollTop; setScrollLeft(event.currentTarget.scrollLeft); },
       onPointerMove: event => {

@@ -15,7 +15,7 @@ import { acceptanceInterval } from "./acceptance";
 import { fitAdjacentLabel, fitLabel, useTextMeasure } from "./labels";
 import type { Interval, Label, Occupancy } from "./labels";
 import { MarkerCluster, markerAt, markerKey } from "./MarkerCluster";
-import { ConclusionMark } from "./ConclusionMark";
+import { ConclusionMark, CONCLUSION_OUTSET_PX as INSET_PX } from "./ConclusionMark";
 import { clusterHalfWidth } from "./ClusterMark";
 import type { TimelineMarker } from "./MarkerCluster";
 import type { OwnedWait } from "./lanes";
@@ -60,8 +60,8 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
     const measure = () => {
       const axisBox = axis.getBoundingClientRect();
       const fitBox = fit?.getBoundingClientRect();
-      const next = fitBox && fitBox.left - axisBox.left - 8 < scale.widthPx && fitBox.right - axisBox.left - 8 > 0
-        ? { left: Math.max(0, fitBox.left - axisBox.left - 8), right: Math.min(scale.widthPx, fitBox.right - axisBox.left - 8) } : null;
+      const next = fitBox && fitBox.left - axisBox.left - INSET_PX < scale.widthPx && fitBox.right - axisBox.left - INSET_PX > 0
+        ? { left: Math.max(0, fitBox.left - axisBox.left - INSET_PX), right: Math.min(scale.widthPx, fitBox.right - axisBox.left - INSET_PX) } : null;
       setFitBounds(previous => previous?.left === next?.left && previous?.right === next?.right ? previous : next);
     };
     const observer = new ResizeObserver(measure);
@@ -117,7 +117,7 @@ export function Axis({ scale, ongoing, nowMs, pointerX = null, pointerBounds, co
     // A clock stays with its tick, even if no room is left for its text.
     if (label && Math.abs((label.left + label.right) / 2 - x) <= measure(text) / 2 + 4) { labels.push({ ...label, y: 16, className: "fill-ink2" }); occupied.push(label); }
   }
-  return <svg ref={axisRef} data-slot="timeline-axis" viewBox={`-8 0 ${width + 16} 36`} width={width + 16} height="36" className="block max-w-none select-none overflow-hidden text-xs" aria-hidden="true">
+  return <svg ref={axisRef} data-slot="timeline-axis" viewBox={`${-INSET_PX} 0 ${width + INSET_PX * 2} 36`} width={width + INSET_PX * 2} height="36" className="block max-w-none select-none overflow-hidden text-xs" aria-hidden="true">
     {ruler}<line data-slot="axis-baseline" x1={0} x2={width} y1={30} y2={30} className="stroke-ink3"/>
     {scale.breaks.map((gap, index) => { const center = (gap.startX + gap.endX) / 2; return <g key={gap.startMs}>
       <path data-slot="axis-break-mark" d={`M${center - 7} 34l6-8m0 8l6-8`} className="stroke-line"/>
@@ -163,7 +163,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   const middle = height / 2;
   const hitBox = (start: number, end: number) => {
     const width = Math.max(28, end - start + 6);
-    return { x: Math.max(-8, Math.min(scale.widthPx + 8 - width, (start + end) / 2 - width / 2)), width };
+    return { x: Math.max(-INSET_PX, Math.min(scale.widthPx + INSET_PX - width, (start + end) / 2 - width / 2)), width };
   };
   // The extra width sits above and below the drawing, leaving neighbouring short bars reachable.
   const hitPath = (start: number, end: number) => {
@@ -259,9 +259,9 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
       add([`${modelLabel(item.span)} · ${fullLabel(item)}`, fullLabel(item), duration(item)!], item.start + (item.span.kind === "execution" ? 23 : 6), (tail?.x ?? item.end) - 6, barTextY, item.span.kind === "execution" ? "fill-execution-ink" : "fill-ink");
     } else add([fullLabel(item), duration(item)!], item.start + (item.outcome === "open" && item.span.kind === "host" ? 10 : 0), item.end, topTextY, item.outcome === "open" && item.span.kind === "host" ? "fill-hand" : "fill-ink3");
   }
-  return <svg data-slot="timeline-track" viewBox={`-8 0 ${scale.widthPx + 16} ${height - 1}`} width={scale.widthPx + 16} height={height} preserveAspectRatio="none" className="block max-w-none select-none overflow-hidden border-t text-xs" aria-label={t("track", { title: displayTitle(row.titleSource, row.title).fullText })}>
+  return <svg data-slot="timeline-track" viewBox={`${-INSET_PX} 0 ${scale.widthPx + INSET_PX * 2} ${height - 1}`} width={scale.widthPx + INSET_PX * 2} height={height} preserveAspectRatio="none" className="block max-w-none select-none overflow-hidden border-t text-xs" aria-label={t("track", { title: displayTitle(row.titleSource, row.title).fullText })}>
     {ruler}<IdlePattern id={pattern}/>{scale.breaks.map(gap => <rect aria-hidden="true" data-slot="timeline-break" key={gap.startMs} x={gap.startX} width={gap.endX - gap.startX} height={height} fill={`url(#${pattern})`}/>)}
-    {selected && <rect aria-hidden="true" pointerEvents="none" data-slot="selected-row" x={-8} width={scale.widthPx + 16} height={height} className="fill-selected-row"/>}
+    {selected && <rect aria-hidden="true" pointerEvents="none" data-slot="selected-row" x={-INSET_PX} width={scale.widthPx + INSET_PX * 2} height={height} className="fill-selected-row"/>}
     {ongoing && <line aria-hidden="true" data-slot="timeline-now" x1={scale.toX(nowMs)!} x2={scale.toX(nowMs)!} y2={height} className="stroke-live opacity-60"/>}
     {acceptance && <line data-slot="acceptance-wait" x1={acceptance.start} x2={acceptance.end} y1={middle} y2={middle} strokeWidth={acceptanceOpen ? 2 : 1.5} strokeDasharray={acceptanceOpen ? "5 4" : undefined} className={acceptanceOpen ? "stroke-hand-mark" : "stroke-ink3"}/>}
     {owned.map(entry => <line key={entry.wait.startMs} data-slot="owned-wait" x1={entry.start} x2={entry.end} y1={middle} y2={middle} strokeWidth={entry.wait.open ? 2 : 1.5} strokeDasharray={entry.wait.open ? "5 4" : undefined} className={entry.wait.open ? "stroke-hand-mark" : "stroke-ink3"}/>)}
