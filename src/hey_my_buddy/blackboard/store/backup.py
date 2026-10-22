@@ -29,8 +29,6 @@ def digest(path: Path) -> str:
 
 
 def _rename(source: Path, target: Path) -> None:
-    _guard(source)
-    _guard(target)
     os.replace(source, target)
 
 
@@ -81,7 +79,6 @@ def _regular_files(root: Path):
         return _shown_path(relative)
 
     def visit(parent):
-        _guard(parent)
         with os.scandir(parent) as entries:
             children = sorted(Path(entry.path) for entry in entries)
         for path in children:
@@ -105,10 +102,6 @@ STATE_FILES = ('console-settings.json',)
 
 
 def _private_copy(source: Path, target: Path) -> None:
-    if _linked_component(source) or not stat.S_ISREG(source.lstat().st_mode):
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup source changed to a linked or special file', path=str(source))
-    if _linked_component(target):
-        raise BoardError('BACKUP_UNSAFE_PATH', 'Backup destination cannot be linked', path=str(target))
     private_dirs.ensure_private_dir(target.parent)
     with _open(source, 'rb') as src, _open(target, 'xb') as dst:
         shutil.copyfileobj(src, dst)
@@ -139,22 +132,7 @@ def database_snapshot(connection, *, event_head: int | None = None,
         columns = (column_projections or {}).get(name)
         if columns is None:
             columns = [column[0] for column in connection.execute('SELECT * FROM ' + quoted + ' LIMIT 0').description]
-        arguments = ','.join('"' + column.replace('"', '""') + '"' for column in columns)
-        limit = connection.getlimit(sqlite3.SQLITE_LIMIT_FUNCTION_ARG)
-        wide = len(columns) > limit
-        if wide:
-            # SELECT * also supports generated columns and tables wider than a
-            # SQLite function call. Join bounded chunks in the same JSON format.
-            def encode_part(*row):
-                return json.dumps(list(row), ensure_ascii=False, separators=(',', ':'), default=lambda value:value.hex())[1:-1]
-
-            connection.create_function('hey_my_buddy_snapshot_part', -1, encode_part)
-            quoted_columns = ['"' + column.replace('"', '""') + '"' for column in columns]
-            parts = ['hey_my_buddy_snapshot_part(' + ','.join(quoted_columns[offset:offset + limit]) + ')'
-                     for offset in range(0, len(columns), limit)]
-            arguments = "'[' || " + " || ',' || ".join(parts) + " || ']'"
-        else:
-            arguments = 'hey_my_buddy_snapshot_row(' + arguments + ')'
+        arguments = 'hey_my_buddy_snapshot_row(' + ','.join('"' + column.replace('"', '""') + '"' for column in columns) + ')'
         sql, args = 'SELECT ' + arguments + ' AS encoded FROM ' + quoted, ()
         if name == 'events':
             sql += ' WHERE seq<=?'; args = (event_head,)
@@ -173,8 +151,6 @@ def database_snapshot(connection, *, event_head: int | None = None,
             return result.hexdigest()
         finally:
             connection.create_function('hey_my_buddy_snapshot_row', -1, None)
-            if wide:
-                connection.create_function('hey_my_buddy_snapshot_part', -1, None)
 
     fingerprints = {name:fingerprint(name) for name in tables}
     return {'tables':counts, 'fingerprints':fingerprints, 'eventHead':event_head}
@@ -211,10 +187,8 @@ def _verify(directory: Path) -> dict:
         if not isinstance(row, dict) or not {'bytes', 'sha256'} <= row.keys():
             raise BoardError('BACKUP_INVALID', 'Backup manifest is incomplete')
         path = directory / relative
-        _guard(path)
         if path.lstat().st_size != row['bytes'] or digest(path) != row['sha256']:
             raise BoardError('BACKUP_INVALID', 'Backup payload hash mismatch', file=relative)
-    _guard(directory.parent)
     with tempfile.TemporaryDirectory(prefix='.verify-', dir=directory.parent) as raw:
         trial = Path(raw)
         with _open(directory / 'board.sqlite3.gz', 'rb') as compressed, _open(trial / 'board.sqlite3', 'xb') as destination:
@@ -223,7 +197,6 @@ def _verify(directory: Path) -> dict:
                     shutil.copyfileobj(source, destination)
             except (OSError, EOFError, zlib.error) as error:
                 raise BoardError('BACKUP_INVALID', 'Backup compressed database is invalid', reason=str(error)) from error
-        _guard(trial / 'board.sqlite3')
         try:
             with closing(sqlite3.connect(trial / 'board.sqlite3')) as connection:
                 schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
@@ -242,18 +215,21 @@ def _verify(directory: Path) -> dict:
 
 def _backup_paths(root: Path) -> tuple[Path, Path, Path, Path]:
     _guard(root)
-    if _linked(root) or (root.exists() and not root.is_dir()):
+    if root.exists() and not root.is_dir():
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup root must be a real directory')
     incoming, current, previous = (root / name for name in ('.incoming', 'current', '.previous'))
     journal = root / '.publish.json'
-    for path in (incoming, current, previous, journal, root / '.lock'):
-        _guard(path)
     for path in (incoming, current, previous):
         if path.exists() and not path.is_dir():
             raise BoardError('BACKUP_UNSAFE_PATH', 'Backup generation must be a directory')
     if journal.exists() and not journal.is_file():
         raise BoardError('BACKUP_UNSAFE_PATH', 'Backup journal must be a regular file')
     return incoming, current, previous, journal
+
+
+def _remove_generation(path: Path) -> None:
+    _guard(path)
+    shutil.rmtree(path)
 
 
 def _publication_journal(root: Path, *, had_current: bool) -> None:
@@ -281,12 +257,10 @@ def _recover_publication(root: Path) -> None:
                 # create may discard this incomplete candidate and rebuild.
                 return
             _rename(incoming, current)
-            _guard(root)
             private_files.sync_directory(root, follow_symlinks=False)
         elif current.exists() and incoming.exists():
             _verify(current)
-            shutil.rmtree(incoming)
-            _guard(root)
+            _remove_generation(incoming)
             private_files.sync_directory(root, follow_symlinks=False)
         return
     try:
@@ -314,19 +288,15 @@ def _recover_publication(root: Path) -> None:
                 # Retain both copies if the old copy cannot be proved valid.
                 _verify(previous)
                 _rename(current, incoming)
-                _guard(root)
                 private_files.sync_directory(root, follow_symlinks=False)
                 _rename(previous, current)
-                _guard(root)
                 private_files.sync_directory(root, follow_symlinks=False)
             else:
-                shutil.rmtree(previous)
-                _guard(root)
+                _remove_generation(previous)
                 private_files.sync_directory(root, follow_symlinks=False)
         else:
             _verify(previous)
             _rename(previous, current)
-            _guard(root)
             private_files.sync_directory(root, follow_symlinks=False)
     elif current.exists():
         # This is either the pre-first-rename old copy or the published new
@@ -340,7 +310,6 @@ def _recover_publication(root: Path) -> None:
     elif incoming.exists() and not had_current:
         _verify(incoming)
         _rename(incoming, current)
-        _guard(root)
         private_files.sync_directory(root, follow_symlinks=False)
     else:
         raise BoardError('BACKUP_RECOVERY_REQUIRED', 'No complete backup generation can be recovered')
@@ -349,11 +318,9 @@ def _recover_publication(root: Path) -> None:
     # discarded. An interrupted cleanup leaves the journal for another pass.
     _verify(current)
     if incoming.exists():
-        shutil.rmtree(incoming)
-        _guard(root)
+        _remove_generation(incoming)
         private_files.sync_directory(root, follow_symlinks=False)
     journal.unlink()
-    _guard(root)
     private_files.sync_directory(root, follow_symlinks=False)
 
 
@@ -390,8 +357,6 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
     root = state / 'backups'
     incoming, current, previous, journal = _backup_paths(root)
     private_dirs.ensure_private_dir(root)
-    if os.name != 'nt':
-        os.chmod(root, 0o700)
     lock = _open_fd(root / '.lock', os.O_CREAT | os.O_RDWR)
     try:
         locking.lock(lock, blocking=False)
@@ -402,13 +367,12 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
         _recover_publication(root)
         # An unpublished candidate can be removed after recovery.
         if incoming.exists():
-            shutil.rmtree(incoming)
+            _remove_generation(incoming)
         private_dirs.ensure_private_dir(incoming)
         snapshot = incoming / 'board.sqlite3'
         # The coordinator owns both writer locks and has detached every owner.
         # Copy the stopped database verbatim so the archive preserves its bytes.
         _private_copy(state / 'board.sqlite3', snapshot)
-        os.chmod(snapshot, 0o600)
         with closing(sqlite3.connect(snapshot)) as connection:
             snapshot_metadata = database_snapshot(connection)
             schema = int(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0])
@@ -433,23 +397,17 @@ def create(state: Path, *, runtime_identity: dict | None, plugin_commit: str | N
         verify(incoming)
         for directory, _, _ in os.walk(incoming, topdown=False):
             directory_path = Path(directory)
-            _guard(directory_path)
             private_files.sync_directory(directory_path, follow_symlinks=False)
         _publication_journal(root, had_current=current.exists())
         if current.exists():
             _rename(current, previous)
-            _guard(root)
             private_files.sync_directory(root, follow_symlinks=False)
         _rename(incoming, current)
-        _guard(root)
         private_files.sync_directory(root, follow_symlinks=False)
-        _verify(current)
         if previous.exists():
-            shutil.rmtree(previous)
-            _guard(root)
+            _remove_generation(previous)
             private_files.sync_directory(root, follow_symlinks=False)
         journal.unlink()
-        _guard(root)
         private_files.sync_directory(root, follow_symlinks=False)
         return {'path': str(current), 'verified': True, 'schema': schema,
                 'bytes': sum(row['bytes'] for row in files.values()) + manifest_path_size(current),

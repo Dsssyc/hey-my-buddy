@@ -4,6 +4,7 @@ import json
 from unittest.mock import Mock, patch
 
 from hey_my_buddy.blackboard.service.service import BoardService
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.store.store import BoardStore
 from support import BoardTestCase
 
@@ -199,3 +200,40 @@ class HarnessServiceTests(BoardTestCase):
     def test_retired_account_operations_are_absent_from_the_service(self):
         for name in ('set', 'login', 'status', 'cancel', 'logout', 'remove'):
             self.assertFalse(hasattr(self.service, 'account_' + name))
+
+    def test_catalog_read_without_its_harness_observation_invalidates_health(self):
+        self.service.harnesses.catalog_refresh = self.service._refresh_harness_catalog
+        ready = {"harness": "codex", "status": "ready", "command": ["/fixture/codex"],
+                 "executable": "/fixture/codex", "reason": None}
+        for payload in ({"source": "fixture", "providers": [], "discoveries": []},
+                        {"source": "fixture", "providers": [{"harness": "codex", "provider": "openai",
+                         "models": [{"id": "fixture", "efforts": ["high"]}]}]}):
+            with self.subTest(payload=payload), \
+                 patch("hey_my_buddy.buddy.harnesses.codex.adapter.CodexAdapter.discover_models", return_value=payload), \
+                 patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"harness": "codex", "managerRecords": [], "candidates": []}), \
+                 patch("hey_my_buddy.blackboard.service.harness_health._discover", return_value=ready):
+                result = self.call("capabilities", refresh=True, harness="codex")
+            health = next(item for item in result["harnesses"] if item["harness"] == "codex")
+            self.assertEqual(health["status"], "unhealthy")
+            self.assertEqual(health["reason"], {"code": "catalog.discovery-failed", "params": {"harness": "codex", "errorCode": "CATALOG_INVALID"}})
+            with self.board.db.read() as db:
+                self.assertIsNone(db.execute("SELECT 1 FROM catalog_current WHERE harness='codex'").fetchone())
+
+    def test_probe_failure_retains_exception_detail_in_service_issues(self):
+        with patch("hey_my_buddy.blackboard.service.harness_health._snapshot", return_value={"harness": "codex", "managerRecords": [], "candidates": []}), \
+             patch("hey_my_buddy.blackboard.service.harness_health._discover", side_effect=RuntimeError("fixture probe defect")):
+            result = self.call("capabilities", refresh=True, harness="codex")
+        health = next(item for item in result["harnesses"] if item["harness"] == "codex")
+        self.assertEqual(health["status"], "unhealthy")
+        issue = self.board.service_issues()[0]
+        self.assertEqual((issue["stage"], issue["code"], issue["message"]),
+                         ("harness-discovery:codex", "RuntimeError", "fixture probe defect"))
+
+    def test_background_scan_failure_is_visible_and_scan_continues(self):
+        from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
+        with patch.object(self.service.harnesses, "refresh", side_effect=[BoardError("HARNESS_UNAVAILABLE", "fixture scan refused"), {}, {}, {}]) as refresh:
+            HarnessHealth.kick(self.service.harnesses)
+            self.service.harnesses._thread.join()
+        self.assertEqual(refresh.call_count, 4)
+        issue = self.board.service_issues()[0]
+        self.assertEqual((issue["stage"], issue["code"]), ("harness-scan:dsh", "HARNESS_UNAVAILABLE"))

@@ -109,22 +109,6 @@ class CatalogRefreshServiceTests(BoardTestCase):
             self.assertEqual(buddies["beta"]["unavailable_code"], catalog.CONFIRMED_ABSENCE_REASON)
             self.assertEqual(catalog.pending_model_services(db), {})
 
-    def test_refresh_without_own_observation_keeps_complete_and_unknown_account(self):
-        payload = native_payload("confirmed")
-        payload["discoveries"] = []
-        payload["providers"] = []
-        stub = SimpleNamespace(discover_models=lambda: payload)
-        with patch("hey_my_buddy.buddy.harnesses.registry.adapter", return_value=stub), \
-             patch.object(catalog_store, "record", wraps=catalog_store.record) as record:
-            self.service._refresh_harness_catalog("dsh", self.record)
-        self.assertEqual(record.call_args.args[1]["discoveries"],
-                         [{"harness": "dsh", "status": "complete", "accountStatus": "unknown", "reason": None, "content": None}])
-        row, buddies, read_at = self.catalog_state()
-        self.assertEqual(row["status"], "unknown")
-        self.assertEqual(row["reason"], {"code": "catalog.account-status-unknown", "params": {"harness": "dsh"}})
-        self.assertEqual(buddies, [])
-        self.assertIsNone(read_at)
-
     def test_missing_or_unknown_account_fact_replaces_nothing(self):
         for account_status in (None, "unknown"):
             with self.subTest(accountStatus=account_status):

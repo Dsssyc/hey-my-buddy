@@ -48,7 +48,7 @@ class LeadOwnedTests(WorkflowTestCase):
         })
         self.assertNotIn("control", result)
         board.service.register_console_authority("owned-fixture-console")
-        self.controls[result["runId"]] = {"consoleAuthority": "owned-fixture-console"}
+        self.controls[result["runId"]] = {"consoleAuthority": {"sessionId": "owned-fixture-console"}}
         return result
 
     def finish_owned(self, board, child, worker="w2", **extra):

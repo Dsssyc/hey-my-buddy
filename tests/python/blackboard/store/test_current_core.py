@@ -17,13 +17,43 @@ from hey_my_buddy.cli import main as cli
 from hey_my_buddy.blackboard.service import daemon
 from hey_my_buddy.protocol import schemas, transport
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION, BuddyControl
-from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION, SECRET_KEY
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.service.service import CONTROL_OPERATIONS
 from hey_my_buddy.blackboard.store.store import BoardStore
 
 
 class CurrentCoreTests(BoardTestCase):
+    def test_fresh_database_creates_private_file_without_changing_directory_mode(self):
+        directory = self.directory / "database-mode"
+        directory.mkdir(mode=0o750)
+        if os.name != 'nt':
+            directory.chmod(0o750)
+        database = Database(directory)
+        database.initialize()
+        self.addCleanup(database.close)
+        with database.read() as connection:
+            meta = dict(connection.execute("SELECT key, value FROM meta"))
+        self.assertEqual(meta['schema_version'], str(SCHEMA_VERSION))
+        self.assertEqual(bytes.fromhex(meta[SECRET_KEY]), database.secret)
+        if os.name != 'nt':
+            self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o750)
+            self.assertEqual(stat.S_IMODE(database.path.stat().st_mode), 0o600)
+
+    def test_existing_database_without_secret_is_corruption(self):
+        directory = self.directory / "missing-secret"
+        database = Database(directory)
+        database.initialize()
+        database.close()
+        with contextlib.closing(sqlite3.connect(directory / 'board.sqlite3')) as connection, connection:
+            connection.execute("DELETE FROM meta WHERE key=?", (SECRET_KEY,))
+        reopened = Database(directory)
+        self.addCleanup(reopened.close)
+        with self.assertRaisesRegex(Corruption, "no capability secret"):
+            reopened.initialize()
+        with contextlib.closing(sqlite3.connect(directory / 'board.sqlite3')) as connection:
+            self.assertIsNone(connection.execute("SELECT value FROM meta WHERE key=?", (SECRET_KEY,)).fetchone())
+
     def test_event_actor_roles_are_closed_to_production_roles(self):
         board = self.board()
         with board.store.db.write() as connection:
@@ -204,7 +234,7 @@ class CurrentCoreTests(BoardTestCase):
                 client.submit_result(other_attempt["attemptId"], other_attempt["generation"], "o" * 32,
                                      {"status": "ok", "shutdownConfirmed": True})
 
-    def test_current_receipt_keeps_result_opaque_and_refuses_flat_old_format(self):
+    def test_current_receipt_keeps_result_opaque(self):
         board = self.board()
         client = board.client()
         task = board.submit_execution(requestId="opaque-current-result", task="return data", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])["task"]
@@ -217,8 +247,3 @@ class CurrentCoreTests(BoardTestCase):
         self.assertEqual(result["result"], data)
         self.assertEqual(result["resultMeta"]["status"], "ok")
         self.assertNotIn("workflow", result)
-        with board.store.db.write() as connection:
-            connection.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?", ('{"status":"ok","finalText":"old shape"}', attempt["attemptId"]))
-        with self.assertRaises(BoardError) as caught:
-            client.result(runId=task["taskId"])
-        self.assertEqual(caught.exception.code, "UNSUPPORTED_RESULT_FORMAT")

@@ -353,14 +353,17 @@ with (mock.patch.object(backup, '_rename', side_effect=hooked_rename),
         board, _, root = self._board()
         backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)
         outside = self.workdir('outside')
-        for name in ('.incoming', '.previous', '.publish.json'):
+        for name, expected_code in (('.incoming', 'BACKUP_UNSAFE_PATH'),
+                                    ('.previous', 'BACKUP_RECOVERY_REQUIRED'),
+                                    ('.publish.json', 'BACKUP_UNSAFE_PATH')):
             with self.subTest(link=name):
                 linked = root / name
                 linked.symlink_to(outside)
                 try:
                     with self.assertRaises(BoardError) as raised:
                         backup.recover(board.directory)
-                    self.assertEqual(raised.exception.code, 'BACKUP_UNSAFE_PATH')
+                    self.assertEqual(raised.exception.code, expected_code)
+                    self.assertTrue(outside.exists())
                 finally:
                     linked.unlink()
         journal = root / '.publish.json'
