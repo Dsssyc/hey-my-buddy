@@ -17,7 +17,7 @@ from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 from fake_executable import make_fake_executable
 from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.harnesses.runtime_selection import bound, command_for, launch_for
+from hey_my_buddy.buddy.harnesses.runtime_selection import bound, launch_for
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
@@ -122,7 +122,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
         request = case.request(schema=schema).model_copy(update={
             'input_text': special})
         with bound([record]):
-            self.assertEqual(command_for("claude"), record["command"])
+            self.assertEqual(launch_for("claude")[0], record["command"])
             result = case.execute(request)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.parsed.value["outcome"]["disposition"], "completed")
@@ -169,7 +169,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
                                prompt="Pick a buddy")
         correction = FastCorrection(codex_cases.FAST_SCHEMA, "Pick a buddy")
         with bound([record]):
-            self.assertEqual(command_for("codex"), record["command"])
+            self.assertEqual(launch_for("codex")[0], record["command"])
             result = codex_cases.run(request, observer=correction.observer,
                                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", repr(result))
@@ -183,7 +183,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
         provider.parent.mkdir()
         shutil.copyfile(case.root / "provider/zcode-builtin.json", provider)
         with bound([record], environment=case.environment):
-            self.assertEqual(command_for("zcode"), record["command"])
+            self.assertEqual(launch_for("zcode")[0], record["command"])
             prompt = structured_prompt("Pick a buddy", zcode_cases.SCHEMA)
             result = zcode_cases.run(case.fast_request(prompt),
                                      observer=FastCorrection(zcode_cases.SCHEMA, prompt).observer,
@@ -201,7 +201,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
         Path(request.cwd).rename(cwd)
         request = request.model_copy(update={"cwd": str(cwd)})
         with bound([record]), mock.patch.object(dsh_cases.native_run, "launch_for", launch_for):
-            self.assertEqual(command_for("dsh"), record["command"])
+            self.assertEqual(launch_for("dsh")[0], record["command"])
             result = dsh_cases.run(request,
                                    observer=FastCorrection(dsh_cases.SCHEMA, "Pick a buddy").observer,
                                    services=None, cancelled=lambda: False)

@@ -55,17 +55,14 @@ def launch_for(harness, environment=None):
     return list(record['command']), shim_environment(record.get('executable'))
 
 
-def command_for(harness, environment=None):
-    return launch_for(harness, environment)[0]
-
-
-def native_environment(environment, *, harness):
+def launch_with_environment(harness, environment=None):
+    """Resolve argv and build its child environment from the same selected entry."""
     from .discovery import native_environment as clean
-    environment = environment_for(environment)
-    command, overrides = launch_for(harness, environment)
-    result = clean(environment, command=command)
+    source = environment_for(environment)
+    command, overrides = launch_for(harness, source)
+    result = clean(source, command=command)
     result.update(overrides)
-    return result
+    return command, result
 
 
 def controller_environment(directory, environment=None, *, read_only=False):

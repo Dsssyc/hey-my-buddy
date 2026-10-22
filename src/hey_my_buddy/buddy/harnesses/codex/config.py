@@ -16,27 +16,26 @@ def native_provider(configured: dict) -> str:
     return provider if isinstance(provider, str) and provider else DEFAULT_MODEL_PROVIDER
 
 
-def cli_command(environment: dict | None = None) -> list[str]:
-    from ..runtime_selection import launch_for
+def launch(environment: dict | None = None) -> tuple[list[str], dict]:
+    """Resolve the native argv and its environment from one selected entry."""
+    from ..runtime_selection import launch_with_environment
     from ..discovery import EntryUnavailable
     from ....errors import BoardError
 
     try:
-        return launch_for("codex", environment)[0]
+        command, result = launch_with_environment("codex", environment)
     except BoardError as error:
         raise CodexUnavailable(error.message) from None
     except EntryUnavailable as error:
         failure = CodexUnavailable(str(error))
         failure.reason = error.reason
         raise failure from None
-
-
-def native_environment(environment: dict) -> dict:
-    """Use the native configuration with the shared service environment allowlist."""
-    from ..runtime_selection import native_environment as clean
-    result = clean(environment, harness="codex")
-    if os.environ.get("HMB_DEV_SOURCE") == "1":
+    if environment is not None and os.environ.get("HMB_DEV_SOURCE") == "1":
         for key in ("HMB_CODEX_FIXTURE_CASE", "HMB_CODEX_FIXTURE_STATE"):
             if key in environment:
                 result[key] = environment[key]
-    return result
+    return command, result
+
+
+def cli_command(environment: dict | None = None) -> list[str]:
+    return launch(environment)[0]

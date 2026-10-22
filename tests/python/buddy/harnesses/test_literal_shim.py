@@ -137,12 +137,12 @@ class LiteralShimTests(unittest.TestCase):
         source = {runtime_selection.RECORD_FILE: str(selection), 'PATH': ''}
         for harness in records:
             with self.subTest(harness=harness):
-                result = runtime_selection.native_environment(source, harness=harness)
+                _command, result = runtime_selection.launch_with_environment(harness, source)
                 self.assertEqual(result['ELECTRON_RUN_AS_NODE'], '1')
                 self.assertNotIn(runtime_selection.RECORD_FILE, result)
         with runtime_selection.bound(list(records.values()), environment=source):
-            self.assertEqual(claude.native_environment(source)['ELECTRON_RUN_AS_NODE'], '1')
-            self.assertEqual(codex.native_environment(source)['ELECTRON_RUN_AS_NODE'], '1')
+            self.assertEqual(claude.launch(source)[1]['ELECTRON_RUN_AS_NODE'], '1')
+            self.assertEqual(codex.launch(source)[1]['ELECTRON_RUN_AS_NODE'], '1')
             controller = runtime_selection.controller_environment(self.root, source)
         saved = json.loads(Path(controller[runtime_selection.RECORD_FILE]).read_text(encoding='utf-8'))
         self.assertEqual(saved, records)  # no new stored field
@@ -157,7 +157,7 @@ class LiteralShimTests(unittest.TestCase):
                     command, environment = runtime_selection.launch_for(name, source)
                     self.assertEqual(command, self.record()['command'])
                     self.assertEqual(environment, {'ELECTRON_RUN_AS_NODE': '1'})
-                    child = runtime_selection.native_environment(source, harness=name)
+                    _command, child = runtime_selection.launch_with_environment(name, source)
                     self.assertEqual(child['ELECTRON_RUN_AS_NODE'], '1')
                     self.assertNotIn(f'HMB_{name.upper()}_CLI', child)
             discover.assert_not_called()

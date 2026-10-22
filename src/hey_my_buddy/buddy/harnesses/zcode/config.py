@@ -8,19 +8,24 @@ from pathlib import Path
 from .protocol import NativeError
 
 
-def cli_command(environment: dict | None = None) -> list[str]:
-    from ..runtime_selection import launch_for
+def launch(environment: dict | None = None) -> tuple[list[str], dict]:
+    """Resolve the native argv and its environment from one selected entry."""
+    from ..runtime_selection import launch_with_environment
     from ..discovery import EntryUnavailable
     from ....errors import BoardError
 
     try:
-        return launch_for("zcode", environment)[0]
+        return launch_with_environment("zcode", environment)
     except BoardError as error:
         raise NativeError("harness-unavailable", error.message) from None
     except EntryUnavailable as error:
         failure = NativeError(error.code, str(error))
         failure.reason = error.reason
         raise failure from None
+
+
+def cli_command(environment: dict | None = None) -> list[str]:
+    return launch(environment)[0]
 
 
 def provider_paths(environment: dict, command: list[str]) -> tuple[Path, Path]:

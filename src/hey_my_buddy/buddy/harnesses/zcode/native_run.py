@@ -90,7 +90,7 @@ from ..run_contract import (
     fold_unknown_events,
     unknown_event_name,
 )
-from .config import cli_command, load_runtime_preferences, provider_access_types, provider_paths
+from .config import cli_command, launch, load_runtime_preferences, provider_access_types, provider_paths
 from ..inquiry_bridge import InquiryBridge
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher
@@ -726,11 +726,9 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
     Failures inside ``owned_popen`` carry creation/cleanup evidence before
     registration, including a suspended child whose stop remains unknown.
     """
-    from ..runtime_selection import native_environment
     root = ensure_private_dir(native_root)
     incoming = dict(environment_for())
-    command = cli_command(incoming)
-    environment = native_environment(incoming, harness="zcode")
+    command, environment = launch(incoming)
     private = ensure_private_dir(invocation_root)
     if incoming.get("HMB_DEV_SOURCE") == "1" and "HMB_ZCODE_TEST_CASE" in incoming:
         environment["HMB_ZCODE_TEST_CASE"] = incoming["HMB_ZCODE_TEST_CASE"]
