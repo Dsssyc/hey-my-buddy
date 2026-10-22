@@ -202,6 +202,8 @@ def normalize_inquiry_record(record: dict, *, was_delivered: bool = False) -> di
         patch["state"] = "delivered"
         patch["reason"] = reason("inquiry-answer-empty")
     elif state == "unavailable":
-        patch["reason"] = reason("inquiry-delivered-at-attempt-end" if was_delivered or delivery.get("deliveredAt")
-                                 else "inquiry-queued-at-attempt-end")
+        if was_delivered or delivery.get("deliveredAt"):
+            patch["reason"] = reason("inquiry-delivered-at-attempt-end")
+        else:
+            patch["reason"] = reason("inquiry-queued-at-attempt-end")
     return patch

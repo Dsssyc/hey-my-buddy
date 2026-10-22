@@ -1569,8 +1569,10 @@ class BoardStore:
         self._import_inquiry_journal(connection, attempt)
         for row in connection.execute("SELECT * FROM messages WHERE attempt_id=? AND state IN ('queued','claimed','delivered')",
                                       (attempt["attempt_id"],)).fetchall():
-            reason = make_reason("inquiry-delivered-at-attempt-end" if row["state"] == "delivered"
-                                 else "inquiry-queued-at-attempt-end")
+            if row["state"] == "delivered":
+                reason = make_reason("inquiry-delivered-at-attempt-end")
+            else:
+                reason = make_reason("inquiry-queued-at-attempt-end")
             self._update_message(connection, row, actor="attempt-finished", state="unavailable", reason=reason)
 
     # -- service admission ---------------------------------------------------
