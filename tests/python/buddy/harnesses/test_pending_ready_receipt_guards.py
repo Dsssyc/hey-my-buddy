@@ -1,31 +1,17 @@
-"""The DSH-native-resume C2 guards: queued conflicts, readiness material, receipts.
+"""Pending inquiry conflicts and finish receipt digest bindings.
 
-The four guards this suite pins are the ones a native-resume attempt relies on
-before anything is committed: a request id or question id that is still queued
-(a pending admission slot, never a committed index) refuses a changed payload
-instead of joining or starting a second delivery; the shared finish-receipt
-verification refuses a foreign input digest at its own binding stage and a
-wrong signature digest under an otherwise identical execution identity at its
-own signature stage; and the holder's readiness-material reader refuses a
-non-regular file and an over-bound file at its own two layers. The queued
-conflicts and the receipt stages reuse the existing suite's fixture helpers
-(:mod:`buddy.harnesses.test_c_two_live`, :class:`buddy.roles.session_mcp.respond`)
-and call the real entries under test; nothing here mints a fact the production
-code would not.
+The endpoint guards pending request and question identifiers before an owner
+commit. Receipt verification keeps its distinct identity and signature checks.
 """
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import threading
 import time
 import unittest
-from pathlib import Path
-from unittest import mock
 
 from buddy.harnesses.test_c_two_live import (
-    QUEUED_REPLY, decode_reply, endpoint, inquiry_request, wire_request,
+    QUEUED_REPLY, decode_reply, endpoint, inquiry_request,
 )
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError, sign_receipt, verify_receipt
 from hey_my_buddy.buddy.harnesses import live as lv
@@ -50,12 +36,12 @@ class QueuedSameRequestConflictTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.endpoint = endpoint(instance_id="c" * 64, token="d" * 64)
+        self.endpoint = endpoint()
         self.run = self.endpoint.identity
 
     def raw_ask(self, request, *, timeout_ms=3000):
-        return self.endpoint.request(wire_request(request, token="d" * 64,
-                                                  instance_id="c" * 64, timeout_ms=timeout_ms))
+        return self.endpoint.request_local(request, timeout_ms=timeout_ms,
+            deadline_monotonic=time.monotonic() + timeout_ms / 1000.0)
 
     def ask(self, request, **kwargs):
         return decode_reply(self.raw_ask(request, **kwargs))
@@ -114,12 +100,12 @@ class QueuedSameQuestionConflictTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.endpoint = endpoint(instance_id="c" * 64, token="d" * 64)
+        self.endpoint = endpoint()
         self.run = self.endpoint.identity
 
     def raw_ask(self, request, *, timeout_ms=3000):
-        return self.endpoint.request(wire_request(request, token="d" * 64,
-                                                  instance_id="c" * 64, timeout_ms=timeout_ms))
+        return self.endpoint.request_local(request, timeout_ms=timeout_ms,
+            deadline_monotonic=time.monotonic() + timeout_ms / 1000.0)
 
     def ask(self, request, **kwargs):
         return decode_reply(self.raw_ask(request, **kwargs))

@@ -429,7 +429,7 @@ class ResumeInquiryTests(NativeResumeCase):
 
     def test_a_resumed_turn_delivers_this_attempts_question_over_its_own_channel(self):
         from buddy.harnesses.zcode.test_native_run import fixture_live_channel
-        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
+        from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveReply, LiveRequest
         request1, _bound1, _mount1, result1 = self.first_turn(inquiry=True)
         self.assertEqual(result1.end.status, "ok", result1.end.message)
         previous = result1.native_identity.session_id
@@ -446,7 +446,7 @@ class ResumeInquiryTests(NativeResumeCase):
             journal_path=credentials["resultsPath"],
             activity_path=self.base / "unused-activity.json", harness="dsh")
         bound2 = dataclasses.replace(bound2, services=dataclasses.replace(
-            bound2.services, live=channel.fixture_endpoint))
+            bound2.services, live=channel))
         replies: list = []
 
         def ask():
@@ -458,7 +458,8 @@ class ResumeInquiryTests(NativeResumeCase):
             end = time.monotonic() + 8
             reply = None
             while time.monotonic() < end:
-                reply = channel.request(request, timeout_ms=1000)
+                reply = LiveReply.model_validate_json(channel.request_local(
+                    request, timeout_ms=1000, deadline_monotonic=time.monotonic() + 1))
                 if reply.status != "unavailable":
                     return reply
                 time.sleep(0.05)

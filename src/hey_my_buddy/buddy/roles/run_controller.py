@@ -25,6 +25,7 @@ from ...errors import BoardError
 from ...json_codec import canonical_json, decode_strict_json
 from ...private_files import read_bytes
 from ...protocol import schemas
+from ..harnesses.run_contract import HARNESS_NAMES
 from ..harnesses.registry import run_seam
 from .turn_io import guard_private_path
 
@@ -48,10 +49,12 @@ def execute(control: dict, cancelled: threading.Event, state_dir: Path) -> tuple
         raise BoardError("INVALID_ARGUMENT", "Unknown native controller operation")
     schemas.reject_unknown(control, {"operation", "arguments", "harness", "cwd", "privateRoot",
                                      "nativeRoot", "timeoutSeconds"}, "native controller")
+    if control.get("harness") not in HARNESS_NAMES:
+        raise BoardError("INVALID_ARGUMENT", "Unknown native controller harness")
     specification = NATIVE_OPERATIONS[operation]
     seam = specification["seam"]
     module = run_seam(control["harness"])
-    if module is None or not callable(getattr(module, seam, None)):
+    if not callable(getattr(module, seam, None)):
         raise BoardError("ROLE_RUN_UNREGISTERED", f"The harness has no registered {operation} operation")
     try:
         value = getattr(module, seam)(

@@ -1,10 +1,4 @@
-"""Inquiry owner migration over the accepted C-Two endpoint, with zero models.
-
-The owner tests drive real admission and journal commits in process. The peer
-tests run the same owner in a private subprocess, use the existing test CRM,
-and feed actual session MCP receipts through ZCode's native root evidence.
-The endpoint's queued reply is never treated as a native delivery receipt.
-"""
+"""Inquiry owner and journal semantics over the local endpoint, with zero models."""
 from __future__ import annotations
 from hey_my_buddy.protocol import inquiry_journal as journal
 from hey_my_buddy.protocol.inquiry_journal import INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BYTES
@@ -13,9 +7,6 @@ import hashlib
 import inspect
 import json
 import os
-import select
-import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -23,20 +14,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from buddy.harnesses.test_c_two_live import (
-    TEST_CRM, decode_reply, decode_snapshot, wire_observe,
-    wire_request,
-)
 from hey_my_buddy import locking
 from hey_my_buddy.buddy.harnesses import c_two_live as ctl
 from hey_my_buddy.buddy.harnesses import inquiry_bridge as ib
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
-from hey_my_buddy.buddy.harnesses.zcode.protocol import (
-    NativeError, RootTurnEvidence,
-)
-from hey_my_buddy.buddy.roles import turn_io
+from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError, RootTurnEvidence
 from hey_my_buddy.buddy.roles.session_mcp import respond
+from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.errors import BoardError
 
 TASK_MATERIAL_ROOT = Path(os.environ.get("HMB_INQUIRY_OWNER_MATERIAL_ROOT", tempfile.gettempdir()))
@@ -45,8 +30,6 @@ RUN = RunIdentity(task_id="task-owner", attempt_id="attempt-owner", generation=2
                   input_sha256="a" * 64)
 BOUND = {key: RUN.to_payload()[key]
          for key in ("taskId", "attemptId", "generation", "turnId")}
-TEST_TOKEN = "d" * 64
-TEST_INSTANCE = "c" * 64
 
 
 def new_material_directory() -> Path:
@@ -54,11 +37,9 @@ def new_material_directory() -> Path:
     return Path(tempfile.mkdtemp(prefix="inquiry-owner-", dir=TASK_MATERIAL_ROOT))
 
 
-def make_endpoint(state_dir: Path) -> ctl.CTwoLiveEndpoint:
+def make_endpoint() -> ctl.CTwoLiveEndpoint:
     return ctl.CTwoLiveEndpoint(RUN, lv.LiveCapabilities(
-        inquiry_delivery="cooperative-checkpoint"), TEST_CRM,
-        instance_id=TEST_INSTANCE, token=TEST_TOKEN,
-        state_dir=state_dir)
+        inquiry_delivery="cooperative-checkpoint"))
 
 
 def make_bridge(directory: Path, endpoint=None, *, identity=None) -> ib.InquiryBridge:
@@ -78,14 +59,13 @@ def request(question_id="q-owner", question="What has been verified?", request_i
 
 def direct_request(endpoint, question_id="q-owner", question="What has been verified?",
                    request_id=None):
-    return decode_reply(endpoint.request(wire_request(
-        request(question_id, question, request_id), token=TEST_TOKEN,
-        instance_id=TEST_INSTANCE, timeout_ms=3000)))
+    return lv.LiveReply.from_payload(json.loads(endpoint.request_local(
+        request(question_id, question, request_id), timeout_ms=3000,
+        deadline_monotonic=time.monotonic() + 3.0)))
 
 
 def direct_snapshot(endpoint, **kwargs):
-    return decode_snapshot(endpoint.observe(wire_observe(
-        RUN, token=TEST_TOKEN, instance_id=TEST_INSTANCE, limit=32, **kwargs)))
+    return lv.LiveSnapshot.from_payload(json.loads(endpoint.observe_local(limit=32, **kwargs)))
 
 
 def records(path: Path) -> list[dict]:
@@ -94,10 +74,63 @@ def records(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+class NativeReceiptFixture:
+    """Feed actual session MCP receipts into the native root evidence owner."""
+
+    def __init__(self, bridge: ib.InquiryBridge):
+        self.bridge = bridge
+        self.ordinal = 0
+        self.config = {"identity": BOUND, "inputSha256": RUN.input_sha256,
+                       "key": "b" * 64,
+                       "inquiryJournalPath": str(bridge.journal_path),
+                       "attentionPath": str(bridge.attention_path)}
+        self.evidence = RootTurnEvidence("native-session-owner", RUN.invocation_id,
+            "mcp__buddy_fixture__hey_my_buddy_finish_turn", self.config,
+            checkpoint_name="mcp__buddy_fixture__hey_my_buddy_checkpoint",
+            answer_name="mcp__buddy_fixture__hey_my_buddy_answer_inquiry",
+            on_delivery=bridge.deliver_inquiries, on_answer=bridge.record_answer,
+            validate_outcome=turn_io.validate_outcome,
+            mounted_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry",
+                           "hey_my_buddy_finish_turn"))
+        self.event("turn.started", {"inputId": RUN.invocation_id})
+
+    def event(self, kind: str, payload: dict) -> None:
+        self.ordinal += 1
+        message = {"method": "session/event", "params": {
+            "sessionId": "native-session-owner", "turnId": "native-root-turn",
+            "seq": self.ordinal, "type": kind, "payload": payload}}
+        self.evidence.observe(message, self.ordinal)
+        self.bridge.note_event(message, "running")
+
+    def tool(self, *, answer: str | None = None, tampered: bool = False,
+             child: bool = False) -> str:
+        tool = "hey_my_buddy_answer_inquiry" if answer is not None else "hey_my_buddy_checkpoint"
+        arguments = {"inquiryId": "q-owner", "answer": answer} if answer is not None else {}
+        response = respond({"jsonrpc": "2.0", "id": self.ordinal + 1, "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments}}, self.config)["result"]
+        if response.get("isError"):
+            raise AssertionError(response)
+        text = response["content"][0]["text"]
+        call_id = f"call-{tool}-{self.ordinal}"
+        tool_name = "mcp__buddy_fixture__" + tool
+        self.event("tool.updated", {"kind": "scheduled", "toolName": tool_name,
+                                    "toolCallId": call_id})
+        if tampered:
+            changed = json.loads(text)
+            changed["signature"] = "f" * 64
+            text = json.dumps(changed)
+        payload = {"kind": "result", "toolCallId": call_id,
+                   "result": {"success": True, "truncated": False, "content": text}}
+        if child:
+            payload["childSessionId"] = "native-child"
+        self.event("tool.updated", payload)
+        return call_id
+
+
 class InquiryOwnerTests(unittest.TestCase):
     def setUp(self):
         self.directory = new_material_directory()
-        self.endpoint = make_endpoint(self.directory / "state")
+        self.endpoint = make_endpoint()
         self.bridge = make_bridge(self.directory, self.endpoint)
         self.addCleanup(self.bridge.close)
 
@@ -219,13 +252,6 @@ class InquiryOwnerTests(unittest.TestCase):
                     make_bridge(new_material_directory(), self.endpoint,
                                 identity={**BOUND, key: value})
 
-    def test_retired_transport_entrypoints_are_absent(self):
-        for name in ("bind_live_channel", "bridge_request", "ExistingLiveChannel"):
-            self.assertFalse(hasattr(ib, name), name)
-        for name in ("handle", "_serve", "_accept_loop", "_clear_stale_socket",
-                     "describe_answer", "_discard"):
-            self.assertFalse(hasattr(self.bridge, name), name)
-
     def test_close_terminalizes_before_owner_stops_and_leaves_endpoint_to_controller(self):
         self.start()
         direct_request(self.endpoint)
@@ -242,6 +268,56 @@ class InquiryOwnerTests(unittest.TestCase):
         self.assertIsNone(self.endpoint._closed_reason)
         self.bridge.close()
         self.assertEqual(len(records(self.bridge.journal_path)), 2)
+
+    def test_cooperative_native_receipts_publish_delivery_and_answer(self):
+        self.start()
+        native = NativeReceiptFixture(self.bridge)
+        queued = direct_request(self.endpoint)
+        self.assertEqual((queued.status, queued.state), ("queued", "queued"))
+        first = direct_snapshot(self.endpoint).inquiries[0]
+        self.assertEqual(first.status, "queued")
+        self.assertEqual([item["state"] for item in records(self.bridge.journal_path)], ["queued"])
+        checkpoint_id = native.tool()
+        delivered = direct_snapshot(self.endpoint).inquiries[0]
+        self.assertEqual((delivered.status, delivered.tool_call_id), ("delivered", checkpoint_id))
+        self.assertGreater(delivered.seq, first.seq)
+        answer_id = native.tool(answer="durably verified")
+        answered = direct_snapshot(self.endpoint, inquiry_id="q-owner").inquiries[0]
+        self.assertEqual((answered.status, answered.answer, answered.bytes, answered.via,
+                          answered.tool_call_id, answered.truncated),
+                         ("answered", "durably verified", 16,
+                          "tool:hey_my_buddy_answer_inquiry", answer_id, False))
+        self.assertIsNotNone(answered.at)
+        self.assertEqual([item["state"] for item in records(self.bridge.journal_path)],
+                         ["queued", "delivered", "answered"])
+        self.assertEqual(direct_request(self.endpoint).status, "answered")
+        self.assertEqual(direct_snapshot(self.endpoint).inquiries[0].seq, answered.seq)
+
+    def test_child_and_tampered_receipts_cannot_upgrade_a_queued_inquiry(self):
+        self.start()
+        native = NativeReceiptFixture(self.bridge)
+        self.assertEqual(direct_request(self.endpoint).status, "queued")
+        native.tool(child=True)
+        self.assertEqual(direct_snapshot(self.endpoint).inquiries[0].status, "queued")
+        with self.assertRaises(NativeError):
+            native.tool(tampered=True)
+        self.assertEqual(direct_snapshot(self.endpoint).inquiries[0].status, "queued")
+        self.assertEqual([item["state"] for item in records(self.bridge.journal_path)], ["queued"])
+        self.bridge.close()
+        self.assertIsNone(self.endpoint._closed_reason)
+        ended = direct_snapshot(self.endpoint)
+        self.assertEqual(ended.inquiries[0].status, "unavailable")
+        self.assertEqual(ended.observation.agent_status, "ended")
+        self.assertIsNone(ended.unavailable)
+
+    def test_attention_write_failure_fails_the_native_turn_with_its_cause(self):
+        self.start()
+        with mock.patch.object(ib, "private_json", side_effect=OSError("disk full")):
+            with self.assertRaises(NativeError) as caught:
+                self.bridge.note_attention({"kind": "unsupported-interactive-request"})
+        self.assertEqual(caught.exception.code, "attention-record-unavailable")
+        self.assertIsInstance(caught.exception.__cause__, OSError)
+        self.assertEqual(str(caught.exception.__cause__), "disk full")
 
     def test_local_bridge_maintains_native_journal_without_a_second_channel(self):
         local = make_bridge(new_material_directory())
@@ -335,7 +411,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
             fact = journal.read_inquiry_journal(RUN, self.path)
         self.assertEqual(lock.call_count, 1)
         self.assertTrue(lock.call_args.kwargs["shared"])
-        bridge = make_bridge(self.directory, make_endpoint(self.directory / "state"))
+        bridge = make_bridge(self.directory, make_endpoint())
         self.addCleanup(bridge.close)
         # Bind the preexisting file without copying or altering its records.
         bridge.journal_path = self.path
@@ -349,7 +425,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
 
     def test_strict_projection_failure_keeps_owner_alive_and_observation_unavailable(self):
         self.write_records([self.record("q-invalid", "answered", answer={"text": "x" * 4001})])
-        endpoint = make_endpoint(self.directory / "state")
+        endpoint = make_endpoint()
         bridge = make_bridge(self.directory, endpoint)
         bridge.journal_path = self.path
         self.addCleanup(bridge.close)
@@ -368,7 +444,7 @@ class InquiryJournalProjectionTests(unittest.TestCase):
         self.path.touch()
         with self.path.open("r+b") as stream:
             stream.truncate(MAX_JOURNAL_BYTES + 1)
-        endpoint = make_endpoint(self.directory / "state")
+        endpoint = make_endpoint()
         bridge = make_bridge(self.directory, endpoint)
         bridge.journal_path = self.path
         self.addCleanup(bridge.close)
@@ -380,204 +456,5 @@ class InquiryJournalProjectionTests(unittest.TestCase):
         self.assertEqual(snapshot.inquiries, ())
 
 
-def peer_main() -> int:
-    """Real C-Two controller peer; stdin commands model native fixture events."""
-    os.environ["C2_RELAY_ANCHOR_ADDRESS"] = ""
-    os.environ["C2_ENV_FILE"] = ""
-    endpoint = None
-    bridge = None
-    evidence = None
-    ordinal = 0
-
-    def event(kind, payload):
-        nonlocal ordinal
-        ordinal += 1
-        message = {"method": "session/event", "params": {
-            "sessionId": "native-session-owner", "turnId": "native-root-turn",
-            "seq": ordinal, "type": kind, "payload": payload}}
-        evidence.observe(message, ordinal)
-        bridge.note_event(message, "running")
-
-    for line in sys.stdin:
-        command = json.loads(line)
-        try:
-            op = command["op"]
-            if op == "start":
-                directory = Path(command["directory"])
-                endpoint = make_endpoint(Path(command["stateDir"]))
-                descriptor = endpoint.start()
-                bridge = make_bridge(directory, endpoint)
-                bridge.start()
-                bridge.activate("native-session-owner")
-                config = {"identity": BOUND, "inputSha256": RUN.input_sha256,
-                          "key": "b" * 64,
-                          "inquiryJournalPath": str(bridge.journal_path),
-                          "attentionPath": str(bridge.attention_path)}
-                evidence = RootTurnEvidence("native-session-owner", RUN.invocation_id,
-                    "mcp__buddy_fixture__hey_my_buddy_finish_turn", config,
-                    checkpoint_name="mcp__buddy_fixture__hey_my_buddy_checkpoint",
-                    answer_name="mcp__buddy_fixture__hey_my_buddy_answer_inquiry",
-                    on_delivery=bridge.deliver_inquiries, on_answer=bridge.record_answer,
-                    validate_outcome=turn_io.validate_outcome,
-                    mounted_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"))
-                event("turn.started", {"inputId": RUN.invocation_id})
-                import c_two as cc
-                result = {"descriptor": descriptor.to_payload(),
-                          "endpointRoot": cc.local_endpoint_context().root}
-            elif op in ("checkpoint", "answer", "tamperedCheckpoint", "childCheckpoint"):
-                tool = "hey_my_buddy_answer_inquiry" if op == "answer" else "hey_my_buddy_checkpoint"
-                arguments = ({"inquiryId": command["questionId"], "answer": command["answer"]}
-                             if op == "answer" else {})
-                response = respond({"jsonrpc": "2.0", "id": ordinal + 1, "method": "tools/call",
-                                    "params": {"name": tool, "arguments": arguments}}, config)["result"]
-                if response.get("isError"):
-                    raise AssertionError(response)
-                text = response["content"][0]["text"]
-                call_id = f"call-{op}-{ordinal}"
-                tool_name = "mcp__buddy_fixture__" + tool
-                event("tool.updated", {"kind": "scheduled", "toolName": tool_name,
-                                       "toolCallId": call_id})
-                if op == "tamperedCheckpoint":
-                    changed = json.loads(text)
-                    changed["signature"] = "f" * 64
-                    text = json.dumps(changed)
-                payload = {"kind": "result", "toolCallId": call_id,
-                           "result": {"success": True, "truncated": False, "content": text}}
-                if op == "childCheckpoint":
-                    payload["childSessionId"] = "native-child"
-                event("tool.updated", payload)
-                result = {"callId": call_id, "states": {
-                    question_id: entry["state"] for question_id, entry in bridge.entries.items()}}
-            elif op == "close":
-                bridge.close()
-                result = {"ownerAlive": bool(bridge.thread and bridge.thread.is_alive()),
-                          "endpointClosed": endpoint._closed_reason is not None}
-            elif op == "stop":
-                bridge.close()
-                endpoint.stop()
-                print(json.dumps({"ok": True}), flush=True)
-                return 0
-            else:
-                raise AssertionError("unknown peer command")
-            print(json.dumps({"ok": True, **result}), flush=True)
-        except Exception as error:
-            print(json.dumps({"ok": False, "error": type(error).__name__,
-                              "code": getattr(error, "code", None),
-                              "detail": str(error)[:400]}), flush=True)
-    return 0
-
-
-class InquiryOwnerPeerTests(unittest.TestCase):
-    def setUp(self):
-        self.directory = new_material_directory()
-        environment = {key: value for key, value in os.environ.items()
-                       if key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")
-                       and not key.startswith(("HMB_", "ANTHROPIC_", "C2_"))}
-        self.state = self.directory / "state"
-        self.home = self.directory / "home"
-        self.home.mkdir(mode=0o700)
-        self.native_tmp = self.directory / "tmp"
-        self.native_tmp.mkdir(mode=0o700)
-        environment.update(HOME=str(self.home), TMPDIR=str(self.native_tmp),
-                           HMB_CHECKS_TMPDIR=str(self.native_tmp),
-                           HMB_RUNTIME_ROOT=str(self.directory / "runtime"),
-                           C2_ENV_FILE="", C2_RELAY_ANCHOR_ADDRESS="")
-        self.stderr_path = self.directory / "peer.stderr"
-        self.stderr = self.stderr_path.open("x", encoding="utf-8", newline="\n")
-        self.addCleanup(self.stderr.close)
-        self.process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--owner-peer"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr,
-            env=environment, text=True, encoding="utf-8")
-        self.addCleanup(self.stop_peer)
-        started = self.command("start", directory=str(self.directory), stateDir=str(self.state))
-        self.assertTrue(started["ok"], started)
-        self.assertEqual(Path(started["endpointRoot"]), self.state.resolve() / "ipc")
-        self.assertFalse((self.home / ".local" / "share" / "hey-my-buddy").exists())
-        self.assertEqual(list(self.native_tmp.iterdir()), [], "the default C-Two domain was created")
-        self.assertEqual(list(self.home.iterdir()), [], "the private empty HOME was used as a default")
-        self.descriptor = ctl.LiveEndpointDescriptor.from_payload(started["descriptor"])
-        self.channel = ctl.CTwoLiveChannel(RUN, TEST_CRM, name=self.descriptor.name,
-            address=self.descriptor.address, instance_id=self.descriptor.instance_id,
-            token=TEST_TOKEN, state_dir=self.state)
-        from hey_my_buddy.protocol import rpc_config
-        import c_two as cc
-        rpc_config.configure_client(self.state)
-        self.assertEqual(Path(cc.local_endpoint_context().root), self.state.resolve() / "ipc")
-        from support import shutdown_private_rpc
-        self.addCleanup(shutdown_private_rpc)
-        self.addCleanup(lambda: self.channel.close(reason="test-ended"))
-
-    def command(self, op, **fields):
-        self.process.stdin.write(json.dumps({"op": op, **fields}) + "\n")
-        self.process.stdin.flush()
-        ready, _, _ = select.select([self.process.stdout], [], [], 10)
-        if not ready:
-            self.fail(f"peer command {op} did not answer; stderr artifact: {self.stderr_path.name}")
-        line = self.process.stdout.readline()
-        self.assertTrue(line, f"peer exited while handling {op}")
-        return json.loads(line)
-
-    def stop_peer(self):
-        if self.process.poll() is None:
-            try:
-                self.command("stop")
-                self.process.wait(5)
-            except (OSError, subprocess.TimeoutExpired, AssertionError):
-                self.process.kill()
-                self.process.wait(5)
-        self.process.stdin.close()
-        self.process.stdout.close()
-
-    def observe(self, **kwargs):
-        return self.channel.observe(timeout_ms=3000, limit=32, **kwargs)
-
-    def test_real_ctwo_owner_queue_requires_verified_cooperative_native_delivery_and_answer(self):
-        queued = self.channel.request(request(), timeout_ms=4000)
-        self.assertEqual((queued.status, queued.state), ("queued", "queued"))
-        first = self.observe().inquiries[0]
-        self.assertEqual(first.status, "queued")
-        self.assertEqual([item["state"] for item in records(self.directory / "inquiry.jsonl")], ["queued"])
-        checkpoint = self.command("checkpoint")
-        self.assertTrue(checkpoint["ok"], checkpoint)
-        delivered = self.observe().inquiries[0]
-        self.assertEqual(delivered.status, "delivered")
-        self.assertEqual(delivered.tool_call_id, checkpoint["callId"])
-        self.assertGreater(delivered.seq, first.seq)
-        answered = self.command("answer", questionId="q-owner", answer="durably verified")
-        self.assertTrue(answered["ok"], answered)
-        answer = self.observe(inquiry_id="q-owner").inquiries[0]
-        self.assertEqual((answer.status, answer.answer, answer.bytes, answer.via,
-                          answer.tool_call_id, answer.truncated),
-                         ("answered", "durably verified", 16, "tool:hey_my_buddy_answer_inquiry",
-                          answered["callId"], False))
-        self.assertIsNotNone(answer.at)
-        self.assertEqual([item["state"] for item in records(self.directory / "inquiry.jsonl")],
-                         ["queued", "delivered", "answered"])
-        self.assertEqual(self.channel.request(request(), timeout_ms=3000).status, "answered")
-        self.assertEqual(self.observe().inquiries[0].seq, answer.seq)
-        self.assertEqual(list(self.home.iterdir()), [])
-        self.assertEqual(list(self.native_tmp.iterdir()), [])
-
-    def test_tampered_receipt_and_child_native_evidence_cannot_upgrade_rpc_queue_receipt(self):
-        self.assertEqual(self.channel.request(request(), timeout_ms=4000).status, "queued")
-        child = self.command("childCheckpoint")
-        self.assertTrue(child["ok"], child)
-        self.assertEqual(self.observe().inquiries[0].status, "queued")
-        forged = self.command("tamperedCheckpoint")
-        self.assertFalse(forged["ok"])
-        self.assertEqual(forged["error"], "NativeError")
-        self.assertEqual(self.observe().inquiries[0].status, "queued")
-        self.assertEqual([item["state"] for item in records(self.directory / "inquiry.jsonl")], ["queued"])
-        closed = self.command("close")
-        self.assertFalse(closed["ownerAlive"])
-        self.assertFalse(closed["endpointClosed"])
-        ended = self.observe()
-        self.assertEqual(ended.inquiries[0].status, "unavailable")
-        self.assertEqual(ended.observation.agent_status, "ended")
-        self.assertIsNone(ended.unavailable)
-
-
 if __name__ == "__main__":
-    if "--owner-peer" in sys.argv:
-        raise SystemExit(peer_main())
     unittest.main()

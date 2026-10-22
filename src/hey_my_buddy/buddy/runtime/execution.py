@@ -1,5 +1,4 @@
 """One process owns one execution, its native work and durable result delivery."""
-from __future__ import annotations
 
 import signal
 
@@ -25,6 +24,7 @@ import time
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import c_two as cc
 
@@ -38,9 +38,10 @@ from ...protocol.reasons import reason as make_reason
 from ...json_codec import canonical_json, decode_strict_json
 from ...protocol.stop import WRAP_UP_INITIATORS, TERMINATION_REASONS
 from ..harnesses.registry import ExecutionContext
-from ..harnesses.c_two_live import (CTwoLiveEndpoint, LiveEndpointDescriptor,
-    _observe_arguments, _timeout_ms, random_person_name)
-from ..harnesses.live import LiveReply, LiveRequest, LiveSnapshot
+from ..harnesses.c_two_live import CTwoLiveEndpoint
+from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, OptionalText, Text, fail
+from ..harnesses.live import (LIVE_FIELDS, MAX_REQUEST_ID, MAX_OBSERVE_LIMIT,
+    MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS, LiveReply, LiveRequest, LiveSnapshot)
 from ..roles import controller as role_seam
 from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory, RETRYABLE
 
@@ -54,6 +55,81 @@ PREFLIGHT_MAX_RETRY_SECONDS = 180.0
     TERMINATION_UNKNOWN_STOP, TERMINATION_DEADLINE, TERMINATION_HARNESS_ERROR,
     TERMINATION_TRANSPORT_ERROR, TERMINATION_INTERRUPTED, TERMINATION_WORKSPACE_ERROR,
 ) = TERMINATION_REASONS
+
+
+_PERSON_NAMES = (
+    "Ada", "Alan", "Amber", "Ana", "Aria", "Ari", "Arthur", "Asha", "Aurelia", "Axel",
+    "Bao", "Bea", "Bo", "Bruno", "Cara", "Cass", "Cecilia", "Cedric", "Chen", "Cleo",
+    "Cora", "Dahlia", "Dara", "Dax", "Delia", "Dev", "Diana", "Dora", "Dorian", "Dun",
+    "Edith", "Elena", "Elio", "Elsa", "Emrys", "Enzo", "Esme", "Ezra", "Faye", "Fen",
+    "Fiona", "Fleur", "Fox", "Gaia", "Gideon", "Gina", "Greta", "Hana", "Harvey", "Hazel",
+    "Heidi", "Hera", "Hild", "Ida", "Idris", "Ilya", "Ines", "Iris", "Isolde", "Iva",
+    "Ivo", "Jade", "Jalen", "Jasper", "Jia", "Joon", "Juno", "Kai", "Kara", "Keir",
+    "Kenzie", "Kestrel", "Kira", "Klaus", "Laleh", "Lena", "Leo", "Lila", "Lin", "Lior",
+    "Livia", "Loke", "Lucia", "Lum", "Lyra", "Mabel", "Mae", "Magnus", "Mali", "Manon",
+    "Mara", "Marius", "Marlow", "Matis", "Mei", "Milo", "Mira", "Mireille", "Nadia", "Nara",
+    "Nell", "Nia", "Noor", "Nox", "Odile", "Ola", "Omar", "Ona", "Orion", "Oskar",
+    "Otto", "Paloma", "Petra", "Phoebe", "Piet", "Pim", "Quinn", "Rada", "Rafa", "Remy",
+    "Rhea", "Rin", "Romy", "Rook", "Rune", "Saga", "Sage", "Sami", "Sasha", "Selene",
+    "Sena", "Sian", "Silas", "Sina", "Sol", "Solveig", "Sonny", "Sora", "Sten", "Suri",
+    "Sven", "Talia", "Tamar", "Taro", "Tessa", "Teo", "Thalia", "Theo", "Tilde", "Tove",
+    "Ugo", "Una", "Uri", "Valda", "Vera", "Vero", "Vesper", "Vida", "Viggo", "Vinnie",
+    "Vita", "Vivi", "Wade", "Wren", "Xu", "Yan", "Yara", "Yuki", "Yusuf", "Zadie",
+    "Zane", "Zara", "Zia", "Zola", "Zora", "Zuri",
+)
+
+def random_person_name() -> str:
+    """One random person name for a run's endpoint; display use only."""
+    return secrets.choice(_PERSON_NAMES)
+
+class LiveEndpointDescriptor(InternalModel):
+    """Bounded private readiness facts; the credential is native opaque JSON.
+
+    The holder consumes ``endpointCredential`` through C-Two's codec. Address,
+    instance and the held process PID remain independent binding checks.
+    Windows has no reap credential and uses the native default pipe domain.
+    """
+
+    address: Text(256)
+    name: Text(128)
+    instance_id: Hex64
+    host_pid: NonNegativeInt
+    endpoint_credential: OptionalText(8192) = None
+
+def _timeout_ms(value: Any, label: str) -> int:
+    """The preserved transport window bound, checked exactly as the live seam does."""
+    if isinstance(value, bool) or not isinstance(value, int) \
+            or not MIN_TRANSPORT_TIMEOUT_MS <= value <= MAX_TRANSPORT_TIMEOUT_MS:
+        raise fail(f"{label} must be an integer between {MIN_TRANSPORT_TIMEOUT_MS} and "
+                   f"{MAX_TRANSPORT_TIMEOUT_MS}", field=label)
+    return value
+
+def _selected_fields(fields: Any) -> frozenset:
+    if fields is None:
+        return frozenset(LIVE_FIELDS)
+    if isinstance(fields, str) or not isinstance(fields, (list, tuple, set, frozenset)):
+        raise fail(f"fields must be a selection of {', '.join(LIVE_FIELDS)}", field="fields")
+    selected = frozenset(fields)
+    if not selected <= frozenset(LIVE_FIELDS):
+        raise fail(f"fields must be a selection of {', '.join(LIVE_FIELDS)}", field="fields")
+    return selected or frozenset(LIVE_FIELDS)
+
+def _observe_arguments(after_seq: Any, limit: Any, fields: Any, inquiry_id: Any) -> dict:
+    """The observe arguments validated exactly as the live seam validates them."""
+    if inquiry_id is not None:
+        if not isinstance(inquiry_id, str) or not inquiry_id \
+                or len(inquiry_id.encode()) > MAX_REQUEST_ID:
+            raise fail("inquiryId must be a nonempty string of at most "
+                       f"{MAX_REQUEST_ID} bytes", field="inquiryId")
+        return {"inquiry_id": inquiry_id}
+    if after_seq is not None and (isinstance(after_seq, bool) or not isinstance(after_seq, int)
+                                  or after_seq < 0):
+        raise fail("afterSeq must be null or a nonnegative integer", field="afterSeq")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_OBSERVE_LIMIT:
+        raise fail(f"limit must be an integer between 1 and {MAX_OBSERVE_LIMIT}", field="limit")
+    selected = _selected_fields(fields)
+    return {"after_seq": after_seq, "limit": limit,
+            "fields": tuple(selected) if selected != frozenset(LIVE_FIELDS) else None}
 
 
 def _now() -> str:

@@ -22,7 +22,6 @@ from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.tool_evidence import ReadOnlyToolEvidence
-from hey_my_buddy.buddy.harnesses.registry import run_seam
 from hey_my_buddy.buddy.roles.run_execution import start_review
 from hey_my_buddy.buddy.roles.structured_call import collect
 from hey_my_buddy.blackboard.routing.router import answer_schema
@@ -481,8 +480,6 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                          (1, ["toolu_so_2", "toolu_so_2"]))
 
 
-@unittest.skipUnless(run_seam("claude") is not None,
-                     "the claude run seam is registered only in the activated verification copy")
 class RunnerReceiptTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-evidence-",

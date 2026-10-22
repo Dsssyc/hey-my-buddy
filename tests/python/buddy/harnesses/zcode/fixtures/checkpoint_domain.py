@@ -170,11 +170,8 @@ def serve():
                     channel = fixture.ready_channel(handle)
                     fixture.assertEqual(Path(cc.local_endpoint_context().root), state / "ipc",
                                         "holder must use its own actual process-level IPC domain")
-                    endpoint = handle.test_live_endpoint
-                    descriptor = endpoint._descriptor.to_payload()
                     facts = {"attemptId": context.attempt_id, "ownerPid": os.getpid(),
-                             "controllerPid": handle.pid, "instanceId": endpoint.instance_id,
-                             "token": endpoint._token, "address": descriptor["address"],
+                             "controllerPid": handle.pid,
                              "state": str(state), "runtime": str(runtime), "home": str(home),
                              "ipcRoot": str(cc.local_endpoint_context().root),
                              "live": handle.exit_code is None}

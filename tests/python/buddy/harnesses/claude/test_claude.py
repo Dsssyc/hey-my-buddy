@@ -35,9 +35,6 @@ from hey_my_buddy.private_dirs import context_root
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 
 
-def _claude_registered() -> bool:
-    from hey_my_buddy.buddy.harnesses.registry import run_seam
-    return run_seam("claude") is not None
 
 
 def flag_value(args: list[str], flag: str) -> str | None:
@@ -105,9 +102,6 @@ class ClaudeFixtureCase(unittest.TestCase):
                                 turn={"turnId": f"turn-{index}", "input": turn_input})
 
 
-@unittest.skipUnless(_claude_registered(),
-                     "the claude run seam is registered only in the activated verification copy; "
-                     "the availability probe rides the shared discovery carrier")
 class ClaudeAvailabilityTests(ClaudeFixtureCase):
     """Capability reads over the cached discovery probe."""
 
@@ -143,8 +137,6 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
         return self.fixture_state()["runs"]
 
 
-@unittest.skipUnless(_claude_registered(),
-                     "the claude run seam is registered only in the activated verification copy")
 class ClaudeAdapterTests(ClaudeFixtureCase):
     """The micro task turn and the read-only call through the registered run."""
 

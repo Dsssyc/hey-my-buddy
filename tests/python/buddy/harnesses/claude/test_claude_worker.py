@@ -1,8 +1,7 @@
 """Claude role wiring through the real private daemon, Worker and Git seal.
 
 Only the native CLI is simulated. No installed harness or model is contacted.
-The daemon-level cases need the Host activation patch that registers the
-claude run seam; the catalog rule is pure and runs anywhere.
+The daemon-level cases use the fixed Claude run seam; the catalog rule is pure.
 """
 import json
 import unittest
@@ -21,13 +20,8 @@ BUDDY = {"harness": "claude", "provider": "anthropic",
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 
 
-def _claude_registered() -> bool:
-    from hey_my_buddy.buddy.harnesses.registry import run_seam
-    return run_seam("claude") is not None
 
 
-@unittest.skipUnless(_claude_registered(),
-                     "the claude run seam is registered only in the activated verification copy")
 class ClaudeWorkerTests(MicroTaskWorkerTestCase):
     def setUp(self):
         super().setUp()

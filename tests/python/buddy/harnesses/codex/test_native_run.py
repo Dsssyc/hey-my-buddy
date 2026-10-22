@@ -29,9 +29,8 @@ from unittest import mock
 
 from hey_my_buddy.blackboard.routing.router import answer_schema
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint, LiveWireObserve
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
-from buddy.harnesses.live_contract import HarnessRunLive
 from hey_my_buddy.protocol.activity import is_newer, normalize_activity
 from hey_my_buddy.buddy.harnesses.codex import native_run
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
@@ -70,14 +69,11 @@ REVIEW_SCHEMA = answer_schema(["legal"])
 
 
 def activity_endpoint(identity):
-    return CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES["codex"], HarnessRunLive,
-                            instance_id="a" * 64, token="b" * 64, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+    return CTwoLiveEndpoint(identity, EXISTING_CAPABILITIES["codex"])
 
 
-def observed_activity(endpoint, identity):
-    query = LiveWireObserve(identity=identity, instance_id="a" * 64, token="b" * 64,
-                            fields=("activity",), limit=10)
-    return json.loads(endpoint.observe(json.dumps(query.to_payload())))["activity"]
+def observed_activity(endpoint):
+    return json.loads(endpoint.observe_local(fields=("activity",), limit=10))["activity"]
 
 
 class RejectionPhaseTests(unittest.TestCase):
@@ -711,7 +707,7 @@ class ReviewSeamTests(CodexSeamCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.value.correction_count, 1)
         self.assertEqual(result.activity.value["counts"], {"modelTurns": 2, "toolCalls": 0})
-        self.assertEqual(observed_activity(endpoint, request.identity), result.activity.value)
+        self.assertEqual(observed_activity(endpoint), result.activity.value)
         self.assertEqual(publish.call_args.args[0], result.activity.value)
 
     def test_a_completed_review_stream_stays_complete_without_a_confirmed_stop(self):
@@ -1455,9 +1451,7 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(payloads[-1]["counts"], {"modelTurns": 1, "toolCalls": 1})
         self.assertTrue(all(normalize_activity(payload) == payload for payload in payloads))
         self.assertTrue(all(is_newer(new, old) for old, new in zip(payloads, payloads[1:])))
-        self.assertEqual(observed_activity(endpoint, request.identity), result.activity.value)
-        foreign = request.identity.model_copy(update={"attempt_id": "another-attempt"})
-        self.assertIsNone(observed_activity(endpoint, foreign))
+        self.assertEqual(observed_activity(endpoint), result.activity.value)
         self.assertFalse(Path(request.private_state.invocation_root, "activity.json").exists())
 
     def test_refused_activity_publication_retains_native_final_facts(self):

@@ -1,7 +1,7 @@
 """Strict bounded live facts and the common C-Two-facing channel interface."""
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal, Optional, Protocol, runtime_checkable
+from typing import Annotated, Any, Literal, Optional
 
 from ...protocol.internal_models import (
     FrozenJson,
@@ -36,7 +36,7 @@ MAX_CLOSE_REASON_BYTES = 200
 LiveKind = Literal["inquiry"]
 InquiryDeliveryMode = Literal["realtime", "cooperative-checkpoint", "unsupported"]
 LiveReplyStatus = Literal["queued", "delivered", "answered", "discarded", "unavailable", "unsupported"]
-ReplyState = Literal["queued", "claimed", "delivered", "answered", "discarded"]
+ReplyState = Literal["queued", "delivered", "answered", "discarded"]
 InquiryStateValue = Literal["queued", "delivered", "answered", "discarded", "unavailable", "unknown"]
 
 
@@ -255,32 +255,13 @@ class LiveSnapshot(InternalModel):
     error: OptionalText(128) = None
 
 
-@runtime_checkable
-class LiveChannel(Protocol):
-    """The one live interface of every harness (ADR-025 execution plan §5).
-
-    ``identity`` is the complete execution identity the channel is bound to —
-    the real run request's own, never a fabricated one (step 2-C2).
-    """
-
-    @property
-    def identity(self) -> RunIdentity: ...
-
-    def capabilities(self) -> LiveCapabilities: ...
-
-    def request(self, request: LiveRequest, *, timeout_ms: int) -> LiveReply: ...
-
-    def observe(self, *, after_seq: int | None = None, limit: int | None = None, timeout_ms: int,
-                fields: Any = None, inquiry_id: str | None = None) -> LiveSnapshot: ...
-
-    def close(self, *, reason: str) -> None: ...
 
 
 
 
 #: Journal record states map onto the closed snapshot set; an unrecognized state
 #: stays ``unknown`` instead of being silently promoted.
-_JOURNAL_STATE_STATUSES = {"queued": "queued", "claimed": "queued", "delivered": "delivered",
+_JOURNAL_STATE_STATUSES = {"queued": "queued", "delivered": "delivered",
                            "answered": "answered", "discarded": "discarded", "unavailable": "unavailable"}
 
 
@@ -334,8 +315,8 @@ def _journal_states(entries: Any) -> tuple[InquiryState, ...]:
     for entry in entries:
         if not isinstance(entry, dict):
             raise fail("an inquiry journal record must be an object")
-        question_id = entry.get("inquiryId") or entry.get("questionId") or entry.get("id")
-        state = entry.get("state") or entry.get("status")
+        question_id = entry.get("inquiryId")
+        state = entry.get("state")
         if not isinstance(question_id, str) or not question_id or len(question_id.encode()) > MAX_REQUEST_ID:
             raise fail("an inquiry journal record carries no bounded question id")
         status = _JOURNAL_STATE_STATUSES.get(state, "unknown")
@@ -364,7 +345,7 @@ def _journal_states(entries: Any) -> tuple[InquiryState, ...]:
 __all__ = [
     "EXISTING_CAPABILITIES", "JOURNAL_REASONS",
     "LIVE_FIELDS", "LiveCapabilities",
-    "LiveChannel", "InquiryJournalRejection",
+    "InquiryJournalRejection",
     "InquiryPayload", "InquiryState", "LiveEvent", "LiveJournal", "LiveObservation", "LiveReply",
     "LiveRequest", "LiveSnapshot",
     "MAX_ANSWER_BYTES", "MAX_INQUIRIES_PER_RUN", "MAX_LIVE_FRAME_BYTES", "MAX_QUESTION_BYTES",

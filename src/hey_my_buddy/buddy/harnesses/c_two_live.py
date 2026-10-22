@@ -1,111 +1,33 @@
-"""The ADR-025 step 5-A live backend: one C-Two endpoint behind the live seam.
+"""In-process live facts and bounded inquiry handoff for one native run.
 
-The native run uses :class:`CTwoLiveEndpoint` as an in-process channel. The
-execution process owns the single registered C-Two ``ExecutionLive`` resource;
-the outer resource forwards authenticated requests into the active native
-channel. The generic endpoint can also register a test CRM for transport
-checks, with its contract supplied by the test fixture.
-
-The transport facts follow the accepted F-C1 evidence: routing is by the
-address read back through ``cc.server_address()`` after registration, the
-person name is display-only and is never an authorization or identity
-judgment, ``set_server``/``set_client`` are applied through
-:mod:`hey_my_buddy.protocol.rpc_config` before the first register or connect,
-and an endpoint that cannot be reached is an unavailable fact — never a
-stopped process. Every cross-process frame is one strict pydantic model of the
-existing live format plus the two private envelope fields this backend really
-reads (``instanceId`` and ``token``) and, on the request frame, the transport
-window and original local monotonic cutoff the server enforces at admission.
-The narrow token never travels in a
-reply, a snapshot, a diagnostic or a log line.
-
-Inside the endpoint the RPC threads only validate and enqueue: requests enter
-one bounded queue that the controller's owner loop consumes through
-:class:`CTwoLiveEndpoint.consume_request`, and the RPC thread then waits —
-inside the caller's transport window, on one standard-library event — for the
-owner's :meth:`CTwoLiveEndpoint.settle_request` answer, so no RPC thread ever
-touches the native connection and no fact is ever invented from the buffer
-insertion: a ``queued`` reply exists only after the owner's own durable
-journal commit, an owner refusal keeps the original code and the request
-retryable, and a window expiry leaves the unconsumed entry dropped rather
-than delivered late. Snapshots serve the bounded latest published facts only
-— activity keeps the monotonic projection of
-:mod:`hey_my_buddy.protocol.activity`, inquiry states, the observation and
-the journal availability fact keep their newest published values — and a read
-never starts a native turn or extends any deadline. Every snapshot the
-endpoint encodes — pages and point queries alike — is measured against the
-64 KiB frame before it leaves, with the overflow reported as an explicit
-unavailability instead of a trimmed or undecodable fact. Durable journals and
-results stay with the production code that owns them.
-
-On the client side C-Two's native connection and call deadlines enforce one
-caller transport window. Expiry ends the client's wait, without cancelling a
-dispatched owner operation or implying that the endpoint stopped. The private
-request frame carries that same local monotonic deadline so connecting and
-queueing cannot give an unconsumed request a second full window.
+The execution process owns the C-Two resource and authenticates each inbound
+frame once before forwarding its validated request into this object. The
+native owner consumes and durably settles inquiries; publication and reads
+never drive the native connection or extend its deadlines.
 """
 from __future__ import annotations
 
 import hashlib
-import os
 import queue
-import re
-import secrets
 import threading
 import time
-from pathlib import Path
-from typing import Annotated, Any, Literal, Mapping, Optional
+from typing import Any, Mapping
 
-import c_two as cc
-from c_two.error import CallDeadlineExceeded
-
-from ...errors import BoardError
-from ...json_codec import canonical_json, decode_bounded_frame, decode_strict_json
+from ...json_codec import canonical_json
 from ...protocol import activity as activity_protocol
-from ...protocol import rpc_config
-from ...protocol.inquiry import DEFAULT_TRANSPORT_TIMEOUT_MS
-from ...protocol.internal_models import (
-    FrozenJson,
-    Hex64,
-    Identifier,
-    InternalModel,
-    JsonTuple,
-    NonNegativeInt,
-    OptionalText,
-    Text,
-    check_text,
-    fail,
-)
+from ...protocol.internal_models import FrozenJson, check_text
 from .live import (
-    LIVE_FIELDS,
-    MAX_CLOSE_REASON_BYTES,
-    MAX_INQUIRIES_PER_RUN,
-    MAX_LIVE_FRAME_BYTES,
-    MAX_OBSERVE_LIMIT,
-    MAX_REQUEST_ID,
-    MAX_TRANSPORT_TIMEOUT_MS,
-    MIN_TRANSPORT_TIMEOUT_MS,
-    InquiryState,
-    LiveCapabilities,
-    LiveJournal,
-    LiveObservation,
-    LiveReply,
-    LiveRequest,
-    LiveSnapshot,
+    LIVE_FIELDS, MAX_CLOSE_REASON_BYTES, MAX_INQUIRIES_PER_RUN, MAX_LIVE_FRAME_BYTES,
+    InquiryState, LiveCapabilities, LiveJournal, LiveObservation, LiveReply,
+    LiveRequest, LiveSnapshot,
 )
 from .run_contract import RunIdentity
-from pydantic import Field
-
-#: The bounded admission buffer between the RPC threads and the owner loop. It
-#: never exceeds the per-run inquiry budget, so a full queue is the defensive
-#: fact for a stalled owner loop rather than a second inquiry limit.
-MAX_PENDING_LIVE_REQUESTS = MAX_INQUIRIES_PER_RUN
 
 
 class _PendingRequest:
     """One admitted request between its enqueue and the owner's settlement.
 
-    The slot is the whole hand-off: the RPC thread validates and enqueues it,
+    The slot is the whole hand-off: the execution call enqueues it,
     then waits on ``done`` inside the caller's transport window; only
     :meth:`CTwoLiveEndpoint.settle_request` — the owner's local answer after
     its own journal commit — sets ``reply``. Nothing about the native side is
@@ -123,148 +45,8 @@ class _PendingRequest:
         self.expired = False
 
 
-_HEX64 = re.compile(r"^[0-9a-f]{64}$")
-
-#: Random display names for one run's endpoint, drawn once per controller run.
-#: A duplicate name on another process is harmless without a relay anchor
-#: (F-C1 E2) and the name is never part of any authorization decision.
-_PERSON_NAMES = (
-    "Ada", "Alan", "Amber", "Ana", "Aria", "Ari", "Arthur", "Asha", "Aurelia", "Axel",
-    "Bao", "Bea", "Bo", "Bruno", "Cara", "Cass", "Cecilia", "Cedric", "Chen", "Cleo",
-    "Cora", "Dahlia", "Dara", "Dax", "Delia", "Dev", "Diana", "Dora", "Dorian", "Dun",
-    "Edith", "Elena", "Elio", "Elsa", "Emrys", "Enzo", "Esme", "Ezra", "Faye", "Fen",
-    "Fiona", "Fleur", "Fox", "Gaia", "Gideon", "Gina", "Greta", "Hana", "Harvey", "Hazel",
-    "Heidi", "Hera", "Hild", "Ida", "Idris", "Ilya", "Ines", "Iris", "Isolde", "Iva",
-    "Ivo", "Jade", "Jalen", "Jasper", "Jia", "Joon", "Juno", "Kai", "Kara", "Keir",
-    "Kenzie", "Kestrel", "Kira", "Klaus", "Laleh", "Lena", "Leo", "Lila", "Lin", "Lior",
-    "Livia", "Loke", "Lucia", "Lum", "Lyra", "Mabel", "Mae", "Magnus", "Mali", "Manon",
-    "Mara", "Marius", "Marlow", "Matis", "Mei", "Milo", "Mira", "Mireille", "Nadia", "Nara",
-    "Nell", "Nia", "Noor", "Nox", "Odile", "Ola", "Omar", "Ona", "Orion", "Oskar",
-    "Otto", "Paloma", "Petra", "Phoebe", "Piet", "Pim", "Quinn", "Rada", "Rafa", "Remy",
-    "Rhea", "Rin", "Romy", "Rook", "Rune", "Saga", "Sage", "Sami", "Sasha", "Selene",
-    "Sena", "Sian", "Silas", "Sina", "Sol", "Solveig", "Sonny", "Sora", "Sten", "Suri",
-    "Sven", "Talia", "Tamar", "Taro", "Tessa", "Teo", "Thalia", "Theo", "Tilde", "Tove",
-    "Ugo", "Una", "Uri", "Valda", "Vera", "Vero", "Vesper", "Vida", "Viggo", "Vinnie",
-    "Vita", "Vivi", "Wade", "Wren", "Xu", "Yan", "Yara", "Yuki", "Yusuf", "Zadie",
-    "Zane", "Zara", "Zia", "Zola", "Zora", "Zuri",
-)
-
-#: The per-component binding of the full run identity, in declared order; the
-#: first mismatch names exactly its own component in the refusal reason.
-_IDENTITY_COMPONENTS = (
-    ("taskId", "task_id"),
-    ("attemptId", "attempt_id"),
-    ("generation", "generation"),
-    ("invocationId", "invocation_id"),
-    ("turnId", "turn_id"),
-    ("inputSha256", "input_sha256"),
-)
-
-#: The inquiry-state values that ride an observed reply, exactly the bridge
-#: state set the existing backend maps; anything else stays a refusal.
-_REPLY_STATE_STATUSES = {"queued": "queued", "claimed": "queued", "delivered": "delivered",
+_REPLY_STATE_STATUSES = {"queued": "queued", "delivered": "delivered",
                          "answered": "answered", "discarded": "discarded"}
-
-LiveField = Literal["activity", "inquiries", "observation"]
-
-#: The transport window as one strict bounded field type, on the one frame
-#: whose server side genuinely consumes it.
-TransportWindowMs = Annotated[int, Field(ge=MIN_TRANSPORT_TIMEOUT_MS, le=MAX_TRANSPORT_TIMEOUT_MS)]
-
-
-def random_person_name() -> str:
-    """One random person name for a run's endpoint; display use only."""
-    return secrets.choice(_PERSON_NAMES)
-
-
-def _secret(value: Any, label: str) -> str:
-    if not isinstance(value, str) or not _HEX64.fullmatch(value):
-        raise fail(f"{label} must be a lowercase hex digest of 64 characters", field=label)
-    return value
-
-
-def _timeout_ms(value: Any, label: str) -> int:
-    """The preserved transport window bound, checked exactly as the live seam does."""
-    if isinstance(value, bool) or not isinstance(value, int) \
-            or not MIN_TRANSPORT_TIMEOUT_MS <= value <= MAX_TRANSPORT_TIMEOUT_MS:
-        raise fail(f"{label} must be an integer between {MIN_TRANSPORT_TIMEOUT_MS} and "
-                   f"{MAX_TRANSPORT_TIMEOUT_MS}", field=label)
-    return value
-
-
-class LiveWireRequest(LiveRequest):
-    """One live request frame on the C-Two wire: the request plus the envelope.
-
-    ``timeoutMs`` keeps the validated transport window. ``deadlineMonotonic``
-    carries its original cutoff across this same-machine IPC boundary: unlike
-    starting another window on arrival, it includes connection and dispatch
-    time. It is private to this backend, never a public board-schema field.
-    """
-
-    instance_id: Hex64
-    token: Hex64
-    timeout_ms: TransportWindowMs
-    deadline_monotonic: float = Field(ge=0, allow_inf_nan=False)
-
-
-class LiveWireObserve(InternalModel):
-    """One observe query frame: the envelope plus the selection of sources."""
-
-    instance_id: Hex64
-    token: Hex64
-    identity: RunIdentity
-    after_seq: Optional[NonNegativeInt] = None
-    limit: Optional[int] = Field(None, ge=1, le=MAX_OBSERVE_LIMIT)
-    fields: Optional[JsonTuple(LiveField, max_items=3)] = None
-    inquiry_id: Optional[Identifier] = None
-
-
-class LiveWireQuery(InternalModel):
-    """One capabilities query frame: the envelope alone."""
-
-    instance_id: Hex64
-    token: Hex64
-    identity: RunIdentity
-
-
-class LiveEndpointDescriptor(InternalModel):
-    """Bounded private readiness facts; the credential is native opaque JSON.
-
-    The holder consumes ``endpointCredential`` through C-Two's codec. Address,
-    instance and the held process PID remain independent binding checks.
-    Windows has no reap credential and uses the native default pipe domain.
-    """
-
-    address: Text(256)
-    name: Text(128)
-    instance_id: Hex64
-    host_pid: NonNegativeInt
-    endpoint_credential: OptionalText(8192) = None
-
-
-class ConfirmedProcessGone(InternalModel):
-    """The holder's own evidence that the endpoint's process group vanished.
-
-    ``exitCode`` is the leader's reaped exit code (negative for a POSIX
-    signal) and ``groupGone`` is the holder's own group observation; the
-    cleanup refuses unless the leader was actually reaped and the group was
-    actually observed gone, because an unobservable group is never stopped.
-    """
-
-    pid: NonNegativeInt
-    exit_code: Optional[int] = Field(None, ge=-(2**31), le=2**32 - 1)
-    group_gone: bool
-
-
-CleanupOutcomeValue = Literal["reaped", "already-absent", "busy", "stale-target",
-                              "unverified", "io-error", "not-applicable"]
-
-
-class CleanupOutcome(InternalModel):
-    """The public native reap fact, or a holder binding refusal."""
-
-    outcome: CleanupOutcomeValue
-    reason: OptionalText(256) = None
 
 
 def _carried_facts(entry: InquiryState) -> dict:
@@ -298,135 +80,20 @@ def _question_reply(entry: InquiryState, *, duplicate: bool) -> LiveReply:
                      native_correlation=correlation)
 
 
-def _selected_fields(fields: Any) -> frozenset:
-    if fields is None:
-        return frozenset(LIVE_FIELDS)
-    if isinstance(fields, str) or not isinstance(fields, (list, tuple, set, frozenset)):
-        raise fail(f"fields must be a selection of {', '.join(LIVE_FIELDS)}", field="fields")
-    selected = frozenset(fields)
-    if not selected <= frozenset(LIVE_FIELDS):
-        raise fail(f"fields must be a selection of {', '.join(LIVE_FIELDS)}", field="fields")
-    return selected or frozenset(LIVE_FIELDS)
-
-
-def _observe_arguments(after_seq: Any, limit: Any, fields: Any, inquiry_id: Any) -> dict:
-    """The observe arguments validated exactly as the live seam validates them."""
-    if inquiry_id is not None:
-        if not isinstance(inquiry_id, str) or not inquiry_id \
-                or len(inquiry_id.encode()) > MAX_REQUEST_ID:
-            raise fail("inquiryId must be a nonempty string of at most "
-                       f"{MAX_REQUEST_ID} bytes", field="inquiryId")
-        return {"inquiry_id": inquiry_id}
-    if after_seq is not None and (isinstance(after_seq, bool) or not isinstance(after_seq, int)
-                                  or after_seq < 0):
-        raise fail("afterSeq must be null or a nonnegative integer", field="afterSeq")
-    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_OBSERVE_LIMIT:
-        raise fail(f"limit must be an integer between 1 and {MAX_OBSERVE_LIMIT}", field="limit")
-    selected = _selected_fields(fields)
-    return {"after_seq": after_seq, "limit": limit,
-            "fields": tuple(selected) if selected != frozenset(LIVE_FIELDS) else None}
-
-
-def write_ready_material(path: str | Path, descriptor: LiveEndpointDescriptor) -> None:
-    """Publish one endpoint descriptor as a fresh 0600 file with no links.
-
-    The file is created exclusively: a pre-existing entry at the path — a
-    link included — is refused instead of being followed or overwritten.
-    """
-    if not isinstance(descriptor, LiveEndpointDescriptor):
-        raise fail("descriptor must be a LiveEndpointDescriptor value")
-    text = canonical_json(descriptor.to_payload())
-    if len(text.encode()) > 16384:
-        raise fail("live readiness material exceeds its frame bound")
-    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    try:
-        os.write(fd, text.encode())
-    finally:
-        os.close(fd)
-
-
-def cleanup_owned_endpoint(descriptor: LiveEndpointDescriptor,
-                           evidence: ConfirmedProcessGone, *,
-                           context: cc.LocalEndpointContext) -> CleanupOutcome:
-    """Reap once through C-Two only after the held leader and group are gone.
-
-    The supplied context is the holder's configured private domain, never a
-    domain derived from the untrusted readiness credential. No file paths or
-    native identity fields are constructed here; C-Two owns the codec and reap.
-    """
-    if not isinstance(descriptor, LiveEndpointDescriptor):
-        raise fail("descriptor must be a LiveEndpointDescriptor value")
-    if not isinstance(evidence, ConfirmedProcessGone):
-        raise fail("evidence must be a ConfirmedProcessGone value")
-    if evidence.exit_code is None or evidence.group_gone is not True:
-        return CleanupOutcome(outcome="unverified", reason="vanishing-not-confirmed")
-    if evidence.pid != descriptor.host_pid:
-        return CleanupOutcome(outcome="unverified", reason="process-identity-mismatch")
-    if descriptor.endpoint_credential is None:
-        return CleanupOutcome(outcome="not-applicable" if os.name == "nt" else "unverified",
-                              reason="endpoint-credential-unavailable")
-    try:
-        credential = cc.EndpointCredential.from_json(descriptor.endpoint_credential)
-    except (ValueError, TypeError):
-        return CleanupOutcome(outcome="unverified", reason="endpoint-credential-invalid")
-    if credential.address != descriptor.address:
-        return CleanupOutcome(outcome="unverified", reason="endpoint-address-mismatch")
-    if (credential.context.platform, credential.context.namespace_id, credential.context.root) != \
-            (context.platform, context.namespace_id, context.root):
-        return CleanupOutcome(outcome="unverified", reason="endpoint-domain-mismatch")
-    result = cc.reap_endpoint(descriptor.address, credential, context=context)
-    return CleanupOutcome(outcome=result["status"], reason=result.get("reason"))
-
-
 class CTwoLiveEndpoint:
-    """The server half of the step 5-A backend, owned by one run's controller.
+    """One run's owner-published facts and bounded inquiry admission queue.
 
-    The three CRM methods are the whole wire surface. ``request`` validates the
-    frame, binds the instance, the token and every component of the run
-    identity, then admits the question into one bounded queue for the owner
-    loop and waits for that owner's :meth:`settle_request` answer within the
-    caller's transport window — an RPC thread never writes the native
-    connection, no inquiry state exists before the owner's commit, and a
-    window expiry drops the unconsumed entry instead of delivering it late.
-    Both admission indexes — the settled questions and the settled request
-    ids, aliases included — are bounded by the per-run budget of 32 with no
-    eviction, so a new request id past the budget is an explicit
-    ``request-limit`` refusal while every known id stays idempotent.
-    ``observe`` serves the bounded latest published facts read-only, journal
-    availability fact included as the owner published it, and ``capabilities``
-    serves the delivery fact the controller declared. ``stop`` is the clean
-    endpoint lifecycle — unregister this resource, then shut the process's
-    C-Two server down — which is what makes this run's socket file disappear.
+    Requests wait for the owner's durable settlement inside their original
+    transport window. Settled questions and request ids retain their bindings
+    for replay and conflict checks over the run's inquiry budget.
     """
 
-    def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities, contract: type | None, *,
-                 name: str | None = None, instance_id: str | None = None,
-                 token: str | None = None, state_dir: Path):
-        if not isinstance(identity, RunIdentity):
-            raise fail("identity must be a RunIdentity")
-        if not isinstance(capabilities, LiveCapabilities):
-            raise fail("capabilities must be a LiveCapabilities value")
-        if contract is not None:
-            if not isinstance(contract, type):
-                raise fail("contract must be a CRM class")
-            for operation in ("capabilities", "request", "observe"):
-                if not callable(getattr(contract, operation, None)):
-                    raise fail(f"the live contract must declare a {operation} operation")
-        self._state_dir = state_dir
+    def __init__(self, identity: RunIdentity, capabilities: LiveCapabilities):
         self._identity = identity
         self._capabilities = capabilities
-        self._contract = contract
-        if contract is None:
-            self._name = self._instance_id = self._token = None
-        else:
-            self._name = check_text(name if name is not None else random_person_name(),
-                                    "name", maximum=128)
-            self._instance_id = _secret(instance_id if instance_id is not None else secrets.token_hex(32),
-                                        "instanceId")
-            self._token = _secret(token if token is not None else secrets.token_hex(32), "token")
         self._lock = threading.RLock()
         self._queue: queue.Queue[tuple[LiveRequest, _PendingRequest]] = \
-            queue.Queue(maxsize=MAX_PENDING_LIVE_REQUESTS)
+            queue.Queue(maxsize=MAX_INQUIRIES_PER_RUN)
         #: The committed admission indexes of the existing contract, bounded by
         #: the per-run budget of 32: one payload digest per settled question
         #: and one question per settled request id. Nothing is ever evicted —
@@ -453,51 +120,11 @@ class CTwoLiveEndpoint:
         self._observation_read: tuple[bool, str | None, str | None] | None = None
         self._journal: LiveJournal | None = None
         self._closed_reason: str | None = None
-        self._descriptor: LiveEndpointDescriptor | None = None
-        self._stopped = False
 
     @property
     def identity(self) -> RunIdentity:
         return self._identity
 
-    @property
-    def instance_id(self) -> str | None:
-        """The endpoint's instance id; a display-safe fact, never the token."""
-        return self._instance_id
-
-    def start(self) -> LiveEndpointDescriptor:
-        """Apply both C-Two profiles, register the resource, read the address back.
-
-        ``configure_server`` and ``configure_client`` both run before the first
-        register — a late call is silently ignored by C-Two (F-C1 E4), so the
-        ordering here is a hard precondition, not a preference. The returned
-        descriptor carries the address read back through
-        ``cc.server_address()``; it never carries the token.
-        """
-        if self._contract is None:
-            raise fail("an in-process live channel has no C-Two endpoint")
-        if self._descriptor is not None:
-            raise fail("the live endpoint was already started")
-        rpc_config.configure_server(self._state_dir)
-        rpc_config.configure_client(self._state_dir)
-        try:
-            cc.register(self._contract, self, name=self._name,
-                        concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
-        except (ValueError, RuntimeError) as error:
-            raise BoardError("LIVE_ENDPOINT_START_FAILED", str(error)) from error
-        address = cc.server_address()
-        if not isinstance(address, str) or not address:
-            raise fail("the registered live endpoint reported no server address")
-        inspected = cc.inspect_endpoint(address)
-        credential = inspected["credential"]
-        if inspected["status"] != "present" and inspected["status"] != "not-applicable":
-            raise BoardError("LIVE_UNAVAILABLE", "Registered endpoint credential is unavailable",
-                             reason=inspected["status"])
-        self._descriptor = LiveEndpointDescriptor(
-            address=check_text(address, "address", maximum=256),
-            name=self._name, instance_id=self._instance_id, host_pid=os.getpid(),
-            endpoint_credential=credential.to_json() if credential is not None else None)
-        return self._descriptor
 
     def consume_request(self, timeout_s: float) -> LiveRequest | None:
         """One owner-loop consumption from the bounded admission queue.
@@ -543,8 +170,6 @@ class CTwoLiveEndpoint:
         settled refusal clears the slot untouched, so the unsuccessful
         request stays retryable exactly as the existing bridges allow.
         """
-        if not isinstance(reply, LiveReply):
-            raise fail("reply must be a LiveReply value")
         with self._lock:
             slot = self._pending.get(request_id)
             if slot is None or slot.reply is not None:
@@ -552,8 +177,7 @@ class CTwoLiveEndpoint:
             aliases = [pending_id for pending_id, other in self._pending.items()
                        if other is slot]
             if reply.observed:
-                status = {None: None, "claimed": "queued"}.get(reply.state, reply.state) \
-                    or reply.status
+                status = reply.state or reply.status
                 for pending_id in aliases:
                     self._requests[pending_id] = slot.question_id
                 self._admitted[slot.question_id] = slot.digest
@@ -595,27 +219,21 @@ class CTwoLiveEndpoint:
 
     def publish_inquiry_state(self, state: InquiryState) -> None:
         """Publish one question's newest facts; a change takes a fresh seq."""
-        if not isinstance(state, InquiryState):
-            raise fail("state must be an InquiryState value")
         with self._lock:
             self._merge_states((state,))
 
-    def publish_observation(self, observation: LiveObservation | Mapping[str, Any]) -> None:
+    def publish_observation(self, observation: LiveObservation) -> None:
         """Keep one bounded observation value; a success read establishes it.
 
         A published value is the owner's own successful native read, so it
         carries the ``observed=True`` fact with it; the value is the newest
         published only and nothing is inferred beside it.
         """
-        if isinstance(observation, Mapping):
-            observation = LiveObservation.from_payload(dict(observation))
-        if not isinstance(observation, LiveObservation):
-            raise fail("observation must be a LiveObservation value")
         with self._lock:
             self._observation = observation
             self._observation_read = (True, None, None)
 
-    def publish_snapshot(self, snapshot: LiveSnapshot | Mapping[str, Any]) -> None:
+    def publish_snapshot(self, snapshot: LiveSnapshot) -> None:
         """Adopt one owner-published snapshot's read facts — a local method.
 
         The owner's actual observation read outcome rides in the snapshot's
@@ -626,10 +244,6 @@ class CTwoLiveEndpoint:
         own publication would be. The inquiries and the paging position are
         the owner's own sequence of settled publications and never ride here.
         """
-        if isinstance(snapshot, Mapping):
-            snapshot = LiveSnapshot.from_payload(dict(snapshot))
-        if not isinstance(snapshot, LiveSnapshot):
-            raise fail("snapshot must be a LiveSnapshot value")
         with self._lock:
             if snapshot.observed is not None:
                 self._observation_read = (snapshot.observed, snapshot.reason, snapshot.error)
@@ -642,7 +256,7 @@ class CTwoLiveEndpoint:
             if snapshot.journal is not None:
                 self._journal = snapshot.journal
 
-    def publish_journal(self, journal: LiveJournal | Mapping[str, Any]) -> None:
+    def publish_journal(self, journal: LiveJournal) -> None:
         """Keep the durable journal's own availability fact; the owner's input only.
 
         The journal projection is exactly what the owner's existing locked
@@ -652,10 +266,6 @@ class CTwoLiveEndpoint:
         is never mixed into the inquiry states: an endpoint whose owner has
         published nothing simply carries no journal fact.
         """
-        if isinstance(journal, Mapping):
-            journal = LiveJournal.from_payload(dict(journal))
-        if not isinstance(journal, LiveJournal):
-            raise fail("journal must be a LiveJournal value")
         with self._lock:
             self._journal = journal
 
@@ -675,55 +285,14 @@ class CTwoLiveEndpoint:
                     slot.done.set()
                 self._pending.pop(request_id, None)
 
-    def stop(self) -> None:
-        """The clean lifecycle: close, unregister this resource, shut the server down.
 
-        The controller process hosts exactly this one C-Two resource, so
-        shutting the process's server down unloads this run's socket file —
-        the disappearance is C-Two's own, observed in F-C1 E1.
-        """
-        if self._stopped:
-            return
-        self.close(reason="endpoint-stopped")
-        if self._contract is not None:
-            cc.unregister(self._name)
-            cc.shutdown()
-        self._stopped = True
+    # -- execution-local operations -----------------------------------------
 
-    # -- the three named CRM operations --------------------------------------
-
-    def capabilities(self, request_json: str) -> str:
-        """Serve the declared delivery fact; refusals raise, there is no carrier."""
-        frame, refusal = self._authenticate_frame(request_json, LiveWireQuery)
-        if refusal is not None:
-            raise fail("the live capabilities call was refused", reason=refusal)
-        return self.capabilities_local()
 
     def capabilities_local(self) -> str:
         """Read the already selected adapter's declaration inside this process."""
         return canonical_json(self._capabilities.to_payload())
 
-    def request(self, request_json: str) -> str:
-        """Validate, bind and admit one live request, then await its settlement.
-
-        The RPC thread's own work ends at the bounded queue: the request waits
-        for the owner's :meth:`settle_request` answer inside the caller's
-        transport window and reports exactly what the owner settled — a
-        journal-committed ``queued`` fact, the owner's own refusal with its
-        original code, or an explicit window expiry. No inquiry state exists
-        before the owner's commit, and an entry the owner has not consumed
-        within its window is dropped instead of triggering a late native
-        delivery.
-        """
-        started = time.monotonic()
-        frame, refusal = self._authenticate_frame(request_json, LiveWireRequest)
-        if refusal is not None or frame is None:
-            return self._refusal_reply(refusal or "frame-invalid")
-        request = LiveRequest(identity=frame.identity, request_id=frame.request_id,
-                              kind=frame.kind, payload=frame.payload)
-        return self.request_local(request, timeout_ms=frame.timeout_ms,
-                                  deadline_monotonic=frame.deadline_monotonic,
-                                  started=started)
 
     def request_local(self, request: LiveRequest, *, timeout_ms: int,
                       deadline_monotonic: float, started: float | None = None) -> str:
@@ -796,9 +365,6 @@ class CTwoLiveEndpoint:
                         return self._refusal_reply("request-window-expired")
                     slot = _PendingRequest(question_id, digest, deadline)
                     try:
-                        # The queue carries the plain request without the
-                        # envelope beside its slot: the owner loop never holds
-                        # the token this frame authenticated with.
                         self._queue.put_nowait(
                             (request, slot))
                     except queue.Full:
@@ -817,15 +383,6 @@ class CTwoLiveEndpoint:
             return self._refusal_reply("channel-closed")
         return canonical_json(reply.to_payload())
 
-    def observe(self, request_json: str) -> str:
-        """Serve one bounded read-only page of the latest published facts."""
-        frame, refusal = self._authenticate_frame(request_json, LiveWireObserve)
-        if refusal is not None or frame is None:
-            return canonical_json(LiveSnapshot(unavailable=refusal or "frame-invalid",
-                                               observed=False,
-                                               reason=refusal or "frame-invalid").to_payload())
-        return self.observe_local(after_seq=frame.after_seq, limit=frame.limit,
-                                  fields=frame.fields, inquiry_id=frame.inquiry_id)
 
     def observe_local(self, *, after_seq=None, limit=None, fields=None,
                       inquiry_id=None) -> str:
@@ -894,17 +451,6 @@ class CTwoLiveEndpoint:
 
     # -- internals ------------------------------------------------------------
 
-    def _authenticate_frame(self, request_json: Any, model: type):
-        """Decode one frame and bind the instance, the token and the identity.
-
-        Returns the validated frame with ``None``, or ``None`` with the refusal
-        reason code the caller reports — the narrow token itself never appears
-        in any refusal.
-        """
-        if self._contract is None:
-            return None, "endpoint-not-registered"
-        return authenticate_live_frame(request_json, model, identity=self._identity,
-                                       instance_id=self._instance_id, token=self._token)
 
     def _question_entry(self, question_id: str) -> InquiryState | None:
         for entry in self._entries:
@@ -964,38 +510,6 @@ class CTwoLiveEndpoint:
             LiveReply(status="unavailable", reason_code=reason_code).to_payload())
 
 
-def authenticate_live_frame(request_json: Any, model: type, *, identity: RunIdentity,
-                            instance_id: str, token: str):
-    """The same bounded frame and complete binding validation at both live hops."""
-    value, refusal = decode_live_wire_frame(request_json)
-    if refusal is not None:
-        return None, refusal
-    try:
-        frame = model.from_payload(value)
-    except BoardError:
-        return None, "frame-invalid"
-    if frame.instance_id != instance_id:
-        return None, "instance-mismatch"
-    if not secrets.compare_digest(frame.token, token):
-        return None, "token-mismatch"
-    for wire_name, field_name in _IDENTITY_COMPONENTS:
-        if getattr(frame.identity, field_name) != getattr(identity, field_name):
-            return None, f"identity-mismatch:{wire_name}"
-    return frame, None
-
-
-def decode_live_wire_frame(raw: Any) -> tuple[Any, str | None]:
-    """The strict bounded decode every inbound frame passes first."""
-    if not isinstance(raw, str):
-        return None, "frame-invalid"
-    if len(raw.encode()) > MAX_LIVE_FRAME_BYTES:
-        return None, "frame-too-large"
-    try:
-        return decode_strict_json(raw), None
-    except (ValueError, RecursionError):
-        return None, "frame-invalid"
-
-
 def _frame_fits(snapshot: LiveSnapshot) -> bool:
     """The paging bound: one whole candidate frame within the 64 KiB limit."""
     return len(canonical_json(snapshot.to_payload()).encode()) <= MAX_LIVE_FRAME_BYTES
@@ -1012,150 +526,4 @@ def _oversized_snapshot_reply() -> str:
                                        reason="frame-too-large").to_payload())
 
 
-class CTwoLiveChannel:
-    """The client half of the step 5-A backend: one :class:`LiveChannel` by address.
-
-    Each call opens one fresh C-Two connection to the endpoint's address — the
-    measured production shape — with the display name only selecting the
-    resource at that address. The whole connect and call runs under the
-    caller's transport window through C-Two's native deadlines, so a peer
-    that never answers returns within the window instead
-    of hanging the holder. A dead, unreachable or stalling endpoint is always
-    an unavailable fact; nothing here ever reports a process as stopped.
-    Closing the channel is local: it changes no result ownership, stops
-    nothing and never waits for an in-flight call.
-    """
-
-    def __init__(self, identity: RunIdentity, contract: type, *, name: str, address: str,
-                 instance_id: str, token: str, state_dir: Path):
-        if not isinstance(identity, RunIdentity):
-            raise fail("identity must be a RunIdentity")
-        if not isinstance(contract, type):
-            raise fail("contract must be a CRM class")
-        for operation in ("capabilities", "request", "observe"):
-            if not callable(getattr(contract, operation, None)):
-                raise fail(f"the live contract must declare a {operation} operation")
-        self._state_dir = state_dir
-        self._identity = identity
-        self._contract = contract
-        self._name = check_text(name, "name", maximum=128)
-        self._address = check_text(address, "address", maximum=256)
-        self._instance_id = _secret(instance_id, "instanceId")
-        self._token = _secret(token, "token")
-        self._closed_reason: str | None = None
-
-    @property
-    def identity(self) -> RunIdentity:
-        """The complete execution identity this channel is bound to."""
-        return self._identity
-
-    def capabilities(self) -> LiveCapabilities:
-        """The endpoint's declared delivery fact, read live over C-Two."""
-        if self._closed_reason is not None:
-            raise BoardError("LIVE_UNAVAILABLE", "the live channel is closed")
-        frame = LiveWireQuery(instance_id=self._instance_id, token=self._token,
-                              identity=self._identity)
-        try:
-            raw = self._call("capabilities", frame,
-                             DEFAULT_TRANSPORT_TIMEOUT_MS)
-        except CallDeadlineExceeded:
-            raise BoardError("LIVE_UNAVAILABLE",
-                             "the live capabilities call did not finish within its transport window",
-                             reason="transport-window-expired") from None
-        except Exception as error:
-            raise BoardError("LIVE_UNAVAILABLE",
-                             "the live endpoint did not answer the capabilities call") from error
-        try:
-            return LiveCapabilities.from_payload(_decode_reply(raw, "live capabilities reply"))
-        except BoardError as error:
-            raise BoardError("LIVE_UNAVAILABLE",
-                             "the live capabilities reply was not a valid frame") from error
-
-    def request(self, request: LiveRequest, *, timeout_ms: int) -> LiveReply:
-        """Deliver one live request within its transport window."""
-        _timeout_ms(timeout_ms, "timeoutMs")
-        return self._request(request, timeout_ms=timeout_ms,
-                             deadline_monotonic=time.monotonic() + timeout_ms / 1000.0)
-
-    def _request(self, request: LiveRequest, *, timeout_ms: int, deadline_monotonic: float) -> LiveReply:
-        """Send the authenticated request without renewing its original window."""
-        if self._closed_reason is not None:
-            return LiveReply(status="unavailable", reason_code="channel-closed")
-        if request.identity != self._identity:
-            return LiveReply(status="unavailable", reason_code="identity-mismatch")
-        frame = LiveWireRequest(identity=request.identity, request_id=request.request_id,
-                                kind=request.kind, payload=request.payload,
-                                instance_id=self._instance_id, token=self._token,
-                                timeout_ms=timeout_ms,
-                                deadline_monotonic=deadline_monotonic)
-        try:
-            raw = self._call("request", frame, timeout_ms)
-        except CallDeadlineExceeded:
-            return LiveReply(status="unavailable", reason_code="transport-window-expired")
-        except Exception:
-            return LiveReply(status="unavailable", reason_code="transport-unreachable")
-        try:
-            return LiveReply.from_payload(_decode_reply(raw, "live reply"))
-        except BoardError:
-            return LiveReply(status="unavailable", reason_code="reply-invalid")
-
-    def observe(self, *, after_seq: int | None = None, limit: int | None = None, timeout_ms: int,
-                fields: Any = None, inquiry_id: str | None = None) -> LiveSnapshot:
-        """One bounded page of the run's live facts, over the selected sources."""
-        _timeout_ms(timeout_ms, "timeoutMs")
-        if self._closed_reason is not None:
-            return LiveSnapshot(unavailable="channel-closed")
-        arguments = _observe_arguments(after_seq, limit, fields, inquiry_id)
-        frame = LiveWireObserve(instance_id=self._instance_id, token=self._token,
-                                identity=self._identity, **arguments)
-        try:
-            raw = self._call("observe", frame, timeout_ms)
-        except CallDeadlineExceeded:
-            return LiveSnapshot(observed=False, reason="transport-window-expired")
-        except Exception:
-            return LiveSnapshot(observed=False, reason="transport-unreachable")
-        try:
-            return LiveSnapshot.from_payload(_decode_reply(raw, "live snapshot"))
-        except BoardError:
-            return LiveSnapshot(observed=False, reason="reply-invalid")
-
-    def close(self, *, reason: str) -> None:
-        """Close this client side; the endpoint and its facts are untouched."""
-        check_text(reason, "reason", maximum=MAX_CLOSE_REASON_BYTES)
-        if self._closed_reason is None:
-            self._closed_reason = reason
-
-    def _call(self, operation: str, frame: InternalModel, timeout_ms: int) -> str:
-        """One native bounded connection and call under the same deadline.
-
-        Only C-Two owns transport waiting. The owner's business queue still
-        enforces this original same-machine cutoff, even when connection time
-        consumed most of the window. A zero budget reaches the SDK so its
-        pre-dispatch expiry keeps the same failure facts as any other deadline.
-        """
-        deadline = (frame.deadline_monotonic if isinstance(frame, LiveWireRequest)
-                    else time.monotonic() + timeout_ms / 1000.0)
-        text = canonical_json(frame.to_payload())
-        rpc_config.configure_client(self._state_dir)
-        with cc.connect(self._contract, name=self._name, address=self._address,
-                        timeout=max(0.0, deadline - time.monotonic())) as peer:
-            bounded = cc.with_call_options(peer, timeout=max(0.0, deadline - time.monotonic()))
-            if operation == "capabilities":
-                return bounded.capabilities(text)
-            if operation == "request":
-                return bounded.request(text)
-            return bounded.observe(text)
-
-
-def _decode_reply(raw: Any, label: str) -> Any:
-    if not isinstance(raw, str):
-        raise fail(f"the {label} is missing")
-    return decode_bounded_frame(raw, label=label, maximum=MAX_LIVE_FRAME_BYTES)
-
-
-__all__ = [
-    "CTwoLiveChannel", "CTwoLiveEndpoint", "CleanupOutcome",
-    "ConfirmedProcessGone", "LiveEndpointDescriptor", "LiveWireObserve",
-    "LiveWireQuery", "LiveWireRequest", "MAX_PENDING_LIVE_REQUESTS",
-    "authenticate_live_frame", "decode_live_wire_frame", "cleanup_owned_endpoint", "random_person_name", "write_ready_material",
-]
+__all__ = ["CTwoLiveEndpoint"]

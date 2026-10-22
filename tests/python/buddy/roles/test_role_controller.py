@@ -1,7 +1,7 @@
-"""Boundary tests of the shared role controller (ADR-025 step 1-C).
+"""Boundary tests of the shared role controller.
 
-The seam is exercised with a fake ``HarnessRun`` registered in the real registry
-table, a recording native adapter behind the Router call point, and a real
+The seam is exercised with a fake ``HarnessRun``, a recording native adapter
+behind the Router call point, and a real
 Worker attempt against the real ``command`` adapter in the worker invariants
 module. Nothing here starts a native harness or a model.
 """
@@ -15,9 +15,9 @@ from unittest import mock
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext
-from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, CommandAdapter, DecisionAdapter, DshAdapter, register_run_seam, run_seam
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, CommandAdapter, DecisionAdapter, run_seam
+from hey_my_buddy.buddy.harnesses.run_contract import HARNESS_NAMES
 from hey_my_buddy.buddy.harnesses.run_contract import (
-    RunRequest,
     FEEDBACK_CONTINUE,
     FEEDBACK_STOP,
     FrozenJson,
@@ -96,60 +96,21 @@ def run_request(root: Path) -> RunRequest:
     )
 
 
-class RunSeamRegistrationTests(unittest.TestCase):
-    def setUp(self):
-        patcher = mock.patch.dict(RUN_SEAMS, {}, clear=True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+class RunSeamRegistryTests(unittest.TestCase):
+    def test_the_fixed_map_covers_every_native_harness(self):
+        self.assertEqual(set(RUN_SEAMS), set(HARNESS_NAMES))
+        for name in HARNESS_NAMES:
+            with self.subTest(harness=name):
+                self.assertIs(run_seam(name), RUN_SEAMS[name])
 
-    def test_registered_harness_run_is_the_only_seam_entry(self):
-        module = FakeHarnessRun()
-        register_run_seam("zcode", module)
-        self.addCleanup(RUN_SEAMS.pop, "zcode")
-        self.assertIs(run_seam("zcode"), module)
-        self.assertIn("zcode", RUN_SEAMS)
-
-    def test_registration_refuses_non_harness_names_duplicates_and_foreign_objects(self):
-        with self.assertRaises(BoardError) as caught:
-            register_run_seam("command", FakeHarnessRun())
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        with self.assertRaises(BoardError) as caught:
-            register_run_seam("external", FakeHarnessRun())
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        register_run_seam("dsh", FakeHarnessRun())
-        self.addCleanup(RUN_SEAMS.pop, "dsh")
-        with self.assertRaises(BoardError) as caught:
-            register_run_seam("dsh", FakeHarnessRun())
-        self.assertEqual(caught.exception.code, "CONFLICT")
-        # The capability check is honest and local: run must be
-        # callable, and nothing about the registration proves more than that.
-        # A command adapter, a bare object and a string-shaped stand-in with
-        # the right attribute names are all refused.
-        with self.assertRaises(BoardError) as caught:
-            register_run_seam("claude", CommandAdapter())
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        with self.assertRaises(BoardError) as caught:
-            register_run_seam("codex", object())
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-
-        class StringShaped:
-            run = "not callable"
-
-        with self.assertRaises(BoardError) as caught:
-            register_run_seam("zcode", StringShaped())
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
-        self.assertEqual(RUN_SEAMS, {"dsh": RUN_SEAMS["dsh"]})
-
-    def test_unextracted_names_have_no_seam(self):
-        for name in ("codex", "claude", "zcode", "dsh", "command", "external", "decision"):
-            self.assertIsNone(run_seam(name), name)
+    def test_non_harness_names_are_not_run_seams(self):
+        for name in ("command", "decision", "external"):
+            with self.subTest(name=name), self.assertRaises(KeyError):
+                run_seam(name)
 
 
 class RunCallPointTests(unittest.TestCase):
     def setUp(self):
-        patcher = mock.patch.dict(RUN_SEAMS, {}, clear=True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-roles-seam-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
@@ -157,9 +118,6 @@ class RunCallPointTests(unittest.TestCase):
         self.request = run_request(self.root)
 
     def run_fake(self, module, observer, services, cancelled=lambda: False):
-        RUN_SEAMS.pop("zcode", None)
-        register_run_seam("zcode", module)
-        self.addCleanup(RUN_SEAMS.pop, "zcode", None)
         return controller.run_harness(module, self.request, observer=observer, services=services,
                                       cancelled=cancelled)
 
@@ -174,22 +132,12 @@ class RunCallPointTests(unittest.TestCase):
         self.assertEqual(result.end.status, "ok")
         self.assertIsNone(result.stop_evidence.interrupt.requested)
 
-    def test_the_call_point_only_runs_the_registered_module_of_the_request_harness(self):
+    def test_the_call_point_checks_the_request_permission(self):
         module = FakeHarnessRun()
-        register_run_seam("zcode", module)
-        self.addCleanup(RUN_SEAMS.pop, "zcode")
         observer = lambda fact: FEEDBACK_CONTINUE
-        # An unregistered harness, a look-alike registered under another name,
-        # and a direct call with a non-registered module are all refused here,
-        # at the one call point, without a second channel existing.
-        other_request = RunRequest.from_payload(self.request.to_payload() | {"harness": "dsh"})
-        with self.assertRaises(BoardError) as caught:
-            controller.run_harness(module, other_request, observer=observer, services=None, cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
-        with self.assertRaises(BoardError) as caught:
-            controller.run_harness(FakeHarnessRun(), self.request, observer=observer, services=None,
-                                   cancelled=lambda: False)
-        self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
+        with mock.patch.dict(controller.PERMISSION_LEVELS, {"zcode": {}}), self.assertRaises(BoardError) as caught:
+            controller.run_harness(module, self.request, observer=observer, services=None, cancelled=lambda: False)
+        self.assertEqual(caught.exception.code, "UNSUPPORTED_CAPABILITY")
         self.assertEqual(module.requests, [])
 
 
@@ -215,29 +163,16 @@ class RunCallPointTests(unittest.TestCase):
 
 
 class WorkerSeamTests(unittest.TestCase):
-    def setUp(self):
-        patcher = mock.patch.dict(RUN_SEAMS, {}, clear=True)
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def test_worker_executor_selects_only_through_the_registry(self):
+    def test_worker_executor_selects_the_native_and_builtin_executors(self):
         self.assertIsInstance(controller.worker_executor("command"), CommandAdapter)
-        with self.assertRaises(BoardError) as caught:
-            controller.worker_executor("dsh")
-        self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
+        self.assertIs(controller.worker_executor("dsh").module, run_seam("dsh"))
         self.assertIsInstance(controller.worker_executor("decision"), DecisionAdapter)
 
-    def test_a_registered_seam_never_falls_through_to_the_legacy_carrier(self):
-        register_run_seam("zcode", FakeHarnessRun())
-        self.addCleanup(RUN_SEAMS.pop, "zcode")
+    def test_native_harness_uses_the_role_executor(self):
         executor = controller.worker_executor("zcode")
         self.assertIs(executor.module, run_seam("zcode"))
         self.assertEqual(executor.name, "zcode")
         self.assertFalse(hasattr(executor.description, "start"))
-        # A missing harness run is refused; command retains its own executor.
-        with self.assertRaises(BoardError) as caught:
-            controller.worker_executor("dsh")
-        self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
         self.assertIsInstance(controller.worker_executor("command"), CommandAdapter)
 
     def test_prepare_worker_run_reports_availability_and_prepare_refusals(self):
@@ -433,7 +368,7 @@ class RouterCallPointTests(unittest.TestCase):
         self.assertEqual(harness, "dsh")
         self.assertIs(request, preparation.request)
 
-    def test_a_registered_seam_refuses_the_legacy_router_entry(self):
+    def test_router_starts_the_prepared_native_run(self):
         preparation = self.preparation("fast")
         with mock.patch("hey_my_buddy.buddy.roles.run_execution.start_fast", return_value="run-handle") as start:
             self.assertEqual(controller.start_router_preparation(preparation), "run-handle")
@@ -442,23 +377,19 @@ class RouterCallPointTests(unittest.TestCase):
         self.assertFalse(hasattr(Adapter, "start_no_tool_structured"))
         self.assertFalse(hasattr(Adapter, "start_read_only_structured"))
 
-    def test_a_missing_registered_run_never_falls_back_to_an_old_entry(self):
-        with mock.patch.dict(RUN_SEAMS, {"dsh": None}):
-            preparation = self.preparation("fast")
-            with mock.patch("hey_my_buddy.buddy.roles.run_execution.start_fast") as start:
-                with self.assertRaises(BoardError) as caught:
-                    controller.start_router_preparation(preparation)
-                start.assert_not_called()
-        self.assertEqual(caught.exception.code, "ROLE_RUN_UNREGISTERED")
+    def test_router_uses_its_frozen_preparation_after_registry_change(self):
+        preparation = self.preparation("fast")
+        with mock.patch.dict(RUN_SEAMS, {"dsh": FakeHarnessRun()}), \
+                mock.patch("hey_my_buddy.buddy.roles.run_execution.start_fast", return_value="run-handle") as start:
+            self.assertEqual(controller.start_router_preparation(preparation), "run-handle")
+        start.assert_called_once_with(self.module, "dsh", preparation.context, preparation.request)
 
     def test_unknown_preparations_are_refused(self):
         class Stranger:
             harness = "dsh"
 
-        with mock.patch("hey_my_buddy.buddy.harnesses.registry.run_seam", return_value=None), \
-                mock.patch("hey_my_buddy.buddy.harnesses.registry.adapter"):
-            with self.assertRaises(BoardError) as caught:
-                controller.start_router_preparation(Stranger())
+        with self.assertRaises(BoardError) as caught:
+            controller.start_router_preparation(Stranger())
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
 

@@ -14,7 +14,7 @@ from buddy.harnesses.fixture_selection import select_fixture
 import c_two as cc
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
-from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
+from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveReply, LiveRequest, LiveSnapshot
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.registry import adapter
 
@@ -76,42 +76,16 @@ class ZcodeFixtureCase(unittest.TestCase):
     # checkpoint and refusal flow suites) -----------------------------------
 
     def own_handle(self, handle):
-        """Own the native run and any test-only live endpoint it registered."""
-
-        def release():
-            endpoint = getattr(handle, "test_live_endpoint", None)
-            descriptor = endpoint._descriptor if endpoint is not None else None
-            if descriptor is not None:
-                endpoint.stop()
-                self.assertEqual(cc.inspect_endpoint(descriptor.address)["status"], "absent",
-                                 "the owned endpoint was left behind")
-        # LIFO: stop the actual held group before cleaning its captured endpoint.
-        self.addCleanup(release)
+        """Own the native run until its process has settled."""
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
 
     def live_channel(self, handle):
-        """Bind a fixture client to this inline run's published endpoint."""
-        from hey_my_buddy.buddy.harnesses.registry import live_binding
-        from buddy.harnesses.live_contract import HarnessRunLive, register_test_endpoint
-
+        """Read this inline run's published in-process endpoint."""
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             endpoint = handle.live_endpoint
             if endpoint is not None:
-                if endpoint._descriptor is None:
-                    register_test_endpoint(endpoint)
-                handle.test_live_endpoint = endpoint
-                descriptor = endpoint._descriptor
-                handle.role_live_descriptor = descriptor
-                channel = live_binding(handle.role_run_control["harness"])(
-                    endpoint.identity, HarnessRunLive, name=descriptor.name,
-                    address=descriptor.address, instance_id=descriptor.instance_id,
-                    token=endpoint._token,
-                    state_dir=Path(self.environment["HMB_STATE_DIR"]))
-                self.addCleanup(channel.close, reason="fixture-complete")
-                self.assertEqual(channel._state_dir, Path(self.environment["HMB_STATE_DIR"]).resolve(),
-                                 "the role channel must use the fixture's private state root")
-                return channel
+                return endpoint
             time.sleep(0.05)
         self.fail("the held controller endpoint never became ready")
 
@@ -120,7 +94,8 @@ class ZcodeFixtureCase(unittest.TestCase):
         channel = self.live_channel(handle)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
-            snapshot = channel.observe(timeout_ms=1000, limit=1, fields=("observation",))
+            snapshot = LiveSnapshot.model_validate_json(
+                channel.observe_local(limit=1, fields=("observation",)))
             observation = snapshot.observation if snapshot.observed else None
             if observation is not None and observation.ready:
                 self.assertEqual(channel.identity, handle.role_run_identity,
@@ -130,12 +105,12 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.fail("the attempt never mounted its private inquiry bridge and admitted the root turn")
 
     def ask(self, handle, inquiry_id, question, channel=None, timeout_ms=4000):
-        """Queue one Host question through the real C-Two request operation."""
+        """Queue one Host question through the live endpoint."""
         channel = channel or self.ready_channel(handle)
-        reply = channel.request(LiveRequest(identity=channel.identity, request_id=inquiry_id,
-                                            kind="inquiry",
-                                            payload=InquiryPayload(question_id=inquiry_id, question=question)),
-                                timeout_ms=timeout_ms)
+        reply = LiveReply.model_validate_json(channel.request_local(
+            LiveRequest(identity=channel.identity, request_id=inquiry_id, kind="inquiry",
+                        payload=InquiryPayload(question_id=inquiry_id, question=question)),
+            timeout_ms=timeout_ms, deadline_monotonic=time.monotonic() + timeout_ms / 1000))
         self.assertTrue(reply.observed, reply.model_dump())
         self.assertEqual(reply.status, "queued", reply.model_dump())
         correlation = reply.native_correlation.value

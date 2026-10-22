@@ -21,11 +21,9 @@ import sys
 import tempfile
 import threading
 import time
-import typing
 import unittest
 from pathlib import Path
 
-from buddy.harnesses.test_c_two_live import TEST_CRM, decode_snapshot, wire_observe
 from hey_my_buddy import locking
 from hey_my_buddy.protocol import activity as activity_module
 from hey_my_buddy.protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records, normalize_inquiry_record
@@ -45,10 +43,9 @@ from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     verify_tool_refusal,
 )
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.buddy.harnesses import c_two_live, live as live_module
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
-from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint, LiveWireRequest
-from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveCapabilities, LiveRequest
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveCapabilities, LiveRequest, LiveSnapshot
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
@@ -56,8 +53,6 @@ OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1,
 RUN_IDENTITY = RunIdentity(task_id="task-1", attempt_id="attempt-1", generation=1,
                            turn_id="turn-1", invocation_id="invocation-inquiry-test",
                            input_sha256="a" * 64)
-LIVE_TOKEN = "d" * 64
-LIVE_INSTANCE = "c" * 64
 
 
 def make_inquiry_bridge(*, identity: dict, journal_path: str,
@@ -116,8 +111,7 @@ class BridgeHarness:
         }
         self.attention_path = self.directory / "attention.json"
         self.live = (CTwoLiveEndpoint(RUN_IDENTITY, LiveCapabilities(
-            inquiry_delivery="cooperative-checkpoint"), TEST_CRM,
-            instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, state_dir=Path(os.environ["HMB_STATE_DIR"])) if live else None)
+            inquiry_delivery="cooperative-checkpoint")) if live else None)
         self.bridge = make_inquiry_bridge(identity=IDENTITY,
                                          journal_path=self.credentials["resultsPath"],
                                          attention_path=str(self.attention_path), live=self.live)
@@ -133,8 +127,7 @@ class BridgeHarness:
 
     def published(self):
         """Read the endpoint's actual published strict facts, without IPC startup."""
-        return decode_snapshot(self.live.observe(wire_observe(
-            RUN_IDENTITY, token=LIVE_TOKEN, instance_id=LIVE_INSTANCE, limit=32)))
+        return LiveSnapshot.model_validate_json(self.live.observe_local(limit=32))
 
     def records(self) -> list[dict]:
         path = Path(self.credentials["resultsPath"])
@@ -228,13 +221,14 @@ class BridgeQueueTests(unittest.TestCase):
         self.assertEqual(late["code"], "agent-not-running")
 
     def test_bounds_are_enforced_before_any_state_change(self):
-        for payload, code in (({"inquiryId": "q-big", "question": "x" * 4001}, "bad-request"),
-                              ({"inquiryId": "i" * 129, "question": "ok?"}, "bad-request"),
-                              ({"inquiryId": "q-blank", "question": "  "}, "bad-request")):
-            with self.subTest(code=code):
-                result = self.harness.owner_call("ask", **payload)
-                self.assertFalse(result["ok"])
-                self.assertEqual(result["code"], code)
+        for question_id, question in (("q-big", "x" * 4001), ("i" * 129, "ok?")):
+            with self.subTest(question_id=question_id[:20]):
+                with self.assertRaises(BoardError):
+                    InquiryPayload(question_id=question_id, question=question)
+        blank = self.harness.owner_call("ask", inquiryId="q-blank", question="  ")
+        self.assertFalse(blank["ok"])
+        self.assertEqual(blank["code"], "bad-request")
+        self.assertEqual(self.harness.records(), [])
         for index in range(MAX_INQUIRIES):
             self.ask(f"q-{index}")
         self.assertEqual(self.harness.owner_call("ask", inquiryId="q-over", question="one too many")["code"], "too-many")
@@ -1014,34 +1008,22 @@ class FinishToolTests(unittest.TestCase):
 
 
 class LiveActivityTests(ZcodeFixtureCase):
-    """Actual controller/native fixture publication through the held C-Two endpoint."""
+    """Actual controller/native fixture publication through the held endpoint."""
 
     def activity_channel(self, handle):
-        from hey_my_buddy.buddy.harnesses.registry import live_binding
-        from buddy.harnesses.live_contract import HarnessRunLive, register_test_endpoint
-
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             endpoint = handle.live_endpoint
             if endpoint is not None:
-                if endpoint._descriptor is None:
-                    register_test_endpoint(endpoint)
-                handle.test_live_endpoint = endpoint
-                descriptor = endpoint._descriptor
-                channel = live_binding(handle.role_run_control["harness"])(
-                    endpoint.identity, HarnessRunLive, name=descriptor.name,
-                    address=descriptor.address, instance_id=descriptor.instance_id,
-                    token=endpoint._token,
-                    state_dir=Path(self.environment["HMB_STATE_DIR"]))
-                self.addCleanup(channel.close, reason="fixture-complete")
-                return channel
+                return endpoint
             time.sleep(0.05)
         self.fail("the held controller endpoint never became ready")
 
     def streaming_activity(self, channel):
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
-            snapshot = channel.observe(timeout_ms=1000, limit=1, fields=("activity",))
+            snapshot = LiveSnapshot.model_validate_json(
+                channel.observe_local(limit=1, fields=("activity",)))
             if snapshot.activity is not None and snapshot.activity.value["phase"] == "streaming-model":
                 return snapshot.activity.value
             time.sleep(0.05)
@@ -1073,7 +1055,6 @@ class LiveActivityTests(ZcodeFixtureCase):
         self.assertNotIn("fixture-private-progress", json.dumps(latest))
 
     def test_the_runner_publishes_real_bound_metadata_only_live_activity(self):
-        from hey_my_buddy.protocol.run_identity import RunIdentity
         context = self.context("live-activity", timeout=20)
         handle = self.adapter.start(context)
         self.own_handle(handle)
@@ -1085,15 +1066,6 @@ class LiveActivityTests(ZcodeFixtureCase):
         datetime.fromisoformat(payload["observedAt"].replace("Z", "+00:00"))
         for forbidden in ("fixture task", "prompt", "toolArguments", "reasoning", "fixture-secret"):
             self.assertNotIn(forbidden, json.dumps(payload))
-        original = channel.identity
-        try:
-            for changes in ({"attempt_id": "other"}, {"generation": 2}):
-                channel._identity = RunIdentity(**{**original.model_dump(), **changes})
-                snapshot = channel.observe(timeout_ms=1000, limit=1, fields=("activity",))
-                self.assertIsNone(snapshot.activity)
-                self.assertIsNotNone(snapshot.unavailable)
-        finally:
-            channel._identity = original
         self.release_turn(context)
         self.assertIsNotNone(handle.wait(10))
         outcome = self.adapter.collect(handle, context)
@@ -1162,61 +1134,6 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertIn("mcp__buddy_x__hey_my_buddy_checkpoint", prompt)
         self.assertIn("mcp__buddy_x__hey_my_buddy_answer_inquiry", prompt)
         self.assertIn("never on a timer", prompt)
-
-
-class TransportWindowBoundaryTests(unittest.TestCase):
-    """The 100–5000 ms transport window is defined once, in the live seam.
-
-    ``c_two_live`` must keep referencing ``live.py``'s constants rather than
-    restating the bounds: the frame admission field is built from them, the
-    client-side whole-call check enforces exactly them, and every boundary
-    value keeps its behavior — 100 and 5000 are accepted, one step outside,
-    a float spelling and a bool are refused.
-    """
-
-    def inquiry_request(self):
-        return LiveRequest(identity=RUN_IDENTITY, request_id="request-window", kind="inquiry",
-                           payload=InquiryPayload(question_id="question-window", question="window?"))
-
-    def test_the_window_constants_live_once_in_the_live_seam(self):
-        self.assertEqual((live_module.MIN_TRANSPORT_TIMEOUT_MS, live_module.MAX_TRANSPORT_TIMEOUT_MS),
-                         (100, 5000))
-        bounds = {name: getattr(constraint, name)
-                  for constraint in typing.get_args(c_two_live.TransportWindowMs)[-1].metadata
-                  for name in ("ge", "le") if hasattr(constraint, name)}
-        self.assertEqual((bounds["ge"], bounds["le"]),
-                         (live_module.MIN_TRANSPORT_TIMEOUT_MS, live_module.MAX_TRANSPORT_TIMEOUT_MS))
-
-    def test_the_wire_frame_admits_exactly_the_window_edges(self):
-        for accepted in (100, 5000):
-            with self.subTest(timeout_ms=accepted):
-                frame = LiveWireRequest(identity=RUN_IDENTITY, request_id="request-window", kind="inquiry",
-                                        payload=InquiryPayload(question_id="question-window", question="window?"),
-                                        instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, timeout_ms=accepted, deadline_monotonic=time.monotonic() + accepted/1000.0)
-                self.assertEqual(frame.timeout_ms, accepted)
-        for refused in (99, 5001, True, 1500.0):
-            with self.subTest(timeout_ms=refused):
-                with self.assertRaises(BoardError):
-                    LiveWireRequest(identity=RUN_IDENTITY, request_id="request-window", kind="inquiry",
-                                    payload=InquiryPayload(question_id="question-window", question="window?"),
-                                    instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, timeout_ms=refused, deadline_monotonic=time.monotonic() + refused/1000.0)
-
-    def test_the_channel_entry_keeps_the_same_edges_and_refuses_bools(self):
-        channel = CTwoLiveChannel(RUN_IDENTITY, TEST_CRM, name="window-probe", address="ipc://window-probe",
-                                  instance_id=LIVE_INSTANCE, token=LIVE_TOKEN, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-        channel.close(reason="fixture-no-endpoint")
-        for accepted in (100, 5000):
-            with self.subTest(timeout_ms=accepted):
-                reply = channel.request(self.inquiry_request(), timeout_ms=accepted)
-                self.assertEqual(reply.reason_code, "channel-closed")
-                snapshot = channel.observe(timeout_ms=accepted, limit=1)
-                self.assertEqual(snapshot.unavailable, "channel-closed")
-        for refused in (99, 5001, True, 1500.0):
-            with self.subTest(timeout_ms=refused):
-                with self.assertRaises(BoardError):
-                    channel.request(self.inquiry_request(), timeout_ms=refused)
-                with self.assertRaises(BoardError):
-                    channel.observe(timeout_ms=refused, limit=1)
 
 
 class NativeCatalogEmptyTests(ZcodeFixtureCase):

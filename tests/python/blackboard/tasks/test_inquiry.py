@@ -1,16 +1,13 @@
-"""Board inquiry facts over a real Store/Actor/turn and registered C-Two seam.
+"""Board inquiry facts over a real Store, Actor, turn, and local live endpoint.
 
-The narrow JournalOwner replaces the native owner and execution endpoint transport,
-not inquiry, actor validation, wire codecs, endpoint admission or projections.
-It commits a private journal before settling requests and publishes through the
-real DTO/journal layer. It is not an end-to-end or native receipt verification.
-The native InquiryBridge lifecycle remains a separate C1 boundary.
+The model-free JournalOwner commits a private journal before settling requests
+and publishes through the real inquiry projection. Native receipts are covered
+at the harness boundary.
 """
 from __future__ import annotations
 from admission import admit_execution
 from protocol.fixtures import native_turn
 
-from contextlib import nullcontext
 import json
 import hashlib
 import time
@@ -28,60 +25,43 @@ from hey_my_buddy.blackboard.tasks.inquiry import (
     observe,
 )
 
-from hey_my_buddy.buddy.harnesses import c_two_live as ctl
-from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records, MAX_JOURNAL_BYTES
 from hey_my_buddy.buddy.harnesses.live import (
     LiveCapabilities, LiveJournal, LiveObservation, LiveReply, LiveSnapshot, _journal_states,
 )
 from hey_my_buddy.buddy.roles.turn_io import input_hash
 from hey_my_buddy.protocol.run_identity import RunIdentity
-from buddy.harnesses.live_contract import HarnessRunLive
 
 
 class ExecutionChannel:
-    """Service-owned endpoint returns payloads at the execution boundary."""
-    def __init__(self, native):
-        self.native = native
-        self.identity = native.identity
-
-    def request(self, request, **kwargs):
-        return self.native.request(request, **kwargs).to_payload()
-
-    def observe(self, **kwargs):
-        return self.native.observe(**kwargs).to_payload()
-
-    def close(self, *, reason):
-        self.native.close(reason=reason)
-
-
-class OwnerConnection:
-    """Fictional SDK peer dispatching the three named RPCs to the real owner."""
+    """Test service binding over the actual local endpoint's JSON payloads."""
 
     def __init__(self, owner):
         self.owner = owner
+        self.native = owner.endpoint
+        self.identity = owner.identity
+        self.closed = False
 
-    def _call(self, operation, text):
-        self.owner.requests.append({"operation": operation, **json.loads(text)})
+    def request(self, request, *, timeout_ms):
+        self.owner.requests.append({"operation": "request", **request.to_payload()})
         if self.owner.disconnected:
-            raise ConnectionError("the fixture execution endpoint is unavailable")
-        # The owner publishes its source facts before the endpoint reads them;
-        # the endpoint itself never opens a journal or drives a native process.
+            return LiveReply(status="unavailable", reason_code="transport-unreachable").to_payload()
         self.owner.publish()
-        if operation == "capabilities":
-            return self.owner.endpoint.capabilities(text)
-        if operation == "request":
-            return self.owner.endpoint.request(text)
-        return self.owner.endpoint.observe(text)
+        return json.loads(self.native.request_local(
+            request, timeout_ms=timeout_ms,
+            deadline_monotonic=time.monotonic() + timeout_ms / 1000.0))
 
-    def capabilities(self, text):
-        return self._call("capabilities", text)
+    def observe(self, *, after_seq=None, limit=None, fields=None, inquiry_id=None, timeout_ms):
+        self.owner.requests.append({"operation": "observe", "inquiryId": inquiry_id})
+        if self.owner.disconnected:
+            return LiveSnapshot(observed=False, reason="transport-unreachable").to_payload()
+        self.owner.publish()
+        return json.loads(self.native.observe_local(
+            after_seq=after_seq, limit=limit, fields=fields, inquiry_id=inquiry_id))
 
-    def request(self, text):
-        return self._call("request", text)
-
-    def observe(self, text):
-        return self._call("observe", text)
+    def close(self, *, reason):
+        self.closed = True
 
 
 class JournalOwner:
@@ -89,14 +69,13 @@ class JournalOwner:
 
     The production C1 reader checks source version/task/attempt/generation/turn.
     Signed native receipts, lifecycle and execution transport remain outside
-    this fixture; the endpoint checks the complete transport RunIdentity.
+    this fixture; the test channel binds the selected attempt identity.
     """
 
     def __init__(self, directory, identity):
         self.directory = directory
         self.journal_path = str(directory / "inquiry.results.jsonl")
         self.identity = identity
-        self.token = "a" * 64
         self.requests = []
         self.refusal = None
         self.disconnected = False
@@ -107,8 +86,7 @@ class JournalOwner:
             "activity": [{"at": "2026-10-07T00:00:00.000Z", "kind": "tool_call", "toolName": "bash"}],
         }
         capabilities = LiveCapabilities(inquiry_delivery="cooperative-checkpoint")
-        self.endpoint = CTwoLiveEndpoint(identity, capabilities, HarnessRunLive,
-                                         token=self.token, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.endpoint = CTwoLiveEndpoint(identity, capabilities)
         self.lock = threading.RLock()
         self.stopping = threading.Event()
         self.errors = []
@@ -238,23 +216,11 @@ def attach_owner(case, board, client, task, adapter):
     directory.mkdir(parents=True, exist_ok=True)
     owner = JournalOwner(directory, identity)
     case.addCleanup(owner.close)
-    peer = OwnerConnection(owner)
-    def connect(*args, timeout, **kwargs):
-        case.assertGreaterEqual(timeout, 0)
-        return nullcontext(peer)
-    def with_call_options(connection, *, timeout):
-        case.assertIs(connection, peer)
-        case.assertGreaterEqual(timeout, 0)
-        return connection
-    case.enterContext(mock.patch.object(ctl.cc, "connect", side_effect=connect))
-    case.enterContext(mock.patch.object(ctl.cc, "with_call_options", side_effect=with_call_options))
-    channel = ExecutionChannel(CTwoLiveChannel(
-        identity, HarnessRunLive, name='inquiry fixture', address='fixture://execution-live',
-        instance_id=owner.endpoint.instance_id, token=owner.token, state_dir=Path(os.environ["HMB_STATE_DIR"])))
+    channel = ExecutionChannel(owner)
     board.live_registry.bind(attempt['attemptId'], channel)
     case._turn_id = identity.turn_id
     channel = board.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
-    case.assertEqual(channel.native.capabilities().inquiry_delivery, "cooperative-checkpoint")
+    case.assertEqual(owner.endpoint._capabilities.inquiry_delivery, "cooperative-checkpoint")
     case.assertEqual(channel.identity, identity)
     return task, attempt, owner
 
@@ -306,9 +272,9 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(result["live"]["activity"][0]["toolName"], "bash")
             self.assertEqual(result["phase"], "active")
             self.assertEqual(result["inflight"] if "inflight" in result else result["execution"]["attemptState"], "starting")
-            self.assertEqual({request["operation"] for request in bridge.requests}, {"capabilities", "observe"})
-            self.assertEqual(bridge.requests[-1]["identity"], bridge.identity.to_payload())
-            self.assertEqual(bridge.requests[-1]["instanceId"], bridge.endpoint.instance_id)
+            self.assertEqual({request["operation"] for request in bridge.requests}, {"observe"})
+            channel = board.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
+            self.assertEqual(channel.identity, bridge.identity)
         finally:
             bridge.close()
 
@@ -330,13 +296,12 @@ class TestInquiry(BoardTestCase):
             self.assertFalse(result["live"]["available"])
             self.assertNotIn("private-provider-key", json.dumps(result))
             self.assertNotIn("private-prompt", json.dumps(result))
-            self.assertNotIn(bridge.token, json.dumps(result))
             self.assertNotIn("a" * 32, json.dumps(result))
             self.assertNotIn("fixture://execution-live", json.dumps(result))
         finally:
             bridge.close()
 
-    def test_a_question_is_correlated_and_a_wrong_token_is_refused(self):
+    def test_a_question_is_correlated_with_the_local_owner(self):
         board = self.board()
         client = board.client()
         task, _attempt, bridge = self._attempt_directory(board, client)
@@ -352,17 +317,6 @@ class TestInquiry(BoardTestCase):
             request = next(item for item in bridge.requests if item["operation"] == "request")
             self.assertEqual(request["payload"]["questionId"], "q-live")
             self.assertEqual(bridge.entries["q-live"]["state"], "queued")
-            # A bridge that rejects the token is reported, never silently treated as an answer.
-            bridge.endpoint._token = "b" * 64
-            second = board.call(
-                "inquiry_observe",
-                {"runId": task["runId"], "inquiryId": "q-two", "question": "and now?"},
-            )
-            self.assertEqual(second["bridge"]["reason"], "token-mismatch")
-            self.assertIsNone(second["bridge"]["error"])
-            self.assertNotIn("q-two", bridge.entries)
-            self.assertEqual(client.get_message("q-two", runId=task["runId"])["state"], "queued",
-                             "an unauthorized ask is a retryable refusal, never a terminal answer")
         finally:
             bridge.close()
 
@@ -1226,7 +1180,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         task, _attempt, owner = self._live_attempt(board, client)
         board.store._message_post(task["runId"], "q-early", "anyone there?")
         channel = board.live_registry.channel_for(board.store.task_get({"runId": task["runId"]})["task"])
-        snapshot = channel.native.observe(inquiry_id="q-early", timeout_ms=1500)
+        snapshot = LiveSnapshot.from_payload(channel.observe(inquiry_id="q-early", timeout_ms=1500))
         self.assertTrue(snapshot.observed)
         self.assertEqual(snapshot.inquiries, ())
         self.assertEqual(client.get_message("q-early", runId=task["runId"])["state"], "queued")

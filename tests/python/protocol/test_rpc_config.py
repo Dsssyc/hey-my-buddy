@@ -269,46 +269,6 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(rpc_config.configure_local_endpoint(self.state, create=False), root)
         self.assertEqual(root.stat().st_mode & 0o777, 0o755)
 
-    def test_endpoint_registration_refuses_unsafe_ipc_without_repair(self):
-        """R-03: real SDK access refusal is an endpoint start failure."""
-        from hey_my_buddy.errors import BoardError
-        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
-        from hey_my_buddy.buddy.harnesses.live import LiveCapabilities
-        from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
-        import c_two as cc
-        @cc.crm(namespace="buddy.fixture.live", version="1.0.0")
-        class FixtureLive:
-            def request(self, request_json: str) -> str: ...
-            def observe(self, request_json: str) -> str: ...
-            def capabilities(self, request_json: str) -> str: ...
-        run = RunIdentity(task_id="rpc-test", attempt_id="rpc-attempt", generation=1,
-                          invocation_id="rpc-invocation", input_sha256="a" * 64)
-        ipc = self.state / "ipc"
-        ipc.mkdir(mode=0o700)
-        self.state.chmod(0o755)
-        for mode, reason in ((0o775, "group and other users must not have write permission"),
-                             (0o777, "group and other users must not have write permission"),
-                             (0o500, "effective user lacks read/write/traverse access")):
-            with self.subTest(mode=oct(mode)):
-                ipc.chmod(mode)
-                target = CTwoLiveEndpoint(run, LiveCapabilities(inquiry_delivery="unsupported"),
-                                         FixtureLive, state_dir=self.state)
-                # Selection alone succeeds; only real native I/O checks access.
-                rpc_config.configure_local_endpoint(self.state, create=False)
-                error = None
-                try:
-                    target.start()
-                except Exception as caught:
-                    error = caught
-                self.assertIsInstance(error, BoardError)
-                self.assertEqual(error.code, "LIVE_ENDPOINT_START_FAILED")
-                self.assertIsInstance(error.__cause__, RuntimeError)
-                self.assertIn(reason, str(error.__cause__))
-                self.assertEqual(error.message, str(error.__cause__))
-                self.assertEqual(ipc.stat().st_mode & 0o777, mode)
-                self.assertTrue(cc.shutdown()["completed"])
-        ipc.chmod(0o700)
-
     def test_bad_state_or_ipc_is_refused_without_repair(self):
         """R-03: structural path guards keep their private-path refusal."""
         from hey_my_buddy.errors import BoardError

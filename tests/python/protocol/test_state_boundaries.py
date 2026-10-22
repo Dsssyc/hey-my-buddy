@@ -25,7 +25,6 @@ class StateBoundaryTests(unittest.TestCase):
 
     def test_internal_parameters_are_required_path_without_another_resolver(self):
         import inspect
-        from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveChannel, CTwoLiveEndpoint
         from hey_my_buddy.buddy.roles.run_controller import execute
         from hey_my_buddy.buddy.roles.inline_run import _inline_live
         from hey_my_buddy.buddy.runtime.execution import Execution
@@ -37,14 +36,13 @@ class StateBoundaryTests(unittest.TestCase):
                 (transport._attach_read_only, "directory"), (transport._cold_start_preflight, "directory"),
                 (rpc_config.configure_local_endpoint, "state_dir"), (rpc_config.configure_client, "state_dir"),
                 (rpc_config.configure_server, "state_dir"), (rpc_config._apply, "state_dir"),
-                (CTwoLiveEndpoint, "state_dir"), (CTwoLiveChannel, "state_dir"),
                 (Execution, "state_dir"),
                 (execute, "state_dir"), (_inline_live, "state_dir"),
                 (await_run, "state_dir"), (run, "state_dir"), (discover, "directory")):
             with self.subTest(function=function):
-                parameter = inspect.signature(function).parameters[argument]
+                parameter = inspect.signature(function, eval_str=True).parameters[argument]
                 self.assertIs(parameter.default, inspect.Parameter.empty)
-                self.assertEqual(parameter.annotation, "Path")
+                self.assertIs(parameter.annotation, Path)
         self.assertFalse(hasattr(rpc_config, "resolve_state_dir"))
         source = Path(transport.__file__).parents[1]
         for name in ("protocol/rpc_config.py", "buddy/runtime/execution.py",

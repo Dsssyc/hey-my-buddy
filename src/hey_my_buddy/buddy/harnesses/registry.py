@@ -45,37 +45,17 @@ def session_projector(harness: str):
 def session_omitted(harness: str) -> tuple[dict, ...]:
     return SESSION_OMITTED[harness]
 
-#: The extracted harness run modules, registered by the ADR-025 step that
-#: extracts each harness (steps two to four). Registration is the only way into
-#: the new seam and is explicit: only callable run and discovery operations may
-#: enter under a harness name, so no command adapter and no string-shaped
-#: stand-in is ever mistaken for a run. Registering a harness commits the same
-#: step to deleting its legacy structured entries; the role seam refuses to
-#: route a registered name through them, so a half-finished switch fails loudly
-#: instead of silently keeping two execution paths.
-RUN_SEAMS: dict[str, HarnessRun] = {}
+RUN_SEAMS: dict[str, HarnessRun] = {
+    "zcode": zcode_run,
+    "codex": codex_run,
+    "claude": claude_run,
+    "dsh": dsh_run,
+}
 
 
-def register_run_seam(name: str, module: HarnessRun) -> None:
-    """Register one extracted harness's run module under its harness name.
-
-    Qualification confirms callable run and no-input discovery operations,
-    without inspecting vendor code or claiming a native policy is enforced.
-    """
-    if name not in HARNESS_NAMES:
-        raise BoardError("INVALID_ARGUMENT", f"{name!r} is not a harness name", harness=name)
-    if name in RUN_SEAMS:
-        raise BoardError("CONFLICT", f"{name} already has a registered run seam", harness=name)
-    if not all(callable(getattr(module, operation, None)) for operation in ("run", "run_discovery")):
-        raise BoardError("INVALID_ARGUMENT",
-                         "a run seam must carry callable run and discovery operations, and nothing about "
-                         "the registration proves more than that", harness=name)
-    RUN_SEAMS[name] = module
-
-
-def run_seam(name: str) -> HarnessRun | None:
-    """The registered run module of one harness, or None while it is unextracted."""
-    return RUN_SEAMS.get(name)
+def run_seam(name: str) -> HarnessRun:
+    """The native run module of a known harness."""
+    return RUN_SEAMS[name]
 
 
 def fast_evidence_is_top_level(name: str) -> bool:
@@ -116,21 +96,6 @@ def worker_message_source(name: str) -> str:
             "claude": "claude/stream-json-root-assistant-message"}.get(
                 name, name + "/session-root-assistant-message")
 
-
-def live_binding(name: str):
-    """An extracted module uses the common C-Two client, with no native fallback."""
-    if RUN_SEAMS.get(name) is None:
-        return None
-    from .c_two_live import CTwoLiveChannel
-    return CTwoLiveChannel
-
-
-# Switching a harness is atomic here: the registered native body and the
-# role executor replace its removed carrier entries in the same change.
-register_run_seam("zcode", zcode_run)
-register_run_seam("codex", codex_run)
-register_run_seam("claude", claude_run)
-register_run_seam("dsh", dsh_run)
 
 def adapters() -> dict[str, Adapter | ZcodeAdapter]:
     return {adapter.name: adapter() for adapter in BUILT_IN}
@@ -211,9 +176,7 @@ __all__ = [
     "adapter",
     "adapters",
     "capability_report",
-    "live_binding",
     "local_capabilities",
-    "register_run_seam",
     "require_permission",
     "run_seam",
 ]
