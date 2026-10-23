@@ -63,15 +63,19 @@ function stubSystemScheme(dark: boolean) {
 }
 
 describe("light and dark themes", () => {
-  it("defaults to light and marks the document color scheme", async () => {
+  it("defaults to the system scheme and marks the document color scheme", async () => {
+    stubSystemScheme(true);
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
     await user.click(await screen.findByRole("link", { name: "设置" }));
-    const dark = await screen.findByRole("radio", { name: "深色" });
-    expect(dark.getAttribute("aria-checked")).toBe("false");
-    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
+    const follow = await screen.findByRole("radio", { name: "跟随系统" });
+    expect(follow.getAttribute("aria-checked")).toBe("true");
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("dark"));
+    expect(document.documentElement.style.colorScheme).toBe("dark");
+    await user.click(screen.getByRole("radio", { name: "浅色" }));
+    expect(document.documentElement.dataset.theme).toBe("light");
     expect(document.documentElement.style.colorScheme).toBe("light");
-    await user.click(dark);
+    await user.click(screen.getByRole("radio", { name: "深色" }));
     expect(screen.getByRole("radio", { name: "深色" }).getAttribute("aria-checked")).toBe("true");
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(document.documentElement.style.colorScheme).toBe("dark");
@@ -93,26 +97,23 @@ describe("light and dark themes", () => {
     expect((await screen.findByRole("radio", { name: "深色" })).getAttribute("aria-checked")).toBe("true");
   });
 
-  it("follows the system scheme and keeps tracking it while the page stays open", async () => {
+  it("follows the system scheme by default and keeps tracking it while the page stays open", async () => {
     const system = stubSystemScheme(true);
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
     await user.click(await screen.findByRole("link", { name: "设置" }));
     const follow = await screen.findByRole("radio", { name: "跟随系统" });
-    expect(follow.getAttribute("aria-checked")).toBe("false");
-    await user.click(follow);
-    expect(screen.getByRole("radio", { name: "跟随系统" }).getAttribute("aria-checked")).toBe("true");
+    expect(follow.getAttribute("aria-checked")).toBe("true");
     expect(document.documentElement.dataset.theme).toBe("dark");
     expect(document.documentElement.style.colorScheme).toBe("dark");
-    // Only the choice is persisted, and it stays "system" rather than the
-    // currently resolved colour.
-    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
+    // No stored choice means no write: the default stays the system's live scheme.
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBeNull();
     await waitFor(() => expect(system.listeners.size).toBe(1));
     // The operating system switching to light is followed without a reload.
     system.change(false);
     await waitFor(() => expect(document.documentElement.dataset.theme).toBe("light"));
     expect(document.documentElement.style.colorScheme).toBe("light");
-    // A reload restores the stored system choice and resolves it again.
+    // A reload resolves the default system choice again.
     cleanup();
     delete document.documentElement.dataset.theme;
     const reloaded = stubSystemScheme(true);
@@ -148,14 +149,21 @@ describe("light and dark themes", () => {
     expect(document.documentElement.dataset.theme).toBe("light");
   });
 
-  it("stops tracking the system once an explicit theme is chosen", async () => {    const system = stubSystemScheme(true);
+  it("stops tracking the system once an explicit theme is chosen", async () => {
+    const system = stubSystemScheme(true);
     const user = userEvent.setup();
     render(<App suppliedApi={api()} />);
     await user.click(await screen.findByRole("link", { name: "设置" }));
-    await user.click(await screen.findByRole("radio", { name: "跟随系统" }));
+    const follow = await screen.findByRole("radio", { name: "跟随系统" });
+    expect(follow.getAttribute("aria-checked")).toBe("true");
     expect(document.documentElement.dataset.theme).toBe("dark");
     await user.click(screen.getByRole("radio", { name: "浅色" }));
     expect(document.documentElement.dataset.theme).toBe("light");
+    await waitFor(() => expect(system.listeners.size).toBe(0));
+    await user.click(follow);
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(window.localStorage.getItem(THEME_STORAGE_KEY)).toBe("system");
+    await user.click(screen.getByRole("radio", { name: "浅色" }));
     system.change(true);
     await waitFor(() => expect(system.listeners.size).toBe(0));
     expect(document.documentElement.dataset.theme).toBe("light");
@@ -169,6 +177,7 @@ describe("light and dark themes", () => {
     render(<App suppliedApi={api()} />);
     await user.click(await screen.findByRole("link", { name: "设置" }));
     await screen.findByRole("radio", { name: "深色" });
+    expect(screen.getByRole("radio", { name: "跟随系统" }).getAttribute("aria-checked")).toBe("true");
     expect(document.documentElement.dataset.theme).toBe("light");
     await user.click(screen.getByRole("radio", { name: "深色" }));
     expect(document.documentElement.dataset.theme).toBe("dark");

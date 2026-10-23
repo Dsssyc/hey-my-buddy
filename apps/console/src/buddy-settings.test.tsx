@@ -386,7 +386,7 @@ describe("the settings page", () => {
     expect(settings.querySelectorAll("[data-slot=settings-section]")).toHaveLength(6);
     expect(screen.getByRole("region", { name: "存储" }).getAttribute("data-slot")).toBe("settings-section");
     expect(within(themes).getAllByRole("radio").map(radio => radio.textContent))
-      .toEqual(["浅色", "深色", "跟随系统"]);
+      .toEqual(["跟随系统", "浅色", "深色"]);
     const storage = screen.getByRole("region", { name: "存储" });
     expect(within(storage).getByRole("heading", { name: "存储" })).toBeTruthy();
     const overview = within(storage).getByRole("group", { name: "占用概览" });

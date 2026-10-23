@@ -33,52 +33,97 @@ async function times(page: Page) {
   }));
 }
 
-for (const [locale, sortLabel, collapseLabel, basisLabels, directionLabels] of [
-  ["zh-CN", "排序", "全部折叠", ["最近更新", "创建时间"], ["新的在前", "旧的在前"]],
-  ["en-US", "Sort", "Collapse all", ["Last updated", "Created"], ["Newest first", "Oldest first"]],
+for (const [locale, sortLabel, collapseLabel, collapseListLabel, basisLabels, directionLabels] of [
+  ["zh-CN", "排序", "全部折叠", "收起宏任务列表", ["最近更新", "创建时间"], ["降序", "升序"]],
+  ["en-US", "Sort", "Collapse all", "Collapse macro task list", ["Last updated", "Created"], ["Descending", "Ascending"]],
 ] as const) for (const theme of ["light", "dark"] as const) {
   test.describe(`macro sort ${locale} ${theme}`, () => {
     test.use({ locale, viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" });
 
-    test("persists both choices, keeps the popover open and shows each row's requested time", async ({ page }, testInfo) => {
+    test("keeps the four toolbar buttons alike and changes each sort choice on its own", async ({ page }, testInfo) => {
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
       await open(page, "#tasks");
-      const trigger = page.locator("[data-slot=macro-sort-button]");
+      const toolbar = page.locator("[data-slot=macro-list-toolbar] > div").last();
+      const basis = page.locator("[data-slot=macro-sort-basis]");
+      const direction = page.locator("[data-slot=macro-sort-direction]");
       const popup = page.locator("[data-slot=macro-sort-popover]");
       const collapse = page.getByRole("button", { name: collapseLabel, exact: true });
+      const fold = page.getByRole("button", { name: collapseListLabel, exact: true });
       const list = page.locator("[data-slot=macro-list]");
-      const currentLabel = (created: boolean, oldest: boolean) => `${sortLabel}${locale === "zh-CN" ? "：" : ": "}${basisLabels[created ? 1 : 0]} · ${directionLabels[oldest ? 1 : 0]}`;
-      await expect(trigger).toHaveAccessibleName(currentLabel(false, false));
-      const muted = await trigger.evaluate(node => getComputedStyle(node).color);
-      await trigger.hover();
-      await expect(page.getByRole("tooltip")).toHaveText(currentLabel(false, false));
-      await trigger.click();
+      const basisName = (created: boolean) => `${sortLabel}${locale === "zh-CN" ? "：" : ": "}${basisLabels[created ? 1 : 0]}`;
+      const buttons = toolbar.locator("button");
+
+      // The four actions sit in one right-hand row, in order and with one shape.
+      await expect(buttons).toHaveCount(4);
+      await expect(fold).toBeVisible();
+      expect(await buttons.evaluateAll(nodes => nodes.map(node =>
+        [node.getAttribute("aria-label"), node.getAttribute("data-variant"), node.getAttribute("data-size")])))
+        .toEqual([
+          [basisName(false), "ghost", "icon-sm"], [directionLabels[0], "ghost", "icon-sm"],
+          [collapseLabel, "ghost", "icon-sm"], [collapseListLabel, "ghost", "icon-sm"],
+        ]);
+      const boxes = await buttons.evaluateAll(nodes => nodes.map(node => {
+        const { x, y, width, height } = node.getBoundingClientRect();
+        return { x, y, width, height };
+      }));
+      for (const box of boxes) {
+        expect(box.width).toBeCloseTo(28, 0);
+        expect(box.height).toBeCloseTo(28, 0);
+      }
+      for (let index = 1; index < boxes.length; index++) {
+        expect(boxes[index].y).toBeCloseTo(boxes[0].y, 0);
+        expect(boxes[index].x - (boxes[index - 1].x + boxes[index - 1].width)).toBeCloseTo(4, 0);
+      }
+
+      await expect(basis).toHaveAccessibleName(basisName(false));
+      await expect(direction).toHaveAccessibleName(directionLabels[0]);
+      await expect(basis).not.toHaveAttribute("data-emphasized", "true");
+      await expect(direction).not.toHaveAttribute("data-emphasized", "true");
+      await expect(basis.locator(".lucide-history")).toHaveCount(1);
+      await expect(direction.locator(".lucide-arrow-down-wide-narrow")).toHaveCount(1);
+      const muted = await basis.evaluate(node => getComputedStyle(node).color);
+      const frame = (await list.boundingBox())!;
+      await page.screenshot({ path: testInfo.outputPath(`macro-sort-toolbar-${locale}-${theme}.png`), clip: {
+        x: frame.x, y: frame.y, width: frame.width, height: 180,
+      } });
+
+      await basis.hover();
+      await expect(page.getByRole("tooltip")).toHaveText(basisName(false));
+      await page.mouse.move(1000, 700);
+      await direction.hover();
+      await expect(page.getByRole("tooltip")).toHaveText(directionLabels[0]);
+      await page.mouse.move(1000, 700);
+      await expect(page.getByRole("tooltip")).toBeHidden();
+
+      await basis.click();
       await expect(popup).toBeVisible();
-      await expect(trigger).not.toBeFocused();
-      const pointerFocus = await trigger.evaluate(node => ({ visible: node.matches(":focus-visible"), shadow: getComputedStyle(node).boxShadow }));
-      expect(pointerFocus).toEqual({ visible: false, shadow: "none" });
+      await expect(popup.getByRole("radio")).toHaveCount(2);
+      await expect(popup.getByRole("radio")).toHaveText([...basisLabels]);
+      await expect(popup.locator("[data-slot=segmented]")).toHaveCount(0);
+      await expect(popup.locator("[role=separator]")).toHaveCount(0);
       await expect(popup.getByRole("radio", { name: basisLabels[0], exact: true })).toBeChecked();
-      await expect(popup.getByRole("radio", { name: directionLabels[0], exact: true })).toBeChecked();
-      const [anchor, floating] = await Promise.all([trigger.boundingBox(), popup.boundingBox()]);
+      await expect(basis).not.toBeFocused();
+      const pointerFocus = await basis.evaluate(node => ({ visible: node.matches(":focus-visible"), shadow: getComputedStyle(node).boxShadow }));
+      expect(pointerFocus).toEqual({ visible: false, shadow: "none" });
+      const [anchor, floating] = await Promise.all([basis.boundingBox(), popup.boundingBox()]);
       expect(floating!.y).toBeGreaterThanOrEqual(anchor!.y + anchor!.height);
       expect(floating!.x + floating!.width).toBeCloseTo(anchor!.x + anchor!.width, 0);
       await page.mouse.move(1000, 700);
-      await page.screenshot({ path: testInfo.outputPath(`macro-sort-open-${locale}-${theme}.png`) });
-      const frame = (await list.boundingBox())!;
-      await page.screenshot({ path: testInfo.outputPath(`macro-sort-header-${locale}-${theme}.png`), clip: {
+      await page.screenshot({ path: testInfo.outputPath(`macro-sort-popover-${locale}-${theme}.png`), clip: {
         x: frame.x, y: frame.y, width: frame.width, height: floating!.y + floating!.height - frame.y + 8,
       } });
+
       const seen: Partial<Record<Mode, Record<string, Summary>>> = {};
 
       async function expandGroups() {
         for (const heading of await list.locator('[data-slot=macro-group-heading][aria-expanded=false]').all()) await heading.click();
       }
-      async function choose(label: string, mode: Mode) {
+      async function record(mode: Mode, action: () => Promise<void>) {
         const read = page.waitForResponse(response => {
           const url = new URL(response.url());
           return url.pathname === "/api/macro-tasks" && url.searchParams.get("sort") === mode;
         });
-        await popup.getByRole("radio", { name: label, exact: true }).click();
+        await action();
         const response = await read;
         expect(response.ok()).toBe(true);
         const data = await response.json();
@@ -86,10 +131,8 @@ for (const [locale, sortLabel, collapseLabel, basisLabels, directionLabels] of [
         seen[mode] = Object.fromEntries(data.macroTasks.map((item: Summary): [string, Summary] => [item.macroTaskId, item]));
         if (mode === "activity-desc") await expect(page).not.toHaveURL(/sort=/);
         else await expect(page).toHaveURL(new RegExp(`[?&]sort=${mode}$`));
-        await expect(popup).toBeVisible();
         await expectShown(mode);
       }
-
       async function expectShown(mode: Mode) {
         const created = mode.startsWith("created");
         const label = basisLabels[created ? 1 : 0];
@@ -100,54 +143,71 @@ for (const [locale, sortLabel, collapseLabel, basisLabels, directionLabels] of [
         }));
       }
 
-      await choose(basisLabels[1], "created-desc");
-      await page.mouse.move(1000, 700);
-      expect(await trigger.evaluate(node => getComputedStyle(node).color)).not.toBe(muted);
-      await expect(trigger).toHaveAccessibleName(currentLabel(true, false));
-      await choose(directionLabels[1], "created-asc");
-      await expect(trigger.locator(".lucide-arrow-up-narrow-wide")).toHaveCount(1);
-      await expect(trigger).toHaveAccessibleName(currentLabel(true, true));
+      // Choosing a basis leaves the direction alone and keeps the menu open.
+      await record("created-desc", () => popup.getByRole("radio", { name: basisLabels[1], exact: true }).click());
+      await expect(popup).toBeVisible();
+      await expect(basis).toHaveAccessibleName(basisName(true));
+      await expect(basis).toHaveAttribute("data-emphasized", "true");
+      await expect(direction).not.toHaveAttribute("data-emphasized", "true");
+      await expect(basis.locator(".lucide-calendar-plus")).toHaveCount(1);
+      expect(await basis.evaluate(node => getComputedStyle(node).color)).not.toBe(muted);
       await page.keyboard.press("Escape");
       await expect(popup).toBeHidden();
-      await expandGroups();
-      // The other project and standalone row also show their creation stamps.
-      const allTimes = await list.locator("[data-macro-task-id]").evaluateAll(nodes => nodes.map(node => {
-        const time = node.querySelector("time")!;
-        return [node.getAttribute("data-macro-task-id"), time.getAttribute("datetime"), time.querySelector(".sr-only")?.textContent];
-      }));
-      expect(allTimes).toHaveLength(4);
-      for (const [id, time, label] of allTimes) {
-        expect(time).toBe(seen["created-asc"]![id!]!.createdAt);
-        expect(label).toBe(basisLabels[1]);
-      }
+
+      // The direction button toggles on a click and opens nothing.
+      await record("created-asc", () => direction.click());
+      await expect(popup).toBeHidden();
+      await expect(direction).toHaveAccessibleName(directionLabels[1]);
+      await expect(direction).toHaveAttribute("data-emphasized", "true");
+      await expect(direction.locator(".lucide-arrow-up-narrow-wide")).toHaveCount(1);
+      await expect(basis).toHaveAttribute("data-emphasized", "true");
+      await record("created-desc", () => direction.click());
+      await expect(direction).not.toHaveAttribute("data-emphasized", "true");
+      await expect(basis).toHaveAttribute("data-emphasized", "true");
+
+      // Returning the basis to its default clears only that button's emphasis.
+      await basis.click();
+      await record("activity-desc", () => popup.getByRole("radio", { name: basisLabels[0], exact: true }).click());
+      await expect(popup).toBeVisible();
+      await expect(basis).not.toHaveAttribute("data-emphasized", "true");
+      await expect(direction).not.toHaveAttribute("data-emphasized", "true");
+      await page.keyboard.press("Escape");
+      await expect(popup).toBeHidden();
+
+      // An ascending direction is the only emphasized button from here.
+      await record("activity-asc", () => direction.click());
+      await expect(direction).toHaveAttribute("data-emphasized", "true");
+      await expect(basis).not.toHaveAttribute("data-emphasized", "true");
       await collapse.click();
       await expect(list.locator('[data-slot=macro-group-heading][aria-expanded=true]')).toHaveCount(0);
-      await collapse.click();
-      await expect(list.locator('[data-slot=macro-group-heading][aria-expanded=true]')).toHaveCount(0);
+
+      // The URL resumes the same row order after a reload and through history.
       await page.reload();
-      await trigger.click();
-      await expect(popup.getByRole("radio", { name: basisLabels[1], exact: true })).toBeChecked();
-      await expect(popup.getByRole("radio", { name: directionLabels[1], exact: true })).toBeChecked();
-      await expect.poll(() => rows(page)).toEqual([C, A]);
-      await expectShown("created-asc");
-      await choose(basisLabels[0], "activity-asc");
-      await choose(directionLabels[0], "activity-desc");
-      await page.goBack();
-      await expect(popup.getByRole("radio", { name: directionLabels[1], exact: true })).toBeChecked();
+      await expect(basis).toHaveAccessibleName(basisName(false));
+      await expect(direction).toHaveAccessibleName(directionLabels[1]);
+      await expect(basis).not.toHaveAttribute("data-emphasized", "true");
+      await expect(direction).toHaveAttribute("data-emphasized", "true");
+      await expandGroups();
       await expect.poll(() => rows(page)).toEqual([C, A]);
       await expectShown("activity-asc");
-      await page.goForward();
-      await expect(popup.getByRole("radio", { name: directionLabels[0], exact: true })).toBeChecked();
+      await page.goBack();
       await expect.poll(() => rows(page)).toEqual([A, C]);
+      await expect(direction).toHaveAccessibleName(directionLabels[0]);
       await expectShown("activity-desc");
-      await page.keyboard.press("Escape");
+      await page.goForward();
+      await expect.poll(() => rows(page)).toEqual([C, A]);
+      await expect(direction).toHaveAccessibleName(directionLabels[1]);
+      await expectShown("activity-asc");
+
       // A pointer click leaves the icon button without a focus ring; Tab draws one.
       await collapse.click();
       expect(await collapse.evaluate(node => node.matches(":focus-visible"))).toBe(false);
       await page.keyboard.press("Shift+Tab");
-      await expect(trigger).toBeFocused();
+      await expect(direction).toBeFocused();
+      await page.keyboard.press("Shift+Tab");
+      await expect(basis).toBeFocused();
       await settle(page);
-      const keyboardFocus = await trigger.evaluate(node => ({ visible: node.matches(":focus-visible"), shadow: getComputedStyle(node).boxShadow }));
+      const keyboardFocus = await basis.evaluate(node => ({ visible: node.matches(":focus-visible"), shadow: getComputedStyle(node).boxShadow }));
       expect(keyboardFocus.visible).toBe(true);
       expect(keyboardFocus.shadow).not.toBe("none");
       expect(keyboardFocus.shadow).toContain("inset");
@@ -155,9 +215,9 @@ for (const [locale, sortLabel, collapseLabel, basisLabels, directionLabels] of [
       await expect(popup).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(popup).toBeHidden();
-      await trigger.click(); await trigger.click();
+      await basis.click(); await basis.click();
       await expect(popup).toBeHidden();
-      await trigger.click(); await list.locator("[data-slot=macro-list-heading]").click();
+      await basis.click(); await list.locator("[data-slot=macro-list-heading]").click();
       await expect(popup).toBeHidden();
     });
   });

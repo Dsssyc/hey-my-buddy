@@ -1,5 +1,5 @@
 export const tasks = {
-  sort: { label: "排序", order: "排列顺序", current: "排序：{{basis}} · {{order}}", activity: "最近更新", created: "创建时间", newest: "新的在前", oldest: "旧的在前" },
+  sort: { label: "排序", basis: "排序：{{basis}}", activity: "最近更新", created: "创建时间", descending: "降序", ascending: "升序" },
   collapseAll: "全部折叠",
   legendLabel: "图例",
   resizeNames: "拖动调整名称栏宽度；方向键微调，双击恢复。",
