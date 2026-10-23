@@ -228,7 +228,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(title).toContainText(unsure);
         await expect(title).not.toContainText(locale === "zh-CN" ? "已结束" : "Ended");
         await expect(chosen(page)).toHaveAccessibleName(new RegExp(locale === "zh-CN" ? "停止未确认" : "Stop unconfirmed"));
-        const mark = await chosen(page).locator("[data-slot=execution-bar]").evaluate(node => node.getAttribute("stroke-dasharray"));
+        const mark = await chosen(page).locator("[data-slot=execution-status-outline]").evaluate(node => node.getAttribute("stroke-dasharray"));
         expect(mark).toBe("3 2");
         await expectDetailWhole(page, { skipTitle: true });
       });

@@ -1,4 +1,5 @@
-import { leadingBuddyColor, runningBuddyColor } from "./buddyColors";
+import { buddyUsesLightInk, leadingBuddyColor, runningBuddyColor } from "./buddyColors";
+import { IsolatedStatusMark } from "./IsolatedStatusMark";
 import { HarnessLogo } from "../buddies/HarnessLogo";
 import { Hint } from "../components/hint";
 import { useId, useLayoutEffect, useRef, useState } from "react";
@@ -143,7 +144,7 @@ function IdlePattern({ id }: { id: string }) {
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52 }: {
+export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background" }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
   buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string | null; boundary?: HTMLElement | null;
   /** Only this fragment is outlined; the selected row has its own neutral wash. */
@@ -153,6 +154,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   ownedWaits?: readonly OwnedWait[];
   /** Row height; 52 keeps the bar, both name lines and their spacing proportionate, a lane header is taller. */
   height?: number;
+  surface?: "background" | "card";
   onSelect: (runId: string, key?: string) => void;
   onOpen: (runId: string, key: string) => void; onHover: (span: TimelineSpan | null) => void; onFocusSpan: (span: TimelineSpan | null) => void;
   onMarker: (marker: TimelineMarker | null, source: "hover" | "focus") => void; buddyColors: ReadonlyMap<string, string>;
@@ -161,6 +163,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   const pattern = useId();
   const isHighlighted = (key: string) => selectedKey === key || highlightedKey === key;
   const middle = height / 2;
+  const paper = surface === "card" ? "stroke-card" : "stroke-background";
   const hitBox = (start: number, end: number) => {
     const width = Math.max(28, end - start + 6);
     return { x: Math.max(-INSET_PX, Math.min(scale.widthPx + INSET_PX - width, (start + end) / 2 - width / 2)), width };
@@ -226,6 +229,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     ...markerGroups.filter(group => group.length > 1).map(group => String(group.length)),
     ...expected.map(entry => entry.text), ...markers.map(marker => eventName(marker.event)), acceptanceLabel, acceptance?.duration ?? ""];
   const { measure, ruler } = useTextMeasure(candidates);
+  const lightInk = (span: TimelineSpan) => buddyUsesLightInk(buddyColors.get(buddyColorKey(span.buddy))!);
   const labels: Label[] = [];
   const occupied: Record<number, Occupancy[]> = { [topTextY]: [], [barTextY]: [...markerGroups.map(group => ({ x: group.reduce((sum, mark) => sum + mark.x, 0) / group.length, radius: group.length > 1 ? clusterHalfWidth(group.length, measure(String(group.length))) + 3 : 8 })), ...expected.map(mark => ({ x: mark.x, radius: 8 }))].map(mark => ({ kind: "obstacle" as const, left: mark.x - mark.radius, right: mark.x + mark.radius })) };
   const add = (texts: string[], left: number, right: number, y: number, className: string, preferred = left, blocks: Occupancy[] = []) => {
@@ -256,7 +260,7 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
   for (const item of positioned) {
     if (item.execution) {
       const tail = tails.find(entry => entry.item === item);
-      add([`${modelLabel(item.span)} · ${fullLabel(item)}`, fullLabel(item), duration(item)!], item.start + (item.span.kind === "execution" ? 23 : 6), (tail?.x ?? item.end) - 6, barTextY, item.span.kind === "execution" ? "fill-execution-ink" : "fill-ink");
+      add([`${modelLabel(item.span)} · ${fullLabel(item)}`, fullLabel(item), duration(item)!], item.start + (item.span.kind === "execution" ? 26 : 6), (tail?.x ?? item.end) - (["failed", "unknown"].includes(item.outcome) ? 14 : 6), barTextY, item.span.kind === "execution" ? (lightInk(item.span) ? "fill-execution-ink-light" : "fill-execution-ink") : "fill-ink");
     } else add([fullLabel(item), duration(item)!], item.start + (item.outcome === "open" && item.span.kind === "host" ? 10 : 0), item.end, topTextY, item.outcome === "open" && item.span.kind === "host" ? "fill-hand" : "fill-ink3");
   }
   return <svg data-slot="timeline-track" viewBox={`${-INSET_PX} 0 ${scale.widthPx + INSET_PX * 2} ${height - 1}`} width={scale.widthPx + INSET_PX * 2} height={height} preserveAspectRatio="none" className="block max-w-none select-none overflow-hidden border-t text-xs" aria-label={t("track", { title: displayTitle(row.titleSource, row.title).fullText })}>
@@ -271,26 +275,33 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
       {isHighlighted(`span:${span.spanId}`) && <rect data-slot="selected-item" x={Math.max(-6, start - 2)} y={execution ? middle - 13 : middle - 3} width={Math.max(5, end - start + 4)} height={execution ? 26 : 6} fill="none" className="pointer-events-none stroke-focus"/>}
       <path data-slot="span-hit" d={hitPath(start, end)} fill="transparent"/>
       {execution ? <rect data-slot={span.kind === "routing" ? "routing-bar" : "execution-bar"} data-outcome={outcome} x={start} y={middle - 11} width={Math.max(1, end - start)} height={22}
-        strokeDasharray={["unknown", "cancelled", "abstention"].includes(outcome) ? "3 2" : undefined}
+        strokeDasharray={span.kind === "routing" && ["unknown", "cancelled", "abstention"].includes(outcome) ? "3 2" : undefined}
         style={{ fill: span.kind === "execution" ? (outcome === "running" ? runningBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!) : buddyColors.get(buddyColorKey(span.buddy))) : undefined }}
-        strokeWidth={span.kind === "execution" && outcome === "failed" ? 2.5 : undefined}
-        className={span.kind === "routing" ? cn("fill-card", outcome === "failed" ? "stroke-fail" : outcome === "running" ? "stroke-ink" : "stroke-ink3") : cn("stroke-line2", outcome === "failed" && "stroke-fail", outcome === "unknown" && "stroke-hand-mark")}/>
+        className={span.kind === "routing" ? cn("fill-card", outcome === "failed" ? "stroke-fail" : outcome === "running" ? "stroke-ink" : "stroke-ink3") : "stroke-line2"}/>
         : <line data-slot={`${span.kind}-wait`} x1={start} x2={end} y1={middle} y2={middle} strokeWidth={outcome === "open" && span.kind === "host" ? 2 : 1.5} strokeDasharray={outcome === "open" && span.kind === "host" ? "5 4" : undefined} className={outcome === "open" && span.kind === "host" ? "stroke-hand-mark" : "stroke-ink3"}/>}
-      {span.kind === "execution" && <foreignObject data-slot="execution-buddy" pointerEvents="none" x={start + 3} y={middle - 7} width={14} height={14} className="overflow-visible text-execution-ink"><div className="[&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5">{span.buddy?.harness && <HarnessLogo harness={span.buddy.harness}/>}</div></foreignObject>}
+      {span.kind === "execution" && ["failed", "unknown", "cancelled"].includes(outcome) && <IsolatedStatusMark slot="execution-status-outline"
+        d={`M${start - 2.5} ${middle - 13.5}h${Math.max(1, end - start) + 5}v27h${-Math.max(1, end - start) - 5}Z`}
+        paper={paper} stroke={outcome === "failed" ? "stroke-fail" : outcome === "unknown" ? "stroke-hand-mark" : "stroke-ink3"} dashed={outcome !== "failed"}/>}
+      {span.kind === "execution" && <>
+        <rect data-slot="execution-buddy-paper" pointerEvents="none" x={start + 2} y={middle - 9} width={18} height={18} className={surface === "card" ? "fill-card" : "fill-background"}/>
+        <foreignObject data-slot="execution-buddy" pointerEvents="none" x={start + 4} y={middle - 7} width={14} height={14} className="overflow-visible text-foreground"><div className="[&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5">{span.buddy?.harness && <HarnessLogo harness={span.buddy.harness}/>}</div></foreignObject>
+      </>}
 
-      {span.kind === "execution" && outcome === "failed" && <path data-slot="execution-failed" pointerEvents="none" d={`M${end - 8} ${middle - 3}l6 6m0-6l-6 6`} className="stroke-fail" strokeWidth={1.8}/>}
-      {outcome === "unknown" && <path data-slot="unconfirmed-end" d={`M${end - 4} ${middle - 11}l4 6-4 5 4 5-4 6`} className="fill-none stroke-hand-mark" strokeWidth={2}/>}
+      {span.kind === "execution" && outcome === "failed" && <IsolatedStatusMark slot="execution-failed" d={`M${end - 8} ${middle - 3}l6 6m0-6l-6 6`} paper={paper} stroke="stroke-fail" width={1.8}/>}
+      {outcome === "unknown" && <IsolatedStatusMark slot="unconfirmed-end" d={`M${end - 4} ${middle - 11}l4 6-4 5 4 5-4 6`} paper={paper} stroke="stroke-hand-mark"/>}
       <rect aria-hidden="true" data-slot="fragment-focus" x={Math.max(-6, start - 5)} y={middle - 17} width={Math.max(12, end - start + 10)} height={34} fill="none" strokeWidth={2} className={cn("pointer-events-none stroke-ink opacity-0", !isHighlighted(`span:${span.spanId}`) && "group-focus/fragment:opacity-100")}/>
     </g></Hint>)}
-    {tails.map(tail => <rect pointerEvents="none" data-slot="silent-tail" key={tail.item.span.spanId} x={tail.x} y={middle - 10.25} width={Math.max(0, tail.item.end - tail.x)} height={20.5} strokeWidth={1.5} className="fill-hand-wash stroke-hand-mark"/>)}
+    {tails.map(tail => <rect key={tail.item.span.spanId} pointerEvents="none" data-slot="silent-tail" x={tail.x} y={middle - 10.25} width={Math.max(0, tail.item.end - tail.x)} height={20.5} className="fill-hand-wash"/>)}
     {positioned.filter(item => item.span.kind === "execution" && item.outcome === "running").map(({ span, start, end }) => <g key={span.spanId} pointerEvents="none">
       <defs><linearGradient id={`${pattern}-breath-${span.spanId}`}><stop stopColor={leadingBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)} stopOpacity={0}/><stop offset="1" stopColor={leadingBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)}/></linearGradient></defs>
       <rect x={Math.max(start, end - 16)} y={middle - 10} width={Math.min(16, Math.max(1, end - start))} height={20} fill={runningBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)}/>
       <rect data-slot="execution-breath" data-span-id={span.spanId} x={Math.max(start, end - 16)} y={middle - 10} width={Math.min(16, Math.max(1, end - start))} height={20} fill={`url(#${pattern}-breath-${span.spanId})`} className="execution-breathe"/>
     </g>)}
+    {/* Status strokes sit above the moving edge, so motion cannot erase their paper. */}
+    {tails.map(tail => <IsolatedStatusMark key={tail.item.span.spanId} slot="silent-tail-outline" d={`M${tail.x} ${middle - 10.25}h${Math.max(0, tail.item.end - tail.x)}v20.5h${-Math.max(0, tail.item.end - tail.x)}Z`} paper={paper} stroke="stroke-hand-mark" width={1.5}/>)}
     {acceptance && acceptanceOpen && <path pointerEvents="none" data-slot="waiting-diamond" d={diamond(acceptance.start, middle)} className="fill-hand-mark"/>}
     {positioned.filter(item => item.span.kind === "host" && item.outcome === "open").map(item => <path pointerEvents="none" key={item.span.spanId} data-slot="waiting-diamond" d={diamond(item.start, middle)} className="fill-hand-mark"/>)}
-    {expected.map(entry => <line pointerEvents="none" data-slot="expected-mark" key={entry.item.span.spanId} x1={entry.x} x2={entry.x} y1={middle - 16} y2={middle + 16} strokeWidth={2} className="stroke-hand-mark"/>)}
+    {expected.map(entry => <IsolatedStatusMark slot="expected-mark" key={entry.item.span.spanId} d={`M${entry.x} ${middle - 16}v32`} paper={paper} stroke="stroke-hand-mark"/>)}
     {singletonInquiries.map(marker => <Hint key={markerKey(marker)} text={markerReadout(marker)}><g role="button" tabIndex={tabKey === markerKey(marker) ? 0 : -1} data-at={Date.parse(markerAt(marker))} data-key={markerKey(marker)} aria-pressed={selectedKey === markerKey(marker)} aria-label={markerReadout(marker)}
       onPointerEnter={() => focusMarker(marker, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker(marker, "focus")} onBlur={() => focusMarker(null, "focus")}
       onClick={event => { if (event.detail > 1) return; onSelect(row.runId, markerKey(marker)); onOpen(row.runId, markerKey(marker)); }} onKeyDown={key => { if (key.key === "Enter") { key.preventDefault(); onOpen(row.runId, markerKey(marker)); } }} className="group/fragment outline-none">

@@ -176,10 +176,10 @@ export function TaskWork(props: TaskWorkProps) {
     className={cn("relative", lead ? "bg-card" : "bg-background")}>
     {narrow
       ? <><div className={cn("sticky left-0 z-10", lead ? "bg-card" : "bg-background")} style={{ width: Math.max(1, width - 2) }}>{renderName(row, { laneLevel: lead ? laneLevel(lead, row) : undefined })}</div>
-        <Track {...trackProps(row)}/></>
+        <Track {...trackProps(row)} surface={lead ? "card" : "background"}/></>
       : <div className="grid items-stretch" style={{ gridTemplateColumns: `${nameWidth}px ${scale!.widthPx + SLACK_PX * 2}px minmax(0,1fr)` }}>
         <div className={cn("sticky left-0 z-10", lead ? "bg-card" : "bg-background")}>{renderName(row, { laneLevel: lead ? laneLevel(lead, row) : undefined })}</div>
-        <Track {...trackProps(row)}/>
+        <Track {...trackProps(row)} surface={lead ? "card" : "background"}/>
         <div className={cn("border-t", (selectedRunId === row.runId || highlightedRunId === row.runId) && "bg-selected-row")}/>
       </div>}
   </div>;
@@ -223,7 +223,7 @@ export function TaskWork(props: TaskWorkProps) {
           {leadName()}
         </div>}
       {scale && input && <div className={narrow ? "block" : "flex items-center"}>
-        <Track {...trackProps(lead)} ownedWaits={ownedWaits(lead, timeline!.spans, nowMs)} height={LEAD_PX}/>
+        <Track {...trackProps(lead)} surface="card" ownedWaits={ownedWaits(lead, timeline!.spans, nowMs)} height={LEAD_PX}/>
       </div>}
       {!narrow && <div className={cn((selectedRunId === lead.runId || highlightedRunId === lead.runId) && "bg-selected-row")}/>}
     </header>;

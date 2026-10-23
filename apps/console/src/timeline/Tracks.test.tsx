@@ -39,14 +39,14 @@ describe("timeline drawings follow recorded facts", () => {
     const buddy = execution().buddy!;
     const identities = [buddy, { ...buddy, harness: "other-harness" }, { ...buddy, provider: "other-provider" },
       { ...buddy, model: "other-model" }, { ...buddy, effort: "other-effort" }];
-    const buddyColors = new Map(identities.map((identity, index) => [buddyColorKey(identity), ["rgb(109, 126, 192)", "rgb(159, 138, 174)", "rgb(75, 147, 186)", "rgb(140, 135, 180)", "rgb(90, 140, 180)"][index]!]));
+    const buddyColors = new Map(identities.map((identity, index) => [buddyColorKey(identity), ["#6d7ec0", "#9f8aae", "#4b93ba", "#8c87b4", "#5a8cb4"][index]!]));
     expect(buddyColorKey(null)).toBe("[null,null,null,null]");
     expect(buddyColors.size).toBe(5);
     track(identities.map((identity, index) => execution({ spanId: "historical-" + index, buddy: identity })), { buddyColors });
-    expect([...document.querySelectorAll<SVGElement>('[data-slot=execution-bar]')].map(bar => bar.style.fill)).toEqual([...buddyColors.values()]);
+    expect([...document.querySelectorAll<SVGElement>('[data-slot=execution-bar]')].map(bar => bar.style.fill)).toEqual(["rgb(109, 126, 192)", "rgb(159, 138, 174)", "rgb(75, 147, 186)", "rgb(140, 135, 180)", "rgb(90, 140, 180)"]);
   });
 
-  it("uses pale settled execution, solid live/failure and a distinct unconfirmed end", () => {
+  it("uses buddy fills for settled execution, moving live edges and a distinct unconfirmed end", () => {
     track([execution()]);
     expect((slot("execution-bar") as SVGElement).style.fill).toBe("rgb(109, 126, 192)");
     cleanup(); track([execution({ endAt: null, state: "executing", shutdownConfirmed: false, resultStatus: undefined })]);
@@ -54,8 +54,8 @@ describe("timeline drawings follow recorded facts", () => {
     expect(slot("execution-breath")).not.toBeNull();
     cleanup(); track([execution({ resultStatus: "failed" })]);
     expect(slot("execution-failed")).not.toBeNull();
-    expect(slot("execution-bar")?.getAttribute("class")).toContain("stroke-fail");
-    expect(slot("execution-bar")?.getAttribute("stroke-width")).toBe("2.5");
+    expect(slot("execution-status-outline")?.getAttribute("class")).toContain("stroke-fail");
+    expect(slot("execution-status-outline")?.getAttribute("stroke-width")).toBe("2");
     expect((slot("execution-bar") as SVGElement).style.fill).toBe("rgb(109, 126, 192)");
     cleanup(); const unknown = execution({ uncertain: true, shutdownConfirmed: false }); track([unknown]);
     expect(slot("unconfirmed-end")).toBeTruthy();
