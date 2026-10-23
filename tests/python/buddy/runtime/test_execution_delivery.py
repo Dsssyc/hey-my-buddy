@@ -7,12 +7,15 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy.buddy.runtime import execution as entry
 from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.execution import read_execution_receipt, receipt_reference
 
@@ -29,11 +32,107 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.execution = entry.Execution(CLAIM, self.state, "n" * 64, client=mock.Mock())
         self.execution.directory.mkdir(parents=True, mode=0o700)
 
+    def budget_execution(self, client, suffix=""):
+        task_id, attempt_id = "router-task" + suffix, "router-attempt" + suffix
+        claim = {"task": {"taskId": task_id, "spec": {
+            "adapter": "decision", "routerBudgetSeconds": 60, "cwd": str(self.state)}},
+            "attempt": {"taskId": task_id, "attemptId": attempt_id, "generation": 1},
+            "decisionInput": {"buddy": {"harness": "codex"}, "routingMode": "fast",
+                              "budget": {"timeoutSeconds": 60}}}
+        execution = entry.Execution(claim, self.state, "n" * 64, client=client)
+        execution.directory.mkdir(parents=True, mode=0o700)
+        return execution, claim
+
+    def execute_budget(self, execution, claim, on_start):
+        handle = mock.Mock(cancel_requested=False, stop_initiator=None, grace_expired=False,
+                           result=None, evidence_retention_failure=None)
+        handle.wait.return_value = 0
+        def start(*_args):
+            on_start()
+            return handle
+        with mock.patch("hey_my_buddy.install.runtime.resolve_runtime", return_value={"identity": "fixture"}), \
+             mock.patch.object(entry.role_seam, "worker_executor"), \
+             mock.patch.object(entry.role_seam, "prepare_worker_run", return_value=SimpleNamespace(available=True, error=None)), \
+             mock.patch.object(entry.role_seam, "worker_start", side_effect=start), \
+             mock.patch.object(entry.role_seam, "worker_collect", return_value=AdapterOutcome("ok", shutdown_confirmed=True)):
+            return execution._execute_selected(claim, claim["task"], claim["task"]["spec"],
+                claim["attempt"], execution.directory, {"preflightControl": mock.Mock()})
+
+    def test_budget_is_notified_before_native_start_and_offline_notice_is_retained(self):
+        for offline in (False, True):
+            with self.subTest(offline=offline):
+                client = mock.Mock()
+                execution, claim = self.budget_execution(client, suffix=f"-{int(offline)}")
+                delivered = []
+                def progress(*_args, **kwargs):
+                    budget = json.loads((execution.directory / entry.BUDGET).read_bytes())
+                    self.assertEqual(budget["binding"], {"taskId": claim["task"]["taskId"],
+                        "attemptId": claim["attempt"]["attemptId"], "generation": 1})
+                    self.assertEqual(kwargs["data"], {"waitingReason": None})
+                    if offline and client.progress.call_count == 1:
+                        raise BoardError("SERVICE_UNAVAILABLE", "offline")
+                    delivered.append(budget["deadline"])
+                client.progress.side_effect = progress
+                def start():
+                    self.assertEqual(client.progress.call_count, 1)
+                    if offline:
+                        self.assertIn("waitingReason", execution._hints)
+                        with mock.patch.object(entry.time, "monotonic", return_value=execution._next_hint_at):
+                            self.assertTrue(execution.flush_hints())
+                    self.assertEqual(len(delivered), 1)
+                receipt = self.execute_budget(execution, claim, start)
+                self.assertEqual(receipt["report"]["status"], "ok")
+
+    def test_an_older_identical_hint_ack_cannot_erase_the_budget_notification(self):
+        client = mock.Mock()
+        execution, claim = self.budget_execution(client)
+        entered, release, published = threading.Event(), threading.Event(), threading.Event()
+        seen_budget, errors = [], []
+        def progress(*_args, **_kwargs):
+            seen_budget.append((execution.directory / entry.BUDGET).exists())
+            if client.progress.call_count == 1:
+                entered.set()
+                if not release.wait(2):
+                    raise RuntimeError("fixture hint acknowledgement remained gated")
+        client.progress.side_effect = progress
+        execution.hint(waitingReason=None)
+        older = threading.Thread(target=execution.flush_hints, daemon=True)
+        original_publish = entry.fsync_json
+        def publish(path, *args, **kwargs):
+            original_publish(path, *args, **kwargs)
+            if path.name == entry.BUDGET:
+                published.set()
+        def start():
+            self.assertEqual(seen_budget, [False, True])
+        def run():
+            try:
+                self.execute_budget(execution, claim, start)
+            except BaseException as error:
+                errors.append(error)
+        current = threading.Thread(target=run, daemon=True)
+        with mock.patch.object(entry, "fsync_json", side_effect=publish):
+            older.start()
+            try:
+                self.assertTrue(entered.wait(2))
+                current.start()
+                self.assertTrue(published.wait(2))
+                release.set()
+                older.join(2)
+                current.join(2)
+                self.assertFalse(older.is_alive())
+                self.assertFalse(current.is_alive())
+                self.assertEqual(errors, [])
+                self.assertEqual(seen_budget, [False, True])
+            finally:
+                release.set()
+                older.join(2)
+                if current.ident is not None:
+                    current.join(2)
+
     def test_receipt_is_private_durable_and_has_no_authority_secret(self):
         report = {"status": "failed", "shutdownConfirmed": True,
                   "terminationReason": "harness-error"}
-        with mock.patch.object(self.execution, "_cleanup_attempt_credentials"):
-            receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
+        receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
         self.assertEqual(set(receipt), {"attemptId", "taskId", "generation", "report", "createdAt"})
         self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
         raw = (self.execution.directory / "result-receipt.json").read_text(encoding="utf-8")
@@ -87,6 +186,44 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertFalse((self.execution.directory / "result-receipt.json").exists())
         self.assertTrue((self.execution.directory / "result-delivery.json").exists())
 
+    def test_uncertain_delivery_fails_once_and_preserves_exact_receipt(self):
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY, RECEIPT
+        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                   "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
+        write_receipt(self.execution.directory, receipt)
+        original = (self.execution.directory / RECEIPT).read_bytes()
+        for error in (BoardError("INTERNAL_ERROR", "commit failed"),
+                      BoardError("INVALID_RESPONSE", "reply lost"), RuntimeError("unexpected defect")):
+            with self.subTest(error=error):
+                client = mock.Mock()
+                client.submit_result.side_effect = error
+                with self.assertRaises(type(error)) as caught, \
+                     mock.patch("hey_my_buddy.buddy.runtime.receipts.time.sleep") as pause:
+                    deliver_receipt(client, receipt, self.execution.directory, nonce="n" * 64)
+                self.assertIs(caught.exception, error)
+                client.submit_result.assert_called_once()
+                pause.assert_not_called()
+                self.assertEqual((self.execution.directory / RECEIPT).read_bytes(), original)
+                self.assertFalse((self.execution.directory / DELIVERY).exists())
+
+    def test_explicit_refusal_records_reason_and_retains_receipt_as_evidence(self):
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY
+        for code in ("ATTEMPT_FINISHED", "STALE_GENERATION", "UNAUTHORIZED", "CONFLICT",
+                     "INVALID_ARGUMENT", "RECEIPT_MISMATCH", "ARTIFACT_MISSING", "ARTIFACT_MISMATCH"):
+            with self.subTest(code=code):
+                directory = self.execution.directory / code
+                directory.mkdir()
+                receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                           "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
+                write_receipt(directory, receipt)
+                client = mock.Mock()
+                client.submit_result.side_effect = BoardError(code, "attempt refused")
+                self.assertFalse(deliver_receipt(client, receipt, directory, nonce="n" * 64))
+                self.assertEqual(read_execution_receipt(directory), receipt)
+                self.assertEqual(json.loads((directory / DELIVERY).read_text()),
+                                 {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1,
+                                  "accepted": False, "error": {"code": code, "message": "attempt refused"}})
+
     def test_result_waits_for_hint_already_in_backoff(self):
         receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"},
@@ -121,6 +258,21 @@ class ExecutionDeliveryTests(unittest.TestCase):
                          {"activity": {"phase": "completed"}})
         client.submit_result.assert_called_once()
         self.assertIsNone(read_execution_receipt(self.execution.directory))
+
+    def test_refusal_is_durable_before_a_log_failure_can_exit_delivery(self):
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt
+        from hey_my_buddy.protocol.execution import read_execution_delivery
+        receipt = {'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
+                   'report': {'status': 'ok'}, 'createdAt': 'fixture'}
+        write_receipt(self.execution.directory, receipt)
+        self.execution.client.submit_result.side_effect = BoardError('INVALID_ARGUMENT', 'report rejected')
+        with self.assertRaisesRegex(OSError, 'log failed'):
+            deliver_receipt(self.execution.client, receipt, self.execution.directory, nonce='n' * 64,
+                            log=mock.Mock(side_effect=OSError('log failed')))
+        decision = read_execution_delivery(self.execution.directory,
+                    binding={'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1})
+        self.assertEqual(decision['error'], {'code': 'INVALID_ARGUMENT', 'message': 'report rejected'})
+        self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
 
     def test_repeated_wrap_up_does_not_extend_deadline_and_force_escalates(self):
         control = self.execution.control
@@ -175,7 +327,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
 
         def execute(_execution):
             client.progress.assert_called_once()
-            return {"report": {"status": "ok"}}
+            return {"report": {"status": "ok", "shutdownConfirmed": True}}
 
         with mock.patch.object(sys, "argv", ["execution", "--startup", str(startup)]), \
              mock.patch.object(entry.execution_protocol, "self_execution_process_identity",
@@ -205,7 +357,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
 
         def execute():
             self.assertEqual(client.progress.call_count, 2)
-            return {"report": {"status": "ok"}}
+            return {"report": {"status": "ok", "shutdownConfirmed": True}}
 
         def install(*_args):
             self.assertEqual(client.progress.call_count, 0)
@@ -260,7 +412,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         clock = [0.0]
         def advance(seconds):
             clock[0] += seconds
-        with mock.patch.object(execution, "execute", return_value={"report": {}}), \
+        with mock.patch.object(execution, "execute", return_value={"report": {"shutdownConfirmed": True}}), \
              mock.patch.object(entry, "deliver_receipt", return_value=True), \
              mock.patch("hey_my_buddy.protocol.process_identity.install_native_process_journal"), \
              mock.patch.object(entry.time, "monotonic", side_effect=lambda: clock[0]), \
@@ -324,3 +476,69 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual(client.progress.call_count, 2)
         self.assertEqual(client.progress.call_args.kwargs['data'], {'waitingReason': None})
         self.assertEqual(self.execution._hints, {})
+
+    def test_unknown_progress_failure_keeps_a_running_control_alive_and_retries(self):
+        for error in (BoardError('INTERNAL_ERROR', 'store defect'),
+                      BoardError('INVALID_RESPONSE', 'reply lost'), RuntimeError('transport defect')):
+            with self.subTest(error=error):
+                logs = []
+                client = mock.Mock()
+                client.progress.side_effect = [error, {}]
+                execution = entry.Execution(CLAIM, self.state, 'n' * 64, client=client, log=logs.append)
+                execution.hint(activity={'phase': 'running'})
+                control = execution.control
+                control.handle = SimpleNamespace(live_endpoint=None)
+                with mock.patch.object(entry.time, 'monotonic', return_value=10.0), \
+                     mock.patch.object(control._wake, 'wait', side_effect=lambda _timeout: control.stop()), \
+                     mock.patch.object(entry.role_seam, 'worker_cancel') as cancel, \
+                     mock.patch.object(entry.role_seam, 'worker_stop') as stop:
+                    control.run()
+                self.assertIsNone(control.fatal)
+                self.assertIsNone(control.cancel_view)
+                cancel.assert_not_called()
+                stop.assert_not_called()
+                self.assertEqual(execution._hints, {'activity': {'phase': 'running'}})
+                self.assertTrue(any('execution progress pending' in line for line in logs))
+                with mock.patch.object(entry.time, 'monotonic', return_value=10.25):
+                    self.assertTrue(execution.flush_hints())
+                self.assertEqual(client.progress.call_count, 2)
+                self.assertEqual(execution._hints, {})
+
+    def test_unknown_progress_failure_during_delivery_leaves_receipt_and_exits(self):
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY, RECEIPT
+        receipt = {'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
+                   'report': {'status': 'ok', 'shutdownConfirmed': True}, 'createdAt': 'fixture'}
+        write_receipt(self.execution.directory, receipt)
+        original = (self.execution.directory / RECEIPT).read_bytes()
+        self.execution.hint(waitingReason=None)
+        for error in (BoardError('INTERNAL_ERROR', 'store defect'),
+                      BoardError('INVALID_RESPONSE', 'reply lost'), RuntimeError('transport defect')):
+            with self.subTest(error=error):
+                self.execution.client.progress.side_effect = error
+                with self.assertRaises(type(error)) as caught:
+                    deliver_receipt(self.execution.client, receipt, self.execution.directory, nonce='n' * 64,
+                                    flush_hints=self.execution._flush_delivery_hints)
+                self.assertIs(caught.exception, error)
+                self.execution.client.submit_result.assert_not_called()
+                self.assertEqual((self.execution.directory / RECEIPT).read_bytes(), original)
+                self.assertEqual(self.execution._hints, {'waitingReason': None})
+                self.assertFalse((self.execution.directory / DELIVERY).exists())
+
+    def test_budget_cleanup_failure_exits_with_the_original_durable_receipt(self):
+        from hey_my_buddy.protocol.execution import BUDGET, RECEIPT
+        report = {'status': 'ok', 'shutdownConfirmed': True}
+        receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
+        original = (self.execution.directory / RECEIPT).read_bytes()
+        budget = self.execution.directory / BUDGET
+        budget.write_text('{}')
+        unlink = Path.unlink
+        def fail_budget(path, **kwargs):
+            if path == budget:
+                raise OSError('budget cleanup failed')
+            return unlink(path, **kwargs)
+        with mock.patch.object(self.execution, 'execute', return_value=receipt), \
+             mock.patch.object(Path, 'unlink', autospec=True, side_effect=fail_budget):
+            with self.assertRaisesRegex(OSError, 'budget cleanup failed'):
+                self.execution.run()
+        self.assertEqual((self.execution.directory / RECEIPT).read_bytes(), original)
+        self.execution.client.submit_result.assert_not_called()

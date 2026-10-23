@@ -571,7 +571,7 @@ def _native_call(call, *, code: str, message: str):
     except AcpTimeout:
         raise NativeError("deadline", f"{message}: the run's overall deadline expired") from None
     except AcpConnectionClosed:
-        raise NativeError("native-disconnected",
+        raise NativeError("transport-error",
                           f"{message}: the native agent connection ended before the answer") from None
 
 
@@ -1132,7 +1132,7 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     if "error" in result:
         error = result["error"]
         if isinstance(error, AcpConnectionClosed):
-            raise NativeError("native-disconnected", "the native agent connection ended during the prompt")
+            raise NativeError("transport-error", "the native agent connection ended during the prompt")
         if isinstance(error, AcpTimeout):
             if state.deadline_hit or _remaining(deadline) <= 0:
                 state.deadline_hit = True
@@ -1390,7 +1390,7 @@ def _collect(*, client: AcpClient | None, pump: _Pump | None, state: _RunState,
     }
     if client.connection.reader_error is not None:
         state.status = "error"
-        state.reason = "native-disconnected"
+        state.reason = "transport-error"
         state.error_text = "the native ACP reader failed before the stream was complete"
         state.provenance = None
         return False
@@ -1529,7 +1529,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
     failure_code = record_failure.get("code") if record_failure else None
     classification = classify_quota_code(failure_code) if failure_code else "unknown"
     incomplete = (drained is not True or bool(record and record.get("truncated"))
-                  or state.reason in ("invalid-native-result", "invalid-protocol", "native-disconnected")
+                  or state.reason in ("invalid-native-result", "invalid-protocol", "transport-error")
                   )
     rejection_phase = ("unknown" if incomplete else
                        "during-model" if state.root_model_activity or bool(record and record.get("modelActivity"))

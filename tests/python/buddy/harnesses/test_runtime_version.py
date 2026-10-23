@@ -505,12 +505,12 @@ class RuntimeVersionTests(unittest.TestCase):
                     if operation == self.execute:
                         result = operation("dsh", case, module)
                         self.assertEqual((result.end.status, result.end.reason_code),
-                                         ("error", "native-disconnected"))
+                                         ("error", "transport-error"))
                         self.assertFalse(result.model_started)
                     else:
                         with self.assertRaises(module.NativeError) as caught:
                             operation("dsh", case, module)
-                        self.assertEqual(caught.exception.code, "native-disconnected")
+                        self.assertEqual(caught.exception.code, "transport-error")
                         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
                     public.assert_not_called()
                 self.assertFalse(any(row.get("dir") == "in" and row["raw"].get("method") == "session/new"

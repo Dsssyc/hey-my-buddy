@@ -52,7 +52,7 @@ class WorkerPermissionTests(NativeRunCase):
                 result = native_run.run(request, observer=worker_observer, services=bound.services,
                                         cancelled=lambda: False)
                 self.assertEqual(result.end.status, "error")
-                self.assertEqual(result.end.reason_code, "native-disconnected")
+                self.assertEqual(result.end.reason_code, "transport-error")
                 self.assertIsNone(result.native_identity)
                 self.assertEqual(result.effective_policy.tools.requested.value, {"permissionMode": mode})
                 observed = [entry for entry in self.agent_log() if entry.get("event") == "home-check"][-1]

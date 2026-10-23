@@ -43,7 +43,7 @@ from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, Op
 from ..harnesses.live import (LIVE_FIELDS, MAX_REQUEST_ID, MAX_OBSERVE_LIMIT,
     MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS, LiveReply, LiveRequest, LiveSnapshot)
 from ..roles import controller as role_seam
-from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory, RETRYABLE
+from .receipts import read_receipt, write_receipt, deliver_receipt, receipt_directory, RETRYABLE, REFUSED
 
 fsync_json = execution_protocol.fsync_json
 BUDGET = execution_protocol.BUDGET
@@ -136,19 +136,6 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def is_transport_failure(payload) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    kind = payload.get("failureKind")
-    if isinstance(kind, str) and kind.strip().lower() in ("transport", "transport-error"):
-        return True
-    for key in ("status", "code"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip().lower().startswith("transport"):
-            return True
-    return False
-
-
 def classify_termination(outcome, *, timed_out, cancel_requested,
                          stop_initiator=None, grace_expired=False):
     if outcome.status == "ok":
@@ -158,33 +145,41 @@ def classify_termination(outcome, *, timed_out, cancel_requested,
     if stop_initiator == "deadline":
         return TERMINATION_DEADLINE
     if cancel_requested:
-        result = outcome.result if isinstance(outcome.result, dict) else {}
+        result = outcome.result
         return role_seam.stop_termination_reason(shutdown_confirmed=outcome.shutdown_confirmed,
             stop_initiator=stop_initiator, grace_expired=result.get("graceExpired", grace_expired),
             wrap_up_delivered=result.get("wrapUpDelivered", False))
     # The turn seal runs only after a completed native turn. Partial sealing and
     # cumulative patch capture can also fail while preserving an earlier failure.
-    if isinstance(outcome.result, dict) and outcome.result.get("workspaceSealError") is not None:
+    if outcome.result.get("workspaceSealError") is not None:
         return TERMINATION_WORKSPACE_ERROR
-    if is_transport_failure(getattr(outcome, "result", None)):
+    if outcome.result.get("code") == "transport-error":
         return TERMINATION_TRANSPORT_ERROR
     return TERMINATION_HARNESS_ERROR
 
 
-def private_adapter(claim: dict) -> str:
-    adapter = claim["task"]["spec"]["adapter"]
-    if adapter == "decision":
-        return claim["decisionInput"]["buddy"]["harness"]
-    return adapter
-
-
 def validate_claim_turn(claim: dict) -> None:
-    """Check the service-owned turn shape once as it enters this process."""
+    """Check the service-owned claim once as it enters this process."""
     if not isinstance(claim, dict):
         raise BoardError("INVALID_ARGUMENT", "Execution claim must be an object")
+    task, attempt = claim.get("task"), claim.get("attempt")
+    if (not isinstance(task, dict) or not isinstance(task.get("taskId"), str) or not task["taskId"]
+            or not isinstance(task.get("spec"), dict)
+            or not isinstance(task["spec"].get("adapter"), str)
+            or not isinstance(attempt, dict) or attempt.get("taskId") != task["taskId"]
+            or not isinstance(attempt.get("attemptId"), str) or not attempt["attemptId"]
+            or type(attempt.get("generation")) is not int or attempt["generation"] <= 0):
+        raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid task or attempt")
+    if task["spec"]["adapter"] == "decision":
+        decision = claim.get("decisionInput")
+        if (not isinstance(decision, dict) or decision.get("routingMode") not in ("fast", "review")
+                or not isinstance(decision.get("buddy"), dict)
+                or not isinstance(decision["buddy"].get("harness"), str)
+                or not decision["buddy"]["harness"] or not isinstance(decision.get("budget"), dict)):
+            raise BoardError("INVALID_ARGUMENT", "Execution claim has invalid decision input")
     if "turn" not in claim:
         return
-    turn = claim.get("turn")
+    turn = claim["turn"]
     if not isinstance(turn, dict) or not isinstance(turn.get("turnId"), str) or not turn["turnId"]:
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn identity")
     turn_input = turn.get("input")
@@ -194,6 +189,8 @@ def validate_claim_turn(claim: dict) -> None:
     if (not isinstance(workspace, dict) or not isinstance(workspace.get("path"), str)
             or not workspace["path"]):
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid workspace")
+    if not isinstance(claim.get("agentCredential"), str) or not claim["agentCredential"]:
+        raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn credential")
 
 
 class _ExecutionLive:
@@ -204,13 +201,13 @@ class _ExecutionLive:
         attempt = execution.claim["attempt"]
         self.identity = RunIdentity(task_id=execution.claim["task"]["taskId"],
             attempt_id=attempt["attemptId"], generation=attempt["generation"],
-            invocation_id="execution", turn_id=(execution.claim.get("turn") or {}).get("turnId"))
+            invocation_id="execution", turn_id=(execution.claim["turn"]["turnId"]
+                                                if "turn" in execution.claim else None))
         self.name = random_person_name()
         self.instance_id = secrets.token_hex(32)
         self.token = secrets.token_hex(32)
         self._lock = threading.RLock()
         self._native: CTwoLiveEndpoint | None = None
-        self._done = threading.Event()
         self._started = False
 
     def start(self, process_identity: dict) -> None:
@@ -239,7 +236,6 @@ class _ExecutionLive:
                 self._native = None
 
     def finish(self) -> None:
-        self._done.set()
         if self._started:
             try:
                 cc.unregister(self.name)
@@ -316,12 +312,6 @@ class _ExecutionLive:
         self.execution.request_stop(value["initiator"], deadline, force=value["force"])
         return canonical_json({"accepted": True})
 
-    def wait(self, request_json: str) -> str:
-        self._auth(request_json, set())
-        self._done.wait(3.0)
-        return canonical_json({"alive": True})
-
-
 class Execution:
     def __init__(self, claim: dict, state_dir: Path, nonce: str, *,
                  session_record_path: str | None = None, client=None, log=None):
@@ -339,7 +329,7 @@ class Execution:
         self._identity_pending: dict | None = None
         self._next_hint_at = 0.0
         self._hint_delay = 0.25
-        self.directory = receipt_directory(self.state_dir, private_adapter(claim),
+        self.directory = receipt_directory(self.state_dir, execution_protocol.private_adapter(claim),
                                            claim["task"]["taskId"], claim["attempt"]["attemptId"])
         self.evidence_directory = (self.state_dir / "attempts" / claim["task"]["taskId"] /
                                    claim["attempt"]["attemptId"])
@@ -358,7 +348,7 @@ class Execution:
         with self._hint_lock:
             self._hints.update(data)
 
-    def flush_hints(self) -> bool:
+    def flush_hints(self, *, delivering: bool = False) -> bool:
         with self._flush_lock:
             with self._hint_lock:
                 pending = dict(self._hints)
@@ -374,10 +364,14 @@ class Execution:
                                      data=pending or None)
             except BoardError as error:
                 if error.code in RETRYABLE:
-                    self._next_hint_at = time.monotonic() + self._hint_delay
-                    self._hint_delay = min(10.0, self._hint_delay * 2)
-                    return False
-                raise
+                    return self._defer_hints(error)
+                if delivering or error.code in REFUSED:
+                    raise
+                return self._defer_hints(error)
+            except Exception as error:
+                if delivering:
+                    raise
+                return self._defer_hints(error)
             self._next_hint_at = 0.0
             self._hint_delay = 0.25
             with self._hint_lock:
@@ -387,13 +381,17 @@ class Execution:
                         self._hints.pop(key)
             return True
 
+    def _defer_hints(self, error: Exception) -> bool:
+        self.log(f"execution progress pending: {error!r}")
+        self._next_hint_at = time.monotonic() + self._hint_delay
+        self._hint_delay = min(10.0, self._hint_delay * 2)
+        return False
+
     def run(self):
         # The durable empty journal precedes the identity acknowledgement:
         # any acknowledged execution therefore has a native-spawn record to
         # inspect after a crash. Native work still waits for the acknowledgement.
         from ...protocol.process_identity import install_native_process_journal, native_process_journal_path
-        from ...private_dirs import ensure_private_dir
-        ensure_private_dir(self.directory)
         binding = {"taskId": self.claim["task"]["taskId"],
                    "attemptId": self.claim["attempt"]["attemptId"],
                    "generation": self.claim["attempt"]["generation"]}
@@ -406,13 +404,15 @@ class Execution:
                 if not delivered:
                     delay = min(10.0, delay * 2)
         receipt = self.execute()
+        if receipt["report"]["shutdownConfirmed"] is True:
+            (self.directory / BUDGET).unlink(missing_ok=True)
         self.control.raise_fatal()
         return deliver_receipt(self.client, receipt, self.directory, nonce=self.nonce, log=self.log,
                                flush_hints=self._flush_delivery_hints)
 
     def _flush_delivery_hints(self):
         self.control.raise_fatal()
-        return self.flush_hints()
+        return self.flush_hints(delivering=True)
 
     def execute(self) -> dict:
         """Run one attempt and always return a durable receipt.
@@ -426,9 +426,7 @@ class Execution:
         attempt = claim["attempt"]
         task = claim["task"]
         spec = task["spec"]
-        from ...private_dirs import ensure_private_dir
-        directory = ensure_private_dir(self.directory)
-        ensure_private_dir(self.evidence_directory)
+        directory = self.directory
         pending = read_receipt(directory)
         if pending is not None:
             return pending
@@ -488,9 +486,9 @@ class Execution:
         from ..harnesses.runtime_selection import bound
 
         name = spec['adapter']
-        review = name == 'decision' and (claim.get('decisionInput') or {}).get('routingMode', 'review') == 'review'
+        review = name == 'decision' and claim['decisionInput']['routingMode'] == 'review'
         if name == 'decision':
-            name = (claim.get('decisionInput') or {}).get('buddy', {}).get('harness')
+            name = claim['decisionInput']['buddy']['harness']
         control = self.control
         holder['preflightControl'] = control
         control.start()
@@ -591,8 +589,8 @@ class Execution:
             'status': 'error', 'code': 'router-review-unavailable', 'reasonCode': code,
             'reason': 'The review harness is unavailable',
             'modelStarted': False, 'harnessAttempts': history,
-            'budget': (claim.get('decisionInput') or {}).get('budget'),
-            **routing_facts(claim.get('decisionInput') or {})},
+            'budget': claim['decisionInput']['budget'],
+            **routing_facts(claim['decisionInput'])},
             'error': code, 'exitCode': None, 'signal': None, 'shutdownConfirmed': True,
             'artifacts': [], 'terminationReason': TERMINATION_HARNESS_ERROR}, directory)
 
@@ -614,12 +612,12 @@ class Execution:
             directory=self.evidence_directory,
             runtime=runtime.resolve_runtime(),
             environment={**os.environ, "HMB_STATE_DIR": str(self.state_dir)},
-            decision_input=claim.get("decisionInput"),
+            decision_input=claim["decisionInput"] if spec["adapter"] == "decision" else None,
             # The service-owned turn identity and bounded context; the adapter stages
             # them for the runner. The scoped credential is written to a private file
             # and exported by path, never into the model-visible turn input.
-            turn=claim.get("turn"),
-            agent_credential=claim.get("agentCredential") or None,
+            turn=claim["turn"] if "turn" in claim else None,
+            agent_credential=claim["agentCredential"] if "turn" in claim else None,
             session_record_path=self.session_record_path,
         )
         implementation = role_seam.worker_executor(spec["adapter"])
@@ -677,6 +675,15 @@ class Execution:
                             "generation": attempt["generation"]},
                 "deadline": deadline,
             })
+        # An older in-flight hint must finish before registering the budget's
+        # notification; its acknowledgement could otherwise erase the same
+        # waitingReason=None value written after the budget was published.
+        with self._flush_lock:
+            self.hint(waitingReason=None)
+        if deadline is not None:
+            # A failed send stays pending for the control/delivery path, and
+            # reconnect reads the file even if this notification was lost.
+            self.flush_hints()
         holder["adapter"] = implementation
         # A previous pre-model retry may have proved its own child stopped. That
         # proof cannot cover this start(): it might spawn before raising a handle.
@@ -688,7 +695,6 @@ class Execution:
         holder["handle"] = handle
         holder["started"] = True
         control.attach(handle, implementation)
-        self.hint(waitingReason=None)
         timed_out = False
         while True:
             control.raise_fatal()
@@ -722,11 +728,11 @@ class Execution:
             self.hint(activity=result.activity.value)
         # A Router projection must retain a failure to preserve its native evidence.
         retention_failure = getattr(handle, "evidence_retention_failure", None)
-        if isinstance(retention_failure, dict) and isinstance(outcome.result, dict):
+        if isinstance(retention_failure, dict):
             outcome.result = {**outcome.result, "evidenceRetention": retention_failure}
         if (holder.get('harnessHistory') and not timed_out
                 and not handle.cancel_requested and outcome.shutdown_confirmed and outcome.status == 'failed'
-                and isinstance(outcome.result, dict) and outcome.result.get('modelStarted') is False
+                and outcome.result.get('modelStarted') is False
                 and outcome.result.get('code') in {'harness-unavailable', 'invalid-native-result', 'invalid-protocol', 'transport-error', 'native-rpc-error', 'protocol-error', 'native-exit', 'connection-closed'}):
             holder['started'] = False
             holder['confirmed_stopped'] = True
@@ -735,8 +741,7 @@ class Execution:
         if timed_out:
             outcome.status = "failed"
             outcome.error = f"the Router budget of {timeout_seconds}s was reached before the adapter finished"
-            if isinstance(outcome.result, dict):
-                outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
+            outcome.result = {**outcome.result, "status": "error", "code": "router-budget-exhausted"}
         # The genuine reason this attempt stopped. It is recorded with the receipt,
         # so a cancelled task, an expired deadline, a harness failure and a completed
         # turn stay distinguishable even after a transport outage.
@@ -753,7 +758,7 @@ class Execution:
         if termination_reason in (TERMINATION_WRAP_UP, TERMINATION_GRACE_EXPIRED, TERMINATION_FORCED_STOP,
                                   TERMINATION_CONSOLE_STOP, TERMINATION_SERVICE_STOP, TERMINATION_UNKNOWN_STOP):
             outcome.status = "cancelled"
-        if isinstance(outcome.result, dict) and "partialOutput" in outcome.result:
+        if "partialOutput" in outcome.result:
             outcome.result["partialOutput"]["reason"] = termination_reason
         report = outcome.to_report()
         if holder.get('harnessHistory'):
@@ -776,28 +781,11 @@ class Execution:
         if control.cancel_view is not None or self.stop_requested():
             raise BoardError('ATTEMPT_FINISHED', 'Stop requested while waiting for a control observation')
 
-    def _cleanup_attempt_credentials(self, claim: dict, spec: dict, task: dict, attempt: dict) -> None:
-        from ...private_dirs import cleanup_attempt_credentials
-        private_adapter = spec["adapter"]
-        if private_adapter == "decision":
-            private_adapter = ((claim.get("decisionInput") or {}).get("buddy") or {}).get("harness")
-        if private_adapter in {"dsh", "zcode", "codex", "claude", "command"}:
-            cleanup_attempt_credentials(self.state_dir, private_adapter, task["taskId"], attempt["attemptId"])
-
     def _nonce(self) -> str:
         return self.nonce
 
     def receipt(self, claim: dict, report: dict, directory: Path) -> dict:
         attempt = claim["attempt"]
-        if report["shutdownConfirmed"] is True:
-            try:
-                (directory / BUDGET).unlink(missing_ok=True)
-            except Exception as error:
-                self.log(f"private execution budget cleanup failed: {error!r}")
-            try:
-                self._cleanup_attempt_credentials(claim, claim["task"]["spec"], claim["task"], attempt)
-            except Exception as error:
-                self.log(f"private credential cleanup failed: {error!r}")
         receipt = {
             "attemptId": attempt["attemptId"],
             "taskId": attempt["taskId"],
@@ -916,7 +904,8 @@ def main():
         interrupted(pending, None)
     _early_signals.clear()
     from ...private_dirs import ensure_private_dir
-    root = ensure_private_dir(execution.directory)
+    ensure_private_dir(execution.directory)
+    ensure_private_dir(execution.evidence_directory)
     identity = execution_protocol.self_execution_process_identity(material.get("jobName"))
     from ..roles.run_execution import set_execution_live_server
     set_execution_live_server(execution.live)

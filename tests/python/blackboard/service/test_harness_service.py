@@ -237,13 +237,16 @@ class HarnessServiceTests(BoardTestCase):
 
     def test_background_scan_failure_is_visible_and_scan_continues(self):
         from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
-        with patch.object(self.service.harnesses, "refresh", side_effect=[BoardError("HARNESS_UNAVAILABLE", "fixture scan refused"), {}, {}, {}]) as refresh:
+        def scan(name):
+            if name == 'dsh':
+                raise BoardError("HARNESS_UNAVAILABLE", "fixture scan refused")
+            return {}
+        with patch.object(self.service.harnesses, "refresh", side_effect=scan) as refresh:
             HarnessHealth.kick(self.service.harnesses)
             self.service.harnesses._thread.join()
         self.assertEqual(refresh.call_count, 4)
         issue = self.board.service_issues()[0]
-        self.assertEqual((issue["stage"], issue["code"]),
-                         ("harness-scan:" + refresh.call_args_list[0].args[0], "HARNESS_UNAVAILABLE"))
+        self.assertEqual((issue["stage"], issue["code"]), ("harness-scan:dsh", "HARNESS_UNAVAILABLE"))
         with patch.object(self.service.harnesses, "refresh", return_value={}):
             HarnessHealth.kick(self.service.harnesses)
             self.service.harnesses._thread.join()

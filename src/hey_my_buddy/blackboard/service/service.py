@@ -879,7 +879,12 @@ class BoardService(_BaseResource):
     def execution_progress(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
             verify = self.execution_scheduler.verify_identity if self.execution_scheduler is not None else None
-            return self.store.execution_progress(params, verify_identity=verify)
+            response = self.store.execution_progress(params, verify_identity=verify)
+            if self.execution_scheduler is not None:
+                # A budget notification can be an unchanged waitingReason hint,
+                # which commits without advancing the store's event head.
+                self.execution_scheduler.wake_attempt(params["attemptId"])
+            return response
         return self._guard("execution.progress", request_json, handler)
 
     def execution_result(self, request_json: str) -> str:

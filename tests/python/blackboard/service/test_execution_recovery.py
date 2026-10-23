@@ -388,6 +388,11 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 material = json.loads(budget.read_text(encoding="utf-8"))
                 material["deadline"] = time.monotonic() - 1
                 fsync_json(budget, material)
+                # Publish as the execution does: an authenticated progress hint
+                # wakes the observer even when waitingReason is unchanged.
+                startup = json.loads((budget.parent / "execution-start.json").read_bytes())
+                self.client().progress(attempt["attemptId"], attempt["generation"], startup["nonce"],
+                                       data={"waitingReason": None})
                 forced = wait_for(lambda: self.client().get(runId=run_id)["selectedAttempt"].get("forceRequestedAt"),
                                   timeout=35)
                 self.assertIsNotNone(forced)
@@ -527,7 +532,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
         scheduler = ExecutionScheduler(self.board_.service, live_registry=self.board_.live_registry)
         client = Mock()
         view = self.client.get(runId=claim["task"]["taskId"])
-        sent, forced_at = scheduler._apply_stop(view, claim, handle, client, None, None)
+        sent, forced_at, _deadline = scheduler._apply_stop(view, claim, handle, client, None, None)
         self.assertEqual(sent, ("deadline", None, True))
         self.assertIsNotNone(forced_at)
         client.stop.assert_called_once_with(initiator="deadline", grace_deadline=None, force=True)
@@ -587,7 +592,7 @@ class ReconnectedWrapUpTests(WorkflowTestCase):
         scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
         for channel in (Mock(), Mock()):
             view = board.client().get(runId=run["runId"])
-            sent, forced_at = scheduler._apply_stop(view, claim, handle, channel, None, None)
+            sent, forced_at, _deadline = scheduler._apply_stop(view, claim, handle, channel, None, None)
             self.assertEqual(sent, ("host", durable["graceDeadline"], False))
             self.assertIsNone(forced_at)
             call = channel.stop.call_args.kwargs

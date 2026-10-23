@@ -12,7 +12,17 @@ from hey_my_buddy.buddy.runtime.partial_outputs import capture, enrich
 class PartialOutputSafetyTests(unittest.TestCase):
     def context(self):
         return SimpleNamespace(turn_input={"executionWorkspace": {"path": "/private/fixture"}},
-                               environment={"HMB_STATE_DIR": "/private/fixture-state"}, task_id="run", attempt_id="attempt")
+                               effective_workspace=None, environment={"HMB_STATE_DIR": "/private/fixture-state"},
+                               task_id="run", attempt_id="attempt")
+
+    def test_transport_classification_uses_only_the_normalized_code(self):
+        for payload, expected in (({"code": "transport-error"}, "transport-error"),
+                                  ({"code": "native-rpc-error"}, "harness-error"),
+                                  ({"failureKind": "transport"}, "harness-error"),
+                                  ({"code": "transport-something", "status": "transport"}, "harness-error")):
+            with self.subTest(payload=payload):
+                outcome = AdapterOutcome("failed", result=payload, shutdown_confirmed=True)
+                self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=False), expected)
 
     def test_unconfirmed_stop_and_explicit_pre_model_failure_never_scan_checkout(self):
         for stopped, payload in ((False, {"modelStarted": True}), (True, {"modelStarted": False})):

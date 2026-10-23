@@ -656,7 +656,7 @@ class NativeConnection:
                     else:
                         select.select([], [self.process.stdin.fileno()], [], min(0.1, remaining))
         except (OSError, ValueError):
-            raise NativeError("native-disconnected", "the native app server input closed") from None
+            raise NativeError("transport-error", "the native app server input closed") from None
 
     def pump(self) -> None:
         """Dispatch feedback after each I/O step, including a call's reply wait.
@@ -681,7 +681,7 @@ class NativeConnection:
         except queue.Empty:
             return
         if message is None:
-            raise NativeError("native-disconnected", "the native app server closed before settlement")
+            raise NativeError("transport-error", "the native app server closed before settlement")
         if isinstance(message, NativeError):
             raise message
         self.ordinal += 1

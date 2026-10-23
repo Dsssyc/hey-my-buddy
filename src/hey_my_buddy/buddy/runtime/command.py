@@ -1,8 +1,6 @@
 """The ``command`` adapter: one explicit argv process, never an implicit shell."""
 from __future__ import annotations
 
-from ...private_dirs import directory_mode
-
 import hashlib
 import math
 import os
@@ -13,6 +11,7 @@ from pathlib import Path
 
 from ...paths import is_absolute_path
 from ...errors import BoardError
+from ...private_dirs import directory_mode
 from ...private_files import read_bytes
 from ...protocol.capabilities import adapter_capabilities
 from ..harnesses.base import Adapter, AdapterOutcome, ExecutionContext, ProcessHandle, open_logs
@@ -119,31 +118,25 @@ class CommandAdapter(Adapter):
 
 
 def _head(path: Path, limit: int = 6000) -> str:
-    try:
-        with path.open("rb") as stream:
-            raw = stream.read(limit)
-        return raw.decode("utf-8", errors="replace").strip()[:limit]
-    except OSError:
-        return ""
+    with path.open("rb") as stream:
+        raw = stream.read(limit)
+    return raw.decode("utf-8", errors="replace").strip()[:limit]
 
 
 def _artifacts(handle: ProcessHandle, context: ExecutionContext) -> list[dict]:
     artifacts: list[dict] = []
     for role in ("stdout", "stderr"):
         path = Path(handle.log_paths[role])
-        try:
-            if not path.is_file():
-                continue
-            artifacts.append(
-                {
-                    "kind": f"runner-{role}",
-                    "location": str(path.resolve()),
-                    "contentHash": hashlib.sha256(path.read_bytes()).hexdigest(),
-                    "sizeBytes": path.stat().st_size,
-                }
-            )
-        except OSError:
+        if not path.is_file():
             continue
+        artifacts.append(
+            {
+                "kind": f"runner-{role}",
+                "location": str(path.resolve()),
+                "contentHash": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "sizeBytes": path.stat().st_size,
+            }
+        )
     task_file = context.task_file()
     if task_file.is_file():
         artifacts.append(

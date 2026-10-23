@@ -29,7 +29,7 @@ from hey_my_buddy import locking  # noqa: E402
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
 from hey_my_buddy.cli.checks import prepare_test_home  # noqa: E402
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference  # noqa: E402
-from hey_my_buddy.private_dirs import attempt_root  # noqa: E402
+from hey_my_buddy.private_dirs import attempt_root, directory_mode  # noqa: E402
 from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402
 from hey_my_buddy.console.server import Console  # noqa: E402
 from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator  # noqa: E402
@@ -288,6 +288,7 @@ def publish_result_receipt(state_dir: Path, params: dict, *, cleanup: dict | Non
                                    if not part.exists()]
     report = {key: value for key, value in params.items()
               if key not in ("attemptId", "generation", "nonce")}
+    directory.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
     fsync_json(path, {"taskId": row["task_id"], "attemptId": attempt_id,
                                         "generation": params["generation"], "report": report,
                                         "createdAt": row["created_at"]})

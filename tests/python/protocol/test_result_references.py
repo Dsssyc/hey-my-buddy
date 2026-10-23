@@ -20,6 +20,7 @@ class ResultReferenceTests(BoardTestCase):
         self.claim = admit_execution(self.board_fixture.client(), self.nonce, task_id=task["taskId"])["claim"]
         self.attempt = self.claim["attempt"]
         self.receipt_dir = execution_directory(self.claim, self.board_fixture.directory)
+        self.receipt_dir.mkdir(parents=True, mode=0o700)
         self.client = BoardClient(self.board_fixture.directory, call=self.board_fixture.call)
 
     def publish(self, report):

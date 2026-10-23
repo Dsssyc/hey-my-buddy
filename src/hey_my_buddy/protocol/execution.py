@@ -5,6 +5,7 @@ import json
 import hashlib
 import os
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -25,12 +26,12 @@ from .run_identity import RunIdentity
 STARTUP = "execution-start.json"
 LIVE = "execution-live.json"
 RECEIPT = "result-receipt.json"
+DELIVERY = "result-delivery.json"
 BUDGET = "execution-budget.json"
 
 
 def fsync_json(path: Path, value: dict, *, immutable: bool = False) -> None:
     """Serialize the execution envelope unchanged and publish complete bytes."""
-    ensure_private_dir(path.parent)
     publish_bytes(path, json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8"), immutable=immutable)
 
 
@@ -78,7 +79,7 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
         handle.budget_path = directory / BUDGET
         handle.role_run_identity = RunIdentity(task_id=binding["taskId"],
             attempt_id=binding["attemptId"], generation=binding["generation"],
-            invocation_id="execution", turn_id=(claim.get("turn") or {}).get("turnId"))
+            invocation_id="execution", turn_id=claim["turn"]["turnId"] if "turn" in claim else None)
         handle.process_identity = None
         handle.process_identity = capture_process_identity(handle)
         fsync_json(evidence / "spawn.marker", {**binding, "processIdentity": handle.process_identity})
@@ -92,7 +93,7 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
             surviving_handle.budget_path = directory / BUDGET
             surviving_handle.role_run_identity = RunIdentity(task_id=binding["taskId"],
                 attempt_id=binding["attemptId"], generation=binding["generation"],
-                invocation_id="execution", turn_id=(claim.get("turn") or {}).get("turnId"))
+                invocation_id="execution", turn_id=claim["turn"]["turnId"] if "turn" in claim else None)
             if not hasattr(surviving_handle, "process_identity"):
                 surviving_handle.process_identity = None
         error.spawn_created = surviving_handle is not None or bool(
@@ -168,8 +169,45 @@ def read_execution_receipt(directory: Path, *, binding: dict | None = None,
     return value
 
 
+def read_execution_delivery(directory: Path, *, binding: dict) -> dict | None:
+    """Read the service's delivery decision, bound to this one attempt."""
+    try:
+        value = _private_json(Path(directory) / DELIVERY)
+    except FileNotFoundError:
+        return None
+    if (set(value) != {"taskId", "attemptId", "generation", "accepted", "error"}
+            or any(value[key] != binding[key] for key in binding)
+            or type(value["generation"]) is not int
+            or type(value["accepted"]) is not bool):
+        raise BoardError("INVALID_ARGUMENT", "Execution delivery decision has a different binding or shape")
+    error = value["error"]
+    if value["accepted"]:
+        valid = error is None
+    else:
+        valid = (isinstance(error, dict) and set(error) == {"code", "message"}
+                 and isinstance(error["code"], str) and bool(error["code"])
+                 and isinstance(error["message"], str) and bool(error["message"]))
+    if not valid:
+        raise BoardError("INVALID_ARGUMENT", "Execution delivery decision has an invalid refusal")
+    return value
+
+
+def execution_live_error(error: Exception) -> BoardError:
+    """Preserve C-Two's diagnostic facts without inferring process death."""
+    details = dict(getattr(error, "details", {}))
+    for source in (error.__cause__, error):
+        if source is None:
+            continue
+        for field in ("io_kind", "raw_os_error", "io_operation", "retryable", "transport_phase"):
+            value = getattr(source, field, None)
+            if value is not None:
+                details[field] = value
+    return BoardError("LIVE_UNAVAILABLE", "The execution endpoint is unavailable",
+                      **{**details, "causeType": type(error).__name__, "cause": str(error)})
+
+
 class ExecutionLiveClient:
-    """One authenticated connection per bounded operation; no liveness inference."""
+    """One held proxy for every operation and its physical connection observation."""
 
     def __init__(self, identity: RunIdentity, *, address: str, name: str,
                  instance_id: str, token: str, state_dir: Path):
@@ -180,21 +218,33 @@ class ExecutionLiveClient:
         self.token = token
         self.state_dir = Path(state_dir)
         self._closed = False
+        self._lock = threading.Lock()
+        self._peer = None
+        self.connection_observation = None
 
     def _frame(self, **values) -> str:
         return canonical_json({"identity": self.identity.to_payload(),
                                "instanceId": self.instance_id, "token": self.token, **values})
 
     def _call(self, method: str, timeout: float, **values) -> dict:
-        if self._closed:
-            raise BoardError("LIVE_UNAVAILABLE", "The execution channel is closed")
-        rpc_config.configure_client(self.state_dir)
         try:
-            with cc.connect(ExecutionLive, name=self.name, address=self.address, timeout=timeout) as peer:
-                bounded = cc.with_call_options(peer, timeout=timeout)
+            with self._lock:
+                if self._closed:
+                    raise BoardError("LIVE_UNAVAILABLE", "The execution channel is closed")
+                if self._peer is None:
+                    rpc_config.configure_client(self.state_dir)
+                    peer = cc.connect(ExecutionLive, name=self.name, address=self.address, timeout=timeout)
+                    try:
+                        self.connection_observation = cc.connection_observation(peer)
+                    except BaseException:
+                        cc.close(peer)
+                        raise
+                    self._peer = peer
+                peer = self._peer
+            with cc.with_call_options(peer, timeout=timeout) as bounded:
                 raw = getattr(bounded, method)(self._frame(**values))
         except Exception as error:
-            raise BoardError("LIVE_UNAVAILABLE", "The execution endpoint is unavailable") from error
+            raise execution_live_error(error) from error
         try:
             response = decode_strict_json(raw)
         except (TypeError, ValueError, RecursionError) as error:
@@ -203,10 +253,10 @@ class ExecutionLiveClient:
             raise BoardError("LIVE_UNAVAILABLE", "The execution endpoint returned an invalid frame")
         return response
 
-    def wait(self) -> bool:
-        if self._call("wait", 5.0) != {"alive": True}:
-            raise BoardError("LIVE_UNAVAILABLE", "The execution wait reply is invalid")
-        return True
+    def connect(self) -> None:
+        # A physical connection alone has not authenticated the private token.
+        # observe also answers before a native run is bound to the execution.
+        self.observe(limit=1, timeout_ms=1000)
 
     def stop(self, initiator: str = "unknown", grace_deadline: float | None = None,
              force: bool = False) -> dict:
@@ -231,7 +281,12 @@ class ExecutionLiveClient:
         return self._call("capabilities", 5.0)
 
     def close(self, reason: str = "service-detached") -> None:
-        self._closed = True
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            if self._peer is not None:
+                cc.close(self._peer)
 
 
 def read_execution_endpoint(directory: Path, identity: RunIdentity, *, state_dir: Path,

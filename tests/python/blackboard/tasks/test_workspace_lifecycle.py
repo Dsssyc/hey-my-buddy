@@ -725,6 +725,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         checkout = Path(manifest['path'])
         failed_root = private_dirs.ensure_private_dir(
             private_dirs.attempt_root(board.directory, 'dsh', run_id, attempt['attemptId']))
+        credential = failed_root / 'agent-credential.json'
+        credential.write_text('private credential fixture', encoding="utf-8", newline="\n")
         refs = [str(failed_root / name) for name in ('unknown-events.json', 'thread-notifications.json')]
         for ref in refs:
             Path(ref).write_text('failure evidence', encoding="utf-8", newline="\n")
@@ -736,6 +738,11 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         if import_failure:
             result['turn'] = {'invalid': 'not an importable turn'}
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'ok' if import_failure else 'failed', 'terminationReason': 'completed' if import_failure else 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': result})
+        # This in-process fixture has no execution process; supply the same
+        # creator stop proof that enters the service-owned cleanup path.
+        board.store.recover_executions(attempt['attemptId'],
+                                      stopped_evidence={'kind': 'creator-reaped', 'exitCode': 1})
+        self.assertFalse(credential.exists())
         receipt = board.call('task_result', {'runId': run_id})
         recorded = receipt['result']
         self.assertEqual(recorded['evidenceRefs'], refs)
@@ -769,7 +776,6 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         artifact = next(row for row in delivered['artifacts'] if row['kind'] == 'output')
         target = self.target_with_artifact(artifact)
         credential = failed_root / 'agent-credential.json'
-        credential.write_text('private credential fixture', encoding="utf-8", newline="\n")
         accepted = self.accept(board, delivered, artifact, target=target)
         self.assertEqual(accepted['state'], 'accepted')
         self.assertFalse(checkout.exists())

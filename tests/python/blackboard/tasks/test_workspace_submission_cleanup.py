@@ -64,7 +64,13 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         run_id = submitted['runId']
         first = self.claim(board, run_id=run_id)
         failed_id = first['claim']['attempt']['attemptId']
+        failed_harness = first['claim']['task']['spec']['adapter']
+        failed_root = private_dirs.ensure_private_dir(
+            private_dirs.attempt_root(board.directory, failed_harness, run_id, failed_id))
+        (failed_root / 'agent-credential.json').write_text('credential fixture', encoding="utf-8", newline="\n")
         self.finish_turn(board, first, runner_status='failed', exit_code=1)
+        board.store.recover_executions(failed_id, stopped_evidence={'kind': 'creator-reaped', 'exitCode': 1})
+        self.assertFalse((failed_root / 'agent-credential.json').exists())
         failed_view = board.call('workflow_get', {'runId': run_id})
         self.continue_run(board, failed_view)
         second = self.claim(board, run_id=run_id, nonce='q' * 16)
@@ -88,7 +94,8 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         for adapter in ('codex', 'dsh', 'zcode', 'claude'):
             for attempt_id in (failed_id, success_id):
                 root = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id))
-                (root / 'agent-credential.json').write_text('credential fixture', encoding="utf-8", newline="\n")
+                if attempt_id == success_id:
+                    (root / 'agent-credential.json').write_text('credential fixture', encoding="utf-8", newline="\n")
                 (root / 'unknown-events.json').write_text('failure evidence fixture', encoding="utf-8", newline="\n")
                 if attempt_id == success_id:
                     (root / 'config.toml').write_text('native configuration fixture', encoding="utf-8", newline="\n")

@@ -523,7 +523,7 @@ class FastSeamTests(NativeRunCase):
                      observer=lambda _facts: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-disconnected")
+        self.assertEqual(result.end.reason_code, "transport-error")
         self.assertIsNone(result.model_started)
         stop = result.stop_evidence.native
         # The process was held, so the run started one: the held connection's
@@ -547,7 +547,7 @@ class FastSeamTests(NativeRunCase):
                          observer=lambda _facts: FEEDBACK_CONTINUE,
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-disconnected")
+        self.assertEqual(result.end.reason_code, "transport-error")
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown", "an unobservable group is never gone")
         self.assertIsNone(result.model_started)
@@ -784,7 +784,7 @@ class WorkerSeamTests(NativeRunCase):
             result = run(request, observer=worker_observer, services=bound.services,
                          cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-disconnected")
+        self.assertEqual(result.end.reason_code, "transport-error")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertNotIn("turn-provenance", {ref.kind for ref in result.evidence_refs})
 
@@ -802,7 +802,7 @@ class WorkerSeamTests(NativeRunCase):
             result = run(request, observer=worker_observer, services=bound.services,
                          cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-disconnected")
+        self.assertEqual(result.end.reason_code, "transport-error")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertFalse(result.completion_evidence.stream_end)
         self.assertNotIn("turn-provenance", {ref.kind for ref in result.evidence_refs})
@@ -1488,7 +1488,7 @@ class DiscoveryTests(NativeRunCase):
                 mock.patch.object(native_run, "stop_evidence", return_value=dict(unconfirmed)):
             with self.assertRaises(native_run.NativeError) as caught:
                 self.discover()
-        self.assertEqual(caught.exception.code, "native-disconnected")
+        self.assertEqual(caught.exception.code, "transport-error")
         self.assertIs(caught.exception.discovery_shutdown_confirmed, False,
                      "an unobservable group is never a confirmed stop")
 
@@ -1496,7 +1496,7 @@ class DiscoveryTests(NativeRunCase):
         self.extra_agent_args = ["--prompt-mode", "final", "--die-before-answer", "session/close"]
         with self.assertRaises(native_run.NativeError) as caught:
             self.discover()
-        self.assertEqual(caught.exception.code, "native-disconnected")
+        self.assertEqual(caught.exception.code, "transport-error")
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True,
                       "the operation's own confirmed group stop is the fact")
         self.assertTrue(self.wait_for(lambda: any(

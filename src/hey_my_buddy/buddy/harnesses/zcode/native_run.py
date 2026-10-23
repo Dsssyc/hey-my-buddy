@@ -637,7 +637,6 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
-    failure_kind: str | None = None
     native_failure: dict | None = None
     quota_failure: dict | None = None
     root_model_activity: bool = False
@@ -1127,8 +1126,6 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                 # Entry resolution may own a Node probe before the main spawn.
                 owned_spawn[:] = [{"created": True, "shutdown": False, "exit_code": None}]
             state.error_text = str(error)
-            if error.code == "native-disconnected":
-                state.failure_kind = "transport"
             # Whitelisted native failure attribution (only the exported turn.failed
             # event supplies it) is observable on the failed result; it never
             # changes the status, code or failureKind, so this stays a harness
@@ -1158,7 +1155,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                                             for key in ("outputTokens", "reasoningOutputTokens")))
             has_text = bool(outcome.attempt_usage and outcome.attempt_usage.last_assistant_message)
             incomplete = (drained is not True or state.drain_error is not None
-                          or state.reason in ("invalid-native-result", "invalid-protocol", "native-disconnected")
+                          or state.reason in ("invalid-native-result", "invalid-protocol", "transport-error")
                           or bool(outcome.attempt_usage and (outcome.attempt_usage.read_incomplete
                                                             or outcome.attempt_usage.delta_conflict)))
             state.quota_failure.update(

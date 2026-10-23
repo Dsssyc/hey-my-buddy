@@ -339,3 +339,18 @@ class ServiceAdmissionWindowTests(BoardTestCase):
         board.submit_execution(requestId='new-work', task='new', cwd=str(self.workdir()),
                               adapter='command', argv=['true'])
         changed.assert_called_once()
+
+    def test_change_notifications_name_only_tasks_changed_by_the_committed_events(self):
+        from unittest.mock import Mock
+        board = self.board()
+        client = board.client()
+        tasks = [board.submit_execution(requestId=f'notify-{index}', task='work',
+                     cwd=str(self.workdir(f'notify-{index}')), adapter='command', argv=['true'])['task']
+                 for index in range(2)]
+        changed = Mock()
+        board.store.on_change = changed
+        client.cancel(runId=tasks[0]['taskId'])
+        changed.assert_called_once_with(frozenset({tasks[0]['taskId']}))
+        changed.reset_mock()
+        board.store.record_service_issue('fixture', RuntimeError('service issue'))
+        changed.assert_called_once_with(frozenset())
