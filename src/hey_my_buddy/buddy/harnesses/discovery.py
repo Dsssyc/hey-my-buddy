@@ -480,29 +480,24 @@ def _probe_posix(process: subprocess.Popen, stop_at: float,
 
 def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | None, bytes, bool]:
     """Poll a Windows pipe without a reader thread; forced tree stop is unverified."""
-    import ctypes
-    from ctypes import wintypes
     import msvcrt
+    import pywintypes
+    import win32pipe
 
     assert process.stdout is not None
     chunks: list[bytes] = []
     pipe = msvcrt.get_osfhandle(process.stdout.fileno())
-    peek = ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe
-    peek.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD,
-                     ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
-                     ctypes.POINTER(wintypes.DWORD)]
-    peek.restype = wintypes.BOOL
-    available = wintypes.DWORD()
     reason = None
     while time.monotonic() < stop_at:
-        readable = peek(pipe, None, 0, None, ctypes.byref(available), None)
-        if not readable:
+        try:
+            _, available, _ = win32pipe.PeekNamedPipe(pipe, 0)
+        except pywintypes.error as error:
             # The child can close stdout before exiting. Broken pipe is EOF,
             # not a failed read; its exit still has the remaining probe budget.
-            if ctypes.get_last_error() != 109:  # ERROR_BROKEN_PIPE
+            if error.winerror != 109:  # ERROR_BROKEN_PIPE
                 reason = "pipe-failed"
             break
-        if available.value:
+        if available:
             chunk = os.read(process.stdout.fileno(), min(4096, _MAX_OUTPUT - sum(map(len, chunks)) + 1))
             if not chunk:
                 break

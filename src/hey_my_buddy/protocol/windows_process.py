@@ -7,44 +7,7 @@ from ctypes import wintypes
 TH32CS_SNAPTHREAD = 0x00000004
 THREAD_SUSPEND_RESUME = 0x0002
 THREAD_QUERY_LIMITED_INFORMATION = 0x0800
-JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
-JOB_OBJECT_QUERY = 0x0004
-JOB_OBJECT_TERMINATE = 0x0008
 ERROR_FILE_NOT_FOUND = 2
-ERROR_MORE_DATA = 234
-
-
-class _BasicLimit(ctypes.Structure):
-    _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
-                ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
-                ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
-                ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
-                ("SchedulingClass", wintypes.DWORD)]
-
-
-class _IoCounters(ctypes.Structure):
-    _fields_ = [(name, ctypes.c_uint64) for name in
-                ("ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
-                 "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
-
-
-class _ExtendedLimit(ctypes.Structure):
-    _fields_ = [("BasicLimitInformation", _BasicLimit), ("IoInfo", _IoCounters),
-                ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
-                ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
-
-
-class _BasicAccounting(ctypes.Structure):
-    _fields_ = [("TotalUserTime", ctypes.c_int64), ("TotalKernelTime", ctypes.c_int64),
-                ("ThisPeriodTotalUserTime", ctypes.c_int64), ("ThisPeriodTotalKernelTime", ctypes.c_int64),
-                ("TotalPageFaultCount", wintypes.DWORD), ("TotalProcesses", wintypes.DWORD),
-                ("ActiveProcesses", wintypes.DWORD), ("TotalTerminatedProcesses", wintypes.DWORD)]
-
-
-class _ProcessIdList(ctypes.Structure):
-    _fields_ = [("NumberOfAssignedProcesses", wintypes.DWORD),
-                ("NumberOfProcessIdsInList", wintypes.DWORD),
-                ("ProcessId", ctypes.c_size_t * 1)]
 
 
 class _ThreadEntry(ctypes.Structure):
@@ -57,22 +20,22 @@ class WindowsAPI:
     """Small injectable Win32 boundary; all returned handles are owned here."""
 
     def __init__(self):
+        import pywintypes
+        import win32api
+        import win32job
+        import win32process
+
+        self.error = pywintypes.error
+        self.api, self.job, self.process = win32api, win32job, win32process
+        # pywin32 exposes neither Toolhelp thread enumeration nor the owning
+        # process query needed to verify the thread found for a suspended Popen.
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         self.kernel = kernel
         signatures = {
-            "CreateJobObjectW": (wintypes.HANDLE, [ctypes.c_void_p, wintypes.LPCWSTR]),
-            "OpenJobObjectW": (wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]),
-            "SetInformationJobObject": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]),
-            "AssignProcessToJobObject": (wintypes.BOOL, [wintypes.HANDLE, wintypes.HANDLE]),
-            "QueryInformationJobObject": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p]),
-            "TerminateJobObject": (wintypes.BOOL, [wintypes.HANDLE, wintypes.UINT]),
             "CreateToolhelp32Snapshot": (wintypes.HANDLE, [wintypes.DWORD, wintypes.DWORD]),
             "Thread32First": (wintypes.BOOL, [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]),
             "Thread32Next": (wintypes.BOOL, [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)]),
-            "OpenThread": (wintypes.HANDLE, [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]),
             "GetProcessIdOfThread": (wintypes.DWORD, [wintypes.HANDLE]),
-            "ResumeThread": (wintypes.DWORD, [wintypes.HANDLE]),
-            "CloseHandle": (wintypes.BOOL, [wintypes.HANDLE]),
         }
         for name, (result, arguments) in signatures.items():
             method = getattr(kernel, name)
@@ -82,93 +45,84 @@ class WindowsAPI:
     def _error():
         raise ctypes.WinError(ctypes.get_last_error())
 
-    def create_job(self, name):
-        handle = self.kernel.CreateJobObjectW(None, name)
-        if not handle:
-            self._error()
+    def _call(self, method, *args):
+        # The ownership callers handle OSError; pywintypes.error is separate.
         try:
-            limits = _ExtendedLimit()
-            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            if not self.kernel.SetInformationJobObject(handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
-                self._error()
+            return method(*args)
+        except self.error as error:
+            raise ctypes.WinError(error.winerror) from error
+
+    def create_job(self, name):
+        handle = self._call(self.job.CreateJobObject, None, name)
+        try:
+            limits = self._call(self.job.QueryInformationJobObject, handle,
+                                self.job.JobObjectExtendedLimitInformation)
+            limits["BasicLimitInformation"]["LimitFlags"] = self.job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            self._call(self.job.SetInformationJobObject, handle,
+                       self.job.JobObjectExtendedLimitInformation, limits)
             return handle
         except BaseException:
-            self.kernel.CloseHandle(handle)
+            self.close(handle)
             raise
 
     def open_job(self, name):
-        handle = self.kernel.OpenJobObjectW(JOB_OBJECT_QUERY | JOB_OBJECT_TERMINATE, False, name)
-        if handle:
-            return handle
-        if ctypes.get_last_error() == ERROR_FILE_NOT_FOUND:
-            return None
-        self._error()
+        try:
+            return self.job.OpenJobObject(self.job.JOB_OBJECT_QUERY | self.job.JOB_OBJECT_TERMINATE, False, name)
+        except self.error as error:
+            if error.winerror == ERROR_FILE_NOT_FOUND:
+                return None
+            raise ctypes.WinError(error.winerror) from error
 
     def process_ids(self, job):
-        size = ctypes.sizeof(_ProcessIdList)
-        while True:
-            buffer = ctypes.create_string_buffer(size)
-            if self.kernel.QueryInformationJobObject(job, 3, buffer, size, None):
-                listing = ctypes.cast(buffer, ctypes.POINTER(_ProcessIdList)).contents
-                count = listing.NumberOfProcessIdsInList
-                pointer = ctypes.cast(ctypes.addressof(buffer) + _ProcessIdList.ProcessId.offset,
-                                      ctypes.POINTER(ctypes.c_size_t * count))
-                return list(pointer.contents)
-            if ctypes.get_last_error() != ERROR_MORE_DATA:
-                self._error()
-            size *= 2
+        return list(self._call(self.job.QueryInformationJobObject, job, self.job.JobObjectBasicProcessIdList))
 
     def assign(self, job, process):
         # Popen retains this exact process handle; no OpenProcess/PID recovery.
-        if not self.kernel.AssignProcessToJobObject(job, int(process._handle)):
+        self._call(self.job.AssignProcessToJobObject, job, int(process._handle))
+
+    def _primary_thread(self, snapshot, pid):
+        entry = _ThreadEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        if not self.kernel.Thread32First(snapshot, ctypes.byref(entry)):
             self._error()
+        candidates = []
+        while True:
+            if entry.th32OwnerProcessID == pid:
+                candidates.append(entry.th32ThreadID)
+            entry.dwSize = ctypes.sizeof(entry)
+            if not self.kernel.Thread32Next(snapshot, ctypes.byref(entry)):
+                if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES
+                    self._error()
+                break
+        if len(candidates) != 1:
+            raise OSError("suspended child has no unique primary thread")
+        return candidates[0]
 
     def resume(self, process):
         snapshot = self.kernel.CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
         if snapshot == ctypes.c_void_p(-1).value:
             self._error()
         try:
-            entry = _ThreadEntry()
-            entry.dwSize = ctypes.sizeof(entry)
-            if not self.kernel.Thread32First(snapshot, ctypes.byref(entry)):
-                self._error()
-            candidates = []
-            while True:
-                if entry.th32OwnerProcessID == process.pid:
-                    candidates.append(entry.th32ThreadID)
-                entry.dwSize = ctypes.sizeof(entry)
-                if not self.kernel.Thread32Next(snapshot, ctypes.byref(entry)):
-                    if ctypes.get_last_error() != 18:  # ERROR_NO_MORE_FILES
-                        self._error()
-                    break
-            if len(candidates) != 1:
-                raise OSError("suspended child has no unique primary thread")
-            thread = self.kernel.OpenThread(THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION,
-                                            False, candidates[0])
-            if not thread:
-                self._error()
+            thread_id = self._primary_thread(snapshot, process.pid)
+            thread = self._call(self.api.OpenThread, THREAD_SUSPEND_RESUME | THREAD_QUERY_LIMITED_INFORMATION,
+                                False, thread_id)
             try:
-                if self.kernel.GetProcessIdOfThread(thread) != process.pid:
+                if self.kernel.GetProcessIdOfThread(int(thread)) != process.pid:
                     raise OSError("suspended child thread identity changed")
-                if self.kernel.ResumeThread(thread) != 1:
+                if self._call(self.process.ResumeThread, thread) != 1:
                     raise OSError("suspended child did not resume exactly once")
             finally:
-                self.kernel.CloseHandle(thread)
+                self.close(thread)
         finally:
-            self.kernel.CloseHandle(snapshot)
+            self.close(snapshot)
 
     def active(self, job):
-        accounting = _BasicAccounting()
-        if not self.kernel.QueryInformationJobObject(job, 1, ctypes.byref(accounting),
-                                                      ctypes.sizeof(accounting), None):
-            self._error()
-        return accounting.ActiveProcesses
+        return self._call(self.job.QueryInformationJobObject, job,
+                          self.job.JobObjectBasicAccountingInformation)["ActiveProcesses"]
 
     def terminate(self, job):
-        if not self.kernel.TerminateJobObject(job, 1):
-            self._error()
+        self._call(self.job.TerminateJobObject, job, 1)
 
     def close(self, job):
-        if not self.kernel.CloseHandle(job):
-            self._error()
+        self._call(self.api.CloseHandle, job)
 

@@ -42,14 +42,6 @@ def _link_print_name(raw):
     return raw[start:start + size].decode("utf-16-le")
 
 
-class _AttributeTag(ctypes.Structure):
-    _fields_ = [("FileAttributes", wintypes.DWORD), ("ReparseTag", wintypes.DWORD)]
-
-
-class _Disposition(ctypes.Structure):
-    _fields_ = [("DeleteFile", ctypes.c_ubyte)]
-
-
 class _RenameInfo(ctypes.Structure):
     _fields_ = [("Flags", ctypes.c_uint32), ("RootDirectory", wintypes.HANDLE),
                 ("FileNameLength", ctypes.c_uint32), ("FileName", ctypes.c_wchar * 1)]
@@ -58,46 +50,34 @@ class _RenameInfo(ctypes.Structure):
 class WindowsFileAPI:
     def __init__(self):
         import msvcrt
+        import pywintypes
+        import win32file
 
         self.msvcrt = msvcrt
-        self.kernel = kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-        signatures = {
-            "CreateFileW": (wintypes.HANDLE, [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                                               ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]),
-            "GetFileInformationByHandleEx": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int,
-                                                               ctypes.c_void_p, wintypes.DWORD]),
-            "GetFinalPathNameByHandleW": (wintypes.DWORD, [wintypes.HANDLE, wintypes.LPWSTR,
-                                                            wintypes.DWORD, wintypes.DWORD]),
-            "GetLongPathNameW": (wintypes.DWORD, [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]),
-            "GetFileType": (wintypes.DWORD, [wintypes.HANDLE]),
-            "SetFileInformationByHandle": (wintypes.BOOL, [wintypes.HANDLE, ctypes.c_int,
-                                                             ctypes.c_void_p, wintypes.DWORD]),
-            "DeviceIoControl": (wintypes.BOOL, [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p,
-                                                 wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
-                                                 ctypes.POINTER(wintypes.DWORD), ctypes.c_void_p]),
-            "CloseHandle": (wintypes.BOOL, [wintypes.HANDLE]),
-        }
-        for name, (result, arguments) in signatures.items():
-            method = getattr(kernel, name)
-            method.restype, method.argtypes = result, arguments
+        self.pywintypes = pywintypes
+        self.win32file = win32file
+        self.kernel = None
+
+    def _call(self, method, *args):
+        try:
+            return method(*args)
+        except self.pywintypes.error as error:
+            raise self._os_error(error.winerror) from error
 
     @staticmethod
-    def _error():
-        code = ctypes.get_last_error()
+    def _os_error(code):
         if code in (2, 3):
-            raise FileNotFoundError(errno.ENOENT, "Windows path does not exist")
+            return FileNotFoundError(errno.ENOENT, "Windows path does not exist")
         if code in (80, 183):
-            raise FileExistsError(errno.EEXIST, "Windows path already exists")
-        raise ctypes.WinError(code)
+            return FileExistsError(errno.EEXIST, "Windows path already exists")
+        return ctypes.WinError(code)
 
     def _open(self, path, access, disposition, *, share_delete=False):
-        handle = self.kernel.CreateFileW(str(path), access, FILE_SHARE_READ | FILE_SHARE_WRITE | (4 if share_delete else 0),
-                                         None, disposition,
-                                         FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS |
-                                         FILE_ATTRIBUTE_NORMAL, None)
-        if handle == ctypes.c_void_p(-1).value:
-            self._error()
-        return handle
+        return self._call(self.win32file.CreateFile, str(path), access,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | (FILE_SHARE_DELETE if share_delete else 0),
+                          None, disposition,
+                          FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS |
+                          FILE_ATTRIBUTE_NORMAL, None)
 
     def open_dir(self, path):
         return self._open(path, GENERIC_READ | 0x00020000, OPEN_EXISTING)
@@ -114,46 +94,31 @@ class WindowsFileAPI:
         return self._open(path, access, disposition)
 
     def info(self, handle):
-        tag = _AttributeTag()
-        if not self.kernel.GetFileInformationByHandleEx(handle, 9, ctypes.byref(tag), ctypes.sizeof(tag)):
-            self._error()
-        return tag.FileAttributes, tag.ReparseTag
+        tag = self._call(self.win32file.GetFileInformationByHandleEx,
+                         handle, self.win32file.FileAttributeTagInfo)
+        return tag["FileAttributes"], tag["ReparseTag"]
 
     def final_path(self, handle):
-        size = self.kernel.GetFinalPathNameByHandleW(handle, None, 0, 0)
-        if not size:
-            self._error()
-        buffer = ctypes.create_unicode_buffer(size + 1)
-        used = self.kernel.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)
-        if not used or used >= len(buffer):
-            self._error()
-        return buffer.value
+        return self._call(self.win32file.GetFinalPathNameByHandle, handle, 0)
 
     def name(self, handle):
         return ntpath.basename(self.final_path(handle).rstrip("\\"))
 
     def long_path(self, path):
-        size = self.kernel.GetLongPathNameW(str(path), None, 0)
-        if not size:
-            self._error()
-        buffer = ctypes.create_unicode_buffer(size + 1)
-        used = self.kernel.GetLongPathNameW(str(path), buffer, len(buffer))
-        if not used or used >= len(buffer):
-            self._error()
-        return buffer.value
+        return self._call(self.win32file.GetLongPathName, str(path))
 
     def file_type(self, handle):
-        return self.kernel.GetFileType(handle)
+        return self._call(self.win32file.GetFileType, handle)
 
     def fd(self, handle, flags):
         # open_osfhandle transfers ownership to the returned CRT descriptor.
-        return self.msvcrt.open_osfhandle(handle, flags | os.O_BINARY | os.O_NOINHERIT)
+        descriptor = self.msvcrt.open_osfhandle(int(handle), flags | os.O_BINARY | os.O_NOINHERIT)
+        handle.Detach()
+        return descriptor
 
     def delete(self, handle):
-        disposition = _Disposition(1)
-        if not self.kernel.SetFileInformationByHandle(handle, 4, ctypes.byref(disposition),
-                                                      ctypes.sizeof(disposition)):
-            self._error()
+        self._call(self.win32file.SetFileInformationByHandle,
+                   handle, self.win32file.FileDispositionInfo, True)
 
     def rename(self, descriptor, target):
         """Replace a name using the still-open, synchronized writer handle."""
@@ -166,13 +131,18 @@ class WindowsFileAPI:
         info.Flags = 0x00000001 | 0x00000002  # REPLACE_IF_EXISTS | POSIX_SEMANTICS
         info.FileNameLength = len(name)
         ctypes.memmove(ctypes.addressof(buffer) + _RenameInfo.FileName.offset, name, len(name))
+        if self.kernel is None:
+            # pywin32's public setter lacks FileRenameInfoEx/POSIX_SEMANTICS.
+            self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+            method = self.kernel.SetFileInformationByHandle
+            method.restype = wintypes.BOOL
+            method.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
         handle = self.msvcrt.get_osfhandle(descriptor)
         if not self.kernel.SetFileInformationByHandle(handle, 22, buffer, size):  # FileRenameInfoEx
-            self._error()
+            raise self._os_error(ctypes.get_last_error())
 
     def close(self, handle):
-        if not self.kernel.CloseHandle(handle):
-            self._error()
+        self._call(handle.Close)
 
     def mkdir(self, path):
         os.mkdir(path)
@@ -180,12 +150,9 @@ class WindowsFileAPI:
     def readlink(self, handle):
         # Python's Windows os.readlink returns the substitute path, which can
         # add a \\?\ prefix. Git stores the original print-name text.
-        buffer = ctypes.create_string_buffer(16 * 1024)
-        returned = wintypes.DWORD()
-        if not self.kernel.DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, None, 0,
-                                            buffer, len(buffer), ctypes.byref(returned), None):
-            self._error()
-        return _link_print_name(buffer.raw[:returned.value])
+        raw = self._call(self.win32file.DeviceIoControl,
+                         handle, FSCTL_GET_REPARSE_POINT, None, 16 * 1024)
+        return _link_print_name(raw)
 
     def symlink(self, target, path, *, directory=False):
         os.symlink(target, path, target_is_directory=directory)

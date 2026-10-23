@@ -1,7 +1,9 @@
 """The Windows private boundary's policy is portable; native checks are explicit."""
 import ctypes
+import errno
 import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
@@ -14,6 +16,32 @@ from hey_my_buddy.private_files import publish_bytes
 
 USER = 'S-1-5-21-100-200-300-1001'
 FOREIGN = 'S-1-5-21-100-200-300-1002'
+
+
+class FakeWinError(Exception):
+    def __init__(self, code):
+        super().__init__(f'Windows error {code}')
+        self.winerror = code
+
+
+class FakeHandle:
+    def __init__(self, value):
+        self.value = value
+        self.detached = False
+        self.closed = False
+
+    def __int__(self):
+        return self.value
+
+    def Detach(self):
+        self.detached = True
+        return self.value
+
+    def Close(self):
+        if self.closed:
+            raise AssertionError('handle closed twice')
+        self.closed = True
+
 
 class ACLPolicyTests(unittest.TestCase):
     def test_empty_dacl_and_all_whitelisted_ordinary_allows_are_accepted(self):
@@ -61,6 +89,128 @@ class ACLPolicyTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 class HandleBoundaryTests(unittest.TestCase):
+    def setUp(self):
+        self.native = mock.Mock()
+        self.native.FileAttributeTagInfo = 9
+        self.native.FileDispositionInfo = 4
+        self.crt = mock.Mock()
+        self.modules = mock.patch.dict(sys.modules, {
+            'win32file': self.native,
+            'pywintypes': mock.Mock(error=FakeWinError),
+            'msvcrt': self.crt,
+        })
+        self.modules.start()
+        self.addCleanup(self.modules.stop)
+        binary = mock.patch.object(os, 'O_BINARY', 0x8000, create=True)
+        noinherit = mock.patch.object(os, 'O_NOINHERIT', 0x10000, create=True)
+        binary.start()
+        noinherit.start()
+        self.addCleanup(noinherit.stop)
+        self.addCleanup(binary.stop)
+        # Keep the production conversion Windows-only; supply its constructor
+        # alongside the fake pywin32 modules on other test hosts.
+        def win_error(code):
+            error = PermissionError(errno.EACCES, 'fixture') if code in (5, 32) else OSError(errno.EIO, 'fixture')
+            error.winerror = code
+            return error
+
+        converted = mock.patch.object(ctypes, 'WinError', side_effect=win_error, create=True)
+        converted.start()
+        self.addCleanup(converted.stop)
+
+    def test_no_follow_open_and_pywin32_file_operations(self):
+        handle = FakeHandle(321)
+        self.native.CreateFile.return_value = handle
+        self.native.GetFileInformationByHandleEx.return_value = {
+            'FileAttributes': files.FILE_ATTRIBUTE_REPARSE_POINT,
+            'ReparseTag': files.IO_REPARSE_TAG_SYMLINK,
+        }
+        self.native.GetFinalPathNameByHandle.return_value = r'\\?\C:\folder\leaf'
+        self.native.GetLongPathName.return_value = r'C:\folder\Long Leaf'
+        self.native.GetFileType.return_value = files.FILE_TYPE_DISK
+        print_name = '../target'.encode('utf-16-le')
+        raw = struct.pack('<IHHHHHHI', files.IO_REPARSE_TAG_SYMLINK,
+                          12 + len(print_name), 0, 0, 0, 0, len(print_name), 1) + print_name
+        self.native.DeviceIoControl.return_value = raw
+        with mock.patch.object(files.ctypes, 'WinDLL', create=True) as kernel:
+            api = files.WindowsFileAPI()
+            self.assertIsNone(api.kernel)
+            kernel.assert_not_called()
+        self.assertIs(api._open('leaf', files.GENERIC_READ, files.OPEN_EXISTING), handle)
+        self.native.CreateFile.assert_called_once_with(
+            'leaf', files.GENERIC_READ, files.FILE_SHARE_READ | files.FILE_SHARE_WRITE,
+            None, files.OPEN_EXISTING,
+            files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS |
+            files.FILE_ATTRIBUTE_NORMAL, None)
+        api._open('leaf', files.GENERIC_READ, files.OPEN_EXISTING, share_delete=True)
+        self.assertTrue(self.native.CreateFile.call_args.args[2] & files.FILE_SHARE_DELETE)
+        self.assertEqual(api.info(handle), (files.FILE_ATTRIBUTE_REPARSE_POINT,
+                                            files.IO_REPARSE_TAG_SYMLINK))
+        self.native.GetFileInformationByHandleEx.assert_called_once_with(handle, 9)
+        self.assertEqual(api.name(handle), 'leaf')
+        self.native.GetFinalPathNameByHandle.assert_called_once_with(handle, 0)
+        self.assertEqual(api.long_path('short'), r'C:\folder\Long Leaf')
+        self.native.GetLongPathName.assert_called_once_with('short')
+        self.assertEqual(api.file_type(handle), files.FILE_TYPE_DISK)
+        api.delete(handle)
+        self.native.SetFileInformationByHandle.assert_called_once_with(handle, 4, True)
+        self.assertEqual(api.readlink(handle), '../target')
+        self.native.DeviceIoControl.assert_called_once_with(
+            handle, files.FSCTL_GET_REPARSE_POINT, None, 16 * 1024)
+        api.close(handle)
+        self.assertTrue(handle.closed)
+
+    def test_pywin32_errors_become_os_errors_with_original_categories(self):
+        api = files.WindowsFileAPI()
+        for code, category in ((2, FileNotFoundError), (3, FileNotFoundError),
+                               (80, FileExistsError), (183, FileExistsError),
+                               (5, PermissionError), (32, PermissionError),
+                               (87, OSError)):
+            with self.subTest(code=code):
+                self.native.CreateFile.side_effect = FakeWinError(code)
+                with self.assertRaises(category) as raised:
+                    api.open_leaf('leaf')
+                self.assertIs(raised.exception.__cause__, self.native.CreateFile.side_effect)
+                if code not in (2, 3, 80, 183):
+                    self.assertEqual(raised.exception.winerror, code)
+                self.assertIsInstance(raised.exception, OSError)
+
+    def test_crt_transfer_detaches_only_after_success(self):
+        api = files.WindowsFileAPI()
+        handle = FakeHandle(321)
+        self.native.CreateFile.return_value = handle
+        self.native.GetFileInformationByHandleEx.return_value = {
+            'FileAttributes': files.FILE_ATTRIBUTE_NORMAL, 'ReparseTag': 0}
+        self.native.GetFileType.return_value = files.FILE_TYPE_DISK
+        self.crt.open_osfhandle.return_value = 456
+        self.assertEqual(files.open_regular_fd('leaf', os.O_RDONLY, api=api), 456)
+        self.crt.open_osfhandle.assert_called_once_with(
+            321, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
+        self.assertTrue(handle.detached)
+        self.assertFalse(handle.closed)
+
+        failed = FakeHandle(654)
+        self.native.CreateFile.return_value = failed
+        self.crt.open_osfhandle.side_effect = OSError('transfer failed')
+        with self.assertRaisesRegex(OSError, 'transfer failed'):
+            files.open_regular_fd('leaf', os.O_RDONLY, api=api)
+        self.assertFalse(failed.detached)
+        self.assertTrue(failed.closed)
+
+    def test_reparse_leaf_is_refused_and_closed_before_crt_transfer(self):
+        api = files.WindowsFileAPI()
+        handle = FakeHandle(321)
+        self.native.CreateFile.return_value = handle
+        self.native.GetFileInformationByHandleEx.return_value = {
+            'FileAttributes': files.FILE_ATTRIBUTE_REPARSE_POINT,
+            'ReparseTag': files.IO_REPARSE_TAG_SYMLINK,
+        }
+        with self.assertRaises(BoardError):
+            files.open_regular_fd('link', os.O_RDONLY, api=api)
+        self.assertTrue(handle.closed)
+        self.assertFalse(handle.detached)
+        self.crt.open_osfhandle.assert_not_called()
+
     def test_rename_uses_writer_handle_and_posix_replace_flags_once(self):
         api = files.WindowsFileAPI.__new__(files.WindowsFileAPI)
         api.kernel, api.msvcrt = mock.Mock(), mock.Mock()
@@ -105,11 +255,10 @@ class HandleBoundaryTests(unittest.TestCase):
         api._open.assert_not_called()
 
     def test_directory_open_pins_against_rename(self):
-        api = files.WindowsFileAPI.__new__(files.WindowsFileAPI)
-        api.kernel = mock.Mock()
-        api.kernel.CreateFileW.return_value = 123
+        api = files.WindowsFileAPI()
+        self.native.CreateFile.return_value = FakeHandle(123)
         api.open_dir(Path('parent'))
-        args = api.kernel.CreateFileW.call_args.args
+        args = self.native.CreateFile.call_args.args
         self.assertTrue(args[1] & files.GENERIC_READ)
         self.assertFalse(args[2] & files.FILE_SHARE_DELETE)
         self.assertEqual(args[5] & (files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS),
