@@ -6,6 +6,8 @@ import io
 import json
 from unittest.mock import Mock, patch
 
+from c_two._native import CoreError
+
 from support import BoardTestCase
 from hey_my_buddy.blackboard.service.daemon import Daemon, _env_int, main
 from hey_my_buddy.errors import BoardError
@@ -142,3 +144,30 @@ class DaemonAdmissionTests(BoardTestCase):
         self.assertEqual(error["code"], "INVALID_ARGUMENT")
         self.assertIn("HMB_MAX_CONCURRENT", error["message"])
         self.assertIn("INVALID_ARGUMENT", stderr.getvalue())
+
+    def test_native_startup_timeout_uses_the_existing_startup_error_record(self):
+        error = CoreError("fixture lifecycle failure without timeout wording")
+        error.category = "lifecycle"
+        error.lifecycle_kind = "startup_timeout"
+        with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}), \
+             patch.object(Daemon, "run", side_effect=error), \
+             patch("hey_my_buddy.blackboard.service.daemon.signal.signal"), \
+             patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.assertEqual(main(), 2)
+        failure = json.loads((self.directory / "startup-error.json").read_text(encoding="utf-8"))
+        self.assertEqual(failure, {"pid": os.getpid(), "code": "SERVICE_START_TIMEOUT", "message": str(error)})
+        self.assertIn("SERVICE_START_TIMEOUT", stderr.getvalue())
+
+    def test_other_native_errors_are_reraised_even_with_timeout_wording(self):
+        for category, kind in (("lifecycle", "shutdown_timeout"), ("transport", "startup_timeout"), (None, None)):
+            with self.subTest(category=category, kind=kind):
+                error = CoreError("server did not become ready within 5.000s")
+                error.category = category
+                error.lifecycle_kind = kind
+                with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}), \
+                     patch.object(Daemon, "run", side_effect=error), \
+                     patch("hey_my_buddy.blackboard.service.daemon.signal.signal"):
+                    with self.assertRaises(CoreError) as caught:
+                        main()
+                self.assertIs(caught.exception, error)
+        self.assertFalse((self.directory / "startup-error.json").exists())

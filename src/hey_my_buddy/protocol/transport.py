@@ -460,7 +460,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
         finally:
             os.close(log_fd)
         # A first cold start may install a runtime before the daemon exists.
-        deadline = time.monotonic() + (300 if target.get("installed") else 20)
+        deadline = time.monotonic() + (300 if target.get("installed") else rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
         while time.monotonic() < deadline:
             endpoint = _healthy(directory)
             if endpoint:

@@ -543,6 +543,58 @@ class ColdStartTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, "SERVICE_START_FAILED")
         self.assertEqual(self.spawn.call_count, 1)
 
+    def test_cold_start_uses_the_shared_budget_and_preserves_first_install_wait(self):
+        for installed, clock in ((False, [100, 100.25, 100.5]), (True, [100, 399.75, 400])):
+            with self.subTest(installed=installed), \
+                 patch.object(transport.rpc_config, "SERVICE_STARTUP_TIMEOUT_SECONDS", 0.5), \
+                 patch("hey_my_buddy.install.runtime.launch_target", return_value={**LAUNCH_TARGET, "installed": installed}), \
+                 patch.object(transport, "_healthy", return_value=None), \
+                 patch.object(transport.time, "monotonic", side_effect=clock), \
+                 patch.object(transport.time, "sleep") as sleep:
+                with self.assertRaises(ServiceError) as failure:
+                    ensure_service(self.directory)
+                self.assertEqual(failure.exception.code, "SERVICE_START_TIMEOUT")
+                sleep.assert_called_once_with(0.05)
+
+    def test_native_startup_timeout_reaches_the_launcher_through_the_daemon_record(self):
+        import io
+        from c_two._native import CoreError
+        from hey_my_buddy.blackboard.service import daemon
+
+        error = CoreError("fixture native lifecycle failure")
+        error.category = "lifecycle"
+        error.lifecycle_kind = "startup_timeout"
+        child = self.spawn.return_value
+        child.pid = os.getpid()
+
+        def fail_startup(*_args, **_kwargs):
+            with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}), \
+                 patch.object(daemon.Daemon, "run", side_effect=error), \
+                 patch.object(daemon.signal, "signal"), \
+                 patch("sys.stderr", new_callable=io.StringIO):
+                child.poll.return_value = daemon.main()
+            return child
+
+        self.spawn.side_effect = fail_startup
+        with patch.object(transport, "_healthy", return_value=None):
+            with self.assertRaises(ServiceError) as failure:
+                ensure_service(self.directory)
+        self.assertEqual(failure.exception.code, "SERVICE_START_TIMEOUT")
+        self.assertEqual(failure.exception.message, str(error))
+
+    def test_startup_error_from_another_pid_is_not_attributed_to_the_new_daemon(self):
+        self.directory.mkdir()
+        from hey_my_buddy.blackboard.service.daemon import atomic_json
+        atomic_json(self.directory / "startup-error.json", {
+            "pid": 4241, "code": "SERVICE_START_TIMEOUT", "message": "earlier daemon timeout",
+        })
+        self.spawn.return_value.pid = 4242
+        self.spawn.return_value.poll.return_value = 2
+        with patch.object(transport, "_healthy", return_value=None):
+            with self.assertRaises(ServiceError) as failure:
+                ensure_service(self.directory)
+        self.assertEqual(failure.exception.code, "SERVICE_START_FAILED")
+
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_cold_start_and_later_attach_share_the_same_trust_rule_under_a_shared_parent(self):
         """A /tmp-style state dir is trusted by cold start and by every later attach."""
@@ -691,7 +743,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         with patch.object(probe_fixture, "PROBE_SERVER", script):
             probe_fixture.ProbeServer.__init__(peer, self.directory)
         self.assertEqual(Path(json.loads(peer.endpoint_path.read_text(encoding="utf-8"))["root"]), self.directory / "ipc")
-        self.assertEqual(cc.__version__, "0.8.0")
+        self.assertEqual(cc.__version__, "0.8.1")
         self.enterContext(patch.object(transport, "BuddyControl", ProbeContract))
         self.enterContext(patch.object(transport, "CONTROL_NAME", "hey-my-buddy-probe"))
         endpoint = {**ENDPOINT, "address": peer.address, "pid": peer.pid}
