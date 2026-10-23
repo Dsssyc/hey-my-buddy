@@ -52,3 +52,4 @@
 | 2026-10-18 | [各 harness 的会话记录有没有现成的统一读法](2026-10-18-session-transcript-projection.md) | ADR-024 |
 | 2026-10-20 | [会话视图怎样显示得像一段会话：现成的展示组件](2026-10-20-session-view-display-components.md) | ADR-024 的改写（会话视图重做） |
 | 2026-10-23 | [buddy 配色：在避开状态色的前提下，怎样让颜色分得开又好看](2026-10-23-buddy-palette.md) | ADR-029 第 13 条 |
+| 2026-10-23 | [README 怎样写得轻：几个开源项目的首页结构](2026-10-23-readme-structure.md) | README 与 README.zh-CN 的改写 |
