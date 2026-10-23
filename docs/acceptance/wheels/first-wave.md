@@ -32,4 +32,4 @@ B 与 C-Two 的改用（见 [C-Two 0.8.2 的记录](../c-two/upgrade-082.md)）�
 ## 没有验证的
 
 - Windows ARM64 都没有跑过；A、B 两批没有推送，没有持续集成的运行。
-- 第二波（C 与 D）另行记录。
+- 第二波（C 与 D）见[第二波的记录](second-wave.md)。
