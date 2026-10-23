@@ -31,6 +31,10 @@ BINDING = {"harness": "claude", "taskId": "task-1", "attemptId": "attempt-1", "g
 ROOT = {"sessionId": "session-root"}
 
 
+def calls(package, *, state_dir: Path):
+    return list(tool_evidence.read_tool_calls(package, state_dir=state_dir))
+
+
 def init_frame(session="session-root"):
     return {"type": "system", "subtype": "init", "session_id": session, "cwd": "/tmp/checkout", "model": "claude-opus-5-5[1m]"}
 
@@ -73,7 +77,7 @@ def result_frame(session="session-root"):
 
 
 def project(frames, stream_complete=True):
-    collector = ReadOnlyToolEvidence(dict(BINDING))
+    collector = ReadOnlyToolEvidence(dict(BINDING), state_dir=Path(os.environ["HMB_STATE_DIR"]))
     for frame in frames:
         collector.observe_frame(frame)
     return collector, collector.finish(stream_complete)
@@ -92,7 +96,7 @@ def structured_use(call_id, value, session="session-root", parent=None):
 
 def armed(frames):
     """An armed collector over the frames: this run's schema command line is on."""
-    collector = ReadOnlyToolEvidence(dict(BINDING), native_schema_delivery=True)
+    collector = ReadOnlyToolEvidence(dict(BINDING), state_dir=Path(os.environ["HMB_STATE_DIR"]), native_schema_delivery=True)
     for frame in frames:
         collector.observe_frame(frame)
     return collector
@@ -109,18 +113,31 @@ def settled_stream():
 
 
 class ProjectionTests(unittest.TestCase):
+    def test_collector_uses_its_explicit_state_root(self):
+        with tempfile.TemporaryDirectory(prefix="claude-evidence-root-") as directory:
+            state_dir = Path(directory) / "state"
+            self.assertNotEqual(state_dir, Path(os.environ["HMB_STATE_DIR"]))
+            collector = ReadOnlyToolEvidence(dict(BINDING), state_dir=state_dir)
+            collector.observe_frame(init_frame())
+            collector.observe_frame(assistant_tool("Read", "toolu_1"))
+            package = collector.finish(True)
+            self.assertEqual([call["callId"] for call in tool_evidence.read_tool_calls(
+                package, state_dir=state_dir)], ["toolu_1"])
+
     def test_a_settled_root_stream_projects_the_shared_fact_package(self):
         collector, package = project(settled_stream())
         self.assertEqual(package["binding"], BINDING)
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 0))
         self.assertTrue(package["streamComplete"])
-        self.assertFalse(package["truncated"])
-        self.assertEqual([(event["toolName"], event["category"], event["phase"]) for event in package["events"]],
-                         [("Read", "read", "start"), ("Read", "read", "end"),
-                          ("Grep", "search", "start"), ("Grep", "search", "end")])
-        self.assertTrue(all(event["nativeIdentity"] == ROOT for event in package["events"]))
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+        self.assertEqual(package["version"], 2)
+        self.assertEqual([(call["callId"], call["categories"], call["phases"])
+                          for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
+                         [("toolu_1", ["read"], ["end", "start"]),
+                          ("toolu_2", ["search"], ["end", "start"])])
+        self.assertTrue(all(call["nativeIdentity"] == ROOT and call["belongsToRoot"]
+                            for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])))
         self.assertEqual(collector.tool_calls, 2)
 
     def test_replays_and_stream_projections_of_one_call_collapse(self):
@@ -129,21 +146,23 @@ class ProjectionTests(unittest.TestCase):
                               assistant_tool("Read", "toolu_1"),
                               stream_start("Read", "toolu_1"),
                               tool_result("toolu_1")])
-        self.assertEqual((package["toolCalls"], len(package["events"])), (1, 2))
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+        self.assertEqual((package["toolCalls"], len(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])))), (1, 1))
+        self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["phases"], ["end", "start"])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
     def test_calls_past_the_old_correlation_limit_keep_their_end_identity(self):
-        collector = ReadOnlyToolEvidence(dict(BINDING))
+        collector = ReadOnlyToolEvidence(dict(BINDING), state_dir=Path(os.environ["HMB_STATE_DIR"]))
         collector.observe_frame(init_frame())
         for index in range(513):
             collector.observe_frame(assistant_tool("Read", f"toolu_{index}"))
         collector.observe_frame(tool_result("toolu_512"))
-        late_call = collector._evidence._calls[('{"sessionId":"session-root"}', "toolu_512")]
-        self.assertIn((("Read", "read"), "end"), late_call["pairs"])
+        package = collector.finish(True)
+        late_call = next(call for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])) if call["callId"] == "toolu_512")
+        self.assertEqual(late_call["phases"], ["end", "start"])
         self.assertEqual(collector.tool_calls, 513)
 
     def test_incomplete_calls_past_the_old_limit_remain_recorded(self):
-        collector = ReadOnlyToolEvidence(dict(BINDING))
+        collector = ReadOnlyToolEvidence(dict(BINDING), state_dir=Path(os.environ["HMB_STATE_DIR"]))
         collector.observe_frame(init_frame())
         for index in range(513):
             collector.observe_frame(assistant_tool("", f"toolu_{index}", with_name=False))
@@ -155,17 +174,18 @@ class ProjectionTests(unittest.TestCase):
                               assistant_tool("Read", "toolu_1"), tool_result("toolu_1"),
                               assistant_tool("Grep", "toolu_1"), tool_result("toolu_1")])
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual(len(package["events"]), 4)
-        self.assertEqual({event["toolName"] for event in package["events"]}, {"Read", "Grep"})
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(len(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))), 1)
+        self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["categories"], ["read", "search"])
+        self.assertFalse(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["consistent"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_stream_block_stop_is_never_a_tool_end(self):
         _, package = project([init_frame(), stream_start("Read", "toolu_1"), block_stop(), result_frame()])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 1))
-        self.assertEqual([event["phase"] for event in package["events"]], ["start"])
+        self.assertEqual(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["phases"], ["start"])
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_subagent_facts_keep_their_parent_identity_and_never_inherit_the_root(self):
@@ -176,13 +196,11 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(package["nativeIdentity"], [ROOT])
         self.assertEqual(package["toolCalls"], 2)
         parent_identity = {"sessionId": "session-root", "callId": "toolu_parent_9"}
-        sub_facts = [event for event in package["events"] if event["nativeIdentity"] != ROOT]
-        self.assertEqual(sub_facts, [
-            {"nativeIdentity": parent_identity, "callId": "toolu_sub_1", "toolName": "Glob",
-             "category": "search", "phase": "start"},
-            {"nativeIdentity": parent_identity, "callId": "toolu_sub_1", "toolName": "Glob",
-             "category": "search", "phase": "end"}])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        sub_facts = [call for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])) if call["nativeIdentity"] != ROOT]
+        self.assertEqual([(call["nativeIdentity"], call["callId"], call["categories"],
+                           call["phases"], call["belongsToRoot"]) for call in sub_facts],
+                         [(parent_identity, "toolu_sub_1", ["search"], ["end", "start"], False)])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_foreign_session_is_kept_and_later_session_less_frames_turn_unprovable(self):
@@ -190,33 +208,29 @@ class ProjectionTests(unittest.TestCase):
                               assistant_tool("Read", "toolu_1", session="session-other"),
                               tool_result("toolu_1", session="session-other"),
                               assistant_tool("Read", "toolu_2", session=None)])
-        self.assertEqual(package["events"][:2], [
-            {"nativeIdentity": {"sessionId": "session-other"}, "callId": "toolu_1",
-             "toolName": "Read", "category": "read", "phase": "start"},
-            {"nativeIdentity": {"sessionId": "session-other"}, "callId": "toolu_1",
-             "toolName": "Read", "category": "read", "phase": "end"}])
-        self.assertEqual(package["events"][2], {"nativeIdentity": {}, "callId": "toolu_2",
-                                                "toolName": "Read", "category": "read", "phase": "start"})
+        self.assertEqual([(call["nativeIdentity"], call["callId"], call["categories"], call["phases"])
+                          for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
+                         [({"sessionId": "session-other"}, "toolu_1", ["read"], ["end", "start"]),
+                          ({}, "toolu_2", ["read"], ["start"])])
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_handshake_confirmed_single_root_adopts_session_less_root_frames(self):
         _, early = project([assistant_tool("Read", "toolu_1", session=None), init_frame()])
-        self.assertEqual(early["events"][0]["nativeIdentity"], {})
+        self.assertEqual(calls(early, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["nativeIdentity"], {})
         self.assertFalse(early["streamComplete"])
         _, adopted = project([init_frame(), assistant_tool("Read", "toolu_1", session=None),
                               tool_result("toolu_1", session=None)])
         self.assertEqual(adopted["nativeIdentity"], [ROOT])
-        self.assertEqual([event["nativeIdentity"] for event in adopted["events"]], [ROOT, ROOT])
-        self.assertIsNone(tool_evidence.judge_tool_evidence(adopted, "read"))
+        self.assertEqual([call["nativeIdentity"] for call in calls(adopted, state_dir=Path(os.environ["HMB_STATE_DIR"]))], [ROOT])
+        self.assertIsNone(tool_evidence.judge_tool_evidence(adopted, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
     def test_session_tagged_facts_stay_foreign_without_a_confirmed_root(self):
         _, package = project([assistant_tool("Read", "toolu_1"), tool_result("toolu_1")])
         self.assertEqual(package["nativeIdentity"], [])
-        self.assertEqual([event["nativeIdentity"] for event in package["events"]],
-                         [{"sessionId": "session-root"}, {"sessionId": "session-root"}])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual([call["nativeIdentity"] for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))], [ROOT])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_uncorrelatable_and_nameless_facts_are_retained_without_invented_ids(self):
@@ -225,9 +239,10 @@ class ProjectionTests(unittest.TestCase):
                                   {"type": "tool_result", "tool_use_id": "toolu_9"}]},
                                "session_id": "session-root"},
                               assistant_tool("", "toolu_1", with_name=False)])
-        self.assertEqual(package["events"], [
-            {"nativeIdentity": ROOT, "callId": "toolu_9", "toolName": None, "category": "other", "phase": "end"},
-            {"nativeIdentity": ROOT, "callId": "toolu_1", "toolName": None, "category": "other", "phase": "start"}])
+        self.assertEqual([(call["nativeIdentity"], call["callId"], call["categories"],
+                           call["phases"], call["incomplete"]) for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
+                         [(ROOT, "toolu_9", ["other"], ["end"], True),
+                          (ROOT, "toolu_1", ["other"], ["start"], True)])
         self.assertFalse(package["streamComplete"])
 
     def test_unknown_tool_names_stay_other_and_count(self):
@@ -235,9 +250,9 @@ class ProjectionTests(unittest.TestCase):
                               assistant_tool("mcp__server__tool", "toolu_1"), tool_result("toolu_1"),
                               assistant_tool("Task", "toolu_2"), tool_result("toolu_2")])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 0))
-        self.assertEqual({event["category"] for event in package["events"]}, {"other"})
+        self.assertEqual({category for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])) for category in call["categories"]}, {"other"})
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_facts_after_the_result_frame_still_project_before_the_close(self):
@@ -245,29 +260,28 @@ class ProjectionTests(unittest.TestCase):
                                       assistant_tool("Read", "toolu_1"), tool_result("toolu_1"),
                                       result_frame(), assistant_tool("Grep", "toolu_2")])
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (2, 1))
-        self.assertEqual([event["callId"] for event in package["events"]],
-                         ["toolu_1", "toolu_1", "toolu_2"])
+        self.assertEqual([call["callId"] for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))], ["toolu_1", "toolu_2"])
         self.assertFalse(package["streamComplete"])
 
-    def test_the_event_bound_reports_truncation(self):
+    def test_more_than_128_settled_calls_remain_judgeable_with_bounded_rows(self):
         frames = [init_frame()]
-        for index in range(65):
+        for index in range(129):
             frames += [assistant_tool("Read", f"toolu_{index}"), tool_result(f"toolu_{index}")]
         _, package = project(frames)
-        self.assertEqual(len(package["events"]), tool_evidence.MAX_TOOL_EVENTS)
-        self.assertEqual(package["toolCalls"], 65)
-        self.assertTrue(package["truncated"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
-                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+        self.assertEqual(len(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))), 129)
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (129, 0))
+        self.assertLess(package["calls"]["bytes"], 129 * 512)
+        self.assertLess(len(json.dumps(package)), 2048)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
     def test_the_first_finish_fixes_the_package_and_its_roots_come_from_the_handshake_only(self):
-        collector = ReadOnlyToolEvidence(dict(BINDING))
+        collector = ReadOnlyToolEvidence(dict(BINDING), state_dir=Path(os.environ["HMB_STATE_DIR"]))
         collector.observe_frame(init_frame())
         collector.observe_frame(assistant_tool("Read", "toolu_1"))
         collector.observe_frame(tool_result("toolu_1"))
         self.assertEqual(collector.finish(False)["streamComplete"], False)
         self.assertEqual(collector.finish(True)["streamComplete"], False)
-        foreign_roots = ReadOnlyToolEvidence(dict(BINDING))
+        foreign_roots = ReadOnlyToolEvidence(dict(BINDING), state_dir=Path(os.environ["HMB_STATE_DIR"]))
         foreign_roots.observe_frame(assistant_tool("Read", "toolu_1", session="session-root"))
         self.assertEqual(foreign_roots.finish(True)["nativeIdentity"], [])
 
@@ -288,17 +302,17 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                          (self.delivery_key(),))
         self.assertEqual(collector.tool_calls, 0)
         package = collector.finish(True, exclude_calls=collector.settle_delivery(DELIVERED, ROOT))
-        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], package["events"]),
+        self.assertEqual((package["toolCalls"], package["unsettledToolCalls"], calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))),
                          (0, 0, []))
         self.assertTrue(package["streamComplete"])
-        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read"))
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
     def test_the_live_budget_count_holds_the_candidate_before_verification(self):
         armed_collector = armed([init_frame(), structured_use("toolu_so_1", DELIVERED)])
         self.assertEqual(armed_collector.tool_calls, 0)
         # The same frames under a run without the schema command line keep the
         # ordinary-tool projection: the call counts as one ordinary start.
-        disarmed = ReadOnlyToolEvidence(dict(BINDING))
+        disarmed = ReadOnlyToolEvidence(dict(BINDING), state_dir=Path(os.environ["HMB_STATE_DIR"]))
         for frame in (init_frame(), structured_use("toolu_so_1", DELIVERED)):
             disarmed.observe_frame(frame)
         self.assertEqual(disarmed.tool_calls, 1)
@@ -311,7 +325,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         # nothing, the call stays counted through the exclusion seam, and the
         # finished package carries its facts instead of dropping them from the
         # tool count — the switch constant alone proves none of that.
-        collector = ReadOnlyToolEvidence(dict(BINDING), native_schema_delivery=False)
+        collector = ReadOnlyToolEvidence(dict(BINDING), state_dir=Path(os.environ["HMB_STATE_DIR"]), native_schema_delivery=False)
         for frame in (init_frame(), structured_use("toolu_so_1", DELIVERED),
                       tool_result("toolu_so_1")):
             collector.observe_frame(frame)
@@ -319,9 +333,9 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual(collector.tool_calls, 1)
         package = collector.finish(True, exclude_calls=collector.settle_delivery(DELIVERED, ROOT))
         self.assertEqual((package["toolCalls"], package["unsettledToolCalls"]), (1, 0))
-        self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
-                         [("StructuredOutput", "start"), ("StructuredOutput", "end")])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual([(call["categories"], call["phases"]) for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
+                         [(["other"], ["end", "start"])])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOLS_FORBIDDEN,
                          "an unarmed StructuredOutput call is an ordinary forbidden tool")
 
@@ -353,7 +367,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         verified = collector.settle_delivery(DELIVERED, ROOT)
         self.assertEqual(verified, (self.delivery_key(),))
         package = collector.finish(True, exclude_calls=verified)
-        self.assertEqual((package["toolCalls"], package["events"]), (0, []))
+        self.assertEqual((package["toolCalls"], calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))), (0, []))
 
     def test_a_value_mismatch_verifies_nothing_and_keeps_the_call_counted(self):
         collector = armed([init_frame(),
@@ -361,8 +375,8 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
         package = collector.finish(True)
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual([event["category"] for event in package["events"]], ["other", "other"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual([call["categories"] for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))], [["other"]])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_a_second_different_full_input_refuses_the_exemption_in_either_order(self):
@@ -378,9 +392,9 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                 self.assertEqual(collector.tool_calls, 1)
                 package = collector.finish(True)
                 self.assertEqual(package["toolCalls"], 1)
-                self.assertEqual([(event["toolName"], event["phase"]) for event in package["events"]],
-                                 [("StructuredOutput", "start"), ("StructuredOutput", "end")])
-                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+                self.assertEqual([(call["categories"], call["phases"]) for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))],
+                                 [(["other"], ["end", "start"])])
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                                  tool_evidence.TOOLS_FORBIDDEN)
 
     def test_an_incomplete_fact_on_the_call_refuses_the_exemption(self):
@@ -396,7 +410,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         package = collector.finish(True)
         self.assertEqual(package["toolCalls"], 1)
         self.assertFalse(package["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_subagent_foreign_and_mounted_lookalikes_are_not_candidates(self):
@@ -411,7 +425,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual(collector.tool_calls, 3)
         package = collector.finish(True)
         self.assertEqual(package["toolCalls"], 3)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOLS_FORBIDDEN)
 
     def test_a_conflicting_start_name_on_the_same_call_refuses_the_exemption(self):
@@ -420,8 +434,9 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual(collector.settle_delivery(DELIVERED, ROOT), ())
         self.assertEqual(collector.tool_calls, 1)
         package = collector.finish(True)
-        self.assertEqual(len(package["events"]), 2)
-        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read"),
+        self.assertEqual(len(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))), 1)
+        self.assertFalse(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))[0]["consistent"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=Path(os.environ["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_candidate_on_an_unconfirmed_root_verifies_nothing(self):
@@ -449,7 +464,7 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
                          [f"toolu_so_{index}" for index in range(2, 10)])
         self.assertEqual(collector.tool_calls, 2)
         package = collector.finish(True, exclude_calls=verified)
-        self.assertEqual((package["toolCalls"], len(package["events"])), (2, 4))
+        self.assertEqual((package["toolCalls"], len(calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"])))), (2, 2))
 
     def test_an_evicted_first_input_still_refuses_a_conflicting_second(self):
         # The Host probe's shape: c1 first carries {"answer": "first"}; c2..c9
@@ -494,8 +509,8 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
         self.assertEqual(verified, (self.delivery_key("toolu_so_1"),))
         self.assertEqual(collector.tool_calls, 1)
         package = collector.finish(True, exclude_calls=verified)
-        self.assertEqual((package["toolCalls"], [event["callId"] for event in package["events"]]),
-                         (1, ["toolu_so_2", "toolu_so_2"]))
+        self.assertEqual((package["toolCalls"], [call["callId"] for call in calls(package, state_dir=Path(os.environ["HMB_STATE_DIR"]))]),
+                         (1, ["toolu_so_2"]))
 
 
 class RunnerReceiptTests(unittest.TestCase):
@@ -545,14 +560,14 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertIsNone(receipt["usage"]["bytesRead"])
         self.assertIsInstance(receipt["usage"]["elapsedMs"], int)
         evidence = receipt["toolEvidence"]
-        self.assertEqual(evidence["version"], 1)
+        self.assertEqual(evidence["version"], 2)
         self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "micro-task-1",
                                                "attemptId": context.attempt_id, "generation": 1})
         self.assertEqual(evidence["nativeIdentity"], [{"sessionId": session}])
         self.assertTrue(evidence["streamComplete"])
-        self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"], evidence["truncated"]), (2, 0, False))
-        self.assertEqual(len(evidence["events"]), 4)
-        self.assertIsNone(tool_evidence.judge_tool_evidence(evidence, "read"))
+        self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (2, 0))
+        self.assertEqual(len(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"]))), 2)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(evidence, "read", state_dir=Path(context.environment["HMB_STATE_DIR"])))
 
     def test_replayed_and_stream_projected_calls_count_once_in_the_receipt(self):
         # A limit of one allows the one real call: the old per-frame block count
@@ -560,7 +575,7 @@ class RunnerReceiptTests(unittest.TestCase):
         context, outcome = self.run_read_only("replay", tool_calls=1)
         self.assertEqual(outcome.status, "ok", outcome.result)
         evidence = outcome.result["toolEvidence"]
-        self.assertEqual((evidence["toolCalls"], len(evidence["events"])), (1, 2))
+        self.assertEqual((evidence["toolCalls"], len(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])))), (1, 1))
         self.assertEqual(outcome.result["usage"]["toolCalls"], 1)
 
     def test_subagent_facts_reach_the_receipt_without_inheriting_the_root(self):
@@ -569,10 +584,9 @@ class RunnerReceiptTests(unittest.TestCase):
         evidence = outcome.result["toolEvidence"]
         parent_identity = {"sessionId": outcome.result["nativeIdentity"]["sessionId"], "callId": "toolu_parent_9"}
         self.assertEqual(evidence["toolCalls"], 2)
-        self.assertEqual([event["nativeIdentity"] for event in evidence["events"]],
-                         [evidence["nativeIdentity"][0], evidence["nativeIdentity"][0],
-                          parent_identity, parent_identity])
-        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read"),
+        self.assertEqual([call["nativeIdentity"] for call in calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"]))],
+                         [evidence["nativeIdentity"][0], parent_identity])
+        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read", state_dir=Path(context.environment["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_a_block_stop_receipt_keeps_the_call_unsettled(self):
@@ -581,7 +595,7 @@ class RunnerReceiptTests(unittest.TestCase):
         evidence = outcome.result["toolEvidence"]
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (1, 1))
         self.assertTrue(evidence["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read", state_dir=Path(context.environment["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_facts_after_the_result_frame_settle_only_after_the_stream_closes(self):
@@ -591,10 +605,9 @@ class RunnerReceiptTests(unittest.TestCase):
         # A call after the native result remains visible and taints the stream,
         # even if a later tool-result were to settle it before EOF.
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (2, 1))
-        self.assertEqual([event["callId"] for event in evidence["events"]],
-                         ["toolu_1", "toolu_1", "toolu_2"])
+        self.assertEqual([call["callId"] for call in calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"]))], ["toolu_1", "toolu_2"])
         self.assertFalse(evidence["streamComplete"])
-        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read"),
+        self.assertEqual(tool_evidence.judge_tool_evidence(evidence, "read", state_dir=Path(context.environment["HMB_STATE_DIR"])),
                          tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
 
     def test_budget_exhaustion_reports_the_unified_count_and_an_unfinished_stream(self):
@@ -604,7 +617,7 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["code"], "readonly-budget-exhausted")
         self.assertEqual(receipt["usage"]["toolCalls"], 2)
         evidence = receipt["toolEvidence"]
-        self.assertEqual((evidence["toolCalls"], len(evidence["events"])), (2, 3))
+        self.assertEqual((evidence["toolCalls"], len(calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"])))), (2, 2))
         self.assertFalse(evidence["streamComplete"])
         self.assertTrue(json.loads((self.root / "fixture.json").read_text(encoding="utf-8"))["interrupted"],
                         "the N+1 call must be interrupted through the native control request")
@@ -616,8 +629,9 @@ class RunnerReceiptTests(unittest.TestCase):
         self.assertEqual(receipt["code"], "native-turn-started-early")
         self.assertNotIn("rawAnswer", receipt)
         evidence = receipt["toolEvidence"]
-        self.assertEqual(evidence["events"], [{"nativeIdentity": {}, "callId": "toolu_early_1",
-                                               "toolName": "Read", "category": "read", "phase": "start"}])
+        self.assertEqual([(call["nativeIdentity"], call["callId"], call["categories"], call["phases"])
+                          for call in calls(evidence, state_dir=Path(context.environment["HMB_STATE_DIR"]))],
+                         [({}, "toolu_early_1", ["read"], ["start"])])
         self.assertFalse(evidence["streamComplete"])
 
 

@@ -40,7 +40,9 @@ class InlineRunErrorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             control = {"privateRoot": directory, "timeoutSeconds": None}
             with mock.patch("hey_my_buddy.buddy.roles.inline_run.execute", side_effect=error):
-                handle = run_execution._launch(control, None, environment={}, identity=identity)
+                handle = run_execution._launch(
+                    control, None, environment={"HMB_STATE_DIR": os.environ["HMB_STATE_DIR"]},
+                    identity=identity)
                 self.assertEqual(handle.wait(10), 1)
             self.assertFalse(handle.shutdown_confirmed())
             for read in (run_execution._read_run, run_execution._read_request,

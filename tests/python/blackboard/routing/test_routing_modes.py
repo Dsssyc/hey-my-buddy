@@ -147,7 +147,7 @@ class RoutingModesTests(BoardTestCase):
             worker = f'router-{index}'
             pass  # Admission is owned by the service.
             claim = admit_execution(board.client(), nonce, task_id=result['runId'])['claim']
-            facts = claim_tool_receipt(claim, count if type(count) is int else 0)
+            facts = claim_tool_receipt(claim, count if type(count) is int else 0, state_dir=board.directory)
             if proof is None:
                 facts.pop('toolEvidence')
             board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**facts, 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 100, 'toolCalls': count}, 'decision': {'buddyId': BUDDY_ID, 'note': 'candidate match', 'evidence': []}}})

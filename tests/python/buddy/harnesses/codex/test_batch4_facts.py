@@ -28,7 +28,7 @@ class NativeFactsTests(unittest.TestCase):
                                  invocation_id="invocation"),
             harness="codex", buddy=RunBuddy(provider="openai", model="model", effort="low"),
             session_record_path=str(self.root / "session.jsonl"),
-            cwd=str(self.root), private_state=PrivateStatePaths(invocation_root=str(self.root),
+            cwd=str(self.root), private_state=PrivateStatePaths(state_dir=str(self.root / "state"), invocation_root=str(self.root),
                                                               native_root=str(self.root / "native")),
             input_text="Read the input", output_schema={"type": "object"}, permission="none",
             budget=RunBudget(timeout_seconds=10))
@@ -241,7 +241,7 @@ class NativeFactsTests(unittest.TestCase):
                     root = self.root / "review"
                     root.mkdir()
                     self.request = self.request.model_copy(update={"private_state": PrivateStatePaths(
-                        invocation_root=str(root), native_root=str(root / "native"))})
+                        state_dir=str(self.root / "state"), invocation_root=str(root), native_root=str(root / "native"))})
 
     def test_unreadable_interrupt_reply_does_not_confirm_acknowledgement(self):
         for result, basis in (([], "native-turn-interrupt-unconfirmed"),
@@ -332,7 +332,7 @@ class NativeFactsTests(unittest.TestCase):
                 root = self.root / mode
                 root.mkdir(mode=0o700)
                 request = self.request.model_copy(update={"permission": scope, "private_state": PrivateStatePaths(
-                    invocation_root=str(root), native_root=str(root / "native"))})
+                    state_dir=str(self.root / "state"), invocation_root=str(root), native_root=str(root / "native"))})
                 state = native_run._RunState(status="ok", raw_answer='{"answer": "retained"}', shutdown=True,
                     policy_checks={"configReadback": {"status": "unknown"},
                                    "threadReceipt": {"status": "unknown"}, "selectedModel": {"status": "unknown"}},

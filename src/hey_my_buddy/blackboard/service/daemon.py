@@ -330,10 +330,15 @@ def main() -> int:
         return daemon.run()
     except RuntimeError as error:
         if not isinstance(error, BoardError):
-            if (getattr(error, "category", None) != "lifecycle"
-                    or getattr(error, "lifecycle_kind", None) != "startup_timeout"):
+            from ...protocol.transport import CoreError, _local_rpc_error
+
+            if isinstance(error, CoreError) and getattr(error, "io_kind", None) is not None:
+                error = _local_rpc_error(error)
+            elif (getattr(error, "category", None) == "lifecycle"
+                    and getattr(error, "lifecycle_kind", None) == "startup_timeout"):
+                error = ServiceError("SERVICE_START_TIMEOUT", str(error))
+            else:
                 raise
-            error = ServiceError("SERVICE_START_TIMEOUT", str(error))
         atomic_json(directory / "startup-error.json", {"pid": os.getpid(), **error.payload()})
         # An actionable, non-destructive failure: never fall back to an old
         # implementation and never rewrite records.

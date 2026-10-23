@@ -284,7 +284,8 @@ class ExpectedDurationTests(BoardTestCase):
         for duration in ({"timeoutSeconds": 60}, {"timeoutSeconds": 60, "expectedSeconds": 60}):
             with self.subTest(duration=duration), self.assertRaises(BoardError) as raised:
                 self.submit(board, "renamed-duration", **duration)
-            self.assertIn("renamed to expectedSeconds", raised.exception.message)
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+            self.assertEqual(raised.exception.details["field"], "timeoutSeconds")
 
     def test_storage_rejects_a_mixed_duration_meaning(self):
         board = self.board()

@@ -27,10 +27,12 @@ class WorkerPermissionEvidenceTests(unittest.TestCase):
         fields = full_request(self.base).to_payload()
         fields.update(harness=harness, permission=permission, sessionServices=[], captureEvidence=False)
         fields["privateState"]["invocationRoot"] = str(root)
+        fields["privateState"]["stateDir"] = str(self.base)
         return rc.RunRequest.from_payload(fields)
 
     def execute(self, root, request, *, status):
         control = {"operation": "worker", "harness": request.harness,
+                   "stateDir": str(self.base),
                    "privateRoot": str(root), "executionLiveFile": str(root / "execution-live.json"),
                    "inputFile": str(root / "input.json"), "outputFile": str(root / "output.json"),
                    "timeoutSeconds": 5, "live": {"instanceId": "a" * 64, "token": "b" * 64}}

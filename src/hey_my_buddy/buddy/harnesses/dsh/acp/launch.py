@@ -8,8 +8,8 @@ from pathlib import Path
 
 from .....errors import BoardError
 from .....protocol.owned_process import owned_popen
+from .....protocol.process_handle import ProcessHandle
 from ... import discovery
-from ...base import ProcessHandle
 from ...native_support import halt_owned_group
 from .connection import stop_evidence
 
@@ -79,8 +79,12 @@ def launch(argv: list[str], *, private_root: Path, extra_env: dict | None = None
     try:
         handle = ProcessHandle(process, own_group=True, log_paths={})
     except BaseException as error:
-        handle = getattr(error, "execution_handle", None)
-        if handle is None:
-            handle = ProcessHandle.adopt_unregistered(process, own_group=True, log_paths={})
-        raise stop_after_spawn_failure(process, handle, error) from error
+        receipt = error.owned_popen_evidence
+        evidence = {"leaderExited": receipt.exit_code is not None,
+                    "leaderExitCode": receipt.exit_code,
+                    "groupObserved": "gone" if receipt.shutdown_confirmed else "unknown",
+                    "shutdownConfirmed": receipt.shutdown_confirmed}
+        raise LaunchOwnershipError(f"ACP startup failed after spawn: {error}",
+                                   process=process, handle=error.execution_handle,
+                                   evidence=evidence) from error
     return process, handle

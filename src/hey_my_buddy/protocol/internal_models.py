@@ -32,7 +32,7 @@ from pydantic_core import core_schema
 
 from ..paths import is_absolute_path
 from ..errors import BoardError
-from ..json_codec import canonical_json, decode_strict_json
+from ..json_codec import canonical_json
 
 #: The largest count an internal format carries; matches the JSON safe-integer
 #: range the board's own bounded JSON rules use.
@@ -110,10 +110,6 @@ class FrozenJson:
             raise fail(f"{label} is not bounded JSON", field=label, reason=str(error)[:200]) from None
         if len(text.encode()) > maximum:
             raise fail(f"{label} exceeds its {maximum}-byte bound", field=label)
-        try:
-            decode_strict_json(text)
-        except ValueError as error:
-            raise fail(f"{label} is not strict JSON", field=label, reason=str(error)[:200]) from None
         instance = cls.__new__(cls)
         object.__setattr__(instance, "text", text)
         return instance

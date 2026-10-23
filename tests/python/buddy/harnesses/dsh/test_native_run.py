@@ -41,6 +41,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 from hey_my_buddy.buddy.harnesses.dsh import native_run
 from hey_my_buddy.buddy.harnesses.dsh.acp.connection import AcpConnection
 from hey_my_buddy.buddy.harnesses.dsh.native_run import SessionServices, prepare_session_service, run
+from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
@@ -79,6 +80,7 @@ class NativeRunCase(unittest.TestCase):
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(container.cleanup)
         self.base = Path(container.name).resolve()
+        self.state_dir = self.base / "state"
         self.root = self.base / "native-root"
         self.sessions_root = self.root / "dsh-home" / "sessions"
         self.home = self.base / "home"
@@ -113,6 +115,7 @@ class NativeRunCase(unittest.TestCase):
             buddy=RunBuddy(provider="fake", model="m1", effort="high"),
             cwd=str(self.base / "cwd"),
             private_state=PrivateStatePaths(
+                state_dir=str(self.state_dir),
                 invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
                 native_root=str(self.root)),
             input_text=prompt, permission=scope,
@@ -160,7 +163,8 @@ class NativeRunCase(unittest.TestCase):
             session_record_path=str(self.base / f"session-{uuid.uuid4().hex}.jsonl"),
             buddy=RunBuddy(provider="fake", model="m1", effort="high"),
             cwd=str(self.base / "cwd"),
-            private_state=PrivateStatePaths(invocation_root=str(invocation),
+            private_state=PrivateStatePaths(state_dir=str(self.state_dir),
+                                            invocation_root=str(invocation),
                                             native_root=str(native_root or self.root)),
             input_text=prompt, permission=level,
             output_schema=run_contract.FrozenJson.from_value(worker_services.OUTCOME_SCHEMA,
@@ -261,7 +265,7 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNone(result.usage, "no record exists, so the usage stays unknown, never zero")
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
-        self.assertEqual(package["events"], [])
+        self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [])
         self.assertEqual(package["nativeIdentity"][0].get("sessionId"),
                          result.native_identity.session_id)
 
@@ -410,10 +414,12 @@ class FastSeamTests(NativeRunCase):
         package = result.tool_evidence.value
         self.assertFalse(package["streamComplete"])
         self.assertEqual(package["toolCalls"], 1)
-        categories = {event["category"] for event in package["events"]}
-        self.assertEqual(categories, {"other"},
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["categories"], ["other"],
                          "an unrecognized native tool name stays other")
-        self.assertTrue(all(event["toolName"] == "run-command" for event in package["events"]))
+        self.assertEqual(calls[0]["phases"], ["end", "start"])
+        self.assertTrue(calls[0]["belongsToRoot"])
 
     def test_an_unknown_event_is_retained_and_continues_to_a_result(self):
         self.extra_agent_args = ["--prompt-mode", "final", "--emit-unknown-update",
@@ -854,8 +860,8 @@ class WorkerSeamTests(NativeRunCase):
         package = result.tool_evidence.value
         self.assertTrue(package["streamComplete"])
         # The checkpoint refusal and the finish call are the verified delivery
-        # calls: their events leave the published package, nothing else hides.
-        self.assertEqual(package["events"], [])
+        # calls: their summaries leave the published package, nothing else hides.
+        self.assertEqual(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir)), [])
         self.assertEqual(package["toolCalls"], 0)
         self.assertEqual(package["nativeIdentity"],
                          [{"sessionId": result.native_identity.session_id}])
@@ -976,7 +982,9 @@ class WorkerSeamTests(NativeRunCase):
         self.assertEqual(package["toolCalls"], 1,
                          "the natively failed finish call stays a task-tool fact; "
                          "only its verified retry is the delivery evidence")
-        self.assertEqual({event["callId"] for event in package["events"]}, {"call_finish_1"})
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertEqual([call["callId"] for call in calls], ["call_finish_1"])
+        self.assertTrue(calls[0]["belongsToRoot"])
 
     def test_a_completed_turn_without_a_finish_tool_fails(self):
         request, bound, mount = self.worker_request()

@@ -12,6 +12,8 @@ judged once, by the blackboard.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from ....errors import BoardError
 from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 from ...roles.turn_io import canonical_json
@@ -86,8 +88,8 @@ class CodexToolEventProjector:
     is allowed.
     """
 
-    def __init__(self, binding: dict):
-        self.evidence = ToolEventEvidence(binding)
+    def __init__(self, binding: dict, *, state_dir: Path):
+        self.evidence = ToolEventEvidence(binding, state_dir=state_dir)
         self.roots: list[dict] = []
         self._started: dict[tuple[str, str], tuple[str, str | None]] = {}
 

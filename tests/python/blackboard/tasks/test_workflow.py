@@ -529,7 +529,7 @@ class LifecycleTests(WorkflowTestCase):
                 "task": f"helper {index}",
                 "cwd": str(self.workdir(f"h{index}")),
                 "executionWorkspace": {"kind": "worktree", "access": "write"},
-                "integrator": index == 2,
+                "role": "integrator" if index == 2 else "helper",
             }
             for index in (1, 2)
         ]
@@ -1296,21 +1296,19 @@ class NestedSpecTests(WorkflowTestCase):
             self.assertEqual(connection.execute("SELECT expected_seconds FROM workflow_turns WHERE attempt_id=?",
                                                (claim["attempt"]["attemptId"],)).fetchone()[0], 1800)
 
-    def test_expected_duration_is_positive_and_old_name_is_rejected(self):
+    def test_expected_duration_is_positive_and_unknown_name_is_rejected(self):
         board = self.board()
         for value in (0, -1, True, None, 1.5):
             with self.subTest(value=value), self.assertRaises(BoardError):
                 self.submit(board, request_id="bad-expected", expectedSeconds=value)
         with self.assertRaises(BoardError) as raised:
-            self.submit(board, request_id="old-duration", timeoutSeconds=60)
-        self.assertIn("renamed to expectedSeconds", raised.exception.message)
+            self.submit(board, request_id="unknown-duration", timeoutSeconds=60)
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
+        self.assertEqual(raised.exception.details["field"], "timeoutSeconds")
         submitted = self.submit(board, request_id="positive-expected", expectedSeconds=1)
         self.assertEqual(submitted["task"]["expectedSeconds"], 1)
 
-    def test_nested_spec_shape_is_rejected_in_favor_of_the_flat_form(self):
-        # The retired duplicate spelling was accepted when both places agreed and
-        # rejected on disagreement; ADR-021 decision 17 removes the second place,
-        # so both cases are one rejection that names where the fields belong.
+    def test_nested_spec_shape_is_rejected(self):
         board = self.board()
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_submit", {

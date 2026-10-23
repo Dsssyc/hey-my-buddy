@@ -42,7 +42,8 @@ def partial_log_open_failure(*, close_error=False):
     state = {"error": OSError(errno.EMFILE, "fixture stderr open exhausted"),
              "close_error": OSError(errno.EIO, "fixture stdout close failed"),
              "stdout": None, "closed": False}
-    original_open, original_close, original_fstat = os.open, os.close, os.fstat
+    original_open = process_handle.open_regular_fd
+    original_close, original_fstat = os.close, os.fstat
 
     def open_file(path, *args, **kwargs):
         name = Path(path).name
@@ -61,7 +62,8 @@ def partial_log_open_failure(*, close_error=False):
                 raise state["close_error"]
 
     try:
-        with mock.patch.object(process_handle.os, "open", open_file), mock.patch.object(process_handle.os, "close", close):
+        with mock.patch.object(process_handle, "open_regular_fd", open_file), \
+             mock.patch.object(process_handle.os, "close", close):
             yield state
     finally:
         if state["stdout"] is not None:
@@ -450,10 +452,11 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
 
     def test_handle_registration_failure_stops_and_hands_out_the_created_child(self):
         error = ValueError("fixture handle registration failed")
-        with controller_log_close_failure(log=None) as state, \
-             mock.patch.object(process_controller, "ProcessHandle", side_effect=error):
-            with self.assertRaises(ValueError) as caught:
-                self.launch()
+        from hey_my_buddy.protocol import process_identity
+        with controller_log_close_failure(log=None) as state:
+            with mock.patch.object(process_identity, "_creation_time", side_effect=error):
+                with self.assertRaises(ValueError) as caught:
+                    self.launch()
             self.assertIs(caught.exception, error)
             self.assertEqual(error.owned_popen_evidence,
                              ProcessCreationEvidence(True, True, state["process"].returncode))

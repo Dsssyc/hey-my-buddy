@@ -59,7 +59,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                     "spec": {"task": "nested helper"}}]}, integrator={"role": "host", "id": "fixture-host"})
             self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
-    def test_duplicate_workspace_fields_are_rejected_and_derived_instead(self):
+    def test_workspace_fields_are_derived_from_submission(self):
         with tempfile.TemporaryDirectory() as root:
             for duplicate in ("cwd", "integrator"):
                 field = {"cwd": root} if duplicate == "cwd" else {"integrator": "host-1"}
@@ -68,7 +68,7 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                         schemas.normalize_workflow_submit({**self.submit_params(root),
                             "executionWorkspace": {"kind": "existing", "access": "write", **field}})
                     self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
-                    self.assertIn(f"executionWorkspace.{duplicate}", raised.exception.message)
+                    self.assertEqual(raised.exception.details["field"], duplicate)
             # The normalized intent still carries both, derived from the top level.
             normalized = schemas.normalize_workflow_submit(self.submit_params(root))
             self.assertEqual(normalized["executionWorkspace"]["cwd"], str(Path(root).resolve()))
@@ -80,6 +80,26 @@ class RetiredSubmissionInputTests(unittest.TestCase):
                 "executionWorkspace": {"kind": "existing", "access": "write"}}]}, integrator={"role": "host", "id": "fixture-host"})[0]
             self.assertEqual(helper["executionWorkspace"]["cwd"], str(Path(root).resolve()))
             self.assertEqual(helper["executionWorkspace"]["integrator"], {"role": "host", "id": "fixture-host"})
+
+    def test_helper_role_selects_the_single_integrator(self):
+        with tempfile.TemporaryDirectory() as root:
+            helper = {"requestId": "helper", "task": "Check a dependency", "cwd": root,
+                      "executionWorkspace": {"kind": "existing", "access": "write"}}
+            authority = {"role": "host", "id": "fixture-host"}
+            default = schemas.normalize_helpers({"helpers": [helper]}, integrator=authority)[0]
+            self.assertEqual((default["role"], default["integrator"]), ("helper", False))
+            selected = schemas.normalize_helpers({"helpers": [{**helper, "role": "integrator"}]},
+                                                 integrator=authority)[0]
+            self.assertEqual((selected["role"], selected["integrator"]), ("integrator", True))
+            with self.assertRaises(BoardError) as raised:
+                schemas.normalize_helpers({"helpers": [{**helper, "integrator": True}]}, integrator=authority)
+            self.assertEqual(raised.exception.details["field"], "integrator")
+            with self.assertRaises(BoardError) as raised:
+                schemas.normalize_helpers({"helpers": [
+                    {**helper, "role": "integrator"},
+                    {**helper, "requestId": "second", "role": "integrator"},
+                ]}, integrator=authority)
+            self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
     def test_owner_attribution_never_changes_the_host_or_submission_identity(self):
         with tempfile.TemporaryDirectory() as root:
@@ -318,7 +338,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         note = document["annotations"][0]
         self.assertEqual({key: note[key] for key in ("harness", "provider", "model", "text")},
                          {**model_service_key(CATALOG_BUDDY), "text": "Human preference for this workflow"})
-        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim']), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
+        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["source"], "model-selection")
         self.assertNotIn("routingPreferences", routed["routing"])
@@ -345,7 +365,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         document = owned["claim"]["decisionInput"]
         self.assertEqual(sorted(entry["buddyId"] for entry in document["buddies"]),
                          sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
-        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim']), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': SECOND_BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
+        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': SECOND_BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["status"], "completed")
         decision = board.call("selection_get", {"decisionId": view["routing"]["decisionId"]})["decision"]

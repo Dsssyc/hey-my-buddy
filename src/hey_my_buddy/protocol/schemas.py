@@ -60,15 +60,9 @@ PARTIAL_BUDDY_HINT = (
 #: ``controlToken`` are the authority: an owner name alone never authorizes.
 CONTROL_FIELDS = ("hostId", "ownerGeneration", "controlToken")
 
-#: Every field ``workflow_submit`` accepts, in addition to the ordinary spec.
-WORKFLOW_SUBMIT_FIELDS: frozenset[str] = frozenset()
-
 #: Sentinel accepted only from the authenticated console layer and validated
 #: against a server-side registry, never trusted from a C-Two/JSON caller.
 CONSOLE_AUTHORITY_FIELD = "consoleAuthority"
-FORBIDDEN_OVERRIDE_FIELDS = frozenset({"userOverride", "consoleUser", "adminOverride"})
-
-WORKFLOW_HELPER_FIELDS: frozenset[str] = frozenset()
 
 
 #: Every field ``task_submit`` accepts. Anything else is INVALID_ARGUMENT, so a
@@ -92,15 +86,12 @@ SUBMIT_FIELDS = frozenset(
 
 TERMINAL_TASK_STATES = frozenset({"completed", "concluded", "failed", "cancelled"})
 
-#: Every field ``workflow_submit`` accepts in addition to the ordinary spec, and
-#: every field one explicit helper specification accepts. The nested ``spec``
-#: spelling and ``inheritRoutingPreferences`` are retired duplicate writings
-#: (ADR-021 decisions 5 and 17).
+#: Fields accepted by workflow submission and explicit helper specifications.
 WORKFLOW_SPEC_FIELDS = frozenset({
     "requestId", "task", "cwd", *BUDDY_FIELDS, "expectedSeconds", "owner", "requiredCapabilities", "exclusiveResources",
 })
 WORKFLOW_SUBMIT_FIELDS = WORKFLOW_SPEC_FIELDS | {"hostId", "executionWorkspace", "submissionToken", "title", "macroTask", "macroTaskId", "macroTaskOf", "buddyLocked", "delegationAuthority", "fixes"}
-WORKFLOW_HELPER_FIELDS = WORKFLOW_SPEC_FIELDS | {"executionWorkspace", "integrator", "role"}
+WORKFLOW_HELPER_FIELDS = WORKFLOW_SPEC_FIELDS | {"executionWorkspace", "role"}
 MIN_SUBMISSION_TOKEN = 16
 MAX_SUBMISSION_TOKEN = 256
 
@@ -112,8 +103,6 @@ def require_object(value: Any, what: str) -> dict:
 
 
 def reject_unknown(params: dict, allowed: frozenset[str] | set[str], what: str) -> None:
-    if "expectedSeconds" in allowed and "timeoutSeconds" in params:
-        raise BoardError("INVALID_ARGUMENT", "timeoutSeconds has been renamed to expectedSeconds; it is an expected duration, not an execution deadline", field="timeoutSeconds")
     unknown = sorted(set(params) - set(allowed))
     if unknown:
         raise BoardError("INVALID_ARGUMENT", f"Unknown {what} parameter: {unknown[0]}", field=unknown[0])
@@ -303,24 +292,6 @@ def bounded_text(params: dict, name: str, *, max_bytes: int, allow_empty: bool =
 
 
 # -- micro-task workflow -------------------------------------------------------
-def reject_untrusted_override(params: dict) -> None:
-    """An untrusted caller-controlled override field is always invalid.
-
-    Console-user authority is never a JSON flag: it is a session identity the
-    console registered with the service, and the service validates it. Naming an
-    override explicitly is rejected before any other check, so no caller can
-    discover a path that skips Host control by guessing a field name.
-    """
-    present = sorted(set(params) & FORBIDDEN_OVERRIDE_FIELDS)
-    if present:
-        raise BoardError(
-            "INVALID_ARGUMENT",
-            f"{present[0]} is not an accepted authority field; authority is a validated control capability, "
-            "never a caller-controlled override",
-            field=present[0],
-        )
-
-
 def normalize_access(intent: dict) -> tuple[str, str | None]:
     """Validate the Worker access choice and its full-access note."""
     access = optional_string(intent, "access") or "write"
@@ -349,22 +320,13 @@ def normalize_execution_workspace(params: dict) -> dict:
     Only the shape is checked here; the workspace module resolves refs, snapshots
     the tree and reports unsupported cases with its own explicit errors. ``cwd``
     and ``integrator`` are derived by the submitter from the ordinary spec's
-    ``cwd`` and the submitting Host (ADR-021 decision 17), never accepted as
-    input: supplying the duplicates is rejected with the spelling that remains.
+    ``cwd`` and the submitting Host (ADR-021 decision 17).
     """
     raw = params.get("executionWorkspace")
     if raw is None:
         raise BoardError("INVALID_ARGUMENT", "executionWorkspace is required; choose kind 'existing' or 'worktree'",
                          field="executionWorkspace")
     intent = require_object(raw, "executionWorkspace")
-    for duplicate in ("cwd", "integrator"):
-        if duplicate in intent:
-            raise BoardError(
-                "INVALID_ARGUMENT",
-                f"executionWorkspace.{duplicate} is a duplicate spelling; the intent is derived from the"
-                + (" top-level cwd" if duplicate == "cwd" else " submitting Host") + " of the submission",
-                field=f"executionWorkspace.{duplicate}",
-            )
     reject_unknown(
         intent,
         {"kind", "access", "accessNote", "base", "includeUntracked", "writeScope", "targetRef"},
@@ -508,7 +470,6 @@ def normalize_submission_token(params: dict) -> str | None:
 def normalize_workflow_submit(params: dict, *, lead_run_id: str | None = None) -> dict:
     """Validate one ``workflow_submit`` request into its canonical parts."""
     params = require_object(params, "workflow submit request")
-    reject_untrusted_override(params)
     reject_unknown(params, WORKFLOW_SUBMIT_FIELDS, "workflow.submit")
     request_id = required_string(params, "requestId", max_length=MAX_REQUEST_ID)
     host_id = None if lead_run_id is not None else required_string(params, "hostId", max_length=256)
@@ -526,9 +487,7 @@ def normalize_workflow_submit(params: dict, *, lead_run_id: str | None = None) -
     if delegation_authority and workspace_intent["access"] != "full":
         raise BoardError("INVALID_ARGUMENT", "delegationAuthority requires executionWorkspace.access='full'",
                          field="executionWorkspace.access")
-    # The workspace's source and integrator are derived, never accepted: the
-    # ordinary spec's cwd is the only source spelling, and the integrator is
-    # attribution owned by the submitting Host.
+    # The workspace's source and integrator come from the spec and submitting Host.
     workspace_intent["cwd"] = spec["cwd"]
     workspace_intent["integrator"] = ({"role": "lead", "id": lead_run_id} if lead_run_id is not None
                                       else {"role": "host", "id": host_id})
@@ -604,10 +563,6 @@ def normalize_helpers(params: dict, *, integrator: dict) -> list[dict]:
     for index, entry in enumerate(raw):
         if not isinstance(entry, dict):
             raise BoardError("INVALID_ARGUMENT", f"helpers[{index}] must be a JSON object")
-        reject_untrusted_override(entry)
-        if "delegationAuthority" in entry:
-            raise BoardError("INVALID_ARGUMENT", "Only Host submissions may grant delegationAuthority; helpers cannot carry it",
-                             field="delegationAuthority")
         reject_unknown(entry, WORKFLOW_HELPER_FIELDS, f"helpers[{index}]")
         request_id = required_string(entry, "requestId", max_length=MAX_REQUEST_ID)
         if request_id in seen:
@@ -620,7 +575,6 @@ def normalize_helpers(params: dict, *, integrator: dict) -> list[dict]:
         # spec cwd is the source, and the integrator is the approving Host.
         workspace_intent["cwd"] = spec["cwd"]
         workspace_intent["integrator"] = integrator
-        is_integrator = optional_bool(entry, "integrator", False)
         role = optional_string(entry, "role") or "helper"
         if role not in ("helper", "integrator"):
             raise BoardError("INVALID_ARGUMENT", f"helpers[{index}].role must be 'helper' or 'integrator'")
@@ -629,10 +583,10 @@ def normalize_helpers(params: dict, *, integrator: dict) -> list[dict]:
                 "requestId": request_id,
                 "spec": spec,
                 "executionWorkspace": workspace_intent,
-                "integrator": is_integrator or role == "integrator",
+                "integrator": role == "integrator",
                 "role": role,
             }
         )
-    if helpers and sum(1 for helper in helpers if helper["integrator"]) > 1:
+    if sum(helper["role"] == "integrator" for helper in helpers) > 1:
         raise BoardError("INVALID_ARGUMENT", "At most one helper can be the named integrator")
     return helpers

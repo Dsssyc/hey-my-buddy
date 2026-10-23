@@ -22,12 +22,13 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from ....json_codec import canonical_json
 from ....protocol.activity import (
     MAX_EVENT_SEQ,
     native_tool_name,
 )
-from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
+from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 from ..session_receipts import refusal_shaped, verify_inquiry_receipt, verify_receipt, verify_tool_refusal
 
 HARNESS = "dsh"
@@ -84,8 +85,8 @@ class DshToolFacts:
     its own ``session/new`` receipts.
     """
 
-    def __init__(self, binding: dict):
-        self.evidence = ToolEventEvidence(binding)
+    def __init__(self, binding: dict, *, state_dir: Path):
+        self.evidence = ToolEventEvidence(binding, state_dir=state_dir)
         self.roots: list[dict] = []
         self.close_pending = False
         self._names: dict[tuple[str, str], str] = {}
@@ -139,9 +140,6 @@ class DshToolFacts:
         if identity and call_id and name:
             key = (identity["sessionId"], call_id)
             if phase == "start":
-                if key not in self._names and len(self._names) >= MAX_TOOL_EVENTS:
-                    self._incomplete(identity, call_id, name, phase)
-                    return
                 self._names.setdefault(key, name)
             event = normalize_tool_event(HARNESS, {
                 "nativeIdentity": identity, "callId": call_id, "toolName": name, "phase": phase})

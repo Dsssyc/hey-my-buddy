@@ -18,7 +18,7 @@ class LocalLaunchTests(unittest.TestCase):
                 with self.assertRaises(transport.ServiceError) as caught:
                     transport.ensure_service(directory)
             self.assertEqual(caught.exception.code, 'LAUNCH_ACCESS_DENIED')
-            self.assertIn('launcher', str(caught.exception))
+            self.assertEqual(caught.exception.details['io_operation'], 'bind')
             spawn.assert_not_called()
 
     def test_unreachable_recorded_service_does_not_spawn_another(self):

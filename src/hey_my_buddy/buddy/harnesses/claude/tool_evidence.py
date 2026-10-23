@@ -21,6 +21,7 @@ fact, and its delivered input must equal the run's final structured output.
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 from ....errors import BoardError
 from ....json_codec import canonical_json
@@ -59,8 +60,8 @@ class ReadOnlyToolEvidence:
     a complete stream is claimed only when the stream itself closed.
     """
 
-    def __init__(self, binding: dict, *, native_schema_delivery: bool = False):
-        self._evidence = ToolEventEvidence(binding)
+    def __init__(self, binding: dict, *, state_dir: Path, native_schema_delivery: bool = False):
+        self._evidence = ToolEventEvidence(binding, state_dir=state_dir)
         self._roots: list[dict] = []
         self._foreign_session = False
         self._correlated: dict[tuple, str] = {}

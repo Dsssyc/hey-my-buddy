@@ -2139,7 +2139,6 @@ class WorkflowCoordinator:
             },
             "workflow.decide",
         )
-        schemas.reject_untrusted_override(params)
         run_id = schemas.required_string(params, "runId", max_length=128)
         request_id = schemas.required_string(params, "requestId", max_length=128)
         command_id = schemas.required_string(params, "commandId", max_length=128)
@@ -2855,7 +2854,6 @@ class WorkflowCoordinator:
             },
             "workflow.continue",
         )
-        schemas.reject_untrusted_override(params)
         run_id = schemas.required_string(params, "runId", max_length=128)
         owner_run_id = run_id
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
@@ -3259,7 +3257,6 @@ class WorkflowCoordinator:
             },
             "workflow.takeover",
         )
-        schemas.reject_untrusted_override(params)
         run_id = schemas.required_string(params, "runId", max_length=128)
         command_id = schemas.required_string(params, "commandId", max_length=128)
         new_host = schemas.required_string(params, "newHostId", max_length=256)
@@ -3386,7 +3383,6 @@ class WorkflowCoordinator:
             {"runId", "commandId", "note", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD},
             "workflow.cancel",
         )
-        schemas.reject_untrusted_override(params)
         run_id = schemas.required_string(params, "runId", max_length=128)
         command_id = schemas.optional_string(params, "commandId", max_length=128)
         note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
@@ -3825,7 +3821,6 @@ class WorkflowCoordinator:
             },
             "workflow.accept",
         )
-        schemas.reject_untrusted_override(params)
         owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         artifact_id = schemas.required_string(params, "artifactId", max_length=128)
@@ -4388,7 +4383,6 @@ class WorkflowCoordinator:
             {"runId", "targetRunId", "note", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD},
             "workflow.conclude",
         )
-        schemas.reject_untrusted_override(params)
         owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         note, _ = schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)
@@ -4654,7 +4648,6 @@ class WorkflowCoordinator:
             {"runId", "targetRunId", *schemas.CONTROL_FIELDS, schemas.CONSOLE_AUTHORITY_FIELD},
             "workflow.reclaim",
         )
-        schemas.reject_untrusted_override(params)
         run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         with self.db.read() as connection:
@@ -4822,7 +4815,6 @@ class WorkflowCoordinator:
             },
             "workflow.scope_amend",
         )
-        schemas.reject_untrusted_override(params)
         owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         command_id = schemas.required_string(params, "commandId", max_length=128)
@@ -5029,7 +5021,6 @@ class WorkflowCoordinator:
             },
             "workflow.workspace_resolve",
         )
-        schemas.reject_untrusted_override(params)
         owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         command_id = schemas.required_string(params, "commandId", max_length=128)
@@ -5394,7 +5385,6 @@ class WorkflowCoordinator:
              schemas.CONSOLE_AUTHORITY_FIELD},
             "workflow.cleanup_plan",
         )
-        schemas.reject_untrusted_override(params)
         owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         command_id = schemas.required_string(params, "commandId", max_length=128)
@@ -5533,7 +5523,6 @@ class WorkflowCoordinator:
              schemas.CONSOLE_AUTHORITY_FIELD},
             "workflow.cleanup_apply",
         )
-        schemas.reject_untrusted_override(params)
         owner_run_id = run_id = schemas.required_string(params, "runId", max_length=128)
         target_id = schemas.optional_string(params, "targetRunId", max_length=128) or run_id
         plan_id = schemas.required_string(params, "planId", max_length=128)

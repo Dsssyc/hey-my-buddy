@@ -189,12 +189,11 @@ class LiveObservation(InternalModel):
 #: reads them all (step 2-C2).
 LIVE_FIELDS = ("activity", "inquiries", "observation")
 
-#: The journal availability reasons the existing direct reader published, kept
-#: verbatim so the channel's projection stays lossless against it.
-JOURNAL_REASONS = ("no-journal-path", "journal-not-written", "journal-exceeds-limit",
+#: Journal availability reasons carried by the live channel.
+JOURNAL_REASONS = ("journal-not-written", "journal-exceeds-limit",
                    "journal-unreadable", "journal-unavailable")
 
-JournalReason = Literal["no-journal-path", "journal-not-written", "journal-exceeds-limit",
+JournalReason = Literal["journal-not-written", "journal-exceeds-limit",
                         "journal-unreadable", "journal-unavailable"]
 
 

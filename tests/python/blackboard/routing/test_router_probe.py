@@ -97,6 +97,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     private = ensure_private_dir(context_root(context, harness) / ("review-" + identity.invocation_id))
     control = {
         "operation": "review", "harness": harness, "privateRoot": str(private),
+        "stateDir": context.environment["HMB_STATE_DIR"],
         "directory": str(context.directory),
         "executionLiveFile": str(context.directory / "execution-live.json"),
         "nativeRoot": str(ensure_private_dir(context_root(context, harness) / "review-native")),
@@ -149,7 +150,8 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
         value=value,
         tool_evidence=tool_receipt({"harness": harness, "taskId": context.task_id,
                                     "attemptId": context.attempt_id, "generation": context.generation},
-                                   tool_calls, native_identity={"sessionId": "mock-session"})["toolEvidence"],
+                                   tool_calls, state_dir=Path(context.environment["HMB_STATE_DIR"]),
+                                   native_identity={"sessionId": "mock-session"})["toolEvidence"],
         stop_evidence=StopEvidence(native=StopLayer(group_state="gone" if shutdown else "unknown")),
         evidence_refs=evidence_refs,
     )

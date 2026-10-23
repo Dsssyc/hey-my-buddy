@@ -989,7 +989,7 @@ class DecisionCoordinator:
         if not isinstance(roots, list) or any(identity not in roots for identity in reported):
             return {"code": unverified}
         permission = {"fast": "none", "review": "read"}[document["routingMode"]]
-        judged = tool_evidence.judge_tool_evidence(evidence, permission)
+        judged = tool_evidence.judge_tool_evidence(evidence, permission, state_dir=self.board.directory)
         if judged is None:
             return None
         return {"code": judged}

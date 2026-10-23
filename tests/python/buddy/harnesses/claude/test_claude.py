@@ -30,6 +30,7 @@ from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.native_run import validate_turn_provenance
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.private_dirs import context_root
+from hey_my_buddy.protocol.tool_evidence import read_tool_calls
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 
@@ -675,7 +676,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(evidence["nativeIdentity"],
                          [{"sessionId": result.result["nativeIdentity"]["sessionId"]}])
         self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (0, 0))
-        self.assertEqual(evidence["events"], [])
+        self.assertEqual(list(read_tool_calls(evidence, state_dir=Path(self.environment["HMB_STATE_DIR"]))), [])
         self.assertTrue(evidence["streamComplete"])
 
 

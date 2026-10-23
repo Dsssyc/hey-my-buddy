@@ -50,10 +50,15 @@ class LaunchTest(AcpTestCase):
         self.assertTrue(stop_evidence(handle)["shutdownConfirmed"])
 
     def test_handle_construction_failure_stops_child_and_retains_evidence(self):
-        with mock.patch.object(ProcessHandle, "__init__", side_effect=RuntimeError("handle failed")):
-            with self.assertRaises(LaunchOwnershipError) as caught:
-                launch([sys.executable, "-c", "import time;time.sleep(30)"],
-                       private_root=self.root)
+        from hey_my_buddy.protocol import process_identity
+        original_terminate = ProcessHandle.terminate
+        with mock.patch.object(ProcessHandle, "terminate", autospec=True,
+                               side_effect=original_terminate) as stop:
+            with mock.patch.object(process_identity, "_creation_time", side_effect=RuntimeError("identity failed")):
+                with self.assertRaises(LaunchOwnershipError) as caught:
+                    launch([sys.executable, "-c", "import time;time.sleep(30)"],
+                           private_root=self.root)
+        self.assertEqual(stop.call_count, 1)
         error = caught.exception
         self.assertTrue(error.evidence["shutdownConfirmed"], error.evidence)
         self.assertEqual("gone", error.evidence["groupObserved"])

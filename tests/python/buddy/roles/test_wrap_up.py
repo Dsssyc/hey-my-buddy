@@ -30,7 +30,7 @@ def request_for(control):
         harness="zcode", buddy=rc.RunBuddy(provider="provider", model="model", effort="off"),
         cwd=control["cwd"], session_record_path=control["sessionRecordPath"],
         private_state=rc.PrivateStatePaths(
-            invocation_root=str(root), native_root=control["nativeRoot"]),
+            state_dir=control["stateDir"], invocation_root=str(root), native_root=control["nativeRoot"]),
         input_text="worker prompt", permission="write", output_schema=rc.FrozenJson({"type": "object"}),
         budget=rc.RunBudget(timeout_seconds=control["timeoutSeconds"]),
     )
@@ -58,6 +58,7 @@ class RoleStopTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.invocation = ensure_private_dir(self.root / "invocation")
         self.control = {"privateRoot": str(self.invocation), "nativeRoot": str(self.root / "native"),
+                        "stateDir": str(self.root),
                         "sessionRecordPath": str(self.root / "session.jsonl"),
                         "cwd": str(self.root), "harness": "zcode", "operation": "worker",
                         "invocationId": "first-invocation",
@@ -489,6 +490,7 @@ class RoleStopTests(unittest.TestCase):
             session_record_path=str(self.root / "session.jsonl"),
             turn={"turnId": "turn-stop", "input": turn_input})
         control = {"operation": "worker", "harness": "codex", "privateRoot": str(self.invocation),
+                   "stateDir": str(self.root),
                    "nativeRoot": str(ensure_private_dir(self.root / "native")),
                    "sessionRecordPath": str(self.root / "session.jsonl"),
                    "executionLiveFile": str(self.root / "execution-live.json"),
@@ -501,7 +503,7 @@ class RoleStopTests(unittest.TestCase):
             buddy=rc.RunBuddy(provider="provider", model="model", effort="off"),
             cwd=str(self.root), session_record_path=str(self.root / "session.jsonl"),
             private_state=rc.PrivateStatePaths(
-                invocation_root=str(self.invocation), native_root=control["nativeRoot"]),
+                state_dir=control["stateDir"], invocation_root=str(self.invocation), native_root=control["nativeRoot"]),
             input_text="original Worker prompt", permission="write",
             output_schema=rc.FrozenJson(worker_format("codex").schema),
             budget=rc.RunBudget(timeout_seconds=None))

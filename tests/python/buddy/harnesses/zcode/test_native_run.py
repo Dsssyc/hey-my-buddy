@@ -42,6 +42,7 @@ from hey_my_buddy.buddy.harnesses.zcode.native_run import (
     prepare_session_service,
     run,
 )
+from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.roles import worker_services
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection, worker_observer
 from hey_my_buddy.buddy.roles.structured_call import structured_prompt
@@ -146,7 +147,8 @@ class NativeRunCase(FakeAppServerTests):
             session_record_path=str(self.base / f"session-{uuid.uuid4().hex}.jsonl"),
             buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
-            private_state=PrivateStatePaths(invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
+            private_state=PrivateStatePaths(state_dir=str(self.state_dir),
+                                            invocation_root=str(self.base / f"invocation-{uuid.uuid4().hex[:8]}"),
                                             native_root=str(self.base / f"native-{uuid.uuid4().hex[:8]}")),
             input_text=prompt, permission="none",
             output_schema=SCHEMA,
@@ -158,6 +160,7 @@ class MockNativeCase(ZcodeFixtureCase):
 
     def setUp(self):
         super().setUp()
+        self.state_dir = Path(self.environment["HMB_STATE_DIR"])
         self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-w-",
                                                  dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
@@ -180,7 +183,8 @@ class MockNativeCase(ZcodeFixtureCase):
             session_record_path=str(self.base / f"session-{uuid.uuid4().hex}.jsonl"),
             buddy=RunBuddy(provider="fixture-api", model="fixture-model", effort="low"),
             cwd=str(self.cwd),
-            private_state=PrivateStatePaths(invocation_root=str(invocation),
+            private_state=PrivateStatePaths(state_dir=self.environment["HMB_STATE_DIR"],
+                                            invocation_root=str(invocation),
                                             native_root=str(self.base / "worker-native")),
             input_text=prompt, permission="write",
             output_schema=worker_services.OUTCOME_SCHEMA,
@@ -290,7 +294,9 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         package = result.tool_evidence.value
         self.assertFalse(package["streamComplete"])
-        self.assertTrue(package["events"])
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertTrue(calls)
+        self.assertTrue(all(call["categories"] for call in calls))
 
     def test_a_second_correction_feedback_is_executed_and_stays_bounded(self):
         # How often to correct is the role's rule alone; the driver only
@@ -489,7 +495,9 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "observer-interrupt")
         self.assertEqual(correction.stop_reason, "no-tool-violation")
         self.assertFalse(result.tool_evidence.value["streamComplete"])
-        self.assertTrue(result.tool_evidence.value["events"])
+        calls = list(tool_evidence.read_tool_calls(result.tool_evidence.value, state_dir=self.state_dir))
+        self.assertTrue(calls)
+        self.assertTrue(any(not call["belongsToRoot"] for call in calls))
 
     def test_a_failed_close_keeps_the_final_message_facts(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -982,13 +990,15 @@ class WorkerSeamTests(MockNativeCase):
         result = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         package = result.tool_evidence.value
-        call_ids = [event["callId"] for event in package["events"]]
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        call_ids = [call["callId"] for call in calls]
         self.assertIn("child-fin", call_ids, "the child relay's same-name call was silently dropped")
         self.assertIn("foreign-fin", call_ids, "the foreign session's same-name call was silently dropped")
         self.assertNotIn("call-finish-first", call_ids,
                          "the root's verified refusal call is delivery evidence, not a task tool")
         self.assertNotIn("root-call", call_ids,
                          "the root's verified receipt call is delivery evidence, not a task tool")
+        self.assertTrue(any(not call["belongsToRoot"] for call in calls))
         self.assertGreaterEqual(package["toolCalls"], 2)
         self.assertTrue(package["streamComplete"])
         # The completion facts remain their own evidence beside the package: the
@@ -1013,13 +1023,16 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         package = result.tool_evidence.value
         self.assertEqual(package["toolCalls"], 1)
-        self.assertEqual([event["callId"] for event in package["events"]], ["call-task", "call-task"])
-        self.assertEqual([event["phase"] for event in package["events"]], ["start", "end"])
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertEqual([call["callId"] for call in calls], ["call-task"])
+        self.assertEqual(calls[0]["categories"], ["execute"])
+        self.assertEqual(calls[0]["phases"], ["end", "start"])
+        self.assertTrue(calls[0]["belongsToRoot"])
         self.assertEqual(package["nativeIdentity"], [{"sessionId": result.native_identity.session_id,
                                                       "turnId": result.native_identity.turn_id}])
         # The delivery call is evidenced by the receipt, never by the package;
         # the verified receipt is the provenance's own fact.
-        self.assertNotIn(evidence_call(result), [event["callId"] for event in package["events"]])
+        self.assertNotIn(evidence_call(result), [call["callId"] for call in calls])
         provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
                                           if ref.kind == "turn-provenance")).read_bytes())
         self.assertTrue(provenance["receiptVerified"])
@@ -1245,7 +1258,7 @@ class ProducerContractTests(NativeRunCase):
             channel.publish_activity({"phase": "streaming-model", "eventSeq": 9,
                                                        "attemptId": "other"})
 
-    def test_journal_states_follow_the_direct_reader_semantics(self):
+    def test_journal_states_follow_the_shared_reader_semantics(self):
         """Empty is available, over-limit and unreadable keep their own reasons."""
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-j-",
@@ -1262,7 +1275,7 @@ class ProducerContractTests(NativeRunCase):
             return fixture_observe(channel, after_seq=None, limit=8,
                                    fields=("inquiries",)).journal
 
-        # Nothing written yet: the direct reader's missing reason.
+        # Nothing written yet has the missing-journal reason.
         self.assertEqual((fact().available, fact().reason, fact().entries),
                          (False, "journal-not-written", 0))
         # An empty existing file is a real, readable journal: available, zero.
@@ -1271,8 +1284,7 @@ class ProducerContractTests(NativeRunCase):
         # Actually over the byte cap keeps its own reason, not the empty one.
         journal.write_bytes(b"x" * (1024 * 1024 + 1))
         self.assertEqual((fact().available, fact().reason), (False, "journal-exceeds-limit"))
-        # Unreadable is its own fact, never reported as missing: the state check
-        # passes and the locked open is what fails.
+        # An existing file that cannot be opened keeps the unreadable reason.
         journal.write_bytes(b"")
         journal.chmod(0)
         self.addCleanup(journal.chmod, 0o644)

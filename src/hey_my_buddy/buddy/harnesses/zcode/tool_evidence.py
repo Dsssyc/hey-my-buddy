@@ -18,7 +18,7 @@ import json
 import os
 from pathlib import Path
 
-from ....protocol.tool_evidence import MAX_TOOL_EVENTS, ToolEventEvidence, normalize_tool_event
+from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 
 HARNESS = "zcode"
 
@@ -53,8 +53,8 @@ class ZcodeToolFacts:
     projection cannot name, keeping the receipt's call count at least one.
     """
 
-    def __init__(self, binding: dict, native_log_dir: Path | None = None):
-        self.evidence = ToolEventEvidence(binding)
+    def __init__(self, binding: dict, native_log_dir: Path | None = None, *, state_dir: Path):
+        self.evidence = ToolEventEvidence(binding, state_dir=state_dir)
         self.roots: list[dict] = []
         self.close_pending = False
         self.violation = False
@@ -140,9 +140,6 @@ class ZcodeToolFacts:
             name = name or (raw if isinstance(raw, str) and raw else None)
             if identity is not None and call_id is not None and name is not None:
                 key = (identity["sessionId"], identity["turnId"], call_id)
-                if key not in self._names and len(self._names) >= MAX_TOOL_EVENTS:
-                    self._incomplete(params, identity, call_id, phase, name)
-                    return
                 self._names.setdefault(key, name)
                 if kind == "scheduled":
                     self._canonical_starts.add(key)
@@ -205,7 +202,7 @@ class ZcodeToolFacts:
         if phase == "scheduled":
             known = self._names.get(key)
             if (name is None or known is not None and name != known
-                    or known is None and (identity is None or len(self._names) >= MAX_TOOL_EVENTS)):
+                    or known is None and identity is None):
                 self._incomplete(params, identity, call_id, "start", name)
                 return
             self._names.setdefault(key, name)
@@ -287,7 +284,7 @@ class ZcodeToolFacts:
         success, error = payload.get("successCount"), payload.get("errorCount")
         valid = (identity in self.roots and identity is not None
                  and (deferred or (identity["sessionId"], identity["turnId"]) not in self._closed)
-                 and isinstance(ids, list) and 0 < len(ids) <= MAX_TOOL_EVENTS
+                 and isinstance(ids, list) and len(ids) > 0
                  and all(isinstance(value, str) and 0 < len(value) <= 512 for value in ids)
                  and len(set(ids)) == len(ids)
                  and type(success) is int and success >= 0 and type(error) is int and error >= 0)

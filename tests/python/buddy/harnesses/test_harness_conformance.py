@@ -80,7 +80,7 @@ def _request(harness):
         harness=harness,
         buddy=RunBuddy(provider="provider", model="model", effort="effort"),
         cwd=str(ROOT),
-        private_state=PrivateStatePaths(invocation_root=str(ROOT), native_root=str(ROOT)),
+        private_state=PrivateStatePaths(state_dir=str(ROOT), invocation_root=str(ROOT), native_root=str(ROOT)),
         input_text="conformance",
         permission="read",
         output_schema={"type": "object"},

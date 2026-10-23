@@ -93,7 +93,7 @@ def run_request(root: Path) -> RunRequest:
         buddy=RunBuddy(provider="provider", model="model", effort="off"),
         cwd=str(root),
         session_record_path=str(root / "session.jsonl"),
-        private_state=PrivateStatePaths(invocation_root=str(root / "invocation"),
+        private_state=PrivateStatePaths(state_dir=str(root), invocation_root=str(root / "invocation"),
                                         native_root=str(root / "native")),
         input_text="one bounded input",
         permission="none",

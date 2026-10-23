@@ -599,6 +599,43 @@ class ColdStartTests(unittest.TestCase):
         self.assertEqual(failure.exception.code, "SERVICE_START_TIMEOUT")
         self.assertEqual(failure.exception.message, str(error))
 
+    def test_native_bind_failure_reaches_cold_start_with_its_structured_cause(self):
+        import errno
+        import io
+        from c_two._native import CoreError
+        from hey_my_buddy.blackboard.service import daemon
+
+        for kind, raw_error, code in (("permission_denied", errno.EACCES, "LAUNCH_ACCESS_DENIED"),
+                                      ("addr_in_use", errno.EADDRINUSE, "C_TWO_TRANSPORT")):
+            with self.subTest(kind=kind):
+                error = CoreError("fixture native endpoint bind failure")
+                error.category = "transport"
+                error.transport_kind = "ipc"
+                error.io_kind = kind
+                error.raw_os_error = raw_error
+                error.io_operation = "bind"
+
+                def fail_startup(*_args, **_kwargs):
+                    child = Mock(pid=os.getpid())
+                    child.wait.return_value = 2
+                    with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}), \
+                         patch.object(daemon.Daemon, "run", side_effect=error), \
+                         patch.object(daemon.signal, "signal"), \
+                         patch("sys.stderr", new_callable=io.StringIO):
+                        child.poll.return_value = daemon.main()
+                    return child
+
+                self.spawn.side_effect = fail_startup
+                with patch.object(transport, "_healthy", return_value=None):
+                    with self.assertRaises(ServiceError) as caught:
+                        ensure_service(self.directory)
+                recorded = json.loads((self.directory / "startup-error.json").read_text(encoding="utf-8"))
+                expected = {"code": code, "message": str(error), "details": {
+                    "category": "transport", "transport_kind": "ipc", "io_kind": kind,
+                    "raw_os_error": raw_error, "io_operation": "bind"}}
+                self.assertEqual(recorded, {"pid": os.getpid(), **expected})
+                self.assertEqual(caught.exception.payload(), expected)
+
     def test_startup_error_from_another_pid_is_not_attributed_to_the_new_daemon(self):
         self.directory.mkdir(mode=0o700)
         from hey_my_buddy.blackboard.service.daemon import atomic_json
@@ -793,9 +830,11 @@ class RpcReadOnlySetupTests(unittest.TestCase):
                 with MutationRecorder() as recorder:
                     with self.assertRaises(ServiceError) as refused:
                         _request(endpoint, "ping", {}, state_dir=self.directory)
-                    self.assertIsNone(_attach_read_only(self.directory))
+                    with self.assertRaises(ServiceError) as attach_refused:
+                        _attach_read_only(self.directory)
                 recorder.assert_no_mutation()
-                self.assertEqual(refused.exception.code, "SERVICE_UNAVAILABLE")
+                self.assertEqual(refused.exception.code, "LAUNCH_ACCESS_DENIED")
+                self.assertEqual(attach_refused.exception.code, "LAUNCH_ACCESS_DENIED")
                 self.assertRegex(str(refused.exception.__cause__).lower(),
                                  r"(group|world|other).*(writ|permission)|(writ|permission).*(group|world|other)",
                                  "the SDK must reject writable access, not an arbitrary transport error")

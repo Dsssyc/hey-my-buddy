@@ -188,7 +188,7 @@ class CatalogAndPreferencePublicationTests(DecisionTestCase):
         return request, claim
 
     def finish(self, board, request, claim):
-        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 32, 'status': 'ok', 'shutdownConfirmed': True, 'result': stopped_answer(claim)})
+        board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 32, 'status': 'ok', 'shutdownConfirmed': True, 'result': stopped_answer(claim, state_dir=board.directory)})
         view = self.decision(board, request["decisionId"])
         self.assertEqual((view["status"], view["buddyId"]), ("completed", BUDDY_ID))
         self.assertEqual(view["input"], claim["decisionInput"])

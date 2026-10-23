@@ -186,7 +186,10 @@ class InquiryBridge:
                 self.truncated = fact["reason"] == "journal-exceeds-limit"
             return
         # Keep the existing crash-tail isolation on the writer's next append.
-        raw = read_shared_snapshot(self.journal_path, MAX_JOURNAL_BYTES)
+        try:
+            raw = read_shared_snapshot(self.journal_path, MAX_JOURNAL_BYTES)
+        except FileNotFoundError:
+            raw = None
         self._torn_line = bool(raw and not raw.endswith(b"\n"))
         for record in fact["records"]:
             inquiry_id = record["inquiryId"]

@@ -218,19 +218,18 @@ def validate_process_identity(record: object) -> dict:
     if not isinstance(record, dict) or set(record) != {
             "bootId", "pid", "startedAt", "processGroupId", "jobName"}:
         raise BoardError("INVALID_ARGUMENT", "process identity has an invalid shape")
-    for subject in (record,):
-        if not isinstance(subject["bootId"], str) or not subject["bootId"]:
-            raise BoardError("INVALID_ARGUMENT", "boot identifier is required")
-        try:
-            platform, identifier = subject["bootId"].split(":", 1)
-            if platform not in {"linux", "macos", "windows"} or str(uuid.UUID(identifier)) != identifier:
-                raise ValueError("noncanonical boot identifier")
-        except ValueError as error:
-            raise BoardError("INVALID_ARGUMENT", "boot identifier is invalid") from error
-        if type(subject["pid"]) is not int or subject["pid"] <= 0:
-            raise BoardError("INVALID_ARGUMENT", "process ID must be positive")
-        if type(subject["startedAt"]) is not int or not 0 < subject["startedAt"] < 2**63:
-            raise BoardError("INVALID_ARGUMENT", "process creation time is invalid")
+    if not isinstance(record["bootId"], str) or not record["bootId"]:
+        raise BoardError("INVALID_ARGUMENT", "boot identifier is required")
+    try:
+        platform, identifier = record["bootId"].split(":", 1)
+        if platform not in {"linux", "macos", "windows"} or str(uuid.UUID(identifier)) != identifier:
+            raise ValueError("noncanonical boot identifier")
+    except ValueError as error:
+        raise BoardError("INVALID_ARGUMENT", "boot identifier is invalid") from error
+    if type(record["pid"]) is not int or record["pid"] <= 0:
+        raise BoardError("INVALID_ARGUMENT", "process ID must be positive")
+    if type(record["startedAt"]) is not int or not 0 < record["startedAt"] < 2**63:
+        raise BoardError("INVALID_ARGUMENT", "process creation time is invalid")
     pgid, job = record["processGroupId"], record["jobName"]
     if (type(pgid) is int and pgid > 0 and job is None) == (pgid is None and isinstance(job, str) and bool(job)):
         raise BoardError("INVALID_ARGUMENT", "exactly one process group or Job is required")

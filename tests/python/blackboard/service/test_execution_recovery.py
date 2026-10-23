@@ -553,7 +553,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
         self.assertNotEqual(pending["status"], "completed")
         self.assertEqual(self.client.get(runId=claim["task"]["taskId"])["attemptState"], "uncertain")
         self.board_.store.execution_connection(actor["attemptId"], connected=True)
-        output = {**claim_tool_receipt(claim, 0), "status": "ok", "operation": "select",
+        output = {**claim_tool_receipt(claim, 0, state_dir=self.directory), "status": "ok", "operation": "select",
                   "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": None},
                   "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                   "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",

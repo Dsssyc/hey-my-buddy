@@ -77,7 +77,7 @@ def _prepare(root, buddy):
     return packet
 
 
-def evaluate(packet, outcome, *, elapsed_ms, unchanged):
+def evaluate(packet, outcome, *, elapsed_ms, unchanged, state_dir: Path):
     result = outcome.result
     evidence = result.get('toolEvidence')
     roots = evidence.get('nativeIdentity', []) if isinstance(evidence, dict) else []
@@ -89,7 +89,7 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
         answer = router.validate_answer(result.get('rawAnswer'), list(CANDIDATES), 'review')
     except Exception:
         answer = None
-    tool_problem = tool_evidence.judge_tool_evidence(evidence, packet['permission'])
+    tool_problem = tool_evidence.judge_tool_evidence(evidence, packet['permission'], state_dir=state_dir)
     counts_match = (isinstance(evidence, dict) and type(usage.get('toolCalls')) is int
                     and usage['toolCalls'] == evidence.get('toolCalls'))
     checks = {
@@ -102,9 +102,9 @@ def evaluate(packet, outcome, *, elapsed_ms, unchanged):
         'permission': packet.get('permission') == 'read',
         'nativeIdentity': bool(reported) and all(isinstance(item, dict) and item in roots for item in reported),
         'toolEvidence': tool_problem is None,
-        'readCompleted': isinstance(evidence, dict) and any((event.get('category') in ('read', 'execute'))
-                                                          and event.get('phase') == 'end'
-                                                          for event in evidence.get('events', [])),
+        'readCompleted': tool_problem is None and any(
+            set(call['categories']) & {'read', 'execute'} and 'end' in call['phases']
+            for call in tool_evidence.read_tool_calls(evidence, state_dir=state_dir)),
         'toolBudget': counts_match and 0 < usage['toolCalls'] <= limits['toolCalls'],
         'deadline': 0 <= elapsed_ms <= limits['timeoutSeconds'] * 1000,
         'correctionBudget': type(result.get('correctionCount')) is int and 0 <= result['correctionCount'] <= 1,
@@ -162,7 +162,8 @@ def run(args):
         report.update(evaluate(packet, outcome, elapsed_ms=round((time.monotonic() - started) * 1000),
                                unchanged=router_input.digest(
                                    root / 'frozen', deadline=time.monotonic() + request.budget['timeoutSeconds'])
-                               == packet['inputDigest']))
+                               == packet['inputDigest'],
+                               state_dir=Path(context.environment['HMB_STATE_DIR'])))
     except (Exception, KeyboardInterrupt) as error:
         report.update(error=type(error).__name__, reason='The probe failed; no automatic retry is authorized')
     finally:

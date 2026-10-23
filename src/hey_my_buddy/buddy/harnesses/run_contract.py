@@ -58,10 +58,6 @@ from pydantic import (
 #: The only internal format version. It never changes a public board contract.
 FORMAT_VERSION = 1
 
-#: The native-provided identifier fields, matching the tool-evidence identity set.
-NATIVE_ID_KEYS = {"sessionId": "session_id", "threadId": "thread_id", "turnId": "turn_id",
-                  "inputId": "input_id", "callId": "call_id"}
-
 from ...protocol.harness_names import HARNESS_NAMES
 
 HarnessName = Literal[*HARNESS_NAMES]
@@ -71,10 +67,8 @@ SchemaStatus = Literal["valid", "invalid", "unknown"]
 GroupState = Literal["gone", "alive", "unknown"]
 ContinuationMode = Literal["native-session", "reconstructed-new-session"]
 
-#: The bounded fact-package size: it holds the old strict 512 KiB read range.
-#: The per-field and per-count bounds below (128 events, 512-char identifiers)
-#: keep a maximal legal tool-evidence package within it, so no package the old
-#: paths could carry is refused here for size alone.
+#: Bound of each JSON fact envelope. Growing tool-call rows live in a private
+#: digest-bound file; only its bounded reference travels in a tool package.
 MAX_PACKAGE_BYTES = 512 * 1024
 #: The role-assembled input text: the board's task text bound is 1 MiB and the
 #: roles add their own bounded material (hints, workspace facts, the answer
@@ -142,8 +136,9 @@ class RunBuddy(InternalModel):
 
 
 class PrivateStatePaths(InternalModel):
-    """The attempt-private invocation and native roots of one run."""
+    """The selected state root and attempt-private roots of one run."""
 
+    state_dir: AbsolutePath
     invocation_root: AbsolutePath
     native_root: AbsolutePath
 
@@ -432,78 +427,17 @@ def _normalized_package(kind: str, value: Any) -> Optional[FrozenJson]:
 
 
 def _validated_tool_evidence(value: Any) -> Optional[FrozenJson]:
-    """Structural validation of one existing version-1 tool-evidence package.
+    """Validate the bounded envelope; the service checks its digest-bound rows.
 
-    The check is shape only: exact fields, the current version, bounded
-    identifiers and ACP categories. No allowance, completeness or publication
-    judgment lives here; that stays with the blackboard's single judge.
+    No publication judgment lives here. Growing per-call facts cross the
+    execution/service boundary as a private file, never a capped event list.
     """
     if value is None:
         return None
     package = value.value if isinstance(value, FrozenJson) else value
-    fields = {"version", "binding", "nativeIdentity", "streamComplete", "events",
-              "toolCalls", "unsettledToolCalls", "truncated"}
-    if not isinstance(package, dict) or set(package) != fields:
-        raise fail("the tool evidence package must carry its exact field set", field="toolEvidence")
-    if type(package["version"]) is not int or package["version"] != tool_evidence_protocol.TOOL_EVIDENCE_VERSION:
-        raise fail("the tool evidence package version is not supported", field="toolEvidence")
-    binding = package["binding"]
-    if not isinstance(binding, dict) or set(binding) != set(tool_evidence_protocol.BINDING_FIELDS):
-        raise fail("the tool evidence binding must carry its exact field set", field="toolEvidence.binding")
-    if binding["harness"] not in HARNESS_NAMES:
+    tool_evidence_protocol.validate_tool_evidence_package(package)
+    if package["binding"]["harness"] not in HARNESS_NAMES:
         raise fail("the tool evidence binding harness is not a harness name", field="toolEvidence.binding.harness")
-    check_text(binding["taskId"], "toolEvidence.binding.taskId", maximum=128)
-    check_text(binding["attemptId"], "toolEvidence.binding.attemptId", maximum=128)
-    if isinstance(binding["generation"], bool) or not isinstance(binding["generation"], int) \
-            or binding["generation"] < 0:
-        raise fail("the tool evidence binding generation must be a nonnegative integer",
-                   field="toolEvidence.binding.generation")
-    for flag in ("streamComplete", "truncated"):
-        if not isinstance(package[flag], bool):
-            raise fail(f"toolEvidence.{flag} must be a boolean", field=f"toolEvidence.{flag}")
-    for name in ("toolCalls", "unsettledToolCalls"):
-        number = package[name]
-        if isinstance(number, bool) or not isinstance(number, int) or not 0 <= number <= MAX_COUNT:
-            raise fail(f"toolEvidence.{name} must be an integer between 0 and {MAX_COUNT}",
-                       field=f"toolEvidence.{name}")
-    identities = package["nativeIdentity"]
-    if not isinstance(identities, list):
-        raise fail("toolEvidence.nativeIdentity must be a list of root identities",
-                   field="toolEvidence.nativeIdentity")
-    # An empty list is a real fact: the existing collector publishes failure and
-    # unknown packages before any native root was observed. Whether such a
-    # package can pass is the role's and the board's judgment, never the
-    # structure's.
-    for identity in identities:
-        if not isinstance(identity, dict) or not identity or set(identity) - set(NATIVE_ID_KEYS):
-            raise fail("a tool evidence root identity is malformed", field="toolEvidence.nativeIdentity")
-        for key, item in identity.items():
-            check_text(item, f"toolEvidence.nativeIdentity.{key}", maximum=512)
-    events = package["events"]
-    if not isinstance(events, list) or len(events) > tool_evidence_protocol.MAX_TOOL_EVENTS:
-        raise fail(f"toolEvidence.events must be a list of at most "
-                   f"{tool_evidence_protocol.MAX_TOOL_EVENTS} events", field="toolEvidence.events")
-    for event in events:
-        if not isinstance(event, dict) or set(event) != set(tool_evidence_protocol.EVENT_FIELDS):
-            raise fail("a tool evidence event must carry its exact field set", field="toolEvidence.events")
-        # The projection's own incomplete facts are real evidence and stay
-        # lossless here: an event identity may be empty and callId/toolName/
-        # phase may be None when the native frame carried none of them. The
-        # closed key set, the version and the category/phase enums are exactly
-        # the collector's own; whether such an event may pass is judged only by
-        # the blackboard.
-        identity = event["nativeIdentity"]
-        if not isinstance(identity, dict) or set(identity) - set(NATIVE_ID_KEYS):
-            raise fail("a tool evidence event identity is malformed", field="toolEvidence.events")
-        for key, item in identity.items():
-            check_text(item, f"toolEvidence event {key}", maximum=512)
-        for key in ("callId", "toolName", "phase"):
-            if event[key] is not None:
-                check_text(event[key], f"toolEvidence event {key}", maximum=512)
-        if event["category"] not in tool_evidence_protocol.ACP_CATEGORIES:
-            raise fail("a tool evidence event category is not an ACP category", field="toolEvidence.events")
-        if event["phase"] is not None and event["phase"] not in tool_evidence_protocol.TOOL_EVENT_PHASES:
-            raise fail("a tool evidence event phase must be start or end", field="toolEvidence.events")
     return FrozenJson.from_value(package, "toolEvidence", maximum=MAX_PACKAGE_BYTES)
 
 
