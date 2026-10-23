@@ -123,7 +123,6 @@ class FastRegisteredSeamTests(DshNoToolTests):
         self.select('{"choice":"b"}')
         _, _, outcome = self.invoke()
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertFalse(outcome.result["answerValid"])
         self.assertEqual(outcome.result["correctionCount"], 0)
 
     def test_execution_completion_and_native_stop_are_required_for_fast_stop(self):

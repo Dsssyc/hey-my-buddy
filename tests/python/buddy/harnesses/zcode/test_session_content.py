@@ -247,6 +247,44 @@ class RouterSessionTests(NativeRunCase):
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
         self.assertTrue(result.evidence_refs)
 
+    def test_write_and_close_failures_keep_completed_native_run_and_both_diagnostics(self):
+        request = self.fast_request('Return only one JSON value matching this schema: {}')
+        original_write = SessionRecord._write
+        original_close = os.close
+        writes = 0
+        record_fd = None
+
+        def failed_write(fd, line):
+            nonlocal writes, record_fd
+            writes += 1
+            if writes == 2:
+                record_fd = fd
+                raise OSError('controlled write failure')
+            return original_write(fd, line)
+
+        def failed_close(fd):
+            if fd == record_fd:
+                raise OSError('controlled close failure')
+            return original_close(fd)
+
+        try:
+            with mock.patch.object(SessionRecord, '_write', side_effect=failed_write), \
+                 mock.patch('hey_my_buddy.buddy.harnesses.session_record.os.close', side_effect=failed_close):
+                result = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE,
+                                        services=None, cancelled=lambda: False)
+        finally:
+            if record_fd is not None:
+                original_close(record_fd)
+
+        self.assertEqual(result.end.status, 'ok')
+        self.assertEqual(result.value.raw, '{"choice":"a"}')
+        self.assertEqual(result.stop_evidence.native.group_state, 'gone')
+        self.assertIsNotNone(result.native_identity.session_id)
+        self.assertEqual(result.session_record_failure.params.category, 'OSError')
+        self.assertEqual(result.session_record_failure.params.message, 'controlled write failure')
+        self.assertEqual(result.session_record_failure.params.close_failure.category, 'OSError')
+        self.assertEqual(result.session_record_failure.params.close_failure.message, 'controlled close failure')
+
     def test_close_failure_preserves_completed_value(self):
         request = self.fast_request('Return only one JSON value matching this schema: {}')
         close = SessionRecord.close

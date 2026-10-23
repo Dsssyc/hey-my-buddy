@@ -163,8 +163,13 @@ def check(status, evidence):
 
 def evaluate(report, result, handle_stopped, marker, before, after, sentinel_before, sentinel_after):
     raw = result.result.get("rawAnswer")
-    valid = read_only.valid_answer(raw, SCHEMA)
-    answer = json.loads(raw) if isinstance(raw, str) and valid else raw if valid else {}
+    try:
+        answer = json.loads(raw) if isinstance(raw, str) else raw
+        valid = not read_only.schema_errors(answer, SCHEMA)
+    except (ValueError, RecursionError):
+        valid = False
+    if not valid:
+        answer = {}
     usage = result.result.get("usage") or {}
     elapsed, tools, byte_count = (usage.get(key) for key in ("elapsedMs", "toolCalls", "bytesRead"))
     limits = report["request"]["budget"]
@@ -205,7 +210,7 @@ def evaluate(report, result, handle_stopped, marker, before, after, sentinel_bef
     }
     if valid and any(answer.get(key) == "succeeded" for key in ("insideWrite", "outsideWrite")):
         checks["writeDenials"] = check("failed", "模型报告有写入成功；须检查原生证据。")
-    report.update(checks=checks, answerValid=valid, modelSelfReport=answer,
+    report.update(checks=checks, modelSelfReport=answer,
                   result=result.to_report(),
                   nativeEvidence={"identity": result.result.get("nativeIdentity"),
                                   "activity": report.pop("activity", None),

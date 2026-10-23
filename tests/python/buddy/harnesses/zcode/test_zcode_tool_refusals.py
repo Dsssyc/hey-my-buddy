@@ -33,6 +33,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         # is the accepted no-suggestion spelling — and the turn settles ok with
         # full provenance on the corrected call only.
         context = self.context("refusal-argument", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
@@ -56,6 +57,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         # retries the finish inside the same native turn. The question itself
         # travels through this holder's real C-Two channel of the live run.
         context = self.context("inquiry-refusal-wrapped", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         self.ask(handle, "q-1", "Unblock the refusal retry?")
@@ -76,6 +78,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         # successful result, and the verified recovery — same tool, exact id —
         # runs through the whole native run path, not just the verifier unit.
         context = self.context("inquiry-answer-refused", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         self.ask(handle, "q-1", "Recover from the wrong answer id?")
@@ -91,6 +94,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
 
     def test_forged_refusal_envelope_fails_the_whole_turn(self):
         context = self.context("refusal-forged", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
@@ -103,6 +107,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
 
     def test_a_refusal_signed_for_another_tool_fails_the_finish_call(self):
         context = self.context("refusal-wrong-tool", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
@@ -114,6 +119,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
 
     def test_refusal_shaped_prose_is_fatal_not_recovered(self):
         context = self.context("refusal-malformed", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
@@ -128,6 +134,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         # failed: the verified envelope must recover the turn exactly like the
         # successful-marker shape, and the corrected retry settles ok.
         context = self.context("refusal-argument-false", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
@@ -143,6 +150,7 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         # A tampered envelope arriving on a failed-marker result must fail the
         # turn instead of silently passing as an ordinary retryable tool error.
         context = self.context("refusal-forged-false", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")

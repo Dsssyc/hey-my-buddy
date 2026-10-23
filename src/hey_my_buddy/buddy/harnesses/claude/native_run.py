@@ -133,6 +133,8 @@ _DRAIN_SECONDS = 10.0
 
 #: Claude needs no extra request controls beyond the common permission level.
 supported_request_controls = ()
+native_evidence = None
+run_delete_sessions = None
 
 
 def _unknown_events(connection: Connection | None) -> dict | None:
@@ -1367,5 +1369,6 @@ def validate_turn_provenance(record: dict) -> str | None:
     return "the Claude P1 session identity is invalid; native-session resume is not supported"
 
 
-__all__ = ["RunServices", "check_preparation", "prepare_run_services",
-           "run", "run_discovery", "session_facts", "validate_turn_provenance"]
+__all__ = ["RunServices", "check_preparation", "native_evidence", "prepare_run_services",
+           "run", "run_delete_sessions", "run_discovery", "session_facts",
+           "supported_request_controls", "validate_turn_provenance"]

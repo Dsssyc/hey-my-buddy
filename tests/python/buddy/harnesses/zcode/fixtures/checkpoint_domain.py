@@ -165,6 +165,7 @@ def serve():
                 if operation == "start":
                     fixture.assertIsNone(handle, "one domain owns exactly one attempt")
                     context = fixture.context(command["case"], timeout=40)
+                    fixture.adapter.prepare(context)
                     handle = fixture.adapter.start(context)
                     fixture.own_handle(handle)
                     channel = fixture.ready_channel(handle)

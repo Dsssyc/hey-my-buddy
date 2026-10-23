@@ -18,7 +18,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses import run_contract as rc
-from hey_my_buddy.buddy.harnesses.run_contract import RunRequest
+from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity, RunRequest
 from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles.turn_io import private_json
 from hey_my_buddy.errors import BoardError
@@ -31,6 +31,23 @@ def _catalog(name: str, account_status: str) -> dict:
             "providers": [], "warnings": [],
             "discoveries": [{"harness": name, "status": "complete",
                              "accountStatus": account_status}]}
+
+
+class InlineRunErrorTests(unittest.TestCase):
+    def test_thread_failure_reaches_every_reader_with_its_original_cause(self):
+        error = RuntimeError("the inline driver failed")
+        identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="invocation")
+        with tempfile.TemporaryDirectory() as directory:
+            control = {"privateRoot": directory, "timeoutSeconds": None}
+            with mock.patch("hey_my_buddy.buddy.roles.inline_run.execute", side_effect=error):
+                handle = run_execution._launch(control, None, environment={}, identity=identity)
+                self.assertEqual(handle.wait(10), 1)
+            self.assertFalse(handle.shutdown_confirmed())
+            for read in (run_execution._read_run, run_execution._read_request,
+                         run_execution.read_fast_result, run_execution.read_review_result):
+                with self.subTest(reader=read.__name__), self.assertRaises(RuntimeError) as caught:
+                    read(handle)
+                self.assertIs(caught.exception, error)
 
 
 class DiscoveryReceiptTests(unittest.TestCase):
@@ -100,7 +117,8 @@ class DiscoveryReceiptTests(unittest.TestCase):
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
 
     def test_an_unregistered_discovery_proves_no_controller_created(self):
-        with mock.patch("hey_my_buddy.buddy.harnesses.registry.run_seam", return_value=None):
+        with mock.patch("hey_my_buddy.buddy.harnesses.registry.native_operation",
+                        side_effect=BoardError("CATALOG_UNAVAILABLE", "fixture unavailable")):
             with self.assertRaises(BoardError) as caught:
                 run_execution.discover_models("fixture")
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)

@@ -30,10 +30,11 @@ from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.controller import worker_executor
 
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
+from buddy.harnesses.fixture_selection import mock_role_workspace
 
 CKROOT = Path(__file__).resolve().parents[5]
 
-SPEC = {"provider": "fake", "model": "m1", "effort": "high"}
+SPEC = {"adapter": "dsh", "provider": "fake", "model": "m1", "effort": "high"}
 
 
 def qualified_tools(attempt_id: str) -> tuple[str, str, str]:
@@ -57,6 +58,7 @@ class DshRoleCase(unittest.TestCase):
         self.addCleanup(cc.shutdown)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir(mode=0o700)
+        mock_role_workspace(self)
         self.log = self.root / "logs" / "fake-agent.log"
         self.log.parent.mkdir(mode=0o700)
         self.record = self.root / "harness-record.json"
@@ -80,7 +82,7 @@ class DshRoleCase(unittest.TestCase):
     def context(self, *, attempt="attempt-1", index=1, mode="initial", previous=None, timeout=20):
         identity = {"version": 1, "taskId": "task", "attemptId": attempt, "generation": index,
                     "turnId": f"turn-{index}", "resumeMode": mode, "previousSessionId": previous,
-                    "context": {}, "executionWorkspace": {}}
+                    "context": {}, "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(
             task_id="task", attempt_id=attempt, generation=index,
             session_record_path=str(self.root / f"session-{attempt}.jsonl"),
@@ -102,6 +104,7 @@ class DshRoleCase(unittest.TestCase):
     def execute(self, context, *, answer=False, permission=False):
         self.micro_task_record(context, permission=permission, answer=answer)
         executor = worker_executor("dsh")
+        executor.prepare(context)
         handle = executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait((context.timeout_seconds or 15) + 15),
@@ -192,6 +195,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
                 record["dsh"]["command"] += ["--stop-reason", reason]
                 self.record.write_text(json.dumps(record), encoding="utf-8", newline="\n")
                 executor = worker_executor("dsh")
+                executor.prepare(context)
                 handle = executor.start(context)
                 self.addCleanup(lambda h=handle: (h.terminate(grace_seconds=0.2), h.wait(15)) if not h.finished else None)
                 self.assertIsNotNone(handle.wait(30))
@@ -239,6 +243,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
         context = self.context()
         self.micro_task_record(context, answer=True)
         executor = worker_executor("dsh")
+        executor.prepare(context)
         holder: list = []
 
         def attempt():
@@ -340,7 +345,7 @@ class WorkerRegisteredRunTests(DshRoleCase):
                 self.assertNotIn(failed_key, refused.result)
                 self.assertNotIn("turn", refused.result)
 
-    def test_a_worker_result_claiming_an_unconfirmed_native_stop_cannot_publish(self):
+    def test_a_worker_result_with_unconfirmed_native_stop_cannot_be_imported(self):
         context = self.context()
         handle, original = self.execute(context)
         self.assertEqual(original.status, "ok", original.to_report())

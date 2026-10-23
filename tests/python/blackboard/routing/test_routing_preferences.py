@@ -17,6 +17,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+from unittest.mock import ANY
 
 from hey_my_buddy.protocol import schemas
 from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, ReadOnlyStructuredRequest
@@ -202,7 +203,7 @@ class DecisionCapabilityTests(unittest.TestCase):
                 handle = native_adapter.start(context)
             from hey_my_buddy.private_dirs import context_root
             private_root = context_root(context, "codex")
-            prepare.assert_called_once_with(manifest, private_root)
+            prepare.assert_called_once_with(manifest, private_root, deadline=ANY)
             self.assertFalse(private_root.is_relative_to(directory))
             child, request = calls[0]
             self.assertIsInstance(request, ReadOnlyStructuredRequest)

@@ -1767,9 +1767,14 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
         raise
 
 
+prepare_run_services = None
+run_delete_sessions = None
+supported_request_controls = ()
+
 __all__ = [
     "NoToolProtocol", "SessionServiceMount", "SessionServices", "catalog",
     "configure_session", "execution_deadline", "prepare_session_service", "prepare_services",
     "check_preparation", "session_facts", "validate_turn_provenance", "native_evidence", "run",
-    "run_discovery", "selected",
+    "run_delete_sessions", "run_discovery", "prepare_run_services", "selected",
+    "supported_request_controls",
 ]

@@ -134,7 +134,7 @@ class CodexSchemaTests(unittest.TestCase):
                                               description=SessionService(tool_names=("mcp__test__finish",)),
                                               completion_tool="mcp__test__finish", checkpoint_tool="checkpoint",
                                               answer_tool="answer")
-                    module = SimpleNamespace(prepare_services=lambda **_kwargs: binding)
+                    module = SimpleNamespace(prepare_services=lambda **_kwargs: binding, prepare_run_services=None)
                     control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
                                "inputFile": str(root / "input.json"), "taskFile": str(root / "task.txt"),
                                "nativeRoot": str(root / "native"), "sessionRecordPath": str(root / "session.jsonl"),
@@ -195,7 +195,7 @@ class SchemaWorkerTests(NativeRunCase):
                 mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True), \
                 mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
             result, request, verdict, code = inline_run.execute(
-                control, handle, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                control, handle)
         return root, turn, control, result, request, verdict, code
 
     def test_native_schema_delivery_keeps_the_shared_worker_record_and_original_read_scope(self):
@@ -259,7 +259,7 @@ class SchemaWorkerTests(NativeRunCase):
                 error.discovery_shutdown_confirmed = stopped
                 with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                         mock.patch.object(native_run, "run_discovery", side_effect=error):
-                    frame, code = run_controller.execute(control, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                    frame, code = run_controller.execute(control, threading.Event())
                 payload = json.loads(frame)
                 self.assertEqual(code, 1)
                 self.assertEqual(payload["error"], "tokenSource none")

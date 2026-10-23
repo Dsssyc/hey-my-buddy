@@ -9,7 +9,7 @@ import time
 import unittest
 from pathlib import Path
 from unittest import mock
-from buddy.harnesses.fixture_selection import select_fixture
+from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
 
 import c_two as cc
 
@@ -28,6 +28,7 @@ class ZcodeFixtureCase(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
+        mock_role_workspace(self)
         self.builtin = self.root / "provider/zcode-builtin.json"
         self.builtin.parent.mkdir()
         self.personal = self.root / "native-user-home/.zcode/v2/provider_config.json"
@@ -55,10 +56,11 @@ class ZcodeFixtureCase(unittest.TestCase):
         attempt_id = f"attempt-{self.root.name}-{index}"
         identity = {"version": 1, "taskId": "micro-task-1", "attemptId": attempt_id, "generation": index,
                     "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
-                    "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
+                    "previousSessionId": previous, "context": {},
+                    "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=attempt_id, generation=index,
                                 session_record_path=str(self.root / f"session-{attempt_id}.jsonl"),
-                                spec={"cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": 1,
+                                spec={"adapter": "zcode", "cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "fixture-api", "model": "fixture-model", "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
@@ -66,6 +68,7 @@ class ZcodeFixtureCase(unittest.TestCase):
                                 turn={"turnId": f"turn-{index}", "input": identity})
 
     def execute(self, context):
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait((context.timeout_seconds or 10) + 10), "controller did not exit within its deadline and shutdown grace")
@@ -190,8 +193,10 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(turn["outcome"]["summary"], "fixture work completed")
         self.assertEqual(turn["provenance"]["settlement"], "session-closed")
         self.assertEqual(outcome.result["requested"], {"provider": "fixture-api", "model": "fixture-model", "effort": "low"})
+        self.assertEqual({key: getattr(handle.result.buddy.checked, key).value
+                          for key in ("provider", "model", "effort")}, outcome.result["requested"])
         self.assertEqual(outcome.result["resolved"], outcome.result["requested"])
-        self.assertIsNone(outcome.result["observed"])
+        self.assertNotIn("observed", outcome.result)
         self.assertNotIn("observedConfig", outcome.result)
         self.assertNotIn("requestedConfig", outcome.result)
         self.assertEqual(self.personal.read_bytes(), original)
@@ -240,27 +245,28 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
                  "wrong-input": "wrong-native-turn", "forged-receipt": "invalid-finish"}
         for index, (case, code) in enumerate(cases.items(), 1):
             with self.subTest(case=case):
-                _, outcome = self.execute(self.context(case, index=index))
+                handle, outcome = self.execute(self.context(case, index=index))
                 self.assertEqual(outcome.status, "failed", outcome.to_report())
                 self.assertTrue(outcome.shutdown_confirmed)
                 self.assertEqual(outcome.result.get("code"), code, outcome.to_report())
                 self.assertNotIn("turn", outcome.result)
-                self.assertEqual(outcome.result["resolved"], outcome.result["requested"])
-                self.assertIsNone(outcome.result["observed"])
+                self.assertEqual({key: getattr(handle.result.buddy.checked, key).value
+                                  for key in ("provider", "model", "effort")}, outcome.result["requested"])
+                self.assertNotIn("observed", outcome.result)
 
     def test_confirmed_model_readback_mismatch_is_rejected_before_work(self):
-        _, outcome = self.execute(self.context("config-mismatch", effort="high"))
+        handle, outcome = self.execute(self.context("config-mismatch", effort="high"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertEqual(outcome.result["code"], "buddy-mismatch")
         self.assertFalse(outcome.result["modelStarted"])
-        self.assertIsNone(outcome.result["resolved"])
+        self.assertIsNone(handle.result.buddy.checked.model)
         self.assertNotIn("turn", outcome.result)
 
     def test_unrecognized_model_readback_continues_and_retains_unknown_facts(self):
-        _, outcome = self.execute(self.context("config-unrecognized"))
+        handle, outcome = self.execute(self.context("config-unrecognized"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.result["modelStarted"])
-        self.assertIsNone(outcome.result["resolved"])
+        self.assertIsNone(handle.result.buddy.checked.model)
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
 
     def test_native_turn_failure_attribution_is_whitelisted_and_secret_free(self):
@@ -302,22 +308,22 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertNotIn("nativeFailure", outcome.result)
 
     def test_duplicate_protocol_members_fail_without_work(self):
-        _, outcome = self.execute(self.context("invalid-json"))
+        handle, outcome = self.execute(self.context("invalid-json"))
         self.assertEqual(outcome.status, "failed", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.result.get("code"), "invalid-protocol")
-        self.assertIsNone(outcome.result["resolved"])
+        self.assertIsNone(handle.result.buddy.checked.model)
         self.assertNotIn("turn", outcome.result)
 
     def test_resume_keeps_exact_session_and_reinjects_the_new_bridge(self):
         _, first = self.execute(self.context())
         self.assertEqual(first.status, "ok", first.to_report())
         session = first.result["turn"]["sessionId"]
-        _, second = self.execute(self.context(index=2, previous=session))
+        second_handle, second = self.execute(self.context(index=2, previous=session))
         self.assertEqual(second.status, "ok", second.to_report())
         self.assertEqual(second.result["turn"]["sessionId"], session)
         self.assertEqual(second.result["turn"]["resumeMode"], "native-session")
-        self.assertEqual(second.result["resolved"]["effort"], "low")
+        self.assertEqual(second_handle.result.buddy.checked.effort.value, "low")
         self.assertNotEqual(second.result["turn"]["inputSha256"], first.result["turn"]["inputSha256"])
         self.assertNotEqual(second.result["turn"]["provenance"]["nativeTurnId"], first.result["turn"]["provenance"]["nativeTurnId"])
 
@@ -345,13 +351,13 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertEqual(refused.result.get("code"), "native-resume-unavailable")
         self.assertIs(refused.result["modelStarted"], False)
         self.assertNotIn("turn", refused.result)
-        _, reconstructed = self.execute(self.context(index=3, previous=previous, mode="reconstructed-new-session", effort="high"))
+        reconstructed_handle, reconstructed = self.execute(self.context(index=3, previous=previous, mode="reconstructed-new-session", effort="high"))
         self.assertEqual(reconstructed.status, "ok", reconstructed.to_report())
         turn = reconstructed.result["turn"]
         self.assertEqual(turn["previousSessionId"], previous)
         self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
         self.assertNotEqual(turn["sessionId"], previous)
-        self.assertEqual(reconstructed.result["resolved"]["effort"], "high")
+        self.assertEqual(reconstructed_handle.result.buddy.checked.effort.value, "high")
         reused = {**turn, "sessionId": previous, "provenance": {**turn["provenance"], "nativeSessionId": previous}}
         self.assertIsNotNone(self.description.validate_turn_provenance(reused))
 
@@ -395,6 +401,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
 
     def test_absent_budget_still_honors_explicit_cancellation(self):
         context = self.context("hang", timeout=None)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.deadline, math.inf)
@@ -408,6 +415,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
 
     def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
         context = self.context(timeout=10)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertGreater(handle.deadline, time.monotonic())
@@ -453,6 +461,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
 
     def test_cancel_and_unconfirmed_stop_are_distinct(self):
         context = self.context("hang")
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.wait_native_input(context)
         self.adapter.cancel(handle)

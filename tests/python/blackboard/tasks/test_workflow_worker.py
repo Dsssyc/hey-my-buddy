@@ -167,9 +167,9 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             # run's rollout lands under the task's shared private sessions
             # root, the owning credentials store keeps resolving by path, and
             # the installed app lists none of it. The session identity comes
-            # only from the imported, validated turn record — sessionIdSource
-            # names that source, and no conflict fact exists to clear (the
-            # unvalidated side of this rule is the Host's own
+            # from the delivered turn record, which the service validates —
+            # sessionIdSource names only that carrier. The undelivered side
+            # of this rule is the Host's own
             # DshPublishedReceiptTests witness). The retained native result
             # supplies its activity facts after the short live endpoint ends.
             _, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
@@ -182,7 +182,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
             self.assertTrue(native.get("captured"))
             self.assertTrue(native.get("resumable"))
             self.assertEqual(native.get("sessionId"), turn["sessionId"])
-            self.assertEqual(native.get("sessionIdSource"), "validated-turn")
+            self.assertEqual(native.get("sessionIdSource"), "turn-record")
             self.assertFalse(native.get("sessionIdConflict"))
 
             # The execution publishes the final native activity before its

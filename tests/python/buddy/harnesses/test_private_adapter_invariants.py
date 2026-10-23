@@ -66,9 +66,10 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
              "HMB_DEV_SOURCE": "1"},
             session_record_path=str(self.root / f"session-{self.index}.jsonl"))
         request = NoToolStructuredRequest(str(self.cwd), "frozen original prompt", {"type": "object"}, 3)
-        module = SimpleNamespace(check_preparation=lambda *_args: None, native_evidence=lambda _result: {})
+        module = SimpleNamespace(check_preparation=lambda *_args: None, prepare_run_services=None,
+                                 native_evidence=lambda _result: {})
         self.enterContext(mock.patch.dict(RUN_SEAMS, {"codex": module}))
-        def execute(control, handle, state_dir):
+        def execute(control, handle):
             frame, _services, _observer, _correction = run_execution.fast_request(control, module)
             result = rc.RunResult(identity=frame.identity, harness="codex", end=rc.RunEnd(status="ok"),
                 value=rc.RunValue(schema_status="unknown", raw="{}"),
@@ -76,7 +77,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
             return result, frame, {"stopReason": None, "elapsedMs": 1}, 0
         with mock.patch("hey_my_buddy.buddy.roles.inline_run.execute", side_effect=execute):
             handle = run_execution.start_fast(module, "codex", context, request)
-            self.assertEqual(handle.wait(5), 0)
+            self.assertEqual(handle.wait(5), 0, repr(handle.error))
         return context, request, handle
 
     def assert_sentinels(self):

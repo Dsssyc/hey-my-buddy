@@ -1,7 +1,6 @@
 """The shared review role against real private Python native fixtures."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import uuid
 from contextlib import nullcontext
@@ -38,8 +37,7 @@ class RegisteredReviewTests(NativeRunCase):
         handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
         with mock.patch.dict(RUN_SEAMS, {"claude": native_run}), \
                 mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)):
-            result, request, verdict, code = inline_run.execute(
-                control, handle, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+            result, request, verdict, code = inline_run.execute(control, handle)
             payload = run_execution._review_result(result, request, verdict)
         return result, request, payload, code
 
@@ -51,7 +49,6 @@ class RegisteredReviewTests(NativeRunCase):
         self.assertNotIn("networkAllowedDomains", request.to_payload())
         self.assertNotIn("additionalDeniedTools", request.to_payload())
         self.assertEqual(payload["rawAnswer"]["buddyId"], "legal")
-        self.assertTrue(payload["answerValid"])
         self.assertEqual(result.identity, request.identity)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
 
@@ -59,9 +56,8 @@ class RegisteredReviewTests(NativeRunCase):
         with mock.patch.object(native_run, "prepare_run_services", return_value=None, create=True) as bind:
             _result, request, _payload, code = self.review()
         self.assertEqual(code, 0)
-        # This fixture's service factory has no declared inputs. Private
-        # roots remain held by the role; no unread factory arguments.
-        bind.assert_called_once_with()
+        # Private roots remain held by the role; this review has no inquiry.
+        bind.assert_called_once_with(inquiry=None)
         self.assertTrue(request.private_state.invocation_root.startswith(str(self.base)))
         self.assertNotIn("account", request.to_payload())
         self.assertEqual(request.session_services, ())

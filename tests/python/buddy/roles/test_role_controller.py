@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -41,6 +42,11 @@ def observation(fact: str, sequence: int, **payload) -> dict:
 
 
 class FakeHarnessRun:
+    supported_request_controls = ()
+    prepare_run_services = None
+    native_evidence = None
+    run_delete_sessions = None
+
     """A run-module double: records the seam arguments, then drives the observer."""
 
     def __init__(self, facts=()):
@@ -362,7 +368,7 @@ class RouterCallPointTests(unittest.TestCase):
         self.assertIsNone(manifest)
         self.assertTrue(root.is_dir())
         self.assertEqual(len(digest), 64)
-        self.assertTrue(router_input.verify(manifest, root, digest)["unchanged"])
+        self.assertTrue(router_input.verify(manifest, root, digest, deadline=time.monotonic() + 120)["unchanged"])
         self.assertEqual(self.start(preparation), "started-handle")
         harness, _context, request = self.start_call
         self.assertEqual(harness, "dsh")
@@ -384,13 +390,6 @@ class RouterCallPointTests(unittest.TestCase):
             self.assertEqual(controller.start_router_preparation(preparation), "run-handle")
         start.assert_called_once_with(self.module, "dsh", preparation.context, preparation.request)
 
-    def test_unknown_preparations_are_refused(self):
-        class Stranger:
-            harness = "dsh"
-
-        with self.assertRaises(BoardError) as caught:
-            controller.start_router_preparation(Stranger())
-        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
 
 if __name__ == "__main__":

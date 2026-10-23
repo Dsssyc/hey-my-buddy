@@ -40,7 +40,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 validate_claim_turn({"turn": bad})
             self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
 
-    def test_context_uses_validated_turn_and_optional_private_adapter(self):
+    def test_context_uses_validated_turn_and_service_adapter(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             context = ExecutionContext("task", "attempt", 1, {"adapter": "command", "cwd": directory},
@@ -54,7 +54,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertEqual(context.turn_input, context.turn["input"])
             self.assertEqual(context.cwd, "/workspace")
             self.assertEqual(context.credential_file().name, "agent-credential.json")
-            context.private_adapter = "codex"
+            context.spec["adapter"] = "codex"
             self.assertIn("codex", context.credential_file().parts)
 
     @unittest.skipUnless(sys.platform in {"darwin", "linux"}, "POSIX unreaped child failure")

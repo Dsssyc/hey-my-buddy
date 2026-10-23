@@ -43,6 +43,7 @@ class CodexContinuationTests(WorkflowTestCase):
                                        generation=attempt["generation"], spec=claim["task"]["spec"],
                                        directory=self.directory / attempt["attemptId"], runtime={},
                                        environment=environment, turn=claim["turn"])
+            adapter.prepare(context)
             handle = adapter.start(context)
             self.addCleanup(lambda: (handle.terminate(grace_seconds=.2), handle.wait(15)) if not handle.finished else None)
             self.assertIsNotNone(handle.wait(15))

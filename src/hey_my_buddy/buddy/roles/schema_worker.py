@@ -51,7 +51,7 @@ def outcome_schema(*, summary_description: str | None = None, suggested_buddy: b
 class WorkerReceiptOptions:
     """Registered receipt projections over the same Worker collection path."""
 
-    capture_session_from_validated_turn: bool = False
+    capture_session_from_turn: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,7 +62,6 @@ class NativeSchemaWorker:
     display_name: str
     interaction_kind: str
     native_identity_keys: tuple[str, ...] = ()
-    validation_error_key: str | None = None
     reject_previous_on_initial: bool = False
     delegation_authority: bool = False
 
@@ -104,10 +103,6 @@ class NativeSchemaWorker:
             identity = result.native_identity.to_payload()
             if all(identity.get(key) is not None for key in self.native_identity_keys):
                 fields["nativeIdentity"] = {key: identity[key] for key in self.native_identity_keys}
-        if self.validation_error_key and result.end.status == "ok" and result.value is not None:
-            _outcome, error, _truncated = self.parse_value(result)
-            if error is not None:
-                fields[self.validation_error_key] = error
         return fields
 
     def delivery(self, result, facts: dict) -> tuple[dict, dict, dict]:

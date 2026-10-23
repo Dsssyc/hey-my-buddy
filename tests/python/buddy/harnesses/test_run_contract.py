@@ -461,9 +461,19 @@ class SessionRecordFailureTests(unittest.TestCase):
         self.assertEqual({**decoded.to_payload(), "sessionRecordFailure": None}, payload)
         self.assertEqual(decoded.end.status, "ok")
         self.assertEqual(decoded.stop_evidence.native.group_state, "gone")
+        close_failure = {"category": "OSError", "message": "close failed", "truncated": False}
+        with_close = {**failure, "params": {**failure["params"], "closeFailure": close_failure}}
+        self.assertEqual(rc.RunResult.from_payload({**payload, "sessionRecordFailure": with_close})
+                         .session_record_failure.to_payload(), with_close)
         for bad in ({**failure, "code": "unknown"}, {**failure, "params": {**failure["params"], "category": None}}):
             with self.subTest(bad=bad), self.assertRaises(BoardError):
                 rc.RunResult.from_payload({**payload, "sessionRecordFailure": bad})
+        for bad_close in ({**close_failure, "category": None},
+                          {**close_failure, "message": "x" * 8193},
+                          {**close_failure, "unexpected": "x"}):
+            with self.subTest(bad_close=bad_close), self.assertRaises(BoardError):
+                rc.RunResult.from_payload({**payload, "sessionRecordFailure": {
+                    **failure, "params": {**failure["params"], "closeFailure": bad_close}}})
 
 
 class FreezingTests(unittest.TestCase):
@@ -626,12 +636,41 @@ class InterfaceSurfaceTests(unittest.TestCase):
         with self.assertRaises(BoardError):
             rc.RunResult.from_payload(payload)
 
-    def test_the_harness_run_protocol_declares_run(self):
+    def test_the_harness_run_protocol_declares_registered_surface(self):
         class Stub:
+            supported_request_controls = ()
+            prepare_run_services = None
+            native_evidence = None
+            run_discovery = None
+            run_delete_sessions = None
+
             def run(self, request, *, observer, services, cancelled):
                 return full_result()
 
+            def check_preparation(self, spec, environment):
+                return None
+
+            def session_facts(self, native_root, session_id):
+                return {}
+
+            def validate_turn_provenance(self, record):
+                return None
+
         self.assertIsInstance(Stub(), rc.HarnessRun)
+
+    def test_registered_runs_declare_native_operations(self):
+        from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, native_operation
+
+        for name, module in RUN_SEAMS.items():
+            with self.subTest(harness=name):
+                self.assertIsInstance(module, rc.HarnessRun)
+                self.assertIs(native_operation(name, "discover"), module.run_discovery)
+        self.assertIs(native_operation("codex", "delete-sessions"), RUN_SEAMS["codex"].run_delete_sessions)
+        for name in ("claude", "dsh", "zcode"):
+            with self.subTest(harness=name):
+                with self.assertRaises(BoardError) as failure:
+                    native_operation(name, "delete-sessions")
+                self.assertEqual(failure.exception.code, "UNSUPPORTED")
 
     def test_tool_evidence_packages_keep_incomplete_facts(self):
         package = PAYLOADS["codex"]["payloads"]["fastSuccess"]["toolEvidence"]

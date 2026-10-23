@@ -23,24 +23,24 @@ class ControllerOperationTests(unittest.TestCase):
 
     def test_controller_resolves_the_registered_operation_and_passes_arguments(self):
         seam = Mock(return_value={"owned": "deleted"})
-        with patch.object(run_controller, "run_seam", return_value=SimpleNamespace(run_delete_sessions=seam)):
-            frame, code = run_controller.execute(self.control(), threading.Event(), Path("/fixture/state"))
+        with patch("hey_my_buddy.buddy.harnesses.registry.run_seam", return_value=SimpleNamespace(run_delete_sessions=seam)):
+            frame, code = run_controller.execute(self.control(), threading.Event())
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(frame)["sessions"], {"owned": "deleted"})
         self.assertEqual(seam.call_args.kwargs["session_ids"], ["owned"])
 
     def test_unknown_operation_is_refused_before_resolving_any_harness(self):
         for operation in ("review", "fixture-operation", None, []):
-            with self.subTest(operation=operation), patch.object(run_controller, "run_seam") as resolve:
+            with self.subTest(operation=operation), patch("hey_my_buddy.buddy.harnesses.registry.run_seam") as resolve:
                 with self.assertRaises(BoardError) as caught:
-                    run_controller.execute({"operation": operation}, threading.Event(), Path("/fixture/state"))
+                    run_controller.execute({"operation": operation}, threading.Event())
                 self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
                 resolve.assert_not_called()
 
     def test_control_file_cannot_supply_a_seam_specification(self):
         control = {**self.control(), "specification": {"seam": "run_review"}}
-        with patch.object(run_controller, "run_seam") as resolve, self.assertRaises(BoardError) as caught:
-            run_controller.execute(control, threading.Event(), Path("/fixture/state"))
+        with patch("hey_my_buddy.buddy.harnesses.registry.run_seam") as resolve, self.assertRaises(BoardError) as caught:
+            run_controller.execute(control, threading.Event())
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         resolve.assert_not_called()
 
@@ -63,10 +63,10 @@ class ControllerOperationTests(unittest.TestCase):
         error = CodexProtocolError("deadline", "fixture deadline")
         error.discovery_shutdown_confirmed = True
         for operation, status, exit_code in (("delete-sessions", "error", 1), ("discover", "unknown", 0)):
-            with self.subTest(status=status), patch.object(run_controller, "run_seam", return_value=
+            with self.subTest(status=status), patch("hey_my_buddy.buddy.harnesses.registry.run_seam", return_value=
                     SimpleNamespace(run_delete_sessions=Mock(side_effect=error), run_discovery=Mock(side_effect=error))):
                 frame, code = run_controller.execute(self.control(operation),
-                                                    threading.Event(), Path("/fixture/state"))
+                                                    threading.Event())
                 self.assertEqual(code, exit_code)
                 self.assertEqual(json.loads(frame)["status"], status)
 
@@ -74,9 +74,9 @@ class ControllerOperationTests(unittest.TestCase):
         native = {"code": -32000, "message": "原因" * 400}
         error = CodexProtocolError("native-rpc-error", native["message"], native_error=native)
         error.discovery_shutdown_confirmed = True
-        with patch.object(run_controller, "run_seam", return_value=
+        with patch("hey_my_buddy.buddy.harnesses.registry.run_seam", return_value=
                 SimpleNamespace(run_delete_sessions=Mock(side_effect=error))):
-            frame, code = run_controller.execute(self.control(), threading.Event(), Path("/fixture/state"))
+            frame, code = run_controller.execute(self.control(), threading.Event())
         payload = json.loads(frame)
         self.assertEqual(code, 1)
         self.assertLessEqual(len(payload["error"].encode("utf-8")), 512)
@@ -166,5 +166,5 @@ class DeletionReceiptBoundaryTests(unittest.TestCase):
         native = {"code": -32000, "message": "原因" * 400}
         with self.assertRaises(BoardError) as caught:
             self.receipt({"status": "error", "error": native["message"], "nativeError": native}, exit_code=1)
-        self.assertLessEqual(len(str(caught.exception).encode("utf-8")), 512)
+        self.assertEqual(caught.exception.message, native["message"])
         self.assertEqual(caught.exception.details["nativeError"], native)

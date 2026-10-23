@@ -21,7 +21,7 @@ import unittest
 import uuid
 from pathlib import Path
 from unittest import mock
-from buddy.harnesses.fixture_selection import select_fixture
+from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
 
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.roles import controller, run_execution, turn_io
@@ -56,6 +56,7 @@ class ClaudeFixtureCase(unittest.TestCase):
         (self.root / "state").mkdir(mode=0o700)
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
+        mock_role_workspace(self)
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("HMB_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
                             and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
@@ -90,10 +91,11 @@ class ClaudeFixtureCase(unittest.TestCase):
                 model="claude-opus-5-5[1m]", access=None):
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode or ("reconstructed-new-session" if previous else "initial"),
-                      "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
+                      "previousSessionId": previous, "context": {},
+                      "executionWorkspace": {"path": str(self.cwd), "access": access or "write"}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
                                 session_record_path=str(self.root / f"session-attempt-{index}.jsonl"),
-                                spec={"cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
+                                spec={"adapter": "claude", "cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
                                       **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
                                       "provider": "anthropic", "model": model, "effort": effort},
                                 directory=self.root / f"attempt-{index}", runtime={},
@@ -153,6 +155,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                          "the claude description carries no execution entries")
 
     def execute(self, context):
+        self.executor.prepare(context)
         handle = self.executor.start(context)
         self.last_handle = handle
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
@@ -211,7 +214,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_observed_model_identity_stays_null_with_the_observed_set(self):
         outcome = self.execute(self.context())
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertIsNone(outcome.result["observed"])
+        self.assertNotIn("observed", outcome.result)
         self.assertEqual(outcome.result["observedModels"], ["claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"])
         self.assertEqual(outcome.result["turn"]["provenance"]["modelUsage"],
                          ["claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"])
@@ -297,6 +300,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def test_cancel_interrupts_the_native_child_before_stopping_the_group(self):
         context = self.context("hang", timeout=12)
+        self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.wait_for_native_user_turn()
@@ -313,6 +317,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def _force_stop_hanging_role(self, *, initiator):
         context = self.context("hang", timeout=None)
+        self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.wait_for_native_user_turn()
@@ -348,6 +353,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def test_quota_event_while_interrupting_does_not_lose_the_stop_receipt(self):
         context = self.context("interrupt-quota", timeout=12)
+        self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=.2), handle.wait(15)) if not handle.finished else None)
         self.wait_for_native_user_turn()
@@ -362,6 +368,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
         context = self.context(timeout=None)
+        self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertEqual(handle.deadline, math.inf)
@@ -524,7 +531,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 self.assertEqual(outcome.result["code"], "invalid-buddy")
                 self.assertFalse(outcome.result["modelStarted"])
                 self.assertNotIn("turn", outcome.result)
-                self.assertIsNone(outcome.result["resolved"])
+                self.assertIsNone(self.last_handle.result.buddy.checked.model)
                 self.assertEqual(self.fixture_state()["userTurns"], 0)
 
     def test_default_effort_omits_the_flag_for_a_model_without_levels(self):
@@ -587,11 +594,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_read_only_workspace_refuses_write_and_bash_tools(self):
         context = self.context()
         context.turn["input"]["executionWorkspace"] = {"path": str(self.cwd), "access": "read"}
-        # The hand-made manifest carries only the access decision; workspace
-        # verification and sealing are owned by other tests.
-        with mock.patch.object(turn_io, "verify_workspace", lambda target: None), \
-             mock.patch.object(turn_io, "seal_workspace", lambda target: (None, None)):
-            outcome = self.execute(context)
+        outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         argv = self.fixture_state()["argv"]
         tools = flag_value(argv, "--tools")
@@ -617,6 +620,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
 
     def test_preserved_final_activity_tracks_the_native_turn(self):
         context = self.context()
+        self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")

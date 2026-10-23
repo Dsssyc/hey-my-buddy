@@ -1387,7 +1387,6 @@ class DecisionCoordinator:
             "decisionModel": {
                 "requested": actor["buddy"] if actor else None,
                 "resolved": (output or {}).get("resolved"),
-                "observed": (output or {}).get("observed"),
             },
             "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
             "note": row["note"],
@@ -1433,7 +1432,6 @@ class DecisionCoordinator:
                     # selected worker buddy above.
                     "requestedBuddy": actor["buddy"] if actor else None,
                     "resolvedBuddy": (output or {}).get("resolved"),
-                    "observedBuddy": (output or {}).get("observed"),
                     "usage": (output or {}).get("usage"),
                     "elapsedSeconds": (output or {}).get("elapsedSeconds"),
                     "helperShutdownConfirmed": (output or {}).get("shutdownConfirmed"),

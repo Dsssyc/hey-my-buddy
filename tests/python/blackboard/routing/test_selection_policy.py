@@ -151,19 +151,18 @@ class RouterAnswerTests(unittest.TestCase):
 
     def test_schema_freezes_candidates_and_has_no_model_policy_fields(self):
         from hey_my_buddy.blackboard.routing import router
-        from hey_my_buddy.buddy.roles.structured_call import correction_code, schema_errors, valid_answer
+        from hey_my_buddy.buddy.roles.structured_call import correction_code, schema_errors
         schema = router.answer_schema([DSH_ID, ZCODE_ID])
         self.assertEqual(schema["properties"]["buddyId"]["enum"], [DSH_ID, ZCODE_ID, None])
         self.assertEqual(set(schema["properties"]), {"buddyId", "note", "evidence"})
-        self.assertTrue(valid_answer(self.answer(), schema))
-        self.assertTrue(valid_answer(self.answer(buddyId=None), schema))
-        self.assertFalse(valid_answer(self.answer(buddyId="ghost"), schema))
-        self.assertFalse(valid_answer(self.answer(policyCheck={}), schema))
-        self.assertFalse(valid_answer(self.answer(note=""), schema))
-        self.assertFalse(valid_answer(self.answer(evidence=[{"kind": "card", "ref": "retired"}]), schema))
-        self.assertFalse(valid_answer(self.answer(evidence=[{"kind": "web", "ref": "x"}]), schema))
-        self.assertFalse(valid_answer(self.answer(buddyId=True), schema))
-        self.assertFalse(valid_answer("not json", schema))
+        self.assertEqual(schema_errors(self.answer(), schema), [])
+        self.assertEqual(schema_errors(self.answer(buddyId=None), schema), [])
+        self.assertIn("enum", schema_errors(self.answer(buddyId="ghost"), schema))
+        self.assertIn("additionalProperties", schema_errors(self.answer(policyCheck={}), schema))
+        self.assertIn("minLength", schema_errors(self.answer(note=""), schema))
+        self.assertIn("enum", schema_errors(self.answer(evidence=[{"kind": "card", "ref": "retired"}]), schema))
+        self.assertIn("enum", schema_errors(self.answer(evidence=[{"kind": "web", "ref": "x"}]), schema))
+        self.assertIn("type", schema_errors(self.answer(buddyId=True), schema))
         # Out-of-bounds choices are never format-corrected; shape errors are.
         self.assertIsNone(correction_code(self.answer(buddyId="ghost"), schema))
         self.assertEqual(correction_code(self.answer(note=""), schema), "answer-shape")

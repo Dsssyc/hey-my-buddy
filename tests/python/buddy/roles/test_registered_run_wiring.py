@@ -120,7 +120,7 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
                                                    {"stopReason": None, "elapsedMs": 1})
             self.assertEqual(review["nativePolicy"], policy)
 
-    def test_codex_worker_receipt_keeps_identity_and_the_bounded_validation_reason(self):
+    def test_codex_delivery_reports_invalid_outcome_without_reparsing_for_receipt(self):
         request = full_request(Path(tempfile.gettempdir()).resolve())
         result = rc.RunResult(
             identity=request.identity, harness="codex", end=rc.RunEnd(status="ok"),
@@ -130,7 +130,10 @@ class NativeEvidenceProjectionTests(unittest.TestCase):
                 "artifacts": [], "request": {}}}))
         payload = run_execution._worker_facts(result)
         self.assertEqual(payload["nativeIdentity"], {"sessionId": "thread-1", "turnId": "turn-1"})
-        self.assertEqual(payload["outcomeValidationError"], "a completed outcome requires request: null")
+        self.assertNotIn("outcomeValidationError", payload)
+        with mock.patch.object(run_execution, "_evidence", return_value={}), self.assertRaises(Exception) as caught:
+            run_execution.worker_delivery(result)
+        self.assertIn("a completed outcome requires request: null", str(caught.exception))
 
 
 class FastRegisteredRunTests(FakeAppServerTests):
@@ -187,7 +190,7 @@ class FastRegisteredRunTests(FakeAppServerTests):
             raw, code = run_controller.execute({"operation": "discover",
                 "arguments": {}, "harness": "zcode",
                 "cwd": str(root), "privateRoot": str(root), "nativeRoot": str(root / "native"),
-                "timeoutSeconds": WIRING_TIMEOUT}, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                "timeoutSeconds": WIRING_TIMEOUT}, threading.Event())
         result = json.loads(raw)
         self.assertEqual(code, 0)
         self.assertFalse(result["modelStarted"])
@@ -240,6 +243,7 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         context = self.context("usage-ok")
         fixture = Path(__file__).parents[1] / "harnesses/zcode/fixtures/mock_zcode_usage.py"
         select_fixture(context.environment, self.root, "zcode", fixture)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(context.timeout_seconds + 10))
@@ -361,15 +365,15 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
 
 
 class DshPublishedReceiptTests(unittest.TestCase):
-    def test_an_unvalidated_dsh_turn_does_not_publish_a_captured_session(self):
+    def test_an_undelivered_dsh_turn_does_not_publish_a_captured_session(self):
         from buddy.harnesses.dsh.test_dsh_role_wiring import DshRoleCase
         fixture = DshRoleCase()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         context = fixture.context()
-        # The real driver completes its native root, but the role rejects the
-        # turn binding during import. Raw root identity is not a captured turn.
-        with mock.patch("hey_my_buddy.buddy.roles.turn_io.read_turn", return_value=(None, "untrusted turn")):
+        # A driver can finish its native root without delivering a valid role
+        # outcome. Raw root identity alone does not establish a captured turn.
+        with mock.patch("hey_my_buddy.buddy.roles.run_execution._worker_result", side_effect=ValueError("invalid outcome")):
             _handle, outcome = fixture.execute(context)
         self.assertEqual(outcome.status, "failed")
         self.assertTrue(outcome.shutdown_confirmed)

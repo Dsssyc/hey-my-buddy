@@ -85,6 +85,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
 
     def test_one_send_delivers_and_answers_a_question_and_finishes_completed(self):
         context = self.context("inquiry-live", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         channel, asked = self.ask(handle, "q-1", "Reply with exactly: checkpoint-ok")
@@ -130,6 +131,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
 
     def test_a_completed_finish_is_refused_with_the_question_then_retries_after_answering(self):
         context = self.context("inquiry-finish-refused", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         self.ask(handle, "q-1", "What color is the sky?")
@@ -145,6 +147,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
 
     def test_a_pending_question_blocks_completed_but_not_assistance(self):
         context = self.context("inquiry-live-blocked", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         self.ask(handle, "q-1", "Should we continue?")
@@ -164,6 +167,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
 
     def test_an_unanswered_delivered_question_settles_unavailable(self):
         context = self.context("inquiry-unanswered", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         self.ask(handle, "q-1", "Anything else?")
@@ -178,6 +182,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
 
     def test_a_question_after_the_final_receipt_becomes_honest_unavailable(self):
         context = self.context("inquiry-late", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         channel = self.ready_channel(handle)
@@ -198,6 +203,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
 
     def test_a_child_relay_cannot_deliver_or_answer(self):
         context = self.context("inquiry-child", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         self.ask(handle, "q-1", "Who may answer?")
@@ -252,6 +258,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
 
     def test_a_forged_answer_receipt_fails_the_whole_turn(self):
         context = self.context("inquiry-forged", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         self.ask(handle, "q-1", "Answer honestly.")
@@ -265,6 +272,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
 
     def test_cancellation_with_a_queued_question_ends_honestly(self):
         context = self.context("inquiry-live", timeout=40)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         channel, _ = self.ask(handle, "q-1", "Will be cancelled.")

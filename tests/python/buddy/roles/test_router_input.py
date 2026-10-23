@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -50,7 +51,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
         with mock.patch.object(router_input.subprocess, "run", return_value=listing), \
                 mock.patch.object(router_input, "discard", side_effect=check_partial_input) as cleanup:
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory)
+                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
         self.assertEqual(refused.exception.code, "router-input-unavailable")
         self.assertEqual(refused.exception.message, message)
         cleanup.assert_called_once_with(frozen)
@@ -75,17 +76,28 @@ class FrozenTreeEntryTests(unittest.TestCase):
             b"160000 commit " + b"a" * 40 + b"\tsubmodule",
             "Frozen Router input with submodules is not supported")
 
-    def test_materialization_limit_is_independent_of_native_budget(self):
+    def test_expired_call_deadline_stops_preparation_before_git(self):
         directory = self.root / "expired"
         directory.mkdir()
         with mock.patch.object(router_input.time, "monotonic", side_effect=[100, 221]), \
              mock.patch.object(router_input.subprocess, "run") as git:
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory)
+                router_input.prepare(self.manifest, directory, deadline=220)
         self.assertEqual(refused.exception.code, "router-input-unknown")
         git.assert_not_called()
 
-    def test_blocked_blob_reader_is_reaped_at_materialization_limit(self):
+    def test_tree_read_receives_remaining_call_budget_without_a_local_cap(self):
+        directory = self.root / "tree-budget"
+        directory.mkdir()
+        failed = subprocess.CompletedProcess([], 1, stdout=b"")
+        with mock.patch.object(router_input.time, "monotonic", return_value=100), \
+             mock.patch.object(router_input.subprocess, "run", return_value=failed) as git:
+            with self.assertRaises(BoardError) as refused:
+                router_input.prepare(self.manifest, directory, deadline=340)
+        self.assertEqual(refused.exception.code, "router-input-unavailable")
+        self.assertEqual(git.call_args.kwargs["timeout"], 240)
+
+    def test_blocked_blob_reader_is_reaped_at_call_deadline(self):
         directory = self.root / "batch"
         directory.mkdir()
         listing = subprocess.CompletedProcess([], 0, stdout=(
@@ -98,11 +110,11 @@ class FrozenTreeEntryTests(unittest.TestCase):
             process = original_popen([sys.executable, "-c", "import time; time.sleep(10)"], **kwargs)
             return process
 
-        with mock.patch.object(router_input, "MATERIALIZE_SECONDS", 0.1), \
-             mock.patch.object(router_input.subprocess, "run", return_value=listing), \
+        with mock.patch.object(router_input.subprocess, "run", return_value=listing), \
              mock.patch.object(router_input.subprocess, "Popen", side_effect=blocked_reader):
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory)
+                router_input.prepare(self.manifest, directory,
+                                     deadline=router_input.time.monotonic() + 0.1)
         self.assertEqual(refused.exception.code, "router-input-unknown")
         self.assertIsNotNone(process.returncode)
         self.assertFalse((directory / "frozen-input").exists())
@@ -110,7 +122,7 @@ class FrozenTreeEntryTests(unittest.TestCase):
     def test_indeterminate_workspace_verification_stays_unknown(self):
         self.enterContext(mock.patch.object(router_input.workspace, "verify",
                           side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
-        result = router_input.verify(self.manifest, self.checkout, "expected")
+        result = router_input.verify(self.manifest, self.checkout, "expected", deadline=time.monotonic() + 120)
         self.assertIsNone(result["unchanged"])
         self.assertEqual(result["code"], "router-input-unknown")
 
@@ -121,20 +133,26 @@ class FrozenTreeEntryTests(unittest.TestCase):
                           side_effect=BoardError("WORKSPACE_GIT_UNKNOWN", "Git read timed out")))
         with mock.patch.object(router_input.subprocess, "run") as git:
             with self.assertRaises(BoardError) as refused:
-                router_input.prepare(self.manifest, directory)
+                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
         self.assertEqual(refused.exception.code, "router-input-unknown")
         git.assert_not_called()
 
     def test_expired_local_verification_stays_unknown(self):
-        with mock.patch.object(router_input.time, "monotonic", side_effect=[100, 221]), \
+        with mock.patch.object(router_input.time, "monotonic", return_value=221), \
              mock.patch.object(router_input, "_digest") as digest:
-            result = router_input.verify(None, self.checkout, "expected")
+            result = router_input.verify(None, self.checkout, "expected", deadline=220)
         self.assertIsNone(result["unchanged"])
         self.assertEqual(result["code"], "router-input-unknown")
         digest.assert_not_called()
 
+    def test_digest_and_verification_use_the_caller_deadline(self):
+        with mock.patch.object(router_input.time, "monotonic", return_value=100):
+            expected = router_input.digest(self.checkout, deadline=340)
+            result = router_input.verify(None, self.checkout, expected, deadline=340)
+        self.assertTrue(result["unchanged"])
+
     def test_completed_digest_mismatch_is_changed(self):
-        result = router_input.verify(None, self.checkout, "incorrect-digest")
+        result = router_input.verify(None, self.checkout, "incorrect-digest", deadline=time.monotonic() + 120)
         self.assertIs(result["unchanged"], False)
         self.assertEqual(result["code"], "router-input-changed")
 

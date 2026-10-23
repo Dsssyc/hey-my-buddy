@@ -31,12 +31,12 @@ class DeferredReviewTests(unittest.TestCase):
         with patch('subprocess.Popen', side_effect=AssertionError('native process')), \
              patch('subprocess.run', side_effect=AssertionError('native process')):
             with self.assertRaises(BoardError) as caught:
-                run_controller.execute({'operation': 'review', 'harness': 'zcode'}, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                run_controller.execute({'operation': 'review', 'harness': 'zcode'}, threading.Event())
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
             self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.zcode.runner'))
             self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.dsh.runner'))
             with self.assertRaises(BoardError) as caught:
-                run_controller.execute({'operation': 'review', 'harness': 'dsh'}, threading.Event(), state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                run_controller.execute({'operation': 'review', 'harness': 'dsh'}, threading.Event())
             self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
 
 

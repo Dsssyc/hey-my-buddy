@@ -35,6 +35,7 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
 
     def _run(self, case="ok"):
         context = self.context(case)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(context.timeout_seconds + 10),
@@ -75,6 +76,7 @@ class CheckpointOnlyResumableTests(ZcodeFixtureCase):
         refs.append(self._checkpoint_ref(context, fields, checkpoint_status))
         fields["evidenceRefs"] = refs
         handle.result = RunResult.from_payload(fields)
+        handle.turn_record = None
         context.turn_output_file().unlink(missing_ok=True)
         return fields
 

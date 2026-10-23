@@ -2138,5 +2138,6 @@ supported_request_controls = ("resume_checkpoint",)
 __all__ = [
     "RunServices", "check_preparation",
     "execution_deadline", "native_evidence", "prepare_run_services", "run",
-    "run_discovery", "session_facts", "validate_turn_provenance",
+    "run_delete_sessions", "run_discovery", "session_facts", "supported_request_controls",
+    "validate_turn_provenance",
 ]

@@ -1805,9 +1805,14 @@ def _catalog_receipt(version: str, providers: list, discoveries: list) -> dict:
     }
 
 
+prepare_run_services = None
+run_delete_sessions = None
+supported_request_controls = ()
+
 __all__ = [
     "NONE_SCOPE_DISABLED_ROWS", "SessionServiceMount", "SessionServices",
     "check_preparation", "execution_deadline", "make_inquiry_bridge",
-    "native_evidence", "prepare_services", "prepare_session_service", "run", "run_discovery",
-    "session_facts", "session_record_facts", "validate_turn_provenance",
+    "native_evidence", "prepare_run_services", "prepare_services", "prepare_session_service",
+    "run", "run_delete_sessions", "run_discovery", "session_facts", "session_record_facts",
+    "supported_request_controls", "validate_turn_provenance",
 ]

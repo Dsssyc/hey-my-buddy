@@ -48,7 +48,7 @@ def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, conf
     handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
     with mock.patch.object(inline_run, "run_harness", side_effect=run_summary):
         _, summary_request, summary, delivered, expired = inline_run._summary_run(
-            control, request, first, module, self.base / "state", time.monotonic() + 30, handle)
+            control, request, first, module, time.monotonic() + 30, handle)
     self.assertTrue(delivered, summary.end.message)
     self.assertFalse(expired)
     self.assertEqual(summary.end.status, "ok", summary.end.message)
