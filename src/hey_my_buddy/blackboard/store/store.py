@@ -1701,11 +1701,11 @@ class BoardStore:
                 # A decision task is admitted *here*, inside the same transaction that
                 # claims it: the selection reader is
                 # bound to this attempt and the exact bounded model input is persisted
-                # before any process exists. A blocked decision stays queued, holds no
-                # execution slot and is skipped for the next candidate.
+                # before any process exists. A decision that cannot start was already
+                # kept queued by the pre-claim preparation above.
                 claim_input: dict | None = None
                 if task["adapter"] == scheduling.DECISION_ADAPTER:
-                    blocked, claim_input = self.decisions.claim(
+                    claim_input = self.decisions.claim(
                         connection,
                         task=task,
                         spec=spec,
@@ -1713,11 +1713,6 @@ class BoardStore:
                         generation=generation,
                         now=self.now(),
                     )
-                    if blocked:
-                        blocker = blocked
-                        if blocked != "decision-closed":
-                            self._set_queue_reason(connection, task, blocked)
-                        continue
                 chosen = task
                 chosen_generation = generation
                 chosen_attempt_id = attempt_id

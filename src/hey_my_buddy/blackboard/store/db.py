@@ -20,7 +20,6 @@ from typing import Iterator
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
 SCHEMA_VERSION = 28
-UPGRADE_BASE_SCHEMA = 27
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1

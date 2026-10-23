@@ -16,13 +16,13 @@ import subprocess
 import time
 import uuid
 
-from ..blackboard.store import backup, upgrade as schema_upgrade
+from ..blackboard.store import backup
 from .. import private_dirs, private_files
 from . import runtime
 from .launcher import write_active_runtime
 from ..protocol import schemas
 from ..protocol.contracts import CONTRACT_VERSION
-from ..blackboard.store.db import SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, utc_now
+from ..blackboard.store.db import SCHEMA_VERSION, utc_now
 from ..errors import BoardError
 from ..protocol.transport import get_state_dir
 
@@ -68,8 +68,8 @@ def file_lock(path: Path, *, timeout: float = 0):
 
 def _idle_board(connection: sqlite3.Connection) -> int:
     schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if schema is None or schema[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
-        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}')
+    if schema is None or schema[0] != str(SCHEMA_VERSION):
+        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {SCHEMA_VERSION}')
     # A micro-task Host boundary has no autonomous next turn. A recorded or
     # queued continuation still has work to prepare/claim, even if the run
     # currently reports a Host boundary. Routing and helper tasks are checked
@@ -95,27 +95,18 @@ def ensure_idle(state: Path) -> int:
         return _idle_board(connection)
 
 
-def idle_snapshot(state: Path, *, event_head: int | None = None,
-                  message_columns: tuple[str, ...] | None = None,
-                  inquiry_settlement_at: str | None = None) -> dict:
+def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = _idle_board(connection)
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
-        projection = {'messages': message_columns or schema_upgrade.RETAINED_MESSAGE_COLUMNS} if schema == UPGRADE_BASE_SCHEMA or message_columns else None
         retained_meta = [list(row) for row in connection.execute(
             "SELECT key,value FROM meta WHERE key!='schema_version' ORDER BY key")]
         retained_meta_hash = hashlib.sha256(json.dumps(
             retained_meta, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
-        settlement = {}
-        if schema == UPGRADE_BASE_SCHEMA and inquiry_settlement_at is not None:
-            plan = schema_upgrade.plan_inquiry_settlement(connection, state, inquiry_settlement_at)
-            settlement = {'inquirySettlementAt': inquiry_settlement_at,
-                          'expectedMessagesSha256': schema_upgrade.expected_messages_fingerprint(connection, plan['updates'])}
-        return {**backup.database_snapshot(connection, event_head=event_head,
-                                           column_projections=projection),
-                'schema': schema, 'retainedMetaSha256': retained_meta_hash, **settlement}
+        return {**backup.database_snapshot(connection, event_head=event_head),
+                'schema': schema, 'retainedMetaSha256': retained_meta_hash}
 
 
 def preflight(state: Path, *, contract_changed: bool) -> dict:
@@ -336,7 +327,6 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
     if contract_changed:
-        converting = before['schema'] == UPGRADE_BASE_SCHEMA and expected_schema == SCHEMA_VERSION
         actual = idle_snapshot(state, event_head=before.get('eventHead'))
         if actual['schema'] != expected_schema:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database schema did not match', tables=['meta'])
@@ -344,9 +334,7 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed',
                              tables=sorted(set(actual['tables']) ^ set(before['tables'])))
         changed = [name for name, value in before['fingerprints'].items()
-                   if not (name == 'meta' and before['schema'] != expected_schema)
-                   and actual['fingerprints'].get(name) != (
-                       before['expectedMessagesSha256'] if converting and name == 'messages' else value)]
+                   if actual['fingerprints'].get(name) != value]
         if before['retainedMetaSha256'] != actual['retainedMetaSha256'] and 'meta' not in changed:
             changed.append('meta')
         if changed:
@@ -566,7 +554,7 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                 preparation.close()
                 with file_lock(state / 'control-daemon.lock'), file_lock(state / 'board-owner.lock'):
                     if contract_changed:
-                        before = idle_snapshot(state, inquiry_settlement_at=utc_now())
+                        before = idle_snapshot(state)
                         before['runtimeSettings'] = runtime_settings
                         journal['before'] = before
                         backed_up = backup.create(state, runtime_identity={'identity': identity}, plugin_commit=runtime.read_ready(previous).get('sourceCommit'), contract_version=contract_version)
@@ -574,8 +562,6 @@ def upgrade(params: dict, *, skill_source: Path | None = None, skill_target: Pat
                         write_journal(marker, journal)
                     journal.update(phase='prepared', expected=before)
                     write_journal(marker, journal)
-                    if contract_changed:
-                        schema_upgrade.migrate_schema(state, inquiry_settlement_at=before.get('inquirySettlementAt'))
                 active = target
                 health = start(state, target)
                 evidence = verify_started(state, target, health, before, contract_changed=contract_changed)
