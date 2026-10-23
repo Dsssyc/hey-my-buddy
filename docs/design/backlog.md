@@ -69,6 +69,8 @@
 
 ## 安装与存储
 
+**最新的执行活动存了两份。**（2026-10-23 Host 查 C1 能否省掉心跳记录时见到，开发者要求记着）`attempt_activity` 表每次执行一行，存最新的活动；`attempt.activity` 事件替换式地只留最新一条，它的载荷又是同一份活动（`store.py` 的 `_append_event` 与 `_store_activity`）。按 AGENTS.md 的存储规则核对它是不是重复存值：事件若只为通知读者，载荷能否只带指向；若有读者靠事件里的活动，说明为什么不能读表。随存储那一批做。
+
 **挪基点到 0.51.0 留下的顺带项。**（2026-10-23 Host 验收微任务“把升级基点挪到 0.51.0”时见到，[记录](../acceptance/installs/0.51.0.md)）`tests/python/blackboard/store/test_upgrade_fixture.py` 的 `test_retained_execution_rows_remain_readable_with_no_buddy` 删多了：它测的是读取方对没有 buddy 的执行行与回合输入的读法，与 27 → 28 的转换无关，只是借这次转换打开看板，应改对新基点后保留；日常看板里是否还有这类行，没有核对。另有两处被删转换留下的参数已没有用处：`backup.database_snapshot` 的 `column_projections`，`install/upgrade.py` 里 `verify_started` 的 `expected_schema`（现在恒等于当前 schema）。随存储那一批做。
 
 **导出工具自己补写配置表的默认行。**（2026-10-22 Host 验收“升级时重新结清历史问询”时见到。）`tools/export_board_sample.py` 按来源看板的定义建表之后，自己调 `initialize_configuration` 并插入 `reminder_settings` 的默认行，其中写死 900 秒，与 `Database.initialize` 的默认重复；日后那里的默认一改，样本就和新建的看板不一样。改为两处共用同一份默认。
