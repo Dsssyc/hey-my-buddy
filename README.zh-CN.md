@@ -52,13 +52,13 @@ hey-my-buddy 是一个共享的 agent skill，装在 `~/.agents/skills/hey-my-bu
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.52.0-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.52.1-py3-none-any.whl" hey-my-buddy install
 ```
 
 发布之后，同样的安装只要一条命令：
 
 ```sh
-uvx hey-my-buddy@0.52.0 install
+uvx hey-my-buddy@0.52.1 install
 ```
 
 <details>
