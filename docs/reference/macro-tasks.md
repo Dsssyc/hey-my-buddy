@@ -69,7 +69,7 @@ The preview helper `tests/probes/macro_task_console_preview.py` serves synthetic
 
 ## Schema and verification
 
-Startup accepts schema 27 only and no conversion runs ([operations](operations.md#backup-upgrade-and-storage-contract)); unsupported boards remain archives and have no conversion entrypoint in this source.
+Startup accepts schema 28 only and no conversion runs ([operations](operations.md#backup-upgrade-and-storage-contract)); unsupported boards remain archives and have no conversion entrypoint in this source.
 
 The check suite restores the fixture board written by the upgrade base, runs the pending upgrade when there is one, and compares the result with a new board that carries the same settings.
 
