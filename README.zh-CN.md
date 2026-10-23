@@ -44,14 +44,14 @@ hey-my-buddy 是一个共享 Agent Skill `hey-my-buddy`，自带命令行，并�
 
 ```sh
 # 发布渠道与版本确定之后使用；目前不可用
-uvx hey-my-buddy@0.51.0 install
+uvx hey-my-buddy@0.51.1 install
 ```
 
 包名是否可用、是否发布到 PyPI 仍待开发者决定，本候选尚未发布到 PyPI。在正式发布之前，可以从冻结源码构建 wheel，并用绝对路径安装：
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.51.0-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.51.1-py3-none-any.whl hey-my-buddy install
 ```
 
 机器上没有 `uv` 时，发布包里的 `install.sh`（macOS、Linux）或 `install.ps1`（Windows）会先准备固定版本的私有 `uv`，再调用同一个安装入口；它们不修改 `PATH`、shell 或 Host 设置，也不会安装全局 `hey-my-buddy` 命令。安装会先列出将写入的路径、物化版本化运行时。只改末位的版本不打断在跑的工作：服务换到新运行时上重启，接回在跑的执行。改了中间号的版本，有排队或在跑的工作、未确认的停止时拒绝并列出阻塞项（`UPGRADE_NOT_IDLE`），空闲后切换，并做校验过的备份。两种都是 skill、启动器、运行时与服务整体切换，失败时回滚。重跑完整同版本只补齐缺失内容、不重启服务；内容损坏时用同一条固定版本命令修复；同版本内容变化会报告 `updated`。sdist 保留来源提交，解包后构建 wheel 仍保留相同 `sourceCommit`。安装或升级日常服务都需要用户的单独授权。代码与脚本可移植到 Windows，但尚未在真机验证。
