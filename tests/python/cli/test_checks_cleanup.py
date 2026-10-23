@@ -13,8 +13,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hey_my_buddy import locking
+from hey_my_buddy import locking, process_observation as observation
 from hey_my_buddy.cli import checks
+from hey_my_buddy.blackboard.tasks import storage
+from process_observation_fakes import native_references, proc_references, process, processes
 
 
 def hold_lock(path: Path) -> int:
@@ -206,7 +208,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
         lock.write_text("", encoding="utf-8", newline="\n")
         script = (
             "import os, sys, time\n"
-            "from hey_my_buddy import locking\n"
+            "from hey_my_buddy import locking, process_observation as observation\n"
             "execution = sys.argv[1]\n"
             "fd = os.open(os.path.join(execution, 'execution.lock'), os.O_RDWR)\n"
             "locking.lock(fd)\n"
@@ -247,7 +249,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
         lock.write_text("", encoding="utf-8", newline="\n")
         script = (
             "import os, sys, time\n"
-            "from hey_my_buddy import locking\n"
+            "from hey_my_buddy import locking, process_observation as observation\n"
             "fd = os.open(sys.argv[1], os.O_RDWR)\n"
             "locking.lock(fd)\n"
             "print('LOCKED', flush=True)\n"
@@ -283,13 +285,402 @@ if __name__ == "__main__":
     unittest.main()
 
 
-class DeletedOpenFileObservationTests(unittest.TestCase):
-    def test_lsof_name_channel_keeps_deleted_private_handles_only(self):
+class ProcessObservationTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory(
+            prefix='process-observation-'))).resolve()
+        self.enterContext(patch.object(observation.psutil, 'WINDOWS', False))
+        self.enterContext(patch.object(observation.psutil, 'LINUX', False))
+        self.enterContext(patch.object(observation.psutil, 'MACOS', True))
+        self.enterContext(patch.object(observation.os, 'geteuid', return_value=0, create=True))
+
+    def test_different_effective_uid_excludes_denied_argv_and_cwd(self):
+        included = process(123, ['python'], uid=1, effective_uid=0)
+        excluded = process(456, ['login'], uid=0, effective_uid=1)
+        excluded.cmdline.side_effect = observation.psutil.AccessDenied(456)
+        excluded.cwd.side_effect = observation.psutil.AccessDenied(456)
+        excluded.status.side_effect = observation.psutil.AccessDenied(456)
+        with processes(included, excluded), native_references() as native:
+            self.assertEqual(checks._ps_argv_table(), [(123, ['python'])])
+            self.assertTrue(storage.process_inventory(Path('/private/checks-fixture'))[2])
+            _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+        self.assertIsNone(error)
+        self.assertTrue(available)
+        excluded.cmdline.assert_not_called()
+        excluded.cwd.assert_not_called()
+        excluded.status.assert_not_called()
+        command = native.call_args.args[0]
+        self.assertEqual(command[command.index('-p') + 1], '123')
+        self.assertNotIn('-u', command)  # The shared effective-UID selection is final.
+
+    def test_same_effective_uid_denied_argv_and_cwd_are_unknown(self):
+        included = process(123, uid=1, effective_uid=0)
+        included.cmdline.side_effect = observation.psutil.AccessDenied(123)
+        included.cwd.side_effect = observation.psutil.AccessDenied(123)
+        with processes(included), native_references():
+            self.assertIsNone(checks._ps_argv_table())
+            self.assertFalse(storage.process_inventory(Path('/private/checks-fixture'))[2])
+            _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+        self.assertIsNotNone(error)
+        self.assertTrue(available)
+
+    def test_failed_argv_reads_use_current_starting_or_ending_state(self):
+        for failure in (observation.psutil.AccessDenied(123), SystemError('proc_cmdline failed')):
+            for state in ('idle', 'zombie', 'gone', 'running', 'denied'):
+                with self.subTest(failure=type(failure).__name__, state=state):
+                    target = process(123, uid=1, effective_uid=0)
+                    target.cmdline.side_effect = failure
+                    if state == 'gone':
+                        target.status.side_effect = observation.psutil.NoSuchProcess(123)
+                    elif state == 'denied':
+                        target.status.side_effect = observation.psutil.AccessDenied(123)
+                    else:
+                        target.status.return_value = state
+                    with processes(target):
+                        table = checks._ps_argv_table()
+                    self.assertEqual(table, [] if state in ('idle', 'zombie', 'gone') else None)
+                    target.status.assert_called_once_with()
+
+    def test_successful_reads_keep_positive_results_without_reading_status(self):
         root = Path('/private/checks-fixture')
-        output = b'p123\nn/private/checks-fixture/state/control-daemon.lock (deleted)\np456\nn/private/other/state/board-owner.lock\n'
-        completed = subprocess.CompletedProcess([], 0, stdout=output, stderr=b'')
-        with patch('hey_my_buddy.cli.checks.shutil.which', return_value='/usr/sbin/lsof'), patch('hey_my_buddy.cli.checks.subprocess.run', return_value=completed):
+        for state in (observation.psutil.STATUS_IDLE, observation.psutil.AccessDenied(123)):
+            with self.subTest(state=state):
+                target = process(123, ['python', str(root / 'state')], cwd=str(root))
+                if isinstance(state, Exception):
+                    target.status.side_effect = state
+                else:
+                    target.status.return_value = state
+                with processes(target), native_references():
+                    self.assertEqual(checks._ps_argv_table(), [(123, ['python', str(root / 'state')])])
+                    pids, error, available = checks._open_file_pids(root)
+                self.assertEqual(pids, {123})
+                self.assertIsNone(error)
+                self.assertTrue(available)
+                target.status.assert_not_called()
+
+    def test_unreadable_uids_are_unknown_and_cannot_exclude_a_process(self):
+        included = process(123, effective_uid=0)
+        included.uids.side_effect = observation.psutil.AccessDenied(123)
+        with processes(included), native_references() as native:
+            self.assertIsNone(checks._ps_argv_table())
+            self.assertFalse(storage.process_inventory(Path('/private/checks-fixture'))[2])
+            _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+        self.assertIsNotNone(error)
+        self.assertTrue(available)
+        native.assert_not_called()
+
+    def test_effective_uid_is_read_once_per_pid_snapshot(self):
+        included = process(123)
+        with processes(included), native_references():
+            _, error, _ = checks._open_file_pids(Path('/private/checks-fixture'))
+        self.assertIsNone(error)
+        included.uids.assert_called_once_with()
+
+    def test_native_argv_tokens_keep_spaces_and_chinese_without_matching_text(self):
+        root = Path('/private/检查 fixture with spaces')
+        target = process(123, ['/python 路径/python', str(root / 'state')])
+        text = process(456, ['python', '-c', f'print("{root}/state")'])
+        neighbor = process(789, ['python', str(root) + '-other/state'])
+        with processes(target, text, neighbor), native_references():
+            findings, problems, _ = checks._observation_snapshot(root)
+        self.assertEqual(set(findings), {123})
+        self.assertEqual(findings[123]['executable'], 'python')
+        self.assertEqual(problems, [])
+
+    def test_unreadable_process_argv_is_unknown(self):
+        target = process(123)
+        target.cmdline.side_effect = observation.psutil.AccessDenied(123)
+        with processes(target):
+            self.assertIsNone(checks._ps_argv_table())
+
+    def test_incomplete_enumeration_keeps_positive_findings_and_unknown_status(self):
+        root = Path('/private/checks-fixture')
+        target = process(123, ['python', str(root / 'state')])
+        denied = process(456)
+        denied.cmdline.side_effect = observation.psutil.AccessDenied(456)
+        with processes(target, denied), native_references():
+            findings, problems, _ = checks._observation_snapshot(root)
+        self.assertEqual(set(findings), {123})
+        self.assertIn('psutil process enumeration incomplete', problems[0])
+
+    def test_process_exiting_between_snapshot_and_argv_is_ended(self):
+        for error in (observation.psutil.NoSuchProcess(123), observation.psutil.ZombieProcess(123)):
+            with self.subTest(error=type(error).__name__):
+                target = process(123, ['python', '/private/checks-fixture/state'])
+                target.cmdline.side_effect = error
+                with processes(target):
+                    self.assertEqual(checks._ps_argv_table(), [])
+
+    def test_ended_or_zombie_process_releases_observed_paths(self):
+        root = Path('/private/checks-fixture')
+        for phase in ('cwd', 'memory_maps'):
+            for error in (observation.psutil.NoSuchProcess(123), observation.psutil.ZombieProcess(123)):
+                with self.subTest(phase=phase, error=type(error).__name__):
+                    target = process(123, cwd=str(root), mappings=[root / 'library.so'])
+                    getattr(target, phase).side_effect = error
+                    with (processes(target), proc_references(),
+                          patch.object(observation.psutil, 'LINUX', True),
+                          patch.object(observation.psutil, 'MACOS', False)):
+                        pids, error, available = checks._open_file_pids(root)
+                    self.assertEqual(pids, set())
+                    self.assertIsNone(error)
+                    self.assertTrue(available)
+
+    def test_lsof_exit_one_missing_ended_process_is_complete(self):
+        root = Path('/private/checks-fixture')
+        for state in ('gone', 'zombie', 'idle'):
+            with self.subTest(state=state):
+                survivor = process(123)
+                ended = process(456, cwd=str(root))
+                if state == 'gone':
+                    ended.status.side_effect = observation.psutil.NoSuchProcess(456)
+                else:
+                    ended.status.return_value = state
+                with processes(survivor, ended), native_references('p123\n', returncode=1):
+                    pids, error, available = checks._open_file_pids(root)
+                self.assertEqual(pids, set())
+                self.assertIsNone(error)
+                self.assertTrue(available)
+
+    def test_lsof_missing_live_process_is_unknown(self):
+        root = Path('/private/checks-fixture')
+        for returncode in (0, 1):
+            with self.subTest(returncode=returncode):
+                with processes(process(123)), native_references('', returncode=returncode):
+                    _, error, available = checks._open_file_pids(root)
+                self.assertIsNotNone(error)
+                self.assertTrue(available)
+
+    def test_process_becoming_zombie_after_snapshot_explains_missing_lsof_result(self):
+        root = Path('/private/checks-fixture')
+        target = process(456, cwd=str(root))
+        def cwd_before_exit():
+            target.status.return_value = observation.psutil.STATUS_ZOMBIE
+            return str(root)
+        target.cwd.side_effect = cwd_before_exit
+        with processes(target), native_references('', returncode=1) as native:
+            pids, error, available = checks._open_file_pids(root)
+        self.assertEqual(pids, set())
+        self.assertIsNone(error)
+        self.assertTrue(available)
+        command = native.call_args.args[0]
+        self.assertEqual(command[command.index('-p') + 1], '456')
+
+    def test_other_lsof_failures_remain_unknown_even_when_a_process_ends(self):
+        for returncode, stderr in ((2, ''), (0, 'denied'), (1, 'denied')):
+            with self.subTest(returncode=returncode, stderr=stderr):
+                ended = process(123)
+                ended.status.side_effect = observation.psutil.NoSuchProcess(123)
+                with (processes(ended),
+                      native_references('', returncode=returncode, stderr=stderr)):
+                    _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+                self.assertIsNotNone(error)
+                self.assertTrue(available)
+
+    def test_linux_missing_fd_directory_means_ended_but_denied_is_unknown(self):
+        root = Path('/private/checks-fixture')
+        for failure in (FileNotFoundError('fd directory gone'), PermissionError('fd denied')):
+            with self.subTest(failure=type(failure).__name__):
+                with (processes(process(123, cwd=str(root))),
+                      patch.object(observation.psutil, 'LINUX', True),
+                      patch.object(observation.psutil, 'MACOS', False),
+                      patch.object(Path, 'iterdir', side_effect=failure)):
+                    pids, error, available = checks._open_file_pids(root)
+                self.assertEqual(error is None, isinstance(failure, FileNotFoundError))
+                if error is None:
+                    self.assertEqual(pids, set())
+                self.assertTrue(available)
+
+    def test_cwd_and_linux_mappings_find_processes_without_an_argv_reference(self):
+        root = Path('/private/检查 fixture')
+        cwd = process(123, cwd=str(root))
+        mapped = process(456, mappings=[root / 'library.so (deleted)'])
+        bystander = process(789, cwd=str(root) + '-other')
+        with (processes(cwd, mapped, bystander), proc_references(),
+              patch.object(observation.psutil, 'LINUX', True),
+              patch.object(observation.psutil, 'MACOS', False)):
+            pids, error, available = checks._open_file_pids(root)
+        self.assertEqual(pids, {123, 456})
+        self.assertIsNone(error)
+        self.assertTrue(available)
+        cwd.open_files.assert_not_called()
+
+    def test_macos_keeps_native_mappings_and_uses_psutil_only_for_cwd(self):
+        root = self.root
+        target = process(123)
+        target.memory_maps.side_effect = AssertionError('macOS mappings are not in psutil')
+        with processes(target), native_references(f'p123\nn{root / "library.dylib"}\n') as command:
             pids, error, available = checks._open_file_pids(root)
         self.assertEqual(pids, {123})
         self.assertIsNone(error)
         self.assertTrue(available)
+        self.assertIn('^cwd', command.call_args.args[0])
+        target.memory_maps.assert_not_called()
+        target.open_files.assert_not_called()
+
+    def test_native_name_channel_keeps_deleted_private_handles_only(self):
+        root = self.root / 'observed'
+        output = (f'p123\nn{root / "state" / "control-daemon.lock"} (deleted)\n'
+                  f'p456\nn{self.root / "other" / "state" / "board-owner.lock"}\n')
+        with processes(process(123), process(456)), native_references(output):
+            pids, error, available = checks._open_file_pids(root)
+        self.assertEqual(pids, {123})
+        self.assertIsNone(error)
+        self.assertTrue(available)
+
+    def test_linux_fd_channel_preserves_deleted_files_and_denied_reads_are_unknown(self):
+        root = self.root
+        for failure in (None, PermissionError('fd denied')):
+            with self.subTest(failure=failure):
+                with (processes(process(123)),
+                      patch.object(observation.psutil, 'LINUX', True),
+                      patch.object(observation.psutil, 'MACOS', False),
+                      patch.object(observation.shutil, 'which', side_effect=AssertionError('Linux called lsof')),
+                      proc_references(failure or f'{root / "unlinked"} (deleted)')):
+                    pids, error, available = checks._open_file_pids(root)
+                self.assertTrue(available)
+                if failure:
+                    self.assertIsNotNone(error)
+                else:
+                    self.assertEqual(pids, {123})
+                    self.assertIsNone(error)
+
+    def test_linux_descriptor_closed_before_read_does_not_make_observation_unknown(self):
+        root = self.root
+        with (processes(process(123)),
+              patch.object(observation.psutil, 'LINUX', True),
+              patch.object(observation.psutil, 'MACOS', False),
+              patch.object(observation.shutil, 'which', side_effect=AssertionError('Linux called lsof')),
+              proc_references(FileNotFoundError('descriptor closed'), str(root / 'open-file'))):
+            pids, error, available = checks._open_file_pids(root)
+        self.assertEqual(pids, {123})
+        self.assertIsNone(error)
+        self.assertTrue(available)
+
+    def test_incomplete_paths_cannot_report_a_clear_root(self):
+        for attribute in ('cwd', 'memory_maps', 'uids', 'status'):
+            with self.subTest(attribute=attribute):
+                target = process(123)
+                getattr(target, attribute).side_effect = observation.psutil.AccessDenied(123)
+                linux = attribute != 'status'
+                with (processes(target),
+                      patch.object(observation.psutil, 'LINUX', linux),
+                      patch.object(observation.psutil, 'MACOS', not linux),
+                      proc_references() if linux else native_references('')):
+                    _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+                self.assertIsNotNone(error)
+                self.assertTrue(available)
+
+    def test_failed_path_reads_drop_references_of_starting_or_ending_processes(self):
+        root = Path('/private/checks-fixture')
+        for channel in ('cwd', 'memory_maps', 'proc-fd'):
+            for state in ('idle', 'zombie', 'gone'):
+                with self.subTest(channel=channel, state=state):
+                    target = process(123, cwd=str(root), mappings=[root / 'library'])
+                    if state == 'gone':
+                        target.status.side_effect = observation.psutil.NoSuchProcess(123)
+                    else:
+                        target.status.return_value = state
+                    if channel != 'proc-fd':
+                        getattr(target, channel).side_effect = observation.psutil.AccessDenied(123)
+                    with (processes(target), patch.object(observation.psutil, 'LINUX', True),
+                          patch.object(observation.psutil, 'MACOS', False),
+                          proc_references(PermissionError('fd denied')) if channel == 'proc-fd' else proc_references()):
+                        pids, error, available = checks._open_file_pids(root)
+                    self.assertEqual(pids, set())
+                    self.assertTrue(available)
+                    self.assertIsNone(error)
+
+    def test_system_error_from_path_reads_is_not_caught(self):
+        for attribute in ('cwd', 'memory_maps'):
+            with self.subTest(attribute=attribute):
+                target = process(123)
+                getattr(target, attribute).side_effect = SystemError('path read failed')
+                with (processes(target), proc_references(),
+                      patch.object(observation.psutil, 'LINUX', True),
+                      patch.object(observation.psutil, 'MACOS', False)):
+                    with self.assertRaises(SystemError):
+                        checks._open_file_pids(Path('/checks-fixture'))
+
+    def test_system_error_from_status_is_not_caught(self):
+        target = process(123)
+        target.cmdline.side_effect = observation.psutil.AccessDenied(123)
+        target.status.side_effect = SystemError('status read failed')
+        with processes(target):
+            with self.assertRaises(SystemError):
+                checks._ps_argv_table()
+
+    def test_windows_cwd_is_positive_evidence_without_enumerating_maps_or_handles(self):
+        root = self.root
+        for cwd in (str(root), str(root.parent)):
+            with self.subTest(cwd=cwd):
+                target = process(123, cwd=cwd, files=[root / 'file'], mappings=[root / 'library'])
+                target.open_files.side_effect = AssertionError('Windows enumerated handles')
+                target.memory_maps.side_effect = AssertionError('Windows enumerated mappings')
+                with (processes(target), patch.object(observation.psutil, 'WINDOWS', True),
+                      patch.object(observation.psutil, 'MACOS', False),
+                      patch.object(observation.subprocess, 'run', side_effect=AssertionError('native POSIX channel called'))):
+                    pids, error, available = checks._open_file_pids(root)
+                self.assertEqual(pids, {123} if cwd == str(root) else set())
+                self.assertIn('Windows open-file observation is incomplete', error)
+                self.assertTrue(available)
+                target.open_files.assert_not_called()
+                target.memory_maps.assert_not_called()
+
+    def test_windows_username_scope_is_shared_by_argv_storage_and_paths(self):
+        included = process(123, ['python'], cwd=str(self.root), username='account')
+        excluded = process(456, ['login'], username='other-account')
+        excluded.cmdline.side_effect = observation.psutil.AccessDenied(456)
+        excluded.cwd.side_effect = observation.psutil.AccessDenied(456)
+        with (processes(included, excluded, current_username='account'),
+              patch.object(observation.psutil, 'WINDOWS', True),
+              patch.object(observation.psutil, 'MACOS', False)):
+            self.assertEqual(checks._ps_argv_table(), [(123, ['python'])])
+            _, commands, known = storage.process_inventory(self.root)
+            pids, error, available = checks._open_file_pids(self.root)
+        self.assertTrue(known)
+        self.assertEqual(commands, ['python'])
+        self.assertEqual(pids, {123})
+        self.assertIn('Windows open-file observation is incomplete', error)
+        self.assertNotIn('process enumeration incomplete', error)
+        self.assertTrue(available)
+        excluded.cmdline.assert_not_called()
+        excluded.cwd.assert_not_called()
+        included.uids.assert_not_called()
+        excluded.uids.assert_not_called()
+
+    def test_windows_unreadable_username_is_unknown_and_cannot_exclude_a_process(self):
+        target = process(123)
+        target.username.side_effect = observation.psutil.AccessDenied(123)
+        with (processes(target), patch.object(observation.psutil, 'WINDOWS', True),
+              patch.object(observation.psutil, 'MACOS', False)):
+            self.assertIsNone(checks._ps_argv_table())
+            self.assertFalse(storage.process_inventory(self.root)[2])
+            _, error, available = checks._open_file_pids(self.root)
+        self.assertIn('psutil process enumeration incomplete', error)
+        self.assertIn('Windows open-file observation is incomplete', error)
+        self.assertTrue(available)
+        target.cmdline.assert_not_called()
+        target.cwd.assert_not_called()
+
+    def test_windows_unreadable_current_username_keeps_scope_unknown(self):
+        target = process(123)
+        with (processes(target) as current, patch.object(observation.psutil, 'WINDOWS', True),
+              patch.object(observation.psutil, 'MACOS', False)):
+            current.username.side_effect = observation.psutil.AccessDenied(0)
+            self.assertIsNone(checks._ps_argv_table())
+            _, error, _ = checks._open_file_pids(self.root)
+        self.assertIn('psutil process enumeration incomplete', error)
+        target.cmdline.assert_not_called()
+        target.cwd.assert_not_called()
+
+    def test_windows_service_inventory_still_observes_its_lock_files(self):
+        foreign = self.root / 'foreign'
+        service = process(123, ['python', '-m', 'hey_my_buddy.blackboard.service.daemon'],
+                          files=[foreign / 'board-owner.lock'])
+        with (processes(service), patch.object(observation.psutil, 'WINDOWS', True),
+              patch.object(observation.psutil, 'MACOS', False)):
+            orphans, _, known = storage.process_inventory(self.root)
+        self.assertTrue(known)
+        self.assertEqual([(row['pid'], row['stateDir']) for row in orphans], [(123, str(foreign))])
+        service.open_files.assert_called_once_with()

@@ -28,8 +28,8 @@ cooperative surfaces, then waits until every observed survivor has been confirme
 exit and asserts a clean root: no held hey-my-buddy lifetime lock, no live process tied to
 the root, and no failed observation. A clean teardown removes the private root; an
 incomplete or unobservable one preserves the root together with a written evidence
-report. Process observation is strictly read-only (``ps`` argv matching plus
-``lsof``/``/proc`` open-file lookup): the teardown never signals or kills a process,
+report. Process observation is strictly read-only (psutil argv/cwd/mapping
+observation plus the native file-reference channels psutil cannot fully cover): the teardown never signals or kills a process,
 never matches or touches a process outside its own private root, and never reads or
 prints environment content. Only an interrupted parallel run stops processes, and
 then only the suite children it started itself; whatever those leave behind is the
@@ -53,6 +53,7 @@ import threading
 import time
 
 from .. import locking, private_dirs
+from ..process_observation import observe_open_paths, observe_process_argv
 
 #: Inherited virtual environment pins not covered by the prefix filter below.
 SANITIZED_VARIABLES = (
@@ -476,118 +477,54 @@ def _root_prefixes(root: Path) -> tuple[str, ...]:
     return tuple({str(root), str(root.resolve())})
 
 
-def _argv_tied(argv: str, prefixes: tuple[str, ...]) -> bool:
+def _argv_tied(argv: list[str], prefixes: tuple[str, ...]) -> bool:
     """True when one whole argv token names the root or a path below it."""
-    for token in argv.split():
+    for token in argv:
         for prefix in prefixes:
-            if token == prefix or token.startswith(prefix + "/"):
+            if token == prefix or token.startswith(prefix + os.sep):
                 return True
     return False
 
 
-def _ps_argv_table() -> list[tuple[int, str]] | None:
-    """Every process as ``(pid, argv)``, or None when enumeration fails."""
-    try:
-        completed = subprocess.run(
-            ["ps", "-axo", "pid=", "-o", "args="],
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if completed.returncode != 0:
-        return None
-    table: list[tuple[int, str]] = []
-    for line in completed.stdout.decode(errors="replace").splitlines():
-        parts = line.strip().split(None, 1)
-        if not parts:
-            continue
-        try:
-            table.append((int(parts[0]), parts[1] if len(parts) > 1 else ""))
-        except ValueError:
-            continue
-    return table
+def _ps_argv_table() -> list[tuple[int, list[str]]] | None:
+    """Every process as ``(pid, argv tokens)``, or None if any read failed."""
+    rows, known = observe_process_argv()
+    return [(process.pid, argv) for process, argv in rows] if known else None
 
 
 def _open_file_pids(root: Path) -> tuple[set[int], str | None, bool]:
-    """Pids with a file open under the root: ``lsof``, ``/proc`` as the fallback.
+    """PIDs referencing this root, including deleted-but-open file names.
 
-    Returns ``(pids, error, available)``. An unavailable channel is a recorded note,
-    not a failure; a present channel that fails to run is an error. The name channel includes deleted-but-open files; scanning only existing
-    directory entries would miss a daemon after its lock path was unlinked.
+    The shared observation layer distinguishes incomplete and unavailable
+    channels. Neither can prove a private root clear; the teardown decides how
+    to record that uncertainty alongside its own argv and lifetime-lock checks.
     """
-    binary = shutil.which("lsof")
-    if binary is not None:
-        try:
-            completed = subprocess.run(
-                [binary, "-nP", "-u", str(os.getuid()), "-Fpn"],
-                capture_output=True,
-                timeout=120,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as error:
-            return set(), f"lsof failed: {type(error).__name__}", True
-        if completed.returncode == 0:
-            stdout = completed.stdout.decode(errors="replace")
-            pids = set()
-            current_pid = None
-            prefixes = _root_prefixes(root)
-            for line in stdout.splitlines():
-                if line.startswith("p") and line[1:].isdigit():
-                    current_pid = int(line[1:])
-                elif line.startswith("n") and current_pid is not None:
-                    filename = line[1:].removesuffix(" (deleted)")
-                    if any(filename == prefix or filename.startswith(prefix + "/") for prefix in prefixes):
-                        pids.add(current_pid)
-            return pids, None, True
-        if completed.returncode == 1 and not completed.stderr.strip():
-            # lsof reports "no matching files" as exit 1.
-            return set(), None, True
-        return set(), f"lsof exited with {completed.returncode}", True
-    if Path("/proc").is_dir():
-        prefixes = _root_prefixes(root)
-        pids: set[int] = set()
-        try:
-            for entry in Path("/proc").iterdir():
-                if not entry.name.isdigit():
-                    continue
-                try:
-                    handles = list((entry / "fd").iterdir())
-                except OSError:
-                    continue
-                for handle in handles:
-                    try:
-                        target = os.readlink(handle)
-                    except OSError:
-                        continue
-                    # A deleted open file reads as "<path> (deleted)" and still matches.
-                    if any(target == prefix or target.startswith(prefix + "/") for prefix in prefixes):
-                        pids.add(int(entry.name))
-                        break
-            return pids, None, True
-        except OSError as error:
-            return set(), f"/proc scan failed: {type(error).__name__}", True
-    return set(), None, False
+    opened, error, available = observe_open_paths()
+    prefixes = _root_prefixes(root)
+    pids = {pid for pid, paths in opened.items()
+            if any(filename == prefix or filename.startswith(prefix + os.sep)
+                   for filename in paths for prefix in prefixes)}
+    return pids, error, available
 
 
 def _observation_snapshot(root: Path) -> tuple[dict[int, dict], list[str], list[str]]:
     """One read-only observation pass: findings by pid, fatal problems, notes."""
     problems: list[str] = []
     notes: list[str] = []
-    table = _ps_argv_table()
-    if table is None:
-        return {}, ["ps process enumeration failed; residue status is unknown"], notes
+    rows, known = observe_process_argv()
+    table = [(process.pid, argv) for process, argv in rows]
+    if not known:
+        problems.append("psutil process enumeration incomplete; residue status is unknown")
     prefixes = _root_prefixes(root)
     own = os.getpid()
     findings: dict[int, dict] = {}
     argv_by_pid = dict(table)
     for pid, argv in table:
         if pid != own and _argv_tied(argv, prefixes):
-            findings[pid] = {"pid": pid, "source": "argv", "executable": Path(argv.split()[0]).name if argv.split() else "unknown"}
+            findings[pid] = {"pid": pid, "source": "argv", "executable": Path(argv[0]).name if argv else "unknown"}
     open_pids, open_error, open_available = _open_file_pids(root)
     if not open_available:
-        problems.append("open-file observation unavailable (no lsof and no /proc)")
+        problems.append("open-file observation unavailable (native file-reference channel missing)")
     elif open_error:
         problems.append(open_error)
     for pid in open_pids:
@@ -598,7 +535,7 @@ def _observation_snapshot(root: Path) -> tuple[dict[int, dict], list[str], list[
             entry["source"] = "argv+openFiles"
         else:
             findings[pid] = {"pid": pid, "source": "openFiles",
-                             "executable": Path(argv_by_pid.get(pid, "unknown").split()[0]).name}
+                             "executable": Path((argv_by_pid.get(pid) or ["unknown"])[0]).name}
     return findings, problems, notes
 
 
@@ -659,7 +596,7 @@ def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
     while True:
         table = _ps_argv_table()
         if table is None:
-            return ["ps process enumeration failed; residue status is unknown"]
+            return ["psutil process enumeration incomplete; residue status is unknown"]
         live = any(pid != os.getpid() and _argv_tied(argv, prefixes) for pid, argv in table)
         residue = held_locks(root)
         if not live and not residue["daemon"]:
@@ -801,7 +738,7 @@ def sweep_private_roots(directory: Path) -> int:
                 reason = f"creator record unreadable: {error}"
             else:
                 if pids is None:
-                    reason = "creator status unknown: ps process enumeration failed"
+                    reason = "creator status unknown: psutil process enumeration incomplete"
                 elif pid in pids:
                     skipped += 1
                     print(f"hey_my_buddy.cli.checks: skipped {root}: creator {pid} is alive")
