@@ -34,8 +34,11 @@ class OwnedJob:
 
     def close(self, *, confirmed=False):
         if self.handle is not None:
-            self.api.close(self.handle)
-            self.handle = None
+            try:
+                self.api.close(self.handle)
+            finally:
+                # pywin32 consumes the handle even when CloseHandle fails.
+                self.handle = None
             self.empty_confirmed = confirmed
 
     def __del__(self):

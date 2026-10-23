@@ -234,11 +234,3 @@ def validate_private_fd(fd: int) -> None:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
             raise BoardError('PRIVATE_PATH_UNSAFE', 'File must be owner-private')
-
-
-def validate_private_dir(path: Path) -> None:
-    path = _absolute(path)
-    if os.name != 'nt':
-        info = path.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            raise BoardError('PRIVATE_PATH_UNSAFE', 'Directory must be owner-private', path=str(path))

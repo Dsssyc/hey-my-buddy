@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, call, patch
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy import private_dirs, state_root
+from hey_my_buddy import state_root
 from hey_my_buddy.protocol import transport
 
 from hey_my_buddy.protocol.transport import (
@@ -236,7 +236,6 @@ class TrustBoundaryTests(AttachFixture):
             spawned, created = recorder.popen.call_count, recorder.mkdir.call_count
         self.assertEqual(spawned, 1, "cold setup must still run when no endpoint can be trusted")
         if os.name == "nt":
-            private_dirs.validate_private_dir(self.directory)
             recorder.chmod.assert_not_called()
         else:
             self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)

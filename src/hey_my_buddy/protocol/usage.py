@@ -31,6 +31,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from ..text import truncate_utf8
+
 #: Canonical document versions. A reader accepts exactly these versions.
 TOKEN_USAGE_VERSION = 1
 LAST_ASSISTANT_MESSAGE_VERSION = 1
@@ -133,20 +135,6 @@ def _timestamp(value: Any) -> str | None:
     if parsed.tzinfo is None:
         return None
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _truncate_utf8(text: str, maximum: int) -> tuple[str, int]:
-    """Head-truncate to a byte bound without splitting a character; return bytes kept."""
-    raw = text.encode()
-    if len(raw) <= maximum:
-        return text, len(raw)
-    kept = raw[:maximum]
-    while kept:
-        try:
-            return kept.decode(), len(kept)
-        except UnicodeDecodeError:
-            kept = kept[:-1]
-    return "", 0
 
 
 def normalize_token_usage(value: Any) -> dict | None:
@@ -343,7 +331,8 @@ def normalize_last_assistant_message(value: Any, *, source: str | None = None) -
         if declared_bytes < len(full):
             return None
         source_bytes, sha256, truncated = declared_bytes, digest, declared_truncated
-    text, kept = _truncate_utf8(raw_text, MAX_ASSISTANT_MESSAGE_BYTES)
+    text = truncate_utf8(raw_text, MAX_ASSISTANT_MESSAGE_BYTES)
+    kept = len(text.encode())
     if len(json.dumps(text, ensure_ascii=False).encode()) > MAX_ASSISTANT_MESSAGE_BYTES:
         lower, upper = 0, len(text)
         while lower < upper:

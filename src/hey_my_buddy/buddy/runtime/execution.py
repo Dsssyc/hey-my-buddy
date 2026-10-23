@@ -15,7 +15,6 @@ if __name__ == "__main__":
         signal.signal(_signal, _defer_signal)
 
 import argparse
-import io
 import math
 import os
 import sys
@@ -28,6 +27,7 @@ from typing import Any
 
 import c_two as cc
 
+from ...text import configure_utf8_output
 from ...errors import BoardError
 from ...protocol.client import BoardClient
 from ...protocol import activity as activity_module
@@ -880,9 +880,7 @@ class _ExecutionControl(threading.Thread):
 
 
 def main():
-    for stream in (sys.stdout, sys.stderr):
-        if isinstance(stream, io.TextIOWrapper):
-            stream.reconfigure(encoding="utf-8", newline="\n")
+    configure_utf8_output()
     if not os.environ.get("HMB_STATE_DIR"):
         sys.stderr.write("hey-my-buddy execution: HMB_STATE_DIR is required\n")
         return 2

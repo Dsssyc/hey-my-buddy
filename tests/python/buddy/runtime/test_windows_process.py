@@ -17,6 +17,7 @@ from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError, Conn
 from hey_my_buddy.protocol.owned_process import (
     CREATE_NEW_PROCESS_GROUP,
     CREATE_SUSPENDED,
+    OwnedJob,
     ProcessCreationEvidence,
     owned_popen,
 )
@@ -86,6 +87,29 @@ class FakeAPI:
 
 
 class WindowsProcessTests(unittest.TestCase):
+    def test_job_close_consumes_failed_handle_without_confirming_shutdown(self):
+        for confirmed in (False, True):
+            with self.subTest(confirmed=confirmed):
+                api = mock.Mock()
+                job = OwnedJob(api, 77, "fixture")
+                failure = OSError("fixture CloseHandle failed after consuming handle")
+
+                def close(handle):
+                    self.assertEqual(handle, 77)
+                    self.assertEqual(job.handle, 77)
+                    raise failure
+
+                api.close.side_effect = close
+                with self.assertRaises(OSError) as caught:
+                    job.close(confirmed=confirmed)
+                self.assertIs(caught.exception, failure)
+                self.assertIsNone(job.active())
+                job.terminate()
+                job.close()
+                api.active.assert_not_called()
+                api.terminate.assert_not_called()
+                api.close.assert_called_once_with(77)
+
     def test_unconfirmed_handle_construction_failure_returns_held_handle(self):
         process = FakeProcess()
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time",

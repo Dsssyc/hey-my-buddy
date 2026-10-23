@@ -1,6 +1,7 @@
 """The pywin32 ownership boundary is injectable on every host OS."""
 from __future__ import annotations
 
+import ctypes
 import sys
 from types import SimpleNamespace
 import unittest
@@ -109,6 +110,32 @@ class WindowsAPITests(unittest.TestCase):
         with mock.patch.object(self.boundary, "_primary_thread", return_value=19) as primary:
             self.boundary.resume(self.child)
         primary.assert_called_once_with(51, 321)
+
+    def test_primary_thread_enumerates_and_requires_one_matching_owner(self):
+        for threads, expected in (([(8, 999), (19, 321), (20, 999)], 19),
+                                  ([(8, 999)], None), ([(19, 321), (20, 321)], None)):
+            with self.subTest(threads=threads):
+                remaining = iter(threads)
+
+                def advance(snapshot, pointer):
+                    self.assertEqual(snapshot, 51)
+                    entry = ctypes.cast(pointer, ctypes.POINTER(windows._ThreadEntry)).contents
+                    self.assertEqual(entry.dwSize, ctypes.sizeof(windows._ThreadEntry))
+                    value = next(remaining, None)
+                    if value is None:
+                        return False
+                    entry.th32ThreadID, entry.th32OwnerProcessID = value
+                    entry.dwSize = 0  # Toolhelp can change the returned size.
+                    return True
+
+                self.kernel.Thread32First.side_effect = advance
+                self.kernel.Thread32Next.side_effect = advance
+                with mock.patch.object(windows.ctypes, "get_last_error", return_value=18, create=True):
+                    if expected is None:
+                        with self.assertRaisesRegex(OSError, "no unique primary thread"):
+                            self.boundary._primary_thread(51, 321)
+                    else:
+                        self.assertEqual(self.boundary._primary_thread(51, 321), expected)
 
     def test_resume_checks_thread_identity_and_closes_both_owned_handles(self):
         events = mock.Mock()

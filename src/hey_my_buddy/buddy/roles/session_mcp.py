@@ -20,11 +20,11 @@ shutdown evidence remain the separate facts they were.
 from __future__ import annotations
 
 import argparse
-import io
 import json
 import sys
 from pathlib import Path
 
+from ...text import configure_utf8_output
 from ...json_codec import canonical_json, decode_strict_json
 from ..harnesses.session_receipts import MAX_OUTCOME_BYTES
 from . import worker_services
@@ -55,9 +55,7 @@ def respond(message: dict, configuration: dict) -> dict | None:
 
 
 def main() -> int:
-    for stream in (sys.stdout, sys.stderr):
-        if isinstance(stream, io.TextIOWrapper):
-            stream.reconfigure(encoding="utf-8", newline="\n")
+    configure_utf8_output()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from ... import locking
 import hmac
-import io
 import json
 import os
 from pathlib import Path
@@ -23,6 +22,7 @@ from ...console.server import Console
 from ...protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from ..store.db import SCHEMA_VERSION, utc_now
 from ...private_files import publish_bytes, read_text
+from ...text import configure_utf8_output
 from ...errors import BoardError
 from .service import BoardService, WaitAdmission, WaitService
 from .execution_scheduler import ExecutionScheduler
@@ -311,9 +311,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def main() -> int:
-    for stream in (sys.stdout, sys.stderr):
-        if isinstance(stream, io.TextIOWrapper):
-            stream.reconfigure(encoding="utf-8", newline="\n")
+    configure_utf8_output()
     selected = os.environ.get("HMB_STATE_DIR")
     if not selected:
         sys.stderr.write("hey-my-buddy daemon: HMB_STATE_DIR is required\n")

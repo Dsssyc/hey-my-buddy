@@ -134,7 +134,7 @@ class HandleBoundaryTests(unittest.TestCase):
         self.native.DeviceIoControl.return_value = raw
         with mock.patch.object(files.ctypes, 'WinDLL', create=True) as kernel:
             api = files.WindowsFileAPI()
-            self.assertIsNone(api.kernel)
+            self.assertIs(api.kernel, files._RENAME_KERNEL)
             kernel.assert_not_called()
         self.assertIs(api._open('leaf', files.GENERIC_READ, files.OPEN_EXISTING), handle)
         self.native.CreateFile.assert_called_once_with(

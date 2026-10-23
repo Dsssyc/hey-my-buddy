@@ -47,6 +47,15 @@ class _RenameInfo(ctypes.Structure):
                 ("FileNameLength", ctypes.c_uint32), ("FileName", ctypes.c_wchar * 1)]
 
 
+_RENAME_KERNEL = None
+if os.name == 'nt':
+    # pywin32's public setter lacks FileRenameInfoEx/POSIX_SEMANTICS.
+    _RENAME_KERNEL = ctypes.WinDLL("kernel32", use_last_error=True)
+    _RENAME_KERNEL.SetFileInformationByHandle.restype = wintypes.BOOL
+    _RENAME_KERNEL.SetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+
+
 class WindowsFileAPI:
     def __init__(self):
         import msvcrt
@@ -56,7 +65,7 @@ class WindowsFileAPI:
         self.msvcrt = msvcrt
         self.pywintypes = pywintypes
         self.win32file = win32file
-        self.kernel = None
+        self.kernel = _RENAME_KERNEL
 
     def _call(self, method, *args):
         try:
@@ -131,12 +140,6 @@ class WindowsFileAPI:
         info.Flags = 0x00000001 | 0x00000002  # REPLACE_IF_EXISTS | POSIX_SEMANTICS
         info.FileNameLength = len(name)
         ctypes.memmove(ctypes.addressof(buffer) + _RenameInfo.FileName.offset, name, len(name))
-        if self.kernel is None:
-            # pywin32's public setter lacks FileRenameInfoEx/POSIX_SEMANTICS.
-            self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-            method = self.kernel.SetFileInformationByHandle
-            method.restype = wintypes.BOOL
-            method.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
         handle = self.msvcrt.get_osfhandle(descriptor)
         if not self.kernel.SetFileInformationByHandle(handle, 22, buffer, size):  # FileRenameInfoEx
             raise self._os_error(ctypes.get_last_error())
