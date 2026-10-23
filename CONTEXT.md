@@ -219,6 +219,9 @@ _Avoid_: 接管, takeover (those name a Host taking over the ownership of a micr
 **验收 / acceptance**:
 The Host's evidence-backed judgment on a fixed artifact, separate from Worker completion.
 
+**打回 / send back**:
+The Host's handling of a delivered micro task it does not accept: it continues the same micro task with what must change, so a Worker runs another turn in the same checkout; nothing counts as accepted until a later seal is accepted.
+
 ### What records say
 
 **原因 / reason**:
