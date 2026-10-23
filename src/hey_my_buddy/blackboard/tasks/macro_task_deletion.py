@@ -326,7 +326,7 @@ def _delete_sessions(store, scope):
     for session in scope.sessions:
         grouped.setdefault(session['harness'], set()).add(session['sessionId'])
     for harness, ids in grouped.items():
-        adapter(harness).delete_sessions(sorted(ids))
+        adapter(harness).delete_sessions(sorted(ids), state_dir=store.directory)
     return []
 
 

@@ -895,6 +895,9 @@ def main():
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
             stream.reconfigure(encoding="utf-8", newline="\n")
+    if not os.environ.get("HMB_STATE_DIR"):
+        sys.stderr.write("hey-my-buddy execution: HMB_STATE_DIR is required\n")
+        return 2
     parser = argparse.ArgumentParser()
     parser.add_argument("--startup", required=True)
     args = parser.parse_args()

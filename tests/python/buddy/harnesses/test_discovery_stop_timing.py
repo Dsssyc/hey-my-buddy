@@ -378,7 +378,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                  patch.object(selector, 'select', side_effect=read), \
                  patch.object(discovery, 'time', probe_clock):
                 result = discovery._probe_dsh_version(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
-                                                      time.monotonic() + 5)
+                                                      time.monotonic() + 5, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(final_facts, [True])
             self.assertFalse(private.exists())
             self.assertTrue(self.group_gone(processes[0].pid))

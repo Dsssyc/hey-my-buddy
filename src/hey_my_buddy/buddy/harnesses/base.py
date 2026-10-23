@@ -149,10 +149,10 @@ class Adapter:
     interrupted_resume = False
     native_resume_permission_change = False
     model_discovery = False
-    def discover_models(self) -> dict:
+    def discover_models(self, *, state_dir: Path) -> dict:
         raise BoardError("CATALOG_UNAVAILABLE", f"{self.name} does not declare model discovery")
 
-    def delete_sessions(self, session_ids: list[str]) -> dict[str, str]:
+    def delete_sessions(self, session_ids: list[str], *, state_dir: Path) -> dict[str, str]:
         raise BoardError("UNSUPPORTED", f"{self.name} does not declare session deletion")
 
     def discovery_available(self) -> tuple[bool, str | None]:

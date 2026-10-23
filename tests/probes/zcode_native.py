@@ -174,7 +174,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
 
     def test_native_catalog_has_per_model_efforts_without_model_requests(self):
         with mock.patch.dict(os.environ, self.environment, clear=True):
-            discovered = self.description.discover_models()
+            discovered = self.description.discover_models(state_dir=Path(self.environment["HMB_STATE_DIR"]))
         provider = next(x for x in discovered["providers"] if x["provider"] == "fixture-api")
         model = next(x for x in provider["models"] if x["id"] == "GLM-5.3-Flash")
         self.assertEqual(model["efforts"], ["low", "high", "max"])
@@ -189,7 +189,7 @@ class InstalledZcodeTests(ZcodeFixtureCase):
         value["config"]["providerConfigRules"]["providerRules"][0]["enabled"] = False
         self.personal.write_text(json.dumps(value))
         with mock.patch.dict(os.environ, self.environment, clear=True):
-            discovered = self.description.discover_models()
+            discovered = self.description.discover_models(state_dir=Path(self.environment["HMB_STATE_DIR"]))
         self.assertEqual(discovered["providers"], [])
         self.assertEqual(discovered["discoveries"],
                          [{"harness": "zcode", "status": "complete", "accountStatus": "not-applicable"}])

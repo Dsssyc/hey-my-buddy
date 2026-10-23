@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -26,7 +27,6 @@ from buddy.harnesses.dsh.acp.support import FAKE_AGENT
 
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
-from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.private_dirs import attempt_root
@@ -233,8 +233,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
     ``_seal_workspace``/``collect``/``workspace_cwd``) is gone; these cases hold
     the same boundaries on the seams that replaced it: the shared executor's
     preparation (workspace input binding, exact turn-input bytes, credential
-    privacy), the shared micro-task-turn import (``roles.turn_io.read_turn`` with
-    the registered DSH validator) and the shared collection over this project's
+    privacy), and the shared collection over this project's
     offline fake ACP agent, whose finish receipts the real role rules mint.
     The agent declares its own fixture selectors (provider ``fake``, model
     ``m1``), so the executor context's buddy is the fixture's, not the
@@ -286,7 +285,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
             attempt_id=attempt_id,
             generation=index,
             session_record_path=str(self.directory / "sessions" / "micro-tasks" / run_id / (attempt_id + ".jsonl")),
-            spec={**self.FIXTURE_BUDDY, "task": "do work", "cwd": manifest["path"], "expectedSeconds": 60},
+            spec={**self.FIXTURE_BUDDY, "adapter": "dsh", "task": "do work", "cwd": manifest["path"], "expectedSeconds": 60},
             directory=attempt,
             runtime={"identity": "test"},
             environment=environment,
@@ -310,7 +309,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
             agent_credential="credential-token",
         )
 
-    def test_adapter_verifies_input_writes_exact_bytes_and_gates_the_seal(self):
+    def test_adapter_prepares_verified_workspace_and_exact_input_bytes(self):
         board = self.board()
         submitted = self.submit(board)
         # Prepare a real manifest directly for the executor context. The selected
@@ -339,41 +338,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
         )
         self.assertTrue(context.credential_file().is_file())
         self.assertEqual(context.credential_file().stat().st_mode & 0o777, 0o600)
-        # No turn output and no confirmed stop: nothing is imported and nothing sealed.
-
-        def import_turn(shutdown_confirmed: bool, exit_code: int | None):
-            return turn_io.read_turn(context, shutdown_confirmed, exit_code,
-                                     executor.module.validate_turn_provenance)
-
-        record, error = import_turn(False, 0)
-        self.assertIsNone(record)
-        self.assertIn("shutdown", error or "")
-        record, error = import_turn(True, 1)
-        self.assertIsNone(record)
-        self.assertIn("exit zero", error or "")
-        context.turn_output_file().write_text(json.dumps({"version": 1}), encoding="utf-8", newline="\n")
-        record, error = import_turn(True, 0)
-        self.assertIsNone(record)
-        self.assertIn("turn record", error or "")
-        # A complete current-format record imports, and the shared seal produces
-        # a real immutable output. The record is a synthetic native fact
-        # (protocol.fixtures.native_turn), not real native verification.
-        service_hash = sha256_text(canonical_json(context.turn_input))
-        complete = native_turn.micro_task_record(
-            harness="dsh", task_id=context.task_id, attempt_id=context.attempt_id,
-            generation=context.generation, turn_id="turn-1", resume_mode="initial",
-            previous_session_id=None, input_sha256=service_hash,
-            outcome={"disposition": "completed", "summary": "done", "remaining": [],
-                     "decisions": [], "artifacts": [], "request": None},
-            session_id="sess-1", prompt_sha256=sha256_text("mock turn prompt"),
-        )
-        context.turn_output_file().write_text(json.dumps(complete), encoding="utf-8", newline="\n")
-        record, error = import_turn(True, 0)
-        self.assertIsNone(error)
-        self.assertEqual(record["turnId"], "turn-1")
-        seal, seal_error = turn_io.seal_workspace(context)
-        self.assertIsNone(seal_error)
-        self.assertTrue(seal["snapshotSha256"])
+        self.assertFalse(context.turn_output_file().exists())
 
     def test_collect_imports_a_turn_only_with_confirmed_shutdown(self):
         board = self.board()
@@ -381,13 +346,18 @@ class RealAdapterTests(RealWorkspaceTestCase):
         manifest = self.manifest_for("adapter-2")
         executor = worker_executor("dsh")
         # The micro-task fake agent holds its turn open at the cooperative
-        # checkpoint. Collection requires the same-process result to exist.
+        # checkpoint. Collect only after its same-process result exists.
         holding = self._micro_task_record(2, submitted["runId"], "--wait-for-inquiry", "20")
         held = self._context(submitted["runId"], manifest, index=2, record=holding)
+        executor.prepare(held)
         handle = executor.start(held)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
-        with self.assertRaises(AssertionError):
-            executor.collect(handle, held)
+        log = self.directory / "fake-agent-2.log"
+        deadline = time.monotonic() + 15
+        while not log.exists() or '"method": "session/prompt"' not in log.read_text(encoding="utf-8"):
+            self.assertFalse(handle.finished, "the fixture exited before its native prompt")
+            self.assertLess(time.monotonic(), deadline, "the fixture never entered its native prompt")
+            time.sleep(0.02)
         self.assertFalse(handle.finished, "the held native run must still be active at collection")
         self.assertFalse(held.turn_output_file().exists())
         handle.terminate()
@@ -396,16 +366,22 @@ class RealAdapterTests(RealWorkspaceTestCase):
         # collection imports the minted turn and seals the real workspace.
         settling = self._micro_task_record(3, submitted["runId"])
         settled = self._context(submitted["runId"], manifest, index=3, record=settling)
+        executor.prepare(settled)
         finished = executor.start(settled)
         self.addCleanup(lambda: finished.terminate(grace_seconds=0.2) if not finished.finished else None)
         self.assertIsNotNone(finished.wait(75),
                              "the native run did not settle within its deadline")
+        with patch.object(finished, "shutdown_confirmed", return_value=False):
+            unconfirmed = executor.collect(finished, settled)
+        self.assertEqual(unconfirmed.status, "failed")
+        self.assertNotIn("turn", unconfirmed.result)
+        self.assertNotIn("workspaceSeal", unconfirmed.result)
         outcome = executor.collect(finished, settled)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertEqual(outcome.result["turn"]["turnId"], "turn-3")
         self.assertIn("workspaceSeal", outcome.result)
-        self.assertEqual(turn_io.workspace_cwd(settled), manifest["path"])
+        self.assertEqual(settled.cwd, manifest["path"])
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -58,7 +58,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
         collection = SimpleNamespace(payload=payload, exit_code=exit_code, stop_confirmed=stopped)
         with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
                 mock.patch.object(run_execution, "collect_controller", return_value=collection):
-            return run_execution.discover_models("codex")
+            return run_execution.discover_models("codex", state_dir=Path(os.environ["HMB_STATE_DIR"]))
 
     def test_the_discovery_receipt_crosses_with_its_account_fact(self):
         receipt = _catalog("codex", "unknown")
@@ -71,7 +71,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
         collection = SimpleNamespace(payload=None, exit_code=0, stop_confirmed=True)
         with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
              mock.patch.object(run_execution, "collect_controller", return_value=collection):
-            result = run_execution.discover_models("codex")
+            result = run_execution.discover_models("codex", state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(result["discoveries"], [{"harness": "codex", "status": "unknown",
                          "accountStatus": "unknown",
                          "reason": {"code": "native-metadata-wait-expired", "params": {}}}])
@@ -104,7 +104,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
         with mock.patch.object(run_execution, "private_json", side_effect=OSError("fixture write failed")), \
              mock.patch.object(run_execution, "launch_controller") as launch:
             with self.assertRaises(OSError) as caught:
-                run_execution.discover_models("codex")
+                run_execution.discover_models("codex", state_dir=Path(os.environ["HMB_STATE_DIR"]))
         launch.assert_not_called()
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
@@ -113,14 +113,14 @@ class DiscoveryReceiptTests(unittest.TestCase):
         with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
              mock.patch.object(run_execution, "collect_controller", side_effect=ValueError("fixture read failed")):
             with self.assertRaises(ValueError) as caught:
-                run_execution.discover_models("codex")
+                run_execution.discover_models("codex", state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
 
     def test_an_unregistered_discovery_proves_no_controller_created(self):
         with mock.patch("hey_my_buddy.buddy.harnesses.registry.native_operation",
                         side_effect=BoardError("CATALOG_UNAVAILABLE", "fixture unavailable")):
             with self.assertRaises(BoardError) as caught:
-                run_execution.discover_models("fixture")
+                run_execution.discover_models("fixture", state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_environment_failure_proves_no_controller_created(self):
@@ -128,7 +128,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
                         side_effect=ValueError('fixture environment failed')), \
              mock.patch.object(run_execution, 'launch_controller') as launch:
             with self.assertRaises(ValueError) as caught:
-                run_execution.discover_models('codex')
+                run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"]))
         launch.assert_not_called()
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), True)
 
@@ -138,7 +138,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
              mock.patch.object(run_execution, 'launch_controller') as launch, \
              mock.patch.object(run_execution.shutil, 'rmtree') as remove:
             with self.assertRaises(OSError) as caught:
-                run_execution.discover_models('codex')
+                run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertIs(caught.exception, error)
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
         launch.assert_not_called()

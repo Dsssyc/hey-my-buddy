@@ -106,7 +106,7 @@ class DeletionReceiptBoundaryTests(unittest.TestCase):
                     patch('hey_my_buddy.buddy.harnesses.registry.run_seam', return_value=SimpleNamespace(run_delete_sessions=Mock())), \
                     patch.object(run_execution, 'launch_controller', side_effect=launch):
                 with self.assertRaises(RuntimeError) as caught:
-                    run_execution.delete_sessions('codex', ['owned'])
+                    run_execution.delete_sessions('codex', ['owned'], state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertIs(caught.exception, reached)
             self.assertEqual(len(controls), 1)
             self.assertEqual(list(worker_tmp.iterdir()), [])
@@ -129,7 +129,7 @@ class DeletionReceiptBoundaryTests(unittest.TestCase):
 
         with patch.object(run_execution, 'launch_controller', side_effect=launch), \
              patch.object(run_execution, 'collect_controller', return_value=collection):
-            self.assertEqual(run_execution.delete_sessions('codex', ['owned']), {'owned': 'deleted'})
+            self.assertEqual(run_execution.delete_sessions('codex', ['owned'], state_dir=Path(os.environ["HMB_STATE_DIR"])), {'owned': 'deleted'})
 
     def receipt(self, payload, *, stopped=True, wait_result=0, exit_code=0):
         handle = Mock()
@@ -137,7 +137,7 @@ class DeletionReceiptBoundaryTests(unittest.TestCase):
         collection = SimpleNamespace(payload=payload, exit_code=exit_code, stop_confirmed=stopped)
         with patch.object(run_execution, "launch_controller", return_value=handle), \
              patch.object(run_execution, "collect_controller", return_value=collection):
-            return run_execution.delete_sessions("codex", ["owned", "gone", "owned"])
+            return run_execution.delete_sessions("codex", ["owned", "gone", "owned"], state_dir=Path(os.environ["HMB_STATE_DIR"]))
 
     def test_accepts_exact_keys_and_supported_results_after_request_deduplication(self):
         sessions = {"owned": "deleted", "gone": "already-gone"}

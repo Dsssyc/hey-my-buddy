@@ -1167,17 +1167,19 @@ class RoleSeamFunctionTests(unittest.TestCase):
 
     def test_check_preparation_confirms_a_selected_or_discoverable_command(self):
         from hey_my_buddy.buddy.harnesses import discovery, runtime_selection
+        state = Path(os.environ["HMB_STATE_DIR"])
+        environment = {"HMB_STATE_DIR": str(state)}
         record = {"status": "ready", "command": ["/installed/dsh"]}
         with mock.patch.object(runtime_selection, "selected", return_value=record):
-            self.assertIsNone(native_run.check_preparation({}, {}))
+            self.assertIsNone(native_run.check_preparation({}, environment))
         # The unbound path reuses the same bounded discovery launch_for falls
         # back to: a discoverable installed command keeps the harness usable
         # without a pinned selection, and a failed scan still refuses here.
         detected = {"status": "ready", "available": True, "command": ["/installed/dsh"]}
         with mock.patch.object(runtime_selection, "selected", return_value=None), \
                 mock.patch.object(discovery, "discover", return_value=detected) as scan:
-            self.assertIsNone(native_run.check_preparation({}, {}))
-        scan.assert_called_once_with("dsh", environment={})
+            self.assertIsNone(native_run.check_preparation({}, environment))
+        scan.assert_called_once_with("dsh", state_dir=state, environment=environment)
         cases = ((None, {"status": "missing", "available": False,
                          "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}),
                  ({"status": "missing"}, None),
@@ -1186,7 +1188,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
             with mock.patch.object(runtime_selection, "selected", return_value=selected), \
                     mock.patch.object(discovery, "discover", return_value=detected_result) as scan:
                 with self.assertRaises(BoardError) as caught:
-                    native_run.check_preparation({}, {})
+                    native_run.check_preparation({}, environment)
                 self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
             self.assertEqual(scan.call_count, 1 if selected is None else 0,
                              "a bound record decides without a discovery scan")

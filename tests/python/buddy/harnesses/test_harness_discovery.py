@@ -63,7 +63,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 with patch.object(discovery, "_home", return_value=home), \
                      patch.object(discovery, "_common_dirs", return_value=[]), \
                      patch.object(discovery, "_app_paths", return_value=[]):
-                    result = discovery.discover("claude", manual_path=str(cli), environment={"PATH": ""})
+                    result = discovery.discover("claude", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 self.assertEqual(result["status"], "ready")
                 self.assertEqual(set(result["billingByProvider"]), {provider})
                 self.assertEqual(result["billingByProvider"][provider]["kind"], "unknown")
@@ -129,7 +129,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
-                result = discovery.discover("codex", manual_path=str(bad), environment={"PATH": ""})
+                result = discovery.discover("codex", manual_path=str(bad), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["source"], "fnm")
             self.assertEqual(result["version"], "2.0.0")
@@ -155,7 +155,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                  patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
-                result = discovery.discover("zcode", manual_path=str(launcher), environment={"PATH": ""})
+                result = discovery.discover("zcode", manual_path=str(launcher), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["command"], [str(node), str(launcher)])
             self.assertTrue(any(call.args[0][:1] == [str(node)] for call in probe.call_args_list))
@@ -167,7 +167,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
-                result = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""})
+                result = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "login-required")
             self.assertFalse(result["available"])
             self.assertNotIn("private-account", str(result))
@@ -175,7 +175,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
-                result = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""})
+                result = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertIn(result["reason"]["code"], ("harness.output-limit", "harness.shutdown-unverified"))
             self.assertEqual(result["status"], "unhealthy")
             self.assertFalse(result["available"])
@@ -194,7 +194,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             ), patch.object(discovery, "_app_paths", return_value=[]), patch.object(
                 discovery, "_terminate_group", side_effect=unobserved_stop
             ):
-                uncertain = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""})
+                uncertain = discovery.discover("codex", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(uncertain["reason"]["code"], "harness.shutdown-unverified")
             self.assertEqual(uncertain["status"], "unhealthy")
             self.assertFalse(uncertain["available"])
@@ -264,7 +264,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                         'path': str(cli), 'source': 'path', 'status': 'ready', 'reason': None,
                         'command': [str(cli)], 'version': '1.0', 'fingerprint': {}}) as handshake:
                     result = discovery.discover('codex', environment={
-                        'PATH': os.pathsep.join([*paths, str(cli.parent)])})
+                        'PATH': os.pathsep.join([*paths, str(cli.parent)])}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
             self.assertGreater(len(second['candidates']), discovery._MAX_CANDIDATES)
             handshake.assert_called_once()
@@ -295,9 +295,9 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[node.parent]
             ), patch.object(discovery, "_app_paths", return_value=[]):
-                claude_result = discovery.discover("claude", manual_path=str(claude), environment={"PATH": ""})
-                dsh_result = discovery.discover("dsh", environment={"PATH": ""})
-                node_result = discovery.discover("node", manual_path=str(node), environment={"PATH": ""})
+                claude_result = discovery.discover("claude", manual_path=str(claude), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                dsh_result = discovery.discover("dsh", environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                node_result = discovery.discover("node", manual_path=str(node), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(claude_result["status"], "ready")
             self.assertEqual(dsh_result["status"], "missing")
             self.assertFalse(dsh_result["available"])
@@ -310,7 +310,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
-                result = discovery.discover("dsh", manual_path=str(dsh), environment={"PATH": ""})
+                result = discovery.discover("dsh", manual_path=str(dsh), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["executable"], str(dsh))
 
@@ -338,7 +338,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, "_home", return_value=root), \
                  patch.object(discovery, "_common_dirs", return_value=[]), \
                  patch.object(discovery, "_app_paths", return_value=[]):
-                result = discovery.discover("dsh", manual_path=str(cli), environment=environment)
+                result = discovery.discover("dsh", manual_path=str(cli), environment=environment, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["version"], "1.2.0")
             observed = json.loads(snapshot.read_text(encoding="utf-8"))
@@ -366,7 +366,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                  patch.object(ProcessHandle, "shutdown_confirmed", return_value=False), \
                  self.assertLogs(discovery.__name__, level="WARNING") as notes:
                 code, output = discovery._probe_dsh_version([sys.executable, str(cli)], {"PATH": ""},
-                                                            time.monotonic() + 5)
+                                                            time.monotonic() + 5, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual((code, output), ("shutdown-unverified", b""))
             self.assertFalse((private / "dsh-home").exists())
             self.assertIn(str(private), notes.output[0])
@@ -440,13 +440,13 @@ class HarnessDiscoveryTests(unittest.TestCase):
                        "fingerprint": None} for index in range(100)]
         snapshot = {"harness": "codex", "candidates": candidates, "managerRecords": []}
 
-        def handshake(_harness, item, _environment, _deadline):
+        def handshake(_harness, item, _environment, _deadline, *, version_probe):
             return {**item, "status": "unhealthy", "reason": discovery._probe_reason("probe-failed"),
                     "command": [], "version": None}
 
         with patch.object(discovery, "candidate_snapshot", return_value=snapshot), \
              patch.object(discovery, "_candidate_handshake", side_effect=handshake) as probe:
-            result = discovery.discover("codex", environment={"PATH": ""})
+            result = discovery.discover("codex", environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(probe.call_count, discovery._MAX_CANDIDATES)
         self.assertEqual(len(result["candidates"]), discovery._MAX_DIAGNOSTICS)
 
@@ -459,7 +459,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[lower.parent]
             ), patch.object(discovery, "_app_paths", return_value=[]):
-                result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""})
+                result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(result["status"], "ready")
             self.assertEqual(result["version"], "unknown")
             self.assertEqual(result["reason"]["code"], "harness.version-unknown")
@@ -478,7 +478,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 discovery, "_SCAN_TIMEOUT", 0.4
             ), patch.object(discovery.os, "killpg", wraps=os.killpg) as kill_group:
                 started = time.monotonic()
-                result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""})
+                result = discovery.discover("zcode", manual_path=str(cli), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertLess(time.monotonic() - started, 2)
             self.assertEqual(result["status"], "unhealthy" if result["reason"]["code"] == "harness.shutdown-unverified" else "unknown")
             # A slow OS reaper may not close the inherited pipe within the
@@ -503,7 +503,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 discovery, "_TIMEOUT", 0.25
             ), patch.object(discovery, "_SCAN_TIMEOUT", 0.45):
                 started = time.monotonic()
-                result = discovery.discover("zcode", manual_path=str(manual), environment={"PATH": ""})
+                result = discovery.discover("zcode", manual_path=str(manual), environment={"PATH": ""}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertLess(time.monotonic() - started, 1.5)
             self.assertEqual(result["reason"]["code"], "harness.scan-timeout")
             self.assertEqual(len(result["candidates"]), 2)
@@ -520,7 +520,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                  patch.object(discovery, 'probe', return_value=('probe-failed', b'')), \
                  patch.object(discovery, '_discover', return_value={'status': 'unknown', 'available': False,
                                                                   'reason': {'code': 'harness.scan-timeout', 'params': {'operation': 'probe'}}}):
-                result = discovery._candidate_handshake('codex', candidate, {'PATH': ''}, time.monotonic() + 20)
+                result = discovery._candidate_handshake('codex', candidate, {'PATH': ''}, time.monotonic() + 20, version_probe=discovery._probe_cli_version)
             self.assertEqual(result['status'], 'unknown')
             self.assertEqual(result['reason']['code'], 'harness.scan-timeout')
 
@@ -647,7 +647,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                      patch.object(discovery, 'probe') as probe, \
                      patch.object(discovery, '_node_for') as node_for:
                     result = discovery._candidate_handshake('codex', candidate, {'PATH': ''},
-                                                            time.monotonic() + 1)
+                                                            time.monotonic() + 1, version_probe=discovery._probe_cli_version)
                 self.assertEqual(result['reason']['code'], 'harness.entry-unsupported')
                 probe.assert_not_called()
                 node_for.assert_not_called()
@@ -819,7 +819,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             with patch.object(discovery, 'probe') as probe, \
                  patch.object(discovery, '_node_for') as node_for:
                 rejected = discovery._candidate_handshake('codex', candidate, {'PATH': ''},
-                                                          time.monotonic() + 5)
+                                                          time.monotonic() + 5, version_probe=discovery._probe_cli_version)
             self.assertEqual(rejected['reason']['code'], 'harness.entry-unsupported')
             self.assertEqual(rejected['command'], [])
             probe.assert_not_called()
@@ -968,7 +968,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         with patch.object(discovery, 'candidate_snapshot', side_effect=ValueError('fixture snapshot failed')), \
              patch.object(discovery, 'probe') as probe:
             with self.assertRaises(ValueError) as caught:
-                discovery.discover('codex', environment={'PATH': ''})
+                discovery.discover('codex', environment={'PATH': ''}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         probe.assert_not_called()
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
@@ -981,7 +981,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                  patch.object(discovery, '_script_launch', side_effect=ValueError('fixture input failed')), \
                  patch.object(discovery, 'probe') as probe:
                 with self.assertRaises(ValueError) as caught:
-                    discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1)
+                    discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1, version_probe=discovery._probe_cli_version)
         probe.assert_not_called()
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
@@ -990,7 +990,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         with patch.object(discovery, '_launch_command', return_value=['/fixture/codex']), \
              patch.object(discovery, 'probe', side_effect=ValueError('fixture unknown process state')):
             with self.assertRaises(ValueError) as caught:
-                discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1)
+                discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1, version_probe=discovery._probe_cli_version)
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
 
     def test_post_probe_error_keeps_confirmed_stop(self):
@@ -1000,7 +1000,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
              patch.object(discovery, '_VERSION') as version:
             version.search.side_effect = ValueError('fixture version parsing failed')
             with self.assertRaises(ValueError) as caught:
-                discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1)
+                discovery._candidate_handshake('codex', candidate, {}, time.monotonic() + 1, version_probe=discovery._probe_cli_version)
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_scan_keeps_probe_exception_stop_evidence(self):
@@ -1012,7 +1012,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                 with patch.object(discovery, 'candidate_snapshot', return_value={'candidates': [candidate]}), \
                      patch.object(discovery, '_candidate_handshake', side_effect=error):
                     with self.assertRaises(ValueError) as caught:
-                        discovery.discover('codex', environment={'PATH': ''})
+                        discovery.discover('codex', environment={'PATH': ''}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), stopped)
 
     def test_login_text_cannot_hide_unverified_shutdown(self):
@@ -1021,7 +1021,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
             with self.subTest(harness=harness), \
                  patch.object(discovery, '_launch_command', return_value=['/fixture/cli']), \
                  patch.object(discovery, 'probe', side_effect=[(None, b'fixture 1.0'), ('shutdown-unverified', output)]):
-                result = discovery._candidate_handshake(harness, candidate, {}, time.monotonic() + 1)
+                result = discovery._candidate_handshake(harness, candidate, {}, time.monotonic() + 1, version_probe=discovery._probe_cli_version)
             self.assertEqual(result['reason']['code'], 'harness.shutdown-unverified')
 
     def test_adjacent_node_unverified_stop_cannot_fall_through(self):
@@ -1073,7 +1073,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                         with patch.object(discovery, '_home', return_value=Path(directory)), \
                              patch.object(discovery, '_common_dirs', return_value=[]), \
                              patch.object(discovery, '_app_paths', return_value=[]):
-                            discovery.discover('zcode', manual_path=str(cli), environment={'PATH': ''})
+                            discovery.discover('zcode', manual_path=str(cli), environment={'PATH': ''}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                     else:
                         discovery.probe([sys.executable, str(cli)], dict(os.environ), deadline=time.monotonic() + 1)
             return caught.exception
@@ -1129,7 +1129,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
                                       side_effect=ValueError('fixture reader failed')), \
                          patch.object(ProcessHandle, 'shutdown_confirmed', actual_stop):
                         with self.assertRaises(ValueError) as caught:
-                            discovery._probe_dsh_version([sys.executable, str(cli)], {'PATH': ''}, time.monotonic() + 1)
+                            discovery._probe_dsh_version([sys.executable, str(cli)], {'PATH': ''}, time.monotonic() + 1, state_dir=Path(os.environ["HMB_STATE_DIR"]))
                     self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), stopped)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX private probe')
@@ -1148,7 +1148,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         with patch.object(discovery, 'candidate_snapshot', return_value={'candidates': [candidate]}), \
              patch.object(discovery, '_candidate_handshake', side_effect=ValueError('fixture unknown stop')):
             with self.assertRaises(ValueError) as caught:
-                discovery.discover('codex', environment={'PATH': ''})
+                discovery.discover('codex', environment={'PATH': ''}, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
 
     def test_node_unknown_probe_failure_keeps_unconfirmed_stop(self):

@@ -1921,7 +1921,7 @@ class DiscoveryStopTests(NativeRunCase):
         self.broken_snapshot()
         os.environ['HMB_ZCODE_TEST_CASE'] = 'discovery'
         with self.assertRaises(BoardError) as caught:
-            run_execution.discover_models('zcode')
+            run_execution.discover_models('zcode', state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
         self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
 

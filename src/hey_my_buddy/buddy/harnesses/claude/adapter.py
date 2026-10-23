@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import threading
 import time
+from pathlib import Path
 
 from ....errors import BoardError
 from ....protocol.capabilities import adapter_capabilities
@@ -50,7 +51,8 @@ class ClaudeAdapter:
         if not usable:
             return False, reason
         try:
-            metadata = _cached_native_metadata()
+            from ..runtime_selection import environment_for
+            metadata = _cached_native_metadata(state_dir=Path(environment_for()["HMB_STATE_DIR"]))
         except BoardError as error:
             return False, error.code
         unknown = next((item for item in metadata['catalog']['discoveries']
@@ -71,7 +73,7 @@ class ClaudeAdapter:
 
     validate_turn_provenance = staticmethod(validate_turn_provenance)
 
-    def discover_models(self) -> dict:
+    def discover_models(self, *, state_dir: Path) -> dict:
         """One explicit initialize-only discovery; never a user message.
 
         The refresh goes through the one shared discovery outer layer
@@ -83,7 +85,7 @@ class ClaudeAdapter:
         which is why the description keeps the cache here.
         """
         _reset_metadata_cache()
-        return _cached_native_metadata()["catalog"]
+        return _cached_native_metadata(state_dir=state_dir)["catalog"]
 
 
 def _reset_metadata_cache() -> None:
@@ -100,7 +102,7 @@ def _cache_key() -> tuple:
     return (tuple(command),)
 
 
-def _probe_native_metadata() -> dict:
+def _probe_native_metadata(*, state_dir: Path) -> dict:
     """One initialize-only native metadata read through the registered discovery carrier.
 
     The probe goes through the one shared discovery outer layer
@@ -113,17 +115,17 @@ def _probe_native_metadata() -> dict:
     from ...roles.run_execution import discover_models
     # The metadata receipt keeps the catalog under its own key, the shape
     # every existing consumer of an explicit refresh reads.
-    return {"catalog": discover_models("claude")}
+    return {"catalog": discover_models("claude", state_dir=state_dir)}
 
 
-def _cached_native_metadata() -> dict:
+def _cached_native_metadata(*, state_dir: Path) -> dict:
     # Concurrent capability readers share one initialize-only probe. In
     # particular an unauthenticated console refresh must not fan out CLIs.
     with _metadata_lock:
-        return _load_native_metadata()
+        return _load_native_metadata(state_dir=state_dir)
 
 
-def _load_native_metadata() -> dict:
+def _load_native_metadata(*, state_dir: Path) -> dict:
     """Cached initialize metadata for repeated capability reads.
 
     Unknown observations and explicit failures are cached too, so console and
@@ -139,7 +141,7 @@ def _load_native_metadata() -> dict:
             raise _metadata_cache["error"]
         return _metadata_cache["metadata"]
     try:
-        metadata = _probe_native_metadata()
+        metadata = _probe_native_metadata(state_dir=state_dir)
     except BoardError as error:
         _metadata_cache = {"key": key, "at": now, "error": error}
         raise

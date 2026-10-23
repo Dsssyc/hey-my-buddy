@@ -43,7 +43,8 @@ class NativeDiscoveryFixture:
 
 class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
     def invoke(self, value):
-        def read():
+        def read(*, state_dir: Path):
+            self.assertIs(state_dir, self.board.directory)
             if isinstance(value, Exception):
                 raise value
             return value() if callable(value) else value
@@ -65,7 +66,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
         error = OSError('fixture catalog directory refused')
         with patch.object(run_execution, 'make_temporary_dir', side_effect=error):
             with self.assertRaises(OSError) as caught:
-                self.invoke(lambda: run_execution.discover_models('codex'))
+                self.invoke(lambda: run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"])))
         self.assertIs(caught.exception, error)
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
 
@@ -75,7 +76,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
                            remedy='fixture has no native harness')
         with patch.dict(os.environ, {'HOME': str(self.directory), 'CODEX_HOME': str(self.directory / '.codex'),
                                      'HMB_CODEX_CLI': ''}):
-            return self.invoke(lambda: run_execution.discover_models('codex'))
+            return self.invoke(lambda: run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"])))
 
     def test_controller_log_emfile_without_spawn_preserves_stop_evidence(self):
         error = OSError(errno.EMFILE, 'fixture controller logs exhausted')

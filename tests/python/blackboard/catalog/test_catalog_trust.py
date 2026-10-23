@@ -57,7 +57,7 @@ class CatalogTrustTests(BoardTestCase):
         payload['discoveries'][0]['reason'] = {'code': 'catalog.model-shape-unreadable', 'params': {}}
         payload['discoveries'][0]['content'] = 'native model shape unreadable'
         instance = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
-                                   discover_models=lambda: payload)
+                                   discover_models=lambda *, state_dir: payload)
         for elapsed in (1, catalog.CONFIRMATION_SECONDS + 1):
             self.clock.advance(elapsed)
             with patch('hey_my_buddy.buddy.harnesses.registry.adapters', return_value={'dsh': instance}), \

@@ -1,5 +1,6 @@
 """Discovery generations, expiry, settings and cache reads use private boards."""
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import json
 import os
 import threading
@@ -38,7 +39,7 @@ class HarnessHealthTests(BoardTestCase):
                            'reason': None}
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=None))
         self.scan = patch('hey_my_buddy.blackboard.service.harness_health._snapshot', side_effect=lambda *args: self.snapshot)
-        self.probe = patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=lambda *args: self.discovered)
+        self.probe = patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=lambda *args, state_dir: self.discovered)
         self.scan.start()
         self.native = self.probe.start()
         self.addCleanup(self.scan.stop)
@@ -326,7 +327,7 @@ class HarnessHealthTests(BoardTestCase):
         self.assertEqual(self.native.call_count, 2)
 
     def test_late_discovery_cannot_overwrite_new_manual_generation(self):
-        def replaced(*args):
+        def replaced(*args, state_dir: Path):
             with self.board.db.write() as db:
                 db.execute("UPDATE harness_health SET manual_path='/new/codex',revision=revision+1 WHERE harness='codex'")
             return self.discovered
@@ -364,7 +365,7 @@ class CatalogShelfLifeTests(BoardTestCase):
                            'reason': None}
         self.enterContext(patch('hey_my_buddy.buddy.harnesses.codex.account_probe.read', return_value=None))
         self.scan = patch('hey_my_buddy.blackboard.service.harness_health._snapshot', side_effect=lambda *args: self.snapshot)
-        self.probe = patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=lambda *args: self.discovered)
+        self.probe = patch('hey_my_buddy.blackboard.service.harness_health._discover', side_effect=lambda *args, state_dir: self.discovered)
         self.scan.start()
         self.native = self.probe.start()
         self.addCleanup(self.scan.stop)
@@ -842,7 +843,7 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
         service = board.service
         record = service.harnesses.get('dsh')
         with patch('hey_my_buddy.buddy.harnesses.registry.adapter',
-                   return_value=SimpleNamespace(discover_models=lambda: [])):
+                   return_value=SimpleNamespace(discover_models=lambda *, state_dir: [])):
             service._refresh_harness_catalog('dsh', record)
         self.assertEqual(service.harnesses.get('dsh')['reason'], {
             'code': 'catalog.discovery-failed',
@@ -865,7 +866,8 @@ class StaleRereadServiceCallbackTests(BoardTestCase):
                 'models': [{'id': 'alpha', 'efforts': ['max'], 'available': True}]}],
                 'discoveries': [{'harness': 'dsh', 'status': 'complete', 'accountStatus': 'confirmed'}]}
 
-        def discover_models():
+        def discover_models(*, state_dir: Path):
+            self.assertIs(state_dir, service.store.directory)
             if calls:
                 raise BoardError('CATALOG_UNAVAILABLE', 'fixture native discovery failed')
             calls.append(True)

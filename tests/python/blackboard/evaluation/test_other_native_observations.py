@@ -14,7 +14,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from buddy.harnesses.fixture_selection import select_fixture
+from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
 
 from hey_my_buddy.protocol import usage
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
@@ -152,6 +152,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
     """The whole Claude controller path against the private stream-json fixture."""
 
     def setUp(self):
+        mock_role_workspace(self)
         self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-native-usage-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -172,9 +173,9 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
                 timeout: int = 10) -> ExecutionContext:
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode, "previousSessionId": previous,
-                      "context": {}, "executionWorkspace": {}}
+                      "context": {}, "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
-                                spec={"cwd": str(self.cwd), "task": "Write a fixture result",
+                                spec={"adapter": "claude", "cwd": str(self.cwd), "task": "Write a fixture result",
                                       "expectedSeconds": timeout, "provider": "anthropic",
                                       "model": CLAUDE_MODEL, "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
@@ -183,6 +184,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
 
     def execute(self, case: str, **kwargs):
         context = self.context(case, **kwargs)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
@@ -420,6 +422,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
     """The whole ZCode controller path against the private app-server fixture."""
 
     def setUp(self):
+        mock_role_workspace(self)
         self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-native-usage-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -443,9 +446,10 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
                 run_id: str = "micro-task-1") -> ExecutionContext:
         identity = {"version": 1, "taskId": run_id, "attemptId": f"attempt-{index}", "generation": index,
                     "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
-                    "previousSessionId": previous, "context": {}, "executionWorkspace": {}}
+                    "previousSessionId": previous, "context": {},
+                    "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
         return ExecutionContext(task_id=run_id, attempt_id=f"attempt-{index}", generation=index,
-                                spec={"cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": timeout,
+                                spec={"adapter": "zcode", "cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": timeout,
                                       "provider": "fixture-api", "model": "fixture-model", "effort": "low"},
                                 directory=self.root / f"attempt-{index}", runtime={},
                                 environment={**self.environment, "HMB_ZCODE_TEST_CASE": case},
@@ -453,6 +457,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
 
     def execute(self, case: str, **kwargs):
         context = self.context(case, **kwargs)
+        self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if not handle.finished else None)
         self.assertIsNotNone(handle.wait(30), "ZCode fixture controller did not exit")

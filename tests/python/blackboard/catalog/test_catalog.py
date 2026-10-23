@@ -31,7 +31,7 @@ class CatalogTests(unittest.TestCase):
             def available(self):
                 return False, "fixture executable missing"
 
-            def discover_models(self):
+            def discover_models(self, *, state_dir: Path):
                 raise AssertionError("No controller should be spawned for a missing executable")
 
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"missing": MissingHarness()}), \
@@ -59,7 +59,7 @@ class CatalogTests(unittest.TestCase):
                                      "diagnostic": {"event": name}}],
                        "harnessVersion": "fixture-1"}
             instances[name] = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
-                                              discover_models=lambda payload=payload: payload)
+                                              discover_models=lambda *, state_dir, payload=payload: payload)
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value=instances), \
              patch.object(catalog, "_override", return_value=None):
             result = catalog.discover(directory=self.directory, harnesses=[{
@@ -151,7 +151,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_discovery_without_own_observation_keeps_complete_and_unknown_account(self):
         instance = SimpleNamespace(model_discovery=True, discovery_available=lambda: (True, None),
-                                   discover_models=lambda: {"source": "fixture-native", "providers": [],
+                                   discover_models=lambda *, state_dir: {"source": "fixture-native", "providers": [],
                                                             "discoveries": []})
         with patch("hey_my_buddy.buddy.harnesses.registry.adapters", return_value={"dsh": instance}), \
              patch.object(catalog, "_override", return_value=None):

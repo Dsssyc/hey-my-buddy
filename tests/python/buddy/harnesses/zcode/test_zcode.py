@@ -179,7 +179,7 @@ class ZcodeFixtureCase(unittest.TestCase):
 class ZcodeAdapterTests(ZcodeFixtureCase):
     def test_slow_version_metadata_does_not_block_native_catalog_discovery(self):
         with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "slow-version"}, clear=True):
-            result = self.description.discover_models()
+            result = self.description.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(result["harnessVersion"], "unknown")
         self.assertEqual(result["providers"][0]["models"][0]["id"], "fixture-model")
 
@@ -454,7 +454,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
 
     def test_catalog_omits_models_without_native_effort_options(self):
         with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "no-effort"}, clear=True):
-            result = self.description.discover_models()
+            result = self.description.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(result["providers"], [])
         self.assertEqual(result["warnings"],
                          [{"reason": {"code": "catalog.effort-directory-omitted", "params": {}}}])
@@ -477,7 +477,7 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
 
     def test_catalog_uses_native_efforts_without_a_turn_or_credentials(self):
         with mock.patch.dict(os.environ, self.environment, clear=True):
-            result = self.description.discover_models()
+            result = self.description.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(result["providers"][0]["models"][0]["efforts"], ["low", "high"])
         self.assertEqual(result["providers"][0]["harness"], "zcode")
         self.assertEqual(result["providers"][0]["packageVersion"], "fixture-0.16.9")

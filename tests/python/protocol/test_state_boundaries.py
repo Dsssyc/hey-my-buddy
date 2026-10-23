@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -25,8 +27,10 @@ class StateBoundaryTests(unittest.TestCase):
 
     def test_internal_parameters_are_required_path_without_another_resolver(self):
         import inspect
-        from hey_my_buddy.buddy.roles.run_controller import execute
-        from hey_my_buddy.buddy.roles.inline_run import _inline_live
+        from hey_my_buddy.buddy.roles.run_execution import _native_operation, discover_models, delete_sessions
+        from hey_my_buddy.buddy.harnesses.discovery import discover as discover_harness, _probe_dsh_version
+        from hey_my_buddy.buddy.harnesses.claude.adapter import _probe_native_metadata, _cached_native_metadata, _load_native_metadata
+        from hey_my_buddy.blackboard.service.harness_health import _discover
         from hey_my_buddy.buddy.runtime.execution import Execution
         from hey_my_buddy.cli.blocking import await_run
         from hey_my_buddy.cli.console_cli import run
@@ -37,7 +41,9 @@ class StateBoundaryTests(unittest.TestCase):
                 (rpc_config.configure_local_endpoint, "state_dir"), (rpc_config.configure_client, "state_dir"),
                 (rpc_config.configure_server, "state_dir"), (rpc_config._apply, "state_dir"),
                 (Execution, "state_dir"),
-                (execute, "state_dir"), (_inline_live, "state_dir"),
+                (_native_operation, "state_dir"), (discover_models, "state_dir"), (delete_sessions, "state_dir"),
+                (discover_harness, "state_dir"), (_probe_dsh_version, "state_dir"), (_discover, "state_dir"),
+                (_probe_native_metadata, "state_dir"), (_cached_native_metadata, "state_dir"), (_load_native_metadata, "state_dir"),
                 (await_run, "state_dir"), (run, "state_dir"), (discover, "directory")):
             with self.subTest(function=function):
                 parameter = inspect.signature(function, eval_str=True).parameters[argument]
@@ -52,6 +58,53 @@ class StateBoundaryTests(unittest.TestCase):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                     self.assertNotIn(node.func.attr, ("resolve", "absolute", "resolve_state_dir"), name)
             self.assertNotIn("PRIVATE_STATE_REQUIRED", (source / name).read_text(encoding="utf-8"))
+
+    def test_native_temporary_directories_use_explicit_root_without_ambient_state(self):
+        from hey_my_buddy import home
+        from hey_my_buddy.buddy.roles import run_execution
+        from hey_my_buddy.buddy.harnesses import discovery
+        from hey_my_buddy.buddy.harnesses.dsh.acp.launch import LaunchRejected
+
+        def controller(*, prepare, log_paths):
+            command, cwd, environment = prepare()
+            control = Path(command[-1])
+            self.assertEqual(control.parent.parent, self.state / "tmp")
+            self.assertEqual(environment["HMB_STATE_DIR"], str(self.state))
+            return SimpleNamespace(wait=lambda timeout: 0)
+
+        def rejected(command, *, private_root, **kwargs):
+            self.assertEqual(private_root.parent, self.state / "tmp")
+            raise LaunchRejected("fixture launch refusal")
+
+        receipt = {"source": "fixture", "providers": []}
+        collection = SimpleNamespace(payload={"status": "ok", "catalog": receipt}, exit_code=0, stop_confirmed=True)
+        for ambient in (None, str(self.root / "foreign")):
+            with self.subTest(ambient=ambient), patch.dict(os.environ), \
+                    patch.object(home, "default_state_dir", side_effect=AssertionError("internal default state")), \
+                    patch.object(run_execution, "launch_controller", side_effect=controller), \
+                    patch.object(run_execution, "collect_controller", return_value=collection), \
+                    patch("hey_my_buddy.buddy.harnesses.dsh.acp.launch.launch", side_effect=rejected):
+                if ambient is None:
+                    os.environ.pop("HMB_STATE_DIR", None)
+                else:
+                    os.environ["HMB_STATE_DIR"] = ambient
+                self.assertIs(run_execution.discover_models("codex", state_dir=self.state), receipt)
+                code, output = discovery._probe_dsh_version(
+                    [sys.executable], {}, time.monotonic() + 1, state_dir=self.state)
+                self.assertEqual((code, output), ("launch-failed", b""))
+                self.assertEqual(list((self.state / "tmp").iterdir()), [])
+        self.assertFalse((self.root / "foreign").exists())
+
+    def test_only_public_boundaries_can_select_an_implicit_state_root(self):
+        source = Path(transport.__file__).parents[1]
+        boundaries = {"cli/main.py", "install/skill_install.py", "install/upgrade.py"}
+        for path in source.rglob("*.py"):
+            name = path.relative_to(source).as_posix()
+            if name in boundaries:
+                continue
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "get_state_dir":
+                    self.assertTrue(node.args or node.keywords, (name, node.lineno))
 
     def test_internal_cli_defaults_share_selected_path_without_public_resolution(self):
         from hey_my_buddy.cli import blocking, console_cli
@@ -145,13 +198,12 @@ class StateBoundaryTests(unittest.TestCase):
         home.mkdir(mode=0o700)
         environment.update(HOME=str(home), USERPROFILE=str(home))
         for module, arguments in (("blackboard.service.daemon", []),
-                                  ("buddy.runtime.execution", []),
+                                  ("buddy.runtime.execution", ["--startup", str(self.root / "absent-startup")]),
                                   ("buddy.roles.run_controller", ["--control", str(self.root / "absent-control")])):
             with self.subTest(module=module):
                 child = subprocess.Popen([sys.executable, "-m", "hey_my_buddy." + module, *arguments],
                                          env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8")
                 stdout, stderr = child.communicate(timeout=15)
                 self.assertEqual(child.returncode, 2, (stdout, stderr))
-                self.assertIn("the following arguments are required: --startup" if module == "buddy.runtime.execution"
-                              else "HMB_STATE_DIR is required", stderr)
+                self.assertIn("HMB_STATE_DIR is required", stderr)
                 self.assertEqual(list(home.iterdir()), [], "internal process selected default state")

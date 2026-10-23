@@ -1,6 +1,7 @@
 """Synthetic static launch descriptions; no vendor shim text or real CLI."""
 from __future__ import annotations
 
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -114,7 +115,7 @@ class LiteralShimTests(unittest.TestCase):
                 self.shim.write_text(content, encoding='utf-8')
                 with mock.patch.object(discovery, 'probe') as probe,\
                      mock.patch.object(discovery, '_probe_dsh_version') as dsh_probe:
-                    result = discovery._candidate_handshake('dsh', self.candidate(), {}, time.monotonic() + 5)
+                    result = discovery._candidate_handshake('dsh', self.candidate(), {}, time.monotonic() + 5, version_probe=partial(discovery._probe_dsh_version, state_dir=Path(os.environ["HMB_STATE_DIR"])))
                 self.assertEqual(result['reason']['code'], 'harness.entry-unsupported')
                 probe.assert_not_called()
                 dsh_probe.assert_not_called()
@@ -123,7 +124,7 @@ class LiteralShimTests(unittest.TestCase):
         source = {'ELECTRON_RUN_AS_NODE': 'inherited-value', 'SECRET': 'excluded', 'PATH': ''}
         with mock.patch.object(discovery, '_native_command', side_effect=lambda p: [str(p)]),\
              mock.patch.object(discovery, 'probe', return_value=(None, b'fixture 1.2.3')) as probe:
-            result = discovery._candidate_handshake('zcode', self.candidate(), source, time.monotonic() + 5)
+            result = discovery._candidate_handshake('zcode', self.candidate(), source, time.monotonic() + 5, version_probe=discovery._probe_cli_version)
         self.assertEqual(result['status'], 'ready')
         environment = probe.call_args.args[1]
         self.assertEqual(environment['ELECTRON_RUN_AS_NODE'], '1')
@@ -186,7 +187,7 @@ class LiteralShimTests(unittest.TestCase):
             entry = renamed
         self.shim.write_text('set "ELECTRON_RUN_AS_NODE=1"\n'
                              f'"%~dp0{entry.name}" "%~dp0..\\..\\payload.asar\\entry.js" %*\n', encoding='utf-8')
-        result = discovery._candidate_handshake('dsh', self.candidate(), {'PATH': ''}, time.monotonic() + 10)
+        result = discovery._candidate_handshake('dsh', self.candidate(), {'PATH': ''}, time.monotonic() + 10, version_probe=partial(discovery._probe_dsh_version, state_dir=Path(os.environ["HMB_STATE_DIR"])))
         self.assertEqual(result['status'], 'ready', result)
         self.assertEqual(json.loads(capture.read_text())['ELECTRON_RUN_AS_NODE'], '1')
         capture.unlink()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from ....protocol.capabilities import adapter_capabilities
 from . import native_run
@@ -39,6 +40,6 @@ class ZcodeAdapter:
 
     validate_turn_provenance = staticmethod(native_run.validate_turn_provenance)
 
-    def discover_models(self) -> dict:
+    def discover_models(self, *, state_dir: Path) -> dict:
         from ...roles.run_execution import discover_models
-        return discover_models(self.name)
+        return discover_models(self.name, state_dir=state_dir)

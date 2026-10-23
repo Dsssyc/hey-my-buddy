@@ -481,7 +481,7 @@ class BoardService(_BaseResource):
         observation = catalog_store.begin(self.evaluation, harnesses=[record])
         try:
             with bound([record], environment=self.harnesses.environment()):
-                native = adapter(name).discover_models()
+                native = adapter(name).discover_models(state_dir=self.store.directory)
                 payload = catalog.discovery_payload(native, harness=name)
             native_fact = (next((item for item in payload['discoveries'] if item['harness'] == name), None)
                            if 'discoveries' in native else None)

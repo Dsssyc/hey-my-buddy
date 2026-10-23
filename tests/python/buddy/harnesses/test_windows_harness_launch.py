@@ -108,7 +108,7 @@ class HarnessLaunchChainTests(unittest.TestCase):
              mock.patch.object(discovery, "_app_paths", return_value=[]), \
              mock.patch.object(discovery, "_registry_paths", return_value=[]):
             record = discovery.discover(harness, manual_path=None if path else str(entry),
-                                        environment=environment)
+                                        environment=environment, state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(record["status"], "ready", record)
         self.assertEqual(record["command"], expected)
         self.assertEqual(record["source"], "path" if path else "manual")

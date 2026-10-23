@@ -150,30 +150,32 @@ class DescriptionSeamTests(DshRoleCase):
         decided from mocked records, never a launched harness.
         """
         from hey_my_buddy.buddy.harnesses import discovery, runtime_selection
+        state = Path(os.environ["HMB_STATE_DIR"])
+        environment = {"HMB_STATE_DIR": str(state)}
         seam = run_seam("dsh")
         description = adapter("dsh")
         ready = {"status": "ready", "command": ["/installed/dsh"]}
         with mock.patch.object(runtime_selection, "selected", return_value=ready):
-            self.assertIsNone(seam.check_preparation({}, {}))
+            self.assertIsNone(seam.check_preparation({}, environment))
             self.assertEqual(description.available(), (True, None))
         bad = {"status": "login-required", "reason": {"code": "harness.login-required", "params": {"operation": "probe"}}}
         with mock.patch.object(runtime_selection, "selected", return_value=bad):
             self.assertEqual(description.available(), (False, "harness.login-required"))
             with self.assertRaises(Exception) as caught:
-                seam.check_preparation({}, {})
+                seam.check_preparation({}, environment)
             self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
         detected = {"status": "ready", "available": True, "command": ["/installed/dsh"]}
         with mock.patch.object(runtime_selection, "selected", return_value=None), \
                 mock.patch.object(discovery, "discover", return_value=detected):
             self.assertEqual(description.available(), (True, None))
-            self.assertIsNone(seam.check_preparation({}, {}))
+            self.assertIsNone(seam.check_preparation({}, environment))
         failed = {"status": "missing", "available": False,
                   "reason": {"code": "harness.not-found", "params": {"operation": "probe"}}}
         with mock.patch.object(runtime_selection, "selected", return_value=None), \
                 mock.patch.object(discovery, "discover", return_value=failed):
             self.assertEqual(description.available(), (False, "harness.not-found"))
             with self.assertRaises(Exception) as caught:
-                seam.check_preparation({}, {})
+                seam.check_preparation({}, environment)
             self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
 
 
@@ -382,7 +384,7 @@ class DiscoverySeamTests(DshRoleCase):
         record = {"harness": "dsh", **json.loads(self.record.read_text(encoding="utf-8"))["dsh"]}
         with mock.patch.dict(os.environ, self.environment):
             with bound([record], environment={**self.environment}):
-                catalog = adapter("dsh").discover_models()
+                catalog = adapter("dsh").discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         self.assertEqual(catalog["harness"], "dsh")
         self.assertEqual(catalog["source"], "dsh-acp-session-config")
         provider = next(entry for entry in catalog["providers"] if entry["provider"] == "fake")

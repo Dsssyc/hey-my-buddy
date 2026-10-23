@@ -63,7 +63,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
         with patch.dict(os.environ, environment, clear=True), \
              patch.object(tempfile, 'tempdir', str(self.root)), \
              bound([record], environment=environment):
-            return run_execution.discover_models('codex')
+            return run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"]))
 
     def test_native_metadata_wait_is_unknown_and_the_next_read_can_complete(self):
         handle = SimpleNamespace(wait=lambda seconds: 0)
@@ -262,7 +262,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
                       'reason': {'code': 'harness.not-found', 'params': {'operation': 'probe'}}}
             with patch.dict(os.environ, environment, clear=True), bound([record], environment=environment):
                 with self.assertRaises(BoardError) as caught:
-                    run_execution.discover_models('codex')
+                    run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"]))
             self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
             self.assertEqual(caught.exception.message, 'The selected harness is unavailable')
             self.assertIs(caught.exception.discovery_shutdown_confirmed, True)

@@ -471,7 +471,7 @@ def discover(*, directory: Path, harnesses: list[dict]) -> dict:
                     discoveries.append({"harness": name, "status": "unknown", "accountStatus": "unknown",
                                         "reason": unavailable})
                     continue
-                payload = instance.discover_models()
+                payload = instance.discover_models(state_dir=directory)
             payload = discovery_payload(payload, harness=name)
         except BoardError as error:
             failure = reason("catalog.discovery-failed", harness=name, errorCode=error.code)

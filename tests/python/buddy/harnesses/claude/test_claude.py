@@ -113,7 +113,7 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
         entered = threading.Event()
         release = threading.Event()
 
-        def probe():
+        def probe(*, state_dir: Path):
             entered.set()
             self.assertTrue(release.wait(3))
             raise BoardError("HARNESS_UNAVAILABLE", "fixture unauthenticated")
@@ -460,7 +460,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def test_discovery_catalog_uses_resolved_ids_without_a_user_turn(self):
         (self.root / "fixture.json").unlink(missing_ok=True)
         with mock.patch.dict("os.environ", self.environment, clear=True):
-            catalog = self.adapter.discover_models()
+            catalog = self.adapter.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
         provider = catalog["providers"][0]
         self.assertEqual(provider["provider"], "anthropic")
         # The subscription account has no tokenSource; facts come from this initialize.
@@ -486,7 +486,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                 (self.root / "fixture.json").unlink(missing_ok=True)
                 environment = {**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case}
                 with mock.patch.dict("os.environ", environment, clear=True):
-                    catalog = self.adapter.discover_models()
+                    catalog = self.adapter.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
                 self.assertEqual(catalog["discoveries"],
                                  [{"harness": "claude", "status": "complete", "accountStatus": "unknown"}])
                 self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
