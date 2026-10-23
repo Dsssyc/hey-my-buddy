@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..paths import is_absolute_path
+from .harness_names import HARNESS_NAMES, ADAPTER_NAMES as ADAPTERS
 from ..blackboard.store.db import canonical_json, sha256_text
 from ..errors import BoardError
 
@@ -35,9 +36,8 @@ MAX_ARG_BYTES = 32 * 1024
 MAX_RESOURCES = 32
 MAX_CAPABILITIES = 32
 
-CODING_HARNESSES = ("dsh", "zcode", "codex", "claude")
+CODING_HARNESSES = HARNESS_NAMES
 BUDDY_FIELDS = ("harness", "provider", "model", "effort")
-ADAPTERS = (*CODING_HARNESSES, "command")
 INQUIRY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")

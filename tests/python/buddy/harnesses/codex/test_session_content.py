@@ -383,7 +383,7 @@ class SessionRecordRecoveryTests(unittest.TestCase):
                          ["first", "second"])
         self.assertTrue(path.read_bytes().endswith(b"\n"))
 
-    def test_file_and_parent_links_are_refused_without_touching_target(self):
+    def test_leaf_link_is_refused_and_private_parent_alias_is_accepted(self):
         outside = self.root / "outside"
         outside.mkdir()
         target = outside / "sentinel.jsonl"
@@ -396,7 +396,8 @@ class SessionRecordRecoveryTests(unittest.TestCase):
         linked_parent = self.root / "linked-parent"
         linked_parent.symlink_to(outside, target_is_directory=True)
         record = SessionRecord(linked_parent / "attempt.jsonl", "attempt")
-        record.append(self._update("ignored"))
-        self.assertEqual(record.failure["code"], "session-record-write-failed")
+        record.append(self._update("through parent alias"))
+        record.close()
+        self.assertIsNone(record.failure)
+        self.assertEqual(notifications(outside / "attempt.jsonl")[-1]["update"]["content"]["text"], "through parent alias")
         self.assertEqual(target.read_text(encoding="utf-8"), "sentinel")
-        self.assertFalse((outside / "attempt.jsonl").exists())

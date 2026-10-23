@@ -52,8 +52,8 @@ from ..c_two_live import CTwoLiveEndpoint
 from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
-from ....private_files import read_bytes
-from ...roles.turn_io import canonical_json, guard_private_path, private_json
+from ....private_files import open_read, read_bytes
+from ...roles.turn_io import canonical_json, private_json
 from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ..version import VersionShutdownError, probe_version
 from ..base import ProcessHandle
@@ -2120,7 +2120,7 @@ def _read_evidence_ref(result: RunResult, kind: str) -> dict | None:
     for ref in result.evidence_refs:
         if ref.kind != kind:
             continue
-        with guard_private_path(Path(ref.location)).open("rb") as stream:
+        with open_read(Path(ref.location)) as stream:
             raw = stream.read(STRICT_RESULT_BYTES + 1)
         if len(raw) > STRICT_RESULT_BYTES:
             raise BoardError("INVALID_ARGUMENT", "The native evidence reference no longer matches its content")

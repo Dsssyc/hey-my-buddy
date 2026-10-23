@@ -22,6 +22,7 @@ from ...paths import is_absolute_path
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
+from ...state_root import get_state_dir
 from ...private_files import open_read, read_bytes, read_text
 from ...protocol import usage
 from ...protocol.stop import WRAP_UP_INITIATORS
@@ -39,7 +40,7 @@ from .run_controller import NATIVE_OPERATIONS
 from .structured_call import (
     _NoToolEvidence, structured_prompt, valid_answer,
 )
-from .turn_io import input_hash, private_json, validate_outcome, guard_private_path, canonical_json
+from .turn_io import input_hash, private_json, validate_outcome, canonical_json
 
 WORKER_STOP_GRACE_SECONDS = 8.0
 _NATIVE_CONTROL = "native-control.json"
@@ -114,7 +115,7 @@ class InlineRunHandle:
 def _evidence(result, kind: str) -> dict | None:
     for ref in result.evidence_refs:
         if ref.kind == kind:
-            with open_read(guard_private_path(Path(ref.location))) as stream:
+            with open_read(Path(ref.location)) as stream:
                 raw = stream.read(STRICT_RESULT_BYTES + 1)
             if (len(raw) > STRICT_RESULT_BYTES or ref.size_bytes != len(raw)
                     or ref.sha256 != hashlib.sha256(raw).hexdigest()):
@@ -616,8 +617,6 @@ def start_review(name: str, context: ExecutionContext, request) -> InlineRunHand
         "readOnlyRequest": {"prompt": request.prompt, "outputSchema": request.output_schema,
                             "budget": request.budget, "captureEvidence": request.capture_evidence},
     }
-    for log_path in context.log_paths().values():
-        guard_private_path(Path(log_path))
     identity = RunIdentity(task_id=context.task_id, attempt_id=context.attempt_id,
                            generation=context.generation, invocation_id=uuid.uuid4().hex)
     return _launch(control, context, environment=environment, identity=identity, grace_seconds=10)
@@ -805,7 +804,7 @@ def _artifacts(context: ExecutionContext, handle: InlineRunHandle) -> list[dict]
     artifacts = []
     for kind, path in paths:
         if path.is_file():
-            raw = read_bytes(path) if kind in ("task-specification", "native-attention") else path.read_bytes()
+            raw = read_bytes(path)
             artifacts.append({"kind": kind, "location": str(path.resolve()), "sizeBytes": path.stat().st_size,
                               "contentHash": hashlib.sha256(raw).hexdigest()})
     return artifacts
@@ -838,7 +837,8 @@ def _native_operation(name: str, operation: str, **arguments) -> dict:
             if not callable(getattr(module, specification["seam"], None)):
                 raise BoardError(specification["unavailableCode"],
                                  f"The harness has no registered {operation} operation", harness=name)
-            directory = make_temporary_dir(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-")
+            directory = make_temporary_dir(prefix=f"hey-my-buddy-{name}-{specification['resultKey']}-",
+                directory=ensure_private_dir(get_state_dir() / "tmp"))
             control = directory / _NATIVE_CONTROL
             private_json(control, {"operation": operation, "arguments": arguments,
                                    "harness": name,

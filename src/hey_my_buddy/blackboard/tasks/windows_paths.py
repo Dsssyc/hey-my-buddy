@@ -206,34 +206,6 @@ def lock_fd(path, *, create=True, api=None, repository=None):
             raise
 
 
-class _WorkspacePublishOperations:
-    """Use the workspace's held Windows handles for shared byte publication."""
-
-    def __init__(self, api, repository):
-        self.api = api
-        self.repository = repository
-
-    def open(self, path):
-        handle, _ = _open_checked(self.api, path, action="create")
-        try:
-            return self.api.fd(handle, os.O_WRONLY)
-        except BaseException:
-            self.api.close(handle)
-            raise
-
-    def read(self, path):
-        contents = read(path, api=self.api, repository=self.repository)
-        if contents is None:
-            raise FileNotFoundError(path)
-        return contents
-
-    def link(self, source, target):
-        self.api.link(source, target)
-
-    def unlink(self, path):
-        remove(path, missing_ok=True, api=self.api, repository=self.repository)
-
-
 @contextmanager
 def artifact_publication(path):
     """Translate immutable workspace conflicts at one shared boundary."""
@@ -247,5 +219,11 @@ def artifact_publication(path):
 def write_once(path, data, *, api=None, repository=None):
     """Publish an immutable artifact under the held Windows workspace parent."""
     with parent(path, api=api, repository=repository) as (api, path), artifact_publication(path):
-        private_files.publish_bytes(path, data, immutable=True,
-                                    operations=_WorkspacePublishOperations(api, repository))
+        # Workspace names retain their case/short-name policy at this boundary.
+        try:
+            handle, _ = _open_checked(api, path)
+        except FileNotFoundError:
+            pass
+        else:
+            api.close(handle)
+        private_files.publish_bytes(path, data, immutable=True)

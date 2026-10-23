@@ -234,10 +234,9 @@ class ExecutionEndpointTests(unittest.TestCase):
                 self.assertNotIn(material["token"], str(refused.exception))
                 if os.name != "nt":
                     os.chmod(endpoint_file, 0o644)
-                    with self.assertRaises(BoardError) as unsafe:
-                        read_execution_endpoint(execution.directory, execution.live.identity,
-                            state_dir=state, process_identity=process_identity)
-                    self.assertEqual(unsafe.exception.code, "PRIVATE_PATH_UNSAFE")
+                    reopened = read_execution_endpoint(execution.directory, execution.live.identity,
+                        state_dir=state, process_identity=process_identity)
+                    self.assertEqual((reopened.identity, reopened.token), (client.identity, material["token"]))
                     os.chmod(endpoint_file, 0o600)
                 with self.assertRaises(BoardError):
                     read_execution_endpoint(execution.directory, execution.live.identity,

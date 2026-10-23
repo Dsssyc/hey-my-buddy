@@ -41,7 +41,7 @@ import buddy.harnesses.zcode.test_zcode as zcode_tests
 
 
 class NoToolEvidenceSafetyTests(unittest.TestCase):
-    """Stopped controller fixtures cannot redirect evidence writes outside their binding."""
+    """Evidence keeps frozen bindings and publication never follows a leaf link."""
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="no-tool-evidence-")
@@ -123,56 +123,25 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                 self.assert_sentinels()
                 self.assertFalse((self.outside / "call-1").exists())
 
-    @unittest.skipIf(os.name == "nt", "POSIX per-operation private path guards")
-    def test_evidence_root_and_call_parent_links_refuse_copy_before_any_outside_write(self):
-        for parent in ("root", "call", "file"):
-            with self.subTest(parent=parent):
-                _, _, handle = self.start()
-                evidence = handle.no_tool_evidence.evidence_root
-                if parent in ("call", "file"):
-                    evidence.mkdir(mode=0o700)
-                    evidence = evidence / "call-1"
-                if parent == "file":
-                    evidence.mkdir(mode=0o700)
-                    (evidence / "result.json").symlink_to(self.sentinels[1])
-                else:
-                    evidence.symlink_to(self.outside, target_is_directory=True)
-                self.assert_retention_failure(handle)
-
-    @unittest.skipIf(os.name == "nt", "POSIX per-operation private path guards")
-    def test_linked_private_source_parent_is_not_read_or_copied(self):
-        _, _, handle = self.start()
-        root = handle.no_tool_evidence.private_root
-        (root / "call-1").symlink_to(self.outside, target_is_directory=True)
-        self.assert_retention_failure(handle)
-        self.assertFalse(handle.no_tool_evidence.evidence_root.exists())
-
-
     def test_evidence_io_failure_preserves_actual_native_stop_and_diagnostic_paths(self):
         _, _, handle = self.start()
         with mock.patch.object(read_only, "private_json", side_effect=OSError("fixture evidence disk failure")):
             self.assert_retention_failure(handle)
 
-    @unittest.skipIf(os.name == "nt", "POSIX per-operation private path guards")
-    def test_plain_and_immutable_json_refuse_final_links_and_every_parent_link(self):
+    def test_private_json_never_writes_through_a_leaf_link(self):
         for exclusive in (False, True):
-            for location in ("file", "parent", "ancestor"):
-                with self.subTest(exclusive=exclusive, location=location):
-                    directory = self.root / f"json-{exclusive}-{location}"
-                    directory.mkdir(mode=0o700)
-                    if location == "file":
-                        target = directory / "result.json"
-                        target.symlink_to(self.sentinels[1])
-                    else:
-                        parent = directory / "linked"
-                        parent.symlink_to(self.outside, target_is_directory=True)
-                        target = parent / "result.json" if location == "parent" else parent / "new" / "result.json"
-                    with self.assertRaises(BoardError) as refused:
-                        turn_io.private_json(target, {"overwritten": True}, exclusive=exclusive)
-                    self.assertEqual(refused.exception.code, "PRIVATE_PATH_UNSAFE")
-                    self.assert_sentinels()
-                    self.assertFalse((self.outside / "new").exists())
-                    self.assertFalse(any(self.outside.glob(".*.tmp")))
+            with self.subTest(exclusive=exclusive):
+                path = self.root / f'linked-{exclusive}.json'
+                path.symlink_to(self.sentinels[1])
+                if exclusive:
+                    with self.assertRaises(BoardError):
+                        turn_io.private_json(path, {"complete": True}, exclusive=True)
+                    self.assertTrue(path.is_symlink())
+                else:
+                    turn_io.private_json(path, {"complete": True})
+                    self.assertFalse(path.is_symlink())
+                    self.assertEqual(json.loads(path.read_bytes()), {"complete": True})
+                self.assert_sentinels()
 
 
 

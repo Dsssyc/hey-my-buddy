@@ -24,7 +24,7 @@ from ..harnesses.run_contract import (
 from . import run_execution
 from .controller import run_harness
 from .prompts import wrap_up_prompt
-from .turn_io import _private_bytes, guard_private_path
+from ...private_files import publish_bytes
 
 
 @contextmanager
@@ -81,7 +81,7 @@ def _summary_run(control, request, result, module, state_dir, deadline, handle):
         return control, request, result, False, True
     root = ensure_private_dir(Path(control["privateRoot"]) / "stop-summary")
     task_path = root / "summary-task.txt"
-    _private_bytes(task_path, wrap_up_prompt().encode(), exclusive=True)
+    publish_bytes(task_path, wrap_up_prompt().encode(), immutable=True)
     next_control = {**control, "privateRoot": str(root), "taskFile": str(task_path),
                     "invocationId": uuid.uuid4().hex,
                     "timeoutSeconds": min(86400, math.ceil(remaining))}
@@ -184,7 +184,7 @@ def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, 
                        "permission": {"level": request.permission,
                                       "enforcement": PERMISSION_LEVELS[request.harness][request.permission]}}
         raw = canonical_json(declaration).encode()
-        _private_bytes(path, raw, exclusive=True)
+        publish_bytes(path, raw, immutable=True)
         ref = EvidenceRef(kind="worker-permission", location=str(path),
                           size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
         result = result.model_copy(update={"evidence_refs": (*result.evidence_refs, ref)})
@@ -196,7 +196,7 @@ def execute(control: dict, handle, state_dir: Path) -> tuple[RunResult, object, 
         wrap_up_run = result.identity != original_identity
         if code == 0 and (not wrap_up_run or wrap_up_candidate):
             try:
-                turn_input = decode_strict_json(read_bytes(guard_private_path(Path(control["inputFile"]))))
+                turn_input = decode_strict_json(read_bytes(Path(control["inputFile"])))
                 facts = {"sessionId": result.native_identity.session_id if result.native_identity else None}
                 run_execution._worker_result(result, control, turn_input, request.input_text, facts)
                 delivered = wrap_up_candidate

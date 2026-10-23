@@ -154,27 +154,29 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
             error = OSError('file could not be opened')
         with mock.patch('hey_my_buddy.buddy.harnesses.session_record.open_regular_fd', side_effect=error):
             stopped = self.finish_recording_failure(board, run, path, error)
-        if kind == 'linked-parent':
-            self.get(browser, route, status=500, code='SESSION_UNREADABLE')
-        else:
-            page = self.get(browser, route)
-            self.assertEqual((page['events'], page['before'], page['after'], page['stopped']),
-                             ([], 0, 0, stopped))
+        page = self.get(browser, route)
+        self.assertEqual((page['events'], page['before'], page['after'], page['stopped']),
+                         ([], 0, 0, stopped))
         self.assertEqual(set(stopped), {'code', 'params'})
-        self.assertEqual(stopped['params']['category'], 'BoardError' if kind == 'linked-parent' else 'OSError')
+        self.assertEqual(stopped['params']['category'], 'OSError')
         if kind == 'linked-parent':
             self.assertEqual(list(outside.iterdir()), [])
 
     def test_missing_record_with_failure_returns_an_empty_stopped_page(self):
         self.assert_failure_before_first_line('missing')
 
-    def test_linked_directory_with_failure_is_unreadable(self):
+    def test_private_parent_alias_with_failure_returns_an_empty_stopped_page(self):
         self.assert_failure_before_first_line('linked-parent')
 
     def test_stopped_record_permission_failure_is_unreadable(self):
         board, browser, route, path, _, _, run = self.fixture(record=False)
         self.finish_recording_failure(board, run, path, OSError('file write unavailable'))
-        with mock.patch.object(private_dirs, 'open_regular_fd', side_effect=PermissionError('private path')):
+        original = private_dirs.open_regular_fd
+        def denied(target, flags, mode=0o600):
+            if target == path:
+                raise PermissionError('private path')
+            return original(target, flags, mode)
+        with mock.patch.object(private_dirs, 'open_regular_fd', side_effect=denied):
             error = self.get(browser, route, status=500, code='SESSION_UNREADABLE')
         self.assertNotIn('private path', json.dumps(error))
 
@@ -351,7 +353,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         with mock.patch.object(session_content, '_page', side_effect=remove):
             self.get(browser, route, status=410, code='SESSION_DELETED')
 
-    def test_linked_file_and_parent_are_refused_without_reading_outside_content(self):
+    def test_leaf_link_is_refused_and_private_parent_alias_is_accepted(self):
         board, browser, route, path, _, _, _ = self.fixture(count=1)
         outside = board.directory / 'outside-session-read'
         outside.mkdir()
@@ -366,10 +368,15 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         path.unlink()
         path.parent.rmdir()
         path.parent.symlink_to(outside, target_is_directory=True)
-        error = self.get(browser, route, status=500, code='SESSION_UNREADABLE')
-        self.assertNotIn('credentials must stay private', json.dumps(error))
+        page = self.get(browser, route)
+        self.assertEqual(page['events'][-1]['update']['content']['text'], 'credentials must stay private')
         self.assertEqual(target.read_bytes(), expected)
-        with mock.patch.object(private_dirs, 'open_regular_fd', side_effect=OSError(str(target))):
+        original = private_dirs.open_regular_fd
+        def unreadable(entry, flags, mode=0o600):
+            if entry == path:
+                raise OSError(str(target))
+            return original(entry, flags, mode)
+        with mock.patch.object(private_dirs, 'open_regular_fd', side_effect=unreadable):
             self.get(browser, route, status=500, code='SESSION_UNREADABLE')
 
     def test_session_bytes_are_separate_and_ordinary_storage_apply_retains_them(self):

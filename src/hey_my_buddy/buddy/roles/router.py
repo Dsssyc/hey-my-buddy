@@ -1,7 +1,8 @@
 """Router attempts over the harness-neutral read-only structured-call protocol."""
 from __future__ import annotations
 
-import os
+from ...private_dirs import directory_mode
+
 
 from dataclasses import replace
 
@@ -83,7 +84,7 @@ class DecisionAdapter(Adapter):
         buddy = document.get("buddy") or {}
         native = adapter(buddy.get("harness"))
         fast = document.get("routingMode") == "fast"
-        context.directory.mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True, exist_ok=True)
+        context.directory.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
         if fast:
             self._preparation = prepare_router_fast(document, buddy, native, context)
         else:

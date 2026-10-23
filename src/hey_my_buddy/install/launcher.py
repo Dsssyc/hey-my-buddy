@@ -145,14 +145,12 @@ def credential_state_dir(value: dict | None = None) -> Path | None:
 
 def read_private(path: Path) -> dict | None:
     from hey_my_buddy.errors import BoardError
-    from hey_my_buddy.private_dirs import open_regular_fd, validate_private_fd
+    from hey_my_buddy.private_dirs import open_regular_fd
     try:
         fd = open_regular_fd(path, os.O_RDONLY)
     except FileNotFoundError:
         return None
     try:
-        if os.name != 'nt':
-            validate_private_fd(fd)
         data = json.loads(os.read(fd, 65537))
         if not isinstance(data, dict):
             raise ValueError('Expected an object')
@@ -370,9 +368,7 @@ def main(argv: list[str] | None = None) -> int:
                 if credential is not None:
                     # The source file was read once. Transfer its validated contents
                     # through an anonymous private descriptor across exec, never argv/env.
-                    from hey_my_buddy.private_dirs import validate_private_fd
                     with tempfile.TemporaryFile(mode='w+b', dir=state) as transfer:
-                        validate_private_fd(transfer.fileno())
                         transfer.write(json.dumps(credential).encode('utf-8'))
                         transfer.seek(0)
                         with _inherited_credential(transfer.fileno()) as descriptor:

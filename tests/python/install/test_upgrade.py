@@ -464,17 +464,6 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
         verify.assert_not_called()
 
-    def test_restore_rejects_linked_backup_parent_before_verification(self):
-        board = self.board()
-        board.store.db.close()
-        current = Path(backup.create(board.directory, runtime_identity=None, plugin_commit=None, contract_version=CONTRACT_VERSION)['path'])
-        alias = self.directory / 'linked-backup-parent'
-        alias.symlink_to(current.parent, target_is_directory=True)
-        with mock.patch('hey_my_buddy.install.upgrade.backup.verify') as verify:
-            with self.assertRaises(BoardError) as caught:
-                upgrade.restore(board.directory, alias / current.name)
-        self.assertEqual(caught.exception.code, 'UPGRADE_UNSAFE')
-        verify.assert_not_called()
 
     def test_restore_rejects_linked_state_destination_without_touching_target(self):
         board = self.board()

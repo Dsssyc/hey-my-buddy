@@ -21,6 +21,7 @@ from protocol.test_public_state import DAEMON_COMMAND, prepare_daemon_spawn, cle
 from protocol import test_transport_attach as attach_fixture
 from protocol.test_transport_attach import MutationRecorder, snapshot
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy import state_root
 from hey_my_buddy.protocol import rpc_config, transport
 
 
@@ -97,7 +98,7 @@ def run_path_case(name, work):
                 alias = work / 'state-alias'
                 alias.symlink_to(state, target_is_directory=True)
                 for selected in (ancestor / 'state', alias):
-                    assert transport.get_state_dir(selected) == state
+                    assert state_root.get_state_dir(selected) == state
                     cli, receipt = cli_health(selected, environment)
                     handles.append(cli)
                     evidence['processes'].append(receipt)
@@ -137,10 +138,10 @@ class PathStateTests(unittest.TestCase):
         alias = self.work / 'alias'
         alias.symlink_to(self.state, target_is_directory=True)
         with patch.dict(os.environ, {'HMB_STATE_DIR': str(alias)}):
-            self.assertEqual(transport.get_state_dir(), self.state)
-            self.assertEqual(transport.get_state_dir(self.work / 'explicit'), self.work / 'explicit')
-        with patch.dict(os.environ, {}, clear=True), patch.object(transport.home, 'default_state_dir', return_value=alias):
-            self.assertEqual(transport.get_state_dir(), self.state)
+            self.assertEqual(state_root.get_state_dir(), self.state)
+            self.assertEqual(state_root.get_state_dir(self.work / 'explicit'), self.work / 'explicit')
+        with patch.dict(os.environ, {}, clear=True), patch.object(state_root.home, 'default_state_dir', return_value=alias):
+            self.assertEqual(state_root.get_state_dir(), self.state)
 
     def test_path02_private_ipc_and_inner_links_and_dotdot_have_paths(self):
         self.state.mkdir(mode=0o700)

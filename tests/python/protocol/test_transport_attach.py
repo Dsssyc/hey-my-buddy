@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, call, patch
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy import private_dirs
+from hey_my_buddy import private_dirs, state_root
 from hey_my_buddy.protocol import transport
 
 from hey_my_buddy.protocol.transport import (
@@ -23,10 +23,17 @@ from hey_my_buddy.protocol.transport import (
     _attach_read_only,
     _read_endpoint,
     _request,
-    _trusted_directory,
     call_service,
     ensure_service,
 )
+
+def trusted_directory(directory):
+    try:
+        state_root.check_state_root(directory)
+    except BoardError:
+        return False
+    return True
+
 
 ENDPOINT = {"address": "ipc://hey-my-buddy-attach-fixture", "token": "fixture-secret", "pid": 4242}
 LAUNCH_TARGET = {"python": sys.executable, "pythonPath": None,
@@ -104,7 +111,7 @@ class AncestorGroupTrustTests(unittest.TestCase):
                 patch("pwd.getpwuid", return_value=account), \
                 patch("pwd.getpwall", return_value=[account, *other_accounts]), \
                 patch("grp.getgrgid", return_value=group):
-            return transport._trusted_ancestors(Path("/fixture/state"))
+            return state_root._trusted_ancestors(Path("/fixture/state"))
 
     def test_group_writable_ancestor_with_private_primary_group_is_trusted(self):
         for members in ((), ("fixture-user",)):
@@ -138,7 +145,7 @@ class AncestorGroupTrustTests(unittest.TestCase):
                     patch("grp.getgrgid", return_value=group) as lookup_group, \
                     patch("pwd.getpwall", return_value=[account]):
                 (lookup_account if missing == "account" else lookup_group).side_effect = KeyError(1000)
-                self.assertFalse(transport._private_primary_group(2000))
+                self.assertFalse(state_root._private_primary_group(2000))
 
     def test_world_writable_ancestor_without_sticky_bit_is_not_trusted(self):
         self.assertFalse(self.trusted(mode=0o777))
@@ -219,6 +226,7 @@ class TrustBoundaryTests(AttachFixture):
             child.wait.return_value = 1
             return child
 
+        mode_before = stat.S_IMODE(self.directory.stat().st_mode)
         with MutationRecorder() as recorder:
             if os.name != "nt":
                 recorder.chmod.side_effect = lambda directory, mode: os.chmod(directory, mode)
@@ -232,7 +240,10 @@ class TrustBoundaryTests(AttachFixture):
             recorder.chmod.assert_not_called()
         else:
             self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o700)
-            recorder.chmod.assert_called_once_with(self.directory.resolve(), 0o700)
+            if mode_before & 0o077:
+                recorder.chmod.assert_called_once_with(self.directory.resolve(), 0o700)
+            else:
+                recorder.chmod.assert_not_called()
         self.assertGreaterEqual(len(calls), 3, "health must be re-checked after spawning")
         self.assertEqual(requests_before_spawn, [0], "no RPC may run against an untrusted endpoint")
 
@@ -246,7 +257,7 @@ class TrustBoundaryTests(AttachFixture):
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_group_writable_state_directory_is_not_trusted_even_with_private_group(self):
         self.directory.chmod(0o770)
-        with patch.object(transport, "_private_primary_group", return_value=True) as group:
+        with patch.object(state_root, "_private_primary_group", return_value=True) as group:
             self.assert_rejected_by_validation()
         group.assert_not_called()
 
@@ -255,13 +266,13 @@ class TrustBoundaryTests(AttachFixture):
         parent = Path(self.temp.name) / "group-writable"
         parent.mkdir(mode=0o770)
         parent.chmod(0o770)
-        directory = parent / "state"
-        directory.mkdir(mode=0o700)
         self.assertEqual(stat.S_IMODE(parent.stat().st_mode), 0o770)
-        for private in (True, False):
+        for private in (False, True):
+            directory = parent / ("state-" + str(private))
+            directory.mkdir(mode=0o700)
             with self.subTest(private=private), \
-                    patch.object(transport, "_private_primary_group", return_value=private) as group:
-                self.assertEqual(_trusted_directory(directory), private)
+                    patch.object(state_root, "_private_primary_group", return_value=private) as group:
+                self.assertEqual(trusted_directory(directory), private)
                 group.assert_any_call(parent.stat().st_gid)
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
@@ -273,11 +284,11 @@ class TrustBoundaryTests(AttachFixture):
         self.request.assert_not_called()
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
-    def test_symlinked_state_directory_is_not_trusted(self):
+    def test_symlinked_state_directory_uses_its_trusted_real_root(self):
         link = Path(self.temp.name) / "state-link"
         link.symlink_to(self.directory)
-        self.assertFalse(_trusted_directory(link))
-        self.assertIsNone(_attach_read_only(link))
+        self.assertTrue(trusted_directory(link))
+        self.assertEqual(_attach_read_only(link), ENDPOINT)
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_state_directory_under_a_sticky_shared_parent_is_trusted(self):
@@ -297,7 +308,7 @@ class TrustBoundaryTests(AttachFixture):
         (nested / "control.json").chmod(0o600)
         self.assertTrue(shared.stat().st_mode & stat.S_ISVTX, "fixture must be a sticky shared directory")
         self.assertTrue(nested.parent.parent.samefile(shared.parent), "fixture must sit under the real shared /tmp")
-        self.assertTrue(_trusted_directory(nested))
+        self.assertTrue(trusted_directory(nested))
         self.assertEqual(_read_endpoint(nested), ENDPOINT)
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
@@ -312,7 +323,7 @@ class TrustBoundaryTests(AttachFixture):
         (nested / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         (nested / "control.json").chmod(0o600)
         self.assertFalse(shared.stat().st_mode & stat.S_ISVTX, "fixture must be non-sticky")
-        self.assertFalse(_trusted_directory(nested))
+        self.assertFalse(trusted_directory(nested))
         self.assertIsNone(_read_endpoint(nested))
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
@@ -335,7 +346,7 @@ class TrustBoundaryTests(AttachFixture):
             return info
 
         with patch("hey_my_buddy.protocol.transport.os.lstat", side_effect=foreign_shared):
-            self.assertFalse(_trusted_directory(nested))
+            self.assertFalse(trusted_directory(nested))
             self.assertIsNone(_read_endpoint(nested))
 
     def test_symlinked_endpoint_file_is_not_trusted(self):
@@ -354,17 +365,24 @@ class TrustBoundaryTests(AttachFixture):
             fields[4] = os.geteuid() + 1  # st_uid
             return os.stat_result(fields)
 
-        real_lstat, real_fstat = os.lstat, os.fstat
-        with patch("hey_my_buddy.protocol.transport.os.lstat", side_effect=lambda *args, **kwargs: as_other_owner(real_lstat(*args, **kwargs))):
-            self.assertFalse(_trusted_directory(self.directory))
-        with patch("hey_my_buddy.protocol.transport.os.fstat", side_effect=lambda *args, **kwargs: as_other_owner(real_fstat(*args, **kwargs))):
+        real_stat = os.stat
+        with patch("hey_my_buddy.state_root.os.stat", side_effect=lambda *args, **kwargs: as_other_owner(real_stat(*args, **kwargs))):
+            self.assertFalse(trusted_directory(self.directory))
             self.assertIsNone(_read_endpoint(self.directory))
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
-    def test_unsafe_endpoint_file_mode_is_not_trusted(self):
+    def test_endpoint_file_does_not_repeat_the_directory_privacy_check(self):
         self.write_endpoint(ENDPOINT, 0o644)
-        self.assert_rejected_by_validation()
-        self.assert_falls_back_to_cold_start()
+        self.assertEqual(_read_endpoint(self.directory), ENDPOINT)
+
+    @unittest.skipIf(os.name == "nt", "POSIX directory boundary")
+    def test_repeated_attachment_checks_directory_trust_once(self):
+        with patch.object(state_root, '_check_posix', wraps=state_root._check_posix) as private, \
+                patch.object(state_root, '_trusted_ancestors', wraps=state_root._trusted_ancestors) as ancestors:
+            for _ in range(3):
+                self.assertEqual(_attach_read_only(self.directory), ENDPOINT)
+        private.assert_called_once_with(self.directory.resolve(), create=False)
+        ancestors.assert_called_once_with(self.directory.resolve(), creating=False)
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_endpoint_outside_a_private_directory_is_not_trusted(self):
@@ -530,8 +548,7 @@ class ColdStartTests(unittest.TestCase):
         with self.assertRaises(BoardError) as refused:
             ensure_service(blocked)
         self.assertEqual(refused.exception.code, 'PRIVATE_PATH_UNSAFE')
-        self.assertEqual(refused.exception.message, 'IPC path is not a directory')
-        self.assertEqual(refused.exception.details['path'], str(blocked.resolve()))
+        self.assertEqual(refused.exception.details['path'], str(self.directory.resolve()))
         self.spawn.assert_not_called()
         self.assertEqual(blocked.read_text(encoding="utf-8"), "not a directory")
 
@@ -583,7 +600,7 @@ class ColdStartTests(unittest.TestCase):
         self.assertEqual(failure.exception.message, str(error))
 
     def test_startup_error_from_another_pid_is_not_attributed_to_the_new_daemon(self):
-        self.directory.mkdir()
+        self.directory.mkdir(mode=0o700)
         from hey_my_buddy.blackboard.service.daemon import atomic_json
         atomic_json(self.directory / "startup-error.json", {
             "pid": 4241, "code": "SERVICE_START_TIMEOUT", "message": "earlier daemon timeout",

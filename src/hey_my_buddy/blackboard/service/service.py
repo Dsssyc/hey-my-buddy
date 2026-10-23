@@ -19,6 +19,7 @@ import re
 
 from ...install import runtime
 from ...protocol import schemas
+from ...protocol.harness_names import HARNESS_NAMES
 from ..tasks import macro_tasks, micro_task, workflow as workflow_module
 from ...private_dirs import session_record_path
 from ...buddy.harnesses.registry import capability_report
@@ -528,7 +529,7 @@ class BoardService(_BaseResource):
                 if attempt['execution_state'] == 'finished' or attempt['cancel_requested_at']:
                     raise BoardError('ATTEMPT_FINISHED', 'This attempt cannot start a harness')
                 name = attempt['model_harness'] or attempt['adapter']
-                if name not in ('dsh', 'zcode', 'codex', 'claude'):
+                if name not in HARNESS_NAMES:
                     return {'harness': None}
                 request = {key: params.get(key) for key in ('attemptId', 'generation', 'retry', 'failedOnly', 'healthRevision')}
                 subject = self.store._subject(params['nonce'], attempt['attempt_id'])
@@ -602,7 +603,7 @@ class BoardService(_BaseResource):
             specs.extend(helper.get('spec', helper) for helper in params['helpers'] if isinstance(helper, dict))
         names = {spec.get('harness') for spec in specs if isinstance(spec, dict) and isinstance(spec.get('harness'), str)}
         for name in sorted(names):
-            if explicit and name in ('dsh', 'zcode', 'codex', 'claude') and self.harnesses.get(name)['status'] != 'ready':
+            if explicit and name in HARNESS_NAMES and self.harnesses.get(name)['status'] != 'ready':
                 self.harnesses.refresh(name, force=True)
         self.harnesses.kick()
 
@@ -857,7 +858,7 @@ class BoardService(_BaseResource):
                     names = {row[0] for row in db.execute(
                         "SELECT DISTINCT adapter FROM tasks WHERE state='queued' "
                         "AND queue_reason IN ('awaiting-execution','capacity','awaiting-buddy-validation')")}
-                for name in sorted(names & {'dsh', 'zcode', 'codex', 'claude'}):
+                for name in sorted(names & set(HARNESS_NAMES)):
                     self.harnesses.refresh(name, preflight=True)
             self.store.workflow.prepare_continuation_workspace({"taskId": task_id} if task_id else {})
             response = self.store.admit_execution(nonce, task_id=task_id)

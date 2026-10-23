@@ -586,8 +586,8 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         original_prepare = workspace._prepare_locked
         original_buddy = board.store.workflow._validated_buddy
         captures = {}
-        def capture_first(directory, workspace_id, request_id, intent):
-            manifest = original_prepare(directory, workspace_id, request_id, intent)
+        def capture_first(directory, workspace_id, request_id, intent, *, state_dir):
+            manifest = original_prepare(directory, workspace_id, request_id, intent, state_dir=state_dir)
             if request_id == 'first-cleanup-helper':
                 captures['manifest'] = manifest
             return manifest

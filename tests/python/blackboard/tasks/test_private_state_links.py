@@ -21,13 +21,13 @@ class PrivateStateLinksTests(BoardTestCase):
         alias.symlink_to(actual, target_is_directory=True)
         record = alias / 'record'
         record.write_bytes(b'fact')
-        fd = private_dirs.open_regular_fd(record, os.O_RDONLY, check_parents=False)
+        fd = private_dirs.open_regular_fd(record, os.O_RDONLY)
         with os.fdopen(fd, 'rb') as stream:
             self.assertEqual(stream.read(), b'fact')
         (alias / 'linked').symlink_to(record)
         for path in (alias / 'linked', actual):
             with self.subTest(path=path), self.assertRaises(BoardError) as caught:
-                private_dirs.open_regular_fd(path, os.O_RDONLY, check_parents=False)
+                private_dirs.open_regular_fd(path, os.O_RDONLY)
             self.assertEqual(caught.exception.code, 'PRIVATE_PATH_UNSAFE')
 
     @unittest.skipIf(os.name == 'nt', 'POSIX nonblocking ordinary-file open')
@@ -35,13 +35,13 @@ class PrivateStateLinksTests(BoardTestCase):
         record = self.directory / 'record'
         record.write_bytes(b'fact')
         with mock.patch.object(private_dirs.os, 'open', wraps=os.open) as opened:
-            fd = private_dirs.open_regular_fd(record, os.O_RDONLY, check_parents=False)
+            fd = private_dirs.open_regular_fd(record, os.O_RDONLY)
         os.close(fd)
         self.assertTrue(opened.call_args.args[1] & os.O_NONBLOCK)
         fifo = self.directory / 'fifo'
         os.mkfifo(fifo)
         with self.assertRaises(BoardError) as caught:
-            private_dirs.open_regular_fd(fifo, os.O_RDONLY, check_parents=False)
+            private_dirs.open_regular_fd(fifo, os.O_RDONLY)
         self.assertEqual(caught.exception.code, 'PRIVATE_PATH_UNSAFE')
         with self.assertRaises(BoardError) as caught:
             storage._read_storage_json(fifo)

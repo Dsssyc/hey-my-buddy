@@ -9,7 +9,7 @@ from ..harnesses.base import AdapterOutcome, ExecutionContext, ProcessHandle
 from ..harnesses.controller import read_plain_evidence
 from ...errors import BoardError
 from ...private_dirs import ensure_private_dir
-from .turn_io import private_json, canonical_json, guard_private_path
+from .turn_io import private_json, canonical_json
 
 _TYPES = {"object": dict, "array": list, "string": str, "null": type(None)}
 
@@ -101,12 +101,12 @@ def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:
     # These paths and the request are frozen at start, never reconstructed from
     # the controller's mutable on-disk configuration after it has run.
     for number in (1, 2):
-        source = guard_private_path(binding.private_root / f"call-{number}")
+        source = binding.private_root / f"call-{number}"
         if not source.exists():
             continue
         if not source.is_dir():
             raise BoardError("PRIVATE_PATH_UNSAFE", "No-tool call source is not a directory", path=str(source))
-        pair = [guard_private_path(source / name) for name in ("request.json", "result.json")]
+        pair = [source / name for name in ("request.json", "result.json")]
         if not all(path.exists() for path in pair):
             continue
         values = [read_plain_evidence(path) for path in pair]

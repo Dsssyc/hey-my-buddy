@@ -20,7 +20,7 @@ from ..protocol import schemas
 from . import skill_package
 from ..errors import BoardError
 from .runtime import project_root
-from ..protocol.transport import get_state_dir
+from ..state_root import check_state_root, get_state_dir
 
 SKILL = skill_package.SKILL_NAME
 
@@ -150,10 +150,7 @@ def install(params: dict) -> dict:
     if os.environ.get("HMB_AGENT_CREDENTIAL_FILE"):
         raise BoardError("UNAUTHORIZED", "A Worker cannot install the shared skill")
     home = agent_skills_home()
-    state = get_state_dir()
-    if os.name == 'nt':
-        from ..windows_files import validate_state_root
-        validate_state_root(state, create=True)
+    state = check_state_root(get_state_dir(), create=True)
     from .runtime import runtime_root
     planned_paths = [str(home / SKILL), str(claude_skills_home() / SKILL), str(state), str(runtime_root())]
     from ..protocol.contracts import CONTRACT_VERSION
@@ -176,7 +173,8 @@ def install(params: dict) -> dict:
         _check_claude_link(target)
         source = packaged_skill()
         if source is None:
-            built = private_dirs.make_temporary_dir(prefix=".hey-my-buddy-source-")
+            built = private_dirs.make_temporary_dir(prefix=".hey-my-buddy-source-",
+                directory=private_dirs.ensure_private_dir(state / "tmp"))
             skill_package.assemble(project_root(), built / SKILL)
             source = built / SKILL
         marker = _marker(source)

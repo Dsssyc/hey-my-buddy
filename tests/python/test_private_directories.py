@@ -137,24 +137,22 @@ class PrivateDirectoryTests(BoardTestCase):
         self.assertTrue(private_dirs.remove_tree(target))
         self.assertEqual(sentinel.read_text(encoding="utf-8"), 'safe')
 
-    def test_parent_guard_stops_before_inspecting_an_entry_under_a_link(self):
-        outside = self.directory.resolve() / 'external-parent'
-        outside.mkdir()
-        (outside / 'secret').write_text('retained', encoding="utf-8", newline="\n")
-        alias = self.directory.resolve() / 'alias'
-        alias.symlink_to(outside, target_is_directory=True)
-        original = Path.lstat
-        def metadata(path, *args, **kwargs):
-            if path == alias / 'secret':
-                raise AssertionError('Entry below linked ancestor was inspected')
-            return original(path, *args, **kwargs)
-        with mock.patch.object(Path, 'lstat', metadata):
-            with self.assertRaises(BoardError) as caught:
-                private_dirs._guard_parents(alias / 'secret')
+    def test_private_open_rejects_parent_traversal_on_both_platforms(self):
+        path = self.directory / 'nested' / '..' / 'record'
+        with self.assertRaises(BoardError) as caught:
+            private_dirs.open_regular_fd(path, os.O_RDONLY)
         self.assertEqual(caught.exception.code, 'PRIVATE_PATH_UNSAFE')
-        self.assertEqual(caught.exception.details['path'], str(alias))
 
-    def test_exclusive_open_rejects_a_link_inserted_after_the_guard(self):
+    def test_existing_directory_permissions_are_not_rewritten(self):
+        if os.name == 'nt':
+            self.skipTest('POSIX mode preservation')
+        target = self.directory / 'existing'
+        target.mkdir(mode=0o750)
+        target.chmod(0o750)
+        self.assertEqual(private_dirs.ensure_private_dir(target), target)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o750)
+
+    def test_exclusive_open_rejects_a_raced_leaf_link(self):
         sentinel = self.directory.resolve() / 'external-sentinel'
         sentinel.write_bytes(b'retained')
         temporary = self.directory.resolve() / 'new-file'

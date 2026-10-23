@@ -120,7 +120,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
         spawn.assert_not_called()
         self.assertIs(caught.exception, error)
         self.assertIs(error.discovery_shutdown_confirmed, True)
-        self.assertEqual(list(self.root.glob('hey-my-buddy-codex-catalog-*')), [])
+        self.assertEqual(list((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*')), [])
 
     def test_launch_prepare_failure_keeps_no_child_stop_through_role(self):
         error = ValueError('fixture launch command preparation failed')
@@ -139,7 +139,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
         spawn.assert_not_called()
         self.assertIs(caught.exception, error)
         self.assertIs(error.discovery_shutdown_confirmed, True)
-        self.assertEqual(list(self.root.glob('hey-my-buddy-codex-catalog-*')), [])
+        self.assertEqual(list((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*')), [])
 
     def test_partial_log_open_failure_closes_stdout_and_keeps_role_stop(self):
         with partial_log_open_failure() as state, \
@@ -153,7 +153,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             with self.assertRaises(OSError) as closed:
                 os.fstat(state['stdout'])
             self.assertEqual(closed.exception.errno, errno.EBADF)
-            self.assertEqual(list(self.root.glob('hey-my-buddy-codex-catalog-*')), [])
+            self.assertEqual(list((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*')), [])
 
     def assert_created_failure(self, receipt, *, stopped):
         with controller_log_close_failure(receipt=receipt) as state:
@@ -166,7 +166,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             self.assertIsNotNone(state['process'].poll())
             self.assertEqual(state['observations'], 1)
             self.assertIs(caught.exception.discovery_shutdown_confirmed, stopped)
-            self.assertEqual(len(list(self.root.glob('hey-my-buddy-codex-catalog-*'))), 0 if stopped else 1)
+            self.assertEqual(len(list((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*'))), 0 if stopped else 1)
 
     def test_created_fd_failure_without_native_receipt_keeps_role_unknown(self):
         self.assert_created_failure(None, stopped=False)
@@ -182,7 +182,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
                         b'{"processState":[]}', b'{"processState":{"shutdownConfirmed":1}}',
                         b'{"processState":{"shutdownConfirmed":"true"}}'):
             with self.subTest(receipt=receipt):
-                previous = set(self.root.glob('hey-my-buddy-codex-catalog-*'))
+                previous = set((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*'))
                 with controller_log_close_failure(receipt=receipt) as state:
                     with self.assertRaises(OSError) as caught:
                         self.discover()
@@ -190,7 +190,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
                     self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, True)
                     self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
                     self.assertEqual(state['observations'], 1)
-                    self.assertEqual(len(set(self.root.glob('hey-my-buddy-codex-catalog-*')) - previous), 1)
+                    self.assertEqual(len(set((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*')) - previous), 1)
 
     def test_created_fd_failure_with_unknown_cleanup_retains_role_directory(self):
         with controller_log_close_failure(receipt=NATIVE_STOPPED, observation_blocked=True) as state:
@@ -201,7 +201,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, False)
             self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
             self.assertEqual(state['observations'], 1)
-            self.assertEqual(len(list(self.root.glob('hey-my-buddy-codex-catalog-*'))), 1)
+            self.assertEqual(len(list((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*'))), 1)
 
     def test_unregistered_controller_with_native_true_and_outer_unknown_keeps_role_unknown(self):
         error = ValueError('fixture handle registration failed')
@@ -215,7 +215,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
             self.assertIsNotNone(state['process'].poll())
             self.assertEqual(state['observations'], 1)
-            self.assertEqual(len(list(self.root.glob('hey-my-buddy-codex-catalog-*'))), 1)
+            self.assertEqual(len(list((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*'))), 1)
 
     def test_simulated_windows_creation_receipt_alone_never_confirms_native_stop(self):
         from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
@@ -235,7 +235,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
                 def spawn(*args, **kwargs):
                     return original_spawn(*args, windows_api=api, **kwargs)
 
-                previous = set(self.root.glob('hey-my-buddy-codex-catalog-*'))
+                previous = set((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*'))
                 with patch.object(windows_process.subprocess, 'Popen', return_value=process), \
                      patch.object(process_controller, 'owned_popen', spawn):
                     with self.assertRaises((OSError, RuntimeError)) as caught:
@@ -244,7 +244,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
                 self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, stopped)
                 self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
                 self.assertNotIn(('resume', process._handle), api.events)
-                self.assertEqual(len(set(self.root.glob('hey-my-buddy-codex-catalog-*')) - previous), 1)
+                self.assertEqual(len(set((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*')) - previous), 1)
 
     def test_path_without_harness_keeps_no_child_fact_through_actual_controller(self):
         with tempfile.TemporaryDirectory(prefix='hey-my-buddy-controller-no-harness-',

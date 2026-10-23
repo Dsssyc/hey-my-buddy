@@ -155,7 +155,7 @@ class GitErrorTests(unittest.TestCase):
     def test_fast_import_nonzero_precedes_missing_marks_and_reports_separate_outputs(self):
         state, start = self.importer()
         with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}))
+            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
         self.diagnostics(error, state["command"], "fast-import")
         self.assertEqual(error.details["returncode"], 128)
         self.assertIsNone(error.__cause__)
@@ -163,7 +163,7 @@ class GitErrorTests(unittest.TestCase):
     def test_fast_import_launch_oserror_reports_argv_and_preserves_cause(self):
         failure = OSError("controlled spawn failure")
         with patch.object(workspace.subprocess, "Popen", side_effect=failure) as start:
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}))
+            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
         self.diagnostics(error, start.call_args.args[0], "fast-import", output=False)
         self.assertIs(error.__cause__, failure)
         self.assertIn("controlled spawn failure", error.details["reason"])
@@ -171,7 +171,7 @@ class GitErrorTests(unittest.TestCase):
     def test_fast_import_broken_pipe_reaps_child_and_keeps_diagnostics_and_cause(self):
         state, start = self.importer(broken=True)
         with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}))
+            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
         self.diagnostics(error, state["command"], "fast-import")
         self.assertIsInstance(error.__cause__, BrokenPipeError)
         self.assertTrue(state["child"].killed)
@@ -181,7 +181,7 @@ class GitErrorTests(unittest.TestCase):
     def test_fast_import_timeout_reaps_child_and_keeps_diagnostics_and_cause(self):
         state, start = self.importer(timed_out=True)
         with patch.object(workspace.subprocess, "Popen", side_effect=start), self.assertRaises(BoardError) as caught:
-            workspace._write_objects(self.root, {self.oid: b"payload"})
+            workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state")
         error = caught.exception
         self.assertEqual(error.code, 'WORKSPACE_GIT_UNKNOWN')
         self.diagnostics(error, state["command"], "fast-import")
@@ -194,14 +194,14 @@ class GitErrorTests(unittest.TestCase):
     def test_fast_import_missing_marks_after_success_still_names_the_command(self):
         state, start = self.importer(code=0)
         with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}))
+            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
         self.diagnostics(error, state["command"], "fast-import")
         self.assertIsInstance(error.__cause__, FileNotFoundError)
 
     def test_fast_import_incorrect_marks_still_names_the_command(self):
         state, start = self.importer(code=0, marks=b":1 wrong-object-id\n")
         with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}))
+            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
         self.diagnostics(error, state["command"], "fast-import")
         self.assertEqual(error.details["expected"], self.oid)
 

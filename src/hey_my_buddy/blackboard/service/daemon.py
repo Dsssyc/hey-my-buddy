@@ -29,6 +29,7 @@ from .execution_scheduler import ExecutionScheduler
 from .live_registry import LiveRegistry
 from ..store.store import BoardStore
 from ...protocol.transport import ServiceError
+from ...state_root import check_state_root, get_state_dir
 
 DRAIN_SECONDS_DEFAULT = 10
 
@@ -39,7 +40,7 @@ def atomic_json(path: Path, value: dict) -> None:
 
 class Daemon:
     def __init__(self, directory: Path):
-        self.directory = Path(directory)
+        self.directory = get_state_dir(directory)
         self.stopping = threading.Event()
         self._maintenance: threading.Thread | None = None
         self.started_at = utc_now()
@@ -124,9 +125,7 @@ class Daemon:
         )
 
     def run(self) -> int:
-        rpc_config._validate_path(self.directory)
-        from ...private_dirs import ensure_private_dir
-        ensure_private_dir(self.directory)
+        self.directory = check_state_root(self.directory, create=True)
         self.control["rpc_profile"] = rpc_config.configure_server(self.directory)
         self.acquire_exclusive()
         try:
@@ -315,7 +314,11 @@ def main() -> int:
     if not selected:
         sys.stderr.write("hey-my-buddy daemon: HMB_STATE_DIR is required\n")
         return 2
-    directory = Path(selected)
+    try:
+        directory = check_state_root(get_state_dir(selected), create=True)
+    except BoardError as error:
+        sys.stderr.write(f"hey-my-buddy: {error.code}: {error}\n")
+        return 2
     try:
         daemon = Daemon(directory)
         for signum in (signal.SIGTERM, signal.SIGINT):

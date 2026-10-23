@@ -18,6 +18,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.tasks import workspace
+from hey_my_buddy import private_dirs
 
 
 #: Content shapes whose numbering must not depend on how they reach Git.
@@ -130,7 +131,7 @@ class BatchedObjectTests(unittest.TestCase):
     def test_batch_write_stores_objects_in_the_same_repository_without_refs(self):
         refs_before = self.git("for-each-ref", "--format=%(refname)")
         objects_before = self.object_files(self.repo)
-        oids = workspace._batch_blobs(self.repo, list(PAYLOADS), write=True)
+        oids = workspace._batch_blobs(self.repo, list(PAYLOADS), write=True, state_dir=self.state)
         self.assertEqual(oids, self.reference_oids(self.repo, PAYLOADS))
         for oid, payload in zip(oids, PAYLOADS):
             self.assertEqual(self.git("cat-file", "-t", oid), b"blob\n")
@@ -140,7 +141,7 @@ class BatchedObjectTests(unittest.TestCase):
         self.assertNotEqual(self.object_files(self.repo), objects_before, "write=True must store objects")
         # A second write finds every object already present and stores nothing again.
         objects_after_first = self.object_files(self.repo)
-        self.assertEqual(workspace._batch_blobs(self.repo, list(PAYLOADS), write=True), oids)
+        self.assertEqual(workspace._batch_blobs(self.repo, list(PAYLOADS), write=True, state_dir=self.state), oids)
         self.assertEqual(self.object_files(self.repo), objects_after_first)
 
     def test_object_format_and_unknown_format_fail_closed(self):
@@ -161,8 +162,8 @@ class BatchedObjectTests(unittest.TestCase):
         # The path-driven filtered reference is exactly what the batch must not use.
         filtered = self.git("hash-object", "--stdin", "--path=crlf.txt", data=payload).decode().strip()
         self.assertNotEqual(unfiltered, filtered, "the fixture must make the filtered path differ")
-        self.assertEqual(workspace._batch_blobs(self.repo, [payload], write=True), [unfiltered])
-        self.assertEqual(workspace._blob(self.repo, payload, write=True), unfiltered)
+        self.assertEqual(workspace._batch_blobs(self.repo, [payload], write=True, state_dir=self.state), [unfiltered])
+        self.assertEqual(workspace._blob(self.repo, payload, write=True, state_dir=self.state), unfiltered)
         self.assertEqual(self.git("cat-file", "blob", unfiltered), payload)
 
     def test_prepare_verify_and_seal_bytes_match_per_file_hash_object(self):
@@ -186,6 +187,28 @@ class BatchedObjectTests(unittest.TestCase):
             self.assertEqual(self.git("show", output["commit"] + ":" + path, cwd=repo), payload)
         self.assertEqual(workspace.verify_sealed_output(manifest, manifest, output)["changedPaths"],
                          ["src/kept.txt", "src/new.txt"])
+
+    def test_workspace_scratch_trees_stay_in_state_with_a_worker_writable_tmpdir(self):
+        repo, _tracked = self.mixed_checkout('private-scratch')
+        worker_tmp = self.root / 'worker-tmp'
+        worker_tmp.mkdir()
+        created = []
+        allocate = private_dirs.make_temporary_dir
+        def capture(*, prefix, directory):
+            path = allocate(prefix=prefix, directory=directory)
+            created.append(path)
+            return path
+        with patch.dict(os.environ, {'TMPDIR': str(worker_tmp), 'TEMP': str(worker_tmp), 'TMP': str(worker_tmp)}), \
+                patch.object(private_dirs, 'make_temporary_dir', side_effect=capture):
+            manifest = workspace.prepare(self.state, 'private-scratch', self.worktree_intent(repo))
+            (Path(manifest['path']) / 'src/kept.txt').write_bytes(b'private output')
+            sealed = workspace.seal(self.state, manifest, 'task', 'private-scratch')
+        self.assertEqual(sealed['changedPaths'], ['src/kept.txt'])
+        self.assertTrue(any(path.name.startswith('hey-my-buddy-objects-') for path in created))
+        self.assertTrue(any(path.name.startswith('hey-my-buddy-index-') for path in created))
+        self.assertTrue(all(path.parent == self.state / 'tmp' for path in created))
+        self.assertEqual(list((self.state / 'tmp').iterdir()), [])
+        self.assertEqual(list(worker_tmp.iterdir()), [])
 
     def test_sha256_repository_roundtrip_uses_full_length_numbers(self):
         if "sha256" not in self.supported_formats():
@@ -227,7 +250,7 @@ class BatchedObjectTests(unittest.TestCase):
             self.assertEqual(observed["tracked"][path][1], oid, path)
         self.assertEqual(observed["tracked"]["script.sh"][0], "100755")
         self.assertEqual(observed["tracked"]["link"][0], "120000")
-        written = workspace._observe(self.repo, [], write=True)
+        written = workspace._observe(self.repo, [], write=True, state_dir=self.state)
         self.assertEqual(written["tracked"], observed["tracked"])
         for path, oid in expected.items():
             self.assertEqual(self.git("cat-file", "blob", oid), contents[path])

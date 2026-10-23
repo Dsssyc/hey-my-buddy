@@ -1,5 +1,6 @@
 """Guarded storage inventory and confirmed reclamation; no process termination."""
 from __future__ import annotations
+
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
 from ...paths import is_absolute_path
@@ -16,6 +17,7 @@ import time
 import uuid
 
 from ... import private_dirs, private_files
+from ...private_dirs import directory_mode
 from ...protocol import schemas
 from ..store.db import utc_now
 from . import host_conclusions
@@ -615,7 +617,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
 
 def _read_storage_json(path: Path, *, missing_ok: bool = False) -> dict | None:
     try:
-        fd = private_dirs.open_regular_fd(path, os.O_RDONLY, check_parents=False)
+        fd = private_dirs.open_regular_fd(path, os.O_RDONLY)
     except FileNotFoundError:
         if missing_ok:
             return None
@@ -678,12 +680,12 @@ def _validate_pending(result: dict, planned: dict, state: Path) -> None:
 @contextmanager
 def locked(store):
     path = store.directory / 'storage'
-    path.mkdir(mode=0o777 if os.name == 'nt' else 0o700, exist_ok=True)
+    path.mkdir(mode=directory_mode(), exist_ok=True)
     if not path.is_dir():
         raise BoardError('STORAGE_UNSAFE', 'Storage plan root must be a directory', path=str(path))
     lock_path = path / '.lock'
     try:
-        fd = private_dirs.open_regular_fd(lock_path, os.O_CREAT | os.O_RDWR, check_parents=False)
+        fd = private_dirs.open_regular_fd(lock_path, os.O_CREAT | os.O_RDWR)
     except BoardError as error:
         raise BoardError('STORAGE_UNSAFE', 'Storage lock is unsafe', path=str(lock_path)) from error
     try:

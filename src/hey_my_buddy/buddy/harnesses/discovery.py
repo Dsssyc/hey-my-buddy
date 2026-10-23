@@ -24,6 +24,7 @@ import selectors
 from xml.parsers.expat import ExpatError
 
 from ...paths import is_absolute_path
+from ...state_root import get_state_dir
 from ...protocol.harness_names import HARNESS_NAMES
 from .discovery_spec import AppEntry, DiscoverySpec
 from ...protocol.reasons import reason as make_reason
@@ -604,7 +605,8 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
     start = time.monotonic()
     if start >= deadline:
         return "scan-timeout", b""
-    root = private_dirs.make_temporary_dir(prefix="hey-my-buddy-dsh-probe-").resolve()
+    root = private_dirs.make_temporary_dir(prefix="hey-my-buddy-dsh-probe-",
+        directory=private_dirs.ensure_private_dir(get_state_dir() / "tmp")).resolve()
     process = handle = None
     stopped = True  # No child exists until launch returns or transfers ownership.
     code, output = "launch-failed", b""

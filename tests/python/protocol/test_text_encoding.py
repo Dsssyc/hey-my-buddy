@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from hey_my_buddy.protocol.execution import fsync_json, receipt_reference, RECEIPT
-from hey_my_buddy.buddy.roles.turn_io import _private_bytes
+from hey_my_buddy.private_files import publish_bytes
 
 
 class TextEncodingTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class TextEncodingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "checkpoint"
             original = b'\xe4\xb8\xad\xe6\x96\x87\r\nsecond\r\n'
-            _private_bytes(path, original, exclusive=True)
+            publish_bytes(path, original, immutable=True)
             self.assertEqual(path.read_bytes(), original)
 
     def test_internal_protocols_write_utf8_even_with_ascii_standard_streams(self):

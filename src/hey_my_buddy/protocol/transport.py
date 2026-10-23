@@ -7,13 +7,12 @@ C-Two operation here.
 from __future__ import annotations
 
 from contextlib import contextmanager, ExitStack
-from .. import home, locking, private_dirs
+from .. import locking, private_dirs
 import json
 import os
 from pathlib import Path
 import socket
 import tempfile
-import stat
 import subprocess
 import sys
 import threading
@@ -26,6 +25,7 @@ import c_two as cc
 from . import rpc_config
 from .contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from ..errors import BoardError
+from ..state_root import check_state_root, get_state_dir
 from ..install.entrypoints import ENTRY_MODULES
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -102,11 +102,6 @@ class ServiceError(BoardError):
     """A board failure raised on the client side of the boundary."""
 
 
-def get_state_dir(state_dir: str | Path | None = None) -> Path:
-    path = Path(state_dir or os.environ.get("HMB_STATE_DIR") or home.default_state_dir()).expanduser()
-    return path.absolute() if os.name == "nt" else path.resolve()
-
-
 def encode_message(value: Any) -> str:
     try:
         text = json.dumps(value, ensure_ascii=False, allow_nan=False)
@@ -117,74 +112,12 @@ def encode_message(value: Any) -> str:
     return text
 
 
-def _private_directory(directory: Path) -> bool:
-    """True only for a real directory this user owns with no group/other access."""
-    try:
-        private_dirs.validate_private_dir(directory)
-        return True
-    except (OSError, BoardError):
-        return False
-
-
-def _private_primary_group(gid: int) -> bool:
-    """Only this user's same-named primary group can grant ancestor write access."""
-    import grp
-    import pwd
-
-    uid = os.geteuid()
-    try:
-        account = pwd.getpwuid(uid)
-        if account.pw_gid != gid:
-            return False
-        group = grp.getgrgid(gid)
-    except KeyError:
-        return False
-    return (
-        group.gr_name == account.pw_name
-        and all(member == account.pw_name for member in group.gr_mem)
-        and not any(other.pw_gid == gid and other.pw_uid != uid for other in pwd.getpwall())
-    )
-
-
-def _trusted_ancestors(directory: Path) -> bool:
-    """True when no ancestor above the state directory can be swapped by another user."""
-    if os.name == 'nt':
-        return True  # Windows checks the state boundary only at installation/cold start.
-    try:
-        current = directory.parent
-        while True:
-            parent = os.lstat(current)
-            if stat.S_ISLNK(parent.st_mode):
-                if parent.st_uid not in (os.geteuid(), 0):
-                    return False
-            else:
-                if not stat.S_ISDIR(parent.st_mode) or parent.st_uid not in (os.geteuid(), 0):
-                    return False
-                if not parent.st_mode & stat.S_ISVTX:
-                    if parent.st_mode & 0o002:
-                        return False
-                    if parent.st_mode & 0o020 and not _private_primary_group(parent.st_gid):
-                        return False
-            if current.parent == current:
-                return True
-            current = current.parent
-    except OSError:
-        return False
-
-
-def _trusted_directory(directory: Path) -> bool:
-    return _private_directory(directory) and _trusted_ancestors(directory)
-
-
 def _read_endpoint(directory: Path) -> dict | None:
     """Read control.json without following links and without touching permissions."""
-    if os.name != 'nt' and (not _private_directory(directory) or not _trusted_ancestors(directory)):
-        return None
     fd = -1
     try:
+        directory = check_state_root(directory)
         fd = private_dirs.open_regular_fd(directory / "control.json", os.O_RDONLY)
-        if os.name != 'nt':
-            private_dirs.validate_private_fd(fd)
         value = json.loads(os.read(fd, MAX_MESSAGE_BYTES + 1))
         if (
             not isinstance(value, dict)
@@ -277,13 +210,8 @@ def _call_board_read_only(operation: str, params: dict | None, directory: Path, 
     return _request(endpoint, operation, params or {}, resource=resource, state_dir=directory)
 
 
-def _healthy(directory: Path) -> dict | None:
-    """Return a trusted endpoint only when its service answers, without any write."""
-    endpoint = _read_endpoint(directory)
+def _ping_endpoint(directory: Path, endpoint: dict | None) -> dict | None:
     if endpoint:
-        if (os.name != "nt" and not (directory / "ipc").exists()
-                and not private_dirs.linked(directory / "ipc")):
-            return None
         try:
             _request(endpoint, "ping", {}, state_dir=directory)
             return endpoint
@@ -293,27 +221,31 @@ def _healthy(directory: Path) -> dict | None:
     return None
 
 
+def _healthy(directory: Path) -> dict | None:
+    """Read control.json and ping after the state boundary has been checked."""
+    return _ping_endpoint(directory, _read_endpoint(directory))
+
+
 def _attach_read_only(directory: Path) -> dict | None:
     """Read-only attachment: never creates, chmods, locks, logs or spawns."""
-    return _healthy(directory)
+    directory = get_state_dir(directory)
+    endpoint = _read_endpoint(directory)
+    if endpoint is None:
+        return None
+    if (os.name != "nt" and not (directory / "ipc").exists()
+            and not private_dirs.linked(directory / "ipc")):
+        return None
+    return _ping_endpoint(directory, endpoint)
 
 
 def _cold_start_preflight(directory: Path) -> None:
     """Prove state writes and local IPC before inheriting this process into a daemon."""
+    directory = check_state_root(directory, create=True)
     probe = directory / ('.launch-probe-' + uuid.uuid4().hex[:12])
     socket_directory = None
     address = None
     try:
-        rpc_config._validate_path(directory)
-        if os.name == 'nt':
-            from ..windows_files import validate_state_root
-            validate_state_root(directory, create=True)
-            rpc_config.configure_local_endpoint(directory)
-        else:
-            private_dirs.ensure_private_dir(directory)
-            rpc_config.configure_local_endpoint(directory)
-            if not _trusted_directory(directory):
-                raise OSError('State directory is not owner-private')
+        rpc_config.configure_local_endpoint(directory)
         fd = private_dirs.open_regular_fd(probe, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         if os.name == 'nt':

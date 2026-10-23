@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from hey_my_buddy import windows_files as files, private_dirs
+from hey_my_buddy import windows_files as files, private_dirs, state_root
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.private_files import publish_bytes
 
@@ -95,6 +95,15 @@ class HandleBoundaryTests(unittest.TestCase):
             files.DELETE | files.GENERIC_WRITE, files.CREATE_NEW, share_delete=True)
         api.close.assert_not_called()
 
+    def test_private_open_refuses_parent_traversal_and_truncation_before_opening(self):
+        api = mock.Mock()
+        for path, flags in ((Path('parent/../leaf'), os.O_RDONLY),
+                            (Path('leaf'), os.O_WRONLY | os.O_TRUNC),
+                            (Path('leaf'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)):
+            with self.subTest(path=path, flags=flags), self.assertRaises(BoardError):
+                private_dirs.open_regular_fd(path, flags)
+        api._open.assert_not_called()
+
     def test_directory_open_pins_against_rename(self):
         api = files.WindowsFileAPI.__new__(files.WindowsFileAPI)
         api.kernel = mock.Mock()
@@ -160,7 +169,7 @@ class NativePrivateFilesTests(unittest.TestCase):
             variant = Path(str(path).swapcase())
             with os.fdopen(private_dirs.open_regular_fd(variant, os.O_RDONLY), 'rb') as stream:
                 self.assertEqual(stream.read(), b'case-preserved-content')
-            files.validate_state_root(Path(str(root).swapcase()))
+            state_root.check_state_root(Path(str(root).swapcase()))
 
     def test_private_path_accepts_an_available_8dot3_alias(self):
         import win32api
@@ -173,7 +182,7 @@ class NativePrivateFilesTests(unittest.TestCase):
             publish_bytes(path, b'short-name-content')
             with os.fdopen(private_dirs.open_regular_fd(Path(short) / path.name, os.O_RDONLY), 'rb') as stream:
                 self.assertEqual(stream.read(), b'short-name-content')
-            files.validate_state_root(Path(short))
+            state_root.check_state_root(Path(short))
 
     def test_private_path_replaced_by_a_junction_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -184,9 +193,10 @@ class NativePrivateFilesTests(unittest.TestCase):
             root.rename(moved)
             result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(root), str(outside)], capture_output=True)
             self.assertEqual(result.returncode, 0, repr(result.stdout) + repr(result.stderr))
+            state_root._checked_roots.clear()
             try:
                 with self.assertRaises(BoardError):
-                    files.validate_state_root(root)
+                    state_root.check_state_root(root)
             finally:
                 root.rmdir()
                 moved.rename(root)
@@ -195,14 +205,15 @@ class NativePrivateFilesTests(unittest.TestCase):
         import win32security as security
         with tempfile.TemporaryDirectory() as temporary:
             root = private_dirs.ensure_private_dir(Path(temporary) / 'inherited')
-            files.validate_state_root(root)
+            state_root.check_state_root(root)
             descriptor = security.GetFileSecurity(str(root), security.DACL_SECURITY_INFORMATION)
             dacl = descriptor.GetSecurityDescriptorDacl()
             dacl.AddAccessAllowedAce(security.ACL_REVISION, 1, security.CreateWellKnownSid(security.WinWorldSid))
             security.SetNamedSecurityInfo(str(root), security.SE_FILE_OBJECT,
                                           security.DACL_SECURITY_INFORMATION, None, None, dacl, None)
+            state_root._checked_roots.clear()
             with self.assertRaisesRegex(BoardError, 'foreign ACE'):
-                files.validate_state_root(root)
+                state_root.check_state_root(root)
 
     def test_ordinary_creation_does_not_protect_dacl_and_descriptor_only_checks_type(self):
         import win32security as security
@@ -229,7 +240,7 @@ class NativePrivateFilesTests(unittest.TestCase):
             result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(link), str(outside)], capture_output=True)
             self.assertEqual(result.returncode, 0, repr(result.stdout) + repr(result.stderr))
             try:
-                state = transport.get_state_dir(link / 'state')
+                state = state_root.get_state_dir(link / 'state')
                 self.assertEqual(state, link / 'state')
                 with self.assertRaisesRegex(BoardError, 'linked component'):
                     transport._cold_start_preflight(state)

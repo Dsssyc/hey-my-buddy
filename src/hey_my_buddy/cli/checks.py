@@ -37,7 +37,6 @@ teardown's to observe.
 """
 from __future__ import annotations
 
-from .. import locking, private_dirs
 import argparse
 import concurrent.futures
 import io
@@ -52,6 +51,8 @@ import sys
 import tempfile
 import threading
 import time
+
+from .. import locking, private_dirs
 
 #: Inherited virtual environment pins not covered by the prefix filter below.
 SANITIZED_VARIABLES = (
@@ -94,15 +95,16 @@ def test_environment(root: Path) -> dict:
 
 def create_private_root(*, directory: Path | None = None) -> Path:
     """One private root this runner owns and can inspect after the suites exit."""
-    root = private_dirs.make_temporary_dir(prefix="hey-my-buddy-checks-", directory=directory).resolve()
+    parent = private_root_directory() if directory is None else directory
+    root = private_dirs.make_temporary_dir(prefix="hey-my-buddy-checks-", directory=parent).resolve()
     (root / CREATOR_FILE_NAME).write_text(f"{os.getpid()}\n", encoding="utf-8", newline="\n")
-    (root / "tmp").mkdir(mode=0o777 if os.name == 'nt' else 0o700)
+    (root / "tmp").mkdir(mode=private_dirs.directory_mode())
     return root
 
 
 def prepare_test_home(home: Path) -> None:
     """Initialize a private home whose Git commands never start background writers."""
-    home.mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True, exist_ok=True)
+    home.mkdir(mode=private_dirs.directory_mode(), parents=True, exist_ok=True)
     config = home / ".gitconfig"
     # A private service may already be reading this home; initialize it only once.
     if not config.exists():
@@ -292,7 +294,7 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
         # interrupted run either never starts this child or already sees it as live.
         if stop.is_set():
             return None
-        (child_root / "tmp").mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True)
+        (child_root / "tmp").mkdir(mode=private_dirs.directory_mode(), parents=True)
         process = subprocess.Popen(
             command,
             cwd=str(root),

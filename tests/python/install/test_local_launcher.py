@@ -12,8 +12,7 @@ class LocalLaunchTests(unittest.TestCase):
     def test_local_socket_denial_refuses_start(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary) / 'state'
-            with mock.patch('hey_my_buddy.protocol.transport._trusted_directory', return_value=True), \
-                    mock.patch('hey_my_buddy.protocol.transport.socket.socket') as socket_factory, \
+            with mock.patch('hey_my_buddy.protocol.transport.socket.socket') as socket_factory, \
                     mock.patch('hey_my_buddy.protocol.transport.subprocess.Popen') as spawn:
                 socket_factory.return_value.bind.side_effect = PermissionError('sandbox')
                 with self.assertRaises(transport.ServiceError) as caught:

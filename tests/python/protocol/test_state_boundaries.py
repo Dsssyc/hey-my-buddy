@@ -11,7 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.protocol import rpc_config, transport
+from hey_my_buddy.protocol import client, rpc_config, transport
 from hey_my_buddy.protocol.client import BoardClient
 
 
@@ -75,12 +75,15 @@ class StateBoundaryTests(unittest.TestCase):
 
     def test_public_calls_select_exactly_once_and_share_the_selected_object(self):
         callers = (
-            lambda: transport.call_board("ping"), lambda: transport.call_service("health"),
-            lambda: transport.ensure_service(), lambda: transport.request_stop(),
-            lambda: BoardClient().ping(), lambda: BoardClient(autostart=False).ping(),
+            (transport, lambda: transport.call_board("ping")),
+            (transport, lambda: transport.call_service("health")),
+            (transport, lambda: transport.ensure_service()),
+            (transport, lambda: transport.request_stop()),
+            (client, lambda: BoardClient().ping()),
+            (client, lambda: BoardClient(autostart=False).ping()),
         )
-        for call in callers:
-            with self.subTest(call=call), patch.object(transport, "get_state_dir", return_value=self.state) as resolve, \
+        for module, call in callers:
+            with self.subTest(call=call), patch.object(module, "get_state_dir", return_value=self.state) as resolve, \
                     patch.object(transport, "_attach_read_only", return_value=self.endpoint) as attach, \
                     patch.object(transport, "_request", return_value={"status": "ok"}) as request:
                 call()
@@ -116,7 +119,7 @@ class StateBoundaryTests(unittest.TestCase):
 
     def test_missing_ipc_is_a_direct_read_only_condition(self):
         with patch.object(transport, "_read_endpoint", return_value=self.endpoint), patch.object(transport, "_request") as request:
-            self.assertIsNone(transport._healthy(self.root / "absent"))
+            self.assertIsNone(transport._attach_read_only(self.root / "absent"))
             request.assert_not_called()
 
     def test_windows_attach_does_not_require_a_posix_ipc_directory(self):

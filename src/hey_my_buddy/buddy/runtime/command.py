@@ -1,6 +1,8 @@
 """The ``command`` adapter: one explicit argv process, never an implicit shell."""
 from __future__ import annotations
 
+from ...private_dirs import directory_mode
+
 import hashlib
 import math
 import os
@@ -35,7 +37,7 @@ class CommandAdapter(Adapter):
                 f"argv[0] {executable!r} is not an executable this worker can find",
                 adapter=self.name,
             )
-        context.directory.mkdir(mode=0o777 if os.name == 'nt' else 0o700, parents=True, exist_ok=True)
+        context.directory.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
         context.task_file().write_bytes(context.spec["task"].encode("utf-8"))
         os.chmod(context.task_file(), 0o600)
 

@@ -157,7 +157,8 @@ class CurrentCoreTests(BoardTestCase):
         old_file = self.old_database(archive, "7")
         before = old_file.read_bytes()
         with patch.dict(os.environ, {}, clear=True), patch.object(Path, "home", return_value=home):
-            current = transport.get_state_dir()
+            from hey_my_buddy import state_root
+            current = state_root.get_state_dir()
             self.assertEqual(current, (archive / "state").resolve())
             Database(current).initialize()
         self.assertEqual(old_file.read_bytes(), before)
