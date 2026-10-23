@@ -688,7 +688,7 @@ class RestartPreparationTests(WorkflowTestCase):
                 with self.assertRaises(BoardError) as blocked:
                     self.submit(board, request_id=f"restart-competing-{access}", cwd=str(self.repo),
                                 executionWorkspace={"kind": "existing", "access": access})
-                self.assertEqual(blocked.exception.code, "SNAPSHOT_CHANGED" if access == "read" else "PREPARATION_CONFLICT")
+                self.assertEqual(blocked.exception.code, "PREPARATION_CONFLICT")
                 self.assertEqual(blocked.exception.details["checkoutId"], workspace.inspect(str(self.repo))["checkoutId"])
                 if access == "write":
                     self.assertEqual(blocked.exception.details["holderTaskId"], helper_id)

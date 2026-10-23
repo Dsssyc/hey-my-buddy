@@ -851,6 +851,12 @@ def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
     """
     with _errors():
         _validate_manifest(manifest)
+        return _verify(manifest, require_unchanged=require_unchanged)
+
+
+def _verify(manifest, *, require_unchanged):
+    """Observe a manifest already validated at the operation's input boundary."""
+    with _errors():
         actual = inspect(manifest["path"])
         if actual["checkoutRoot"] != manifest["checkoutRoot"]:
             raise BoardError("WORKSPACE_CHANGED", "The execution checkout identity changed", field="checkoutRoot")
@@ -892,14 +898,24 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
                            _preparation=None):
     """Hold the original allocation lock through preparation and admission.
 
-    The new-allocation fact is local to this invocation; replaying a prepared
-    input never grants permission to remove the earlier allocation.
+    Both kinds are new allocations when no manifest existed before this
+    preparation. An earlier input record or checkout does not decide that fact;
+    the revocation plan must prove every record, reference and physical target.
+    Replaying an existing manifest never grants permission to revoke it.
     """
     with _errors():
         intent = _intent(intent)
         workspace_id, directory = _workspace_directory(state_dir, request_id)
+    prepared = {"afterRelease": None}
+
+    def after_release():
+        if prepared["afterRelease"] is not None:
+            prepared["afterRelease"]()
+
     with ExitStack() as local_stack:
         stack, held = shared_locks if shared_locks is not None else (local_stack, set())
+        # This callback precedes the lock entry, so it runs after lock release.
+        stack.callback(after_release)
         if directory not in held:
             stack.enter_context(_lock(directory))
             held.add(directory)
@@ -913,14 +929,101 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
                 fresh = _borrowed_submission_allocation(state_dir, intent)
                 if fresh != borrowed:
                     raise BoardError("WORKSPACE_CHANGED", "The borrowed allocation changed while its lock was acquired")
-            target = directory / "checkout"
-            new = (intent["kind"] == "worktree" and not _path_present(target)
-                   and _record(directory / "manifest.json") is None)
+            new = _record(directory / "manifest.json") is None
             if _preparation is None:
                 manifest = _prepare_locked(directory, workspace_id, request_id, intent)
             else:
                 manifest = _prepare_locked(directory, workspace_id, request_id, intent, _preparation)
-        yield {"manifest": manifest, "newAllocation": new}
+        prepared.update(manifest=manifest, newAllocation=new)
+        yield prepared
+
+
+def submission_revoke_plan(state_dir, manifest):
+    """Inspect this new allocation under its preparation lock, outside SQLite.
+
+    Any unproven record, changed content, reference or additional evidence keeps
+    the entire allocation. The coordinator separately proves no board reference
+    under its writer fence before applying this plan with the same lock held.
+    """
+    with _errors():
+        _validate_manifest(manifest)
+        state = Path(state_dir).resolve()
+        if not _workspace_identifier(manifest["workspaceId"]):
+            raise BoardError("WORKSPACE_UNSAFE", "The submission workspace identity is invalid")
+        directory = state / "workspaces" / manifest["workspaceId"]
+        if private_dirs.linked_component(directory) is not None:
+            raise BoardError("WORKSPACE_UNSAFE", "The rejected submission's private directory is linked")
+        if _record(directory / "manifest.json") != manifest:
+            raise BoardError("WORKSPACE_CONFLICT", "The rejected submission's snapshot changed before removal")
+        request = _record(directory / "request.json")
+        pinned = _record(directory / "input.json")
+        expected_id = "ws-" + _sha(_json([str(state), request["requestId"]]))[:32]
+        if (expected_id != manifest["workspaceId"] or request["intent"]["kind"] != manifest["kind"]
+                or pinned["inputCommit"] != manifest["inputCommit"]
+                or pinned["inputTree"] != manifest["inputTree"]
+                or pinned["snapshot"]["stagedCommit"] != manifest["snapshot"]["stagedCommit"]):
+            raise BoardError("WORKSPACE_UNSAFE", "The submission records no longer prove this allocation")
+        plan = {"manifest": manifest, "directory": directory, "allocation": None, "reasons": []}
+        expected = {".lock", "request.json", "input.json", "manifest.json"}
+        if manifest["kind"] == "worktree":
+            expected.add("checkout")
+        if {path.name for path in directory.iterdir()} != expected:
+            plan["reasons"].append("additional-evidence")
+            return plan
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        if _identity(repository) != manifest["repositoryId"]:
+            raise BoardError("WORKSPACE_CHANGED", "The rejected submission's repository identity changed")
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        refs = set(_line(repository, "for-each-ref", "--format=%(refname)", prefix).splitlines())
+        if refs != {prefix + suffix for suffix in ("input", "staged", "retained/input", "retained/staged")}:
+            plan["reasons"].append("fixed-reference-set-changed")
+            return plan
+        for suffix, commit in (("input", manifest["inputCommit"]),
+                               ("staged", manifest["snapshot"]["stagedCommit"]),
+                               ("retained/input", manifest["inputCommit"]),
+                               ("retained/staged", manifest["snapshot"]["stagedCommit"])):
+            ref = prefix + suffix
+            if (_line(repository, "symbolic-ref", "--quiet", ref, allowed=(0, 1))
+                    or _line(repository, "rev-parse", "--verify", ref) != commit):
+                plan["reasons"].append("fixed-reference-changed")
+        if manifest["kind"] == "worktree":
+            proof = _cleanup_inspect(state, manifest)
+            plan["allocation"] = proof["allocation"]
+            plan["reasons"].extend(proof["reasons"])
+            if _git(Path(manifest["checkoutRoot"]), "ls-files", "--others", "--ignored", "--exclude-standard", "-z"):
+                plan["reasons"].append("unsealed-changes")
+        return plan
+
+
+def revoke_submission(plan):
+    """Remove a proven, unregistered allocation, preserving sweep evidence on failure.
+
+    The original preparation lock and the coordinator's writer fence are held.
+    The worktree goes before its manifest so failed Git removal retains the
+    record the orphan sweep needs. All remaining removals follow creation in
+    reverse order.
+    The lock file and directory are removed after release by that context's
+    callback. With three callers for one requestId, a second caller can lock the
+    unlinked old inode while a third creates and locks a new file, breaking
+    mutual exclusion. This window remains accepted; deleting the lock file
+    while holding it requires separate Windows verification.
+    """
+    with _errors():
+        manifest, directory = plan["manifest"], plan["directory"]
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        if manifest["kind"] == "worktree":
+            _remove_worktree(repository, Path(manifest["checkoutRoot"]), plan["allocation"], manifest,
+                             {"removed": True, "alreadyRemoved": True})
+        (directory / "manifest.json").unlink()
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        for suffix, commit in (("staged", manifest["snapshot"]["stagedCommit"]), ("input", manifest["inputCommit"])):
+            _git(repository, "update-ref", "--no-deref", "-d", prefix + suffix, commit)
+        (directory / "input.json").unlink()
+        for suffix, commit in (("retained/staged", manifest["snapshot"]["stagedCommit"]),
+                               ("retained/input", manifest["inputCommit"])):
+            _git(repository, "update-ref", "--no-deref", "-d", prefix + suffix, commit)
+        (directory / "request.json").unlink()
+        return {"removed": True}
 
 
 def _borrowed_submission_allocation(state_dir, intent):
@@ -942,11 +1045,12 @@ def _borrowed_submission_allocation(state_dir, intent):
     original = _record(directory / "manifest.json")
     if original is None:
         return None
-    allocation = resolve_allocation(state, original)
+    _validate_manifest(original)
+    allocation = _resolve_allocation(state, original)
     if (allocation is None or allocation["workspaceId"] != parts[0]
             or allocation["path"] != str(directory / "checkout")):
         raise BoardError("WORKSPACE_UNSAFE", "The borrowed checkout has no proven original allocation")
-    verify(original, require_unchanged=False)
+    _verify(original, require_unchanged=False)
     if original["checkoutRoot"] != allocation["path"]:
         raise BoardError("WORKSPACE_CHANGED", "The borrowed execution checkout identity changed")
     registration = _worktree_record(Path(original["snapshot"]["repositoryPath"]), directory / "checkout")
@@ -1201,7 +1305,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                 if output.get("taskId") != task_id or output.get("attemptId") != attempt_id or output.get("manifestSha256") != manifest["manifestSha256"]:
                     raise BoardError("WORKSPACE_CONFLICT", "This output identity belongs to a different attempt or input")
                 return _finish_output(repository, output, directory)
-            verify(manifest, require_unchanged=False)
+            _verify(manifest, require_unchanged=False)
             root = Path(manifest["checkoutRoot"])
             observation = _observe(root, manifest["snapshot"]["executionSelectors"], write=True)
             if manifest["access"] == "read":
@@ -1258,6 +1362,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
 def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> dict:
     """Freeze a whole-micro-task patch using immutable Git objects, independent of checkout edits."""
     with _errors():
+        _validate_manifest(manifest)
         if original_commit == manifest.get("inputCommit"):
             _validate_output_record(manifest, artifact)
             data = _read(Path(artifact["diffPath"]))
@@ -1786,7 +1891,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             repository = Path(manifest["snapshot"]["repositoryPath"])
             if manifest["repositoryId"] != _identity(repository):
                 raise BoardError("WORKSPACE_CHANGED", "The output repository identity changed")
-            verify(manifest, require_unchanged=False)
+            _verify(manifest, require_unchanged=False)
             observation = _stable_observation(root, manifest["snapshot"]["executionSelectors"])
             if observation["fingerprint"] != observed_fingerprint:
                 raise BoardError("WORKSPACE_CHANGED", "The workspace does not match the fingerprint the Host observed",
@@ -1871,7 +1976,6 @@ def _tree_changes(root, before_tree, after_tree, *, env=None):
 
 def _validate_output_record(final_input, artifact):
     """Validate the retained output record without observing Git or the checkout."""
-    _validate_manifest(final_input)
     if not isinstance(artifact, dict) or not isinstance(artifact.get("snapshot"), dict):
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The sealed output snapshot is missing")
     snapshot = artifact["snapshot"]
@@ -1904,7 +2008,6 @@ def _validate_output_record(final_input, artifact):
 
 def _artifact_binding(original_input, final_input, artifact):
     """Prove both input manifests and the final output against fixed Git objects."""
-    _validate_manifest(original_input)
     _validate_output_record(final_input, artifact)
     repository = Path(original_input["snapshot"]["repositoryPath"])
     if (original_input["repositoryId"] != _identity(repository)
@@ -1945,6 +2048,9 @@ def verify_sealed_output(original_input: dict, final_input: dict, artifact: dict
     so a caller can trust exactly the paths this record names.
     """
     with _errors():
+        _validate_manifest(original_input)
+        if final_input is not original_input:
+            _validate_manifest(final_input)
         _repository, changed = _artifact_binding(original_input, final_input, artifact)
         return {"changedPaths": sorted(changed)}
 
@@ -1965,6 +2071,9 @@ def integration_verify(artifact: dict, *, original_input: dict, final_input: dic
     the pure content comparison of the artifact against the target tree.
     """
     with _errors():
+        _validate_manifest(original_input)
+        if final_input is not original_input:
+            _validate_manifest(final_input)
         if not isinstance(artifact, dict):
             raise BoardError("INVALID_WORKSPACE", "The integration source artifact is missing")
         if bool(host_paths) and not before_commit:
@@ -2124,6 +2233,12 @@ def resolve_allocation(state_dir, manifest: dict, retained=None) -> dict | None:
     """
     with _errors():
         _validate_manifest(manifest)
+        return _resolve_allocation(state_dir, manifest, retained)
+
+
+def _resolve_allocation(state_dir, manifest, retained=None):
+    """Resolve ownership using the input manifest validated by the caller."""
+    with _errors():
         state_dir = Path(state_dir).resolve()
         checkout_root = manifest["checkoutRoot"]
         for candidate in _allocation_candidates(manifest, retained):
@@ -2258,8 +2373,14 @@ def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retai
     """
     with _errors():
         _validate_manifest(manifest)
+        return _cleanup_inspect(state_dir, manifest, sealed, retained, allowed, resume=resume)
+
+
+def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=None, *, resume=False):
+    """Inspect removal using the input manifest validated at the read boundary."""
+    with _errors():
         state_dir = Path(state_dir).resolve()
-        allocation = resolve_allocation(state_dir, manifest, retained)
+        allocation = _resolve_allocation(state_dir, manifest, retained)
         result = {
             "eligible": False, "reasons": [],
             "workspaceId": (allocation or manifest)["workspaceId"],
@@ -2364,7 +2485,7 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
 
     if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
         try:
-            verify(manifest, require_unchanged=True)
+            _verify(manifest, require_unchanged=True)
         except BoardError as error:
             if error.code == "WORKSPACE_GIT_UNKNOWN":
                 raise
@@ -2426,7 +2547,7 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
     """
     with _errors():
         _validate_manifest(manifest)
-        allocation = resolve_allocation(state_dir, manifest)
+        allocation = _resolve_allocation(state_dir, manifest)
         if allocation is None or allocation["workspaceId"] != manifest["workspaceId"]:
             return {"reasons": ["owner-unproven"], "resume": False}
         checkout = Path(allocation["path"])
@@ -2435,6 +2556,9 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
                    if isinstance(item, dict) and item.get("repositoryId") == manifest["repositoryId"]
                    and item.get("checkoutId") == manifest["checkoutId"]
                    and item.get("checkoutRoot") == manifest["checkoutRoot"]]
+        for item in related:
+            if item is not manifest:
+                _validate_manifest(item)
         by_hash = {item["manifestSha256"]: item for item in related}
         candidates = [item for item in artifacts if isinstance(item, dict)
                       and item.get("workspaceId") in {value["workspaceId"] for value in related}
@@ -2459,13 +2583,13 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
             first = None
             for candidate in candidates:
                 selected = by_hash[candidate["manifestSha256"]]
-                proof = cleanup_inspect(state_dir, selected, sealed=candidate, retained=related)
+                proof = _cleanup_inspect(state_dir, selected, sealed=candidate, retained=related)
                 if proof["eligible"]:
                     return {"reasons": [], "resume": True}
                 if first is None:
                     first = proof
             for selected in related:
-                proof = cleanup_inspect(state_dir, selected, retained=related)
+                proof = _cleanup_inspect(state_dir, selected, retained=related)
                 if proof["eligible"]:
                     return {"reasons": [], "resume": True}
                 if first is None:
@@ -2522,7 +2646,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
     with _errors():
         _validate_manifest(manifest)
         state_dir = Path(state_dir).resolve()
-        allocation = resolve_allocation(state_dir, manifest, retained)
+        allocation = _resolve_allocation(state_dir, manifest, retained)
         if allocation is None or not _inside(manifest["path"], allocation["path"]):
             raise BoardError("WORKSPACE_UNSAFE", "Cleanup only removes a registered disposable hey-my-buddy checkout",
                              path=manifest["checkoutRoot"])
@@ -2571,24 +2695,29 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
             raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is locked by a different allocation",
                              path=str(checkout_root))
         removal["repositoryPath"] = str(repository)
-        try:
-            _git(repository, "worktree", "unlock", str(checkout_root), allowed=(0, 1))
-            _git(repository, "worktree", "remove", "--force", str(checkout_root), allowed=(0,))
-        except BoardError as error:
-            # A failed remove must leave the allocation recoverable under its
-            # original lock. Only relock this same physical registration.
-            if _path_present(checkout_root):
-                try:
-                    _cleanup_resume_registration(repository, checkout_root, allocation, manifest)
-                except BoardError as relock_error:
-                    error.details["relockError"] = relock_error.payload()
-            # A concurrent owner of this same allocation completed the removal in
-            # this window; the Git refusal is about a registration that no longer
-            # names a live checkout, and the target is provably gone.
-            if _path_present(checkout_root):
-                raise
-            return removal
+        return _remove_worktree(repository, checkout_root, allocation, manifest, removal)
+
+
+def _remove_worktree(repository, checkout_root, allocation, manifest, removal):
+    """Remove the proven physical worktree and retain actual removal evidence."""
+    try:
+        _git(repository, "worktree", "unlock", str(checkout_root), allowed=(0, 1))
+        _git(repository, "worktree", "remove", "--force", str(checkout_root), allowed=(0,))
+    except BoardError as error:
+        # A failed remove must leave the allocation recoverable under its
+        # original lock. Only relock this same physical registration.
         if _path_present(checkout_root):
-            raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout still exists after removal", path=str(checkout_root))
-        removal["alreadyRemoved"] = False
+            try:
+                _cleanup_resume_registration(repository, checkout_root, allocation, manifest)
+            except BoardError as relock_error:
+                error.details["relockError"] = relock_error.payload()
+        # A concurrent owner of this same allocation completed the removal in
+        # this window; the Git refusal is about a registration that no longer
+        # names a live checkout, and the target is provably gone.
+        if _path_present(checkout_root):
+            raise
         return removal
+    if _path_present(checkout_root):
+        raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout still exists after removal", path=str(checkout_root))
+    removal["alreadyRemoved"] = False
+    return removal
