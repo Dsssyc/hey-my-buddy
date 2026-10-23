@@ -44,14 +44,14 @@ Once the developer decides the release channel and the exact version, the instal
 
 ```sh
 # After the release channel and version are decided; not available today
-uvx hey-my-buddy@0.51.1 install
+uvx hey-my-buddy@0.52.0 install
 ```
 
 The package name's availability and whether it is published on PyPI are still the developer's decisions, and this candidate has not been published there. Until a release exists, build the wheel from the frozen source and install from its absolute path:
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from /absolute/path/hey_my_buddy-0.51.1-py3-none-any.whl hey-my-buddy install
+uvx --from /absolute/path/hey_my_buddy-0.52.0-py3-none-any.whl hey-my-buddy install
 ```
 
 On a machine without `uv`, the release's `install.sh` (macOS, Linux) or `install.ps1` (Windows) prepares a fixed private `uv` and then calls the same entry; they never change `PATH`, shell or Host settings and never install a global `hey-my-buddy` command. An install prints the paths it will write and materializes the versioned runtime. A version that moves only the last number keeps running work: the service restarts on the new runtime and takes the running executions over. A version that moves the middle number refuses while work is queued or running or a stop is unconfirmed (`UPGRADE_NOT_IDLE`, listing the blockers) and switches with a verified backup. Either way the whole generation — skill, launcher, runtime and service — switches together, and a failure rolls back. Rerunning the same complete version repairs what is missing without restarting the service, and damaged content is repaired by rerunning the same fixed-version command; changed content at the same version reports `updated`. Source archives retain their original commit when later built into wheels. Installing or upgrading the daily service needs the user's separate authorization. The code and scripts are portable to Windows, but no real Windows machine has been validated yet.
