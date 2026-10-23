@@ -2,7 +2,7 @@
 
 2026-10-21，设计候选，修订基线 `92031c1deb30e302b9f60e571524c146a367060d`。依据为[分批计划](plan.md)、[清单](inventory.md)、[进程实验](windows-experiments-process.md)、[文件实验](windows-experiments-files.md)、当前源码、AGENTS.md、[架构](../../reference/architecture.md)、[ADR-007](../../decisions/007-neutral-core-and-single-current-contract.md)及 [ADR-031](../../decisions/031-one-process-per-execution.md)。实验结论只覆盖记录中的 Windows 11 x64、NTFS、令牌与启动形式；本轮没有运行新实验或检查套件。实验文档引用的原始输出在本检出中未提供，本文采用其逐项摘录及明确的未验证边界，不声称重新核验过原始包。
 
-支持范围为 Windows 11 x64、本地 NTFS、同一 Windows 会话、Python `>=3.12,<3.13`；阶段 B 一度把下限提到 3.12.4，只为 Windows 上 `mkdir(0o700)` 的受保护 ACL，第 2 节不再用它，下限随精简回到 3.12。Windows 系统服务、网络盘、FAT/exFAT、Windows ARM 不在首发范围。三系统共用任务身份、事实发布、结果接收及最终结算；Windows 的 ACL、Job、会话与文件共享行为在系统边界实现。Linux/macOS 脱离进程组的后代留在另一批，本批不宣称解决。
+支持范围为 Windows 11 的 x64 与 ARM64（ARM64 由开发者 2026-10-23 加入，见[计划](plan.md)）、本地 NTFS、同一 Windows 会话、Python `>=3.12,<3.13`；阶段 B 一度把下限提到 3.12.4，只为 Windows 上 `mkdir(0o700)` 的受保护 ACL，第 2 节不再用它，下限随精简回到 3.12。Windows 系统服务、网络盘、FAT/exFAT 不在首发范围。三系统共用任务身份、事实发布、结果接收及最终结算；Windows 的 ACL、Job、会话与文件共享行为在系统边界实现。Linux/macOS 脱离进程组的后代留在另一批，本批不宣称解决。
 
 ADR-031 第 13 条已经定为开发流程约束：开发使用真实数据只经导出工具取得已验收微任务，用完即删。产品不增加状态目录身份，不为看板副本增加接回、停止或结算围栏，也不实现目录文件 ID 的读取或副本验收。下面的 Windows 会话核对服务于 `Local\` Job 的定位，与状态目录无关。
 
