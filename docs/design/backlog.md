@@ -135,7 +135,7 @@
 
 ## 路由与额度
 
-**任务文本超过 8 KiB 就路由不了。**（2026-10-23 Host 委派第八轮“执行进程与连接”时撞到） `blackboard/routing/decision.py` 的 `MAX_DECISION_TASK_BYTES = 8192`：任务书超过它，路由不调 Router，直接以 `router-input-too-large` 退回 Host，只能由 Host 指定 buddy。那份任务书 9,901 字节。难的工作任务书往往长，正是最需要路由的时候；整个路由输入另有 128 KiB 的上限（`MAX_DECISION_INPUT_BYTES`），任务文本单独的 8 KiB 看不出依据，属于“按通常情况定的数”。Host 的建议：去掉任务文本单独的上限，只留整个输入的那一个；整个输入真超了，再用第二种手段（例如复核模式把任务书作为冻结文件交给 Router 读），不截断。随 Router 那一批做，待开发者定。
+**任务文本超过 8 KiB 就路由不了。**（2026-10-23 Host 委派第八轮“执行进程与连接”时撞到） `blackboard/routing/decision.py` 的 `MAX_DECISION_TASK_BYTES = 8192`：任务书超过它，路由不调 Router，直接以 `router-input-too-large` 退回 Host，只能由 Host 指定 buddy。那份任务书 9,901 字节。难的工作任务书往往长，正是最需要路由的时候。这个数从最初的核心提交（`e0fb9435`，2026-09-24）就在，没有实测记录；代码注释给的理由是路由请求把输入连同任务文本的副本存进 `decision_requests.input_json` 作审计，任务更长时只存引用，Router 又不能凭不完整的任务选，于是退回。可是微任务自己已经存着完整的任务文本（提交时上限 1 MiB），路由请求里的那份是重复。Host 的建议：路由请求只存对微任务任务文本的引用，调用 Router 时再取全文，任务文本单独的上限随之去掉；整个路由输入的 128 KiB（`MAX_DECISION_INPUT_BYTES`）是跨进程帧的边界，留着，真超了再用第二种手段（私有文件加摘要），不截断。这改的是存储形式，排进哪一批待开发者定。
 
 **Router 的角色文本把画像一项标成了 “Buddy:”。** 2026-10-20 讨论 Router 时看到：`src/hey_my_buddy/buddy/roles/texts/router.txt` 列出三种工作，画像那一项的标签是 “Buddy:”，应为 “Profile:”。画像面还没有调用方，现在不影响运行。随 Router 那一批改。
 
