@@ -330,10 +330,11 @@ def main() -> int:
         return daemon.run()
     except RuntimeError as error:
         if not isinstance(error, BoardError):
-            from ...protocol.transport import CoreError, _local_rpc_error
+            from c_two.error import CoreError
+            from ...protocol.transport import local_rpc_error
 
             if isinstance(error, CoreError) and getattr(error, "io_kind", None) is not None:
-                error = _local_rpc_error(error)
+                error = local_rpc_error(error)
             elif (getattr(error, "category", None) == "lifecycle"
                     and getattr(error, "lifecycle_kind", None) == "startup_timeout"):
                 error = ServiceError("SERVICE_START_TIMEOUT", str(error))

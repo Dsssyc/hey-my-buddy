@@ -14,6 +14,8 @@ import time
 import unittest
 from unittest.mock import Mock, call, patch
 
+import c_two as cc
+
 from hey_my_buddy.blackboard.service.execution_scheduler import (
     ExecutionScheduler, _RecoveredExecution, _ExecutionObservation)
 from hey_my_buddy.errors import BoardError
@@ -22,24 +24,75 @@ from hey_my_buddy.protocol.run_identity import RunIdentity
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 
-class PhysicalConnection:
+class ConnectionEvents:
     def __init__(self):
-        self.connection_id = id(self)
+        self.events = queue.Queue()
+        self.receives = queue.Queue()
         self.closed = threading.Event()
-        self.waiting = threading.Event()
-        self.waits = []
 
-    def wait_closed(self, *, timeout=None):
-        self.waits.append(timeout)
-        self.waiting.set()
-        self.closed.wait(timeout)
-        return SimpleNamespace(connection_id=self.connection_id, reason="peer_closed",
-                               operation="read", os_error=None)
+    def recv(self):
+        self.receives.put(threading.get_ident())
+        event = self.events.get()
+        if isinstance(event, BaseException):
+            raise event
+        return event
+
+    def close(self):
+        self.closed.set()
+        self.events.put(StopIteration())
+
+
+class PhysicalConnection:
+    def __init__(self, publish):
+        self.connection_id = id(self)
+        self.publish = publish
+        self.closed = None
+        self.snapshots = 0
+
+    def snapshot(self):
+        self.snapshots += 1
+        return self.closed
+
+    def close(self, *, emit=True, reason="peer_closed", operation="read", os_error=None):
+        self.closed = SimpleNamespace(connection_id=self.connection_id, reason=reason,
+                                      operation=operation, os_error=os_error)
+        if emit:
+            self.publish(SimpleNamespace(side="client", kind="closed",
+                                         connection_id=self.connection_id, value=self.closed))
 
 
 class ExecutionObservationTests(unittest.TestCase):
     def setUp(self):
         self.live_registry = Mock(spec=LiveRegistry)
+        self.subscriptions = []
+        self.subscribed = queue.Queue()
+        subscription = patch("hey_my_buddy.blackboard.service.execution_scheduler.cc.connection_events",
+                             side_effect=self.subscribe)
+        self.subscribe_events = subscription.start()
+        self.addCleanup(subscription.stop)
+
+    def subscribe(self):
+        events = ConnectionEvents()
+        self.subscriptions.append(events)
+        self.subscribed.put(events)
+        return events
+
+    def publish(self, event):
+        if self.subscriptions:
+            self.subscriptions[-1].events.put(event)
+
+    def start_connections(self, scheduler):
+        self.addCleanup(scheduler.stop)
+        with patch.object(scheduler._thread, "run"):
+            scheduler.start()
+            scheduler._thread.join()
+
+    @staticmethod
+    def watch(scheduler, observation, attempt_id="attempt"):
+        observer = _ExecutionObservation(attempt_id, threading.Condition(scheduler._lock))
+        scheduler._observed[attempt_id] = observer
+        scheduler._watch_connection(observation, observer)
+        return observer
 
     def recovered(self, root, *, task_id="task", attempt_id="attempt"):
         claim = {"attempt": {"attemptId": attempt_id, "generation": 1}, "task": {"taskId": task_id}}
@@ -48,8 +101,7 @@ class ExecutionObservationTests(unittest.TestCase):
         return claim, location
 
     def client(self):
-        physical = PhysicalConnection()
-        self.addCleanup(physical.closed.set)
+        physical = PhysicalConnection(self.publish)
         client = Mock(spec=["connect", "stop", "close", "connection_observation"])
         client.connection_observation = physical
         return client
@@ -62,6 +114,7 @@ class ExecutionObservationTests(unittest.TestCase):
 
     @contextmanager
     def observing(self, scheduler, claim, location, client, *, endpoint_reads=None):
+        self.start_connections(scheduler)
         identity = {"pid": 1}
         attempt_id = claim["attempt"]["attemptId"]
         waits = queue.Queue()
@@ -231,7 +284,7 @@ class ExecutionObservationTests(unittest.TestCase):
             service = Mock(store=store)
             scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
             client = self.client()
-            client.connection_observation.closed.set()
+            client.connection_observation.close()
             handle = Mock()
             handle.process.poll.return_value = None
             handle.execution_directory = Path(root)
@@ -358,7 +411,7 @@ class ExecutionObservationTests(unittest.TestCase):
             clients = [self.client(), self.client()]
             store.record_execution_deadline.return_value = {
                 "forceRequestedAt": datetime.now(timezone.utc).isoformat(), "forceReason": "service-stop"}
-            clients[0].connection_observation.closed.set()
+            clients[0].connection_observation.close()
             clients[1].connect.side_effect = scheduler._stopping.set
             claim = {"attempt": {"attemptId": "attempt"}, "task": {"taskId": "task"}}
             with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint",
@@ -448,6 +501,7 @@ class ExecutionObservationTests(unittest.TestCase):
             store = Mock(directory=Path(root))
             store.task_get.side_effect = lambda _params: {'task': {'cancelRequested': False}}
             scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
+            self.start_connections(scheduler)
             pairs = [self.recovered(Path(root) / name, task_id=name, attempt_id=name) for name in ('a', 'b')]
             clients = {name: self.client() for name in ('a', 'b')}
             waits = queue.Queue()
@@ -472,7 +526,7 @@ class ExecutionObservationTests(unittest.TestCase):
                     self.assertEqual(waits.get(timeout=2), ('execution-a', None))
                     scheduler.wake_attempt('a')
                     self.assertEqual(waits.get(timeout=2), ('execution-a', None))
-                    clients['a'].connection_observation.closed.set()
+                    clients['a'].connection_observation.close()
                     name, timeout = waits.get(timeout=2)
                     self.assertEqual(name, 'execution-a')
                     self.assertGreater(timeout, 0)
@@ -645,15 +699,18 @@ class ExecutionObservationTests(unittest.TestCase):
             client = self.client()
             with self.observing(scheduler, claim, location, client) as waits:
                 self.assertIsNone(waits.get(timeout=2))
-                self.assertTrue(client.connection_observation.waiting.wait(2))
+                self.subscriptions[0].receives.get(timeout=2)
                 reads = store.task_get.call_count
                 with self.assertRaises(queue.Empty):
                     waits.get(timeout=.04)
                 self.assertEqual(store.task_get.call_count, reads)
                 scheduler.stop()
                 self.assertEqual(scheduler._observed, {})
-                self.assertFalse(client.connection_observation.closed.is_set())
-            self.assertEqual(client.connection_observation.waits, [None])
+                self.assertIsNone(client.connection_observation.closed)
+                self.assertFalse(scheduler._connection_thread.is_alive())
+                self.assertTrue(self.subscriptions[0].closed.is_set())
+            self.assertEqual(client.connection_observation.snapshots, 1)
+            self.subscribe_events.assert_called_once_with()
             client.stop.assert_not_called()
             store.recover_executions.assert_not_called()
 
@@ -811,7 +868,7 @@ class ExecutionObservationTests(unittest.TestCase):
                 scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
                 claim, location = self.recovered(root)
                 client = self.client()
-                client.connection_observation.closed.set()
+                client.connection_observation.close()
                 original_wait = scheduler._condition.wait_for
                 waits = []
                 def stop_at_backoff(predicate, timeout=None):
@@ -835,30 +892,141 @@ class ExecutionObservationTests(unittest.TestCase):
                 self.assertEqual(issue.message, "The execution connection is unavailable")
                 self.assertEqual(issue.details, {})
 
-    def test_logical_reconnects_share_one_physical_close_waiter(self):
+    def test_logical_reconnects_share_one_physical_watch_until_close(self):
         scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        self.start_connections(scheduler)
+        events = self.subscribed.get(timeout=2)
+        events.receives.get(timeout=2)
         client = self.client()
         observation = client.connection_observation
-        first = scheduler._watch_connection(observation)
-        self.assertTrue(observation.waiting.wait(2))
+        first = self.watch(scheduler, observation, "first")
         client.close()
-        second = scheduler._watch_connection(observation)
-        self.assertIs(first, second)
-        self.assertIsNone(first.error)
-        self.assertEqual(observation.waits, [None])
-
-    def test_failed_close_waiter_start_is_not_reused_as_a_running_watcher(self):
-        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
-        observation = self.client().connection_observation
-        with patch("hey_my_buddy.blackboard.service.execution_scheduler.threading.Thread.start",
-                   side_effect=RuntimeError("thread creation failed")):
-            with self.assertRaisesRegex(RuntimeError, "thread creation failed"):
-                scheduler._watch_connection(observation)
+        # A new logical client can have a new observation of the same stream.
+        same_connection = PhysicalConnection(self.publish)
+        same_connection.connection_id = observation.connection_id
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.threading.Thread.start") as start:
+            second = self.watch(scheduler, same_connection, "second")
+        start.assert_not_called()
+        self.assertIs(first.watch, second.watch)
+        self.assertIsNone(first.watch.error)
+        self.assertEqual(observation.snapshots, 1)
+        self.assertEqual(same_connection.snapshots, 0)
+        self.assertEqual(len(scheduler._connections), 1)
+        observation.close(os_error=32)
+        events.receives.get(timeout=2)
+        self.assertEqual((first.revision, second.revision), (1, 1))
+        self.assertEqual(first.watch.error.code, "LIVE_UNAVAILABLE")
+        self.assertEqual(first.watch.error.details, {
+            "connectionId": observation.connection_id, "reason": "peer_closed",
+            "io_operation": "read", "raw_os_error": 32})
         self.assertEqual(scheduler._connections, {})
-        watch = scheduler._watch_connection(observation)
-        self.assertTrue(observation.waiting.wait(2))
-        self.assertIsNone(watch.error)
-        self.assertEqual(observation.waits, [None])
+
+    def test_server_opened_and_untracked_events_do_not_wake_observers(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        self.start_connections(scheduler)
+        events = self.subscribed.get(timeout=2)
+        events.receives.get(timeout=2)
+        observation = self.client().connection_observation
+        observer = self.watch(scheduler, observation)
+        for side, kind, key in (("server", "closed", observation.connection_id),
+                                ("client", "opened", observation.connection_id),
+                                ("client", "closed", -1)):
+            self.publish(SimpleNamespace(side=side, kind=kind, connection_id=key, value=None))
+            events.receives.get(timeout=2)
+            self.assertEqual(observer.revision, 0)
+            self.assertIsNone(observer.watch.error)
+        self.assertEqual(observation.snapshots, 1)
+
+    def test_close_before_registration_is_found_by_one_snapshot(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        self.start_connections(scheduler)
+        events = self.subscribed.get(timeout=2)
+        events.receives.get(timeout=2)
+        observation = self.client().connection_observation
+        observation.close()
+        events.receives.get(timeout=2)  # The event has passed without a watch.
+        observer = self.watch(scheduler, observation)
+        self.assertEqual(observation.snapshots, 1)
+        self.assertEqual(observer.revision, 1)
+        self.assertEqual(observer.watch.error.code, "LIVE_UNAVAILABLE")
+        self.assertEqual(observer.watch.error.details["connectionId"], observation.connection_id)
+        self.assertEqual(scheduler._connections, {})
+
+    def test_lag_resubscribes_and_snapshots_all_tracked_physical_connections(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        self.start_connections(scheduler)
+        events = self.subscribed.get(timeout=2)
+        consumer = events.receives.get(timeout=2)
+        closed, live = [self.client().connection_observation for _ in range(2)]
+        first, shared = self.watch(scheduler, closed, "first"), self.watch(scheduler, closed, "shared")
+        other = self.watch(scheduler, live, "other")
+        closed.close(emit=False, reason="io_error", operation="read_header", os_error=5)
+        events.events.put(cc.ConnectionEventsLagged("fixture lag"))
+        replacement = self.subscribed.get(timeout=2)
+        self.assertEqual(replacement.receives.get(timeout=2), consumer)
+        self.assertIsNot(events, replacement)
+        self.assertEqual(self.subscribe_events.call_count, 2)
+        self.assertEqual((closed.snapshots, live.snapshots), (2, 2))
+        self.assertEqual((first.revision, shared.revision, other.revision), (1, 1, 0))
+        self.assertEqual(first.watch.error.details, {
+            "connectionId": closed.connection_id, "reason": "io_error",
+            "io_operation": "read_header", "raw_os_error": 5})
+        self.assertIsNone(other.watch.error)
+        self.assertEqual(set(scheduler._connections), {live.connection_id})
+        live.close()
+        replacement.receives.get(timeout=2)
+        self.assertEqual(other.revision, 1)
+        self.assertEqual(scheduler._connections, {})
+        scheduler.stop()
+        self.assertTrue(replacement.closed.is_set())
+        self.assertFalse(scheduler._connection_thread.is_alive())
+
+    def test_close_during_resubscription_is_found_by_the_following_snapshot(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        self.start_connections(scheduler)
+        events = self.subscribed.get(timeout=2)
+        events.receives.get(timeout=2)
+        observation = self.client().connection_observation
+        observer = self.watch(scheduler, observation)
+        def subscribe_after_close():
+            observation.close(emit=False)
+            return self.subscribe()
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.cc.connection_events",
+                   side_effect=subscribe_after_close) as subscribe:
+            events.events.put(cc.ConnectionEventsLagged("fixture lag"))
+            replacement = self.subscribed.get(timeout=2)
+            replacement.receives.get(timeout=2)
+        subscribe.assert_called_once_with()
+        self.assertEqual(observation.snapshots, 2)
+        self.assertEqual(observer.revision, 1)
+        self.assertEqual(observer.watch.error.code, "LIVE_UNAVAILABLE")
+        self.assertEqual(scheduler._connections, {})
+
+    def test_shutdown_during_lag_does_not_create_a_replacement_subscription(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        events = ConnectionEvents()
+        receiving = threading.Event()
+        def lag_on_close():
+            receiving.set()
+            events.closed.wait()
+            raise cc.ConnectionEventsLagged("fixture lag at shutdown")
+        with patch.object(events, "recv", side_effect=lag_on_close), \
+             patch("hey_my_buddy.blackboard.service.execution_scheduler.cc.connection_events",
+                   return_value=events) as subscribe:
+            self.start_connections(scheduler)
+            self.assertTrue(receiving.wait(2))
+            scheduler.stop()
+        subscribe.assert_called_once_with()
+        self.assertFalse(scheduler._connection_thread.is_alive())
+
+    def test_failed_consumer_start_closes_its_subscription_and_does_not_admit(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        with patch.object(scheduler._connection_thread, "start", side_effect=RuntimeError("thread creation failed")), \
+             patch.object(scheduler._thread, "start") as admit:
+            with self.assertRaisesRegex(RuntimeError, "thread creation failed"):
+                scheduler.start()
+        self.assertTrue(self.subscriptions[0].closed.is_set())
+        admit.assert_not_called()
 
     def test_unreadable_stop_endpoint_still_persists_the_external_stop_deadline(self):
         with tempfile.TemporaryDirectory() as root:

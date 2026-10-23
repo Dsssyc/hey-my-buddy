@@ -369,7 +369,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 observation = first.connection_observation
                 self.assertEqual(observation.connection_id, second.connection_observation.connection_id)
                 first.close()
-                self.assertIsNone(observation.wait_closed(timeout=0))
+                self.assertIsNone(observation.snapshot())
                 self.assertEqual(second.observe(limit=1)["unavailable"], "source-unavailable")
                 self.assertFalse(execution.stop_requested())
             finally:
