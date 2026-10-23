@@ -54,7 +54,7 @@ class LauncherTests(unittest.TestCase):
             python.write_text('#!/bin/sh\nprintf \'{"used":"active"}\\n\'\n', encoding="utf-8", newline="\n")
             python.chmod(0o700)
             (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
-            (target / 'READY.json').write_text(json.dumps({'format': 1, 'state': 'READY', 'contentId': target.name}), encoding="utf-8", newline="\n")
+            (target / 'READY.json').write_text(json.dumps({'format': 1, 'state': 'READY', 'contentId': target.name, 'python': str(python)}), encoding="utf-8", newline="\n")
             launcher.write_active_runtime(state, target)
             bootstrap = base / 'bootstrap'
             bootstrap.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -S "$@"\n', encoding="utf-8", newline="\n")
@@ -145,11 +145,15 @@ class LauncherTests(unittest.TestCase):
 
     def test_missing_installed_pointer_has_repairable_error(self):
         with tempfile.TemporaryDirectory() as temporary:
-            with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(Path(temporary) / 'runtime')}, clear=True), \
-                    mock.patch.object(runtime, 'project_root', return_value=Path(temporary) / 'package'):
-                with self.assertRaises(BoardError) as caught:
-                    launcher.selected_runtime(Path(temporary))
-            self.assertEqual(caught.exception.code, 'ACTIVE_RUNTIME_MISSING')
+            state = Path(temporary)
+            launcher.write_private(state / 'control.json', {'runtimeIdentity': 'runtime:' + 'a' * 32})
+            for project, code in (('package', 'ACTIVE_RUNTIME_MISSING'), ('source', 'DEV_SOURCE_REQUIRED')):
+                with self.subTest(project=project), \
+                     mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT': str(state / 'runtime')}, clear=True), \
+                     mock.patch.object(runtime, 'project_root', return_value=state / project):
+                    with self.assertRaises(BoardError) as caught:
+                        launcher.selected_runtime(state)
+                self.assertEqual(caught.exception.code, code)
 
 
 if __name__ == '__main__':

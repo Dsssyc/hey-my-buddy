@@ -359,7 +359,7 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
         from ..install import runtime
 
         # Cold start installs and runs from the content-addressed stable runtime, so
-        # the default path never falls back to the replaceable plugin cache. Only an
+        # the default path stays independent of the source tree. Only an
         # explicit HMB_DEV_SOURCE=1 development/test run executes from the checkout,
         # and that reports stable=false.
         target = runtime.launch_target(log_path=directory / "runtime-install.log")

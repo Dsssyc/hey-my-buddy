@@ -15,7 +15,7 @@ import shutil
 import uuid
 import sys
 
-from .. import locking, private_dirs
+from .. import private_dirs
 from ..protocol import schemas
 from . import skill_package
 from ..errors import BoardError
@@ -116,9 +116,7 @@ def _link_claude(target: Path) -> dict:
         resolved = Path(os.path.realpath(link))
         if resolved == Path(os.path.realpath(target)):
             return {"path": str(link), "status": "already-linked"}
-        if resolved.exists() and not _is_product_skill(resolved):
-            raise BoardError("SKILL_TARGET_CONFLICT", f"{link} links to a different skill; move it away and rerun install")
-        link.unlink()
+        raise BoardError("SKILL_TARGET_CONFLICT", f"{link} links to another skill; move it away before installing")
     elif link.exists():
         raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is a separate directory; move it away and rerun install")
     home.mkdir(parents=True, exist_ok=True)
@@ -140,11 +138,6 @@ def _check_claude_link(target: Path) -> None:
         raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is a separate directory; move it away before installing")
 
 
-def _legacy_plugins() -> list[str]:
-    cache = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "plugins/cache"
-    return sorted(str(path) for path in cache.glob("*/hey-my-buddy") if path.is_dir()) if cache.is_dir() else []
-
-
 def install(params: dict) -> dict:
     schemas.reject_unknown(params, set(), "install")
     if os.environ.get("HMB_AGENT_CREDENTIAL_FILE"):
@@ -155,21 +148,16 @@ def install(params: dict) -> dict:
     planned_paths = [str(home / SKILL), str(claude_skills_home() / SKILL), str(state), str(runtime_root())]
     from ..protocol.contracts import CONTRACT_VERSION
     print(json.dumps({'contractVersion': CONTRACT_VERSION, 'action': 'install-plan', 'writePaths': planned_paths}), file=sys.stderr, flush=True)
-    if (state / 'board.sqlite3').exists() and not (state / 'upgrade.json').exists():
-        from .upgrade import install_preflight
-        install_preflight(state)
     home.mkdir(parents=True, exist_ok=True)
     target = home / SKILL
-    lock = os.open(home / f".{SKILL}-install.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    lock = private_dirs.open_lock_fd(home / f".{SKILL}-install.lock")
     built = None
+    recovery_result = None
+    skill_cleanup_error = None
     try:
-        locking.lock(lock)
         if (state / 'upgrade.json').exists():
             from .upgrade import upgrade
-            upgrade({})  # Recover the recorded generation before starting another install.
-            if (state / 'board.sqlite3').exists():
-                from .upgrade import install_preflight
-                install_preflight(state)
+            recovery_result = upgrade(state)
         _check_claude_link(target)
         source = packaged_skill()
         if source is None:
@@ -178,7 +166,6 @@ def install(params: dict) -> dict:
             skill_package.assemble(project_root(), built / SKILL)
             source = built / SKILL
         marker = _marker(source)
-        state = get_state_dir()
         pointer = state / "active-runtime.json"
         from . import runtime
         from .launcher import selected_runtime
@@ -188,36 +175,31 @@ def install(params: dict) -> dict:
         if pointer.exists() and intact:
             active = selected_runtime(state, allow_overrides=False)
             expected = runtime.runtime_dir(source / 'package')
-            if active == expected and runtime.content_id(active) == active.name:
+            if active == expected:
                 claude = _link_claude(target)
                 write_runtime_hint(target, active)
                 return {'skill': {'path': str(target), 'version': marker['version'], 'contract': marker['contract'], 'placement': 'already-current'},
                         'claude': claude, 'service': {'action': 'none', 'reason': 'same complete generation'}, 'writePaths': planned_paths,
+                        **({'recovery': recovery_result} if recovery_result is not None else {}),
                         'diagnostics': {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
                                         'launcher': str(target / 'scripts/hey-my-buddy')}}
         if pointer.exists() and not (state / "control.json").exists():
             from .launcher import selected_runtime
             from .upgrade import start
             old_dev = os.environ.pop("HMB_DEV_SOURCE", None)
-            old_pin = os.environ.get("HMB_RUNTIME")
             try:
-                os.environ.pop("HMB_RUNTIME", None)
                 previous = selected_runtime(state, allow_overrides=False)
                 start(state, previous)
             finally:
                 if old_dev is not None:
                     os.environ["HMB_DEV_SOURCE"] = old_dev
-                if old_pin is None:
-                    os.environ.pop("HMB_RUNTIME", None)
-                else:
-                    os.environ["HMB_RUNTIME"] = old_pin
         if (state / "control.json").exists():
             from .upgrade import upgrade
             current = _marker(target) if target.is_dir() and not target.is_symlink() else None
             # Placement follows the actual content comparison above, not a marker
             # match: a same-version rebuild with changed files is an update.
             placement = "already-current" if intact else ("updated" if current else "installed")
-            result = upgrade({}, skill_source=source, skill_target=target)
+            result = upgrade(state, skill_source=source, skill_target=target)
             if result.get("error"):
                 error = result["error"]
                 raise BoardError(error["code"], error["message"], **{**error.get('details', {}), **{k: v for k, v in result.items() if k != "error"}})
@@ -253,24 +235,28 @@ def install(params: dict) -> dict:
                     shutil.rmtree(target)
                 raise
             if previous_skill is not None:
-                shutil.rmtree(previous_skill, ignore_errors=True)
+                try:
+                    shutil.rmtree(previous_skill)
+                except OSError as error:
+                    skill_cleanup_error = f'{previous_skill}: {error}'
             service = {"action": "none", "reason": "the first command starts the installed runtime"}
+    except BoardError as error:
+        if recovery_result is not None:
+            error.details['recovery'] = recovery_result
+        raise
     finally:
         if built is not None:
             shutil.rmtree(built, ignore_errors=True)
-        locking.unlock(lock)
         os.close(lock)
     result = {"skill": {"path": str(target), "version": marker["version"], "contract": marker["contract"],
                         "placement": placement},
-              "claude": claude, "service": service}
+              "claude": claude, "service": service,
+              **({'recovery': recovery_result} if recovery_result is not None else {}),
+              **({'skillCleanupError': skill_cleanup_error} if skill_cleanup_error is not None else {})}
     result['writePaths'] = planned_paths
     result['diagnostics'] = {'skillInstalled': True, 'claudeLink': claude['status'], 'runtimeMaterialized': True,
                              'launcher': str(target / 'scripts/hey-my-buddy'),
                              'next': 'A new Host session loads the skill. This session can use the absolute launcher path outside its sandbox.'}
-    legacy = _legacy_plugins()
-    if legacy:
-        result["legacyPlugins"] = legacy
-        result["next"] = "Retire the Codex plugin: codex plugin remove hey-my-buddy@<marketplace>"
     return result
 
 
@@ -290,12 +276,8 @@ def paths(params: dict) -> dict:
     marker = _marker(target) if target.is_dir() else None
     running = packaged_skill()
     state = get_state_dir()
-    pointer = None
-    try:
-        from ..private_files import read_text
-        pointer = json.loads(read_text(state / "active-runtime.json")).get("runtimeDir")
-    except (OSError, ValueError, AttributeError, BoardError):
-        pass
+    from .launcher import read_private
+    pointer = read_private(state / "active-runtime.json")
     return {
         "skill": {"dir": str(target), "installed": marker is not None,
                   "version": marker.get("version") if marker else None,
@@ -305,5 +287,5 @@ def paths(params: dict) -> dict:
         "data": {"stateDir": str(state), "board": str(state / "board.sqlite3"),
                  "attempts": str(state / "attempts"), "workspaces": str(state / "workspaces"),
                  "backup": str(state / "backups" / "current"), "serviceLog": str(state / "control.log")},
-        "runtime": {"root": str(runtime_root().resolve()), "active": pointer},
+        "runtime": {"root": str(runtime_root().resolve()), "active": pointer['runtimeDir'] if pointer is not None else None},
     }

@@ -54,7 +54,6 @@ class SkillInstallTests(unittest.TestCase):
         self.assertTrue((self.claude / "hey-my-buddy").is_symlink())
         self.assertEqual(os.path.realpath(self.claude / "hey-my-buddy"), os.path.realpath(skill))
         self.assertEqual(result["service"]["action"], "none")
-        self.assertNotIn("legacyPlugins", result)
 
     def test_a_second_host_with_the_same_version_only_repairs_the_link(self):
         self.install()
@@ -74,6 +73,27 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(self.install()["skill"]["placement"], "updated")
         self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))["version"], stale["version"])
         self.assertEqual(sorted(path.name for path in self.agents.iterdir() if not path.name.endswith(".lock")), ["hey-my-buddy"])
+
+    def test_first_install_reports_old_skill_cleanup_failure_after_publication(self):
+        skill = self.agents / 'hey-my-buddy'
+        skill.mkdir(parents=True)
+        (skill / 'skill.json').write_text('{"name":"hey-my-buddy","version":"0.0.1"}', encoding='utf-8')
+        (skill / 'SKILL.md').write_text('---\nname: hey-my-buddy\n---\nold skill', encoding='utf-8')
+        remove = shutil.rmtree
+
+        def refuse_previous(path, *args, **kwargs):
+            if Path(path).name.startswith('.hey-my-buddy-install-previous-'):
+                raise PermissionError('old skill cleanup denied')
+            return remove(path, *args, **kwargs)
+
+        with patch('hey_my_buddy.install.skill_install.shutil.rmtree', side_effect=refuse_previous):
+            result = self.install()
+        self.assertEqual(result['skill']['placement'], 'updated')
+        self.assertEqual(result['service']['action'], 'none')
+        self.assertIn('old skill cleanup denied', result['skillCleanupError'])
+        self.assertTrue((self.base / 'state/active-runtime.json').is_file())
+        self.assertTrue((self.claude / 'hey-my-buddy').is_symlink())
+        self.assertEqual(len(list(self.agents.glob('.hey-my-buddy-install-previous-*'))), 1)
 
     def test_foreign_directories_are_never_replaced(self):
         from hey_my_buddy.errors import BoardError
@@ -100,16 +120,13 @@ class SkillInstallTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "UNAUTHORIZED")
         self.assertFalse(self.agents.exists())
 
-    def test_an_installed_skill_copies_itself_and_reports_a_legacy_plugin(self):
+    def test_an_installed_skill_copies_itself(self):
         built = load_build_skill().build(ROOT, self.base / "built/hey-my-buddy")
-        (self.base / "codex/plugins/cache/personal/hey-my-buddy").mkdir(parents=True)
         with patch("hey_my_buddy.install.skill_install.project_root", return_value=built / "package"):
             result = self.install()
         self.assertEqual(result["skill"]["placement"], "installed")
         self.assertEqual(json.loads((self.agents / "hey-my-buddy/skill.json").read_text(encoding="utf-8")),
                          json.loads((built / "skill.json").read_text(encoding="utf-8")))
-        self.assertEqual(result["legacyPlugins"], [str(self.base / "codex/plugins/cache/personal/hey-my-buddy")])
-        self.assertIn("codex plugin remove", result["next"])
 
     def test_a_failed_claude_link_fails_before_the_service_and_rerun_recovers(self):
         from hey_my_buddy.errors import BoardError

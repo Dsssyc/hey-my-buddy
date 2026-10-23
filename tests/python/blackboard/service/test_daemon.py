@@ -158,6 +158,22 @@ class DaemonAdmissionTests(BoardTestCase):
         self.assertEqual(failure, {"pid": os.getpid(), "code": "SERVICE_START_TIMEOUT", "message": str(error)})
         self.assertIn("SERVICE_START_TIMEOUT", stderr.getvalue())
 
+    def test_runtime_identity_failure_prevents_startup_and_records_the_cause(self):
+        from hey_my_buddy.install import runtime
+        for cause in (BoardError('RUNTIME_NOT_READY', 'unusable READY marker'),
+                      OSError('cannot read runtime paths'), ValueError('invalid runtime metadata')):
+            with self.subTest(cause=type(cause).__name__), \
+                 patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}), \
+                 patch.object(runtime, 'resolve_runtime', side_effect=cause), \
+                 patch.object(Daemon, 'run') as run, \
+                 patch('sys.stderr', new_callable=io.StringIO):
+                self.assertEqual(main(), 2)
+                run.assert_not_called()
+            failure = json.loads((self.directory / 'startup-error.json').read_text(encoding='utf-8'))
+            self.assertEqual(failure['code'], cause.code if isinstance(cause, BoardError) else 'RUNTIME_IDENTITY_INVALID')
+            self.assertEqual(failure['pid'], os.getpid())
+            self.assertNotEqual(failure.get('runtimeIdentity'), 'runtime:unavailable')
+
     def test_other_native_errors_are_reraised_even_with_timeout_wording(self):
         for category, kind in (("lifecycle", "shutdown_timeout"), ("transport", "startup_timeout"), (None, None)):
             with self.subTest(category=category, kind=kind):

@@ -40,7 +40,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
                     after_observed()
 
         with mock.patch.object(upgrade, "write_journal", side_effect=after_first_journal):
-            installed = upgrade.upgrade({})
+            installed = upgrade.upgrade(self.directory)
         self.assertEqual(held, ["preflight"])
         self.assertTrue(installed["upgraded"], installed)
         self.assertNotIn("backup", installed)
@@ -75,7 +75,7 @@ class ExecutionInstallFenceTests(BoardTestCase):
                     observed.touch()
 
             with mock.patch.object(upgrade, "write_journal", side_effect=after_first_journal):
-                installed = upgrade.upgrade({})
+                installed = upgrade.upgrade(self.directory)
             self.assertEqual(held, ["preflight"])
             self.assertTrue(installed["upgraded"], installed)
             self.assertFalse((self.directory / "upgrade.json").exists())

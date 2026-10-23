@@ -59,4 +59,4 @@ class TargetEntryModuleTests(BoardTestCase):
             with self.assertRaises(SystemExit):
                 launcher.main(['ping'])
         self.assertEqual(execute.call_args.args[1],
-                         [str(launcher._runtime_python(target)), '-P', '-m', 'hey_my_buddy.cli.main', 'ping'])
+                         [str(upgrade.runtime.runtime_python(target)), '-P', '-m', 'hey_my_buddy.cli.main', 'ping'])

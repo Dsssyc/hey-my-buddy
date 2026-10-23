@@ -134,12 +134,11 @@ class PublicationByteTests(unittest.TestCase):
                  mock.patch.object(runtime, "missing_resources", return_value=[]), \
                  mock.patch.object(runtime, "manifest", return_value=record), \
                  mock.patch.object(runtime.subprocess, "run", side_effect=installed), \
-                 mock.patch.object(runtime, "_rewrite_environment_paths"), \
                  mock.patch.object(runtime, "_now", return_value="2026-01-02T03:04:05Z"), \
-                 mock.patch.object(runtime, "_source_commit", return_value="a" * 40), \
+                 mock.patch("hey_my_buddy.install.skill_package.source_commit", return_value="a" * 40), \
                  mock.patch.object(runtime, "resource_paths", return_value={"fixture.runner": target / "runner.py"}), \
                  mock.patch.object(runtime, "read_ready", return_value={}):
-                runtime._materialize_locked(root, target, "uv", 10, None)
+                runtime._materialize_locked(root, target, "uv", None)
             self.assertEqual((target / "manifest.json").read_bytes(),
                              b'{\n  "a": [\n    1,\n    true\n  ],\n  "manifestSha256": "digest",\n'
                              b'  "z": "caf\\u00e9"\n}\n')

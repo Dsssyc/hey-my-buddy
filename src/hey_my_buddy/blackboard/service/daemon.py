@@ -59,6 +59,10 @@ class Daemon:
             raise BoardError("INVALID_ARGUMENT", f"HMB_MAX_CONCURRENT must be between {minimum} and {maximum}")
         self.store = BoardStore(self.directory, max_concurrent=max_concurrent)
         self.live_registry = LiveRegistry()
+        try:
+            runtime_identity = runtime.runtime_identity()
+        except (OSError, ValueError) as error:
+            raise BoardError('RUNTIME_IDENTITY_INVALID', 'Runtime identity could not be read', reason=str(error)) from error
         self.control = {
             "service_id": self.service_id,
             "contract_version": CONTRACT_VERSION,
@@ -68,7 +72,7 @@ class Daemon:
             "wait_admission": self.wait_admission,
             "stopping": False,
             "restart_requested": False,
-            "runtime": runtime.runtime_identity(),
+            "runtime": runtime_identity,
         }
         self.console: Console | None = None
         self.lock_fds: list[int] = []

@@ -176,7 +176,7 @@ class HostCutoverTests(WorkflowTestCase):
                             saw_fence.append(value['phase'])
                             release.set()
                     with mock.patch.object(upgrade, 'write_journal', side_effect=on_journal):
-                        result = upgrade.upgrade({})
+                        result = upgrade.upgrade(self.directory)
                     self.assertTrue(result['upgraded'], result)
                     self.assertEqual(saw_fence, ['preflight'])
                     waited = waiter.result(timeout=20)

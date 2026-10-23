@@ -82,14 +82,12 @@ class UpgradeCutoverTests(BoardTestCase):
         with ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, {"HMB_RUNTIME_ROOT": str(self.runtime_root)}))
             for name, options in (
-                ("get_state_dir", {"return_value": self.state}),
                 ("runtime.is_ready", {"return_value": True}),
                 ("runtime.read_ready", {"return_value": {"sourceCommit": "fixture-commit"}}),
                 ("runtime.materialize", {"return_value": {"runtimeDir": str(target)}}),
                 ("probe", {"return_value": health}),
                 ("detach", {"return_value": None}),
                 ("start", {"side_effect": start}),
-                ("command", {"return_value": {"leaks": []}}),
             ):
                 stack.enter_context(mock.patch("hey_my_buddy.install.upgrade." + name, **options))
             stack.enter_context(mock.patch("hey_my_buddy.install.upgrade.write_active_runtime"))
@@ -100,11 +98,11 @@ class UpgradeCutoverTests(BoardTestCase):
                     backup, "create", side_effect=BoardError("BACKUP_INVALID", "injected backup failure")))
             if interrupt_target:
                 with self.assertRaises(KeyboardInterrupt):
-                    upgrade.upgrade({})
+                    upgrade.upgrade(self.state)
                 journal = json.loads((self.state / "upgrade.json").read_text(encoding="utf-8"))
                 self.assertEqual(journal["phase"], "prepared")
                 return upgrade.recover(self.state, self.runtime_root)
-            return upgrade.upgrade({})
+            return upgrade.upgrade(self.state)
 
     def assert_history_preserved(self):
         self.assertEqual((self.state / "board.sqlite3").read_bytes(), self.original_board)
@@ -144,6 +142,34 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertEqual(result["rollback"]["runtimeContentId"], self.previous.name)
         self.assertEqual(self.started_runtimes, [target, self.previous])
         self.assert_history_preserved()
+
+    def test_retention_defect_after_verification_does_not_restore_over_new_work(self):
+        target = self.runtime_root / ('b' * 32)
+
+        def failed_retention(*_args):
+            self.assertFalse((self.state / 'upgrade.json').exists())
+            (self.state / 'console-settings.json').write_text('{"theme":"after-verification"}', encoding='utf-8')
+            raise TypeError('retention defect')
+
+        with mock.patch.object(upgrade, 'retain_runtimes', side_effect=failed_retention), self.assertRaises(TypeError):
+            self.cutover(self.previous, target)
+        self.assertEqual(self.started_runtimes, [target])
+        self.assertEqual((self.state / 'console-settings.json').read_text(encoding='utf-8'), '{"theme":"after-verification"}')
+        self.assertEqual(json.loads((self.state / 'upgrade-last.json').read_text(encoding='utf-8'))['phase'], 'verified')
+
+    def test_verified_history_write_failure_leaves_the_recoverable_new_generation(self):
+        target = self.runtime_root / ('b' * 32)
+        write = upgrade.write_journal
+
+        def refuse_history(path, journal):
+            if path == self.state / 'upgrade-last.json' and journal['phase'] == 'verified':
+                raise PermissionError('history write denied')
+            return write(path, journal)
+
+        with mock.patch.object(upgrade, 'write_journal', side_effect=refuse_history), self.assertRaises(PermissionError):
+            self.cutover(self.previous, target)
+        self.assertEqual(self.started_runtimes, [target])
+        self.assertEqual(json.loads((self.state / 'upgrade.json').read_text(encoding='utf-8'))['phase'], 'verified')
 
     def test_failed_backup_returns_to_previous_runtime_with_history(self):
         target = self.runtime_root / ("b" * 32)

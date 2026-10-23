@@ -22,6 +22,7 @@ import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.install import runtime
+from hey_my_buddy import locking
 from hey_my_buddy.errors import BoardError
 
 
@@ -62,20 +63,6 @@ class RuntimePathTests(unittest.TestCase):
                         runtime._declared_relative(value, "asset", flavor("manifest.json"))
                     self.assertEqual(failure.exception.code, "RUNTIME_MANIFEST_INVALID")
                 self.assertEqual(runtime._declared_relative("a/b", "asset", flavor("manifest.json")), "a/b")
-
-    def test_plugin_cache_comparison_uses_native_components(self):
-        for flavor, cached, unrelated in (
-            (PureWindowsPath, (r"D:\plugins\cache\package\file", "D:/Plugins/Cache/package/file",
-                               r"\\server\share\plugins\cache\package"),
-             (r"D:\plugins\cache-other\file", r"D:\other-plugins\cache\file")),
-            (PurePosixPath, ("/plugins/cache/package/file", "/work/plugins/cache/package"),
-             ("/plugins/cache-other/file", "/Plugins/Cache/package")),
-        ):
-            with self.subTest(platform=flavor.__name__), patch.object(runtime, "Path", flavor):
-                for value in cached:
-                    self.assertTrue(runtime._in_plugin_cache(value), value)
-                for value in unrelated:
-                    self.assertFalse(runtime._in_plugin_cache(value), value)
 
 REAL_ROOT = Path(__file__).resolve().parents[3]
 
@@ -415,7 +402,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
 
     def test_concurrent_installers_share_one_lock_until_ready(self):
         first_building, release, second_attempted = Event(), Event(), Event()
-        real_run, real_lock = runtime.subprocess.run, runtime.locking.lock
+        real_run, real_lock = runtime.subprocess.run, locking.lock
         acquisitions = []
 
         def controlled_run(command, **options):
@@ -431,12 +418,12 @@ class RuntimeMaterializationTests(unittest.TestCase):
                 second_attempted.set()
             return real_lock(fd, **options)
 
-        options = {"destination": self.runtime_root, "uv_bin": str(self.uv), "timeout_seconds": 10}
+        options = {"destination": self.runtime_root, "uv_bin": str(self.uv)}
         target = runtime.runtime_dir(self.root, self.runtime_root)
         lock_path = target.parent / runtime.INSTALL_LOCK
         with ThreadPoolExecutor(max_workers=2) as pool, \
              patch.object(runtime.subprocess, "run", side_effect=controlled_run), \
-             patch.object(runtime.locking, "lock", side_effect=observe_lock):
+             patch.object(locking, "lock", side_effect=observe_lock):
             first = pool.submit(runtime.materialize, self.root, **options)
             try:
                 self.assertTrue(first_building.wait(5))
@@ -467,7 +454,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         write_assets(other)
         write_manifest(other, resources={"other.runner": "resources/runner.py"})
         self.assertNotEqual(runtime.content_id(self.root), runtime.content_id(other))
-        real_copy, real_lock = runtime._copy_assets, runtime.locking.lock
+        real_copy, real_lock = runtime._copy_assets, locking.lock
         acquisitions = []
 
         def controlled_copy(source, target):
@@ -488,7 +475,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         options = {"destination": self.runtime_root, "uv_bin": str(self.uv)}
         with ThreadPoolExecutor(max_workers=2) as pool, \
              patch.object(runtime, "_copy_assets", side_effect=controlled_copy), \
-             patch.object(runtime.locking, "lock", side_effect=observe_lock):
+             patch.object(locking, "lock", side_effect=observe_lock):
             first = pool.submit(runtime.materialize, self.root, **options)
             try:
                 self.assertTrue(first_copying.wait(5))
@@ -547,6 +534,116 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.assertTrue(lock_path.is_file())
         self.assertEqual((self.uv.parent / "invocations").read_text(encoding="utf-8").splitlines(), ["sync", "sync"])
 
+    def test_materialize_rebuilds_only_an_unpublished_directory(self):
+        target = runtime.runtime_dir(self.root, self.runtime_root)
+        target.mkdir(parents=True)
+        partial = target / 'unfinished'
+        partial.write_bytes(b'partial build')
+        self.assertEqual(self.materialize(), target)
+        self.assertFalse(partial.exists())
+
+    def test_materialize_preserves_any_unusable_published_marker(self):
+        target = self.materialize()
+        marker = target / runtime.READY_FILE
+        original = marker.read_bytes()
+        interpreter = runtime.runtime_python(target)
+        for replacement in (b'{', b'{}', b'[]', original.replace(b'"READY"', b'"BUILDING"'),
+                            original.replace(target.name.encode(), b'0' * 32)):
+            with self.subTest(marker=replacement[:30]):
+                marker.write_bytes(replacement)
+                with self.assertRaises(BoardError) as failure:
+                    runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
+                self.assertEqual(failure.exception.code, 'RUNTIME_NOT_READY')
+                self.assertIn('READY marker', str(failure.exception))
+                self.assertEqual(marker.read_bytes(), replacement)
+                self.assertTrue(interpreter.is_file())
+        marker.write_bytes(original)
+        interpreter.unlink()
+        with self.assertRaises(BoardError) as failure:
+            runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
+        self.assertEqual(failure.exception.code, 'RUNTIME_NOT_READY')
+        self.assertIn('Python interpreter', str(failure.exception))
+        self.assertEqual(failure.exception.details['python'], str(interpreter))
+        self.assertEqual(marker.read_bytes(), original)
+
+    def test_materialize_preserves_a_runtime_when_the_marker_is_unreadable(self):
+        target = self.materialize()
+        marker = target / runtime.READY_FILE
+        original = marker.read_bytes()
+        with patch.object(runtime, '_read_ready_file', side_effect=PermissionError('READY read denied')):
+            with self.assertRaises(BoardError) as failure:
+                runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
+        self.assertEqual(failure.exception.code, 'RUNTIME_NOT_READY')
+        self.assertIn('unreadable', str(failure.exception))
+        self.assertIn('READY read denied', failure.exception.details['reason'])
+        self.assertEqual(marker.read_bytes(), original)
+
+    def test_materialize_reports_a_failed_removal_before_replacing_partial_content(self):
+        target = runtime.runtime_dir(self.root, self.runtime_root)
+        target.mkdir(parents=True)
+        sentinel = target / 'unfinished'
+        sentinel.write_bytes(b'partial')
+        remove = runtime.shutil.rmtree
+
+        def refuse_target(path, *args, **kwargs):
+            if path == target:
+                raise PermissionError('partial removal denied')
+            return remove(path, *args, **kwargs)
+
+        with patch.object(runtime.shutil, 'rmtree', side_effect=refuse_target), self.assertRaises(PermissionError):
+            runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv))
+        self.assertEqual(sentinel.read_bytes(), b'partial')
+
+    def test_install_failure_remains_primary_when_target_cleanup_is_denied(self):
+        target = runtime.runtime_dir(self.root, self.runtime_root)
+        log = self.runtime_root.parent / 'runtime-install.log'
+        remove = runtime.shutil.rmtree
+
+        def refuse_target(path, *args, **kwargs):
+            if path == target:
+                raise PermissionError('target cleanup denied')
+            return remove(path, *args, **kwargs)
+
+        for returncode, message in ((1, 'uv sync failed'), (0, 'no Python interpreter')):
+            with self.subTest(returncode=returncode):
+                with patch.object(runtime.subprocess, 'run', return_value=SimpleNamespace(returncode=returncode)), \
+                     patch.object(runtime.shutil, 'rmtree', side_effect=refuse_target), self.assertRaises(BoardError) as caught:
+                    runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv), log_path=log)
+                failure = caught.exception
+                self.assertEqual(failure.code, 'RUNTIME_INSTALL_FAILED')
+                self.assertIn(message, str(failure))
+                self.assertIn('see the install log', str(failure))
+                self.assertEqual(failure.details['log'], str(log))
+                self.assertEqual(failure.details['cleanupErrors'], [{'path': str(target), 'code': 'PermissionError',
+                                                                  'message': 'target cleanup denied'}])
+                self.assertFalse((target / runtime.READY_FILE).exists())
+                self.assertTrue(target.is_dir())
+                remove(target)
+
+    def test_temporary_cleanup_reports_both_the_original_failure_and_removal_error(self):
+        log = self.runtime_root.parent / 'runtime-install.log'
+        for cause in (BoardError('RUNTIME_ASSET_MISSING', 'build asset unavailable'), OSError('asset copy denied')):
+            with self.subTest(cause=type(cause).__name__), \
+                 patch.object(runtime, '_copy_assets', side_effect=cause), \
+                 patch.object(runtime.shutil, 'rmtree', side_effect=PermissionError('temporary cleanup denied')), \
+                 self.assertRaises(BoardError) as caught:
+                runtime.materialize(self.root, destination=self.runtime_root, uv_bin=str(self.uv), log_path=log)
+            failure = caught.exception
+            self.assertEqual(failure.code, cause.code if isinstance(cause, BoardError) else 'RUNTIME_INSTALL_FAILED')
+            self.assertIn(str(cause), str(failure))
+            self.assertEqual(failure.details['cleanupErrors'][0]['message'], 'temporary cleanup denied')
+            if isinstance(cause, OSError):
+                self.assertEqual(failure.details['reason'], {'code': 'OSError', 'message': 'asset copy denied'})
+                self.assertEqual(failure.details['log'], str(log))
+
+    def test_runtime_and_skill_share_an_archive_source_identity(self):
+        metadata = self.root / 'src/hey_my_buddy/build-info.json'
+        metadata.write_text('{"sourceCommit":null}', encoding='utf-8')
+        with patch('hey_my_buddy.install.skill_package.subprocess.check_output', return_value='a' * 40) as git:
+            target = self.materialize()
+        git.assert_not_called()
+        self.assertIsNone(runtime.read_ready(target)['sourceCommit'])
+
     def test_a_ready_runtime_keeps_its_paths_after_the_source_tree_is_replaced(self):
         target = self.materialize()
         record = runtime.read_ready(target)
@@ -595,29 +692,24 @@ class RuntimeMaterializationTests(unittest.TestCase):
         finally:
             replaced.rename(self.root)
 
-    def test_a_ready_runtime_with_a_missing_resource_is_not_ready(self):
+    def test_a_published_runtime_reports_missing_resources_in_its_identity(self):
         target = self.materialize()
         Path(runtime.read_ready(target)["resources"]["fixture.runner"]).unlink()
-        self.assertFalse(runtime.is_ready(target))
+        self.assertTrue(runtime.is_ready(target))
+        with patch.dict(os.environ, {"HMB_RUNTIME": str(target)}), patch.object(runtime, "project_root", return_value=target):
+            resolved = runtime.resolve_runtime()
+        self.assertFalse(resolved["stable"])
+        self.assertIn("fixture.runner", resolved["resourcesMissing"])
 
-    def test_a_ready_runtime_rejects_an_outward_resource_symlink(self):
+    def test_a_published_runtime_reports_an_outward_resource_symlink_as_a_leak(self):
         target = self.materialize()
         record = runtime.read_ready(target)
         runner = Path(record["resources"]["fixture.runner"])
         outside = self.root / DEFAULT_RESOURCES["fixture.runner"]
         runner.unlink()
         runner.symlink_to(outside)
-        self.assertFalse(runtime.is_ready(target))
+        self.assertTrue(runtime.is_ready(target))
         self.assertTrue(any("fixture.runner resolves outside" in leak for leak in runtime.source_leaks(record)))
-        with patch.dict(os.environ, {"HMB_RUNTIME": str(target)}):
-            with self.assertRaises(BoardError) as failure:
-                runtime.resolve_runtime()
-        self.assertEqual(failure.exception.code, "RUNTIME_NOT_READY")
-
-    def test_a_ready_runtime_rejects_an_outward_symlink_inside_an_asset_directory(self):
-        target = self.materialize()
-        (target / "src/hey_my_buddy/external.py").symlink_to(self.root / "src/hey_my_buddy/fixture_bridge.py")
-        self.assertFalse(runtime.is_ready(target))
 
     def test_a_shared_base_interpreter_symlink_is_allowed(self):
         target = self.materialize()
@@ -667,15 +759,22 @@ class RuntimeMaterializationTests(unittest.TestCase):
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("fixture.runner" in leak for leak in leaks), leaks)
 
-    def test_source_leaks_find_a_plugin_cache_path(self):
+    def test_source_leaks_does_not_hide_an_unreadable_pth_file(self):
         target = self.materialize()
         record = runtime.read_ready(target)
-        record["resources"] = {
-            **record["resources"],
-            "console.assets": "/Users/someone/.codex/plugins/cache/hey-my-buddy/console_assets",
-        }
-        leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
-        self.assertTrue(any("plugins/cache" in leak for leak in leaks), leaks)
+        site = Path(record['environment']) / 'lib/python3.12/site-packages'
+        site.mkdir(parents=True)
+        pth = site / 'runtime.pth'
+        pth.write_bytes(b'fixture')
+        read = Path.read_text
+
+        def refuse_pth(path, *args, **kwargs):
+            if path == pth:
+                raise PermissionError('pth read denied')
+            return read(path, *args, **kwargs)
+
+        with patch.object(Path, 'read_text', refuse_pth), self.assertRaises(PermissionError):
+            runtime.source_leaks(record)
 
     def test_source_leaks_find_a_pyvenv_that_references_the_project(self):
         target = self.materialize()
@@ -683,6 +782,13 @@ class RuntimeMaterializationTests(unittest.TestCase):
         (Path(record["environment"]) / "pyvenv.cfg").write_text(f"home = /usr/bin\nproject = {REAL_ROOT}\n", encoding="utf-8", newline="\n")
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("references the project source tree" in leak for leak in leaks), leaks)
+
+    def test_source_leaks_does_not_replace_invalid_pyvenv_bytes(self):
+        target = self.materialize()
+        record = runtime.read_ready(target)
+        (Path(record['environment']) / 'pyvenv.cfg').write_bytes(b'home = \xff\n')
+        with self.assertRaises(UnicodeDecodeError):
+            runtime.source_leaks(record)
 
 
 class CheckoutRuntimeTests(unittest.TestCase):

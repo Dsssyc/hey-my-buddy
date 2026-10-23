@@ -1,8 +1,7 @@
 """The stable, content-identified runtime the service and its executions use.
 
-The Codex plugin cache may disappear on upgrade, so the default service, its
-execution processes and the harness adapters must run from a versioned runtime outside that
-cache. What a runtime contains is declared exactly once, in
+The service, its execution processes and the harness adapters run from a
+versioned runtime independent of the source tree. Its contents are declared in
 ``packaging/runtime-assets.json``:
 
 * ``assets`` are current root-relative files/directories copied into the runtime;
@@ -21,13 +20,12 @@ node_modules and any existing virtual environment are never copied.
 """
 from __future__ import annotations
 
-from .. import home, locking, private_dirs
+from .. import home, private_dirs
 from contextlib import contextmanager
 import hashlib
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -277,42 +275,27 @@ def runtime_dir(root: Path | None = None, destination: Path | None = None) -> Pa
     return base / content_id(root)
 
 
+def _valid_ready_marker(value: Any, directory: Path) -> bool:
+    return (isinstance(value, dict) and value.get("format") == RUNTIME_FORMAT
+            and value.get("state") == "READY" and value.get("contentId") == directory.name
+            and isinstance(value.get("python"), str))
+
+
 def is_ready(directory: Path) -> bool:
-    """True only for a complete runtime whose assets and resources stay inside it."""
+    """Recognize a published runtime without walking its build assets."""
     directory = Path(directory)
     try:
         value = _read_ready_file(directory)
     except (OSError, ValueError):
         return False
-    if not isinstance(value, dict) or value.get("format") != RUNTIME_FORMAT:
-        return False
-    if value.get("state") != "READY" or value.get("contentId") != directory.name:
-        return False
-    interpreter = value.get("python", "")
-    if not _inside(directory, interpreter, allow_lexical=True) or not Path(interpreter).is_file():
-        return False
-    try:
-        # Validate declared directory contents too: an outward symlink must not
-        # become a stable asset merely because its containing directory is local.
-        for _relative, _path in iter_assets(directory):
-            pass
-        return not missing_resources(directory)
-    except BoardError:
-        return False
+    return _valid_ready_marker(value, directory) and Path(value["python"]).is_file()
 
 
 @contextmanager
 def installation_lock(path: Path, *, blocking: bool = True, create: bool = True):
     """Hold a stable lock file until the descriptor closes; never unlink it."""
-    flags = os.O_RDWR | (os.O_CREAT if create else 0)
-    if os.name == 'nt':
-        fd = private_dirs.open_regular_fd(path, flags)
-    else:
-        fd = os.open(path, flags | os.O_NOFOLLOW, 0o600)
+    fd = private_dirs.open_lock_fd(path, blocking=blocking, create=create)
     try:
-        if os.name != 'nt' and not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise BoardError('RUNTIME_INSTALL_LOCK_INVALID', 'Runtime installation lock is not a regular file', path=str(path))
-        locking.lock(fd, blocking=blocking)
         yield fd
     finally:
         os.close(fd)
@@ -323,7 +306,6 @@ def materialize(
     destination: Path | None = None,
     *,
     uv_bin: str | None = None,
-    timeout_seconds: int = 900,
     log_path: Path | None = None,
 ) -> dict:
     """Install the stable runtime, or return the existing READY one unchanged.
@@ -340,20 +322,34 @@ def materialize(
     if is_ready(target):
         return {"runtime": read_ready(target), "installed": False, "runtimeDir": str(target)}
     target.parent.mkdir(parents=True, exist_ok=True)
-    # Install into a temporary sibling first only because the final name must be a
-    # complete directory atomically; every path recorded inside is rewritten to the
-    # final location before installation starts.
     lock_path = target.parent / INSTALL_LOCK
     with installation_lock(lock_path):
-        return _materialize_locked(root, target, uv_bin, timeout_seconds, log_path)
+        return _materialize_locked(root, target, uv_bin, log_path)
 
 
 def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
-                        timeout_seconds: int, log_path: Path | None) -> dict:
+                        log_path: Path | None) -> dict:
     working = None
     try:
         if is_ready(target):
             return {"runtime": read_ready(target), "installed": False, "runtimeDir": str(target)}
+        # READY is published last. Only its absence proves an abandoned build;
+        # an unreadable or invalid published marker cannot authorize deletion.
+        try:
+            (target / READY_FILE).lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            try:
+                ready = _read_ready_file(target)
+            except (OSError, ValueError) as error:
+                raise BoardError("RUNTIME_NOT_READY", "Existing READY marker is unreadable or invalid; directory preserved",
+                                 runtimeDir=str(target), reason=str(error)) from error
+            if not _valid_ready_marker(ready, target):
+                raise BoardError("RUNTIME_NOT_READY", "Existing READY marker is invalid; directory preserved",
+                                 runtimeDir=str(target))
+            raise BoardError("RUNTIME_NOT_READY", "The published runtime's Python interpreter is missing or unavailable; directory preserved",
+                             runtimeDir=str(target), python=ready["python"])
         working = private_dirs.make_temporary_dir(prefix=f".{target.name}.build-", directory=target.parent)
         _copy_assets(root, working)
         absent = missing_resources(working)
@@ -369,7 +365,7 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
         # Publish the complete source tree under the FINAL content-addressed name
         # before any environment is created inside it.
         if target.exists():
-            shutil.rmtree(target, ignore_errors=True)
+            shutil.rmtree(target)
         working.rename(target)
         environment = target / "venv"
         command = [
@@ -391,28 +387,29 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
                 env=environment_variables,
                 stdout=log_stream,
                 stderr=subprocess.STDOUT if log_path else subprocess.DEVNULL,
-                timeout=timeout_seconds,
                 check=False,
             )
         except FileNotFoundError as exc:
             raise BoardError("UV_NOT_FOUND", "uv is required to install the stable runtime") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise BoardError("RUNTIME_INSTALL_TIMEOUT", "Installing the stable runtime timed out") from exc
         finally:
             if log_path:
                 log_stream.close()
         if completed.returncode != 0:
             # An incomplete runtime is never READY and is removed so nothing can attach.
-            shutil.rmtree(target, ignore_errors=True)
-            raise BoardError(
+            failure = BoardError(
                 "RUNTIME_INSTALL_FAILED",
                 "uv sync failed while installing the stable runtime; see the install log",
                 log=str(log_path) if log_path else None,
             )
+            _remove_build(target, failure=failure, log_path=log_path)
+            raise failure
         interpreter = runtime_python(target)
         if not interpreter.is_file():
-            shutil.rmtree(target, ignore_errors=True)
-            raise BoardError("RUNTIME_INSTALL_FAILED", "The runtime environment has no Python interpreter")
+            failure = BoardError("RUNTIME_INSTALL_FAILED", "The runtime environment has no Python interpreter; see the install log",
+                                 python=str(interpreter), log=str(log_path) if log_path else None)
+            _remove_build(target, failure=failure, log_path=log_path)
+            raise failure
+        from .skill_package import source_commit
         ready = {
             "format": RUNTIME_FORMAT,
             "state": "READY",
@@ -423,33 +420,35 @@ def _materialize_locked(root: Path, target: Path, uv_bin: str | None,
             "python": str(interpreter),
             "runtimeRoot": str(target.parent),
             "installedAt": _now(),
-            "sourceCommit": _source_commit(root),
+            "sourceCommit": source_commit(root),
             "manifest": ASSET_MANIFEST.as_posix(),
             "manifestSha256": record["manifestSha256"],
             "resources": {name: str(path) for name, path in resource_paths(target).items()},
         }
-        _rewrite_environment_paths(environment, target)
         publish_bytes(target / READY_FILE, (json.dumps(ready, indent=2, sort_keys=True) + "\n").encode("utf-8"), immutable=True)
         result = {"runtime": read_ready(target), "installed": True, "runtimeDir": str(target)}
         return result
     finally:
         if working is not None and working.exists():
-            shutil.rmtree(working, ignore_errors=True)
+            _remove_build(working, failure=sys.exception(), log_path=log_path)
 
 
-def _rewrite_environment_paths(environment: Path, target: Path) -> None:
-    """Point any absolute build-path reference at the final directory.
-
-    ``uv`` normally records only the environment location, but a copied or
-    pre-created environment could carry the build path; rewriting here keeps the
-    runtime honest even then, and ``source_leaks`` verifies the result.
-    """
-    for configuration in (environment / "pyvenv.cfg",):
-        if not configuration.is_file():
-            continue
-        text = configuration.read_text(errors="replace", encoding="utf-8")
-        if "build-" in text:
-            configuration.write_text(text.replace(str(environment.parent), str(target)), encoding="utf-8", newline="\n")
+def _remove_build(path: Path, *, failure: BaseException | None, log_path: Path | None) -> None:
+    """Report cleanup alongside the failure that made this private build unusable."""
+    try:
+        shutil.rmtree(path)
+    except OSError as cleanup_error:
+        if failure is None:
+            raise
+        cleanup = {"path": str(path), "code": type(cleanup_error).__name__, "message": str(cleanup_error)}
+        if isinstance(failure, BoardError):
+            failure.details.setdefault("cleanupErrors", []).append(cleanup)
+            raise failure from cleanup_error
+        if isinstance(failure, Exception):
+            raise BoardError("RUNTIME_INSTALL_FAILED", f"{failure}; see the install log",
+                             reason={"code": type(failure).__name__, "message": str(failure)},
+                             cleanupErrors=[cleanup], log=str(log_path) if log_path else None) from failure
+        raise failure from cleanup_error
 
 
 def _copy_assets(root: Path, destination: Path) -> None:
@@ -540,7 +539,7 @@ def resolve_runtime() -> dict:
     else:
         directory = find_ready()
 
-    if directory is not None and is_ready(directory):
+    if directory is not None:
         record = read_ready(directory)
         recorded = {name: str(value) for name, value in (record.get("resources") or {}).items()}
         declared_missing = sorted(name for name, value in recorded.items() if not Path(value).exists())
@@ -587,14 +586,13 @@ def resolve_runtime() -> dict:
 
 
 def launch_target(*, log_path: Path | None = None) -> dict:
-    """Interpreter and environment for a child that must survive the plugin cache.
+    """Interpreter and environment for a child independent of the source tree.
 
     The default path installs the stable runtime on first use and then starts the
     daemon, the execution processes and the adapters from that runtime's own interpreter and
     installed package. ``HMB_DEV_SOURCE=1`` is the explicit development/test
     switch that runs from the checkout instead and reports ``stable=false``; it is
-    never the default, so a plugin update cannot silently reintroduce the
-    cache-source dependency.
+    never the default.
     """
     identity = resolve_runtime()
     if not identity.get("declaredStable") and not os.environ.get("HMB_DEV_SOURCE"):
@@ -620,23 +618,14 @@ def launch_target(*, log_path: Path | None = None) -> dict:
 
 
 def runtime_identity() -> str:
-    try:
-        return resolve_runtime()["identity"]
-    except BoardError:
-        return "runtime:unavailable"
-
-
-def _in_plugin_cache(value: str) -> bool:
-    parts = Path(value).parts
-    return any(Path(*pair) == Path("plugins") / "cache" for pair in zip(parts, parts[1:]))
+    return resolve_runtime()["identity"]
 
 
 def source_leaks(runtime: dict | None = None) -> list[str]:
-    """Paths inside a runtime that still point at disposable plugin source.
+    """Paths inside a runtime that still depend on the source tree.
 
     An editable install, a copied interpreter symlink or a resource that resolves
-    back into the checkout would make the stable runtime depend on the very cache
-    it is supposed to survive.
+    back into the checkout would make the stable runtime depend on that checkout.
     """
     runtime = runtime or resolve_runtime()
     leaks: list[str] = []
@@ -645,38 +634,24 @@ def source_leaks(runtime: dict | None = None) -> list[str]:
         return leaks
     root = Path(runtime.get("runtimeDir") or runtime.get("source") or "").resolve()
     for pth in sorted(environment.glob("lib/python*/site-packages/*.pth")):
-        try:
-            text = pth.read_text(errors="replace", encoding="utf-8")
-        except OSError:
-            continue
+        text = pth.read_text(encoding="utf-8")
         for line in text.splitlines():
             candidate = line.strip()
             if not candidate or candidate.startswith("import "):
                 continue
-            try:
-                resolved = Path(candidate).resolve()
-            except OSError:
-                continue
-            if _in_plugin_cache(candidate):
-                leaks.append(f"{pth}: {candidate}")
-                continue
+            resolved = Path(candidate).resolve()
             # An editable/relative reference is fine only when it stays inside this
             # runtime; anything pointing back into a checkout is a real dependency
             # on the disposable source tree.
             if root and root not in resolved.parents and resolved != root:
                 leaks.append(f"{pth}: {candidate}")
-    for value in (runtime.get("source"), runtime.get("projectRoot"), runtime.get("runtimeDir"), runtime.get("python")):
-        if isinstance(value, str) and _in_plugin_cache(value):
-            leaks.append(value)
     for name, value in (runtime.get("resources") or {}).items():
         if not isinstance(value, str):
             continue
-        if _in_plugin_cache(value):
-            leaks.append(f"{name}: {value}")
-        elif root and not _inside(root, value):
+        if root and not _inside(root, value):
             leaks.append(f"{name} resolves outside the runtime: {value}")
     pyvenv = environment / "pyvenv.cfg"
-    if pyvenv.is_file() and str(project_root()) in pyvenv.read_text(errors="replace", encoding="utf-8"):
+    if pyvenv.is_file() and str(project_root()) in pyvenv.read_text(encoding="utf-8"):
         leaks.append(f"{pyvenv}: references the project source tree")
     return leaks
 
@@ -700,15 +675,3 @@ def _now() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def _source_commit(root: Path) -> str | None:
-    metadata = root / "src/hey_my_buddy/build-info.json"
-    if metadata.exists():
-        return json.loads(metadata.read_text(encoding="utf-8")).get("sourceCommit")
-    try:
-        # rev-parse HEAD is ASCII hex, a subset of UTF-8.
-        return subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True,
-                                       encoding="utf-8", stderr=subprocess.DEVNULL).strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
