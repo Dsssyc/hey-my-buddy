@@ -1,44 +1,48 @@
+import { z } from "zod";
+import { isReason } from "./reason";
 import type { Reason } from "./reason";
+
+export const safeCount = z.int().nonnegative();
+// Number.isInteger intentionally accepts integers beyond Number.MAX_SAFE_INTEGER.
+export const integer = z.number().refine(Number.isInteger);
+export const nonblankString = z.string().refine(value => value.trim().length > 0);
+export const dateString = z.string().refine(value => Number.isFinite(Date.parse(value)));
+const reason = z.custom<Reason>(isReason);
 
 export const ACTOR_ROLES = ["host", "lead", "console", "service", "workflow", "bridge"] as const;
 export type ActorRole = (typeof ACTOR_ROLES)[number];
 export type Actor = { role: ActorRole; id: string };
 
 /** The five recorded states of one harness in the console snapshot. */
-export type HarnessStatus = "unknown" | "ready" | "missing" | "login-required" | "unhealthy";
-/** One location discovery tried, and why it was not chosen. */
-export type HarnessCandidate = {
-  path?: string;
-  source?: string;
-  reason?: Reason | null;
-  status?: string;
-};
-/**
- * One harness's recorded health. `ready` carries the chosen executable, its
- * version and where it came from; every other status carries the attempted
- * locations and a program reason. `manualPath` is the user's stored override (`null`
- * means automatic detection) and `revision` records its current generation.
- */
-export type HarnessHealth = {
-  harness: string;
-  status: HarnessStatus;
-  revision: number;
-  manualPath: string | null;
-  command?: string[];
-  executable?: string;
-  version?: string;
-  source?: string;
-  candidates?: HarnessCandidate[];
-  reason?: Reason | null;
-  checkedAt?: string | null;
-  expiresAt?: string | null;
-  providers?: ProviderCooling[];
-  permissions?: PermissionLevels;
-  billingByProvider?: Record<string, BillingFact>;
-  account?: import("./harness-account").HarnessAccount;
-};
+const harnessStatus = z.enum(["unknown", "ready", "missing", "login-required", "unhealthy"]);
+export type HarnessStatus = z.infer<typeof harnessStatus>;
+const candidateFields = z.looseObject({
+  path: z.string().nullish(), source: z.string().nullish(), status: z.string().nullish(), reason: reason.nullish(),
+});
+// The previous read boundary also accepted arrays as candidate objects. Keep
+// that acceptance without converting the returned array or its contents.
+const harnessCandidate = z.union([candidateFields,
+  z.array(z.unknown()).transform(value => value as unknown as z.infer<typeof candidateFields>),
+]);
+export type HarnessCandidate = z.infer<typeof harnessCandidate>;
 
-export type PermissionLevels = Partial<Record<"none" | "read" | "write" | "full", "enforced" | "convention">>;
+export const permissionLevelsSchema = z.strictObject({
+  none: z.enum(["enforced", "convention"]).optional(), read: z.enum(["enforced", "convention"]).optional(),
+  write: z.enum(["enforced", "convention"]).optional(), full: z.enum(["enforced", "convention"]).optional(),
+}).refine(value => !Object.values(value).some(enforcement => enforcement === undefined));
+export type PermissionLevels = z.infer<typeof permissionLevelsSchema>;
+
+/** One harness's core facts; providers and permissions are parsed independently. */
+export const harnessHealthSchema = z.looseObject({
+  harness: nonblankString, status: harnessStatus, revision: integer.nonnegative(), manualPath: z.string().nullish(),
+  command: z.array(z.string()).nullish(), executable: z.string().nullish(), version: z.string().nullish(),
+  source: z.string().nullish(), candidates: z.array(harnessCandidate).nullish(), reason: reason.nullish(),
+  checkedAt: z.string().nullish(), expiresAt: z.string().nullish(),
+  providers: z.custom<ProviderCooling[]>().optional(), permissions: z.custom<PermissionLevels>().optional(),
+  billingByProvider: z.custom<Record<string, BillingFact>>().optional(),
+  account: z.custom<import("./harness-account").HarnessAccount>().optional(),
+});
+export type HarnessHealth = z.infer<typeof harnessHealthSchema> & { manualPath: string | null };
 
 type BillingFact = {
   kind: "subscription" | "metered" | "unknown";
@@ -66,11 +70,10 @@ export type TokenUsage = {
 };
 
 /** A provider's retained cooling record; only a future deadline is active. */
-export type ProviderCooling = {
-  provider: string;
-  coolingUntil: string | null;
-  consecutiveRejections: number;
-};
+export const providerCoolingSchema = z.looseObject({
+  provider: nonblankString, coolingUntil: dateString.nullable(), consecutiveRejections: integer.positive(),
+});
+export type ProviderCooling = z.infer<typeof providerCoolingSchema>;
 
 /**
  * The board's model-level catalog state (ADR-027 §2/§6), published on every
@@ -108,8 +111,10 @@ export type Buddy = {
   pendingSince?: string | null;
 };
 /** A user's preference for one buddy; an absent row means no preference. */
-export type PreferenceMode = "prefer" | "pin" | "exclude";
-export type Preference = { buddyId: string; mode: PreferenceMode; note: string | null };
+const preferenceMode = z.enum(["prefer", "pin", "exclude"]);
+export type PreferenceMode = z.infer<typeof preferenceMode>;
+export const preferencesSchema = z.array(z.strictObject({ buddyId: z.string(), mode: preferenceMode, note: z.string().nullable() }));
+export type Preference = z.infer<typeof preferencesSchema>[number];
 /** The model service's human note. */
 export type ModelServiceNote = ModelService & {
   text: string;
@@ -267,103 +272,72 @@ export type ModelServiceConcurrencySetting = ModelService & { limit: number };
  * publishes it.
  */
 export type ModelServiceConcurrencyEntry = ModelServiceConcurrencySetting & { active: number };
-export type RoutingMode = "fast" | "review";
-export type RoutingBudget = "brief" | "standard" | "deep";
+const routingMode = z.enum(["fast", "review"]);
+const routingBudget = z.enum(["brief", "standard", "deep"]);
+export type RoutingMode = z.infer<typeof routingMode>;
+export type RoutingBudget = z.infer<typeof routingBudget>;
 type RoutingBudgetLimits = { preset: RoutingBudget; timeoutSeconds: number; toolCalls: number; bytesRead: number };
-/**
- * The ordered Router list settings (ADR-021 §2). `routerBuddyIds` is the
- * user's order; the head is the preferred first choice and the tail follows it.
- * The retired single/dual slot fields (`routerBuddyId`, `fastRouterBuddyId`,
- * `reviewRouterBuddyId`, `decisionBuddyId`) are never valid keys again.
- */
-export type Configuration = {
-  routerBuddyIds: string[];
-  routerRetryIntervalSeconds: number;
-  defaultRoutingMode: RoutingMode;
-  routingBudget: RoutingBudget;
-  routingBudgetLimits?: RoutingBudgetLimits;
-};
+/** The ordered Router list; retired single/dual slot keys are refused even when undefined. */
+export const configurationSchema = z.looseObject({
+  routerBuddyIds: z.array(nonblankString).refine(ids => new Set(ids).size === ids.length),
+  routerRetryIntervalSeconds: integer.min(1).max(2147483647), defaultRoutingMode: routingMode, routingBudget,
+  routingBudgetLimits: z.custom<RoutingBudgetLimits>().optional(),
+}).refine(config => !["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId"].some(key => key in config));
+export type Configuration = z.infer<typeof configurationSchema>;
+
 /** The complete published four-part identity of one listed buddy. */
-export type RouterHealthIdentity = { harness: string; provider: string; model: string; effort: string };
-/**
- * One listed buddy's health facts (ADR-021 §20): resolution eligibility with its
- * machine reason code, skip window and retry facts, the all-time and windowed
- * outcome counts of its own immutable timeline, and its last recorded error.
- * Unknown-nature entries count into `windowEntries` but never as an answer or a
- * failure; input-changed and cancelled records are not no-answers at all.
- */
-export type RouterHealthEntry = {
-  buddyId: string;
-  index: number;
-  identity: RouterHealthIdentity | null;
-  eligible: boolean;
-  code?: string | null;
-  inSkipWindow?: boolean;
-  skipUntil?: string | null;
-  retryAt?: string | null;
-  retryInProgress?: boolean;
-  answeredCount?: number;
-  noAnswerCount?: number;
-  lastAnsweredAt?: string | null;
-  lastNoAnswerAt?: string | null;
-  consecutiveNoAnswers?: number;
-  windowSize?: number;
-  windowEntries?: number;
-  windowAnsweredCount?: number;
-  windowFailureCount?: number;
-  windowBudgetExhaustedCount?: number;
-  windowBoundsRejectedCount?: number;
-  windowAttemptCount?: number;
-  lastError?: { code: string | null; at: string; phase?: string | null } | null;
-};
-export type RoutingHealth = {
-  available?: boolean;
-  reason?: Reason | null;
-  /** The buddy currently holding the Router role, or null while none can serve. */
-  currentRouterBuddyId?: string | null;
-  /** Per-buddy facts in the user's list order; absent data is unknown, not success. */
-  routers?: RouterHealthEntry[];
-  /** Terminal selection records whose attribution or nature cannot be proven. */
-  unattributedCount?: number;
-  unattributed?: { decisionId: string; at: string; outcome: string; code: string | null }[];
-  windowSize: number; sampleCount: number; failureCount: number; consecutiveFailures: number;
-  abstentionCount: number; cancelledCount: number;
-  budgetExhaustedCount?: number; boundsRejectedCount?: number; inputChangedCount?: number;
-  /** Window entries that reached a model attempt; a request stays one entry. */
-  attemptCount?: number;
-  lastSuccessAt: string | null; lastSuccessDecisionId: string | null;
-  recentFailures: { decisionId: string; runId: string | null; at: string; code: string }[];
-};
-/**
- * Identity of the authenticated HTTP snapshot's browser session. The live
- * service issues `{id}` for a valid login. A missing or malformed descriptor
- * never grants write access; an expired login is reported by a 401 refusal. The
- * descriptor never carries a credential; the session CSRF token stays separate.
- */
-export type ConsoleSession = {
-  id: string;
-};
-export type ConsoleAccess = {
-  requireLogin: boolean;
-  revision: number;
-  sessions: { id: string; lastSeen: number; current: boolean }[];
-};
-export type ReminderSettings = { silenceSeconds: number; revision: number; updatedAt: string };
-export type Snapshot = {
+export const routerHealthIdentitySchema = z.looseObject({ harness: z.string(), provider: z.string(), model: z.string(), effort: z.string() });
+export type RouterHealthIdentity = z.infer<typeof routerHealthIdentitySchema>;
+/** One listed buddy's optional observations; a malformed field refuses all health. */
+const routerHealthEntry = z.looseObject({
+  buddyId: nonblankString, index: safeCount, identity: routerHealthIdentitySchema.nullish(), eligible: z.boolean(),
+  code: z.string().nullish(), inSkipWindow: z.boolean().optional(), skipUntil: z.string().nullish(),
+  retryAt: z.string().nullish(), retryInProgress: z.boolean().optional(), answeredCount: safeCount.optional(),
+  noAnswerCount: safeCount.optional(), lastAnsweredAt: z.string().nullish(), lastNoAnswerAt: z.string().nullish(),
+  consecutiveNoAnswers: safeCount.optional(), windowSize: safeCount.optional(), windowEntries: safeCount.optional(),
+  windowAnsweredCount: safeCount.optional(), windowFailureCount: safeCount.optional(), windowBudgetExhaustedCount: safeCount.optional(),
+  windowBoundsRejectedCount: safeCount.optional(), windowAttemptCount: safeCount.optional(),
+  lastError: z.looseObject({ code: z.string().nullable(), at: z.string(), phase: z.string().nullish() }).nullish(),
+});
+export type RouterHealthEntry = z.infer<typeof routerHealthEntry>;
+export const routingHealthSchema = z.looseObject({
+  available: z.boolean().optional(), reason: reason.nullish(), currentRouterBuddyId: z.string().nullish(),
+  routers: z.array(routerHealthEntry).optional(), unattributedCount: safeCount.optional(),
+  unattributed: z.array(z.looseObject({ decisionId: z.string(), at: z.string(), outcome: z.string(), code: z.string().nullable() })).optional(),
+  windowSize: safeCount, sampleCount: safeCount, failureCount: safeCount, consecutiveFailures: safeCount,
+  abstentionCount: safeCount, cancelledCount: safeCount, budgetExhaustedCount: safeCount.optional(),
+  boundsRejectedCount: safeCount.optional(), inputChangedCount: safeCount.optional(), attemptCount: safeCount.optional(),
+  lastSuccessAt: z.string().nullable(), lastSuccessDecisionId: z.string().nullable(),
+  recentFailures: z.array(z.looseObject({ decisionId: z.string(), runId: z.string().nullable(), at: z.string(), code: z.string() })),
+});
+export type RoutingHealth = z.infer<typeof routingHealthSchema>;
+
+/** Authenticated browser session; the CSRF token stays separate. */
+export const consoleSessionSchema = z.looseObject({ id: nonblankString });
+export type ConsoleSession = z.infer<typeof consoleSessionSchema>;
+export const consoleAccessSchema = z.looseObject({
+  requireLogin: z.boolean(), revision: safeCount,
+  sessions: z.array(z.looseObject({ id: z.string().regex(/^[a-f0-9]{24}$/), lastSeen: z.number(), current: z.boolean() })).max(64),
+});
+export type ConsoleAccess = z.infer<typeof consoleAccessSchema>;
+export const reminderSettingsSchema = z.looseObject({ silenceSeconds: z.int().min(1).max(86400), revision: z.int().min(1), updatedAt: dateString });
+export type ReminderSettings = z.infer<typeof reminderSettingsSchema>;
+
+// Only these snapshot fields were checked at the read boundary. The schema
+// validates; the API returns the original representation, including unknowns.
+export const snapshotReadSchema = z.object({
+  csrfToken: z.string(), eventCursor: safeCount, configuration: configurationSchema.nullable(),
+  buddies: z.array(z.custom<Buddy>()), preferences: preferencesSchema,
+  modelServiceNotes: z.array(z.custom<ModelServiceNote>()), modelServiceConcurrency: z.array(z.custom<ModelServiceConcurrencyEntry>()),
+  tasks: z.object({ pendingCount: safeCount }),
+  // Drafts share this field's nullable type; a server read still requires settings.
+}).refine(snapshot => snapshot.configuration !== null);
+export type Snapshot = z.infer<typeof snapshotReadSchema> & {
   harnesses?: HarnessHealth[];
-  csrfToken: string;
-  /** Last recorded event in the coherent board read. */
-  eventCursor: number;
   /** Authenticated browser session; missing or malformed fails closed. */
   consoleSession: ConsoleSession;
   consoleAccess?: ConsoleAccess;
   reminderSettings?: ReminderSettings;
-  configuration: Configuration | null;
-  buddies: Buddy[];
-  /** Preferences for individual buddies. */
-  preferences: Preference[];
-  /** Model service notes. */
-  modelServiceNotes: ModelServiceNote[];
   /**
    * Every unavailable buddy in the table, including one the snapshot
    * still lists (the retained decision selector). The console subtracts the
@@ -374,18 +348,6 @@ export type Snapshot = {
   decisions: Decision[];
   /** Read-only bounded selection health; absent data is unknown, not success. */
   routingHealth?: RoutingHealth;
-  /**
-   * One concurrent-task entry per model service represented in the response,
-   * including defaults for model services without an explicit override. `active` is
-   * read-only occupancy; publishing it is refused.
-   */
-  modelServiceConcurrency: ModelServiceConcurrencyEntry[];
-  /**
-   * The board-wide count of micro task roots awaiting their Host, computed by
-   * the service over every run. It is never inferred from a page of recent
-   * rows; the full execution records stay on the paginated `tasks` read.
-   */
-  tasks: { pendingCount: number };
   capabilities: Record<string, boolean>;
 };
 /** Local draft of the fields a human may publish through `user_policy_publish`. */
@@ -414,14 +376,12 @@ export type BuddyPage = {
 };
 
 /** Facts from the serving process and its recorded installation, read on demand. */
-export type VersionFacts = {
-  softwareVersion: string | null;
-  contractVersion: string | null;
-  schemaVersion: number | null;
-  sourceCommit: string | null;
-  installedAt: string | null;
-};
-export type RuntimeVersionInfo = {
-  running: VersionFacts & { mode: "runtime" | "source" };
-  installed: VersionFacts | null;
-};
+const versionFactsSchema = z.looseObject({
+  softwareVersion: nonblankString.nullable(), contractVersion: nonblankString.nullable(), schemaVersion: safeCount.nullable(),
+  sourceCommit: nonblankString.nullable(), installedAt: dateString.nullable(),
+});
+export type VersionFacts = z.infer<typeof versionFactsSchema>;
+export const runtimeVersionSchema = z.looseObject({
+  running: versionFactsSchema.extend({ mode: z.enum(["runtime", "source"]) }), installed: versionFactsSchema.nullable(),
+});
+export type RuntimeVersionInfo = z.infer<typeof runtimeVersionSchema>;
