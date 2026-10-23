@@ -34,7 +34,11 @@ Windows 上的私有目录与文件照常创建，继承上层的 ACL，不传 0
 
 事实的发布与读者由第 3 节规定：FileRenameInfoEx 按句柄换代，产品自己的读者允许删除共享。这是让有人读着的文件也能换代的功能要求，不是安全层。
 
+落地情况（2026-10-23，随 0.52.0 安装）：状态根由 `state_root.check_state_root` 在安装与冷启动时查一次，其余入口只查不改（第八轮删除的根模块一批）；`windows_files.py` 的句柄、Job 与管道窥视改用 pywin32，只有 FileRenameInfoEx 改名与 Toolhelp 线程枚举留着一层窄的 ctypes（轮子盘点的 A 批）。
+
 ## 3. 事实发布、Windows 换代与开机会话
+
+落地情况（2026-10-23 核对源码）：Windows 的可变发布已按句柄用 FileRenameInfoEx 换代（阶段 B2），POSIX 照旧 `os.replace`；下文写“当前仍调用 os.replace”的段落是设计时的现状。
 
 现有 `publish_bytes` 同目录独占建临时文件，写完整内容并在写句柄上 flush/fsync，关闭后发布；不可变对象 compare-and-create，相同内容可复用、不同内容冲突。POSIX 刷父目录，Windows 不打开目录刷盘。承诺是写者进程中断后读者得到完整旧版、完整新版或明确未完成；不承诺 Windows 目录项的断电耐久性。SQLite 仍是权威状态，WAL、synchronous=FULL 及事务/事件原子性不变。
 

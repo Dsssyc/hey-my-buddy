@@ -30,7 +30,15 @@
 
 ## 留给下一批的
 
-- B2-7（可能在 Windows 并发时出错）：`workflow.py` 读原生检查点与原生会话绑定、`codex/native_run.py` 读证据引用，仍用不允许删除共享的 `Path.open`；执行进程恰好按句柄换代时，发布会以错误 32 失败。改走 `private_files.open_read`，并在全仓找出读可变发布文件却还用 `Path.open` 的地方。问题出在 B2 之前，属于第 3 节没做全。
-- B2-1 至 B2-6：`0o777 if os.name == 'nt' else 0o700` 抄在约 16 处，收进 `private_dirs` 的一个入口；三处 `tempfile.TemporaryDirectory` 在 Windows 上仍隐含 0o700，改用 `make_temporary_dir`；Windows 的 `open_regular_fd` 新加了没有使用者的 `O_TRUNC` 语义，与 POSIX 不一致；Windows 私有打开不再拒绝 `..`，两个系统的入口规则不一致；一次安装会把状态根查两到三次，只在 `upgrade()` 这个公共入口查；同一把存储锁有两种开法，`_prepare_runtime` 改回用 `runtime.installation_lock`。
-- B2-8：见上一节。
-- `codex.test_session_content` 与 `console.test_console_session_content` 照第 2 节改写，与任务层在状态目录里逐次查链接的删除（过度防御审查的任务层第 13 条）一起做。
+2026-10-23 第八轮删除的根模块一批（微任务 `08b6c00d`，合入 `ed630097`，随 0.52.0 安装）做掉了这里留下的各条，Host 在源码里核对过：
+
+- B2-1：`0o777 if os.name == 'nt' else 0o700` 只剩 `private_dirs` 里的一个入口；
+- B2-2：产品代码里没有 `tempfile.TemporaryDirectory` 了；
+- B2-3：两个系统的私有打开在共同入口上用同一条规则，不带 `O_EXCL` 的 `O_TRUNC` 一律拒绝；
+- B2-4：两个系统的私有打开对 `..` 用同一条规则；
+- B2-5：一次安装只查一次状态根；
+- B2-6：安装锁与准备运行时用的存储锁都经 `private_dirs.open_lock_fd` 打开；
+- B2-7：`workflow.py` 与 `codex/native_run.py` 读可变发布文件改走 `private_files.open_read`；
+- `codex.test_session_content` 与 `console.test_console_session_content` 照第 2 节改写。
+
+B2-8（8.3 短名与长名混用）仍是上一节所说的没有核对的一项。

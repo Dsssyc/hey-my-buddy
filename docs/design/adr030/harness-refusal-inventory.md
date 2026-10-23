@@ -88,7 +88,7 @@ A 留归属与证据，B 留凭据和私有路径，C 留我方输入边界，H 
 ## 共用部分
 
 - 回执、来源、问询、冻结输入与停止：58 处，A，留。例如 `verify_receipt` / `invalid-finish`、`record_answer` / `conflicting-inquiry-answer`、`_read_request` / `INVALID_ARGUMENT`。签名格式是本项目证据格式，属于 A，不是厂商版本白名单 F。
-- 凭据与私有路径：8 处，B，留。例如 `account_native.descend` / `PRIVATE_PATH_UNSAFE`、`guard_private_path` / `PRIVATE_PATH_UNSAFE`、`_private_regular_bytes` / `INVALID_ARGUMENT`。错误码不决定类别；它们防止链接、特殊文件或失控的私有读取。
+- 凭据与私有路径：8 处，B，留。例如 `account_native.descend` / `PRIVATE_PATH_UNSAFE`、`guard_private_path` / `PRIVATE_PATH_UNSAFE`、`_private_regular_bytes` / `INVALID_ARGUMENT`。错误码不决定类别；它们防止链接、特殊文件或失控的私有读取。（2026-10-23 第八轮删除把私有路径收成一个机制，随 0.52.0 安装：这里举的三个函数都已删去，私有路径的拒绝改由 `state_root.check_state_root` 与 `private_dirs` 的打开入口在边界上给出一次，类别不变。）
 - 我方请求、登记与内部事实格式：78 处，C，留。例如 `register_run_seam` / `INVALID_ARGUMENT`、`_validated_tool_evidence` / `a tool evidence event category is not an ACP category`、`WorkerRunExecutor.prepare` / `INVALID_ARGUMENT`。调用方是本项目的角色、运行模块或另一进程；这些不是固定厂商原生形状。
 - 独立账户冻结与注入：3 处，E，随独立账户删除。例如 `inject_claude_key` / `ACCOUNT_LOGIN_REQUIRED`、`inject_claude_key` / `ACCOUNT_BINDING_UNAVAILABLE`、`_account_environment` / `INVALID_ARGUMENT`。账户代码里保护私有路径、真实停止或失败的其他抛错按实际作用归 B、A、H；这些原则仍要留在以后实际存在的操作里，不要求为已删除入口保留死代码。
 - 命令、原生账户操作与实时连接真实失败：14 处，H，留。例如 `command_for` / `<dynamic>`、`CTwoLiveChannel.capabilities` / `LIVE_UNAVAILABLE`、`CommandAdapter.prepare` / `ADAPTER_UNAVAILABLE`。实时断连不证明原生进程停了。
