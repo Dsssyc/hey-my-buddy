@@ -94,7 +94,7 @@ Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInf
 
 三系统共同次序为：native 工作停止已确认后写不可变回执；服务核对绑定、摘要及产物边界并可靠接收，立即响应“已接收”，attempt 保持 finalizing 和全部资源；执行收到响应退出；服务经原有长调用失败/创建句柄回收进入停止观察，Windows 确认执行根（服务创建的进程）的完整身份缺席，并取得原根 Job 全空、或按原名打开得到错误 2 的证据（服务与执行在同一个 Windows 会话里，是支持范围的前提，不记录也不核对），POSIX 确认完整身份与已登记原组结束，然后一个事务导入最终结果、事件并释放容量及 claims。成功回执到达不提前完成，不加另一种交付结果，也不等根退出才响应 RPC 造成死锁。
 
-具体收敛为一个接收记录：新增 `attempt_received_receipts`，attempt_id 为外键及主键，只存已接收不可变回执的摘要；固定路径由 attempt 推导，不重复存路径或整份 report。插入该记录与置 finalizing 同事务，重复同摘要幂等，不同摘要冲突；响应采用唯一的已接收语义，删除“收到即提交完成”的旧分支。最终结算读同一份回执并在完成事务删除接收行；文件作为冻结证据随所属微任务删除，不因收到 ACK 就删除。无回执时仍走已有的中断/部分封存结算路径，停止未知时保留占用。新增表的 stock、约束、恢复读取及清理随 E 的升级一起落地，不用 meta 或无结构 JSON 槽存接收状态。
+具体收敛为一个接收记录：新增 `attempt_received_receipts`，attempt_id 为外键及主键，只存已接收不可变回执的摘要；固定路径由 attempt 推导，不重复存路径或整份 report。插入该记录与置 finalizing 同事务，重复同摘要幂等，不同摘要冲突；响应采用唯一的已接收语义，删除“收到即提交完成”的旧分支。最终结算读同一份回执并在完成事务删除接收行；文件不因收到 ACK 就删除，最终结算之前一直保留；结算之后随 attempt 的私有材料由现有的检出回收与存储回收删掉（2026-10-25 改：原写“随所属微任务删除”，结算之后它没有读者）。无回执时仍走已有的中断/部分封存结算路径，停止未知时保留占用。新增表的 stock、约束、恢复读取及清理随 E 的升级一起落地，不用 meta 或无结构 JSON 槽存接收状态。
 
 `buddy/runtime/receipts.py:deliver_receipt` 当前在 submit_result 后写 delivery 并删除 receipt；该次序要删掉，ACK 后仅退出，恢复不再靠 delivery 文件。`blackboard/store/store.py:execution_result_reference/execution_result/_commit_execution_result`、调度恢复和 interruption 只保留上述一条结算路径；回执保持封存原文，不改写 shutdownConfirmed 为假值延迟完成。接收记录及原始回执的恢复保证服务可在接收后、执行退出前后或最终事务前崩溃，回来只结算一次。没有足够 Job 结束证据时，即使接收行存在也不提交完成。
 
