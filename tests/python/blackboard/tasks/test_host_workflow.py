@@ -378,12 +378,12 @@ class HostCompletionTests(WorkflowTestCase):
         self.assertEqual(concluded["conclusion"]["attemptId"], later_attempt[0])
 
 
-from blackboard.tasks.test_workspace_lifecycle import LifecycleTestCase
+from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase
 
 
 class HostConclusionCleanupTests(LifecycleTestCase):
     def test_acceptance_records_only_real_separate_host_paths(self):
-        from blackboard.tasks.test_workspace_lifecycle import git
+        from blackboard.tasks.workspace_lifecycle_case import git
         board = self.board()
         self.register(board)
         _submitted, _claim, _manifest, _checkout, _seal, current, artifact = self.run_worktree(board)

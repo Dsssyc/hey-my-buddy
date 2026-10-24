@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import sqlite3
 import subprocess
+import tempfile
 
 FIXTURE = Path(__file__).resolve().parents[3] / "fixtures/upgrade-base"
 
@@ -61,10 +62,24 @@ def load_fixture(state: Path) -> dict:
     repository = fixture_root / "repository"
     repository.mkdir(parents=True)
     _git(repository, "init", "--quiet")
-    for item in resources["gitObjects"]:
-        actual = _git(repository, "hash-object", "-w", "--stdin", "-t", item["type"], data=bytes.fromhex(item["hex"]))
-        if actual != item["oid"]:
-            raise ValueError(f"Fixed Git object changed: {item['oid']}")
+    # One hash-object invocation per object type writes the whole fixed stock and
+    # reports one oid per input line, in order; each is still verified against
+    # the fixture's recorded oid.
+    with tempfile.TemporaryDirectory(prefix="upgrade-fixture-objects-") as scratch:
+        grouped: dict[str, list[Path]] = {}
+        for item in resources["gitObjects"]:
+            path = Path(scratch) / item["oid"]
+            path.write_bytes(bytes.fromhex(item["hex"]))
+            grouped.setdefault(item["type"], []).append(path)
+        for kind, paths in grouped.items():
+            listing = "".join(f"{path}\n" for path in paths)
+            actual = _git(repository, "hash-object", "-w", "-t", kind, "--stdin-paths", data=listing.encode("utf-8"))
+            written = actual.splitlines()
+            if len(written) != len(paths):
+                raise ValueError(f"hash-object reported {len(written)} oids for {len(paths)} objects")
+            for path, oid in zip(paths, written):
+                if oid != path.name:
+                    raise ValueError(f"Fixed Git object changed: {path.name}")
     commit = resources["workspaceInputCommit"]
     (repository / ".git/HEAD").write_text(commit + "\n", encoding="utf-8", newline="\n")
     _git(repository, "read-tree", commit)
@@ -101,8 +116,10 @@ def load_fixture(state: Path) -> dict:
             return {bind(key): bind(item) for key, item in value.items()}
         return value
 
-    for ref, oid in resources["refs"].items():
-        _git(repository, "update-ref", ref, oid)
+    # One transaction applies every fixed ref; distinct refs end exactly as the
+    # per-ref loop did.
+    updates = "".join(f"update {ref} {oid}\n" for ref, oid in resources["refs"].items())
+    _git(repository, "update-ref", "--stdin", data=updates.encode("utf-8"))
     for relative, text in resources["files"].items():
         target = state / relative
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from blackboard.tasks import test_workspace_lifecycle as lifecycle_fixtures
+from blackboard.tasks import workspace_lifecycle_case as lifecycle_fixtures
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import workspace as git_workspace

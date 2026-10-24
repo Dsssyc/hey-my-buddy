@@ -1,7 +1,7 @@
 """Shared-object eligibility through real workspace admission and ownership."""
 from pathlib import Path
 
-from blackboard.tasks import test_workspace_lifecycle as lifecycle_fixtures
+from blackboard.tasks import workspace_lifecycle_case as lifecycle_fixtures
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion, workspace, workflow
 from hey_my_buddy.errors import BoardError
