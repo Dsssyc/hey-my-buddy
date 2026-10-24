@@ -8,6 +8,7 @@ TH32CS_SNAPTHREAD = 0x00000004
 THREAD_SUSPEND_RESUME = 0x0002
 THREAD_QUERY_LIMITED_INFORMATION = 0x0800
 ERROR_FILE_NOT_FOUND = 2
+ERROR_ALREADY_EXISTS = 183
 
 
 class _ThreadEntry(ctypes.Structure):
@@ -54,6 +55,9 @@ class WindowsAPI:
 
     def create_job(self, name):
         handle = self._call(self.job.CreateJobObject, None, name)
+        if self.api.GetLastError() == ERROR_ALREADY_EXISTS:
+            self.close(handle)
+            raise FileExistsError(ERROR_ALREADY_EXISTS, f"Job already exists: {name}")
         try:
             limits = self._call(self.job.QueryInformationJobObject, handle,
                                 self.job.JobObjectExtendedLimitInformation)

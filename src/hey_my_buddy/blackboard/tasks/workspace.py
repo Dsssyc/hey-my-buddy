@@ -24,6 +24,7 @@ import tempfile
 from ...private_dirs import directory_mode
 from ...errors import BoardError
 from ...protocol.schemas import normalize_access
+from ...protocol.service_process import service_creation_flags
 from . import windows_paths
 from . import workspace_identity
 
@@ -110,7 +111,7 @@ def _git(root, *args, data=None, env=None, allowed=(0,)):
     git_env.update(env or {})
     try:
         result = subprocess.run(command, input=data, capture_output=True, env=git_env,
-                                timeout=_GIT_TIMEOUT_SECONDS)
+                                timeout=_GIT_TIMEOUT_SECONDS, creationflags=service_creation_flags())
     except subprocess.TimeoutExpired as error:
         raise _git_unknown(command, args[0], error, stdout=error.stdout, stderr=error.stderr) from error
     except OSError as error:
@@ -142,7 +143,7 @@ def _git_in(git_dir, *args, allowed=(0,)):
                "--git-dir", str(git_dir), *args]
     try:
         result = subprocess.run(command, input=None, capture_output=True, env=git_env,
-                                timeout=_GIT_TIMEOUT_SECONDS)
+                                timeout=_GIT_TIMEOUT_SECONDS, creationflags=service_creation_flags())
     except subprocess.TimeoutExpired as error:
         raise _git_unknown(command, args[0], error, stdout=error.stdout, stderr=error.stderr) from error
     except OSError as error:
@@ -315,7 +316,7 @@ def _write_objects(root, objects, *, state_dir):
                                             "--export-marks=" + os.fspath(marks))
             try:
                 process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=output,
-                                           stderr=diagnostics, env=git_env)
+                                           stderr=diagnostics, env=git_env, creationflags=service_creation_flags())
             except OSError as error:
                 raise _git_failure(command, "fast-import", error=error) from error
             code, recorded = 1, {}

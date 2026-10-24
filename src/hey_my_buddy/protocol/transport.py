@@ -24,6 +24,7 @@ import c_two as cc
 from c_two.error import CCError, CoreError
 
 from . import rpc_config
+from .service_process import independent_service_popen
 from .contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from ..errors import BoardError
 from ..state_root import check_state_root, get_state_dir
@@ -401,13 +402,12 @@ def _ensure_service(directory: Path, *, resource: str = "control") -> dict:
             env["HMB_RUNTIME"] = target["runtime"]["runtimeDir"]
         log_fd = private_dirs.open_regular_fd(directory / "control.log", os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
         try:
-            child = subprocess.Popen(
+            child = independent_service_popen(
                 [target["python"], "-m", ENTRY_MODULES['hey_my_buddy']['daemon']],
                 env=env,
                 stdin=subprocess.DEVNULL,
                 stdout=log_fd,
                 stderr=log_fd,
-                start_new_session=True,
                 close_fds=True,
             )
             threading.Thread(target=child.wait, name="hey-my-buddy-daemon-reaper", daemon=True).start()

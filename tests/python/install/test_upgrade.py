@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 from threading import Event
+from types import SimpleNamespace
+from hey_my_buddy.protocol import service_process
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
@@ -20,6 +22,27 @@ from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 class UpgradeTests(BoardTestCase):
+    def test_windows_replacement_and_rollback_use_independent_service_flags(self):
+        state = self.directory / 'state'
+        state.mkdir()
+        for name in ('replacement-runtime', 'rollback-runtime'):
+            with self.subTest(name=name):
+                target = self.directory / name
+                (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
+                child = mock.Mock(pid=4321)
+                child.poll.return_value = None
+                with mock.patch.object(service_process, 'os', SimpleNamespace(name='nt')), \
+                     mock.patch.object(service_process.subprocess, 'Popen', return_value=child) as popen, \
+                     mock.patch.object(upgrade, '_environment', return_value={}), \
+                     mock.patch.object(upgrade, '_read_json', return_value={'pid': child.pid}), \
+                     mock.patch.object(upgrade, 'command', return_value={'status': 'ok'}) as command:
+                    self.assertEqual(upgrade.start(state, target), {'status': 'ok'})
+                popen.assert_called_once()
+                self.assertEqual(popen.call_args.kwargs['creationflags'], 0x01000208)
+                self.assertNotIn('start_new_session', popen.call_args.kwargs)
+                self.assertEqual(popen.call_args.kwargs['cwd'], target)
+                command.assert_called_once_with(state, target, 'health')
+
     def test_runtime_preparation_excludes_the_previous_services_reclaimer(self):
         board = self.board()
         state = board.directory

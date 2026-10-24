@@ -12,9 +12,9 @@ import subprocess
 import uuid
 
 from .windows_process import WindowsAPI
+from .service_process import CREATE_NEW_PROCESS_GROUP, service_creation_flags
 
 CREATE_SUSPENDED = 0x00000004
-CREATE_NEW_PROCESS_GROUP = 0x00000200
 WINDOWS_COMMAND_LINE_LIMIT = 32767
 
 
@@ -27,6 +27,9 @@ class OwnedJob:
         if self.handle is None:
             return 0 if self.empty_confirmed else None
         return self.api.active(self.handle)
+
+    def members(self):
+        return self.api.process_ids(self.handle)
 
     def terminate(self):
         if self.handle is not None:
@@ -113,7 +116,8 @@ def owned_popen(*args, windows_api=None, job_name: str | None = None, **kwargs):
         name = job_name if job_name is not None else f"Local\\HeyMyBuddy-{uuid.uuid4()}"
         job = OwnedJob(api, api.create_job(name), name)
         kwargs = {**kwargs, "creationflags": kwargs.get("creationflags", 0) |
-                  CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP, "start_new_session": False}
+                  CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | service_creation_flags(windows=True),
+                  "start_new_session": False}
         process = subprocess.Popen(*args, **kwargs)
         api.assign(job.handle, process)
         assigned = True

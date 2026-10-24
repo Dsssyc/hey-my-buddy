@@ -478,56 +478,57 @@ def _probe_posix(process: subprocess.Popen, stop_at: float,
         process.stdout.close()
 
 
-def _probe_windows(process: subprocess.Popen, stop_at: float) -> tuple[str | None, bytes, bool]:
-    """Poll a Windows pipe without a reader thread; forced tree stop is unverified."""
-    import msvcrt
-    import pywintypes
-    import win32pipe
+def _probe_windows(process: subprocess.Popen, stop_at: float, handle) -> tuple[str | None, bytes, bool]:
+    """Poll the pipe, then stop and observe the entire held Job, including conhost."""
+    failure = None
+    stopped = False
+    try:
+        import msvcrt
+        import pywintypes
+        import win32pipe
 
-    assert process.stdout is not None
-    chunks: list[bytes] = []
-    pipe = msvcrt.get_osfhandle(process.stdout.fileno())
-    reason = None
-    while time.monotonic() < stop_at:
-        try:
-            _, available, _ = win32pipe.PeekNamedPipe(pipe, 0)
-        except pywintypes.error as error:
-            # The child can close stdout before exiting. Broken pipe is EOF,
-            # not a failed read; its exit still has the remaining probe budget.
-            if error.winerror != 109:  # ERROR_BROKEN_PIPE
-                reason = "pipe-failed"
-            break
-        if available:
-            chunk = os.read(process.stdout.fileno(), min(4096, _MAX_OUTPUT - sum(map(len, chunks)) + 1))
-            if not chunk:
+        assert process.stdout is not None
+        chunks: list[bytes] = []
+        pipe = msvcrt.get_osfhandle(process.stdout.fileno())
+        reason = None
+        while time.monotonic() < stop_at:
+            try:
+                _, available, _ = win32pipe.PeekNamedPipe(pipe, 0)
+            except pywintypes.error as error:
+                # stdout can close before the process exits; retain its exit budget.
+                if error.winerror != 109:  # ERROR_BROKEN_PIPE
+                    reason = "pipe-failed"
                 break
-            chunks.append(chunk)
-            if sum(map(len, chunks)) > _MAX_OUTPUT:
-                reason = "output-limit"
-                break
+            if available:
+                chunk = os.read(process.stdout.fileno(), min(4096, _MAX_OUTPUT - sum(map(len, chunks)) + 1))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                if sum(map(len, chunks)) > _MAX_OUTPUT:
+                    reason = "output-limit"
+                    break
+            else:
+                time.sleep(0.01)
         else:
-            time.sleep(0.01)
-    else:
-        reason = "timeout"
-    if reason is None:
-        try:
-            process.wait(timeout=max(0, stop_at - time.monotonic()))
-        except subprocess.TimeoutExpired:
             reason = "timeout"
-    forced = reason is not None
-    if forced:
+        if reason is None:
+            try:
+                process.wait(timeout=max(0, stop_at - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                reason = "timeout"
+    except Exception as error:
+        failure = error
+        raise
+    finally:
         try:
-            subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=1, check=False)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        if process.poll() is None:
-            process.kill()
-        process.wait()
-    process.stdout.close()
-    return (reason, b"", False) if forced else (
-        ("probe-failed" if process.returncode else None), b"".join(chunks), True)
+            handle.terminate(grace_seconds=0)
+            stopped = handle.shutdown_confirmed(settle_seconds=0.2)
+        finally:
+            process.stdout.close()
+            if failure is not None:
+                failure.discovery_shutdown_confirmed = stopped
+    return (reason, b"", stopped) if reason is not None else (
+        ("probe-failed" if process.returncode else None), b"".join(chunks), stopped)
 
 
 def probe(command: list[str], environment: dict, *, deadline: float | None = None,
@@ -542,39 +543,37 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
     from ...protocol.process_identity import native_process_journal_active
 
     journalled = native_process_journal_active()
-    from ...protocol.owned_process import WindowsCommandLineTooLong
+    from ...protocol.owned_process import WindowsCommandLineTooLong, owned_popen
     try:
-        if journalled:
-            from ...protocol.owned_process import owned_popen
-            process = owned_popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                  stderr=subprocess.STDOUT, env=environment, cwd=cwd,
-                                  start_new_session=os.name != "nt")
-        else:
-            from ...protocol.owned_process import check_windows_command_line
-            check_windows_command_line(command)
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT, env=environment, cwd=cwd,
-                                       start_new_session=os.name != "nt",
-                                       creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0)
-    except WindowsCommandLineTooLong as error:
-        return make_reason("harness.command-line-too-long", operation="probe", utf16Units=error.utf16_units, limit=error.limit), b""
-    except (OSError, ValueError):
-        return "launch-failed", b""
-    if journalled:
-        from .base import ProcessHandle
-        try:
-            ProcessHandle(process, own_group=True, log_paths={})
-        except Exception:
-            # Its durable intent remains unresolved until the held probe
-            # confirms shutdown. A crash before that proof stays unknown.
-            pass
+        process = owned_popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, env=environment, cwd=cwd,
+                              start_new_session=os.name != "nt")
+    except Exception as error:
+        creation = getattr(error, "owned_popen_evidence", None)
+        if creation is not None:
+            receipt.update(created=creation.created, shutdown=creation.shutdown_confirmed,
+                           exit_code=creation.exit_code)
+        if isinstance(error, WindowsCommandLineTooLong):
+            return make_reason("harness.command-line-too-long", operation="probe", utf16Units=error.utf16_units, limit=error.limit), b""
+        if isinstance(error, (OSError, ValueError)):
+            return "launch-failed", b""
+        raise
     receipt.update(created=True, shutdown=False)
     stop_at = min(start + _TIMEOUT, deadline) if deadline is not None else start + _TIMEOUT
     try:
-        code, output, stopped = (_probe_windows(process, stop_at) if os.name == "nt" else
+        if journalled or os.name == "nt":
+            from .base import ProcessHandle
+            try:
+                handle = ProcessHandle(process, own_group=True, log_paths={})
+            except Exception:
+                process.stdout.close()
+                raise
+        code, output, stopped = (_probe_windows(process, stop_at, handle) if os.name == "nt" else
                                  _probe_posix(process, stop_at, deadline))
     except Exception as error:
-        receipt.update(shutdown=getattr(error, "discovery_shutdown_confirmed", False) is True,
+        creation = getattr(error, "owned_popen_evidence", None)
+        receipt.update(shutdown=(creation.shutdown_confirmed if creation is not None else
+                                 getattr(error, "discovery_shutdown_confirmed", False) is True),
                        exit_code=process.returncode)
         if journalled and receipt["shutdown"]:
             from ...protocol.process_identity import discard_confirmed_native_spawn
@@ -620,7 +619,7 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
         else:
             process.stdin.close()
             stop_at = min(start + _TIMEOUT, deadline)
-            code, output, _ = (_probe_windows(process, stop_at) if os.name == "nt" else
+            code, output, _ = (_probe_windows(process, stop_at, handle) if os.name == "nt" else
                                _probe_posix(process, stop_at, deadline))
     except Exception as error:
         failure = error

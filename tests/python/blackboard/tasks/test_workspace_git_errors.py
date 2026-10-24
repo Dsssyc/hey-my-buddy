@@ -3,11 +3,13 @@ import io
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol import service_process
 
 
 class GitErrorTests(unittest.TestCase):
@@ -44,6 +46,18 @@ class GitErrorTests(unittest.TestCase):
 
     def run_entries(self):
         return (workspace._git, workspace._git_in)
+
+    def test_service_git_children_all_use_the_shared_no_window_policy(self):
+        with patch.object(service_process, "os", SimpleNamespace(name="nt")):
+            for entry in self.run_entries():
+                with self.subTest(entry=entry.__name__), patch.object(workspace.subprocess, "run") as run:
+                    run.return_value = subprocess.CompletedProcess([], 0, b"ok", b"")
+                    self.assertEqual(entry(self.root, "status"), b"ok")
+                    self.assertEqual(run.call_args.kwargs["creationflags"], 0x08000000)
+            state, start = self.importer(code=0, marks=f":1 {self.oid}\n".encode())
+            with patch.object(workspace.subprocess, "Popen", side_effect=start) as popen:
+                workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state")
+            self.assertEqual(popen.call_args.kwargs["creationflags"], 0x08000000)
 
     def test_nonzero_entries_return_actual_argv_and_both_bounded_outputs(self):
         for entry in self.run_entries():

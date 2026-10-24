@@ -22,6 +22,7 @@ from hey_my_buddy.protocol.owned_process import (
     owned_popen,
 )
 from hey_my_buddy.protocol import process_controller
+from hey_my_buddy.protocol.service_process import CREATE_NO_WINDOW, CREATE_BREAKAWAY_FROM_JOB
 
 
 class FakeProcess:
@@ -150,8 +151,8 @@ class WindowsProcessTests(unittest.TestCase):
         with mock.patch("hey_my_buddy.protocol.owned_process.subprocess.Popen", return_value=process) as popen:
             child = owned_popen(["child"], windows_api=api, start_new_session=True)
         flags = popen.call_args.kwargs["creationflags"]
-        self.assertEqual(flags & (CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP),
-                         CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP)
+        self.assertEqual(flags, CREATE_SUSPENDED | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
+        self.assertFalse(flags & CREATE_BREAKAWAY_FROM_JOB)
         self.assertFalse(popen.call_args.kwargs["start_new_session"])
         return child
 
