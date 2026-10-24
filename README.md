@@ -52,13 +52,13 @@ It is not published yet. Build the wheel from this repository and install it:
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.52.1-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.53.0-py3-none-any.whl" hey-my-buddy install
 ```
 
 Once a release is published, the same install is one command:
 
 ```sh
-uvx hey-my-buddy@0.52.1 install
+uvx hey-my-buddy@0.53.0 install
 ```
 
 <details>
