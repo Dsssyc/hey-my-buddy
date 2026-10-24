@@ -457,9 +457,6 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     resume_mode         TEXT NOT NULL
         CHECK (resume_mode IN ('initial','reconstructed-new-session','native-session')),
     previous_session_id TEXT,
-    session_id          TEXT,
-    prompt_sha256       TEXT,
-    input_sha256        TEXT,
     input_json          TEXT NOT NULL,
     -- Frozen access for this turn, independent of later run intent changes.
     access              TEXT NOT NULL CHECK (access IN ('read','write','full')),
@@ -467,12 +464,6 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
     access_note         TEXT,
     expected_seconds    INTEGER NOT NULL CHECK (expected_seconds > 0),
     state               TEXT NOT NULL CHECK (state IN ('prepared','running','returned','failed','interrupted','rejected')),
-    disposition         TEXT CHECK (disposition IN ('completed','assistance','attention','waiting')),
-    outcome_json        TEXT,
-    outcome_truncated_json TEXT,
-    provenance_json     TEXT,
-    turn_result_path    TEXT,
-    sealed_artifacts_json TEXT NOT NULL DEFAULT '[]',
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     CHECK ((access='full') = (access_note IS NOT NULL)),

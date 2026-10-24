@@ -399,7 +399,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(replay["artifactId"], first["artifactId"])
         with board.store.db.read() as connection:
             attempt_id = claimed["claim"]["attempt"]["attemptId"]
-            turn = connection.execute("SELECT state, disposition FROM workflow_turns WHERE attempt_id=?", (attempt_id,)).fetchone()
+            turn = connection.execute("SELECT state FROM workflow_turns WHERE attempt_id=?", (attempt_id,)).fetchone()
             artifact = connection.execute(
                 "SELECT kind, manifest_json FROM workflow_artifacts WHERE attempt_id=? AND kind IN ('output','resolved-output')",
                 (attempt_id,),
@@ -408,7 +408,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
                 "SELECT kind, request_hash FROM commands WHERE attempt_id=?", (attempt_id,)
             ).fetchall()
         self.assertEqual(turn["state"], "failed")
-        self.assertIsNone(turn["disposition"])
+        self.assertIsNone(board.call("workflow_get", {"runId": run_id})["currentTurn"]["disposition"])
         self.assertEqual(artifact["kind"], "resolved-output")
         self.assertEqual(json.loads(artifact["manifest_json"])["action"], "restore")
 
@@ -647,7 +647,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             ).fetchone()["delivery_json"])
         self.assertEqual(attempt["shutdown_confirmed"], 1)
         self.assertEqual(turn["state"], "failed")
-        self.assertIsNone(turn["disposition"])
+        self.assertIsNone(board.call("workflow_get", {"runId": run_id})["currentTurn"]["disposition"])
         payload = json.loads(attempt["result_json"])
         self.assertEqual(payload["status"], "failed")
         self.assertIn("workspaceSealError", payload["result"])

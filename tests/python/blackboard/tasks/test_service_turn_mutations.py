@@ -54,7 +54,9 @@ class ServiceTurnMutationTests(WorkflowTestCase):
                 (attempt["attemptId"],),
             ).fetchone()
             turn_row = connection.execute(
-                "SELECT state, session_id FROM workflow_turns WHERE turn_id=?",
+                "SELECT t.state,CASE WHEN t.state='returned'"
+                " THEN json_extract(a.result_json,'$.result.turn.sessionId') END AS session_id"
+                " FROM workflow_turns t LEFT JOIN attempts a USING(attempt_id) WHERE t.turn_id=?",
                 (claim["turn"]["turnId"],),
             ).fetchone()
         stored = json.loads(attempt_row["result_json"])

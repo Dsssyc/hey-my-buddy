@@ -205,9 +205,11 @@ def attach_owner(case, board, client, task, adapter):
     case._claim = claim
     case.assertIsNotNone(turn)
     with board.store.db.read() as db:
-        row = db.execute("SELECT input_json, input_sha256 FROM workflow_turns WHERE turn_id=?", (turn["turnId"],)).fetchone()
-        case.assertIsNone(row["input_sha256"], "the running receipt-time digest is allowed to remain NULL")
+        row = db.execute("SELECT input_json FROM workflow_turns WHERE turn_id=?", (turn["turnId"],)).fetchone()
         case.assertEqual(json.loads(row["input_json"]), turn["input"])
+    audit = board.store.workflow.get({"runId": task["runId"], "includeAudit": True})['audit']['turns']
+    case.assertIsNone(next(item['inputSha256'] for item in audit if item['turnId'] == turn['turnId']),
+                      "a running turn has no imported receipt-time digest")
     identity = RunIdentity(task_id=task["runId"], attempt_id=attempt["attemptId"],
                            generation=attempt["generation"], invocation_id="inquiry-fixture-invocation",
                            turn_id=turn["turnId"], input_sha256=turn["inputSha256"])

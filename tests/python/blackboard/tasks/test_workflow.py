@@ -281,15 +281,19 @@ class LifecycleTests(WorkflowTestCase):
         claim = self.claim(board)
         truncated = {"remaining": {"droppedItems": 5, "shortenedItems": 1}}
         self.finish_turn(board, claim)
-        # Model a turn already stored before S4; new receipts cannot publish this field.
+        # Model a receipt stored before S4; new receipts cannot publish this field.
         with board.store.db.write() as connection:
-            connection.execute("UPDATE workflow_turns SET outcome_truncated_json=? WHERE turn_id=?",
-                               (json.dumps(truncated), claim["claim"]["turn"]["turnId"]))
+            connection.execute(
+                "UPDATE attempts SET result_json=json_set(result_json,'$.result.turn.outcomeTruncated',json(?))"
+                " WHERE attempt_id=?",
+                (json.dumps(truncated), claim["claim"]["attempt"]["attemptId"]),
+            )
 
         with board.store.db.read() as connection:
             stored = connection.execute(
-                "SELECT outcome_truncated_json FROM workflow_turns WHERE turn_id=?",
-                (claim["claim"]["turn"]["turnId"],),
+                "SELECT json_extract(result_json,'$.result.turn.outcomeTruncated') AS outcome_truncated_json"
+                " FROM attempts WHERE attempt_id=?",
+                (claim["claim"]["attempt"]["attemptId"],),
             ).fetchone()
         self.assertEqual(json.loads(stored["outcome_truncated_json"]), truncated)
         view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
@@ -300,6 +304,33 @@ class LifecycleTests(WorkflowTestCase):
         self.assertEqual(view["turns"][0]["outcomeTruncated"], truncated)
         self.assertEqual(view["audit"]["turns"][0]["outcomeTruncated"], truncated)
         self.assertNotIn("outcomeTruncated", view["audit"]["turns"][0]["outcome"])
+
+    def test_failed_receipt_turn_outcome_and_unaccepted_seal_stay_hidden(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board)
+        claim = self.claim(board)
+        self.finish_turn(board, claim, runner_status="failed", exit_code=1)
+        with board.store.db.read() as connection:
+            receipt = json.loads(connection.execute(
+                "SELECT result_json FROM attempts WHERE attempt_id=?",
+                (claim["claim"]["attempt"]["attemptId"],),
+            ).fetchone()[0])
+        self.assertEqual(receipt["result"]["turn"]["outcome"]["summary"], "did the work")
+
+        view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
+        current = view["currentTurn"]
+        audit = view["audit"]["turns"][0]
+        self.assertEqual(current["state"], "failed")
+        self.assertIsNone(current["disposition"])
+        self.assertNotIn("summary", current)
+        self.assertIsNone(audit["outcome"])
+        self.assertIsNone(audit["provenance"])
+        self.assertIsNone(audit["sessionId"])
+        self.assertIsNone(audit["promptSha256"])
+        self.assertIsNone(audit["inputSha256"])
+        self.assertIsNone(audit["turnResultPath"])
+        self.assertEqual(audit["sealedArtifacts"], [])
 
     def test_unselected_buddy_reads_have_no_provider_cooling_fact(self):
         board = self.board()

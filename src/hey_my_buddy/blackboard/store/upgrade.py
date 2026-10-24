@@ -11,7 +11,7 @@ from .db import (DB_FILE, DECISION_REQUESTS_DDL, EVALUATION_DECISIONS_DDL,
                  EVENTS_ROUTER_CLAIMED_INDEX_DDL, MODEL_SERVICE_CONCURRENCY_DDL,
                  ROUTER_DISPATCHES_DDL, ROUTER_OUTCOMES_DDL, ROUTER_REQUESTS_DDL,
                  SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, WORKFLOW_CHILDREN_DDL,
-                 WORKFLOW_RUNS_DDL, canonical_json)
+                 WORKFLOW_RUNS_DDL, WORKFLOW_TURNS_DDL, canonical_json, sha256_text)
 from ... import private_dirs
 from ...errors import BoardError
 
@@ -37,6 +37,11 @@ RETAINED_COLUMN_PROJECTIONS = {
     'workflow_children': (
         'child_task_id', 'parent_run_id', 'request_id', 'decision_command_id', 'role', 'state',
         'workspace_manifest_json', 'created_at', 'updated_at',
+    ),
+    'workflow_turns': (
+        'turn_id', 'run_id', 'attempt_id', 'generation', 'turn_index', 'resume_mode',
+        'previous_session_id', 'input_json', 'access', 'access_note', 'expected_seconds',
+        'state', 'created_at', 'updated_at',
     ),
 }
 
@@ -219,6 +224,49 @@ def _validate_router_stock(connection) -> None:
         raise BoardError('UPGRADE_INVALID_BOARD', 'Router outcome is outside the routing plane')
 
 
+def _validate_turn_stock(connection) -> None:
+    """Check receipt copies and the turn's accepted pins before retiring them."""
+    from ..tasks.workflow import WorkflowCoordinator
+
+    cursor = connection.execute(
+        'SELECT t.*,a.result_json FROM workflow_turns t'
+        ' LEFT JOIN attempts a ON a.attempt_id=t.attempt_id ORDER BY t.rowid')
+    columns = [column[0] for column in cursor.description]
+    for values in cursor:
+        row = dict(zip(columns, values))
+        payload = json.loads(row['result_json']) if row['result_json'] is not None else None
+        result = WorkflowCoordinator.result_payload(payload)
+        turn = result.get('turn')
+        if row['state'] == 'returned':
+            if not isinstance(turn, dict):
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Returned turn has no execution receipt outcome',
+                                 turnId=row['turn_id'])
+            expected = {
+                'disposition': turn['outcome']['disposition'],
+                'outcome_json': canonical_json(turn['outcome']),
+                'outcome_truncated_json': (canonical_json(turn['outcomeTruncated'])
+                                           if 'outcomeTruncated' in turn else None),
+                'provenance_json': canonical_json(turn.get('provenance')),
+                'session_id': turn.get('sessionId'),
+                'prompt_sha256': turn.get('promptSha256'),
+                'input_sha256': turn['inputSha256'],
+                'turn_result_path': result.get('turnResultPath'),
+            }
+            if turn['inputSha256'] != sha256_text(row['input_json']):
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Turn receipt input digest differs from its frozen input',
+                                 turnId=row['turn_id'], field='input_sha256')
+        else:
+            expected = dict.fromkeys((
+                'disposition', 'outcome_json', 'outcome_truncated_json', 'provenance_json',
+                'session_id', 'prompt_sha256', 'input_sha256', 'turn_result_path'))
+        expected['sealed_artifacts_json'] = canonical_json(WorkflowCoordinator._sealed_artifacts(
+            connection, run_id=row['run_id'], turn_id=row['turn_id']))
+        for column, value in expected.items():
+            if row[column] != value:
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Turn copy differs from its authoritative projection',
+                                 turnId=row['turn_id'], field=column)
+
+
 def _rebuild_table(connection, name: str, ddl: str, *, projected: bool = False,
                    expressions: dict[str, str] | None = None) -> None:
     previous = name + '_upgrade'
@@ -366,6 +414,7 @@ def migrate_schema(state: Path) -> None:
             if version is None or version[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
                 raise BoardError('UNSUPPORTED_SCHEMA', 'Board schema cannot be upgraded')
             if version[0] == str(UPGRADE_BASE_SCHEMA):
+                _validate_turn_stock(connection)
                 with _router_upgrade_stock(connection):
                     _validate_router_stock(connection)
                     _rebuild_table(connection, 'router_requests', ROUTER_REQUESTS_DDL, projected=True)
@@ -377,6 +426,7 @@ def migrate_schema(state: Path) -> None:
                 _rebuild_table(connection, 'workflow_runs', WORKFLOW_RUNS_DDL,
                                expressions={'source_host_id': SOURCE_HOST_SQL})
                 _rebuild_table(connection, 'workflow_children', WORKFLOW_CHILDREN_DDL)
+                _rebuild_table(connection, 'workflow_turns', WORKFLOW_TURNS_DDL)
                 connection.execute("UPDATE events SET payload_json=? WHERE kind='attempt.activity'",
                                    (ACTIVITY_EVENT_PAYLOAD,))
                 connection.execute('DROP INDEX events_router_claimed_idx')

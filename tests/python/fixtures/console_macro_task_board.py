@@ -333,7 +333,11 @@ class SyntheticBoard:
                       "workflow_artifacts", "workflow_integrations", "workflow_continuations")
             counts = {table: connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
             lengths = [row[0] for row in connection.execute("SELECT length(CAST(result_json AS BLOB)) FROM attempts WHERE json_type(result_json,'$.privateSyntheticInjection')='object'")]
-            outcomes = [json.loads(row[0]) for row in connection.execute("SELECT outcome_json FROM workflow_turns WHERE outcome_json IS NOT NULL")]
+            outcomes = [json.loads(row[0]) for row in connection.execute(
+                "SELECT json_extract(a.result_json,'$.result.turn.outcome') FROM workflow_turns t"
+                " JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.state='returned'"
+                " AND json_type(a.result_json,'$.result.turn.outcome')='object'"
+            )]
             fk = [list(row) for row in connection.execute("PRAGMA foreign_key_check")]
             integrity = connection.execute("PRAGMA integrity_check").fetchone()[0]
             schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]

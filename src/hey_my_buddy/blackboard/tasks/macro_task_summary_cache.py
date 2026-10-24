@@ -118,8 +118,10 @@ def dependencies(connection, members):
             ("run", "SELECT run_id,macro_task_id,state,host_id,owner_generation,active_request_id,current_turn_id,"
              " current_attempt_id,final_artifact_id,final_attempt_id,revision,created_at,activity_seq,activity_at"
              " FROM workflow_runs WHERE run_id IN ({}) ORDER BY run_id"),
-            ("turn", "SELECT run_id,turn_id,turn_index,state,attempt_id,generation,disposition"
-             " FROM workflow_turns WHERE run_id IN ({}) ORDER BY run_id,turn_index"),
+            ("turn", "SELECT t.run_id,t.turn_id,t.turn_index,t.state,t.attempt_id,t.generation,"
+             " CASE WHEN t.state='returned' THEN json_extract(a.result_json,'$.result.turn.outcome.disposition') END"
+             " FROM workflow_turns t LEFT JOIN attempts a ON a.attempt_id=t.attempt_id"
+             " WHERE t.run_id IN ({}) ORDER BY t.run_id,t.turn_index"),
             ("conclusion", "SELECT run_id,conclusion_id,execution_status"
              " FROM workflow_host_conclusions WHERE run_id IN ({}) ORDER BY run_id"),
             ("request", "SELECT run_id,request_id,turn_id,attempt_id,child_task_id,kind,state,expected_revision,decided_at"
@@ -163,9 +165,9 @@ def dependencies(connection, members):
             row = connection.execute(
                 "SELECT " + _bounded("r.title") + "," + _bounded("json_extract(t.spec_json,'$.task')",
                     kind="json_type(t.spec_json,'$.task')") + ","
-                + _bounded("(SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
-                           " THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
-                           " WHERE t.run_id=r.run_id AND t.state='returned' AND t.outcome_json IS NOT NULL"
+                + _bounded("(SELECT CASE WHEN json_type(a.result_json,'$.result.turn.outcome.summary')='text'"
+                           " THEN json_extract(a.result_json,'$.result.turn.outcome.summary') END FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
+                           " WHERE t.run_id=r.run_id AND t.state='returned'"
                            " ORDER BY t.turn_index DESC LIMIT 1)") +
                 " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id WHERE r.run_id=?", (group[4:],),
             ).fetchone()

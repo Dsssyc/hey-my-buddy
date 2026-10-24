@@ -270,9 +270,9 @@ def _run_presentation(connection, run_id: str) -> tuple[str | None, str, str | N
     """Intent first; a recorded result summary is a separate secondary field."""
     row = connection.execute(
         "SELECT r.title,"
-        " (SELECT CASE WHEN json_type(t.outcome_json,'$.summary')='text'"
-        "  THEN json_extract(t.outcome_json,'$.summary') END FROM workflow_turns t"
-        "  WHERE t.run_id=r.run_id AND t.state='returned' AND t.outcome_json IS NOT NULL"
+        " (SELECT CASE WHEN json_type(a.result_json,'$.result.turn.outcome.summary')='text'"
+        "  THEN json_extract(a.result_json,'$.result.turn.outcome.summary') END FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
+        "  WHERE t.run_id=r.run_id AND t.state='returned'"
         "  ORDER BY t.turn_index DESC LIMIT 1) AS summary,"
         " json_extract(t.spec_json,'$.task') AS task"
         " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id WHERE r.run_id=?",
@@ -724,7 +724,8 @@ def _run_spans(store, connection, row) -> list[dict]:
     spans: list[dict] = []
     attempts = connection.execute(
         "SELECT a.*, json_extract(a.result_json,'$.status') AS result_status,"
-        " t.turn_id, t.turn_index, t.input_json, t.state AS turn_state, t.disposition,"
+        " t.turn_id, t.turn_index, t.input_json, t.state AS turn_state,"
+        " CASE WHEN t.state='returned' THEN json_extract(a.result_json,'$.result.turn.outcome.disposition') END AS disposition,"
         " t.expected_seconds AS turn_expected_seconds"
         " FROM attempts a LEFT JOIN workflow_turns t ON t.attempt_id = a.attempt_id"
         " WHERE a.task_id=? ORDER BY a.generation, a.created_at",

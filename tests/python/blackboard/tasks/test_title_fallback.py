@@ -109,8 +109,10 @@ class TitleFallbackTests(WorkflowTestCase):
         for broken in ("   ", "\n\t ", 7, None, False, {}, [], {"text": "not a summary"}):
             with board.store.db.write() as connection:
                 connection.execute(
-                    "UPDATE workflow_turns SET outcome_json=? WHERE run_id=? AND turn_index=2",
-                    (json.dumps({"disposition": "completed", "summary": broken}), run_id),
+                    "UPDATE attempts SET result_json=json_set(result_json,"
+                    "'$.result.turn.outcome.summary',json(?)) WHERE attempt_id=("
+                    "SELECT attempt_id FROM workflow_turns WHERE run_id=? AND turn_index=2)",
+                    (json.dumps(broken), run_id),
                 )
             self.assertIsNone(workflow_summary(micro_task_view(board, run_id)), broken)
             listed = board.call("task_list", {"limit": 10})["runs"]
@@ -118,12 +120,16 @@ class TitleFallbackTests(WorkflowTestCase):
         # The older nonempty first-turn result is never substituted back in.
         with board.store.db.write() as connection:
             connection.execute(
-                "UPDATE workflow_turns SET outcome_json=? WHERE run_id=? AND turn_index=2",
-                (json.dumps({"disposition": "completed", "summary": "  "}), run_id),
+                "UPDATE attempts SET result_json=json_set(result_json,"
+                "'$.result.turn.outcome.summary',json(?)) WHERE attempt_id=("
+                "SELECT attempt_id FROM workflow_turns WHERE run_id=? AND turn_index=2)",
+                (json.dumps("  "), run_id),
             )
             connection.execute(
-                "UPDATE workflow_turns SET outcome_json=? WHERE run_id=? AND turn_index=1",
-                (json.dumps({"disposition": "assistance", "summary": "older nonempty"}), run_id),
+                "UPDATE attempts SET result_json=json_set(result_json,"
+                "'$.result.turn.outcome.summary',json(?)) WHERE attempt_id=("
+                "SELECT attempt_id FROM workflow_turns WHERE run_id=? AND turn_index=1)",
+                (json.dumps("older nonempty"), run_id),
             )
         self.assertIsNone(workflow_summary(micro_task_view(board, run_id)))
 

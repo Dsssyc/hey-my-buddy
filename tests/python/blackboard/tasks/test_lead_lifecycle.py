@@ -497,7 +497,10 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.accept_run(board, self.current(board, lead))
         accepted_at = clock()
         with board.store.db.read() as db:
-            turns = db.execute("SELECT * FROM workflow_turns WHERE run_id=? ORDER BY turn_index", (lead["runId"],)).fetchall()
+            turns = db.execute("SELECT t.*,CASE WHEN t.state='returned'"
+                               " THEN json_extract(a.result_json,'$.result.turn.outcome.disposition') END AS disposition"
+                               " FROM workflow_turns t LEFT JOIN attempts a USING(attempt_id)"
+                               " WHERE t.run_id=? ORDER BY t.turn_index", (lead["runId"],)).fetchall()
             events = db.execute("SELECT * FROM events WHERE task_id=? ORDER BY seq", (lead["runId"],)).fetchall()
             wakes = db.execute("SELECT * FROM workflow_continuations WHERE run_id=? AND kind='lead-wakeup'", (lead["runId"],)).fetchall()
             owned = db.execute("SELECT * FROM workflow_lead_tasks WHERE lead_run_id=?", (lead["runId"],)).fetchone()
