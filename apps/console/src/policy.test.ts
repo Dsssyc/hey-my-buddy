@@ -320,24 +320,24 @@ describe("the Router retry interval", () => {
 describe("model concurrency limits", () => {
   it("blocks an out-of-range limit while every legal limit stays publishable", () => {
     const baseline = makeDraft(snapshot([worker]));
-    for (const limit of [0, 33, 2.5]) {
+    for (const limit of [0, Number.MAX_SAFE_INTEGER + 1, 2.5]) {
       const invalid = {
         ...baseline,
         modelServiceConcurrency: [{ harness: worker.harness, provider: worker.provider, model: worker.model, limit }],
       };
       const issues = blockingIssues(baseline, invalid);
       expect(issues).toHaveLength(1);
-      expect(issues[0].message).toContain("1–32");
+      expect(issues[0].message).toContain("正整数");
       expect(issues[0].buddyId).toBe(worker.buddyId);
     }
     // A limit edit never depends on availability: the retired buddy's
     // model service setting stays publishable within the range.
     const retiredBase = makeDraft(snapshot([worker, retired]));
-    const raised = setConcurrencyLimit(retiredBase, retired, 32);
+    const raised = setConcurrencyLimit(retiredBase, retired, 33);
     expect(blockingIssues(retiredBase, raised)).toEqual([]);
     const patch = publication(retiredBase, raised, "c");
     expect(patch.modelServiceConcurrency).toEqual([
-      { harness: retired.harness, provider: retired.provider, model: retired.model, limit: 32 },
+      { harness: retired.harness, provider: retired.provider, model: retired.model, limit: 33 },
     ]);
   });
 });

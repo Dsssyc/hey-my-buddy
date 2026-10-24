@@ -58,13 +58,18 @@ describe("authenticated snapshot read boundaries", () => {
       });
     }
   });
-  it("checks safe nonnegative snapshot counts without inspecting unchecked arrays", async () => {
+  it("checks safe snapshot counts and model service limits", async () => {
     for (const count of [-1, 0.5, unsafe, NaN, Infinity, "0", null, undefined]) {
       await expect(apiFor({ ...snapshot, eventCursor: count }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
       await expect(apiFor({ ...snapshot, tasks: { pendingCount: count } }).snapshot()).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
+    const entry = { harness: "dsh", provider: "fixture", model: "alpha", limit: Number.MAX_SAFE_INTEGER, active: 1 };
+    for (const limit of [0, Number.MAX_SAFE_INTEGER + 1, 1.5, "33", null]) {
+      await expect(apiFor({ ...snapshot, modelServiceConcurrency: [{ ...entry, limit }] }).snapshot())
+        .rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    }
     const value = { ...snapshot, eventCursor: Number.MAX_SAFE_INTEGER, buddies: [null],
-      modelServiceNotes: [false], modelServiceConcurrency: [7], tasks: { pendingCount: Number.MAX_SAFE_INTEGER } };
+      modelServiceNotes: [false], modelServiceConcurrency: [entry], tasks: { pendingCount: Number.MAX_SAFE_INTEGER } };
     await expect(apiFor(value).snapshot()).resolves.toMatchObject(value);
   });
 });

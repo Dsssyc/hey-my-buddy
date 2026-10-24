@@ -83,7 +83,7 @@ export default {
     concurrencyLimit: "并发上限",
     occupancy: "占用 {{n}}",
     occupancyUnknown: "占用未知",
-    range: "需要 {{min}}–{{max}} 的整数",
+    range: "需要正整数",
     note: "备注",
     locked: {
       session: "浏览器授权已失效，重新授权后可以修改",

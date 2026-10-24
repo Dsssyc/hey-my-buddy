@@ -1,14 +1,17 @@
 """The single pending board-schema upgrade, invoked by installation after backup."""
 from __future__ import annotations
 
-from contextlib import closing
+from contextlib import closing, contextmanager
 import hashlib
 import json
 from pathlib import Path
 import sqlite3
 
-from .db import (DB_FILE, EVENTS_ROUTER_CLAIMED_INDEX_DDL, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA,
-                 WORKFLOW_CHILDREN_DDL, WORKFLOW_RUNS_DDL)
+from .db import (DB_FILE, DECISION_REQUESTS_DDL, EVALUATION_DECISIONS_DDL,
+                 EVENTS_ROUTER_CLAIMED_INDEX_DDL, MODEL_SERVICE_CONCURRENCY_DDL,
+                 ROUTER_DISPATCHES_DDL, ROUTER_OUTCOMES_DDL, ROUTER_REQUESTS_DDL,
+                 SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, WORKFLOW_CHILDREN_DDL,
+                 WORKFLOW_RUNS_DDL, canonical_json)
 from ... import private_dirs
 from ...errors import BoardError
 
@@ -19,6 +22,10 @@ EVENT_COLUMNS = ('seq', 'task_id', 'attempt_id', 'revision', 'kind', 'payload_js
 
 # Only the common columns cross the pending upgrade's retention comparison.
 RETAINED_COLUMN_PROJECTIONS = {
+    'evaluation_decisions': ('decision_id', 'status', 'buddy_id', 'reason_code',
+                             'reason_params_json', 'note', 'created_at'),
+    'router_outcomes': ('receipt_id', 'request_id', 'router_index', 'buddy_id', 'phase',
+                        'task_id', 'attempt_id', 'outcome', 'code', 'event_seq'),
     'workflow_runs': (
         'run_id', 'macro_task_id', 'title', 'activity_seq', 'activity_at', 'host_id',
         'owner_generation', 'control_verifier', 'request_fingerprint', 'buddy_json',
@@ -32,6 +39,225 @@ RETAINED_COLUMN_PROJECTIONS = {
         'workspace_manifest_json', 'created_at', 'updated_at',
     ),
 }
+
+_ROUTER_FACT_FIELDS = ('routerBuddyIds', 'routerIdentities', 'routingMode', 'routingBudget',
+                      'routerRetryIntervalSeconds', 'budget')
+_ROUTER_IDENTITY_FIELDS = ('harness', 'provider', 'model', 'effort')
+_ROUTER_COLUMNS = {
+    'decision_requests': ('decision_id', 'request_id', 'input_fingerprint', 'task_id',
+                          'attempt_id', 'generation', 'selected_json', 'output_json',
+                          'requested_json', 'updated_at'),
+    'router_requests': ('decision_id', 'round', 'snapshot_json', 'frozen_at'),
+    'router_dispatches': ('task_id', 'decision_id', 'round', 'router_index', 'buddy_id',
+                          *_ROUTER_IDENTITY_FIELDS, 'created_at'),
+}
+
+
+def _request_without_router_facts(request: dict, snapshots: list[dict], *, decision_id: str) -> dict:
+    """Check the old writer's duplicated facts before retiring their request copy."""
+    current = snapshots[-1]
+    facts = current['facts']
+    if request.get('selectionRetry') and request['routingBasis']['candidateCount'] <= 1:
+        # This old branch ended before resolving another Router, so its six
+        # request facts still name round one; routerCalled describes the new round.
+        facts = {**facts, **snapshots[0]['facts']}
+    copied = request.keys() & facts.keys()
+    for key in copied:
+        if request[key] != facts[key]:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Request Router fact differs from its round snapshot',
+                             decisionId=decision_id, field=key)
+    # The old writer also stored this now-unread timeout alias beside budget.
+    if 'routerBudgetSeconds' in request:
+        if request['routerBudgetSeconds'] != facts['budget']['timeoutSeconds']:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Request Router timeout differs from its round snapshot',
+                             decisionId=decision_id, field='routerBudgetSeconds')
+        copied.add('routerBudgetSeconds')
+    if 'selectionRetryInspections' in request and request['selectionRetryInspections'] != current['inspections']:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Request Router inspections differ from its round snapshot',
+                         decisionId=decision_id, field='selectionRetryInspections')
+    return {key: value for key, value in request.items()
+            if key not in copied and key != 'selectionRetryInspections'}
+
+
+def _historical_router_document(encoded: str) -> dict:
+    """Apply the pre-0.46 excluded-buddy conversion already applied to snapshots."""
+    document = json.loads(encoded)
+    for entry in document['routingBasis']['excludedBuddies']:
+        if 'reason' in entry:
+            entry['note'] = entry.pop('reason') or None
+    return document
+
+
+@contextmanager
+def _router_upgrade_stock(connection):
+    """Project the old writer's initial and single-retry packets into round rows.
+
+    Original snapshots keep their rowids. The old writer omitted snapshots when
+    zero or one candidates needed no Router; their task-only snapshots are made
+    from the retained request text, checked against the task column being retired.
+    The old task request key distinguishes
+    retry dispatches; their actor-free document and retry inspections recover the
+    second snapshot. Temporary tables let SQLite sort fingerprints without
+    retaining all Router inputs in Python.
+    """
+    connection.execute('CREATE TEMP TABLE hmb_upgrade_router_requests AS'
+                       ' SELECT rowid AS original_rowid,decision_id,1 AS round,snapshot_json,frozen_at'
+                       ' FROM router_requests')
+    connection.execute("CREATE TEMP TABLE hmb_upgrade_router_dispatches AS"
+                       " SELECT d.rowid AS original_rowid,d.task_id,d.decision_id,"
+                       " CASE WHEN t.request_id='decision:'||r.request_id||':1:'||d.router_index"
+                       " THEN 2 ELSE 1 END AS round,d.router_index,d.buddy_id,"
+                       " d.harness,d.provider,d.model,d.effort,d.created_at"
+                       " FROM router_dispatches d JOIN tasks t ON t.task_id=d.task_id"
+                       " JOIN decision_requests r ON r.decision_id=d.decision_id")
+    try:
+        next_rowid = connection.execute('SELECT COALESCE(MAX(rowid),0)+1 FROM router_requests').fetchone()[0]
+        for decision_id, encoded, created_at in connection.execute(
+            'SELECT r.decision_id,r.requested_json,d.created_at FROM decision_requests r'
+            ' JOIN evaluation_decisions d ON d.decision_id=r.decision_id'
+            ' LEFT JOIN router_requests s ON s.decision_id=r.decision_id'
+            ' WHERE s.decision_id IS NULL ORDER BY r.rowid'):
+            request = json.loads(encoded)
+            count = request['routingBasis']['candidateCount']
+            if request.get('selectionRetry') or count > 1 or connection.execute(
+                    'SELECT 1 FROM router_dispatches WHERE decision_id=? LIMIT 1', (decision_id,)).fetchone():
+                raise BoardError('UPGRADE_INVALID_BOARD', 'Decision has no Router snapshot', decisionId=decision_id)
+            facts = {'routerBuddyId': None, 'routingMode': None, 'budget': None, 'routerCalled': False}
+            snapshot = {'baseInput': {'task': request['task']}, 'facts': facts, 'inspections': []}
+            connection.execute('INSERT INTO hmb_upgrade_router_requests VALUES(?,?,?,?,?)',
+                               (next_rowid, decision_id, 1, canonical_json(snapshot), created_at))
+            next_rowid += 1
+        for row in connection.execute('SELECT decision_id,requested_json,input_json'
+                                      ' FROM decision_requests ORDER BY rowid'):
+            decision_id, encoded_request, encoded_input = row
+            request = json.loads(encoded_request)
+            if not request.get('selectionRetry'):
+                continue
+            if request['routingBasis']['candidateCount'] <= 1:
+                snapshot = {'baseInput': {'task': request['task']},
+                            'facts': {'routerBuddyId': None, 'routingMode': None, 'budget': None, 'routerCalled': False},
+                            'inspections': []}
+            else:
+                dispatch = connection.execute(
+                    'SELECT d.document_json FROM router_dispatches d JOIN hmb_upgrade_router_dispatches s'
+                    ' ON s.task_id=d.task_id WHERE s.decision_id=? AND s.round=2 ORDER BY d.rowid LIMIT 1',
+                    (decision_id,)).fetchone()
+                if dispatch is None and encoded_input is None:
+                    raise BoardError('UPGRADE_INVALID_BOARD', 'Selection retry has no retained Router packet',
+                                     decisionId=decision_id)
+                base_input = _historical_router_document(dispatch[0] if dispatch is not None else encoded_input)
+                for field in ('buddy', 'routerBuddyId', 'routerBuddy', 'routerIndex'):
+                    base_input.pop(field, None)
+                snapshot = {'baseInput': base_input,
+                            'facts': {field: base_input[field] for field in _ROUTER_FACT_FIELDS},
+                            'inspections': request['selectionRetryInspections']}
+            frozen_at = connection.execute(
+                "SELECT created_at FROM events WHERE kind='decision.selection_rerouted'"
+                " AND json_extract(payload_json,'$.decisionId')=?", (decision_id,)).fetchone()[0]
+            connection.execute('INSERT INTO hmb_upgrade_router_requests VALUES(?,?,?,?,?)',
+                               (next_rowid, decision_id, 2, canonical_json(snapshot), frozen_at))
+            next_rowid += 1
+        columns = ','.join(_ROUTER_COLUMNS['decision_requests'])
+        connection.execute('CREATE TEMP TABLE hmb_upgrade_decision_requests AS'
+                           f' SELECT rowid AS original_rowid,{columns} FROM decision_requests')
+        try:
+            for decision_id, encoded in connection.execute('SELECT decision_id,requested_json FROM decision_requests'):
+                snapshots = [json.loads(row[0]) for row in connection.execute(
+                    'SELECT snapshot_json FROM hmb_upgrade_router_requests WHERE decision_id=? ORDER BY round',
+                    (decision_id,))]
+                request = _request_without_router_facts(json.loads(encoded), snapshots, decision_id=decision_id)
+                connection.execute('UPDATE hmb_upgrade_decision_requests SET requested_json=? WHERE decision_id=?',
+                                   (canonical_json(request), decision_id))
+            yield
+        finally:
+            connection.execute('DROP TABLE hmb_upgrade_decision_requests')
+    finally:
+        connection.execute('DROP TABLE hmb_upgrade_router_dispatches')
+        connection.execute('DROP TABLE hmb_upgrade_router_requests')
+
+
+def _validate_router_stock(connection) -> None:
+    missing = connection.execute(
+        'SELECT d.decision_id FROM evaluation_decisions d LEFT JOIN hmb_upgrade_router_requests r'
+        ' ON r.decision_id=d.decision_id WHERE r.decision_id IS NULL LIMIT 1').fetchone()
+    if missing is not None:
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Decision has no Router snapshot', decisionId=missing[0])
+    # The only redundant task copy is checked before evaluation_decisions is rebuilt.
+    for decision_id, task, snapshot in connection.execute(
+        'SELECT d.decision_id,d.task,s.snapshot_json FROM evaluation_decisions d'
+        ' JOIN hmb_upgrade_router_requests s ON s.decision_id=d.decision_id'
+        ' WHERE s.round=(SELECT MAX(current.round) FROM hmb_upgrade_router_requests current'
+        ' WHERE current.decision_id=d.decision_id)'):
+        if task != json.loads(snapshot)['baseInput']['task']:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Decision task differs from its Router snapshot',
+                             decisionId=decision_id)
+    for row in connection.execute(
+        'SELECT d.task_id,d.document_json,s.snapshot_json,d.buddy_id,d.harness,d.provider,d.model,d.effort,'
+        ' d.router_index FROM router_dispatches d JOIN hmb_upgrade_router_dispatches projected'
+        ' ON projected.task_id=d.task_id JOIN hmb_upgrade_router_requests s'
+        ' ON s.decision_id=projected.decision_id AND s.round=projected.round'):
+        task_id, encoded, snapshot, buddy_id, *identity, router_index = row
+        buddy = dict(zip(_ROUTER_IDENTITY_FIELDS, identity))
+        expected = {**json.loads(snapshot)['baseInput'], 'buddy': buddy,
+                    'routerBuddyId': buddy_id, 'routerBuddy': buddy, 'routerIndex': router_index}
+        if _historical_router_document(encoded) != expected:
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Router dispatch differs from its round snapshot',
+                             taskId=task_id)
+    # input_json held either a retry's actor-free packet or its current dispatch.
+    for decision_id, encoded, snapshot, document in connection.execute(
+        'SELECT r.decision_id,r.input_json,s.snapshot_json,d.document_json FROM decision_requests r'
+        ' JOIN hmb_upgrade_router_requests s ON s.decision_id=r.decision_id'
+        ' LEFT JOIN router_dispatches d ON d.task_id=r.task_id'
+        ' WHERE r.input_json IS NOT NULL AND s.round=(SELECT MAX(current.round)'
+        ' FROM hmb_upgrade_router_requests current WHERE current.decision_id=r.decision_id)'):
+        actual = _historical_router_document(encoded)
+        if actual != json.loads(snapshot)['baseInput'] and (
+                document is None or actual != _historical_router_document(document)):
+            raise BoardError('UPGRADE_INVALID_BOARD', 'Decision input differs from its retained Router packet',
+                             decisionId=decision_id)
+    if connection.execute("SELECT 1 FROM router_outcomes WHERE plane!='routing' LIMIT 1").fetchone():
+        raise BoardError('UPGRADE_INVALID_BOARD', 'Router outcome is outside the routing plane')
+
+
+def _rebuild_table(connection, name: str, ddl: str, *, projected: bool = False,
+                   expressions: dict[str, str] | None = None) -> None:
+    previous = name + '_upgrade'
+    indexes = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='index'"
+                                 " AND tbl_name=? AND sql IS NOT NULL", (name,)).fetchall()
+    connection.execute(f'ALTER TABLE {name} RENAME TO {previous}')
+    for index_name, _ in indexes:
+        connection.execute(f'DROP INDEX {index_name}')
+    connection.execute(ddl)
+    names = [row[1] for row in connection.execute(f'PRAGMA table_info({name})')]
+    columns = ','.join(names)
+    values = ','.join((expressions or {}).get(column, column) for column in names)
+    source, rowid = ('hmb_upgrade_' + name, 'original_rowid') if projected else (previous, 'rowid')
+    connection.execute(f'INSERT INTO {name}(rowid,{columns}) SELECT {rowid},{values} FROM {source} source')
+    connection.execute(f'DROP TABLE {previous}')
+    for _, index_sql in indexes:
+        connection.execute(index_sql)
+
+
+def expected_router_fingerprints(connection) -> dict[str, str]:
+    """Hash the projected round rows with the backup's sorted JSON row format."""
+    fingerprints = {}
+    with _router_upgrade_stock(connection):
+        connection.create_function('hmb_upgrade_router_row', -1,
+                                   lambda *values: json.dumps(values, ensure_ascii=False, separators=(',', ':')))
+        try:
+            for name, columns in _ROUTER_COLUMNS.items():
+                projected = 'hmb_upgrade_' + name
+                cursor = connection.execute('SELECT hmb_upgrade_router_row(' + ','.join(columns)
+                                            + f') AS encoded FROM {projected} ORDER BY encoded COLLATE BINARY')
+                digest, separator = hashlib.sha256(), b''
+                for row in cursor:
+                    digest.update(separator)
+                    digest.update(row[0].encode())
+                    separator = b'\n'
+                fingerprints[name] = digest.hexdigest()
+        finally:
+            connection.create_function('hmb_upgrade_router_row', -1, None)
+    return fingerprints
 
 # This is the schema-28 reader's inference, consumed once rather than on reads.
 SOURCE_HOST_SQL = """
@@ -102,25 +328,6 @@ def cleanup_legacy_layout(state: Path) -> dict:
     return {'complete': not failures, 'removed': removed, 'failures': failures}
 
 
-def _rebuild_workflow_tables(connection) -> None:
-    for name, ddl in (('workflow_runs', WORKFLOW_RUNS_DDL), ('workflow_children', WORKFLOW_CHILDREN_DDL)):
-        previous = name + '_upgrade'
-        indexes = connection.execute("SELECT name,sql FROM sqlite_master WHERE type='index'"
-                                     " AND tbl_name=? AND sql IS NOT NULL", (name,)).fetchall()
-        connection.execute(f'ALTER TABLE {name} RENAME TO {previous}')
-        for index_name, _ in indexes:
-            connection.execute(f'DROP INDEX {index_name}')
-        connection.execute(ddl)
-        columns = ','.join(RETAINED_COLUMN_PROJECTIONS[name])
-        added_column, added_value = ((',source_host_id', ',' + SOURCE_HOST_SQL)
-                                     if name == 'workflow_runs' else ('', ''))
-        connection.execute(f'INSERT INTO {name}(rowid,{columns}{added_column})'
-                           f' SELECT rowid,{columns}{added_value} FROM {previous} source')
-        connection.execute(f'DROP TABLE {previous}')
-        for _, index_sql in indexes:
-            connection.execute(index_sql)
-
-
 def expected_events_fingerprint(connection, *, event_head: int) -> str:
     """Hash upgraded event rows in the same bounded sorted format as the backup."""
     def encode(*values):
@@ -159,7 +366,17 @@ def migrate_schema(state: Path) -> None:
             if version is None or version[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
                 raise BoardError('UNSUPPORTED_SCHEMA', 'Board schema cannot be upgraded')
             if version[0] == str(UPGRADE_BASE_SCHEMA):
-                _rebuild_workflow_tables(connection)
+                with _router_upgrade_stock(connection):
+                    _validate_router_stock(connection)
+                    _rebuild_table(connection, 'router_requests', ROUTER_REQUESTS_DDL, projected=True)
+                    _rebuild_table(connection, 'router_dispatches', ROUTER_DISPATCHES_DDL, projected=True)
+                    _rebuild_table(connection, 'evaluation_decisions', EVALUATION_DECISIONS_DDL)
+                    _rebuild_table(connection, 'decision_requests', DECISION_REQUESTS_DDL, projected=True)
+                    _rebuild_table(connection, 'router_outcomes', ROUTER_OUTCOMES_DDL)
+                    _rebuild_table(connection, 'model_service_concurrency', MODEL_SERVICE_CONCURRENCY_DDL)
+                _rebuild_table(connection, 'workflow_runs', WORKFLOW_RUNS_DDL,
+                               expressions={'source_host_id': SOURCE_HOST_SQL})
+                _rebuild_table(connection, 'workflow_children', WORKFLOW_CHILDREN_DDL)
                 connection.execute("UPDATE events SET payload_json=? WHERE kind='attempt.activity'",
                                    (ACTIVITY_EVENT_PAYLOAD,))
                 connection.execute('DROP INDEX events_router_claimed_idx')

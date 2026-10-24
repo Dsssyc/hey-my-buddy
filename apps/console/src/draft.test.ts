@@ -320,9 +320,9 @@ describe("model modelService concurrency", () => {
       .not.toHaveProperty("modelServiceConcurrency");
   });
 
-  it("never publishes a limit outside the 1–32 integer range", () => {
+  it("never publishes a limit outside the positive safe integer range", () => {
     const baseline = makeDraft(snapshot);
-    for (const limit of [0, 33, 2.5]) {
+    for (const limit of [0, Number.MAX_SAFE_INTEGER + 1, 2.5]) {
       const invalid = {
         ...baseline,
         modelServiceConcurrency: [{ ...baseline.modelServiceConcurrency[0], limit }],
@@ -348,7 +348,7 @@ describe("model modelService concurrency", () => {
 
   it("retains invalid local limits during a rebase instead of discarding the input", () => {
     const baseline = basedAt();
-    for (const limit of [33, NaN]) {
+    for (const limit of [Number.MAX_SAFE_INTEGER + 1, NaN]) {
       const draft = setConcurrencyLimit(baseline, flash, limit);
       const rebased = rebaseDraft(draft, baseline, tableAt(2));
       expect(rebased.conflicts.some(conflict => conflict.field === "modelServiceConcurrency")).toBe(true);

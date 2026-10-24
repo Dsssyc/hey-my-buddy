@@ -104,8 +104,12 @@ def idle_snapshot(state: Path, *, event_head: int | None = None,
         if schema == UPGRADE_BASE_SCHEMA:
             column_projections = schema_upgrade.RETAINED_COLUMN_PROJECTIONS
         snapshot = backup.database_snapshot(connection, event_head=event_head, column_projections=column_projections)
-        expected = ({'expectedEventsSha256': schema_upgrade.expected_events_fingerprint(
-            connection, event_head=snapshot['eventHead'])} if schema == UPGRADE_BASE_SCHEMA else {})
+        expected = {}
+        if schema == UPGRADE_BASE_SCHEMA:
+            fingerprints = schema_upgrade.expected_router_fingerprints(connection)
+            fingerprints['events'] = schema_upgrade.expected_events_fingerprint(
+                connection, event_head=snapshot['eventHead'])
+            expected = {'expectedFingerprints': fingerprints}
         return {**snapshot, 'schema': schema, 'retainedMetaSha256': retained_meta_hash, **expected,
                 **({'columnProjections': column_projections} if column_projections is not None else {})}
 
@@ -322,7 +326,7 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
         changed = [name for name, value in before['fingerprints'].items()
                    if not (name == 'meta' and before['schema'] != expected_schema)
                    and actual['fingerprints'].get(name) != (
-                       before['expectedEventsSha256'] if converting and name == 'events' else value)]
+                       before['expectedFingerprints'].get(name, value) if converting else value)]
         if before['retainedMetaSha256'] != actual['retainedMetaSha256'] and 'meta' not in changed:
             changed.append('meta')
         if changed:

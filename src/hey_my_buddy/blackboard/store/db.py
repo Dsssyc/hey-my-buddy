@@ -315,6 +315,46 @@ CREATE INDEX IF NOT EXISTS attempt_activity_task_idx ON attempt_activity(task_id
 """
 
 #: Published settings and discovery/decision history.
+EVALUATION_DECISIONS_DDL = """
+CREATE TABLE IF NOT EXISTS evaluation_decisions (
+    decision_id       TEXT PRIMARY KEY,
+    status            TEXT NOT NULL,
+    buddy_id        TEXT,
+    reason_code       TEXT,
+    reason_params_json TEXT,
+    note              TEXT,
+    created_at        TEXT NOT NULL,
+    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
+        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'))
+);
+"""
+
+DECISION_REQUESTS_DDL = """
+CREATE TABLE IF NOT EXISTS decision_requests (
+    decision_id            TEXT PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
+    request_id             TEXT NOT NULL UNIQUE,
+    input_fingerprint      TEXT NOT NULL,
+    task_id                TEXT,
+    attempt_id             TEXT,
+    generation             INTEGER,
+    selected_json          TEXT,
+    output_json            TEXT,
+    requested_json         TEXT NOT NULL DEFAULT '{}',
+    updated_at             TEXT NOT NULL
+);
+"""
+
+MODEL_SERVICE_CONCURRENCY_DDL = """
+CREATE TABLE IF NOT EXISTS model_service_concurrency (
+    harness           TEXT NOT NULL,
+    provider          TEXT NOT NULL,
+    model             TEXT NOT NULL,
+    concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK (concurrency_limit >= 1),
+    PRIMARY KEY (harness, provider, model)
+);
+"""
+
 EVALUATION_TABLES = (
     """
 CREATE TABLE IF NOT EXISTS catalog_observations (
@@ -377,21 +417,7 @@ CREATE TABLE IF NOT EXISTS evaluation_preferences (
 );
 CREATE INDEX IF NOT EXISTS evaluation_preferences_mode_idx ON evaluation_preferences(mode, buddy_id);
 """,
-    """
-CREATE TABLE IF NOT EXISTS evaluation_decisions (
-    decision_id       TEXT PRIMARY KEY,
-    status            TEXT NOT NULL,
-    task              TEXT NOT NULL,
-    buddy_id        TEXT,
-    reason_code       TEXT,
-    reason_params_json TEXT,
-    note              TEXT,
-    created_at        TEXT NOT NULL,
-    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
-        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
-            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object'))
-);
-""",
+    EVALUATION_DECISIONS_DDL,
     """
 CREATE TABLE IF NOT EXISTS evaluation_catalog (
     discovery_id      TEXT PRIMARY KEY,
@@ -400,24 +426,9 @@ CREATE TABLE IF NOT EXISTS evaluation_catalog (
 """,
     # Extended decision state. ``evaluation_decisions`` stays the bounded public
     # history row the console reads; this table carries the audit material (the
-    # exact persisted model input, the helper envelope and the selected buddy)
+    # helper envelope and the selected buddy)
     # that must not sit on every console refresh.
-    """
-CREATE TABLE IF NOT EXISTS decision_requests (
-    decision_id            TEXT PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
-    request_id             TEXT NOT NULL UNIQUE,
-    input_fingerprint      TEXT NOT NULL,
-    task_id                TEXT,
-    attempt_id             TEXT,
-    generation             INTEGER,
-    selected_json          TEXT,
-    input_json             TEXT,
-    input_sha256           TEXT,
-    output_json            TEXT,
-    requested_json         TEXT NOT NULL DEFAULT '{}',
-    updated_at             TEXT NOT NULL
-);
-""",
+    DECISION_REQUESTS_DDL,
     """
 CREATE INDEX IF NOT EXISTS decision_requests_task_idx ON decision_requests(task_id);
 """,
@@ -431,15 +442,7 @@ CREATE INDEX IF NOT EXISTS evaluation_decisions_created_idx
     # survives discovery marking a model unavailable, and a model service without a row
     # uses the code-owned default. Only the authenticated console writer patch in
     # ``user_policy.py`` ever writes here.
-    """
-CREATE TABLE IF NOT EXISTS model_service_concurrency (
-    harness           TEXT NOT NULL,
-    provider          TEXT NOT NULL,
-    model             TEXT NOT NULL,
-    concurrency_limit INTEGER NOT NULL DEFAULT 2 CHECK (concurrency_limit BETWEEN 1 AND 32),
-    PRIMARY KEY (harness, provider, model)
-);
-""",
+    MODEL_SERVICE_CONCURRENCY_DDL,
 )
 
 EVALUATION_SCHEMA = "\n".join(EVALUATION_TABLES)
@@ -900,47 +903,35 @@ CREATE TABLE IF NOT EXISTS workflow_host_conclusions (
 );
 """
 HOST_CONCLUSION_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS workflow_host_conclusions_run_idx ON workflow_host_conclusions(run_id)"
-ROUTER_SCHEMA = """
-CREATE TABLE IF NOT EXISTS router_settings (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
-    budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
-    retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
-);
-CREATE TABLE IF NOT EXISTS router_buddies (
-    position INTEGER PRIMARY KEY CHECK (position >= 0),
-    buddy_id TEXT NOT NULL UNIQUE
-);
+ROUTER_REQUESTS_DDL = """
 CREATE TABLE IF NOT EXISTS router_requests (
-    decision_id      TEXT NOT NULL PRIMARY KEY REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
+    decision_id      TEXT NOT NULL REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
+    round            INTEGER NOT NULL CHECK (round >= 1),
     snapshot_json    TEXT NOT NULL,
-    frozen_at        TEXT NOT NULL
+    frozen_at        TEXT NOT NULL,
+    PRIMARY KEY (decision_id, round)
 );
+"""
+
+ROUTER_DISPATCHES_DDL = """
 CREATE TABLE IF NOT EXISTS router_dispatches (
     task_id      TEXT NOT NULL PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
-    decision_id  TEXT NOT NULL REFERENCES router_requests(decision_id) ON DELETE RESTRICT,
+    decision_id  TEXT NOT NULL,
+    round        INTEGER NOT NULL CHECK (round >= 1),
     router_index INTEGER NOT NULL CHECK (router_index >= 0),
     buddy_id   TEXT NOT NULL,
     harness      TEXT NOT NULL,
     provider     TEXT NOT NULL,
     model        TEXT NOT NULL,
     effort       TEXT NOT NULL,
-    document_json TEXT NOT NULL,
-    input_sha256 TEXT NOT NULL,
-    created_at   TEXT NOT NULL
+    created_at   TEXT NOT NULL,
+    FOREIGN KEY (decision_id, round) REFERENCES router_requests(decision_id, round) ON DELETE RESTRICT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_binding_unique ON attempts(attempt_id, task_id, generation);
-CREATE TABLE IF NOT EXISTS router_claims (
-    attempt_id TEXT NOT NULL PRIMARY KEY,
-    task_id    TEXT NOT NULL REFERENCES router_dispatches(task_id) ON DELETE RESTRICT,
-    generation INTEGER NOT NULL CHECK (generation >= 1),
-    FOREIGN KEY (attempt_id, task_id, generation) REFERENCES attempts(attempt_id, task_id, generation) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
-    UNIQUE (task_id, generation)
-);
-CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_outcome_binding_unique ON attempts(attempt_id, task_id);
+"""
+
+ROUTER_OUTCOMES_DDL = """
 CREATE TABLE IF NOT EXISTS router_outcomes (
     receipt_id   TEXT NOT NULL PRIMARY KEY,
-    plane        TEXT NOT NULL CHECK (plane IN ('routing','maintenance','portrait')),
     request_id   TEXT NOT NULL,
     router_index INTEGER NOT NULL CHECK (router_index >= 0),
     buddy_id   TEXT NOT NULL,
@@ -953,6 +944,31 @@ CREATE TABLE IF NOT EXISTS router_outcomes (
     CHECK (attempt_id IS NULL OR task_id IS NOT NULL),
     FOREIGN KEY (attempt_id, task_id) REFERENCES attempts(attempt_id, task_id) ON DELETE RESTRICT
 );
+"""
+
+ROUTER_SCHEMA = f"""
+CREATE TABLE IF NOT EXISTS router_settings (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
+    budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
+    retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
+);
+CREATE TABLE IF NOT EXISTS router_buddies (
+    position INTEGER PRIMARY KEY CHECK (position >= 0),
+    buddy_id TEXT NOT NULL UNIQUE
+);
+{ROUTER_REQUESTS_DDL}
+{ROUTER_DISPATCHES_DDL}
+CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_binding_unique ON attempts(attempt_id, task_id, generation);
+CREATE TABLE IF NOT EXISTS router_claims (
+    attempt_id TEXT NOT NULL PRIMARY KEY,
+    task_id    TEXT NOT NULL REFERENCES router_dispatches(task_id) ON DELETE RESTRICT,
+    generation INTEGER NOT NULL CHECK (generation >= 1),
+    FOREIGN KEY (attempt_id, task_id, generation) REFERENCES attempts(attempt_id, task_id, generation) ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED,
+    UNIQUE (task_id, generation)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_outcome_binding_unique ON attempts(attempt_id, task_id);
+{ROUTER_OUTCOMES_DDL}
 CREATE INDEX IF NOT EXISTS router_outcomes_buddy_idx ON router_outcomes(buddy_id, event_seq);
 CREATE INDEX IF NOT EXISTS router_outcomes_task_idx ON router_outcomes(task_id, event_seq);
 CREATE INDEX IF NOT EXISTS router_outcomes_attempt_idx ON router_outcomes(attempt_id);

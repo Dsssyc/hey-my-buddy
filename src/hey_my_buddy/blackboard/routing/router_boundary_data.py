@@ -76,27 +76,21 @@ def _preflight_no_answer(connection, item, event, state, now):
 def router_trials(connection, row, *, now):
     """Every observed/dispatch item, with its own receipt; unknown stays null."""
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
-    if snapshot is None:
-        # Schema 15->16 did not backfill earlier decisions' frozen snapshots;
-        # retain this until the explicit upgrade converts or marks that stock.
-        return []
     request = _json(row["requested_json"], {})
-    facts = request if request.get("selectionRetry") else snapshot["facts"]
+    if snapshot["facts"].get("routerCalled") is False or (request.get("routingBasis") or {}).get("candidateCount") == 0:
+        return []
+    current_round = connection.execute("SELECT MAX(round) FROM router_requests WHERE decision_id=?",
+                                       (row["decision_id"],)).fetchone()[0]
+    facts = snapshot["facts"]
     events = _events(connection, row)
     if request.get("selectionRetry"):
         rerouted = next((event["seq"] for event in reversed(events)
                          if event["kind"] == "decision.selection_rerouted"), None)
         if rerouted is not None:
             events = [event for event in events if event["seq"] > rerouted]
-    inspected = ({item["index"]: item for item in request.get("selectionRetryInspections", [])}
-                 if request.get("selectionRetry") else
-                 {item["index"]: item for item in snapshot["inspections"]})
-    dispatches = router_sequence.dispatches(connection, row["decision_id"])
-    if request.get("selectionRetry"):
-        retry_prefix = f"decision:{row['request_id']}:1:"
-        dispatches = tuple(item for item in dispatches if connection.execute(
-            "SELECT request_id FROM tasks WHERE task_id=?", (item["taskId"],)
-        ).fetchone()["request_id"].startswith(retry_prefix))
+    inspected = {item["index"]: item for item in snapshot["inspections"]}
+    dispatches = tuple(item for item in router_sequence.dispatches(connection, row["decision_id"])
+                       if item["round"] == current_round)
     dispatched = {item["routerIndex"]: item for item in dispatches}
     for event in events:
         payload = event["payload"]
@@ -323,8 +317,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     if row["status"] not in ("needs-host", "failed", "cancelled") and not execution_changed:
         return None
     request = _json(row["requested_json"], {})
-    if request.get("routerCalled") is False:
-        return None
+    snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
     if (request.get("routingBasis") or {}).get("candidateCount") == 0:
         stopped, problem, helper_policy, _run = _continuation_context(connection, row, run_id, owner_run_id)
         return build_boundary(
@@ -335,10 +328,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
             target_run_id=run_id if owner_run_id and owner_run_id != run_id else None,
             helper_policy=helper_policy, shutdown_confirmed=stopped, continuation_problem=problem,
             explicit_buddy=True)
-    snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
-    if snapshot is None:
-        # Schema 15->16 did not backfill earlier decisions' frozen snapshots;
-        # retain this until the explicit upgrade converts or marks that stock.
+    if snapshot["facts"].get("routerCalled") is False:
         return None
     trials = router_trials(connection, row, now=now)
     code = row["reason_code"] or (request.get("routerProblem") or {}).get("code")
@@ -353,16 +343,11 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     else:
         kind = "router-unavailable"
     reason = reason_from_json(row["reason_code"], row["reason_params_json"])
-    if request.get("selectionRetry"):
-        facts = deepcopy(_json(row["input_json"], {}))
-        facts.update(deepcopy(request))
-        facts["inspections"] = deepcopy(request.get("selectionRetryInspections", []))
-    else:
-        facts = deepcopy(snapshot["baseInput"])
-        facts.update(deepcopy(snapshot["facts"]))
-        facts["inspections"] = deepcopy(snapshot["inspections"])
+    facts = deepcopy(snapshot["baseInput"])
+    facts.update(deepcopy(snapshot["facts"]))
+    facts["inspections"] = deepcopy(snapshot["inspections"])
     candidates = facts.get("buddies") or []
-    retry_at = _retry_at(connection, request if request.get("selectionRetry") else snapshot["facts"],
+    retry_at = _retry_at(connection, snapshot["facts"],
                          trials, now=now, kind=kind)
     stopped, problem, helper_policy, run = _continuation_context(connection, row, run_id, owner_run_id)
     dispatch_docs = router_sequence.dispatches(connection, row["decision_id"])

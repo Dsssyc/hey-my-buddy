@@ -5,7 +5,7 @@ import json
 import uuid
 
 from ..evaluation import user_policy
-from .catalog import CatalogView, canonical_payload
+from .catalog import CatalogView
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 from ...protocol.reasons import reason
@@ -59,7 +59,7 @@ def _buddy_content(row):
 
 
 def record(evaluation, discovered, observation_id=None, *, health_generation=None):
-    payload = canonical_payload(discovered)
+    payload = discovered
     if observation_id is None:
         observation_id = begin(evaluation)['observationId']
     identity = {k: v for k, v in payload.items() if k != 'discoveredAt'}

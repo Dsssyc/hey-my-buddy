@@ -5,9 +5,9 @@ import json
 import uuid
 from unittest.mock import patch
 
-from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.blackboard.routing import router, router_sequence
 from hey_my_buddy.protocol import schemas
-from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from protocol.fixtures import mock_readonly
 from support import BoardTestCase
@@ -43,7 +43,7 @@ class SingleRouterRequestTests(BoardTestCase):
         view = self.audit(board, response)
         self.assertEqual(response["status"], "queued")
         identity = {key: CATALOG_BUDDY[key] for key in schemas.BUDDY_FIELDS}
-        for document in (view, view["requested"], view["input"]):
+        for document in (view, view["input"]):
             self.assertEqual(document["routerBuddyIds"], [BUDDY_ID])
             self.assertEqual(document["routerIdentities"], [identity])
             self.assertEqual(document["routingMode"], "review")
@@ -51,9 +51,11 @@ class SingleRouterRequestTests(BoardTestCase):
             self.assertNotIn("fallback", document)
             self.assertNotIn("requestedRoutingMode", document)
         self.assertEqual(view["input"]["buddy"], identity)
+        self.assertNotIn("routerBuddyIds", view["requested"])
+        self.assertNotIn("budget", view["requested"])
         self.assertEqual(view["routerBuddyId"], BUDDY_ID)
         self.assertEqual(view["routerBuddy"], identity)
-        self.assertEqual(view["inputSha256"], sha256_text(canonical_json(view["input"])))
+        self.assertNotIn("inputSha256", view)
         self.readonly_start.assert_not_called()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
@@ -70,7 +72,8 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertEqual(view["routerBuddyId"], BUDDY_ID)
         self.assertEqual(view["routingMode"], "fast")
         self.assertEqual(view["budget"], router.FAST_BUDGET)
-        self.assertEqual(view["requested"]["routerBudgetSeconds"], 60)
+        self.assertNotIn("routerBudgetSeconds", view["requested"])
+        self.assertEqual(view["input"]["budget"]["timeoutSeconds"], 60)
         self.assertNotIn("executionWorkspace", view["input"])
         self.assertNotIn("evidence", view["input"])
         self.assertNotIn("file", view["input"]["outputSchema"]["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
@@ -91,7 +94,8 @@ class SingleRouterRequestTests(BoardTestCase):
         view = self.audit(board, self.request(board))
         self.assertEqual(view["budget"], router.budget())
         with board.store.db.read() as connection:
-            resolution = router.current_router(connection, frozen=view["requested"])
+            snapshot = router_sequence.request_snapshot(connection, view["decisionId"])["facts"]
+            resolution = router.current_router(connection, frozen=snapshot)
         self.assertEqual(resolution.buddy_id, BUDDY_ID)
         self.assertIsNone(resolution.problem)
         self.assertEqual(resolution.facts["budget"]["timeoutSeconds"], 300)
@@ -209,9 +213,10 @@ class SingleRouterRequestTests(BoardTestCase):
     def test_frozen_current_router_keeps_snapshot_after_settings_changes(self):
         board = self.board()
         self.seed(board)
-        snapshot = self.audit(board, self.request(board))["requested"]
+        decision = self.audit(board, self.request(board))
         self.configure(board, routerBuddyIds=[SECOND_BUDDY_ID], defaultRoutingMode="fast", routingBudget="brief")
         with board.store.db.read() as connection:
+            snapshot = router_sequence.request_snapshot(connection, decision["decisionId"])["facts"]
             resolution = router.current_router(connection, frozen=snapshot)
         self.assertEqual(resolution.buddy_id, BUDDY_ID)
         self.assertIsNone(resolution.problem)
@@ -224,8 +229,9 @@ class SingleRouterRequestTests(BoardTestCase):
     def test_frozen_current_router_keeps_identity_and_rechecks_health(self):
         board = self.board()
         self.seed(board)
-        snapshot = self.audit(board, self.request(board))["requested"]
+        decision = self.audit(board, self.request(board))
         with board.store.db.write() as connection:
+            snapshot = router_sequence.request_snapshot(connection, decision["decisionId"])["facts"]
             connection.execute("UPDATE buddies SET effort='high' WHERE buddy_id=?", (BUDDY_ID,))
             resolution = router.current_router(connection, frozen=snapshot)
             self.assertEqual(resolution.buddy["effort"], "off")
@@ -248,22 +254,26 @@ class SingleRouterRequestTests(BoardTestCase):
         self.assertNotIn("fallback", view)
         self.assertNotIn("requestedRoutingMode", view)
 
-    def test_complete_input_byte_limit_includes_snapshot_and_schema(self):
+    def test_selection_request_accepts_task_beyond_old_router_limit(self):
         board = self.board()
         self.seed(board)
-        ordinary = self.audit(board, self.request(board))
-        document = ordinary["input"]
-        # The old assembly fits this ceiling; the final schema/snapshot
-        # additions do not. Admission must check the entire actual packet.
-        limit = len(canonical_json(document).encode("utf-8")) - 1
-        with patch("hey_my_buddy.blackboard.routing.decision.MAX_DECISION_INPUT_BYTES", limit):
-            response = self.request(board, requestId="bounded-packet")
+        response = board.call("selection_request", {"requestId": "large-selection",
+                                                    "task": "x" * 9000})
         view = self.audit(board, response)
-        self.assertEqual(view["status"], "needs-host")
-        self.assertEqual(view["reason"]["code"], "router-input-too-large")
-        self.assertGreater(view["reason"]["params"]["bytes"], limit)
-        self.assertIsNone(view["input"])
-        self.assertIsNone(view["runId"])
+        self.assertEqual(view["status"], "queued")
+        self.assertEqual(view["input"]["task"], "x" * 9000)
+        self.assertIsNotNone(view["runId"])
+
+    def test_selection_request_uses_shared_one_mib_task_bound(self):
+        board = self.board()
+        self.seed(board)
+        task = "x" * schemas.MAX_TASK_BYTES
+        accepted = board.call("selection_request", {"requestId": "exact-one-mib", "task": task})
+        self.assertEqual(accepted["status"], "queued")
+        self.assertEqual(self.audit(board, accepted)["input"]["task"], task)
+        with self.assertRaises(BoardError) as raised:
+            board.call("selection_request", {"requestId": "over-one-mib", "task": task + "x"})
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
 
     def test_admission_failure_rolls_back_request_task_and_event_together(self):
         board = self.board()

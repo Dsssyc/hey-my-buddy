@@ -14,7 +14,7 @@ import unittest
 
 from support import BoardTestCase
 from hey_my_buddy.blackboard.routing import router_history, router_sequence
-from hey_my_buddy.blackboard.store.db import Database, canonical_json, sha256_text
+from hey_my_buddy.blackboard.store.db import Database, canonical_json
 from hey_my_buddy.errors import BoardError
 
 T0 = "2026-01-01T00:00:00.000Z"
@@ -72,8 +72,8 @@ class RouterSequenceTestCase(BoardTestCase):
         self.board_ = self.board()
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO evaluation_decisions(decision_id,status,task,"
-                "created_at) VALUES('dec-1','queued','task',?)", (T0,))
+                "INSERT INTO evaluation_decisions(decision_id,status,"
+                "created_at) VALUES('dec-1','queued',?)", (T0,))
             db.execute(
                 "INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,"
                 "requested_json,updated_at)"
@@ -140,9 +140,10 @@ class FreezeRequestTests(RouterSequenceTestCase):
         self.assertIn("fix the parser", stored)
         self.assertNotIn("mutated", stored)
 
-    def test_unknown_decision_reads_none(self):
+    def test_unknown_decision_snapshot_is_missing(self):
         with self.board_.store.db.read() as db:
-            self.assertIsNone(router_sequence.request_snapshot(db, "dec-missing"))
+            with self.assertRaises(KeyError):
+                router_sequence.request_snapshot(db, "dec-missing")
             self.assertIsNone(router_sequence.dispatch(db, "task-missing"))
 
 
@@ -150,11 +151,11 @@ class ReserveDispatchTests(RouterSequenceTestCase):
     def reserved(self, task_id: str, *, buddy=ALPHA, document: dict | None = None, router_index: int = 0,
                  now: str = T0):
         with self.board_.store.db.write() as db:
-            if router_sequence.request_snapshot(db, "dec-1") is None:
+            if not db.execute("SELECT 1 FROM router_requests WHERE decision_id='dec-1'").fetchone():
                 router_sequence.freeze_request(db, "dec-1", snapshot=snapshot_dict(), now=T0)
             return router_sequence.reserve_dispatch(
                 db, decision_id="dec-1", task_id=task_id, router_index=router_index,
-                buddy=buddy, document=document or alpha_document(), now=now)
+                buddy=buddy, now=now)
 
     def test_reserve_records_the_complete_identity_document_and_hash(self):
         stored = self.reserved("task-alpha")
@@ -165,25 +166,24 @@ class ReserveDispatchTests(RouterSequenceTestCase):
         self.assertEqual(stored["buddy"], {key: ALPHA[key] for key in ("harness", "provider", "model", "effort")})
         self.assertEqual(stored["document"]["routerBuddyId"], ALPHA["buddyId"])
         self.assertEqual(stored["createdAt"], T0)
-        self.assertEqual(stored["inputSha256"], sha256_text(canonical_json(alpha_document())))
+        self.assertNotIn("inputSha256", stored)
 
     def test_two_dispatches_of_one_request_keep_their_own_documents_and_hashes(self):
         alpha = self.reserved("task-alpha")
-        bravo = self.reserved("task-bravo", buddy=BRAVO, document=bravo_document(), router_index=1)
-        self.assertNotEqual(alpha["inputSha256"], bravo["inputSha256"])
+        bravo = self.reserved("task-bravo", buddy=BRAVO, router_index=1)
+        self.assertNotEqual(alpha["document"], bravo["document"])
         with self.board_.store.db.read() as db:
             first = router_sequence.dispatch(db, "task-alpha")
             first["document"]["task"] = "mutated"
-            first["inputSha256"] = "mutated"
             again = router_sequence.dispatch(db, "task-alpha")
         self.assertEqual(again["document"]["task"], "fix the parser")
-        self.assertEqual(again["inputSha256"], alpha["inputSha256"])
+        self.assertEqual(again["document"], alpha["document"])
         stored = self.stored("router_dispatches", "task_id", "task-alpha")
         self.assertNotIn("mutated", stored)
 
     def test_dispatches_follow_router_index_when_task_ids_have_reverse_order(self):
         first = self.reserved("task-bravo")
-        second = self.reserved("task-alpha", buddy=BRAVO, document=bravo_document(), router_index=1)
+        second = self.reserved("task-alpha", buddy=BRAVO, router_index=1)
         with self.board_.store.db.read() as db:
             dispatches = router_sequence.dispatches(db, "dec-1")
             self.assertEqual([item["taskId"] for item in dispatches], ["task-bravo", "task-alpha"])
@@ -207,7 +207,7 @@ class RecordClaimTests(RouterSequenceTestCase):
                                   "decisionId": "dec-1", "routerIndex": 0, "buddyId": ALPHA["buddyId"]})
         events = self.events()
         self.assertEqual(len(events), 1)
-        self.assertEqual(events[0], {"buddyId": ALPHA["buddyId"], "plane": "routing", "requestId": "pick-1",
+        self.assertEqual(events[0], {"buddyId": ALPHA["buddyId"], "requestId": "pick-1",
                                      "routerIndex": 0, "taskId": "task-alpha", "attemptId": "att-1",
                                      "generation": 1})
         # The binding is a fresh copy; mutating it touches nothing stored.
@@ -221,7 +221,7 @@ class RecordClaimTests(RouterSequenceTestCase):
             router_sequence.freeze_request(db, "dec-1", snapshot=snapshot_dict(), now=T0)
             router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-alpha",
                                              router_index=0, buddy=ALPHA,
-                                             document=alpha_document(), now=T0)
+                                             now=T0)
 
     def test_claim_rolls_back_with_its_caller_transaction(self):
         self.reserved_claim_setup()
@@ -239,10 +239,10 @@ class RelationalBindingTests(RouterSequenceTestCase):
     def reserve(self, db):
         router_sequence.freeze_request(db, "dec-1", snapshot=snapshot_dict(), now=T0)
         router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-alpha", router_index=0,
-                                         buddy=ALPHA, document=alpha_document(), now=T0)
+                                         buddy=ALPHA, now=T0)
 
     def outcome(self, db, *, task_id="task-alpha", attempt_id=None):
-        return router_history.record_outcome(db, buddy_id=ALPHA["buddyId"], plane="routing",
+        return router_history.record_outcome(db, buddy_id=ALPHA["buddyId"],
             request_id="pick-1", task_id=task_id, attempt_id=attempt_id, outcome="answered", code=None,
             phase="result", facts={"routerIndex":0}, now=T0)
 
@@ -256,7 +256,7 @@ class RelationalBindingTests(RouterSequenceTestCase):
                     if task_id == "missing-task":
                         router_sequence.freeze_request(db, decision_id, snapshot=snapshot_dict(), now=T0)
                     router_sequence.reserve_dispatch(db, decision_id=decision_id, task_id=task_id,
-                        router_index=0, buddy=ALPHA, document=alpha_document(), now=T0)
+                        router_index=0, buddy=ALPHA, now=T0)
         self.assertIsNone(self.stored("router_requests", "decision_id", "dec-1"))
         self.assertIsNone(self.stored("router_dispatches", "task_id", "task-alpha"))
 
@@ -264,17 +264,17 @@ class RelationalBindingTests(RouterSequenceTestCase):
         with self.board_.store.db.write() as db:
             self.reserve(db)
             second = router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-bravo", router_index=0,
-                                                      buddy=BRAVO, document=bravo_document(), now=T0)
+                                                      buddy=BRAVO, now=T0)
         with self.board_.store.db.read() as db:
             first = router_sequence.dispatch(db, "task-alpha")
             self.assertEqual(router_sequence.dispatch(db, "task-bravo"), second)
             self.assertEqual(first["document"], alpha_document())
-            self.assertEqual(second["document"], bravo_document())
-            self.assertNotEqual(first["inputSha256"], second["inputSha256"])
+            self.assertEqual(second["document"], {**bravo_document(), "routerIndex": 0})
+            self.assertNotEqual(first["document"], second["document"])
         with self.assertRaises(sqlite3.IntegrityError):
             with self.board_.store.db.write() as db:
                 router_sequence.reserve_dispatch(db, decision_id="dec-1", task_id="task-alpha", router_index=0,
-                                                 buddy=BRAVO, document=bravo_document(), now=T0)
+                                                 buddy=BRAVO, now=T0)
         with self.board_.store.db.read() as db:
             self.assertEqual(router_sequence.dispatch(db, "task-alpha"), first)
 
@@ -320,7 +320,7 @@ class RelationalBindingTests(RouterSequenceTestCase):
             # can reject this row; every FK already has its parent.
             with self.assertRaisesRegex(sqlite3.IntegrityError,
                                         r"UNIQUE constraint failed: router_outcomes.event_seq"):
-                db.execute("INSERT INTO router_outcomes SELECT 'another-receipt',plane,request_id,router_index,"
+                db.execute("INSERT INTO router_outcomes SELECT 'another-receipt',request_id,router_index,"
                            "buddy_id,phase,task_id,attempt_id,outcome,code,event_seq FROM router_outcomes")
         with self.board_.store.db.read() as db:
             self.assertEqual([row[0] for row in db.execute("SELECT event_seq FROM router_outcomes")], [first['seq']])

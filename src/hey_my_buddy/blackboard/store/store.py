@@ -774,10 +774,9 @@ class BoardStore:
             for row in rows
             if row["provider"] and row["model"] and row["harness"] in schemas.CODING_HARNESSES
         }
-        for row in connection.execute("SELECT r.input_json FROM decision_requests r JOIN tasks t ON t.task_id=r.task_id WHERE t.state='queued'"):
-            buddy = (json.loads(row["input_json"]) if row["input_json"] else {}).get("buddy") or {}
-            if all(buddy.get(key) for key in ("harness", "provider", "model")):
-                model_services.add(tuple(buddy[key] for key in ("harness", "provider", "model")))
+        for row in connection.execute("SELECT d.harness,d.provider,d.model FROM router_dispatches d"
+                                      " JOIN tasks t ON t.task_id=d.task_id WHERE t.state='queued'"):
+            model_services.add((row["harness"], row["provider"], row["model"]))
         return model_services
 
     def _full_model_services(self, connection: sqlite3.Connection) -> set[tuple[str, str, str]]:

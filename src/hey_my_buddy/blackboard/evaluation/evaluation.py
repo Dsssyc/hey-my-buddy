@@ -56,7 +56,9 @@ class EvaluationStore:
                 self._decision_view(row)
                 for row in connection.execute(
                     "SELECT d.*,"
-                    " r.task_id AS run_id, r.updated_at AS updated_at"
+                    " r.task_id AS run_id, r.updated_at AS updated_at,"
+                    " (SELECT snapshot_json FROM router_requests s WHERE s.decision_id=d.decision_id"
+                    " ORDER BY round DESC LIMIT 1) AS snapshot_json"
                     " FROM evaluation_decisions d LEFT JOIN decision_requests r ON r.decision_id = d.decision_id"
                     " ORDER BY d.created_at DESC, d.decision_id DESC LIMIT ?",
                     (MAX_DECISION_PAGE,),
@@ -162,7 +164,7 @@ class EvaluationStore:
         view = {
             "decisionId": row["decision_id"],
             "status": row["status"],
-            "task": row["task"],
+            "task": json.loads(row["snapshot_json"])["baseInput"]["task"],
             "buddyId": row["buddy_id"],
             "reason": reason_from_json(row["reason_code"], row["reason_params_json"]),
             "note": row["note"],

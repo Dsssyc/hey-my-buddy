@@ -34,6 +34,7 @@ BASE_SCHEMA = 28
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
 AT = "2026-01-01T00:00:00.000Z"
 PROFILES = ["codex:openai:fixture-alpha:high", "codex:openai:fixture-beta:high"]
+THIRD_CANDIDATE = "codex:openai:fixture-gamma:high"
 LEGACY_PRIVATE_FILES = {
     **{f"harnesses/{harness}/goals/fixture-retired/native-history.jsonl":
        '{"retired":"private native history"}\n' for harness in ("codex", "claude", "zcode", "dsh")},
@@ -141,12 +142,14 @@ def populate(args):
                "discoveredAt": AT, "discoveries": [{"harness": "codex", "status": "complete", "accountStatus": "confirmed"}],
                "providers": [{"harness": "codex", "provider": "openai", "efforts": ["high"],
                               "models": [{"id": "fixture-alpha", "efforts": ["high"]},
-                                         {"id": "fixture-beta", "efforts": ["high"]}]}]}
+                                         {"id": "fixture-beta", "efforts": ["high"]},
+                                         {"id": "fixture-gamma", "efforts": ["high"]}]}]}
     catalog_file = work / "catalog.json"
     catalog_file.write_bytes((json_text(catalog) + "\n").encode("utf-8"))
     os.environ["HMB_MODEL_CATALOG_FILE"] = str(catalog_file)
     operations = []
     ids = {}
+    task_only_stock = {}
     inquiry_stock = {}
     counter = itertools.count(1)
     preimages = {}
@@ -248,7 +251,7 @@ def populate(args):
                                    "nativeThreadId": "fixture-session-" + label, "nativeTurnId": "fixture-turn-" + label,
                                    "finalItemId": "fixture-item", "eventSeq": 2}}
 
-        def answer_router(claim, outcome):
+        def answer_router(claim, outcome, *, selected_buddy=PROFILES[0]):
             document = claim["decisionInput"]
             identity = {"sessionId": "fixture-router-" + outcome}
             binding = {"harness": "codex", "taskId": claim["task"]["taskId"],
@@ -259,14 +262,14 @@ def populate(args):
                       "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                       "inputVerification": {"unchanged": True, "snapshotSha256": "fixture-digest",
                           "manifestSha256": (document.get("executionWorkspace") or {}).get("manifestSha256")},
-                      "decision": {"buddyId": PROFILES[0], "note": "fixture routing answer", "evidence": []}}
+                      "decision": {"buddyId": selected_buddy, "note": "fixture routing answer", "evidence": []}}
             if outcome == "no_answer":
                 result.update(status="error", code="fixture-router-no-answer")
             report(claim, nonce, status="ok" if outcome == "answered" else "failed", result=result)
 
         call("harness_set", {"harness": "codex", "path": None})
         call("model_catalog_refresh", {"requestId": "fixture-catalog"})
-        publish(buddySettings=[{"buddyId": profile, "enabled": True} for profile in PROFILES])
+        publish(buddySettings=[{"buddyId": profile, "enabled": True} for profile in [*PROFILES, THIRD_CANDIDATE]])
         publish(preferenceChanges=[{"buddyId": PROFILES[0], "mode": "prefer", "note": "fixture preference"},
                                    {"buddyId": PROFILES[1], "mode": "exclude", "note": "fixture exclusion"}],
                 modelServiceConcurrency=[{"harness": "codex", "provider": "openai", "model": "fixture-alpha", "limit": 3}])
@@ -285,6 +288,89 @@ def populate(args):
                                                  "task": "fixture routing " + outcome})
             claim = admit(nonce, selected["runId"])
             answer_router(claim, outcome)
+        # The first Router answer becomes ineligible while its admitted call is
+        # running. Two legal coding candidates remain, so the released writer
+        # records a second, genuinely dispatched Router round for this decision.
+        clock[0] = "2026-01-01T00:00:48.000Z"  # Let the prior no-answer's 47-second skip window expire.
+        selected = call("selection_request", {"requestId": "fixture-routing-retry",
+                                             "task": "fixture routing retry"})
+        first_claim = admit(nonce, selected["runId"])
+        publish(preferenceChanges=[{"buddyId": PROFILES[0], "mode": "exclude", "note": "fixture changed bound"}],
+                configuration={"routerBuddyIds": [PROFILES[1]]})
+        answer_router(first_claim, "answered")
+        with store.db.read() as connection:
+            retry = connection.execute("SELECT task_id,requested_json FROM decision_requests WHERE request_id=?",
+                                       ("fixture-routing-retry",)).fetchone()
+            assert json.loads(retry["requested_json"])["selectionRetry"] is True
+            assert retry["task_id"] != selected["runId"]
+        second_claim = admit(nonce, retry["task_id"])
+        answer_router(second_claim, "answered", selected_buddy=PROFILES[1])
+        # fd9f04e8's writer cannot emit this pre-0.46 dispatch-document form.
+        # Preserve one historical exclusion representation as explicit stock,
+        # updating its dependent digest and the mutable current input together.
+        with store.db.write() as connection:
+            task_id = retry["task_id"]
+            dispatch = connection.execute("SELECT document_json FROM router_dispatches WHERE task_id=?",
+                                          (task_id,)).fetchone()
+            document = json.loads(dispatch["document_json"])
+            excluded = document["routingBasis"]["excludedBuddies"]
+            assert len(excluded) == 1 and excluded[0]["buddyId"] == PROFILES[0]
+            excluded[0].pop("note")
+            excluded[0]["reason"] = ""
+            encoded = json_text(document)
+            input_sha = digest(encoded.encode("utf-8"))
+            connection.execute("UPDATE router_dispatches SET document_json=?,input_sha256=? WHERE task_id=?",
+                               (encoded, input_sha, task_id))
+            connection.execute("UPDATE decision_requests SET input_json=?,input_sha256=? WHERE request_id=?",
+                               (encoded, input_sha, "fixture-routing-retry"))
+            started = connection.execute("SELECT seq,payload_json FROM events WHERE kind='decision.started' "
+                                         "AND json_extract(payload_json,'$.attemptId')=?",
+                                         (second_claim["attempt"]["attemptId"],)).fetchone()
+            assert started is not None
+            payload = json.loads(started["payload_json"])
+            payload["inputSha256"] = input_sha
+            connection.execute("UPDATE events SET payload_json=? WHERE seq=?", (json_text(payload), started["seq"]))
+
+        # The released writer omitted router_requests for a decision admitted
+        # with zero or one legal candidate. These are direct, task-only rounds.
+        publish(preferenceChanges=[{"buddyId": PROFILES[0], "mode": "exclude", "note": "fixture initial zero"},
+                                   {"buddyId": PROFILES[1], "mode": "exclude", "note": "fixture initial zero"},
+                                   {"buddyId": THIRD_CANDIDATE, "mode": "exclude", "note": "fixture initial zero"}])
+        initial_zero = call("selection_request", {"requestId": "fixture-initial-zero",
+                                                  "task": "fixture initial zero candidates"})
+        assert initial_zero["status"] == "needs-host" and initial_zero["runId"] is None
+        task_only_stock["initialZero"] = initial_zero["decisionId"]
+        publish(preferenceChanges=[{"buddyId": PROFILES[0], "mode": None}])
+        initial_sole = call("selection_request", {"requestId": "fixture-initial-sole",
+                                                  "task": "fixture initial sole candidate"})
+        assert initial_sole["status"] == "completed" and initial_sole["runId"] is None
+        task_only_stock["initialSole"] = initial_sole["decisionId"]
+
+        # A selected answer can become stale while its Router call is running.
+        # With zero or one newly legal candidate the released retry writer
+        # records selectionRetry, but dispatches no second Router task.
+        for label, excluded in (("retryZero", [*PROFILES, THIRD_CANDIDATE]),
+                                ("retrySole", [*PROFILES])):
+            publish(preferenceChanges=[{"buddyId": buddy_id, "mode": None}
+                                       for buddy_id in [*PROFILES, THIRD_CANDIDATE]])
+            request_id = "fixture-" + label.lower()
+            selected = call("selection_request", {"requestId": request_id,
+                                                 "task": "fixture " + label})
+            first_claim = admit(nonce, selected["runId"])
+            publish(preferenceChanges=[{"buddyId": buddy_id, "mode": "exclude",
+                                        "note": "fixture " + label} for buddy_id in excluded])
+            answer_router(first_claim, "answered")
+            with store.db.read() as connection:
+                row = connection.execute("SELECT task_id,requested_json FROM decision_requests WHERE decision_id=?",
+                                         (selected["decisionId"],)).fetchone()
+                assert json.loads(row["requested_json"])["selectionRetry"] is True
+                assert row["task_id"] == (None if label == "retrySole" else selected["runId"])
+                assert connection.execute("SELECT COUNT(*) FROM router_dispatches WHERE decision_id=?",
+                                          (selected["decisionId"],)).fetchone()[0] == 1
+            task_only_stock[label] = selected["decisionId"]
+
+        publish(preferenceChanges=[{"buddyId": PROFILES[0], "mode": "prefer", "note": "fixture preference"}],
+                configuration={"routerBuddyIds": PROFILES})
         publish(preferenceChanges=[{"buddyId": PROFILES[1], "mode": "exclude", "note": "fixture exclusion"}],
                 configuration={"routerBuddyIds": PROFILES})
         for label in ("delivered", "accepted", "failed", "cancelled"):
@@ -617,7 +703,7 @@ def populate(args):
         operations.append({"operation": "workflow.suggest", "params": suggestion, "response": response})
         call("workflow_suggest", {"runId": helper_parent["runId"], "body": "Fixture agent suggestion"})
         call("reminder_settings_set", {"silenceSeconds": 60}, human=True)
-        clock[0] = "2026-01-01T00:01:00.000Z"
+        clock[0] = "2026-01-01T00:02:00.000Z"
         response = reminders.collect(store)
         operations.append({"operation": "reminders.collect", "params": {"now": clock[0]}, "response": response})
         helper_manifest = helper_claim["turn"]["input"]["executionWorkspace"]
@@ -748,8 +834,8 @@ def populate(args):
             "sourceTree": subprocess.check_output(["git", "rev-parse", BASE + "^{tree}"],
                                                   text=True, encoding="utf-8").strip(),
             "workspaceInputCommit": WORKSPACE_INPUT,
-            "generationCommand": "python packaging/generate-upgrade-fixture.py " +
-                ("--python <prepared-python>" if args.python else "--offline") +
+            "generationCommand": "python packaging/generate-upgrade-fixture.py" +
+                (" --python <prepared-python>" if args.python else " --offline" if args.offline else "") +
                 " --work-dir " + str(work.relative_to(Path(__file__).resolve().parents[1])) +
                 " --output-dir tests/fixtures/upgrade-base",
             "dependencyMode": "prepared-read-only-interpreter" if args.python else "base-frozen-uv-environment",
@@ -757,11 +843,12 @@ def populate(args):
             "sourceFiles": {str(p.relative_to(source)): digest(p.read_bytes()) for p in
                             [*sorted((source / "src/hey_my_buddy").rglob("*.py")), source / "pyproject.toml",
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
-            "stableIds": ids, "stockIds": stock_ids, "inquiryStock": inquiry_stock,
+            "stableIds": ids, "stockIds": stock_ids, "taskOnlyStock": task_only_stock,
+            "inquiryStock": inquiry_stock,
             "tableRowCounts": row_counts,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Every stored row comes from a base writer; no SQL seed remains. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. Stored rows come from base writers; one completed retry dispatch and its dependent current-input and event digests are patched to represent the pre-0.46 excludedBuddies reason-empty form that fd9f04e8 cannot emit. No SQL seed creates a row. Text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
             "pythonVersion": sys.version.split()[0],
             "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",
@@ -868,6 +955,34 @@ def verify(output, restored):
         assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == str(BASE_SCHEMA)
         assert connection.execute("SELECT COUNT(*) FROM events WHERE kind='attempt.activity'").fetchone()[0] > 0
         assert connection.execute("SELECT COUNT(*) FROM events WHERE kind='router.claimed'").fetchone()[0] > 0
+        retry = connection.execute("SELECT decision_id,task_id,requested_json FROM decision_requests "
+                                   "WHERE request_id='fixture-routing-retry'").fetchone()
+        assert json.loads(retry[2])["selectionRetry"] is True
+        dispatches = connection.execute("SELECT d.task_id,d.document_json,t.request_id FROM router_dispatches d "
+                                        "JOIN tasks t ON t.task_id=d.task_id WHERE d.decision_id=? "
+                                        "ORDER BY t.request_id", (retry[0],)).fetchall()
+        assert [row[2] for row in dispatches] == ["decision:fixture-routing-retry:0:0",
+                                                     "decision:fixture-routing-retry:1:0"]
+        assert retry[1] == dispatches[1][0]
+        assert json.loads(dispatches[1][1])["routingBasis"]["excludedBuddies"][0]["reason"] == ""
+        for label, decision_id in metadata["taskOnlyStock"].items():
+            row = connection.execute(
+                "SELECT d.status,d.task,r.requested_json,r.task_id,r.input_json FROM evaluation_decisions d"
+                " JOIN decision_requests r ON r.decision_id=d.decision_id WHERE d.decision_id=?",
+                (decision_id,)).fetchone()
+            assert row is not None and row[1] == json.loads(row[2])["task"]
+            assert connection.execute("SELECT COUNT(*) FROM router_requests WHERE decision_id=?",
+                                      (decision_id,)).fetchone()[0] == (0 if label.startswith("initial") else 1)
+            assert connection.execute("SELECT COUNT(*) FROM router_dispatches WHERE decision_id=?",
+                                      (decision_id,)).fetchone()[0] == (0 if label.startswith("initial") else 1)
+            assert json.loads(row[2])["routingBasis"]["candidateCount"] == (1 if label.endswith("Sole") else 0)
+            assert bool(json.loads(row[2]).get("selectionRetry")) == label.startswith("retry")
+            if label == "retryZero":
+                assert row[0] == "needs-host" and row[3] is not None and row[4] is not None
+            elif label == "retrySole":
+                assert row[0] == "completed" and row[3] is None and row[4] is None
+            else:
+                assert row[3] is None and row[4] is None
         assert connection.execute("SELECT COUNT(*) FROM macro_tasks").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM provider_cooling").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM macro_task_deletions").fetchone()[0] == 1

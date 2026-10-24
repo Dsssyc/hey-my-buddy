@@ -252,7 +252,11 @@ class SoleCandidateWorkflowTests(WorkflowTestCase):
         self.assertEqual(submitted["routing"]["constraints"], {})
         decision = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"]})["decision"]
         self.assertIsNone(decision["runId"])
-        self.assertEqual(decision["taskReference"]["bytes"], len(task.encode()))
+        self.assertEqual(decision["task"], task)
+        from hey_my_buddy.blackboard.routing import router_sequence
+        with board.store.db.read() as connection:
+            self.assertEqual(router_sequence.request_snapshot(connection, decision["decisionId"])
+                             ["baseInput"]["task"], task)
         with board.store.db.read() as connection:
             micro_task = json.loads(connection.execute("SELECT spec_json FROM tasks").fetchone()[0])
             self.assertEqual(micro_task["task"], task)

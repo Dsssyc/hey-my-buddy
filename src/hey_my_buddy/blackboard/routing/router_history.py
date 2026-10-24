@@ -1,7 +1,6 @@
 """Router outcome facts: idempotent recording and read-only per-buddy projections.
 
-One entry point records ``router.answered``/``router.no_answer`` facts for every
-Router plane (routing, maintenance, portrait); reads project only those receipts.
+The routing plane records ``router.answered``/``router.no_answer`` receipts.
 
 Skip windows come from the last recorded no-answer plus the current retry interval;
 a later valid answered (including a valid abstention) removes it. Reads project
@@ -18,7 +17,6 @@ from datetime import datetime, timedelta, timezone
 from ..store.db import canonical_json, utc_now
 from ...errors import BoardError
 
-PLANES = ("routing", "maintenance", "portrait")
 OUTCOMES = ("answered", "no_answer")
 #: Attempt states that still own capacity: active execution or unconfirmed stop.
 #: Missing PIDs and expired leases never prove a stop, so ``uncertain`` stays here.
@@ -49,12 +47,12 @@ def _append_event(connection, *, kind: str, task_id: str | None, attempt_id: str
     return seq
 
 
-def record_outcome(connection, *, buddy_id: str, plane: str, request_id: str, task_id: str | None,
+def record_outcome(connection, *, buddy_id: str, request_id: str, task_id: str | None,
                    attempt_id: str | None, outcome: str, code: str | None, phase: str,
                    facts: dict, now: str) -> dict:
-    """Record one idempotent Router outcome fact for any plane; never executes anything.
+    """Record one idempotent routing outcome fact; never executes anything.
 
-    The idempotency key is plane/requestId/selectionRetry/routerIndex/phase/taskId/attemptId/outcome
+    The idempotency key is routing/requestId/selectionRetry/routerIndex/phase/taskId/attemptId/outcome
     with ``routerIndex`` and the retry marker taken from ``facts``; its receipt lives in ``router_outcomes`` and
     commits in the caller's transaction together with the event. A replay with the
     same facts returns the original record, different facts raise ``CONFLICT``.
@@ -63,27 +61,27 @@ def record_outcome(connection, *, buddy_id: str, plane: str, request_id: str, ta
     """
     router_index = facts["routerIndex"]
     selection_retry = facts.get("selectionRetry", False)
-    payload = {"plane": plane, "requestId": request_id, "routerIndex": router_index,
+    payload = {"requestId": request_id, "routerIndex": router_index,
                "buddyId": buddy_id, "phase": phase, "taskId": task_id,
                "attemptId": attempt_id, "outcome": outcome, "code": code}
     if selection_retry:
         payload["selectionRetry"] = True
     key = hashlib.sha256(canonical_json(
-        [plane, request_id, selection_retry, router_index, phase, task_id, attempt_id, outcome]).encode("utf-8")).hexdigest()
+        ["routing", request_id, selection_retry, router_index, phase, task_id, attempt_id, outcome]).encode("utf-8")).hexdigest()
     kind = f"router.{outcome}"
-    stored = connection.execute("SELECT plane,request_id,router_index,buddy_id,phase,task_id,attempt_id,"
+    stored = connection.execute("SELECT request_id,router_index,buddy_id,phase,task_id,attempt_id,"
                                 "outcome,code,event_seq FROM router_outcomes WHERE receipt_id=?", (key,)).fetchone()
     if stored is not None:
-        expected = (plane, request_id, router_index, buddy_id, phase, task_id, attempt_id, outcome, code)
+        expected = (request_id, router_index, buddy_id, phase, task_id, attempt_id, outcome, code)
         if tuple(stored)[:-1] != expected:
             raise BoardError("CONFLICT", "router outcome facts conflict with the recorded receipt",
                              buddyId=buddy_id, requestId=request_id)
         return {"recorded": False, "seq": int(stored[-1]), "event": kind}
     seq = _append_event(connection, kind=kind, task_id=task_id, attempt_id=attempt_id,
                         payload=payload, now=now)
-    connection.execute("INSERT INTO router_outcomes(receipt_id,plane,request_id,router_index,buddy_id,phase,"
-                       "task_id,attempt_id,outcome,code,event_seq) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                       (key, plane, request_id, router_index, buddy_id, phase, task_id, attempt_id,
+    connection.execute("INSERT INTO router_outcomes(receipt_id,request_id,router_index,buddy_id,phase,"
+                       "task_id,attempt_id,outcome,code,event_seq) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                       (key, request_id, router_index, buddy_id, phase, task_id, attempt_id,
                         outcome, code, seq))
     return {"recorded": True, "seq": seq, "event": kind}
 
@@ -92,13 +90,13 @@ def _fact_entries(connection, buddy_id: str) -> list[dict]:
     """Recorded outcome receipts of one buddy, ordered by the event sequence."""
     entries = []
     rows = connection.execute(
-        "SELECT o.event_seq, e.created_at AS recorded_at, o.plane, o.request_id, o.router_index,"
+        "SELECT o.event_seq, e.created_at AS recorded_at, o.request_id, o.router_index,"
         " o.phase, o.task_id, o.attempt_id, o.outcome, o.code"
         " FROM router_outcomes o JOIN events e ON e.seq=o.event_seq"
         " WHERE o.buddy_id=? ORDER BY o.event_seq", (buddy_id,))
     for row in rows:
         entries.append({"seq": int(row["event_seq"]), "at": row["recorded_at"],
-                        "outcome": row["outcome"], "plane": row["plane"],
+                        "outcome": row["outcome"],
                         "requestId": row["request_id"], "routerIndex": row["router_index"],
                         "phase": row["phase"], "taskId": row["task_id"],
                         "attemptId": row["attempt_id"], "code": row["code"]})
@@ -180,5 +178,5 @@ def router_state(connection, *, buddy_id: str, interval_seconds: int, now: str |
             "activeAttempts": attempts}
 
 
-__all__ = ["ACTIVE_ATTEMPT_STATES", "OUTCOMES", "PLANES", "active_executions",
+__all__ = ["ACTIVE_ATTEMPT_STATES", "OUTCOMES", "active_executions",
            "buddy_timeline", "record_outcome", "router_state", "summarize"]

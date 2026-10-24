@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { isReason } from "./reason";
 import type { Reason } from "./reason";
+import { isModelServiceConcurrencyEntry } from "./console-data";
 
 export const safeCount = z.int().nonnegative();
 // Number.isInteger intentionally accepts integers beyond Number.MAX_SAFE_INTEGER.
@@ -264,7 +265,7 @@ type Shutdown = {
  * Effort variants share one model service and never enter the key.
  */
 export type ModelService = { harness: string; provider: string; model: string };
-/** The user-owned per-model-service concurrent-task limit (integer 1–32, default 2). */
+/** The user-owned per-model-service concurrent-task limit (positive safe integer, default 2). */
 export type ModelServiceConcurrencySetting = ModelService & { limit: number };
 /**
  * One snapshot/page observation entry per represented model service. `active`
@@ -328,7 +329,7 @@ export type ReminderSettings = z.infer<typeof reminderSettingsSchema>;
 export const snapshotReadSchema = z.object({
   csrfToken: z.string(), eventCursor: safeCount, configuration: configurationSchema.nullable(),
   buddies: z.array(z.custom<Buddy>()), preferences: preferencesSchema,
-  modelServiceNotes: z.array(z.custom<ModelServiceNote>()), modelServiceConcurrency: z.array(z.custom<ModelServiceConcurrencyEntry>()),
+  modelServiceNotes: z.array(z.custom<ModelServiceNote>()), modelServiceConcurrency: z.array(z.custom<ModelServiceConcurrencyEntry>(isModelServiceConcurrencyEntry)),
   tasks: z.object({ pendingCount: safeCount }),
   // Drafts share this field's nullable type; a server read still requires settings.
 }).refine(snapshot => snapshot.configuration !== null);

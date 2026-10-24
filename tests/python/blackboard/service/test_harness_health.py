@@ -389,12 +389,12 @@ class CatalogShelfLifeTests(BoardTestCase):
             db.execute("UPDATE harness_health SET scan_after=NULL WHERE harness='codex'")
 
     def record_native(self, account_status, *, observed_seconds_ago=None):
-        from hey_my_buddy.blackboard.catalog import catalog_store
+        from hey_my_buddy.blackboard.catalog import catalog, catalog_store
         payload = {'source': 'fixture-native',
                    'providers': [{'harness': 'codex', 'provider': 'openai',
                                   'models': [{'id': 'sol', 'efforts': ['high'], 'available': True}]}],
                    'discoveries': [{'harness': 'codex', 'status': 'complete', 'accountStatus': account_status}]}
-        catalog_store.record(self.board.evaluation, payload)
+        catalog_store.record(self.board.evaluation, catalog.canonical_payload(payload))
         if observed_seconds_ago is not None:
             with self.board.db.write() as db:
                 db.execute("UPDATE catalog_current SET updated_at=? WHERE harness='codex'", (_stamp(observed_seconds_ago),))

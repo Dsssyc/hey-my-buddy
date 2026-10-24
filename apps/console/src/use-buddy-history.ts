@@ -3,7 +3,7 @@ import i18n from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { ApiError, errorText, validPreferences } from "./api";
-import { modelServiceKey } from "./console-data";
+import { isModelServiceConcurrencyEntry, modelServiceKey } from "./console-data";
 import type { ModelService, BuddyPage, Snapshot } from "./types";
 
 /** One bounded page of retained identities, including unavailable history. */
@@ -29,6 +29,7 @@ function parseBuddyPage(value: unknown): BuddyPage {
     && validPreferences(page.preferences)
     && optionalList(page.modelServiceNotes)
     && Array.isArray(page.modelServiceConcurrency)
+    && page.modelServiceConcurrency.every(isModelServiceConcurrencyEntry)
     && (page.nextCursor === null || typeof page.nextCursor === "string");
   if (!valid) throw new ApiError("INVALID_RESPONSE", () => i18n.t("console:theBuddyHistoryReplyIsIncompleteCheck"));
   return page;

@@ -12,6 +12,7 @@ MODEL_SERVICE_FIELDS = ('harness', 'provider', 'model')
 #: ``active`` and every other derived field are rejected: occupancy is observation,
 #: never input. There is no effort dimension — effort variants share one model service.
 MODEL_SERVICE_CONCURRENCY_FIELDS = frozenset({'harness', 'provider', 'model', 'limit'})
+SQLITE_INTEGER_MAX = 2 ** 63 - 1
 
 
 def _model_service_concurrency_changes(params: dict) -> list[dict]:
@@ -32,8 +33,8 @@ def _model_service_concurrency_changes(params: dict) -> list[dict]:
             raise BoardError('INVALID_ARGUMENT', 'modelServiceConcurrency repeats a model service')
         seen.add(model_service)
         limit = value.get('limit')
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 32:
-            raise BoardError('INVALID_ARGUMENT', 'limit must be an integer between 1 and 32')
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= SQLITE_INTEGER_MAX:
+            raise BoardError('INVALID_ARGUMENT', 'limit must be a positive SQLite integer')
     return values
 
 

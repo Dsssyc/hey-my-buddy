@@ -6,7 +6,6 @@ import json
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
-from hey_my_buddy.blackboard.routing.decision import MAX_DECISION_TASK_BYTES
 from hey_my_buddy.errors import BoardError
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from admission import run_next
@@ -574,54 +573,23 @@ class TestWorkflowRouting(WorkflowTestCase):
         claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="authorized-coding-turn")
         self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["buddy"], selected["buddy"])
 
-    def test_oversized_micro_task_stops_before_selection_and_recovers_with_explicit_buddy(self):
-        DecisionTestCase.use_helper(self)
+    def test_large_micro_task_reaches_router_whole(self):
         board = self.board()
         self.seed(board)
-        task = "目标🔒" * (MAX_DECISION_TASK_BYTES // 5)
-        task_bytes = len(task.encode("utf-8"))
-        self.assertGreater(task_bytes, MAX_DECISION_TASK_BYTES)
-        self.assertLess(len(task), MAX_DECISION_TASK_BYTES)
+        task = "完整工作说明" * 15000
+        self.assertGreater(len(task.encode("utf-8")), 128 * 1024)
         submitted = self.routed(board, task=task)
-        self.assertTrue(submitted["awaitingHost"])
-        self.assertEqual(submitted["routing"]["status"], "needs-host")
-        self.assertIsNone(submitted["routing"]["taskId"])
-        self.assertEqual(submitted["routing"]["reason"],
-                         {"code": "router-input-too-large", "params": {"bytes": task_bytes,
-                                                                        "limit": MAX_DECISION_TASK_BYTES}})
-        decision = board.call("selection_get", {"decisionId": submitted["routing"]["decisionId"], "includeAudit": True})["decision"]
-        reference = {"runId": submitted["runId"], "bytes": task_bytes,
-                     "sha256": hashlib.sha256(task.encode("utf-8")).hexdigest()}
-        self.assertEqual(decision["taskReference"], reference)
-        self.assertEqual(decision["requested"]["taskReference"], reference)
-        self.assertIsNone(decision["input"])
-        self.assertIsNone(decision["attemptId"])
-        self.assertLess(len(json.dumps(decision["requested"])), 4096)
-        self.assertNotIn(task, json.dumps(decision["requested"]))
-        with patch("hey_my_buddy.buddy.roles.router.DecisionAdapter.start") as start:
-            self.assertEqual(run_next(board.client()), "idle")
-        start.assert_not_called()
-        replay = self.routed(board, task=task)
-        self.assertTrue(replay["duplicate"])
-        self.assertEqual(replay["routing"]["decisionId"], submitted["routing"]["decisionId"])
-        with board.store.db.read() as connection:
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks").fetchone()[0], 1)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts").fetchone()[0], 0)
-            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 1)
-        continued = self.continue_run(board, submitted, buddy=BUDDY, note="Host chose an installed buddy for the oversized micro task")
-        self.assertEqual(continued["requestFingerprint"], submitted["requestFingerprint"])
-        self.assertEqual(continued["microTask"]["fingerprint"], submitted["microTask"]["fingerprint"])
-        audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})["audit"]
-        self.assertEqual(audit["microTask"]["task"], task)
-        self.register(board)
-        claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="long-micro-task-coding")
-        self.assertEqual(claimed["claim"]["task"]["spec"]["task"], task)
+        self.assertEqual(submitted["routing"]["status"], "queued")
+        selected = self.router_claim(board, submitted)
+        self.assertEqual(selected["claim"]["decisionInput"]["task"], task)
+        self.assertGreater(len(router_prompt(router.render_prompt(selected["claim"]["decisionInput"])).encode()),
+                           128 * 1024)
 
-    def test_micro_task_at_exact_routing_byte_limit_is_passed_whole(self):
+    def test_micro_task_above_old_routing_byte_limit_is_passed_whole(self):
         board = self.board()
         self.seed(board)
-        task = "界" * (MAX_DECISION_TASK_BYTES // 3) + "x" * (MAX_DECISION_TASK_BYTES % 3)
-        self.assertEqual(len(task.encode("utf-8")), MAX_DECISION_TASK_BYTES)
+        task = "界" * 3000
+        self.assertGreater(len(task.encode("utf-8")), 8192)
         submitted = self.routed(board, task=task)
         self.assertEqual(submitted["routing"]["status"], "queued")
         selected = self.router_claim(board, submitted)
@@ -629,7 +597,7 @@ class TestWorkflowRouting(WorkflowTestCase):
 
     def test_explicit_long_micro_task_does_not_require_selector(self):
         board = self.board()
-        task = "Complete the entire micro task. " * MAX_DECISION_TASK_BYTES
+        task = "Complete the entire micro task. " * 10000
         submitted = self.submit(board, task=task)
         self.assertEqual(submitted["routing"]["status"], "explicit")
         self.assertFalse(submitted["awaitingHost"])

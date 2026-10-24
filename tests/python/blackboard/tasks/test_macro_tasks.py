@@ -923,18 +923,19 @@ class RoutingSpanTests(WorkflowTestCase):
     def decision(self, board, task_id, *, output=None, status='completed', selected=None, buddy_id='frozen-buddy'):
         with board.store.db.write() as db:
             note = (output or {}).get('decision', {}).get('note')
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,note,created_at)"
-                       " VALUES('recorded-decision',?,'task',?,?,'2026-01-01T00:00:00Z')", (status, buddy_id, note))
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,buddy_id,note,created_at)"
+                       " VALUES('recorded-decision',?,?,?,'2026-01-01T00:00:00Z')", (status, buddy_id, note))
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,selected_json,output_json,requested_json,updated_at)"
                        " VALUES('recorded-decision','recorded-request','fingerprint',?,?,?,?,'2026-01-01T00:00:00Z')",
                        (task_id, json.dumps(selected) if selected else None, json.dumps(output) if output else None,
-                        json.dumps({'budget': {'preset': 'deep'}})))
+                        json.dumps({})))
             now = '2026-01-01T00:00:00Z'
             router_sequence.freeze_request(db, 'recorded-decision',
-                                           snapshot={'facts': {}, 'baseInput': {}, 'inspections': []}, now=now)
+                                           snapshot={'facts': {'budget': (output or {}).get('budget')},
+                                                     'baseInput': {'task': 'task'}, 'inspections': []}, now=now)
             router_sequence.reserve_dispatch(db, decision_id='recorded-decision', task_id=task_id, router_index=0,
                                              buddy={'buddyId': 'frozen-router', 'harness': 'dsh', 'provider': 'fixture',
-                                                    'model': 'router', 'effort': 'max'}, document={}, now=now)
+                                                    'model': 'router', 'effort': 'max'}, now=now)
 
     def spans(self, board, task_id):
         from hey_my_buddy.blackboard.tasks.macro_tasks import _routing_spans
@@ -961,11 +962,14 @@ class RoutingSpanTests(WorkflowTestCase):
         # Changing the owner's current execution buddy cannot rewrite this history.
         with board.store.db.write() as db:
             db.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.model','current-model') WHERE task_id=?", (task_id,))
-            db.execute("INSERT INTO evaluation_decisions(decision_id,status,task,buddy_id,created_at)"
-                       " VALUES('current-decision','completed','current task','current-buddy','2026-01-02T00:00:00Z')")
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,buddy_id,created_at)"
+                       " VALUES('current-decision','completed','current-buddy','2026-01-02T00:00:00Z')")
             db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,task_id,selected_json,output_json,updated_at)"
                        " VALUES('current-decision','current-request','other-fingerprint','other-calculation',?,?,'2026-01-02T00:00:00Z')",
                        (json.dumps({**selected, 'model': 'current-model'}), json.dumps({'budget': {'preset': 'deep'}})))
+            router_sequence.freeze_request(db, 'current-decision',
+                                           snapshot={'facts': {}, 'baseInput': {'task': 'current task'},
+                                                     'inspections': []}, now='2026-01-02T00:00:00Z')
             for decision_id in ('recorded-decision', 'current-decision'):
                 db.execute("INSERT INTO workflow_routes(decision_id,run_id,owner_generation,state,created_at)"
                            " VALUES(?,?,1,'resolved','2026-01-02T00:00:00Z')", (decision_id, task_id))

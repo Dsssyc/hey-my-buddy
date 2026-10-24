@@ -180,14 +180,29 @@ class PolicyPatchTests(ModelServiceConcurrencyTestCase):
             count = connection.execute("SELECT COUNT(*) AS count FROM model_service_concurrency").fetchone()["count"]
         self.assertEqual(count, 0)
 
-    def test_limits_are_integers_between_one_and_thirty_two(self):
+    def test_limits_are_positive_integers(self):
         board = self.board_
-        for limit in (0, 33, -1, True, "4", 2.5, None):
+        for limit in (0, -1, True, "4", 2.5, None):
             with self.assertRaises(BoardError):
                 self.publish_limits(
                     board,
                     {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1], "model": MODEL_SERVICE_A[2], "limit": limit},
                 )
+
+    def test_large_model_limits_survive_console_and_health_projections(self):
+        for limit in (33, 2 ** 53 - 1):
+            with self.subTest(limit=limit):
+                self.publish_limits(
+                    self.board_,
+                    {"harness": MODEL_SERVICE_A[0], "provider": MODEL_SERVICE_A[1],
+                     "model": MODEL_SERVICE_A[2], "limit": limit},
+                    command=f"limits-{limit}",
+                )
+                snapshot = self.board_.call("console_snapshot", {})
+                self.assertEqual(self.model_service_row(snapshot, MODEL_SERVICE_A)["limit"], limit)
+                health = self.board_.call("health", {})
+                self.assertEqual(self.model_service_row(health["capacity"], MODEL_SERVICE_A)["limit"], limit)
+                self.assertEqual(health["capacity"]["totalLimit"], 8)
 
     def test_repeated_model_services_in_one_patch_are_refused(self):
         board = self.board_

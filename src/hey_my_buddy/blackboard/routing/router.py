@@ -342,8 +342,8 @@ def selection_source(request: dict) -> str:
     does not claim a model ran, and a record without the frozen basis is never
     relabeled from later state.
     """
-    if request.get("routerCalled") is False:
-        return "single-candidate"
     if (request.get("routingBasis") or {}).get("candidateCount") == 0:
         return "no-candidate"
+    if request.get("routerCalled") is False:
+        return "single-candidate"
     return "model-selection"
