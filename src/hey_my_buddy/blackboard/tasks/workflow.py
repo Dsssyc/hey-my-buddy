@@ -3700,7 +3700,8 @@ class WorkflowCoordinator:
             "SELECT * FROM attempts WHERE task_id=? AND (execution_state!='finished' OR shutdown_confirmed!=1)",
             (task_id,),
         ).fetchall():
-            if attempt["cancel_requested_at"] is not None and initiator in WRAP_UP_INITIATORS:
+            if attempt["cancel_requested_at"] is not None and (
+                    initiator in WRAP_UP_INITIATORS or attempt["stop_initiator"] in ("console", "service")):
                 continue
             deadline = attempt["grace_deadline"]
             if (wrap_up and initiator in WRAP_UP_INITIATORS

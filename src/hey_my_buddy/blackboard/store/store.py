@@ -2224,14 +2224,8 @@ class BoardStore:
                 raise BoardError("INVALID_ARGUMENT", "Wrap-up requires a durable grace deadline",
                                  field="terminationReason")
             if termination_reason == "console-stop" and attempt["stop_initiator"] != "console":
-                known_console_stop = connection.execute(
-                    "SELECT 1 FROM events WHERE task_id=? AND kind IN ('workflow.cancelled','workflow.helper_cancelled')"
-                    " AND json_extract(payload_json,'$.stopInitiator')='console' LIMIT 1",
-                    (attempt["task_id"],),
-                ).fetchone()
-                if known_console_stop is None:
-                    raise BoardError("INVALID_ARGUMENT", "console-stop requires a durable console stop",
-                                     field="terminationReason")
+                raise BoardError("INVALID_ARGUMENT", "console-stop requires a durable console stop",
+                                 field="terminationReason")
             if attempt["result_json"] is not None and shutdown_evidence is None:
                 previous = json.loads(attempt["result_json"])
                 # A later service proof changes only shutdownConfirmed. An exact
