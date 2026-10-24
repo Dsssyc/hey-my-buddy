@@ -55,15 +55,15 @@ export function needsReview(task: Task): boolean {
     (!task.workflow || task.workflowShutdown?.descendantsConfirmed === true) &&
     !task.acceptedAt &&
     task.spec?.harness !== "decision" &&
-    ["completed", "failed", "cancelled"].includes(task.status) &&
+    ["completed", "failed", "cancelled"].includes(task.state) &&
     task.resultAvailable === true &&
     task.shutdownConfirmed === true;
 }
 
 export function taskStatus(task: Task): string {
-  if (["cancelling", "reconciliation-needed"].includes(task.status)) return task.status;
+  if (["cancelling", "reconciliation-needed"].includes(task.state)) return task.state;
   if (task.workflow?.state === "cancelled" && task.workflowShutdown?.unconfirmedCount) return "cancelling";
-  return displayWorkflowState(task.workflow?.state || task.status, task.lineage?.rootLeadRunId ?? null);
+  return displayWorkflowState(task.workflow?.state || task.state, task.lineage?.rootLeadRunId ?? null);
 }
 
 /** Presentation only: the stored state stays awaiting-host for a Lead-owned tree. */

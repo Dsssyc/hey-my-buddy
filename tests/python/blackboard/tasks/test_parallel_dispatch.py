@@ -29,14 +29,14 @@ class DirectAdmissionTests(BoardTestCase):
         third = self.submit(board, "third")
         one = board.store.admit_execution("n" * 32, task_id=first["runId"])["claim"]
         two = board.store.admit_execution("m" * 32, task_id=second["runId"])["claim"]
-        self.assertEqual({one["task"]["runId"], two["task"]["runId"]},
+        self.assertEqual({one["task"]["taskId"], two["task"]["taskId"]},
                          {first["runId"], second["runId"]})
         self.assertEqual(board.store.capacity_report()["totalActive"], 2)
         refused = board.store.admit_execution("o" * 32, task_id=third["runId"])
         self.assertIsNone(refused["claim"])
         self.assertEqual(refused["reason"], "capacity")
         board.store.release_execution(one["attempt"]["attemptId"], reason="execution-process-not-created")
-        self.assertEqual(board.store.admit_execution("p" * 32, task_id=third["runId"])["claim"]["task"]["runId"],
+        self.assertEqual(board.store.admit_execution("p" * 32, task_id=third["runId"])["claim"]["task"]["taskId"],
                          third["runId"])
 
     def test_exclusive_resource_prevents_overlap_with_a_free_machine_slot(self):
@@ -79,7 +79,7 @@ class ModelServiceAdmissionTests(BoardTestCase):
             "cwd": str(self.workdir("command-free")), "adapter": "command", "argv": ["/bin/true"],
         })["task"]
         claim = board.store.admit_execution("p" * 32)["claim"]
-        self.assertEqual(claim["task"]["runId"], command["runId"])
+        self.assertEqual(claim["task"]["taskId"], command["runId"])
 
     def test_uncertain_deep_model_attempt_holds_model_and_machine_capacity(self):
         board = self.board(max_concurrent=2)
@@ -161,7 +161,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                 second_release.touch()
                 third_release.touch()
                 for run_id in (first, second, third):
-                    self.assertTrue(wait_for(lambda: client.get(runId=run_id)["status"] == "completed", timeout=60),
+                    self.assertTrue(wait_for(lambda: client.get(runId=run_id)["state"] == "completed", timeout=60),
                                     (run_id, client.get(runId=run_id)))
                 self.assertEqual(client.health()["capacity"]["totalActive"], 0)
             finally:
@@ -176,7 +176,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             try:
                 self.assertTrue(wait_for(started.exists, timeout=60))
                 client.cancel(runId=run_id)
-                self.assertTrue(wait_for(lambda: client.get(runId=run_id)["status"] == "cancelled",
+                self.assertTrue(wait_for(lambda: client.get(runId=run_id)["state"] == "cancelled",
                                          timeout=60), client.get(runId=run_id))
                 self.assertTrue(client.get(runId=run_id)["shutdownConfirmed"])
             finally:
@@ -204,7 +204,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                                      timeout=35), client.get(runId=run_id))
             view = client.get(runId=run_id)
             self.assertEqual(view["selectedAttemptId"], attempt_id)
-            self.assertEqual(view["status"], "cancelled")
+            self.assertEqual(view["state"], "cancelled")
             self.assertTrue(view["shutdownConfirmed"])
             self.assertEqual(view["stopInitiator"], "service")
 
@@ -223,7 +223,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                 client = BoardClient(self.directory, autostart=False)
                 self.assertEqual(client.get(runId=run_id)["selectedAttemptId"], attempt_id)
                 release.touch()
-                self.assertTrue(wait_for(lambda: client.get(runId=run_id)["status"] == "completed",
+                self.assertTrue(wait_for(lambda: client.get(runId=run_id)["state"] == "completed",
                                          timeout=60), client.get(runId=run_id))
         finally:
             release.touch()
@@ -267,7 +267,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             self.assertTrue(wait_for(lambda: client.get(runId=run_id)["attemptState"] == "finished",
                                      timeout=25), client.get(runId=run_id))
             view = client.get(runId=run_id)
-            self.assertEqual(view["status"], "cancelled")
+            self.assertEqual(view["state"], "cancelled")
             self.assertTrue(view["shutdownConfirmed"])
             self.assertTrue(wait_for(lambda: self.native_stopped(int(pid_path.read_text(encoding="utf-8"))), timeout=10))
             self.assertTrue(wait_for(lambda: self.native_stopped(execution_pid), timeout=10))
@@ -292,7 +292,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                 self.assertTrue(wait_for(lambda: client.get(runId=run_id)["attemptState"] == "finished",
                                          timeout=60), client.get(runId=run_id))
                 view = client.get(runId=run_id)
-                self.assertEqual(view["status"], "cancelled")
+                self.assertEqual(view["state"], "cancelled")
                 self.assertTrue(view["shutdownConfirmed"])
                 elapsed = (datetime.now(timezone.utc) - recorded).total_seconds()
                 self.assertGreaterEqual(elapsed, 7)

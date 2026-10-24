@@ -330,16 +330,15 @@ class TestInquiry(BoardTestCase):
         bound = self._bound_fields(task, attempt)
         journal = Path(bridge.directory) / "inquiry.results.jsonl"
         journal.write_text(
-            json.dumps({**bound, "inquiryId": "q-real", "state": "queued",
+            json.dumps({**bound, "version": 2, "inquiryId": "q-real", "state": "queued",
                         "question": "status?", "questionSha256": hashlib.sha256(b"status?").hexdigest(),
-                        "delivery": {"requestedDelivery": None, "admittedDelivery": "cooperative-checkpoint",
-                                     "startsNewTurn": False, "extendsDeadline": False, "supported": True}})
+                        "delivery": {"admittedDelivery": "cooperative-checkpoint", "at": "2026-10-07T04:59:00.000Z"}})
             + "\n"
-            + json.dumps({**bound, "inquiryId": "q-real", "state": "delivered",
+            + json.dumps({**bound, "version": 2, "inquiryId": "q-real", "state": "delivered",
                           "deliveredAt": "2026-10-07T05:00:00.000Z", "via": "tool:hey_my_buddy_checkpoint",
                           "toolCallId": "call-41"})
             + "\n"
-            + json.dumps({**bound, "inquiryId": "q-real", "state": "answered",
+            + json.dumps({**bound, "version": 2, "inquiryId": "q-real", "state": "answered",
                           "answeredAt": "2026-10-07T05:00:04.000Z",
                           "answer": {"text": "the tests are still running", "bytes": 27,
                                      "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": "call-42",
@@ -369,7 +368,12 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(repeated["revision"], revision)
             self.assertEqual(board.store.head(), head)
             self.assertEqual(repeated["delivery"]["admittedDelivery"], "cooperative-checkpoint")
+            self.assertEqual(repeated["delivery"]["at"], "2026-10-07T04:59:00.000Z")
             self.assertEqual(repeated["delivery"]["deliveredAt"], "2026-10-07T05:00:00.000Z")
+            self.assertEqual(repeated["delivery"]["via"], "tool:hey_my_buddy_checkpoint")
+            self.assertEqual(repeated["delivery"]["toolCallId"], "call-41")
+            self.assertEqual(set(repeated["delivery"]),
+                             {"admittedDelivery", "at", "deliveredAt", "via", "toolCallId"})
         finally:
             bridge.close()
 
@@ -649,7 +653,7 @@ class TestInquiry(BoardTestCase):
         board = self.board()
         client = board.client()
         task = board.submit_execution(requestId="no-inquiry", task="work", cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
-        admit_execution(client, "a" * 32, task_id=task["taskId"])
+        admit_execution(client, "a" * 32, task_id=task["runId"])
         result = board.call("inquiry_observe", {"runId": task["runId"], "inquiryId": "q-unsupported", "question": "status?", "waitMs": 3000})
         self.assertEqual(result["inquiry"]["state"], "unavailable")
         self.assertEqual(result["inquiry"]["reason"], {"code": "bridge-refused", "params": {"errorCode": "unsupported-method"}})
@@ -927,7 +931,7 @@ class TestInquiry(BoardTestCase):
         task, _attempt, owner = self._attempt_directory(board, client)
         # Neither the owner nor the endpoint has published the earlier legal
         # answer: the final source record must reject it before publication.
-        changed = (("version", 2, "journal-attempt-unbound"),
+        changed = (("version", 3, "journal-attempt-unbound"),
                    ("taskId", "foreign-task", "journal-task-mismatch"),
                    ("attemptId", "foreign-attempt", "journal-attempt-mismatch"),
                    ("generation", owner.identity.generation + 1, "journal-attempt-unbound"),

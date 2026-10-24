@@ -217,10 +217,10 @@ class Daemon:
         count = 0
         failed = False
         for task in self.store.active_work()["queuedTasks"]:
-            if exclude and task["taskId"] in exclude:
+            if exclude and task["runId"] in exclude:
                 continue
             try:
-                self.store.task_cancel({"runId": task["taskId"], **({"note": note} if note else {})},
+                self.store.task_cancel({"runId": task["runId"], **({"note": note} if note else {})},
                                        initiator="service")
                 count += 1
             except BoardError as error:

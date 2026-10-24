@@ -93,9 +93,21 @@ class CurrentCoreTests(BoardTestCase):
         reopened.initialize()
         replay = reopened.task_submit(request)
         self.assertTrue(replay["duplicate"])
-        self.assertEqual(first["task"]["taskId"], replay["task"]["taskId"])
+        self.assertEqual(first["task"]["runId"], replay["task"]["runId"])
         self.assertNotIn("legacy", replay["task"])
         self.assertEqual(replay["task"]["fingerprintVersion"], schemas.FINGERPRINT_VERSION_CURRENT)
+
+    def test_host_task_identity_and_state_have_one_name(self):
+        board = self.board()
+        task = board.submit_execution(requestId="one-name", task="work", cwd=str(self.workdir()),
+                                      adapter="command", argv=["true"])["task"]
+        self.assertNotIn("taskId", task)
+        self.assertNotIn("status", task)
+        self.assertEqual(task["state"], "queued")
+        self.assertEqual(board.call("task_get", {"requestId": "one-name"})["task"]["runId"], task["runId"])
+        with self.assertRaises(BoardError) as caught:
+            board.call("task_get", {"taskId": task["runId"]})
+        self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
 
     def test_meta_writers_are_only_the_two_board_singletons(self):
         source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy"
@@ -201,29 +213,29 @@ class CurrentCoreTests(BoardTestCase):
                 client = board.client()
                 task = board.submit_execution(requestId=f"inquiry-end-{status}-{confirmed}", task="return data",
                     cwd=str(self.workdir(f"{status}-{confirmed}")), adapter="command", argv=["true"])["task"]
-                claim = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]
+                claim = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]
                 attempt = claim["attempt"]
                 other = board.submit_execution(requestId=f"other-{status}-{confirmed}", task="still running",
                     cwd=str(self.workdir(f"other-{status}-{confirmed}")), adapter="command", argv=["true"])["task"]
-                other_attempt = admit_execution(client, "o" * 32, task_id=other["taskId"])["claim"]["attempt"]
-                board.store._message_post(other["taskId"], "q-other", "Still there?")
+                other_attempt = admit_execution(client, "o" * 32, task_id=other["runId"])["claim"]["attempt"]
+                board.store._message_post(other["runId"], "q-other", "Still there?")
                 for inquiry_id in ("q-pending", "q-delivered", "q-answered"):
-                    board.store._message_post(task["taskId"], inquiry_id, "Status?")
-                board.store._message_update(task["taskId"], "q-delivered", actor="bridge", state="delivered")
-                board.store._message_update(task["taskId"], "q-answered", actor="bridge", answer={
+                    board.store._message_post(task["runId"], inquiry_id, "Status?")
+                board.store._message_update(task["runId"], "q-delivered", actor="bridge", state="delivered")
+                board.store._message_update(task["runId"], "q-answered", actor="bridge", answer={
                     "text": "Still working", "bytes": 13, "via": None, "toolCallId": None,
                     "at": None, "truncated": False, "source": "bridge-journal",
                 })
                 report = {"status": status, "shutdownConfirmed": confirmed}
                 client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
-                pending = client.get_message("q-pending", runId=task["taskId"])
+                pending = client.get_message("q-pending", runId=task["runId"])
                 self.assertEqual(pending["state"], "unavailable")
                 self.assertEqual(pending["reason"], {"code": "inquiry-queued-at-attempt-end", "params": {}})
-                delivered = client.get_message("q-delivered", runId=task["taskId"])
+                delivered = client.get_message("q-delivered", runId=task["runId"])
                 self.assertEqual(delivered["state"], "unavailable")
                 self.assertEqual(delivered["reason"], {"code": "inquiry-delivered-at-attempt-end", "params": {}})
-                self.assertEqual(client.get_message("q-answered", runId=task["taskId"])["answer"]["text"], "Still working")
-                events = client.read_events(taskId=task["taskId"])
+                self.assertEqual(client.get_message("q-answered", runId=task["runId"])["answer"]["text"], "Still working")
+                events = client.read_events(runId=task["runId"])
                 unavailable = [e for e in events["events"] if e["kind"] == "message.updated"
                                and e["payload"].get("state") == "unavailable"]
                 self.assertEqual(len(unavailable), 2)
@@ -231,7 +243,7 @@ class CurrentCoreTests(BoardTestCase):
                 head = board.store.head()
                 client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
                 self.assertEqual(board.store.head(), head)
-                self.assertEqual(client.get_message("q-other", runId=other["taskId"])["state"], "queued")
+                self.assertEqual(client.get_message("q-other", runId=other["runId"])["state"], "queued")
                 client.submit_result(other_attempt["attemptId"], other_attempt["generation"], "o" * 32,
                                      {"status": "ok", "shutdownConfirmed": True})
 
@@ -240,11 +252,11 @@ class CurrentCoreTests(BoardTestCase):
         client = board.client()
         task = board.submit_execution(requestId="opaque-current-result", task="return data", cwd=str(self.workdir()), adapter="command", argv=["/bin/true"])["task"]
         pass  # Admission is owned by the service.
-        claim = admit_execution(client, "n" * 32, task_id=task["taskId"])["claim"]
+        claim = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]
         attempt = claim["attempt"]
         data = {"status": "arbitrary-data", "result": {"turn": {"outcome": {"disposition": "attention"}}}}
         client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, {"status": "ok", "result": data, "shutdownConfirmed": True})
-        result = client.result(runId=task["taskId"])
+        result = client.result(runId=task["runId"])
         self.assertEqual(result["result"], data)
         self.assertEqual(result["resultMeta"]["status"], "ok")
         self.assertNotIn("workflow", result)

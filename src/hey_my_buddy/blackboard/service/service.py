@@ -175,7 +175,7 @@ class _BaseResource:
     def _waiting_for_host(self, params: dict) -> dict:
         """Count the default Host history filters after the operation has finished."""
         host_id = params.get('hostId')
-        run_id = params.get('runId') or params.get('taskId')
+        run_id = params.get('runId')
         request_id = params.get('requestId')
         if not (host_id or run_id or request_id):
             return {}

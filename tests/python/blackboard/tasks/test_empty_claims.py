@@ -42,7 +42,7 @@ class EmptyClaimTests(BoardTestCase):
         self.assertIsNone(admit_execution(client, NONCE)["claim"])
         task = submit_command(board, "after-empty", self.workdir("retry-work"))
         first = admit_execution(client, NONCE)
-        self.assertEqual(first["claim"]["task"]["runId"], task["runId"])
+        self.assertEqual(first["claim"]["task"]["taskId"], task["runId"])
         self.assertIsNone(admit_execution(client, NONCE)["claim"])
         self.assertEqual(self.attempt_count(board, task["runId"]), 1)
         self.assertEqual(self.command_count(board), 0)
@@ -74,7 +74,7 @@ class EmptyClaimTests(BoardTestCase):
             "shutdownConfirmed": True, "error": "fixture",
         })
         admitted = admit_execution(client, NONCE)
-        self.assertEqual(admitted["claim"]["task"]["runId"], waiting["runId"])
+        self.assertEqual(admitted["claim"]["task"]["taskId"], waiting["runId"])
         self.assertEqual(self.attempt_count(board, held["runId"]), 1)
         self.assertEqual(self.attempt_count(board, waiting["runId"]), 1)
 

@@ -247,12 +247,12 @@ class BoardStore:
         return self._head
 
     def events_read(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"after", "limit", "taskId", "runId"}, "events.read")
+        schemas.reject_unknown(params, {"after", "limit", "runId"}, "events.read")
         after = schemas.optional_int(params, "after", 0, 0, 2**62)
         limit = schemas.optional_int(params, "limit", 100, 1, MAX_EVENT_PAGE)
-        task_id = params.get("taskId") or params.get("runId")
+        task_id = params.get("runId")
         if task_id is not None and not isinstance(task_id, str):
-            raise BoardError("INVALID_ARGUMENT", "taskId must be a string")
+            raise BoardError("INVALID_ARGUMENT", "runId must be a string")
         with self.db.read() as connection:
             if task_id:
                 rows = connection.execute(
@@ -272,7 +272,7 @@ class BoardStore:
         return {"events": events, "cursor": cursor, "head": int(head_row["head"]), "truncated": len(events) == limit}
 
     def task_wait(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "afterRevision", "timeoutMs", "consumeReminders", "reminderWaitId"}, "task.wait")
+        schemas.reject_unknown(params, {"runId", "afterRevision", "timeoutMs", "consumeReminders", "reminderWaitId"}, "task.wait")
         consume_reminders = schemas.optional_bool(params, "consumeReminders", False)
         if consume_reminders:
             schemas.required_string(params, "reminderWaitId", max_length=128)
@@ -291,9 +291,9 @@ class BoardStore:
                 from ..tasks.reminders import consume
                 reminder = consume(self, params)
                 if reminder is not None:
-                    view = self.task_get({"runId": params.get("runId"), "taskId": params.get("taskId")})["task"]
+                    view = self.task_get({"runId": params.get("runId")})["task"]
                     return {**view, "reminder": reminder}
-            view = self.task_get({"runId": params.get("runId"), "taskId": params.get("taskId")})["task"]
+            view = self.task_get({"runId": params.get("runId")})["task"]
             # Re-check after subscribing so a change between read and subscribe is
             # never lost; the recheck happens inside events_wait.
             if view["resultAvailable"] or timeout_ms == 0 or (
@@ -307,7 +307,7 @@ class BoardStore:
                 {
                     "after": head,
                     "timeoutMs": int(max(1, remaining * 1000)),
-                    "taskId": view["taskId"],
+                    "runId": view["runId"],
                     "limit": 1,
                 }
             )
@@ -319,15 +319,15 @@ class BoardStore:
         waiting, so unlimited concurrent waiters cannot block cancellation or
         result commits.
         """
-        schemas.reject_unknown(params, {"after", "timeoutMs", "limit", "taskId", "runId"}, "events.wait")
+        schemas.reject_unknown(params, {"after", "timeoutMs", "limit", "runId"}, "events.wait")
         after = schemas.optional_int(params, "after", 0, 0, 2**62)
         timeout_ms = schemas.optional_int(params, "timeoutMs", 30000, 0, 30000)
         limit = schemas.optional_int(params, "limit", 100, 1, MAX_EVENT_PAGE)
-        task_id = params.get("taskId") or params.get("runId")
+        task_id = params.get("runId")
         with self._condition:
             if self._wait_stopped:
                 raise BoardError("SERVICE_STOPPING", "The service is stopping; no task state was changed")
-        page = self.events_read({"after": after, "limit": limit, **({"taskId": task_id} if task_id else {})})
+        page = self.events_read({"after": after, "limit": limit, **({"runId": task_id} if task_id else {})})
         # Compare against the *filtered* head: an unrelated task's later event must
         # not make this task's unchanged cursor look satisfied.
         if page["truncated"] or page["events"] or page["head"] > page["cursor"] or timeout_ms == 0:
@@ -346,7 +346,7 @@ class BoardStore:
                 if remaining <= 0:
                     return {**page, "timedOut": True}
                 self._condition.wait(remaining if stop is None else min(remaining, 1.0))
-        page = self.events_read({"after": after, "limit": limit, **({"taskId": task_id} if task_id else {})})
+        page = self.events_read({"after": after, "limit": limit, **({"runId": task_id} if task_id else {})})
         return {**page, "timedOut": False}
 
     def _filtered_head(self, task_id: str | None) -> int:
@@ -462,7 +462,6 @@ class BoardStore:
         spec = json.loads(row["spec_json"]) if execution_spec is None else execution_spec
         view = {
             "runId": row["task_id"],
-            "taskId": row["task_id"],
             "requestId": row["request_id"],
             "owner": row["owner"],
             "adapter": row["adapter"],
@@ -475,7 +474,6 @@ class BoardStore:
             "fingerprintVersion": row["fingerprint_version"],
             "requiredCapabilities": json.loads(row["required_capabilities"]),
             "exclusiveResources": json.loads(row["exclusive_resources"]),
-            "status": row["state"],
             "state": row["state"],
             "queueReason": row["queue_reason"],
             "revision": row["revision"],
@@ -569,14 +567,14 @@ class BoardStore:
         }
 
     def _task_row(self, connection: sqlite3.Connection, selector: dict) -> sqlite3.Row:
-        task_id = selector.get("taskId") or selector.get("runId")
+        task_id = selector.get("runId")
         request_id = selector.get("requestId")
         if isinstance(task_id, str) and task_id:
             row = connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone()
         elif isinstance(request_id, str) and request_id:
             row = connection.execute("SELECT * FROM tasks WHERE request_id = ?", (request_id,)).fetchone()
         else:
-            raise BoardError("INVALID_ARGUMENT", "runId, taskId or requestId is required")
+            raise BoardError("INVALID_ARGUMENT", "runId or requestId is required")
         if row is None:
             raise BoardError("NOT_FOUND", "Unknown runId or requestId")
         return row
@@ -1063,7 +1061,7 @@ class BoardStore:
         return response
 
     def task_get(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "requestId"}, "task.get")
+        schemas.reject_unknown(params, {"runId", "requestId"}, "task.get")
         with self.db.read() as connection:
             row = self._task_row(connection, params)
             from ..tasks.fixes import view as fix_view
@@ -1173,7 +1171,7 @@ class BoardStore:
         return {"runs": tasks, "total": int(total), "cursor": head, "nextCursor": next_cursor}
 
     def task_result(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "requestId"}, "task.result")
+        schemas.reject_unknown(params, {"runId", "requestId"}, "task.result")
         with self.db.read() as connection:
             task = self._task_row(connection, params)
             attempt = self._selected_attempt(connection, task)
@@ -1196,7 +1194,6 @@ class BoardStore:
             params,
             {
                 "runId",
-                "taskId",
                 "requestId",
                 "note",
                 "requestedBy",
@@ -1209,7 +1206,7 @@ class BoardStore:
                 if params.get("note") is not None else None)
         actor = {"role": "service" if initiator == "service" else "host",
                  "id": schemas.optional_string(params, "requestedBy") or "cli"}
-        request = {"selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params}, "note": note}
+        request = {"selector": {k: params[k] for k in ("runId", "requestId") if k in params}, "note": note}
         with self.db.write() as connection:
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.cancel", request)
@@ -1276,7 +1273,6 @@ class BoardStore:
             params,
             {
                 "runId",
-                "taskId",
                 "requestId",
                 "note",
                 "requestedBy",
@@ -1288,7 +1284,7 @@ class BoardStore:
         note = (schemas.bounded_text(params, "note", max_bytes=schemas.MAX_NOTE_BYTES)[0]
                 if params.get("note") is not None else None)
         request = {
-            "selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params},
+            "selector": {k: params[k] for k in ("runId", "requestId") if k in params},
             "note": note,
         }
         with self.db.write() as connection:
@@ -1382,7 +1378,6 @@ class BoardStore:
             params,
             {
                 "runId",
-                "taskId",
                 "requestId",
                 "note",
                 "verdict",
@@ -1399,7 +1394,7 @@ class BoardStore:
             raise BoardError("INVALID_ARGUMENT", "verdict must be 'accepted' or 'rejected'")
         evidence = schemas.string_list(params, "evidence", limit=32)
         actor = {"role": "host", "id": schemas.optional_string(params, "acknowledgedBy") or "cli"}
-        request = {"selector": {k: params[k] for k in ("runId", "taskId", "requestId") if k in params}, "note": note, "verdict": verdict, "evidence": evidence}
+        request = {"selector": {k: params[k] for k in ("runId", "requestId") if k in params}, "note": note, "verdict": verdict, "evidence": evidence}
         with self.db.write() as connection:
             if command_id:
                 receipt = self._receipt(connection, command_id, "task.acknowledge", request)
@@ -1802,10 +1797,12 @@ class BoardStore:
                 task_row = connection.execute("SELECT * FROM tasks WHERE task_id=?", (chosen["task_id"],)).fetchone()
                 attempt_row = connection.execute("SELECT * FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()
                 # Execution inputs start from mechanical facts, never the decorated read view.
+                claim_task = self._task_view(task_row, execution_spec=spec)
+                claim_task["taskId"] = claim_task.pop("runId")
                 response = {
                     "claim": {
                         "attempt": self._attempt_view(attempt_row, include_result=False),
-                        "task": self._task_view(task_row, execution_spec=spec),
+                        "task": claim_task,
                     },
                     "reason": None,
                 }
@@ -2733,7 +2730,7 @@ class BoardStore:
         return connection.execute("SELECT * FROM messages WHERE message_id=?", (row["message_id"],)).fetchone()
 
     def message_get(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "requestId", "inquiryId", "messageId"}, "message.get")
+        schemas.reject_unknown(params, {"runId", "requestId", "inquiryId", "messageId"}, "message.get")
         with self.db.read() as connection:
             if params.get("inquiryId"):
                 task = self._task_row(connection, params)
@@ -2749,10 +2746,10 @@ class BoardStore:
             return {"message": self._message_view(row)}
 
     def message_list(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "state", "limit"}, "message.list")
+        schemas.reject_unknown(params, {"runId", "state", "limit"}, "message.list")
         limit = schemas.optional_int(params, "limit", 50, 1, 200)
         clauses, values = [], []
-        if params.get("runId") or params.get("taskId"):
+        if params.get("runId"):
             task = None
             with self.db.read() as connection:
                 task = self._task_row(connection, params)
@@ -2774,7 +2771,7 @@ class BoardStore:
 
     # -- artifacts -----------------------------------------------------------
     def artifact_list(self, params: dict) -> dict:
-        schemas.reject_unknown(params, {"runId", "taskId", "attemptId"}, "artifact.list")
+        schemas.reject_unknown(params, {"runId", "attemptId"}, "artifact.list")
         with self.db.read() as connection:
             if params.get("attemptId"):
                 rows = connection.execute(

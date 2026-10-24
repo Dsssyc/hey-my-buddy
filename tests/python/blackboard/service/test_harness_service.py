@@ -28,7 +28,7 @@ class HarnessServiceTests(BoardTestCase):
             self.assertNotIn('error', self.call('harness_prepare', **params, commandId='unknown-read'))
             view = self.board.task_get({'runId': task['runId']})['task']
             self.assertEqual(view['queueReason'], 'harness-probe-unknown')
-            self.assertEqual(view['status'], 'running')
+            self.assertEqual(view['state'], 'running')
             self.assertNotIn('error', self.call('execution_progress', **params,
                                                data={'waitingReason': {'code': 'router-input-unknown', 'params': {}}}))
             self.assertEqual(self.board.task_get({'runId': task['runId']})['task']['queueReason'], 'router-input-unknown')
@@ -36,7 +36,7 @@ class HarnessServiceTests(BoardTestCase):
             self.assertNotIn('error', self.call('execution_progress', **params,
                                                data={'waitingReason': {'code': 'router-input-unknown', 'params': {}}}))
             self.assertEqual(self.board.head(), head)
-            waiting = [event for event in self.board.events_wait({'after': 0, 'taskId': task['runId'],
+            waiting = [event for event in self.board.events_wait({'after': 0, 'runId': task['runId'],
                          'timeoutMs': 0})['events'] if event['kind'] == 'attempt.waiting']
             self.assertEqual(waiting[-1]['payload']['reason'], {'code': 'router-input-unknown', 'params': {}})
             self.assertNotIn('error', self.call('execution_progress', **params, data={'waitingReason': None}))

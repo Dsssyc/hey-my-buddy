@@ -117,7 +117,6 @@ WRAP_UP_SECONDS = 300
 #: Bounded views of the lifecycle records added by the workspace-lifecycle slice.
 MAX_CONFLICT_VIEW = 8
 MAX_INTEGRATION_VIEW = 8
-MAX_CONFLICT_PATH_VIEW = 32
 MAX_OUTPUT_PATH_VIEW = 32
 MAX_OUTPUT_PATH_SAMPLE_BYTES = 500
 INTEGRATION_PATH_FIELDS = (
@@ -735,7 +734,6 @@ class WorkflowCoordinator:
         from ..routing.quota_routing import cooling
         view = {
             "runId": run_row["run_id"],
-            "taskId": run_row["run_id"],
             "requestId": task_row["request_id"],
             "hostId": run_row["host_id"],
             "ownerGeneration": run_row["owner_generation"],
@@ -829,7 +827,6 @@ class WorkflowCoordinator:
             "owner": decorated["owner"],
             "adapter": decorated["adapter"],
             "cwd": decorated["cwd"],
-            "status": decorated["status"],
             "cancellation": decorated.get("cancellation"),
             "state": decorated["state"],
             "queueReason": decorated["queueReason"],
@@ -7156,14 +7153,8 @@ class WorkflowCoordinator:
         return recorded
 
     def _record_scope_attention(self, connection, run_row, turn_row, attempt, conflict_ids, now) -> str:
-        conflicts = connection.execute(
-            "SELECT * FROM workflow_workspace_conflicts WHERE conflict_id IN (%s)"
-            % ",".join("?" for _ in conflict_ids),
-            tuple(conflict_ids),
-        ).fetchall()
-        paths = sorted({path for row in conflicts for path in json.loads(row["evidence_json"])["blockingPaths"]})
         request_id = self._record_system_request(
-            connection, run_row, make_reason("workspace-scope-violation", conflictIds=list(conflict_ids), paths=paths[:MAX_CONFLICT_PATH_VIEW]),
+            connection, run_row, make_reason("workspace-scope-violation", conflictIds=list(conflict_ids)),
             {}, now, turn_row=turn_row,
         )
         self.board._append_event(
@@ -7172,7 +7163,7 @@ class WorkflowCoordinator:
             task_id=run_row["run_id"],
             attempt_id=attempt["attempt_id"],
             revision=run_row["revision"] + 1,
-            payload={"requestId": request_id, "conflictIds": list(conflict_ids), "paths": paths[:MAX_CONFLICT_PATH_VIEW]},
+            payload={"requestId": request_id, "conflictIds": list(conflict_ids)},
         )
         return request_id
 

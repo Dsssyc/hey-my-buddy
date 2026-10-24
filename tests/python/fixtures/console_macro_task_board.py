@@ -295,7 +295,7 @@ class SyntheticBoard:
             view = self.board.submit_execution(**{"requestId": f"synthetic-plain-{number}", "adapter": "command",
                                              "argv": ["synthetic-never-executed"], "task": "Fictional plain record",
                                              "cwd": str(self.state / "fictional-project")})
-            self.plain.append(view["task"]["taskId"])
+            self.plain.append(view["task"]["runId"])
         self._inject_results()
         self._evidence()
 

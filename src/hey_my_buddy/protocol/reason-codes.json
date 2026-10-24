@@ -248,8 +248,7 @@
   "workspace-error": [],
   "workspace-ownership-lost": [],
   "workspace-scope-violation": [
-    "conflictIds",
-    "paths"
+    "conflictIds"
   ],
   "workspace.continuation-prepare-failed": [
     "continuationId"

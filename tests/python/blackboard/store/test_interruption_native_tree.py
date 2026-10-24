@@ -20,7 +20,7 @@ class NativeTreeTests(BoardTestCase):
                 patch.object(processes, 'stop_orphan_process', return_value='orphan-stopped') as stop:
             board.store.recover_executions()
             stop.assert_called_once()
-        self.assertFalse(client.get(runId=task['taskId'])['shutdownConfirmed'])
+        self.assertFalse(client.get(runId=task['runId'])['shutdownConfirmed'])
 
     def test_orphan_stop_is_named_in_the_persisted_evidence(self):
         board, client, task, _, actor = self.claimed()
@@ -30,4 +30,4 @@ class NativeTreeTests(BoardTestCase):
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch.object(processes, 'stop_orphan_process', return_value='orphan-stopped'):
             board.store.recover_executions()
-        self.assertEqual(client.get(runId=task['taskId'])['interruptionEvidence']['kind'], 'orphan-stopped')
+        self.assertEqual(client.get(runId=task['runId'])['interruptionEvidence']['kind'], 'orphan-stopped')

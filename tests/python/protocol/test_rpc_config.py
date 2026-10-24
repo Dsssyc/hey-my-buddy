@@ -597,7 +597,7 @@ class RealDaemonControlTests(unittest.TestCase):
         deadline = time.monotonic() + 10
         for run_id in (waited, cancellable):
             while call_board("task_get", {"runId": run_id}, endpoint=self.endpoint,
-                             state_dir=self.state)["task"]["status"] == "queued":
+                             state_dir=self.state)["task"]["state"] == "queued":
                 self.assertLess(time.monotonic(), deadline)
                 time.sleep(0.05)
         started = time.monotonic()
@@ -636,10 +636,10 @@ class RealDaemonControlTests(unittest.TestCase):
         while time.monotonic() < deadline:
             final = call_board("task_get", {"runId": quick}, endpoint=self.endpoint,
                                state_dir=self.state)["task"]
-            if final["status"] == "completed":
+            if final["state"] == "completed":
                 break
             time.sleep(0.05)
-        self.assertEqual(final["status"], "completed")
+        self.assertEqual(final["state"], "completed")
         self.assertTrue(final["resultAvailable"])
 
 

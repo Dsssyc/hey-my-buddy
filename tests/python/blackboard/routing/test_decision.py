@@ -249,7 +249,7 @@ class SelectionRequestTests(DecisionTestCase):
         self.assertNotIn("inputSha256", decision)
         # The decision task completed as ordinary work with a durable receipt.
         task = board.call("task_get", {"runId": request["runId"]})["task"]
-        self.assertEqual(task["status"], "completed")
+        self.assertEqual(task["state"], "completed")
         self.assertTrue(task["shutdownConfirmed"])
         self.assertEqual(task["spec"]["decision"]["kind"], "select")
 
@@ -472,7 +472,7 @@ class DecisionGateTests(DecisionTestCase):
         board.call("task_cancel", {"runId": request["runId"], 'note': "user cancelled the pending selection"})
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "cancelled")
         self.run_worker(board)
-        self.assertEqual(board.call("task_get", {"runId": request["runId"]})["task"]["status"], "cancelled")
+        self.assertEqual(board.call("task_get", {"runId": request["runId"]})["task"]["state"], "cancelled")
         self.assertIsNone(self.decision(board, request["decisionId"])["attemptId"])
 
 
@@ -605,7 +605,7 @@ class DecisionFailureTests(DecisionTestCase):
                 self.assertEqual(decision["output"]["code"], code)
                 self.assertEqual(decision["evidence"], [])
                 task = board.call("task_get", {"runId": decision["runId"]})["task"]
-                self.assertEqual(task["status"], "failed")
+                self.assertEqual(task["state"], "failed")
                 self.assertTrue(task["shutdownConfirmed"])
                 with board.store.db.read() as connection:
                     self.assertEqual(connection.execute("SELECT COUNT(*) FROM attempts WHERE task_id=?",

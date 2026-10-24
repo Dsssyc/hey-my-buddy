@@ -118,7 +118,7 @@ class DaemonAdmissionTests(BoardTestCase):
         daemon = Daemon(self.directory / "state")
         self.addCleanup(daemon.store.db.close)
         daemon.store.initialize()
-        work = {"queuedTasks": [{"taskId": "one"}, {"taskId": "two"}],
+        work = {"queuedTasks": [{"runId": "one"}, {"runId": "two"}],
                 "attempts": [{"taskId": "three"}, {"taskId": "four"}]}
         for method, stage in ((daemon.cancel_queued, "cancel-queued"), (daemon.cancel_active, "cancel-active")):
             with self.subTest(stage=stage), patch.object(daemon.store, "active_work", return_value=work), \

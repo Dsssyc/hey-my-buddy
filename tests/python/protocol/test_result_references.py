@@ -17,7 +17,7 @@ class ResultReferenceTests(BoardTestCase):
         task = self.board_fixture.submit_execution(requestId="receipt-ref", task="collect output facts",
                                                   cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
         self.nonce = "n" * 32
-        self.claim = admit_execution(self.board_fixture.client(), self.nonce, task_id=task["taskId"])["claim"]
+        self.claim = admit_execution(self.board_fixture.client(), self.nonce, task_id=task["runId"])["claim"]
         self.attempt = self.claim["attempt"]
         self.receipt_dir = execution_directory(self.claim, self.board_fixture.directory)
         self.receipt_dir.mkdir(parents=True, mode=0o700)

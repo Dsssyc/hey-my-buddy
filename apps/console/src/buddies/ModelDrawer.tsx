@@ -120,14 +120,14 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
   const limitInvalid = concurrencyLimit(row.limit) === null;
   const buddyIds = new Set(modelService.buddies.map(buddy => buddy.buddyId));
   const mine = (issue: { modelService?: string; buddyId: string }) => issue.modelService === key || (!issue.modelService && buddyIds.has(issue.buddyId));
-  const blocking = editor.blocking.filter(mine);
+  const blocking = editor.blocking.filter(issue => mine(issue) && !(limitInvalid && issue.modelService === key));
   const attention = editor.attention.filter(issue => !issue.router && mine(issue));
   const state = !row.available ? "unavailable" : row.pending ? "pending" : "available";
   const reasons = [harnessState, ...reasonTexts(row.reasons, t, !!harnessState)].filter(Boolean).join(" · ");
   const editingLock = !editor.sessionWritable ? t("pane.locked.session") : !editing ? t("pane.locked.saving") : undefined;
   const name = (text: string, unsaved: boolean, target: { id: string } | { htmlFor: string }) =>
     <div className="flex shrink-0 items-center gap-1.5 text-xs whitespace-nowrap text-ink3">
-      <label {...target}>{text}</label>{unsaved && <UnsavedMark label={t("unsaved")} />}
+      <label {...target}>{text}</label><span className="inline-flex size-1.5 shrink-0">{unsaved && <UnsavedMark label={t("unsaved")} />}</span>
     </div>;
 
   return <section role="region" aria-label={modelIdentity(modelService)} data-slot="model-drawer"
@@ -155,9 +155,9 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
                 const value = event.target.value === "" ? NaN : Number(event.target.value);
                 editor.update(draft => setConcurrencyLimit(draft, member, value));
               }} /></Hint>
-            <span id={`${id}-occupancy`} className="text-xs text-ink3 tabular-nums">
-              {row.occupancy === null ? t("pane.occupancyUnknown") : t("pane.occupancy", { n: row.occupancy })}
-              {limitInvalid && <span className="ml-2 text-fail">{t("pane.range")}</span>}
+            <span id={`${id}-occupancy`} className="grid shrink-0 grid-rows-[1rem_1rem] text-xs leading-4 text-ink3 tabular-nums">
+              <span>{row.occupancy === null ? t("pane.occupancyUnknown") : t("pane.occupancy", { n: row.occupancy })}</span>
+              <span className={cn("whitespace-nowrap text-fail", !limitInvalid && "invisible")} aria-hidden={!limitInvalid} role={limitInvalid ? "alert" : undefined}>{t("pane.range")}</span>
             </span>
           </div>
           <ConcurrencyNotice id={`${id}-concurrency-notice`} />

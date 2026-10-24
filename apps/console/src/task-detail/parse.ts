@@ -442,7 +442,7 @@ function parseAttempt(task: Rec): Attempt | null {
   const quota = quotaFailure ? oneOf(quotaFailure.code, ["quota-exceeded", "rate-limited"] as const, "task.quotaFailure") : null;
   const initiator = attempt.stopInitiator ?? task.stopInitiator;
   const cancellation = recOrNull(task.cancellation, "task.cancellation");
-  const cancelled = task.status === "cancelled" || task.status === "cancelling" || recOrNull(task.workflow, "task.workflow")?.state === "cancelled";
+  const cancelled = task.state === "cancelled" || task.state === "cancelling" || recOrNull(task.workflow, "task.workflow")?.state === "cancelled";
   const raw = strOrNull(receipt?.terminationReason, "task.selectedAttempt.result")?.trim() || strOrNull(task.terminationReason, "task.terminationReason")?.trim() || null;
   const who = cancellation ? actorOrNull(cancellation.actor, "task.cancellation") : null;
   const stopper = initiator === null || initiator === undefined ? null : oneOf(initiator, STOPPERS, "task.stopInitiator");
@@ -450,7 +450,7 @@ function parseAttempt(task: Rec): Attempt | null {
   // Only a person who stopped it is named; the console and the service are the stopper, not a name.
   const named = who && (stoppedBy === "host" || stoppedBy === "lead") && who.role === stoppedBy ? who : null;
   // A run that is over and says no cause is not a normal end: its cause is unknown.
-  const normal = raw === "completed" || (raw === null && !cancelled && !quota && !["completed", "failed"].includes(task.status as string));
+  const normal = raw === "completed" || (raw === null && !cancelled && !quota && !["completed", "failed"].includes(task.state as string));
   const ending: Ending | null = normal ? null : {
     cause: raw, stoppedBy: cancelled ? stoppedBy : null, actor: cancelled ? named : null,
     note: cancelled && cancellation ? strOrNull(cancellation.note, "task.cancellation.note") : null, quota,
@@ -499,7 +499,7 @@ function parseLineage(value: unknown): Rec {
 export function parseTask(value: unknown, runId: string): TaskView {
   const task = rec(value, "task");
   if (task.runId !== runId) refuse("task.runId");
-  for (const key of ["task", "status", "cwd", "createdAt", "updatedAt"]) str(task[key], `task.${key}`);
+  for (const key of ["task", "state", "cwd", "createdAt", "updatedAt"]) str(task[key], `task.${key}`);
   for (const key of ["acceptedAt", "reviewRejectedAt", "reviewRejectionNote", "activeAttemptId", "terminationReason"]) strOrNull(task[key], `task.${key}`);
   const lineage = parseLineage(task.lineage);
   const workflow = rec(task.workflow, "task.workflow");

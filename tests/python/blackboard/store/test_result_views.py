@@ -14,7 +14,7 @@ class ResultViewTests(BoardTestCase):
         board = self.board()
         task = board.submit_execution(requestId="large-workspace-result", task="collect workspace output",
                                       cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
-        attempt = admit_execution(board.client(), "n" * 32, task_id=task["taskId"])["claim"]["attempt"]
+        attempt = admit_execution(board.client(), "n" * 32, task_id=task["runId"])["claim"]["attempt"]
         paths = [f"src/{index:04d}-" + "a" * 2990 for index in range(3000)]
         seal = {
             "changedPaths": paths, "includedUntracked": paths,
@@ -34,8 +34,8 @@ class ResultViewTests(BoardTestCase):
             "attemptId": attempt["attemptId"], "generation": attempt["generation"],
             "nonce": "n" * 32, **report,
         })
-        status = board.call("task_get", {"taskId": task["taskId"]})
-        result = board.call("task_result", {"taskId": task["taskId"]})
+        status = board.call("task_get", {"runId": task["runId"]})
+        result = board.call("task_result", {"runId": task["runId"]})
         with board.store.db.read() as connection:
             stored = json.loads(connection.execute(
                 "SELECT result_json FROM attempts WHERE attempt_id=?", (attempt["attemptId"],)

@@ -63,6 +63,24 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
 
 
 class CurrentSchemaTests(BoardTestCase):
+    def test_claim_task_uses_task_id_while_host_views_use_run_id(self):
+        board = self.board()
+        submitted = board.submit_execution(
+            requestId="claim-name", task="do", cwd=str(self.workdir()),
+            adapter="command", argv=["/bin/true"],
+        )["task"]
+        task_id = submitted["runId"]
+        self.assertNotIn("taskId", submitted)
+
+        claim = admit_execution(board.client(), "n" * 32, task_id=task_id)["claim"]
+        self.assertEqual(claim["task"]["taskId"], task_id)
+        self.assertNotIn("runId", claim["task"])
+        self.assertEqual(claim["attempt"]["taskId"], task_id)
+
+        viewed = board.call("task_get", {"runId": task_id})["task"]
+        self.assertEqual(viewed["runId"], task_id)
+        self.assertNotIn("taskId", viewed)
+
     def test_fresh_board_is_the_current_schema_with_the_model_service_concurrency_table(self):
         board = self.board()
         integrity = board.store.integrity()
@@ -327,7 +345,7 @@ class ServiceAdmissionWindowTests(BoardTestCase):
                                  adapter='command', argv=['true'])['task']
         admitted = admit_execution(client, 'free-nonce-0000000000000000000')['claim']
         self.assertIsNotNone(admitted)
-        self.assertEqual(admitted['task']['taskId'], runnable['taskId'])
+        self.assertEqual(admitted['task']['taskId'], runnable['runId'])
 
     def test_an_empty_admission_does_not_wake_the_scheduler_again(self):
         from unittest.mock import Mock
@@ -350,8 +368,8 @@ class ServiceAdmissionWindowTests(BoardTestCase):
                  for index in range(2)]
         changed = Mock()
         board.store.on_change = changed
-        client.cancel(runId=tasks[0]['taskId'])
-        changed.assert_called_once_with(frozenset({tasks[0]['taskId']}))
+        client.cancel(runId=tasks[0]['runId'])
+        changed.assert_called_once_with(frozenset({tasks[0]['runId']}))
         changed.reset_mock()
         board.store.record_service_issue('fixture', RuntimeError('service issue'))
         changed.assert_called_once_with(frozenset())

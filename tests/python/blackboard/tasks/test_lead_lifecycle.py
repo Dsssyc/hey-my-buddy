@@ -54,7 +54,7 @@ class LeadLifecycleTests(WorkflowTestCase):
             self.assertIsNone(db.execute("SELECT current_attempt_id FROM workflow_runs WHERE run_id=?", (lead["runId"],)).fetchone()[0])
             self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1").fetchone()[0], 0)
         next_claim = self.claim(board, claim_request_id="claim-owned")
-        self.assertEqual(next_claim["claim"]["task"]["runId"], child["runId"])
+        self.assertEqual(next_claim["claim"]["task"]["taskId"], child["runId"])
 
     def test_completed_with_unfinished_owned_is_service_attention_without_auto_loop(self):
         board = self.board()
@@ -340,7 +340,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         child_claim = self.claim(board, claim_request_id="child", run_id=trigger["runId"])
         self.finish_turn(board, child_claim)
         next_claim = self.claim(board, claim_request_id="pick")
-        self.assertEqual(next_claim["claim"]["task"]["runId"], lead["runId"])
+        self.assertEqual(next_claim["claim"]["task"]["taskId"], lead["runId"])
 
     def test_lead_waits_for_its_own_stop_without_waking_until_settlement(self):
         board = self.board()

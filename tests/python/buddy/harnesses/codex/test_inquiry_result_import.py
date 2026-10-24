@@ -29,8 +29,8 @@ class InquiryResultImportTests(BoardTestCase):
         board = self.board()
         task = board.submit_execution(requestId=f"inquiry-result-{sampled_state}", task="fixture work",
                                       cwd=str(self.workdir()), adapter="command", argv=["true"])["task"]
-        attempt = admit_execution(board.client(), NONCE, task_id=task["taskId"])["claim"]["attempt"]
-        task_id, attempt_id = task["taskId"], attempt["attemptId"]
+        attempt = admit_execution(board.client(), NONCE, task_id=task["runId"])["claim"]["attempt"]
+        task_id, attempt_id = task["runId"], attempt["attemptId"]
         identity = {"taskId": task_id, "attemptId": attempt_id,
                     "generation": attempt["generation"], "turnId": None}
         journal = self.directory / "attempts" / task_id / attempt_id / "inquiry.results.jsonl"

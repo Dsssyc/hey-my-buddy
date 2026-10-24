@@ -101,7 +101,7 @@ class TestNamedContract(BoardTestCase):
                     adapter="command", argv=[sys.executable, "-c", "import time; time.sleep(30)"],
                     expectedSeconds=60,
                 )
-                self.assertEqual(reply["task"]["status"], "queued")
+                self.assertEqual(reply["task"]["state"], "queued")
                 task_id = reply["task"]["runId"]
                 # The attempt becomes `executing` only when its process reports in,
                 # in the same transaction that appends attempt.progress; waiting for
@@ -114,7 +114,7 @@ class TestNamedContract(BoardTestCase):
                     time.sleep(0.02)
                 cursor = json.loads(board.events_read(json.dumps({"token": endpoint["token"]})))["cursor"]
                 # Scope the wait to this task; unrelated events cannot release it.
-                params = {"after": cursor, "taskId": task_id, "timeoutMs": 10000}
+                params = {"after": cursor, "runId": task_id, "timeoutMs": 10000}
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     holder = pool.submit(self._wait_call, endpoint, "events_wait", params)
                     deadline = time.monotonic() + 5

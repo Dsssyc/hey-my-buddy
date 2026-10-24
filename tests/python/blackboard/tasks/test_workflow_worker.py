@@ -428,7 +428,6 @@ class CompactRouteTests(MicroTaskWorkerTestCase):
         expected = {
             "microTask",
             "runId",
-            "taskId",
             "requestId",
             "hostId",
             "ownerGeneration",

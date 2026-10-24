@@ -152,7 +152,7 @@ def _envelope(
         "runId": run.get("runId"),
         **({"waitingForHost": run["waitingForHost"]} if "waitingForHost" in run else {}),
         "requestId": run.get("requestId", request_id),
-        "status": run.get("status"),
+        "status": run.get("state"),
         **({"workflowState": run["workflowState"]} if run.get("workflowState") is not None else {}),
         "outcome": outcome,
         "ok": success,
@@ -211,7 +211,7 @@ def _result_undelivered(
     return _envelope(
         run,
         request_id=request_id,
-        outcome=run.get("status", "unknown"),
+        outcome=run.get("state", "unknown"),
         waited_seconds=waited_seconds,
         wait_seconds=wait_seconds,
         recovery=_recovery(request_id, run_id, recovery_reason),
@@ -473,7 +473,7 @@ def _wait_until_terminal(
                 shutdown.get("selfConfirmed") is True and shutdown.get("descendantsConfirmed") is True
             ):
                 break
-        if workflow_state is None and run.get("status") in TERMINAL_STATUSES:
+        if workflow_state is None and run.get("state") in TERMINAL_STATUSES:
             break
         remaining = deadline - clock()
         if remaining <= 0:
@@ -562,7 +562,7 @@ def _wait_until_terminal(
     if micro_task_view is not None:
         # A late execution completion does not undo the Host's micro task cancellation.
         micro_task_state = full.get("workflowState", run.get("workflowState"))
-        outcome = micro_task_state if micro_task_state in ("cancelled", "failed") else full.get("status", run.get("status", "unknown"))
+        outcome = micro_task_state if micro_task_state in ("cancelled", "failed") else full.get("state", run.get("state", "unknown"))
         envelope = _envelope(
             full,
             request_id=request_id,
@@ -583,7 +583,7 @@ def _wait_until_terminal(
     return _envelope(
         full,
         request_id=request_id,
-        outcome=full.get("status", run.get("status", "unknown")),
+        outcome=full.get("state", run.get("state", "unknown")),
         waited_seconds=clock() - started,
         wait_seconds=wait_seconds,
         result=full["result"],

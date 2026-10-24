@@ -154,7 +154,8 @@ class InquiryOwnerTests(unittest.TestCase):
         entry = snapshot.inquiries[0]
         self.assertEqual(entry.status, "queued")
         self.assertIsNotNone(entry.delivery)
-        self.assertFalse(entry.delivery.value["startsNewTurn"])
+        self.assertEqual(set(entry.delivery.value), {"admittedDelivery", "at"})
+        self.assertEqual(entry.delivery.value["admittedDelivery"], "cooperative-checkpoint")
         self.assertEqual(snapshot.journal.entries, 1)
         self.assertTrue(snapshot.journal.available)
         self.assertTrue(snapshot.observation.ready)

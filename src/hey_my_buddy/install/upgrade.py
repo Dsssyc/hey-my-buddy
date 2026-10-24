@@ -98,16 +98,18 @@ def idle_snapshot(state: Path, *, event_head: int | None = None,
         schema = _idle_board(connection)
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
+        if schema == UPGRADE_BASE_SCHEMA:
+            schema_upgrade.validate_inquiry_and_scope_stock(connection)
+            column_projections = schema_upgrade.RETAINED_COLUMN_PROJECTIONS
         retained_meta = [list(row) for row in connection.execute(
             "SELECT key,value FROM meta WHERE key!='schema_version' ORDER BY key")]
         retained_meta_hash = hashlib.sha256(json.dumps(
             retained_meta, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
-        if schema == UPGRADE_BASE_SCHEMA:
-            column_projections = schema_upgrade.RETAINED_COLUMN_PROJECTIONS
         snapshot = backup.database_snapshot(connection, event_head=event_head, column_projections=column_projections)
         expected = {}
         if schema == UPGRADE_BASE_SCHEMA:
             fingerprints = schema_upgrade.expected_router_fingerprints(connection)
+            fingerprints.update(schema_upgrade.expected_inquiry_and_scope_fingerprints(connection))
             fingerprints['events'] = schema_upgrade.expected_events_fingerprint(
                 connection, event_head=snapshot['eventHead'])
             expected = {'expectedFingerprints': fingerprints}

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ... import locking
 from ...protocol.inquiry_journal import (INQUIRY_JOURNAL_VERSION, MAX_JOURNAL_BYTES,
-                                         read_inquiry_journal, read_shared_snapshot)
+                                         inquiry_delivery_facts, read_inquiry_journal, read_shared_snapshot)
 from ...errors import BoardError
 from ...json_codec import canonical_json
 from ...timestamps import utc_now as _now
@@ -27,11 +27,7 @@ from .live import (
     _journal_states,
 )
 from .c_two_live import CTwoLiveEndpoint
-from .session_receipts import (
-    MAX_ANSWER_BYTES,
-    MAX_INQUIRIES,
-    MAX_QUESTION_BYTES,
-)
+from .session_receipts import MAX_INQUIRIES
 
 #: States a checkpoint may deliver and an answer may act on.
 ANSWERABLE_STATES = ("queued", "delivered")
@@ -189,6 +185,8 @@ class InquiryBridge:
         self._torn_line = bool(raw and not raw.endswith(b"\n"))
         for record in fact["records"]:
             inquiry_id = record["inquiryId"]
+            if isinstance(record.get("delivery"), dict):
+                record = {**record, "delivery": inquiry_delivery_facts(record["delivery"])}
             self.entries[inquiry_id] = {**self.entries.get(inquiry_id, {}), **record}
 
     def _identity_fields(self) -> dict:
@@ -216,7 +214,7 @@ class InquiryBridge:
         """
         inquiry_id = record["inquiryId"]
         merged = {**self.entries.get(inquiry_id, {}), **record}
-        raw = (canonical_json({"version": INQUIRY_JOURNAL_VERSION, **record}) + "\n").encode()
+        raw = (canonical_json({**record, "version": INQUIRY_JOURNAL_VERSION}) + "\n").encode()
         try:
             fd = os.open(self.journal_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
         except OSError:
@@ -396,12 +394,7 @@ class InquiryBridge:
             "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials", "immediateDelivery"],
             "journal": {"enabled": True, "truncated": self.truncated, "entries": len(entries)},
             "capability": "inquiry",
-            "supported": True,
             "deliveryMode": self.delivery_mode,
-            "limits": {"maxQuestionBytes": MAX_QUESTION_BYTES, "maxAnswerBytes": MAX_ANSWER_BYTES,
-                       "maxInquiriesPerRun": MAX_INQUIRIES,
-                       "inquiry": self.delivery_mode, "deliveryMode": self.delivery_mode,
-                       "requestedDelivery": None, "startsNewTurn": False, "extendsDeadline": False},
             "error": self.error,
         }
 
@@ -415,7 +408,6 @@ class InquiryBridge:
             "mounted": self.mounted,
             "error": self.error,
             "capability": "inquiry",
-            "supported": True,
             "inquiry": self.delivery_mode,
             "deliveryMode": self.delivery_mode,
             "requested": len(entries),
@@ -427,9 +419,6 @@ class InquiryBridge:
             "unansweredDelivered": sum(1 for entry in entries if entry.get("deliveredAt")
                                        and entry.get("state") not in ("answered", "discarded")),
             "journalEntries": len(entries),
-            "requestedDelivery": None,
-            "startsNewTurn": False,
-            "extendsDeadline": False,
         }
 
     def publish_attention(self) -> None:
@@ -494,8 +483,7 @@ class InquiryBridge:
                 return response(True, value=self._question_value(inquiry_id, existing, duplicate=True))
             if len(self.entries) >= MAX_INQUIRIES:
                 return response(False, error="too-many")
-            delivery = {"requestedDelivery": None, "admittedDelivery": self.delivery_mode,
-                        "startsNewTurn": False, "extendsDeadline": False, "supported": True, "at": _now()}
+            delivery = {"admittedDelivery": self.delivery_mode, "at": _now()}
             if not self._journal({**self._identity_fields(), "inquiryId": inquiry_id, "state": "queued",
                                   "question": question, "questionSha256": digest, "askedAt": _now(),
                                   "delivery": delivery}):
@@ -508,7 +496,6 @@ class InquiryBridge:
     def _question_value(inquiry_id: str, entry: dict, *, duplicate: bool) -> dict:
         return {
             "accepted": True,
-            "supported": True,
             "state": entry.get("state") or "queued",
             "duplicate": duplicate,
             "inquiryId": inquiry_id,
@@ -518,12 +505,12 @@ class InquiryBridge:
 
 
 #: The bridge snapshot's fields the channel observation carries — exactly the
-#: fields the board's ``live`` view reads. The bridge's own ``limits`` and its
-#: start timestamp stay behind: they are dropped here, never hidden in a JSON
+#: fields the board's ``live`` view reads. The bridge's start timestamp stays
+#: behind: it is dropped here, never hidden in a JSON
 #: slot, and the recent-event metadata is renamed to ``recentActivity`` so the
 #: snapshot's ``activity`` field keeps meaning the normalized activity publication.
 _OBSERVATION_FIELDS = ("ready", "observedAt", "sessionId", "agentStatus", "inbox", "lastEvent",
-                       "activityDropped", "replyTool", "capability", "supported", "attention",
+                       "activityDropped", "replyTool", "capability", "attention",
                        "journal", "deliveryMode", "unavailable", "error")
 
 

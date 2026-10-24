@@ -188,6 +188,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                           **{fixture['stockIds'][key]: 'accepted' for key in ('adopted', 'verified', 'helper', 'lead')},
                           fixture['stockIds']['helperParent']: 'concluded',
                           fixture['stockIds']['leadOwned']: 'concluded',
+                          **{fixture['stockIds'][key]: 'cancelled' for key in ('scopeParent', 'scopeHelper')},
                           **{entry['runId']: 'failed' for entry in fixture['edgeStock'].values()}})
         self.assertEqual(connection.execute("SELECT COUNT(*) FROM tasks WHERE state IN ('queued','running')").fetchone()[0], 0)
         self.assertEqual({row[0] for row in connection.execute(
@@ -305,8 +306,15 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual({row[1]: row[3] for row in connection.execute('PRAGMA table_info(workflow_runs)')}
                          ['workspace_manifest_json'], 1)
         self.assertNotIn('integrator', {row[1] for row in connection.execute('PRAGMA table_info(workflow_children)')})
-        expected = [{**event, 'payload_json': '{}'} if event['kind'] == 'attempt.activity' else event
-                    for event in events]
+        expected = []
+        for event in events:
+            if event['kind'] == 'attempt.activity':
+                event = {**event, 'payload_json': '{}'}
+            elif event['kind'] == 'workflow.scope_conflict':
+                payload = json.loads(event['payload_json'])
+                del payload['paths']
+                event = {**event, 'payload_json': _json(payload)}
+            expected.append(event)
         self.assertEqual([dict(row) for row in connection.execute('SELECT rowid AS event_rowid,* FROM events ORDER BY seq')],
                          expected)
         for name, original in rowids.items():
@@ -321,6 +329,136 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual((state / 'board.sqlite3').read_bytes(), board)
         self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+
+    def test_delivery_and_scope_stock_loses_only_the_old_writers_checked_copies(self):
+        fixture, connection = self.restored('delivery-and-scope-stock')
+        constants = {'extendsDeadline': False, 'requestedDelivery': None, 'startsNewTurn': False, 'supported': True}
+        messages = [dict(row) for row in connection.execute('SELECT rowid,* FROM messages ORDER BY rowid')]
+        expected_messages = []
+        changed = 0
+        for row in messages:
+            if row['delivery_json'] is not None:
+                delivery = json.loads(row['delivery_json'])
+                retired = constants.keys() & delivery.keys()
+                for key in retired:
+                    self.assertIs(type(delivery[key]), type(constants[key]))
+                    self.assertEqual(delivery[key], constants[key])
+                if retired:
+                    self.assertEqual(retired, constants.keys())
+                    self.assertIn('admittedDelivery', delivery)
+                    self.assertIn('deliveredAt', delivery)
+                    self.assertIn('nativeCorrelation', delivery)
+                    row = {**row, 'delivery_json': _json({key: value for key, value in delivery.items()
+                                                          if key not in constants})}
+                    changed += 1
+            expected_messages.append(row)
+        self.assertGreater(changed, 0)
+        conflicts = [dict(row) for row in connection.execute('SELECT rowid,* FROM workflow_workspace_conflicts ORDER BY rowid')]
+        evidence = {row['conflict_id']: json.loads(row['evidence_json'])['blockingPaths'] for row in conflicts}
+        self.assertTrue(any(len(paths) == 40 for paths in evidence.values()))
+        reasons = [dict(row) for row in connection.execute(
+            "SELECT rowid,* FROM workflow_requests WHERE reason_code='workspace-scope-violation' ORDER BY rowid")]
+        self.assertTrue(any(row['child_task_id'] is not None for row in reasons))
+        expected_reasons = []
+        for row in reasons:
+            params = json.loads(row['reason_params_json'])
+            self.assertEqual(set(params), {'conflictIds', 'paths'})
+            expected_paths = sorted({path for conflict_id in params['conflictIds'] for path in evidence[conflict_id]})[:32]
+            self.assertEqual(params['paths'], expected_paths)
+            expected_reasons.append({**row, 'reason_params_json': _json({'conflictIds': params['conflictIds']})})
+        old_events = [dict(row) for row in connection.execute(
+            "SELECT rowid,* FROM events WHERE kind='workflow.scope_conflict' ORDER BY seq")]
+        self.assertEqual(len(old_events), len(conflicts))
+        expected_events = []
+        for row in old_events:
+            payload = json.loads(row['payload_json'])
+            self.assertEqual(set(payload), {'conflictIds', 'paths', 'requestId'})
+            self.assertEqual(payload['paths'], sorted({path for conflict_id in payload['conflictIds']
+                                                      for path in evidence[conflict_id]})[:32])
+            expected_events.append({**row, 'payload_json': _json({key: value for key, value in payload.items() if key != 'paths'})})
+        schema_upgrade.migrate_schema(fixture['state'])
+        self.assertEqual([dict(row) for row in connection.execute('SELECT rowid,* FROM messages ORDER BY rowid')], expected_messages)
+        self.assertEqual([dict(row) for row in connection.execute(
+            "SELECT rowid,* FROM workflow_requests WHERE reason_code='workspace-scope-violation' ORDER BY rowid")], expected_reasons)
+        self.assertEqual([dict(row) for row in connection.execute(
+            "SELECT rowid,* FROM events WHERE kind='workflow.scope_conflict' ORDER BY seq")], expected_events)
+        self.assertEqual([dict(row) for row in connection.execute(
+            'SELECT rowid,* FROM workflow_workspace_conflicts ORDER BY rowid')], conflicts)
+
+    def test_nonconstant_inquiry_delivery_rolls_back_the_upgrade(self):
+        fixture, connection = self.restored('nonconstant-delivery')
+        message = connection.execute("SELECT message_id,delivery_json FROM messages"
+                                     " WHERE json_type(delivery_json,'$.supported') IS NOT NULL LIMIT 1").fetchone()
+        original = json.loads(message['delivery_json'])
+        for field, value in (('extendsDeadline', True), ('requestedDelivery', 'realtime'),
+                             ('startsNewTurn', True), ('supported', False),
+                             ('extendsDeadline', 0), ('supported', 1)):
+            with self.subTest(field=field, value=value):
+                connection.execute('UPDATE messages SET delivery_json=? WHERE message_id=?',
+                                   (_json({**original, field: value}), message['message_id']))
+                connection.commit()
+                before = list(connection.iterdump())
+                with self.assertRaises(BoardError) as caught:
+                    schema_upgrade.migrate_schema(fixture['state'])
+                self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                self.assertEqual(caught.exception.details['messageId'], message['message_id'])
+                self.assertEqual(caught.exception.details['field'], field)
+                self.assertEqual(list(connection.iterdump()), before)
+
+    def test_idle_snapshot_reports_invalid_copies_before_sqlite_fingerprints(self):
+        fixture, connection = self.restored('snapshot-invalid-copies')
+        cases = (
+            ('messages', 'message_id', 'delivery_json',
+             "json_type(delivery_json,'$.supported') IS NOT NULL", 'supported', False, 'messageId'),
+            ('workflow_requests', 'request_id', 'reason_params_json',
+             "reason_code='workspace-scope-violation' AND child_task_id IS NULL", 'paths', ['changed.txt'], 'recordId'),
+            ('workflow_requests', 'request_id', 'reason_params_json',
+             "reason_code='workspace-scope-violation' AND child_task_id IS NOT NULL", 'paths', ['changed.txt'], 'recordId'),
+            ('events', 'seq', 'payload_json', "kind='workflow.scope_conflict'", 'paths', ['changed.txt'], 'recordId'),
+            ('workflow_requests', 'request_id', 'reason_params_json',
+             "reason_code='workspace-scope-violation'", 'conflictIds', ['missing-conflict'], 'recordId'),
+            ('events', 'seq', 'payload_json', "kind='workflow.scope_conflict'", 'conflictIds', ['missing-conflict'], 'recordId'),
+        )
+        for table, identity, column, predicate, field, value, detail in cases:
+            with self.subTest(table=table, predicate=predicate, field=field):
+                record_id, original = connection.execute(
+                    f'SELECT {identity},{column} FROM {table} WHERE {predicate} LIMIT 1').fetchone()
+                changed = {**json.loads(original), field: value}
+                connection.execute(f'UPDATE {table} SET {column}=? WHERE {identity}=?', (_json(changed), record_id))
+                connection.commit()
+                before = list(connection.iterdump())
+                with self.assertRaises(BoardError) as caught:
+                    upgrade.idle_snapshot(fixture['state'])
+                self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                self.assertEqual(caught.exception.details[detail], record_id)
+                self.assertEqual(caught.exception.details['field'], field)
+                self.assertTrue(caught.exception.message)
+                self.assertEqual(list(connection.iterdump()), before)
+                connection.execute(f'UPDATE {table} SET {column}=? WHERE {identity}=?', (original, record_id))
+                connection.commit()
+
+    def test_scope_request_proxy_and_event_path_mismatches_roll_back_the_upgrade(self):
+        fixture, connection = self.restored('scope-copy-mismatch')
+        for table, column, predicate in (
+                ('workflow_requests', 'reason_params_json', "reason_code='workspace-scope-violation' AND child_task_id IS NULL"),
+                ('workflow_requests', 'reason_params_json', "reason_code='workspace-scope-violation' AND child_task_id IS NOT NULL"),
+                ('events', 'payload_json', "kind='workflow.scope_conflict'")):
+            identity = 'seq' if table == 'events' else 'request_id'
+            row = connection.execute(f'SELECT rowid,{column},{identity} FROM {table} WHERE {predicate} LIMIT 1').fetchone()
+            for change in ({'paths': ['different.txt']}, {'conflictIds': ['missing-conflict']}):
+                with self.subTest(table=table, predicate=predicate, change=change):
+                    facts = {**json.loads(row[1]), **change}
+                    connection.execute(f'UPDATE {table} SET {column}=? WHERE rowid=?', (_json(facts), row[0]))
+                    connection.commit()
+                    before = list(connection.iterdump())
+                    with self.assertRaises(BoardError) as caught:
+                        schema_upgrade.migrate_schema(fixture['state'])
+                    self.assertEqual(caught.exception.code, 'UPGRADE_INVALID_BOARD')
+                    self.assertEqual(caught.exception.details['recordId'], row[2])
+                    self.assertEqual(caught.exception.details['field'], next(iter(change)))
+                    self.assertEqual(list(connection.iterdump()), before)
+                    connection.execute(f'UPDATE {table} SET {column}=? WHERE rowid=?', (row[1], row[0]))
+                    connection.commit()
 
     def test_missing_manifest_rolls_back_the_whole_upgrade(self):
         fixture, connection = self.restored('missing-manifest')
@@ -820,7 +958,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         references = [entry['params']['receipt'] for entry in fixture['operations']
                       if entry['operation'] == 'execution_result']
-        self.assertEqual(len(references), 18)
+        self.assertEqual(len(references), 20)
         for reference in references:
             receipt = read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'])
             self.assertIsNotNone(receipt)
@@ -828,7 +966,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                                          (receipt['attemptId'],)).fetchone()
             self.assertEqual(tuple(attempt), (receipt['taskId'], receipt['generation']))
         sessions = list((fixture['state'] / 'sessions').rglob('*.jsonl'))
-        self.assertEqual(len(sessions), 12)
+        self.assertEqual(len(sessions), 14)
         for path in sessions:
             lines = path.read_text(encoding="utf-8").splitlines()
             format = SessionFormat.model_validate_json(lines[0])
@@ -839,6 +977,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             "SELECT run_id FROM workflow_artifacts WHERE kind='turn-input'")},
             {fixture['stableIds']['delivered'], fixture['stableIds']['accepted'], fixture['stockIds']['verified'],
              fixture['stockIds']['lead'], fixture['stockIds']['helperParent'], fixture['stockIds']['helper'],
+             fixture['stockIds']['scopeParent'],
              fixture['edgeStock']['partial-failed']['runId']})
         outputs = [json.loads(row[0]) for row in connection.execute(
             "SELECT manifest_json FROM workflow_artifacts WHERE kind='output'")]
@@ -886,7 +1025,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         schema_upgrade.migrate_schema(fixture['state'])
         target = self.root / 'runtimes' / ('b' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
-        for kind in ('attempt.activity', 'router.claimed'):
+        for kind in ('attempt.activity', 'router.claimed', 'workflow.scope_conflict'):
             with self.subTest(kind=kind):
                 row = connection.execute('SELECT seq,payload_json FROM events WHERE kind=? LIMIT 1', (kind,)).fetchone()
                 connection.execute('UPDATE events SET payload_json=? WHERE seq=?',
@@ -897,6 +1036,27 @@ class UpgradeFixtureTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
                 self.assertEqual(caught.exception.details['tables'], ['events'])
                 connection.execute('UPDATE events SET payload_json=? WHERE seq=?', (row['payload_json'], row['seq']))
+                connection.commit()
+
+    def test_started_verification_checks_the_retained_parts_of_converted_json(self):
+        fixture, connection = self.restored('checked-json-retention')
+        before = upgrade.idle_snapshot(fixture['state'])
+        schema_upgrade.migrate_schema(fixture['state'])
+        target = self.root / 'runtimes' / ('b' * 32)
+        health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
+        for table, column, predicate in (
+                ('messages', 'delivery_json', 'delivery_json IS NOT NULL'),
+                ('workflow_requests', 'reason_params_json', "reason_code='workspace-scope-violation'")):
+            with self.subTest(table=table):
+                row = connection.execute(f'SELECT rowid,{column} FROM {table} WHERE {predicate} LIMIT 1').fetchone()
+                facts = {**json.loads(row[1]), 'changedRetainedFact': True}
+                connection.execute(f'UPDATE {table} SET {column}=? WHERE rowid=?', (_json(facts), row[0]))
+                connection.commit()
+                with self.assertRaises(BoardError) as caught:
+                    upgrade.verify_started(fixture['state'], target, health, before)
+                self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
+                self.assertEqual(caught.exception.details['tables'], [table])
+                connection.execute(f'UPDATE {table} SET {column}=? WHERE rowid=?', (row[1], row[0]))
                 connection.commit()
 
     def test_started_verification_rejects_rewritten_command_receipts(self):

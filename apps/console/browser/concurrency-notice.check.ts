@@ -24,6 +24,7 @@ for (const { locale, copy, limit, note } of languages) for (const width of [1280
       const heading = notice.getByRole("heading", { name: copy.title });
       const body = notice.getByText(copy.body, { exact: true });
       const input = drawer.getByRole("spinbutton", { name: limit });
+      const occupancy = drawer.locator('[id$="-occupancy"]');
       const noteInput = drawer.getByRole("textbox", { name: note, exact: true });
       await notice.scrollIntoViewIfNeeded();
       await expect(heading).toBeVisible();
@@ -33,9 +34,21 @@ for (const { locale, copy, limit, note } of languages) for (const width of [1280
       await expect(input).toHaveAccessibleDescription(new RegExp(copy.title));
       await expectWholeAndApart(notice, notice.locator("h4, p"));
       await expectTextUncut(notice.locator("h4, p"));
-      const [inputBox, noticeBox, noteBox] = await Promise.all([input.boundingBox(), notice.boundingBox(), noteInput.boundingBox()]);
+      const [inputBox, occupancyBox, noticeBox, noteBox] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox(), noteInput.boundingBox()]);
       expect(inputBox!.y + inputBox!.height).toBeLessThanOrEqual(noticeBox!.y);
       expect(noticeBox!.y + noticeBox!.height).toBeLessThanOrEqual(noteBox!.y);
+      await input.fill("0");
+      await expect(input).toHaveAttribute("aria-invalid", "true");
+      const error = occupancy.getByRole("alert");
+      await expect(error).toBeVisible();
+      const [invalidInput, invalidOccupancy, invalidNotice, invalidNote] = await Promise.all([input.boundingBox(), occupancy.boundingBox(), notice.boundingBox(), noteInput.boundingBox()]);
+      for (const [before, after] of [[inputBox, invalidInput], [occupancyBox, invalidOccupancy], [noticeBox, invalidNotice], [noteBox, invalidNote]]) {
+        expect(Math.abs(after!.x - before!.x)).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(after!.y - before!.y)).toBeLessThanOrEqual(0.5);
+      }
+      const errorBox = await error.boundingBox();
+      expect(errorBox!.y).toBeGreaterThanOrEqual(invalidOccupancy!.y);
+      expect(errorBox!.y + errorBox!.height).toBeLessThanOrEqual(invalidOccupancy!.y + invalidOccupancy!.height);
       for (const text of [heading, body]) {
         expect(await contrastOf(text)).toBeGreaterThanOrEqual(4.5);
         const style = await text.evaluate(node => {

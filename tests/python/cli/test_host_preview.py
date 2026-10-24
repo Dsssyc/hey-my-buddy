@@ -225,7 +225,7 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertTrue(failed_conclusion["failed"])
         self.assertFalse(failed_conclusion["cancelled"])
         fixture = json.loads((fixtures / failed_path).read_text(encoding="utf-8"))
-        self.assertEqual("failed", fixture["task"]["status"])
+        self.assertEqual("failed", fixture["task"]["state"])
         self.assertEqual("failed", fixture["state"])
         self.assertIsNone(fixture["task"]["acceptedAt"])
         self.assertTrue(any(item["kind"] == "partial-output" and item.get("partial") is True
@@ -271,7 +271,7 @@ class PreviewFixtureTest(unittest.TestCase):
                                  for run_id in ("preview-run-b3", "preview-run-b4", "preview-run-b5")]
         self.assertEqual("waiting-owned", rows[lead["runId"]]["state"])
         self.assertEqual("waiting-owned", lead["state"])
-        self.assertEqual("completed", lead["task"]["status"])
+        self.assertEqual("completed", lead["task"]["state"])
         self.assertEqual("awaiting-owned", lead["queueReason"])
         self.assertEqual("awaiting-owned", lead["task"]["queueReason"])
         self.assertIsNone(lead["task"]["activeAttemptId"])
@@ -316,7 +316,7 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertEqual(waiting["currentTurn"]["updatedAt"], wait_span["startAt"])
         self.assertIsNone(wait_span["endAt"])
         self.assertEqual("executing", active["state"])
-        self.assertEqual("queued", active["task"]["status"])
+        self.assertEqual("queued", active["task"]["state"])
         self.assertIsNone(active["task"]["selectedAttemptId"])
         self.assertIsNone(active["task"]["activeAttemptId"])
         self.assertIsNone(active["currentTurn"])
@@ -612,6 +612,16 @@ class PreviewDeletionTest(unittest.TestCase):
                 "requestId": "synthetic-clear-expired", "harness": "zcode", "provider": "zai"})
             self.assertEqual({"harness": "zcode", "provider": "zai", "cleared": True,
                               "duplicate": False}, expired["result"])
+
+    def test_message_list_uses_the_current_task_selector(self) -> None:
+        with self.server() as server:
+            run_id = 'preview-run-a1'
+            status, reply = self.call(server, '/api/command', 'message_list', {'runId': run_id})
+            self.assertEqual(status, 200, reply)
+            self.assertIn('messages', reply['result'])
+            status, reply = self.call(server, '/api/command', 'message_list', {'taskId': run_id})
+            self.assertEqual(status, 400, reply)
+            self.assertEqual(reply['error']['code'], 'INVALID_ARGUMENT')
 
     def test_preview_scope_and_blocker_titles(self) -> None:
         with self.server() as server:

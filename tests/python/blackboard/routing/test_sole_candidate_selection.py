@@ -171,7 +171,7 @@ class SoleCandidateSelectionTests(DecisionTestCase):
         self.assertIn("mock select chose", completed["note"])
         self.readonly_start.assert_called_once()
         task = board.call("task_get", {"runId": request["runId"]})["task"]
-        self.assertEqual(task["status"], "completed")
+        self.assertEqual(task["state"], "completed")
 
     def test_direct_selection_retains_the_pin_that_narrowed_the_candidates(self):
         board = self.board()

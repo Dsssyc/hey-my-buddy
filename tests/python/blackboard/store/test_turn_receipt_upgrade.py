@@ -27,7 +27,8 @@ class TurnReceiptUpgradeTests(unittest.TestCase):
 
     def test_old_writer_stock_keeps_every_result_field_and_receipt_byte(self):
         connection = self.connection
-        connection.execute('UPDATE workflow_turns SET rowid=rowid*11+4')
+        last_rowid = connection.execute('SELECT MAX(rowid) FROM workflow_turns').fetchone()[0]
+        connection.execute('UPDATE workflow_turns SET rowid=rowid*11+?', (last_rowid + 4,))
         connection.commit()
         stock = {row['turn_id']: dict(row) for row in connection.execute(
             'SELECT rowid AS original_rowid,* FROM workflow_turns')}

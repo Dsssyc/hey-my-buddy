@@ -3,7 +3,7 @@ import type { Task } from "./types";
 import { excerpt, needsReview, taskStatus, taskTitle } from "./task-state";
 
 const task = (overrides: Partial<Task> = {}): Task => ({
-  runId: "run-1", task: "第一行标题\n第二行", status: "queued", owner: "host", cwd: "/repo",
+  runId: "run-1", task: "第一行标题\n第二行", state: "queued", owner: "host", cwd: "/repo",
   revision: 1, createdAt: "2026-09-26T00:00:00Z", acceptedAt: null, reviewRejectedAt: null, reviewRejectionNote: null,
   ...overrides,
 });
@@ -11,14 +11,14 @@ const task = (overrides: Partial<Task> = {}): Task => ({
 describe("awaiting review", () => {
   it("includes only delivered workflows with the required result and stop evidence", () => {
     const delivered = task({
-      status: "completed", resultAvailable: true, shutdownConfirmed: true,
+      state: "completed", resultAvailable: true, shutdownConfirmed: true,
       workflowShutdown: { selfConfirmed: true, descendantsConfirmed: true, unconfirmedRunIds: [], unconfirmedCount: 0, truncated: false },
       workflow: { state: "delivered", awaitingHost: false, hostId: "host", ownerGeneration: 1, revision: 1 },
     });
     expect(needsReview(delivered)).toBe(true);
     expect(needsReview({ ...delivered, workflow: undefined, workflowShutdown: undefined })).toBe(true);
     expect(needsReview({ ...delivered, workflow: { ...delivered.workflow!, state: "concluded" } })).toBe(false);
-    expect(needsReview({ ...delivered, status: "concluded" })).toBe(false);
+    expect(needsReview({ ...delivered, state: "concluded" })).toBe(false);
     expect(needsReview({ ...delivered, workflowShutdown: undefined })).toBe(false);
     expect(needsReview({ ...delivered, resultAvailable: false })).toBe(false);
   });
@@ -26,7 +26,7 @@ describe("awaiting review", () => {
 
 describe("Lead ownership display", () => {
   it("shows a helper's Lead boundary through its root even without direct ownership", () => {
-    const boundary = task({ status: "completed", workflow: { state: "awaiting-host", awaitingHost: true, hostId: "host", ownerGeneration: 1, revision: 1 } });
+    const boundary = task({ state: "completed", workflow: { state: "awaiting-host", awaitingHost: true, hostId: "host", ownerGeneration: 1, revision: 1 } });
     expect(taskStatus(boundary)).toBe("awaiting-host");
     expect(taskStatus({ ...boundary, lineage: { kind: "micro-task", sourceHostId: "host", currentHostId: "host", parentRunId: null,
       rootRunId: "run-1", rootLeadRunId: "lead-1", project: { id: "p", path: null, label: "p" }, buddy: null,

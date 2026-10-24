@@ -155,6 +155,6 @@ export default {
   "workspace-cleanup-started": "Workspace cleanup started.",
   "workspace-error": "Workspace error.",
   "workspace-ownership-lost": "Workspace ownership was lost.",
-  "workspace-scope-violation": "The workspace has changes outside its authorized scope: {{paths}}; conflicts {{conflictIds}}.",
+  "workspace-scope-violation": "The workspace has changes outside its authorized scope; conflicts: {{conflictIds}}.",
   "workspace.continuation-prepare-failed": "Workspace preparation failed for continuation {{continuationId}}; Host attention is needed.",
 } satisfies typeof zh;

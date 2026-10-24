@@ -58,7 +58,7 @@ class FullModelServiceBacklogTests(StoreConcurrencyTestCase):
         )
         claim = admit_execution(client, "n" * 32)
         self.assertIsNotNone(claim["claim"], claim["reason"])
-        self.assertEqual(claim["claim"]["task"]["runId"], submitted["task"]["runId"])
+        self.assertEqual(claim["claim"]["task"]["taskId"], submitted["task"]["runId"])
 
     def test_blocked_backlog_tasks_report_the_model_service_queue_reason(self):
         board = self.board_
