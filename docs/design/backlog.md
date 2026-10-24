@@ -67,11 +67,11 @@
 
 ## 安装与存储
 
-**最新的执行活动存了两份。**（2026-10-23 Host 查 C1 能否省掉心跳记录时见到，开发者要求记着）`attempt_activity` 表每次执行一行，存最新的活动；`attempt.activity` 事件替换式地只留最新一条，它的载荷又是同一份活动（`store.py` 的 `_append_event` 与 `_store_activity`）。按 AGENTS.md 的存储规则核对它是不是重复存值：事件若只为通知读者，载荷能否只带指向；若有读者靠事件里的活动，说明为什么不能读表。随存储那一批做。
+**最新的执行活动存了两份。**（2026-10-23 Host 查 C1 能否省掉心跳记录时见到，开发者要求记着；2026-10-24 在源码里做完，`attempt.activity` 事件只带身份，随 0.53.0 的升级转换存量，尚未安装）`attempt_activity` 表每次执行一行，存最新的活动；`attempt.activity` 事件替换式地只留最新一条，它的载荷又是同一份活动（`store.py` 的 `_append_event` 与 `_store_activity`）。按 AGENTS.md 的存储规则核对它是不是重复存值：事件若只为通知读者，载荷能否只带指向；若有读者靠事件里的活动，说明为什么不能读表。随存储那一批做。
 
-**挪基点到 0.51.0 留下的顺带项。**（2026-10-23 Host 验收微任务“把升级基点挪到 0.51.0”时见到，[记录](../acceptance/installs/0.51.0.md)）`tests/python/blackboard/store/test_upgrade_fixture.py` 的 `test_retained_execution_rows_remain_readable_with_no_buddy` 删多了：它测的是读取方对没有 buddy 的执行行与回合输入的读法，与 27 → 28 的转换无关，只是借这次转换打开看板，应改对新基点后保留；日常看板里是否还有这类行，没有核对。另有两处被删转换留下的参数已没有用处：`backup.database_snapshot` 的 `column_projections`，`install/upgrade.py` 里 `verify_started` 的 `expected_schema`（现在恒等于当前 schema）。随存储那一批做。
+**挪基点到 0.51.0 留下的顺带项。**（2026-10-23 Host 验收微任务“把升级基点挪到 0.51.0”时见到，[记录](../acceptance/installs/0.51.0.md)；2026-10-24 在源码里做完：那条读取测试已恢复，两个参数是 28 → 29 升级核验的一部分，留着；尚未安装）`tests/python/blackboard/store/test_upgrade_fixture.py` 的 `test_retained_execution_rows_remain_readable_with_no_buddy` 删多了：它测的是读取方对没有 buddy 的执行行与回合输入的读法，与 27 → 28 的转换无关，只是借这次转换打开看板，应改对新基点后保留；日常看板里是否还有这类行，没有核对。另有两处被删转换留下的参数已没有用处：`backup.database_snapshot` 的 `column_projections`，`install/upgrade.py` 里 `verify_started` 的 `expected_schema`（现在恒等于当前 schema）。随存储那一批做。
 
-**导出工具自己补写配置表的默认行。**（2026-10-22 Host 验收“升级时重新结清历史问询”时见到。）`tools/export_board_sample.py` 按来源看板的定义建表之后，自己调 `initialize_configuration` 并插入 `reminder_settings` 的默认行，其中写死 900 秒，与 `Database.initialize` 的默认重复；日后那里的默认一改，样本就和新建的看板不一样。改为两处共用同一份默认。
+**导出工具自己补写配置表的默认行。**（2026-10-22 Host 验收“升级时重新结清历史问询”时见到；2026-10-24 在源码里做完，两处共用 `db.initialize_defaults`，尚未安装）`tools/export_board_sample.py` 按来源看板的定义建表之后，自己调 `initialize_configuration` 并插入 `reminder_settings` 的默认行，其中写死 900 秒，与 `Database.initialize` 的默认重复；日后那里的默认一改，样本就和新建的看板不一样。改为两处共用同一份默认。
 
 **备份只为升级的回滚而存在。**（开发者 2026-10-16 同意；同日做完并随 0.41.0 安装，[验收记录](../acceptance/backup-for-rollback/backup-for-rollback.md)；留下的小事见下一条） 2026-10-16 讨论中间号不变的安装时查到：`hey-my-buddy backup` 做的手动在线备份没有任何命令能用，唯一的还原是中间号变的安装失败时的自动回滚，用的是安装自己在服务停下、看板空闲之后做的离线备份；产品里与 Host 的演练都不调用手动备份。安装的备份又把执行证据与受管检出的封存产物整份复制一遍，而升级从不改动它们：日常看板这一份 98 MB，其中 86 MB 是封存产物的副本、6 MB 是执行证据，看板压缩后 5 MB。存储页把它列为受保护的一行“备份”，只有大小，看不出是哪天的、做什么用。做法：去掉手动 `backup`（CLI 命令与服务操作）；安装的备份只装回滚需要的东西，也就是看板与安装会改动的状态文件；存储页把这一行写明是“上次升级之前的看板”。备份不再复制证据之后，`backup-preflight` 命令、`health.backupPreflight`、控制台存储页的“备份预检”与只为备份而存在的证据清单（`protocol/attempt_evidence.py`）都没有东西可查，同一批一并删掉（开发者同日同意），skill 里安装那一句随之去掉备份预检。随这一批删掉的还有 M5 验收时看到的 `test_backup_has_no_upgrade_token_parameter`：它为一个已删的参数留着测试。哪天真有了“看板坏了要恢复”的需要，再把完整备份与还原一起设计。
 
