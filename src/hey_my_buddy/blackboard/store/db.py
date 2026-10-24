@@ -19,7 +19,8 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
+UPGRADE_BASE_SCHEMA = 28
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -113,6 +114,12 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS messages_task_idx ON messages(task_id, created_at);
 CREATE INDEX IF NOT EXISTS messages_state_idx ON messages(state);
+"""
+
+EVENTS_ROUTER_CLAIMED_INDEX_DDL = """
+CREATE INDEX IF NOT EXISTS events_router_claimed_idx
+    ON events(json_extract(payload_json, '$.buddyId'), seq)
+    WHERE kind='router.claimed';
 """
 
 CORE_SCHEMA = """
@@ -270,9 +277,6 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_task_idx ON events(task_id, seq);
 CREATE INDEX IF NOT EXISTS events_decision_status_idx ON events(kind, seq DESC)
     WHERE kind IN ('decision.completed','decision.failed','decision.needs_host','decision.cancelled');
-CREATE INDEX IF NOT EXISTS events_router_claimed_idx
-    ON events(json_extract(CASE WHEN json_valid(payload_json) THEN payload_json END, '$.buddyId'), seq)
-    WHERE kind='router.claimed';
 
 CREATE TABLE IF NOT EXISTS commands (
     command_id      TEXT PRIMARY KEY,
@@ -998,7 +1002,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_expected_idx
 CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
     ON attempt_reminders(attempt_id, silence_started_at) WHERE kind = 'native-silence';
 """
-SCHEMA = "\n".join((CORE_SCHEMA, MESSAGES_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
+SCHEMA = "\n".join((CORE_SCHEMA, EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
                     HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
                     CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))
 
@@ -1012,6 +1016,16 @@ def utc_now() -> str:
 
 def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def initialize_defaults(connection: sqlite3.Connection) -> None:
+    """Seed the configuration shared by a fresh board and a disposable sample."""
+    from ..routing.router import initialize_configuration
+    initialize_configuration(connection)
+    connection.execute(
+        "INSERT INTO reminder_settings(id, silence_seconds, updated_at, revision) "
+        "VALUES(1, 900, ?, 1)", (utc_now(),)
+    )
 
 
 class Corruption(RuntimeError):
@@ -1165,12 +1179,7 @@ class Database:
                         connection.execute(
                             "INSERT INTO meta(key, value) VALUES(?, ?)", (SECRET_KEY, secrets.token_hex(32))
                         )
-                        from ..routing.router import initialize_configuration
-                        initialize_configuration(connection)
-                        connection.execute(
-                            "INSERT INTO reminder_settings(id, silence_seconds, updated_at, revision) "
-                            "VALUES(1, 900, ?, 1)", (utc_now(),)
-                        )
+                        initialize_defaults(connection)
                         connection.execute("COMMIT")
                     except BaseException:
                         connection.execute("ROLLBACK")

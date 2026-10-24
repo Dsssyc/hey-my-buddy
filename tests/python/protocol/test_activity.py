@@ -213,7 +213,9 @@ class ActivityProjection(BoardTestCase):
             event for event in client.read_events(after=0)["events"] if event["kind"] == "attempt.activity"
         ]
         self.assertEqual(len(events), 1, "advancing receipts replace this attempt's previous activity")
-        self.assertEqual(events[0]["payload"]["activity"], newer)
+        self.assertEqual(events[0]["payload"], {})
+        self.assertEqual(events[0]["taskId"], task["runId"])
+        self.assertEqual(events[0]["attemptId"], attempt["attemptId"])
 
     def test_activity_waiting_reason_is_checked_at_service_receipt(self):
         board = self.board()
@@ -266,7 +268,9 @@ class ActivityProjection(BoardTestCase):
         self.assertEqual(len(following["events"]), 1)
         self.assertGreater(following["cursor"], old_cursor)
         self.assertEqual(following["head"], board.store.head())
-        self.assertEqual(following["events"][0]["payload"]["activity"], second)
+        self.assertEqual(following["events"][0]["payload"], {})
+        self.assertEqual(following["events"][0]["taskId"], task["runId"])
+        self.assertEqual(following["events"][0]["attemptId"], attempt["attemptId"])
         self.assertFalse(following["timedOut"])
         all_events = client.read_events(after=0)["events"]
         self.assertNotIn(old_cursor, [event["seq"] for event in all_events])
@@ -445,7 +449,8 @@ class ExecutionActivityForwarding(BoardTestCase):
         self.assertTrue(wait_for(lambda: client.get(runId=attempt["taskId"])["activity"] == second, 3))
         self.assertFalse(endpoint.publish_activity(first), "the endpoint fences older observations")
         self.assertEqual(len(self.activity_events(client)), 1)
-        self.assertEqual(self.activity_events(client)[0]["payload"]["activity"], second)
+        self.assertEqual(self.activity_events(client)[0]["payload"], {})
+        self.assertEqual(self.activity_events(client)[0]["attemptId"], attempt["attemptId"])
         self.assertIsNone(control.handle.process.poll(), "activity reads never stop the owned child")
 
     def test_unavailable_binding_is_retried_without_activity_or_heartbeat(self):

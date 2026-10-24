@@ -197,7 +197,9 @@ class UpgradeTests(BoardTestCase):
         from hey_my_buddy.blackboard.store.store import BoardStore
         state = self.directory / 'state'
         state.mkdir()
-        BoardStore(state).initialize()
+        store = BoardStore(state)
+        self.addCleanup(store.db.close)
+        store.initialize()
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         journal = {'phase': 'verified', 'contractChanged': True, 'previous': str(previous),
@@ -628,7 +630,7 @@ class UpgradeTests(BoardTestCase):
 
     def test_upgrade_refuses_older_or_unknown_schema(self):
         board=self.board()
-        for version in ('19', '20', '21', '22', '23', '24', '25', '26', '27', '29', '025', '999'):
+        for version in ('19', '20', '21', '22', '23', '24', '25', '26', '27', '30', '028', '029', '999'):
             with self.subTest(schema=version):
                 with board.store.db.write() as connection:
                     connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))

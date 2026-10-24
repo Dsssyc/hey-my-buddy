@@ -2029,7 +2029,6 @@ class BoardStore:
                     "attempt.activity",
                     task_id=attempt["task_id"],
                     attempt_id=attempt["attempt_id"],
-                    payload={"activity": activity},
                 )
             if message is not None or phase is not None:
                 self._append_event(

@@ -842,6 +842,8 @@ def verify(output, restored):
         assert connection.execute("PRAGMA integrity_check").fetchall() == [("ok",)]
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert dict(connection.execute("SELECT key,value FROM meta"))["schema_version"] == str(BASE_SCHEMA)
+        assert connection.execute("SELECT COUNT(*) FROM events WHERE kind='attempt.activity'").fetchone()[0] > 0
+        assert connection.execute("SELECT COUNT(*) FROM events WHERE kind='router.claimed'").fetchone()[0] > 0
         assert connection.execute("SELECT COUNT(*) FROM macro_tasks").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM provider_cooling").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM macro_task_deletions").fetchone()[0] == 1

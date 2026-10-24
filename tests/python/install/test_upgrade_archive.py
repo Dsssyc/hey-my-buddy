@@ -1,5 +1,5 @@
 """Runtime cutovers preserve historical workspace files."""
-from contextlib import ExitStack
+from contextlib import closing, ExitStack
 import json
 import os
 from pathlib import Path
@@ -10,8 +10,8 @@ from unittest import mock
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from support import BoardTestCase
 from blackboard.store.upgrade_fixture import load_fixture
-from hey_my_buddy.blackboard.store import backup
-from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
+from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
+from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION, UPGRADE_BASE_SCHEMA
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade
@@ -30,7 +30,7 @@ class UpgradeCutoverTests(BoardTestCase):
         shutil.copytree(old_backup, self.retained_archive)
         self.archive_bytes = {path.relative_to(self.retained_archive): path.read_bytes()
                               for path in self.retained_archive.rglob("*") if path.is_file()}
-        self.assertEqual(backup.verify(self.retained_archive)["schema"], SCHEMA_VERSION)
+        self.assertEqual(backup.verify(self.retained_archive)["schema"], UPGRADE_BASE_SCHEMA)
         self.evidence = self.state / "attempts" / "fixture-run" / "fixture-attempt" / "result.json"
         self.evidence.parent.mkdir(parents=True, exist_ok=True)
         self.evidence.write_text('{"retained":"evidence"}', encoding="utf-8", newline="\n")
@@ -63,7 +63,7 @@ class UpgradeCutoverTests(BoardTestCase):
             if (fail_target or interrupt_target) and path == target:
                 # Model writes by a failed replacement after the archive was
                 # sealed: rollback replays board/settings, not these records.
-                with sqlite3.connect(self.state / "board.sqlite3") as connection:
+                with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection, connection:
                     connection.execute("INSERT INTO meta(key,value) VALUES('injected-after-backup','changed')")
                 (self.state / "console-settings.json").write_text('{"theme":"light"}', encoding="utf-8", newline="\n")
                 self.expected_evidence = '{"retained":"later evidence"}'
@@ -77,7 +77,9 @@ class UpgradeCutoverTests(BoardTestCase):
                 raise KeyboardInterrupt("interrupted after backup")
             if fail_target and path == target:
                 raise BoardError("INJECTED_START", "new runtime did not start")
-            return {**health, "runtimeContentId": path.name, "schemaVersion": SCHEMA_VERSION}
+            with closing(sqlite3.connect(self.state / "board.sqlite3")) as connection:
+                schema = int(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0])
+            return {**health, "runtimeContentId": path.name, "schemaVersion": schema}
 
         with ExitStack() as stack:
             stack.enter_context(mock.patch.dict(os.environ, {"HMB_RUNTIME_ROOT": str(self.runtime_root)}))
@@ -104,8 +106,9 @@ class UpgradeCutoverTests(BoardTestCase):
                 return upgrade.recover(self.state, self.runtime_root)
             return upgrade.upgrade(self.state)
 
-    def assert_history_preserved(self):
-        self.assertEqual((self.state / "board.sqlite3").read_bytes(), self.original_board)
+    def assert_history_preserved(self, *, migrated=False):
+        if not migrated:
+            self.assertEqual((self.state / "board.sqlite3").read_bytes(), self.original_board)
         self.assertEqual((self.state / "console-settings.json").read_text(encoding="utf-8"), '{"theme":"dark"}')
         self.assertEqual(self.evidence.read_text(encoding="utf-8"), self.expected_evidence)
         self.assertEqual(self.start_log.read_text(encoding="utf-8"), self.expected_start_log)
@@ -114,23 +117,36 @@ class UpgradeCutoverTests(BoardTestCase):
             self.assertNotEqual(self.history, self.original_history)
         self.assertEqual({path.relative_to(self.retained_archive): path.read_bytes()
                           for path in self.retained_archive.rglob("*") if path.is_file()}, self.archive_bytes)
-        self.assertEqual(upgrade.idle_snapshot(self.state), self.before)
+        actual = upgrade.idle_snapshot(self.state)
+        if migrated:
+            self.assertEqual(actual['schema'], SCHEMA_VERSION)
+            self.assertEqual(actual['tables'], self.before['tables'])
+            self.assertEqual(actual['retainedMetaSha256'], self.before['retainedMetaSha256'])
+            for table, fingerprint in self.before['fingerprints'].items():
+                if table != 'meta':
+                    self.assertEqual(actual['fingerprints'][table],
+                                     self.before['expectedEventsSha256'] if table == 'events' else fingerprint,
+                                     table)
+        else:
+            self.assertEqual(actual, self.before)
 
-    def test_same_schema_cutovers_keep_board_and_history(self):
+    def test_schema_upgrade_and_same_schema_cutover_keep_history(self):
         first = self.runtime_root / ("b" * 32)
         result = self.cutover(self.previous, first)
         self.assertTrue(result["upgraded"], result)
         self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], SCHEMA_VERSION)
         self.assertNotIn("archive", result)
-        self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], SCHEMA_VERSION)
-        self.assert_history_preserved()
+        self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], UPGRADE_BASE_SCHEMA)
+        self.assert_history_preserved(migrated=True)
+        migrated_board = (self.state / 'board.sqlite3').read_bytes()
 
         second = self.runtime_root / ("c" * 32)
         result = self.cutover(first, second)
         self.assertTrue(result["upgraded"], result)
         self.assertNotIn("archive", result)
         self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], SCHEMA_VERSION)
-        self.assert_history_preserved()
+        self.assert_history_preserved(migrated=True)
+        self.assertEqual((self.state / 'board.sqlite3').read_bytes(), migrated_board)
         self.assertEqual(self.started_runtimes, [first, second])
 
     def test_failed_new_runtime_returns_to_previous_runtime_with_history(self):
@@ -141,6 +157,43 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertEqual(result["error"]["message"], "Installation failed; the previous runtime and backup were restored")
         self.assertEqual(result["rollback"]["runtimeContentId"], self.previous.name)
         self.assertEqual(self.started_runtimes, [target, self.previous])
+        self.assert_history_preserved()
+
+    def test_migration_uses_a_verified_base_backup_under_both_owner_locks(self):
+        migrate = schema_upgrade.migrate_schema
+
+        def checked_migrate(state):
+            archived = state / 'backups/current'
+            self.assertEqual(backup.verify(archived)['schema'], UPGRADE_BASE_SCHEMA)
+            for name in ('control-daemon.lock', 'board-owner.lock'):
+                with self.assertRaises(BoardError) as caught:
+                    with upgrade.file_lock(state / name):
+                        self.fail('migration ran outside ' + name)
+                self.assertEqual(caught.exception.code, 'UPGRADE_BUSY')
+            migrate(state)
+
+        target = self.runtime_root / ('b' * 32)
+        with mock.patch.object(schema_upgrade, 'migrate_schema', side_effect=checked_migrate) as conversion:
+            result = self.cutover(self.previous, target)
+        self.assertTrue(result['upgraded'], result)
+        conversion.assert_called_once_with(self.state)
+        self.assert_history_preserved(migrated=True)
+
+    def test_migration_failure_restores_the_base_before_restarting_the_old_runtime(self):
+        migrate = schema_upgrade.migrate_schema
+
+        def fail_after_migration(state):
+            migrate(state)
+            raise sqlite3.OperationalError('injected migration failure')
+
+        target = self.runtime_root / ('b' * 32)
+        with mock.patch.object(schema_upgrade, 'migrate_schema', side_effect=fail_after_migration):
+            result = self.cutover(self.previous, target)
+        self.assertFalse(result['upgraded'], result)
+        self.assertEqual(result['error']['code'], 'UPGRADE_ROLLED_BACK')
+        self.assertEqual(result['error']['details']['reason']['code'], 'OperationalError')
+        self.assertEqual(result['rollback']['schemaVersion'], UPGRADE_BASE_SCHEMA)
+        self.assertEqual(self.started_runtimes, [self.previous])
         self.assert_history_preserved()
 
     def test_retention_defect_after_verification_does_not_restore_over_new_work(self):

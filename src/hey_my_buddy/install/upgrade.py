@@ -15,12 +15,12 @@ import subprocess
 import time
 import uuid
 
-from ..blackboard.store import backup
+from ..blackboard.store import backup, upgrade as schema_upgrade
 from .. import private_dirs, private_files
 from . import runtime
 from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
-from ..blackboard.store.db import SCHEMA_VERSION, utc_now
+from ..blackboard.store.db import SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, utc_now
 from ..errors import BoardError
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
@@ -63,8 +63,8 @@ def file_lock(path: Path, *, timeout: float = 0):
 
 def _idle_board(connection: sqlite3.Connection) -> int:
     schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if schema is None or schema[0] != str(SCHEMA_VERSION):
-        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {SCHEMA_VERSION}')
+    if schema is None or schema[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
+        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}')
     # A micro-task Host boundary has no autonomous next turn. A recorded or
     # queued continuation still has work to prepare/claim, even if the run
     # currently reports a Host boundary. Routing and helper tasks are checked
@@ -100,8 +100,10 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
             "SELECT key,value FROM meta WHERE key!='schema_version' ORDER BY key")]
         retained_meta_hash = hashlib.sha256(json.dumps(
             retained_meta, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
-        return {**backup.database_snapshot(connection, event_head=event_head),
-                'schema': schema, 'retainedMetaSha256': retained_meta_hash}
+        snapshot = backup.database_snapshot(connection, event_head=event_head)
+        expected = ({'expectedEventsSha256': schema_upgrade.expected_events_fingerprint(
+            connection, event_head=snapshot['eventHead'])} if schema == UPGRADE_BASE_SCHEMA else {})
+        return {**snapshot, 'schema': schema, 'retainedMetaSha256': retained_meta_hash, **expected}
 
 
 def preflight(state: Path, *, contract_changed: bool) -> dict:
@@ -305,6 +307,7 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
     if contract_changed:
+        converting = before['schema'] == UPGRADE_BASE_SCHEMA and expected_schema == SCHEMA_VERSION
         actual = idle_snapshot(state, event_head=before.get('eventHead'))
         if actual['schema'] != expected_schema:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database schema did not match', tables=['meta'])
@@ -312,7 +315,9 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed',
                              tables=sorted(set(actual['tables']) ^ set(before['tables'])))
         changed = [name for name, value in before['fingerprints'].items()
-                   if actual['fingerprints'].get(name) != value]
+                   if not (name == 'meta' and before['schema'] != expected_schema)
+                   and actual['fingerprints'].get(name) != (
+                       before['expectedEventsSha256'] if converting and name == 'events' else value)]
         if before['retainedMetaSha256'] != actual['retainedMetaSha256'] and 'meta' not in changed:
             changed.append('meta')
         if changed:
@@ -514,6 +519,8 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                         write_journal(marker, journal)
                     journal.update(phase='prepared', expected=before)
                     write_journal(marker, journal)
+                    if contract_changed:
+                        schema_upgrade.migrate_schema(state)
                 active = target
                 health = start(state, target)
                 evidence = verify_started(state, target, health, before, contract_changed=contract_changed)

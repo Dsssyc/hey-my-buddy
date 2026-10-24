@@ -13,7 +13,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from console.test_console import Browser
 from support import InProcessBoard, write_catalog_fixture, _child_environment, wait_for
-from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
+from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, SECRET_KEY, Database
 from hey_my_buddy import private_dirs
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
@@ -253,7 +253,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with closing(sqlite3.connect(output / DB_FILE)) as connection:
             self.assertEqual(connection.execute(
                 "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                str(SCHEMA_VERSION))
+                str(UPGRADE_BASE_SCHEMA))
             self.assertEqual(list(connection.execute(
                 "SELECT type,name,tbl_name,sql FROM sqlite_master "
                 "WHERE type IN ('table','index') AND name NOT LIKE 'sqlite_%' "
