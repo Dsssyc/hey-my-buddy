@@ -195,7 +195,7 @@ Inquiry rules:
 | `model-catalog-refresh` | optional `requestId` (≤128) | Explicit native metadata discovery; one monotone `observationId` per request publishes per-harness facts and preserves existing human state. Each harness reports `status: complete\|unknown` with a nullable `{code, params}` reason and `accountStatus: confirmed\|unknown\|not-applicable`, plus `appliedHarnesses` and `staleHarnesses`; only a complete reading whose account status is `confirmed` or `not-applicable` is trusted, a model missing from it becomes pending and is confirmed absent only by a further trusted reading at least one hour later, and a late older response is skipped. New buddies are disabled and enabled state is never reset. No model call |
 | `buddy-list` | optional `includeUnavailable`, `limit` (1–200, default 100), `after` buddy cursor, `query` (≤200 characters, at most 8 terms), `harness` | Bounded active/unavailable buddy page with `preferences`, `modelServiceNotes`, per-model-service `modelServiceConcurrency` (`active` occupancy is read-only observation) and nextCursor; unavailable entries are hidden unless requested |
 | `user-policy-publish` | `commandId`, optional `buddySettings`, `preferenceChanges`, `modelServiceNoteChanges`, `modelServiceConcurrency`, `configuration` | Authenticated console only. Lists contain at most 200 field patches; model service notes at most 4000 characters; `modelServiceConcurrency` patches are `{harness, provider, model, limit}` entries that reject `active` and other derived fields. `preferenceChanges` patch one buddy's preference `{buddyId, mode, note}` (the user's own note, at most 10000 UTF-8 bytes, stored as null when empty); a null mode deletes that stored row, an empty model service note clears it, and omitted fields remain unchanged. Program model/catalog fields cannot be written |
-| `selection-request` | `requestId`, `task` (≤8192 UTF-8 bytes), optional `requiredCapabilities` (the hard budget comes from the routing budget preset in the Router settings) | Durable bounded routing request; returns `decision`, `decisionId`, `status`, `runId` (nullable) and `duplicate` |
+| `selection-request` | `requestId`, `task` (at most 1 MiB), optional `requiredCapabilities` (the hard budget comes from the routing budget preset in the Router settings) | Durable bounded routing request; returns `decision`, `decisionId`, `status`, `runId` (nullable) and `duplicate` |
 | `selection-get` | `decisionId`, optional `includeAudit` (default `false`) | Compact routing summary with nullable reason object `reason`, nullable Router `note`, frozen `selectedBuddy`, `decisionModel`, `evidence`, `usage`, `budget`, `nativeIdentity`, `stopEvidence`, `inputVerification`, `routingMode`; audit mode includes persisted input/output and hash |
 | `selection-list` | optional `limit` (1–100, default 20), positive integer `before` (≤2^63−1) | Read-only compact history, filtered before pagination; returns `decisions`, `nextCursor` and matching `total`; no model invocation |
 
@@ -218,19 +218,18 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed` a
 | Event page `limit` | 100 | 1–200 |
 | `list` page `limit` | 20 | 1–100 |
 | `messages` page `limit` | 50 | 1–200 |
-| Task text | — | 1 MiB |
+| Task text (micro task or selection request) | — | 1 MiB |
 | Question / answer | — | 4000 UTF-8 bytes each |
 | Inquiries retained per task | — | 32 |
 | Acknowledgment note / evidence | — | 10000 bytes / 32 entries |
 | Artifacts per result / location | — | 100 / absolute path ≤4096 characters |
 | Micro task continuation input | — | 64 KiB |
 | Helpers per Host decision | — | 8 |
-| Selection request task text | — | 8192 UTF-8 bytes |
 | Routing budget preset | `standard` | `brief` 60 s/8 calls, `standard` 300 s/24 calls, `deep` 600 s/64 calls for review routing (the recorded read-byte limits 128 KiB/512 KiB/2 MiB apply only where an adapter can observe read bytes, which neither current adapter can); fast routing has no tool-call budget and a fixed 60 s deadline; the Router call's `routerBudgetSeconds` is the preset timeout plus a 10 s Worker shutdown margin |
 | Compact micro task view | 5 requests / 10 turns / 32 children / 32 artifacts | `counts`/`truncated` describe omissions |
 | Cleanup plan expiry | 900 s | fixed; an expired plan authorizes nothing |
 | Concurrent attempts `HMB_MAX_CONCURRENT` | 8 | 1–32; one machine-wide ceiling shared by routing and execution |
-| Concurrent attempts of a model service | 2 | 1–32 per exact harness/provider/model; user-set on the model card, hot at the next admission |
+| Concurrent attempts of a model service | 2 | any positive integer per exact harness/provider/model (a value beyond a 64-bit integer is refused); user-set on the model card, hot at the next admission |
 | Wait capacity `HMB_WAIT_CAPACITY` | 32 | 1–48; leaves native RPC callbacks available for control operations |
 
 ## Error codes
@@ -271,6 +270,7 @@ Decision statuses are `queued`, `running`, `completed`, `needs-host`, `failed` a
 | `WAIT_ABANDONED` | The wait was interrupted; the task was not cancelled |
 | `SERVICE_UNAVAILABLE` | The service could not be reached, or no service runs for `wait`/`watch` |
 | `SERVICE_START_FAILED` / `SERVICE_START_TIMEOUT` | The daemon failed to start or become ready |
+| `SERVICE_START_UNSUPPORTED` | Windows: the process that starts the service runs in a Job that forbids leaving it, so the service could not outlive that process; start it from a terminal outside such a Job ([operations](operations.md#installation)) |
 | `RESULT_NOT_AVAILABLE` | `await` found a terminal run without a persisted result; the execution status is still reported honestly |
 | `RUNTIME_INSTALL_FAILED` / `RUNTIME_INSTALL_TIMEOUT` / `UV_NOT_FOUND` / `RUNTIME_NOT_READY` | Stable-runtime installation or pinning failed; see [operations.md](operations.md#runtime-lifecycle) |
 | `INSECURE_CONTROL_FILE` | A `controlFile` is not a private regular file owned by the current user with mode `0600` |
