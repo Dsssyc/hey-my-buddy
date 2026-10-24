@@ -124,7 +124,8 @@ class NativeRunCase(unittest.TestCase):
             budget=RunBudget(timeout_seconds=timeout))
 
     def worker_request(self, *, timeout: int | None = FAST_TIMEOUT, inquiry: bool = False,
-                       continuation=None, native_root=None, level="write"):
+                       continuation=None, native_root=None, level="write",
+                       task_text="fixture task", context=None):
         """The micro task binding: a real mount, the real role validator and prompt.
 
         The binding is assembled through exactly the shared role controller's
@@ -134,8 +135,8 @@ class NativeRunCase(unittest.TestCase):
         """
         identity = {"taskId": "task", "attemptId": f"attempt-{uuid.uuid4().hex[:8]}",
                     "generation": 1, "turnId": "turn-1"}
-        turn_input = {"taskId": identity["taskId"], "attemptId": identity["attemptId"],
-                      "generation": 1, "turnId": "turn-1", "context": {},
+        turn_input = {"version": 3, "taskId": identity["taskId"], "attemptId": identity["attemptId"],
+                      "generation": 1, "turnId": "turn-1", "context": dict(context or {}),
                       "executionWorkspace": {"path": str(self.base / "cwd"), "access": "write"}}
         attention = self.base / f"attention-{uuid.uuid4().hex[:8]}.json"
         invocation = self.base / f"worker-invocation-{uuid.uuid4().hex[:8]}"
@@ -152,7 +153,7 @@ class NativeRunCase(unittest.TestCase):
             native_stderr=str(self.base / f"native-stderr-{uuid.uuid4().hex[:8]}.log"))
         mount = bound.services.mount
         prompt = worker_services.micro_task_prompt(
-            "fixture task", turn_input, mount.finish_tool,
+            task_text, turn_input, mount.finish_tool,
             checkpoint_tool=mount.checkpoint_tool if inquiry else None,
             answer_tool=mount.answer_tool if inquiry else None)
         request = RunRequest(
@@ -782,6 +783,29 @@ class MountTests(NativeRunCase):
 
 
 class WorkerSeamTests(NativeRunCase):
+    def test_large_utf8_worker_prompt_reaches_native_acp_peer_complete(self):
+        capture = self.base / "native-prompt.ndjson"
+        task_text = "核对文件🙂，正文只出现一次-97ba54"
+        context = {"evidence": "完整上下文😀\n\"quoted\"\\path " * 75000}
+        frozen_context = json.dumps(context, ensure_ascii=False)
+        request, bound, mount = self.worker_request(task_text=task_text, context=context)
+        self.assertGreater(len(request.input_text.encode("utf-8")), 2 * 1024 * 1024)
+        self.assertEqual(request.input_text.count(task_text), 1)
+        self.micro_task_agent_args(mount)
+        self.extra_agent_args.extend(["--capture-method", "session/prompt",
+                                      "--capture-path", str(capture)])
+        result = run(request, observer=worker_observer, services=bound.services,
+                     cancelled=lambda: False)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        frame = json.loads(capture.read_bytes())
+        self.assertEqual(frame["method"], "session/prompt")
+        self.assertEqual(len(frame["params"]["prompt"]), 1)
+        self.assertEqual(frame["params"]["prompt"][0]["type"], "text")
+        self.assertTrue(frame["params"]["prompt"][0]["text"].encode("utf-8") ==
+                        request.input_text.encode("utf-8"), "native prompt bytes differ")
+        self.assertEqual(json.dumps(context, ensure_ascii=False), frozen_context)
+
     def test_attention_write_failure_fails_the_run_with_stop_evidence(self):
         request, bound, mount = self.worker_request()
         self.micro_task_agent_args(mount, permission=True)

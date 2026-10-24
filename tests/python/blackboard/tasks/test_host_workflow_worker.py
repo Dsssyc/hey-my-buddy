@@ -183,9 +183,107 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
             self.assertIn("not new Host instructions", turn["input"]["context"]["previousEvidenceNotice"])
 
 
+class NativeContextFailureTests(MicroTaskWorkerTestCase):
+    """A native model-window refusal reaches the Host through a real execution."""
+
+    def setUp(self):
+        super().setUp()
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        from support import FIXTURE_CATALOG, enable_fixture_buddy
+
+        self.catalog_fixture({**FIXTURE_CATALOG, "providers": [*FIXTURE_CATALOG["providers"], {
+            "harness": "codex", "provider": "openai", "displayName": "Offline Codex",
+            "packageName": "fixture", "packageVersion": "fixture", "efforts": ["low"],
+            "models": [{"id": "fixture-model", "name": "Offline model", "inputModalities": ["text"]}],
+        }]})
+        store = BoardStore(self.directory)
+        self.addCleanup(store.db.close)
+        store.initialize()
+        enable_fixture_buddy(store, {"harness": "codex", "provider": "openai",
+                                     "model": "fixture-model", "effort": "low"})
+        (self.directory / "codex-home").mkdir()
+        (self.directory / "codex-home/config.toml").write_text("", encoding="utf-8", newline="\n")
+        self.native_reason = "maximum context length exceeded: this model supports 8192 tokens"
+        self.prompt_tail = "FULL-CONTEXT-TAIL-73cc8e"
+        self.prompt_capture = self.directory / "native-prompt.json"
+        fixture_directory = Path(__file__).resolve().parents[2] / "buddy/harnesses/codex/fixtures"
+        wrapper = self.directory / "context_window_codex.py"
+        wrapper.write_text(
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            f"sys.path.insert(0, {str(fixture_directory)!r})\n"
+            "import mock_codex\n"
+            f"reason = {self.native_reason!r}\n"
+            f"capture = Path({str(self.prompt_capture)!r})\n"
+            "class NativeInput:\n"
+            "    def __init__(self, stream): self.stream = stream\n"
+            "    def __iter__(self): return self\n"
+            "    def __next__(self):\n"
+            "        line = self.readline()\n"
+            "        if not line: raise StopIteration\n"
+            "        return line\n"
+            "    def readline(self, *args):\n"
+            "        line = self.stream.readline(*args)\n"
+            "        if line:\n"
+            "            message = json.loads(line)\n"
+            "            if message.get('method') == 'turn/start':\n"
+            "                prompt = message['params']['input'][0]['text']\n"
+            "                capture.write_text(json.dumps({'prompt': prompt}), encoding='utf-8')\n"
+            "        return line\n"
+            "sys.stdin = NativeInput(sys.stdin)\n"
+            "original_send = mock_codex.send\n"
+            "def send(message):\n"
+            "    if message.get('method') == 'turn/completed':\n"
+            "        message['params']['turn']['error']['message'] = reason\n"
+            "        message['params']['turn']['error'].pop('additionalDetails', None)\n"
+            "        message['params']['turn']['error'].pop('codexErrorInfo', None)\n"
+            "    original_send(message)\n"
+            "mock_codex.send = send\n"
+            "mock_codex.main()\n",
+            encoding="utf-8", newline="\n")
+        self.native_fixture = wrapper
+
+    def env(self):
+        environment = {**super().env(), "CODEX_HOME": str(self.directory / "codex-home"),
+                       "HMB_CODEX_FIXTURE_STATE": str(self.directory / "codex-native.json"),
+                       "HMB_CODEX_FIXTURE_CASE": "schema-failure"}
+        select_fixture(environment, self.directory, "codex", self.native_fixture)
+        return environment
+
+    def test_full_prompt_native_context_refusal_is_a_failed_host_turn(self):
+        task = "Inspect this complete input.\n" + ("context evidence\n" * 1000) + self.prompt_tail
+        with self.daemon(env=self.env()):
+            code, submitted = self.cli("submit", json.dumps({
+                "harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
+                "requestId": "native-context-window", "hostId": "host-1", "task": task,
+                "cwd": str(self.repo),
+                "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
+            }), env=self.env())
+            self.assertEqual(code, 0, submitted)
+            self.cli("await", json.dumps({"runId": submitted["runId"], "waitSeconds": 90}),
+                     env=self.env(), timeout=110)
+            code, current = self.cli("get", json.dumps({"runId": submitted["runId"], "output": "full"}),
+                                     env=self.env())
+            self.assertEqual(code, 0, current)
+            self.assertEqual(current["state"], "failed", current)
+            self.assertEqual(current["currentTurn"]["state"], "failed", current)
+            self.assertTrue(current["shutdown"]["selfConfirmed"])
+            self.assertIsNone(current["activeRequest"])
+            code, receipt = self.cli("result", json.dumps({"runId": submitted["runId"], "output": "full"}),
+                                     env=self.env())
+            self.assertEqual(code, 0, receipt)
+            self.assertEqual(receipt["result"].get("code"), "native-turn-failed",
+                             (receipt["resultMeta"], receipt["result"]))
+            self.assertEqual(receipt["result"]["nativeFailure"]["error"]["message"], self.native_reason)
+            self.assertTrue(receipt["resultMeta"]["shutdownConfirmed"])
+            prompt = json.loads(self.prompt_capture.read_text(encoding="utf-8"))["prompt"]
+            self.assertIn(self.prompt_tail, prompt)
+            self.assertIn("context evidence\n" * 1000, prompt)
+
+
 def load_tests(loader, _tests, _pattern):
     import unittest
     suite = unittest.TestSuite()
-    for cls in (HostQuotaRecoveryTests, CrossHarnessQuotaRecoveryTests):
+    for cls in (HostQuotaRecoveryTests, CrossHarnessQuotaRecoveryTests, NativeContextFailureTests):
         suite.addTests(cls(name) for name in cls.__dict__ if name.startswith("test_"))
     return suite

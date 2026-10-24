@@ -304,7 +304,7 @@ def _worker_reports(result, payload: dict) -> bool:
 
 
 def _worker_result(result, control: dict, turn_input: dict, prompt: str) -> dict:
-    outcome, provenance, truncated = worker_delivery(
+    outcome, provenance = worker_delivery(
         result, delegation_authority=turn_input.get("context", {}).get("delegationAuthority") is True)
     identity = {key: turn_input[key] for key in ("taskId", "attemptId", "generation", "turnId")}
     record = {"version": 1, **identity, "inputSha256": input_hash(turn_input),
@@ -313,8 +313,6 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str) -> dict
               "previousSessionId": turn_input.get("previousSessionId"),
               "resumeMode": turn_input["resumeMode"],
               "outcome": outcome, "provenance": provenance}
-    if truncated:
-        record["outcomeTruncated"] = truncated
     raw = canonical_json(record).encode()
     if len(raw) > turn_io.MAX_RECORD_BYTES:
         raise BoardError("invalid-result", "the turn record exceeds its byte bound")
@@ -322,7 +320,7 @@ def _worker_result(result, control: dict, turn_input: dict, prompt: str) -> dict
     return record
 
 
-def worker_delivery(result, *, delegation_authority: bool = False) -> tuple[dict, dict, dict]:
+def worker_delivery(result, *, delegation_authority: bool = False) -> tuple[dict, dict]:
     """Judge the role's delivery once through the selected completion policy."""
     from ..harnesses.registry import worker_format
 
@@ -343,7 +341,7 @@ def worker_delivery(result, *, delegation_authority: bool = False) -> tuple[dict
             or validate_outcome(outcome, delegation_authority=delegation_authority) is not None
             or not isinstance(provenance, dict)):
         raise BoardError("INVALID_ARGUMENT", "The Worker run did not deliver its valid outcome and provenance")
-    return outcome, provenance, {}
+    return outcome, provenance
 
 
 def worker_request(control: dict, module):

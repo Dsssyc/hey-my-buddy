@@ -485,7 +485,7 @@ class HelpExtractionRegressionTests(unittest.TestCase):
         self.assertIn("string", parameter.kind)
         self.assertIn("object", parameter.kind)
         self.assertIn("nonempty", parameter.bounds or "")
-        self.assertIn("65536 UTF-8 bytes", parameter.bounds or "")
+        self.assertIn("1048576 UTF-8 bytes", parameter.bounds or "")
 
     def test_continue_reports_every_required_buddy_string(self):
         buddy = self.parameter("continue", "buddy")
@@ -615,7 +615,6 @@ class HelpSourceFreshnessTests(unittest.TestCase):
                 shutil.copy2(path, target)
             schemas = copy / "protocol" / "schemas.py"
             text = schemas.read_text(encoding="utf-8")
-            text = text.replace("MAX_WORKFLOW_INPUT_BYTES = 64 * 1024", "MAX_WORKFLOW_INPUT_BYTES = 48 * 1024")
             text = text.replace("MAX_TASK_BYTES = 1024 * 1024", "MAX_TASK_BYTES = 3 * 512 * 1024")
             schemas.write_text(text, encoding="utf-8", newline="\n")
 
@@ -629,8 +628,8 @@ class HelpSourceFreshnessTests(unittest.TestCase):
                 cli_help.PACKAGE_ROOT = previous
                 cli_help.reset_index()
 
-            self.assertIn("49152 UTF-8 bytes", continuation)
-            self.assertNotIn("65536 UTF-8 bytes", continuation)
+            self.assertIn("1572864 UTF-8 bytes", continuation)
+            self.assertNotIn("1048576 UTF-8 bytes", continuation)
             self.assertIn("1572864 UTF-8 bytes", submission)
             self.assertNotIn("1048576 UTF-8 bytes", submission)
 

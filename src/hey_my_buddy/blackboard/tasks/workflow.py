@@ -6,7 +6,7 @@ ordinary task/attempt/worker/capacity/receipt machinery, never a second job engi
 What the coordinator adds is durable governance around it:
 
 * an immutable original micro task, a Host owner generation and a control capability;
-* one durable turn per actual execution, with the bounded context and the validated
+* one durable turn per actual execution, with the full context and the validated
   structured outcome the coding adapter imported after confirmed shutdown;
 * assistance/attention requests, explicit helper tasks, one-use automatic
   continuation authority and manual continuation inputs;
@@ -102,16 +102,13 @@ LEAD_OWNED_OPERATIONS = LEAD_OPERATIONS - {"workflow_submit"} | (
     AGENT_RUN_BOUND_OPERATIONS - {"workflow_suggest"}
 )
 
-TURN_INPUT_VERSION = 2
+TURN_INPUT_VERSION = 3
 TURN_OUTPUT_VERSION = 1
 TURN_DISPOSITIONS = ("completed", "assistance", "attention", "waiting")
 MAX_ACTIVE_TURNS_VIEW = 10
 MAX_CHILD_VIEW = 32
 MAX_ARTIFACT_VIEW = 32
 MAX_REQUEST_VIEW = 5
-MAX_CONTEXT_HELPERS = 8
-MAX_CONTEXT_ARTIFACTS = 8
-MAX_CONTEXT_TEXT = 4000
 #: The micro-task task-title fallback is bounded like the turn-view summary it
 #: projects; the stored outcome itself may be longer and stays intact in audit.
 MAX_RESULT_SUMMARY = 2000
@@ -192,7 +189,7 @@ def workspace_module():
 def _turn_input_context(input_json: str) -> dict:
     """The frozen context object of one supported turn input."""
     document = json.loads(input_json)
-    if type(document["version"]) is not int or document["version"] not in (1, TURN_INPUT_VERSION):
+    if type(document["version"]) is not int or document["version"] not in (1, 2, TURN_INPUT_VERSION):
         raise BoardError("TURN_INVALID", "The frozen turn input version is not supported")
     return document["context"]
 
@@ -1610,11 +1607,10 @@ class WorkflowCoordinator:
         # The column tracks the effective execution checkout (a prepared worktree
         # path), while spec_json/input_fingerprint keep the immutable original
         # spec. Admission and resource claims use the column.
-        if manifest.get("path"):
-            connection.execute(
-                "UPDATE tasks SET cwd=?, updated_at=? WHERE task_id=?",
-                (manifest["path"], now, run_id),
-            )
+        connection.execute(
+            "UPDATE tasks SET cwd=?, updated_at=? WHERE task_id=?",
+            (manifest["path"], now, run_id),
+        )
         # The original authorization is recorded once as scope version 1; every
         # later amendment appends a new version instead of editing this one.
         connection.execute(
@@ -2699,7 +2695,7 @@ class WorkflowCoordinator:
     ) -> None:
         spec = item["spec"]
         fingerprint = schemas.spec_fingerprint(spec)
-        effective_cwd = manifest.get("path") or spec["cwd"]
+        effective_cwd = manifest["path"]
         blocker = self.board._admission_blocker(connection, {**spec, "cwd": effective_cwd})
         request_id = item["requestId"]
         existing = connection.execute("SELECT * FROM tasks WHERE request_id=?", (request_id,)).fetchone()
@@ -3122,10 +3118,8 @@ class WorkflowCoordinator:
                 "taskState": row["task_state"],
                 "integrator": row["role"] == "integrator",
                 "disposition": turn["disposition"] if turn is not None else None,
-                "summary": _head(outcome.get("summary") if outcome else None, 2000),
-                "remaining": [str(item)[:500] for item in (outcome or {}).get("remaining", [])[:8]]
-                if isinstance((outcome or {}).get("remaining"), list)
-                else [],
+                "summary": outcome.get("summary") if outcome else None,
+                "remaining": (outcome or {}).get("remaining", []),
                 "attemptId": attempt_id,
                 "generation": turn["generation"] if turn is not None else None,
                 "workspaceManifestSha256": (json.loads(row["workspace_manifest_json"]).get("manifestSha256")
@@ -4341,8 +4335,6 @@ class WorkflowCoordinator:
         alone never do. The named paths must sit inside the record's provably
         changed set, so a forged or drifted local record authorizes nothing.
         """
-        if not manifest.get("manifestSha256"):
-            return []
         module = workspace_module()
         adopted: set[str] = set()
         for row in connection.execute(
@@ -4562,10 +4554,8 @@ class WorkflowCoordinator:
         return task
 
     def _conclude_seal_work(self, connection, run_row, task):
-        """The manifest, allowed paths and attempt of one Host partial seal, or None."""
+        """A Host partial seal's manifest, allowed paths and attempt, once an attempt ran."""
         manifest = json.loads(run_row["workspace_manifest_json"])
-        if not manifest.get("manifestSha256"):
-            return None
         if not task["selected_attempt_id"]:
             # No execution attempt ever ran on this checkout; there is nothing that
             # could be unsealed, and a partial output needs an attempt identity.
@@ -4684,7 +4674,7 @@ class WorkflowCoordinator:
         with self.db.read() as connection:
             run_row = self._run_optional(connection, run_id)
             if run_row is None:
-                return {"removed": False, "reasons": ["workspace-not-prepared"]}
+                return {"removed": False, "reasons": ["run-not-found"]}
             revision = self._run_row(connection, owner_run_id)["revision"]
         command = f"reclaim-{purpose}-" + uuid.uuid4().hex
         control_triple = {key: control[key] for key in schemas.CONTROL_FIELDS if key in control}
@@ -5893,9 +5883,9 @@ class WorkflowCoordinator:
             for path in repositories:
                 repositories[path] = module.shared_stash_inventory(path)
         except BoardError as error:
-            pass_reason = _head(f"{error.code}: {error.message}", 512)
+            pass_reason = f"{error.code}: {error.message}"
         except OSError as error:
-            pass_reason = _head(str(error), 512)
+            pass_reason = str(error)
         if pass_reason is not None:
             for path, value in repositories.items():
                 if value is None:
@@ -5931,9 +5921,9 @@ class WorkflowCoordinator:
         try:
             inventory = module.shared_stash_inventory(path)
         except BoardError as error:
-            return {"repositoryPath": path, "failure": _head(f"{error.code}: {error.message}", 512)}
+            return {"repositoryPath": path, "failure": f"{error.code}: {error.message}"}
         except OSError as error:
-            return {"repositoryPath": path, "failure": _head(str(error), 512)}
+            return {"repositoryPath": path, "failure": str(error)}
         return {"repositoryPath": path, "inventory": inventory}
 
     def seal_interrupted_turn(self, attempt_id: str) -> dict | None:
@@ -6119,7 +6109,7 @@ class WorkflowCoordinator:
                         and not permission_reconstruction):
                     resume_mode = "native-session"
         turn_id = str(uuid.uuid4())
-        context = self._turn_context(connection, run_row, task, spec, continuation, previous, turn_index)
+        context = self._turn_context(connection, run_row, continuation, previous, turn_index)
         if previous is not None:
             # A refused native resume can fail before producing any new message.
             # Keep the last already-recorded assistant evidence through that hop.
@@ -6344,7 +6334,7 @@ class WorkflowCoordinator:
         # A permission-only continuation before any seal keeps the original
         # explicit untracked input selectors when it re-prepares the allocation.
         included = (sealed["includedUntracked"]
-                    if sealed is not None else list((manifest.get("snapshot") or {}).get("executionSelectors") or []))
+                    if sealed is not None else list(manifest["snapshot"].get("executionSelectors") or []))
         sealed = sealed or {}
         return {
             # Reuse the allocated checkout instead of minting a new worktree.
@@ -6619,11 +6609,10 @@ class WorkflowCoordinator:
     def _owned_turn_context(self, connection, run_id: str, previous) -> dict:
         cursor = self.board._head_of(connection)
         previous_cursor = _turn_input_context(previous["input_json"])["ownedFactsCursor"] if previous else 0
-        total = connection.execute("SELECT COUNT(*) FROM workflow_lead_tasks WHERE lead_run_id=?", (run_id,)).fetchone()[0]
         rows = connection.execute(
             "SELECT r.*,t.request_id,t.state AS execution_state,t.queue_reason FROM workflow_lead_tasks l"
             " JOIN workflow_runs r ON r.run_id=l.owned_run_id JOIN tasks t ON t.task_id=r.run_id"
-            " WHERE l.lead_run_id=? ORDER BY r.activity_seq DESC,r.run_id LIMIT ?", (run_id, MAX_CHILD_VIEW),
+            " WHERE l.lead_run_id=? ORDER BY r.activity_seq DESC,r.run_id", (run_id,),
         ).fetchall()
         facts = [{"runId": row["run_id"], "requestId": row["request_id"], "state": row["state"],
                   "executionState": row["execution_state"], "queueReason": row["queue_reason"],
@@ -6633,16 +6622,10 @@ class WorkflowCoordinator:
                   "finalArtifactId": row["final_artifact_id"], "activitySeq": row["activity_seq"],
                   "changedSincePreviousTurn": row["activity_seq"] > previous_cursor}
                  for row in rows]
-        return {"ownedMicroTasks": facts, "ownedMicroTaskTotal": total, "ownedFactsCursor": cursor,
-                "ownedMicroTasksTruncated": total - len(facts)}
+        return {"ownedMicroTasks": facts, "ownedFactsCursor": cursor}
 
-    def _turn_context(self, connection, run_row, task, spec, continuation, previous, turn_index) -> dict:
-        micro_task = json.loads(task["spec_json"])
-        task_text = micro_task.get("task") if isinstance(micro_task.get("task"), str) else ""
+    def _turn_context(self, connection, run_row, continuation, previous, turn_index) -> dict:
         context: dict[str, Any] = {
-            # Bounded on purpose: the immutable full text stays in the task record.
-            "task": task_text if len(task_text) <= 8000 else task_text[:8000],
-            "taskTruncated": len(task_text) > 8000,
             "taskId": run_row["run_id"],
             "turnIndex": turn_index,
             "buddy": self._buddy(run_row),
@@ -6717,22 +6700,18 @@ class WorkflowCoordinator:
         else:
             children = self._helper_outcomes(connection, run_row["run_id"])
         if children:
-            context["helperOutcomes"] = children[:MAX_CONTEXT_HELPERS]
-            context["helperOutcomeTotal"] = len(children)
+            context["helperOutcomes"] = children
         artifacts = connection.execute(
-            "SELECT * FROM workflow_artifacts WHERE run_id=? ORDER BY created_at DESC LIMIT ?",
-            (run_row["run_id"], MAX_CONTEXT_ARTIFACTS + 1),
+            "SELECT * FROM workflow_artifacts WHERE run_id=? ORDER BY created_at DESC",
+            (run_row["run_id"],),
         ).fetchall()
         if artifacts:
-            context["artifacts"] = [self._artifact_view(row) for row in artifacts[:MAX_CONTEXT_ARTIFACTS]]
-            context["artifactTotal"] = len(artifacts)
-            if len(artifacts) > MAX_CONTEXT_ARTIFACTS:
-                context["artifactsTruncated"] = True
+            context["artifacts"] = [self._artifact_view(row) for row in artifacts]
         context["nextActions"] = [
             "Continue the original task from the recorded checkpoint.",
             "Report the structured outcome through this execution harness's supplied completion interface.",
         ]
-        return _bound_context(context)
+        return context
 
     def precheck_result(self, params: dict) -> None:
         """Validate a micro-task result outside any database transaction.
@@ -7114,8 +7093,8 @@ class WorkflowCoordinator:
                 return "a waiting turn cannot name a request"
         if not isinstance(outcome.get("summary"), str) or not outcome["summary"].strip():
             return "the turn outcome has no summary"
-        if "outcomeTruncated" in turn and not isinstance(turn["outcomeTruncated"], dict):
-            return "the turn outcomeTruncated must be an object"
+        if "outcomeTruncated" in turn:
+            return "the turn record no longer accepts outcomeTruncated"
         if disposition in ("assistance", "attention"):
             request = outcome.get("request")
             if not isinstance(request, dict):
@@ -7147,8 +7126,6 @@ class WorkflowCoordinator:
         manifest = document["executionWorkspace"]
         if not manifest.get("manifestSha256"):
             manifest = json.loads(run_row["workspace_manifest_json"])
-        if not manifest.get("manifestSha256"):
-            return []
         try:
             records = module.scope_conflicts(self.board.directory, manifest, run_row["run_id"], attempt["attempt_id"])
         except BoardError:
@@ -7629,9 +7606,9 @@ def _bounded_input(params: dict) -> str:
     size = len(text.encode("utf-8"))
     if size == 0 or not text.strip():
         raise BoardError("INVALID_ARGUMENT", "input must not be empty")
-    if size > schemas.MAX_WORKFLOW_INPUT_BYTES:
+    if size > schemas.MAX_TASK_BYTES:
         raise BoardError(
-            "INVALID_ARGUMENT", f"input must be at most {schemas.MAX_WORKFLOW_INPUT_BYTES} UTF-8 bytes"
+            "INVALID_ARGUMENT", f"input must be at most {schemas.MAX_TASK_BYTES} UTF-8 bytes"
         )
     return text
 
@@ -7678,48 +7655,21 @@ def _preparation_reason(details) -> str | None:
 
 
 def _string_list(value) -> list[str]:
-    """Normalize a bounded string list.
+    """Normalize nonempty request text to the Host's string-list projection.
 
     The native runner contract allows ``neededWork`` to be one nonempty string, so a
     string is exposed as a one-item list; lists stay lists and anything else is
     dropped rather than guessed.
     """
     if isinstance(value, str) and value.strip():
-        return [value.strip()[:500]]
+        return [value.strip()]
     if not isinstance(value, list):
         return []
     out: list[str] = []
-    for entry in value[:32]:
+    for entry in value:
         if isinstance(entry, str) and entry.strip():
-            out.append(entry.strip()[:500])
+            out.append(entry.strip())
     return out
-
-
-def _bound_context(context: dict) -> dict:
-    """Bound the turn context so a Host decision never inflates a prompt."""
-    serialized = canonical_json(context)
-    if len(serialized.encode("utf-8")) <= schemas.MAX_WORKFLOW_INPUT_BYTES:
-        return context
-    trimmed = dict(context)
-    for key in ("helperOutcomes", "artifacts", "nextActions"):
-        if key in trimmed and isinstance(trimmed[key], list):
-            trimmed[key] = trimmed[key][:4]
-    text = canonical_json(trimmed)
-    if len(text.encode("utf-8")) <= schemas.MAX_WORKFLOW_INPUT_BYTES:
-        return trimmed
-    trimmed["artifacts"] = []
-    trimmed["helperOutcomes"] = [
-        {k: item.get(k) for k in ("taskId", "state", "disposition", "summary")}
-        for item in trimmed.get("helperOutcomes", [])[:4]
-    ]
-    trimmed["nextActions"] = trimmed.get("nextActions", [])[:1]
-    if "ownedMicroTasks" in trimmed:
-        owned = list(trimmed["ownedMicroTasks"])
-        trimmed["ownedMicroTasks"] = owned
-        while owned and len(canonical_json(trimmed).encode("utf-8")) > schemas.MAX_WORKFLOW_INPUT_BYTES:
-            owned.pop()
-            trimmed["ownedMicroTasksTruncated"] = trimmed["ownedMicroTaskTotal"] - len(owned)
-    return trimmed
 
 
 __all__ = [

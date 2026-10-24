@@ -850,6 +850,25 @@ class ReviewSeamTests(CodexSeamCase):
 
 
 class WorkerSeamTests(CodexSeamCase):
+    def test_complete_worker_prompt_over_two_mib_reaches_the_native_peer(self):
+        task = "Execute this task once: 单份任务正文-2fef3c"
+        turn = {"version": 3, "taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
+                "turnId": "turn-check", "context": {"delegationAuthority": False,
+                    "evidence": "完整上下文😀\n\"quoted\"\\path " * 75000}}
+        frozen_input = json.dumps(turn, ensure_ascii=False)
+        frozen_hash = input_hash(turn)
+        prompt = worker_format("codex").prompt(task, turn)
+        expected = prompt.encode("utf-8")
+        self.assertGreater(len(expected), 2 * 1024 * 1024)
+        result = self.worker_run("large-prompt", input_text=prompt, timeout=20)
+        self.assertEqual(result.end.status, "ok", result.end.message)
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        capture = Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).with_suffix(".prompt.txt")
+        self.assertEqual(capture.read_bytes(), expected)
+        self.assertEqual(prompt.count(task), 1)
+        self.assertEqual(json.dumps(turn, ensure_ascii=False), frozen_input)
+        self.assertEqual(input_hash(turn), frozen_hash)
+
     def test_escaping_native_failure_carries_recorded_session_failure(self):
         native_error = RuntimeError("fatal native result failure")
         with mock.patch.object(native_run.CodexSessionProjector, "observe_notification",

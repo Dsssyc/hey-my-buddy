@@ -272,7 +272,7 @@ class LeadLifecycleTests(WorkflowTestCase):
         next_claim = self.claim(board, claim_request_id="lead-second", run_id=lead["runId"])["claim"]
         context = next_claim["turn"]["input"]["context"]
         facts = {row["runId"]: row for row in context["ownedMicroTasks"]}
-        self.assertEqual(context["ownedMicroTaskTotal"], 3)
+        self.assertEqual(len(context["ownedMicroTasks"]), 3)
         self.assertEqual(facts[first["runId"]]["state"], "delivered")
         self.assertEqual(facts[second["runId"]]["state"], "awaiting-host")
         self.assertTrue(all(row["changedSincePreviousTurn"] for row in facts.values()))
@@ -434,7 +434,7 @@ class LeadLifecycleTests(WorkflowTestCase):
             self.assertTrue(source["stopConfirmed"])
             self.assertEqual(connection.execute("SELECT task_id FROM events WHERE seq=?", (source["sourceEventSeq"],)).fetchone()[0], route_id)
 
-    def test_owned_input_is_bounded_and_marks_unchanged_facts_on_the_following_turn(self):
+    def test_owned_input_is_complete_and_marks_unchanged_facts_on_the_following_turn(self):
         board = self.board()
         lead, claim = self.lead(board)
         for index in range(workflow.MAX_CHILD_VIEW + 1):
@@ -443,15 +443,9 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.continue_run(board, self.current(board, lead), command_id="first-manual")
         first = self.claim(board, claim_request_id="second-turn", run_id=lead["runId"])["claim"]
         context = first["turn"]["input"]["context"]
-        self.assertEqual(len(context["ownedMicroTasks"]), workflow.MAX_CHILD_VIEW)
-        self.assertEqual(context["ownedMicroTaskTotal"], workflow.MAX_CHILD_VIEW + 1)
-        self.assertEqual(context["ownedMicroTasksTruncated"], 1)
-        large_paths = {**context, "ownedMicroTasks": [
-            {**row, "requestId": "a" * 4090} for row in context["ownedMicroTasks"]]}
-        bounded = workflow._bound_context(large_paths)
-        self.assertLessEqual(len(workflow.canonical_json(bounded).encode()), workflow.schemas.MAX_WORKFLOW_INPUT_BYTES)
-        self.assertEqual(bounded["ownedMicroTasksTruncated"],
-                         bounded["ownedMicroTaskTotal"] - len(bounded["ownedMicroTasks"]))
+        self.assertEqual(len(context["ownedMicroTasks"]), workflow.MAX_CHILD_VIEW + 1)
+        self.assertNotIn("ownedMicroTaskTotal", context)
+        self.assertNotIn("ownedMicroTasksTruncated", context)
         self.wait(board, first)
         self.continue_run(board, self.current(board, lead), command_id="second-manual")
         second = self.claim(board, claim_request_id="third-turn", run_id=lead["runId"])["claim"]

@@ -113,13 +113,15 @@ class WorkflowAgent(fake_agent.FakeAgent):
     def run_micro_task_prompt(self, message: dict) -> None:
         turn_input = self.turn_input(message)
         index = (turn_input.get("context") or {}).get("turnIndex")
+        # The task is the plain section before the final turn-context JSON.
+        task_section = self.prompt_text(message.get("params") or {}).rpartition("\n\n")[0]
         quota = self.workflow_mode == "quota" or (
             self.workflow_mode == "auto" and index == 1
-            and (turn_input.get("context") or {}).get("task") == QUOTA_TASK)
+            and task_section.endswith("\n\n" + QUOTA_TASK))
         if quota and index == 1:
             self.run_quota_turn(message, turn_input)
             return
-        if self.workflow_mode == "auto" and index == 1 and (turn_input.get("context") or {}).get("task") == NETWORK_TASK:
+        if self.workflow_mode == "auto" and index == 1 and task_section.endswith("\n\n" + NETWORK_TASK):
             self.run_quota_turn(message, turn_input, code="NETWORK_UNAVAILABLE",
                                 edit=NETWORK_EDIT, message_text=NETWORK_MESSAGE)
             return
@@ -199,8 +201,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
 
     @staticmethod
     def turn_input(message: dict) -> dict:
-        """The frozen turn input the micro task prompt carries as its last JSON
-        object: the identity and context this fixture's behavior keys on."""
+        """The prompt's complete final turn-input JSON: identity and context."""
         text = fake_agent.FakeAgent.prompt_text(message.get("params") or {})
         for line in reversed(text.splitlines()):
             line = line.strip()
