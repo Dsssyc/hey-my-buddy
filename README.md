@@ -35,7 +35,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-en-dark.svg">
-  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, a Router buddy picks a Worker buddy, which runs a turn in its own checkout; the Host can ask that running turn a question through the blackboard; the blackboard seals the result; the Host reviews it and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="docs/assets/architecture-en-light.svg" width="100%">
+  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, a Router buddy picks a Worker buddy, which runs a turn in its own checkout; the Host can ask that running turn a question through the blackboard; the blackboard seals the checkout when the turn ends; the Host checks the Worker's report against the seal and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="docs/assets/architecture-en-light.svg" width="100%">
 </picture>
 
 1. **Delegate.** The Host writes a micro task: what to do, which files it may change, and how to check it. Unless the Host names a buddy, a Router buddy picks one.

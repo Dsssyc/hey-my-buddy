@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 842" width="1500" height="842" role="img" aria-label="How hey-my-buddy works">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 916" width="1500" height="916" role="img" aria-label="How hey-my-buddy works">
 <title>How hey-my-buddy works</title>
 <defs><marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#24654d"/></marker><marker id="tip-send" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#9c2f6b"/></marker><marker id="tip-ask" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#56645c"/></marker></defs>
-<rect x="0" y="0" width="1500" height="842" fill="#f3f1ea" stroke="none" stroke-width="1"/>
+<rect x="0" y="0" width="1500" height="916" fill="#f3f1ea" stroke="none" stroke-width="1"/>
 <g transform="translate(0,-24)">
-<rect x="20" y="48" width="1460" height="798" fill="none" stroke="#cfcdc3" stroke-width="1.5"/>
+<rect x="20" y="48" width="1460" height="872" fill="none" stroke="#cfcdc3" stroke-width="1.5"/>
 <rect x="32" y="40" width="118.80000000000001" height="16" fill="#f3f1ea" stroke="none" stroke-width="1"/>
 <text x="40" y="54" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="650" fill="#1f2a24" text-anchor="start">your machine</text>
 <rect x="40" y="84" width="210" height="140" fill="#ffffff" stroke="#cfcdc3" stroke-width="1.5"/>
@@ -11,16 +11,16 @@
 <text x="60" y="168" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">ask your Host buddy</text>
 <text x="60" y="188" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">in plain words</text>
 <path d="M250 154 L316 154" fill="none" stroke="#56645c" stroke-width="1.5" marker-end="url(#tip)"/>
-<rect x="320" y="72" width="860" height="160" fill="#ffffff" stroke="#1f2a24" stroke-width="2"/>
-<rect x="344" y="82" width="184" height="106" fill="#f8f7f2" stroke="#cfcdc3" stroke-width="1.2"/>
-<rect x="336" y="88" width="184" height="106" fill="#f8f7f2" stroke="#cfcdc3" stroke-width="1.2"/>
-<rect x="328" y="94" width="184" height="106" fill="#ffffff" stroke="#56645c" stroke-width="1.2"/>
-<path d="M346 104.9 L355.1 114 L346 123.1 L336.9 114 Z" fill="#5b6a62"/>
-<text x="362" y="120" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">micro task</text>
-<text x="344" y="144" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">what to do</text>
-<text x="344" y="164" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">files it may change</text>
-<text x="344" y="184" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">how to check</text>
-<text x="328" y="221" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">a macro task holds micro tasks</text>
+<rect x="320" y="74" width="860" height="160" fill="#ffffff" stroke="#1f2a24" stroke-width="2"/>
+<rect x="360" y="82" width="184" height="106" fill="#f8f7f2" stroke="#cfcdc3" stroke-width="1.2"/>
+<rect x="352" y="88" width="184" height="106" fill="#f8f7f2" stroke="#cfcdc3" stroke-width="1.2"/>
+<rect x="344" y="94" width="184" height="106" fill="#ffffff" stroke="#56645c" stroke-width="1.2"/>
+<path d="M362 104.9 L371.1 114 L362 123.1 L352.9 114 Z" fill="#5b6a62"/>
+<text x="378" y="120" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">micro task</text>
+<text x="360" y="144" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">what to do</text>
+<text x="360" y="164" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">files it may change</text>
+<text x="360" y="184" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">how to check</text>
+<text x="344" y="221" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">a macro task holds micro tasks</text>
 <text x="750.0" y="116" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="32" font-weight="700" fill="#1f2a24" text-anchor="middle">Host buddy</text>
 <text x="750.0" y="142" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#56645c" text-anchor="middle">Codex · Claude Code</text>
 <path d="M656 167.9 L665.1 177 L656 186.1 L646.9 177 Z" fill="#ffffff" stroke="#56645c" stroke-width="2.27"/>
@@ -44,39 +44,39 @@
 <circle cx="1430" cy="154" r="5" fill="#f3f1ea" stroke="#1f2a24" stroke-width="2"/>
 <circle cx="1402" cy="154" r="6" fill="#1f2a24"/>
 <text x="1270" y="188" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">only accepted work lands</text>
-<path d="M420 232 L420 276" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
-<circle cx="447" cy="256" r="11" fill="#f3f1ea" stroke="#24654d" stroke-width="1.8"/>
-<text x="447" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#24654d" text-anchor="middle">1</text>
-<text x="464" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#24654d" text-anchor="start">delegate</text>
-<path d="M1080 280 L1080 236" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
+<path d="M436 234 L436 276" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
+<circle cx="463" cy="256" r="11" fill="#f3f1ea" stroke="#24654d" stroke-width="1.8"/>
+<text x="463" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#24654d" text-anchor="middle">1</text>
+<text x="480" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#24654d" text-anchor="start">delegate</text>
+<path d="M1080 280 L1080 238" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
 <circle cx="1107" cy="256" r="11" fill="#f3f1ea" stroke="#d85a30" stroke-width="1.8"/>
 <text x="1107" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#d85a30" text-anchor="middle">5</text>
 <text x="1124" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#d85a30" text-anchor="start">review</text>
-<path d="M1030 232 L1030 276" fill="none" stroke="#9c2f6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#tip-send)"/>
+<path d="M1030 234 L1030 276" fill="none" stroke="#9c2f6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#tip-send)"/>
 <text x="1014" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#9c2f6b" text-anchor="end">send back</text>
 <circle cx="916.36" cy="256" r="11" fill="#f3f1ea" stroke="#9c2f6b" stroke-width="1.8" stroke-dasharray="3.2 2.6"/>
 <text x="916.36" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#9c2f6b" text-anchor="middle">6</text>
-<path d="M720 234 L720 278" fill="none" stroke="#56645c" stroke-width="2" stroke-dasharray="1.5 4.5" stroke-linecap="round" marker-start="url(#tip-ask)" marker-end="url(#tip-ask)"/>
-<path d="M742 246.9 L751.1 256 L742 265.1 L732.9 256 Z" fill="#ffffff" stroke="#56645c" stroke-width="2.27"/>
-<text x="756" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#56645c" text-anchor="start">inquiry</text>
+<path d="M744 236 L744 278" fill="none" stroke="#56645c" stroke-width="2" stroke-dasharray="1.5 4.5" stroke-linecap="round" marker-start="url(#tip-ask)" marker-end="url(#tip-ask)"/>
+<path d="M766 246.9 L775.1 256 L766 265.1 L756.9 256 Z" fill="#ffffff" stroke="#56645c" stroke-width="2.27"/>
+<text x="780" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#56645c" text-anchor="start">inquiry</text>
 <rect x="40" y="280" width="1420" height="220" fill="#f8f7f2" stroke="#24654d" stroke-width="2.5"/>
 <rect x="40" y="280" width="1420" height="46" fill="#24654d" stroke="#24654d" stroke-width="2.5"/>
 <text x="60" y="315" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="32" font-weight="700" fill="#f1efe8" text-anchor="start">Blackboard</text>
 <text x="263.20000000000005" y="312" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#f1efe8" text-anchor="start">one private service · SQLite</text>
 <text x="1440" y="311" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#c9d6cf" text-anchor="end">buddies talk only through it · every step is kept · work outlives your session</text>
 <rect x="42" y="342" width="1416" height="32" fill="#e5e8e3" stroke="none" stroke-width="1"/>
-<text x="406" y="363" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700" fill="#1f2a24" text-anchor="end">mt-7f3a</text>
-<circle cx="420" cy="358" r="4.4" fill="#5b6a62"/>
-<path d="M426 358 L580 358" stroke="#5b6a62" stroke-width="1.5"/>
+<text x="422" y="363" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700" fill="#1f2a24" text-anchor="end">mt-7f3a</text>
+<circle cx="436" cy="358" r="4.4" fill="#5b6a62"/>
+<path d="M442 358 L580 358" stroke="#5b6a62" stroke-width="1.5"/>
 <rect x="580" y="348.4" width="40" height="19.2" fill="#ffffff" stroke="#1f2a24" stroke-width="1.5"/>
-<rect x="628" y="348.4" width="162" height="19.2" fill="#025387" stroke="#cfcdc3" stroke-width="1"/>
-<path d="M720 348.9 L729.1 358 L720 367.1 L710.9 358 Z" fill="#ffffff" stroke="#56645c" stroke-width="2.27"/>
-<path d="M800 348.9 L809.1 358 L800 367.1 L790.9 358 Z" fill="#d85a30"/>
-<path d="M810 358 L826 358" stroke="#d85a30" stroke-width="2" stroke-dasharray="5 4"/>
-<rect x="830" y="348.4" width="54" height="19.2" fill="#025387" stroke="#cfcdc3" stroke-width="1"/>
-<rect x="892.0" y="349.9" width="16.1" height="16.1" fill="#5b6a62" stroke="none" stroke-width="1"/>
-<path d="M920 348.9 L929.1 358 L920 367.1 L910.9 358 Z" fill="#d85a30"/>
-<path d="M930 358 L1066 358" stroke="#d85a30" stroke-width="2" stroke-dasharray="5 4"/>
+<rect x="628" y="348.4" width="172" height="19.2" fill="#025387" stroke="#cfcdc3" stroke-width="1"/>
+<path d="M744 348.9 L753.1 358 L744 367.1 L734.9 358 Z" fill="#ffffff" stroke="#56645c" stroke-width="2.27"/>
+<path d="M812 348.9 L821.1 358 L812 367.1 L802.9 358 Z" fill="#d85a30"/>
+<path d="M822 358 L880 358" stroke="#d85a30" stroke-width="2" stroke-dasharray="5 4"/>
+<rect x="886" y="348.4" width="98" height="19.2" fill="#025387" stroke="#cfcdc3" stroke-width="1"/>
+<rect x="992.0" y="349.9" width="16.1" height="16.1" fill="#5b6a62" stroke="none" stroke-width="1"/>
+<path d="M1020 348.9 L1029.1 358 L1020 367.1 L1010.9 358 Z" fill="#d85a30"/>
+<path d="M1030 358 L1066 358" stroke="#d85a30" stroke-width="2" stroke-dasharray="5 4"/>
 <path d="M1073.0 358.7 L1077.9 363.2 L1087.0 353.1" fill="none" stroke="#5b6a62" stroke-width="3.15" stroke-linecap="round" stroke-linejoin="round"/>
 <text x="128" y="397" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#536057" text-anchor="end">mt-3c90</text>
 <text x="548" y="427" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#536057" text-anchor="end">mt-8b2c</text>
@@ -111,104 +111,107 @@
 <path d="M1000 463 L1000 477" stroke="#24654d" stroke-width="1.5"/>
 <text x="916" y="487" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="end">delegated by the Lead</text>
 <text x="60" y="492" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">the private console shows these timelines; you set preferences there</text>
-<path d="M600 500 L600 544" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
-<circle cx="627" cy="520" r="11" fill="#f3f1ea" stroke="#24654d" stroke-width="1.8"/>
-<text x="627" y="525" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#24654d" text-anchor="middle">2</text>
-<text x="644" y="525" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#24654d" text-anchor="start">route</text>
-<rect x="534" y="548" width="132" height="64" fill="#ffffff" stroke="#1f2a24" stroke-width="2"/>
-<text x="600" y="576" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#1f2a24" text-anchor="middle">Router</text>
-<text x="600" y="598" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#1f2a24" text-anchor="middle">buddy</text>
-<text x="514" y="574" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#1f2a24" text-anchor="end">picks an enabled, available buddy fit for the task</text>
-<text x="514" y="598" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="end">by your preferences and model notes, unless the Host names one</text>
-<path d="M600 612 L600 652" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
-<circle cx="627" cy="632" r="11" fill="#f3f1ea" stroke="#24654d" stroke-width="1.8"/>
-<text x="627" y="637" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#24654d" text-anchor="middle">3</text>
-<text x="644" y="637" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#24654d" text-anchor="start">run</text>
-<path d="M750.0 500 L750.0 544" fill="none" stroke="#9c2f6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#tip-send)"/>
-<rect x="684.0" y="548" width="132" height="64" fill="#f3f1ea" stroke="#9c2f6b" stroke-width="1.5" stroke-dasharray="5 4"/>
-<text x="750.0" y="569" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#9c2f6b" text-anchor="middle">sent back</text>
-<text x="750.0" y="587" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">same Worker,</text>
-<text x="750.0" y="603" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">no routing</text>
-<path d="M750.0 612 L750.0 652" fill="none" stroke="#9c2f6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#tip-send)"/>
-<path d="M900 656 L900 616" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
-<text x="916" y="637" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#56645c" text-anchor="start">turn ends</text>
-<rect x="834" y="548" width="132" height="64" fill="#f8f7f2" stroke="#24654d" stroke-width="2"/>
-<rect x="860.0" y="565.0" width="16.1" height="16.1" fill="#5b6a62" stroke="none" stroke-width="1"/>
-<text x="884" y="580" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#1f2a24" text-anchor="start">seal</text>
-<text x="900" y="601" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">by the blackboard</text>
-<path d="M900 548 L900 504" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
-<circle cx="927" cy="520" r="11" fill="#f3f1ea" stroke="#24654d" stroke-width="1.8"/>
-<text x="927" y="525" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#24654d" text-anchor="middle">4</text>
-<text x="944" y="525" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#24654d" text-anchor="start">sealed result</text>
-<text x="986" y="574" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#1f2a24" text-anchor="start">fixes the checkout when the turn ends</text>
-<text x="986" y="598" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">acceptance judges this seal, never the Worker's report</text>
-<text x="40" y="642" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#1f2a24" text-anchor="start">Worker buddies</text>
-<text x="226.64000000000001" y="642" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">harness · provider · model · effort</text>
-<text x="1460" y="642" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="end">each works in its own checkout of your repository</text>
-<rect x="40" y="656" width="230" height="140" fill="#ffffff" stroke="#cfcdc3" stroke-width="1.5"/>
-<rect x="56" y="676" width="11" height="11" fill="#66c8e4" stroke="none" stroke-width="1"/>
-<text x="74" y="687" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">ZCode</text>
-<circle cx="64" cy="715" r="7.9" fill="#1f2a24"/>
-<text x="80" y="720" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#1f2a24" text-anchor="start">running</text>
-<text x="56" y="746" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">mt-8b2c</text>
-<rect x="290" y="656" width="230" height="140" fill="#ffffff" stroke="#cfcdc3" stroke-width="1.5"/>
-<rect x="306" y="676" width="11" height="11" fill="#6137a5" stroke="none" stroke-width="1"/>
-<text x="324" y="687" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">Codex</text>
-<circle cx="314" cy="715" r="7.0" fill="#ffffff" stroke="#536057" stroke-width="2.62"/>
-<text x="330" y="720" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#1f2a24" text-anchor="start">free</text>
-<text x="306" y="746" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">mt-3c90</text>
-<text x="306" y="768" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">sent back once, then accepted</text>
-<rect x="980" y="656" width="230" height="140" fill="#ffffff" stroke="#cfcdc3" stroke-width="1.5"/>
-<rect x="996" y="676" width="11" height="11" fill="#fad58e" stroke="none" stroke-width="1"/>
-<text x="1014" y="687" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">Claude Code</text>
-<circle cx="1004" cy="715" r="7.9" fill="#1f2a24"/>
-<text x="1020" y="720" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#1f2a24" text-anchor="start">running</text>
-<text x="996" y="746" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">mt-d417</text>
-<text x="996" y="768" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">owned by the Lead</text>
-<rect x="1230" y="656" width="230" height="140" fill="#ffffff" stroke="#cfcdc3" stroke-width="1.5"/>
-<rect x="1246" y="676" width="11" height="11" fill="#acec6e" stroke="none" stroke-width="1"/>
-<text x="1264" y="687" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">Codex · Lead buddy</text>
-<circle cx="1254" cy="715" r="7.9" fill="#1f2a24"/>
-<text x="1270" y="720" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#1f2a24" text-anchor="start">running</text>
-<text x="1246" y="746" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">mt-1a52</text>
-<text x="1246" y="768" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">delegated mt-d417:</text>
-<text x="1246" y="786" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">Host of its own micro tasks</text>
-<rect x="540" y="656" width="420" height="140" fill="#ffffff" stroke="#1f2a24" stroke-width="2"/>
-<rect x="556" y="676" width="11" height="11" fill="#025387" stroke="none" stroke-width="1"/>
-<text x="574" y="687" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="700" fill="#1f2a24" text-anchor="start">DeepSeek Harness</text>
-<text x="556" y="709" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">chosen for mt-7f3a · works in its own checkout</text>
-<path d="M600 742.9 L609.1 752 L600 761.1 L590.9 752 Z" fill="#5b6a62"/>
-<rect x="628" y="742.4" width="162" height="19.2" fill="#025387" stroke="#cfcdc3" stroke-width="1"/>
-<path d="M720 742.9 L729.1 752 L720 761.1 L710.9 752 Z" fill="#ffffff" stroke="#56645c" stroke-width="2.27"/>
-<path d="M800 742.9 L809.1 752 L800 761.1 L790.9 752 Z" fill="#d85a30"/>
-<path d="M810 752 L826 752" stroke="#d85a30" stroke-width="2" stroke-dasharray="5 4"/>
-<rect x="830" y="742.4" width="54" height="19.2" fill="#025387" stroke="#cfcdc3" stroke-width="1"/>
-<rect x="892.0" y="744.0" width="16.1" height="16.1" fill="#5b6a62" stroke="none" stroke-width="1"/>
-<text x="712" y="733" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">inquiry</text>
-<text x="806" y="733" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">stops and asks</text>
-<text x="600" y="782" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">fixed input</text>
-<text x="900" y="782" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">sealed output</text>
-<circle cx="52" cy="822" r="4.4" fill="#5b6a62"/>
-<text x="67" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">delegated</text>
-<rect x="182.70000000000002" y="812.4" width="26.0" height="19.2" fill="#ffffff" stroke="#1f2a24" stroke-width="1.5"/>
-<text x="216.70000000000002" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">routing</text>
-<rect x="305.6" y="812.4" width="26.0" height="19.2" fill="#025387" stroke="#cfcdc3" stroke-width="1"/>
-<text x="339.6" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">turn</text>
-<path d="M412.30000000000007 812.9 L421.4 822 L412.30000000000007 831.1 L403.2 822 Z" fill="#ffffff" stroke="#56645c" stroke-width="2.27"/>
-<text x="427.30000000000007" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">inquiry</text>
-<path d="M535.2000000000002 812.9 L544.3 822 L535.2000000000002 831.1 L526.1 822 Z" fill="#5b6a62"/>
-<text x="550.2000000000002" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">put in</text>
-<path d="M649.7000000000002 812.9 L658.8 822 L649.7000000000002 831.1 L640.6 822 Z" fill="#d85a30"/>
-<text x="664.7000000000002" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">waits for the Host</text>
-<rect x="857.0" y="814.0" width="16.1" height="16.1" fill="#5b6a62" stroke="none" stroke-width="1"/>
-<text x="880.0000000000002" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">sealed</text>
-<path d="M972.5 822.7 L977.4 827.2 L986.5 817.1" fill="none" stroke="#5b6a62" stroke-width="3.15" stroke-linecap="round" stroke-linejoin="round"/>
-<text x="994.5000000000002" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">accepted</text>
-<circle cx="1110.8000000000002" cy="822" r="7.9" fill="#1f2a24"/>
-<text x="1125.8000000000002" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">running</text>
-<circle cx="1233.7" cy="822" r="7.0" fill="#ffffff" stroke="#536057" stroke-width="2.62"/>
-<text x="1248.7" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">free</text>
-<path d="M1322.3999999999999 822 L1348.3999999999999 822" stroke="#9c2f6b" stroke-width="2" stroke-dasharray="6 5"/>
-<text x="1356.3999999999999" y="827" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">send back</text>
+<rect x="40" y="706" width="1420" height="198" fill="#e5e2d8" stroke="#cfcdc3" stroke-width="1.5"/>
+<path d="M600 500 L600 528" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
+<circle cx="627" cy="514" r="11" fill="#f3f1ea" stroke="#24654d" stroke-width="1.8"/>
+<text x="627" y="519" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#24654d" text-anchor="middle">2</text>
+<text x="644" y="519" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#24654d" text-anchor="start">route</text>
+<rect x="40" y="532" width="624" height="144" fill="#ffffff" stroke="#1f2a24" stroke-width="2"/>
+<text x="60" y="560" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">Router buddy</text>
+<text x="196.96000000000004" y="559" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">skipped if the Host names one or one is left; it may pick none</text>
+<text x="108" y="592" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="middle">every buddy</text>
+<rect x="70" y="606" width="12" height="12" fill="#66c8e4" stroke="none" stroke-width="1"/>
+<rect x="86" y="606" width="12" height="12" fill="#6137a5" stroke="none" stroke-width="1"/>
+<rect x="102" y="606" width="12" height="12" fill="#025387" stroke="none" stroke-width="1"/>
+<rect x="118" y="606" width="12" height="12" fill="#fad58e" stroke="none" stroke-width="1"/>
+<rect x="134" y="606" width="12" height="12" fill="#acec6e" stroke="none" stroke-width="1"/>
+<path d="M156 612 L300 612" fill="none" stroke="#536057" stroke-width="1.4" marker-end="url(#tip-ask)"/>
+<text x="227" y="638" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">the program keeps those</text>
+<text x="227" y="656" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">enabled, free, not cooling, fit</text>
+<text x="330" y="592" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="middle">candidates</text>
+<rect x="308" y="606" width="12" height="12" fill="#66c8e4" stroke="none" stroke-width="1"/>
+<rect x="324" y="606" width="12" height="12" fill="#6137a5" stroke="none" stroke-width="1"/>
+<rect x="340" y="606" width="12" height="12" fill="#025387" stroke="none" stroke-width="1"/>
+<path d="M362 612 L584 612" fill="none" stroke="#536057" stroke-width="1.4" marker-end="url(#tip-ask)"/>
+<text x="476" y="638" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">the Router reads the task, your preferences</text>
+<text x="476" y="656" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">and model notes; in review mode, the repo</text>
+<rect x="594" y="606" width="12" height="12" fill="#025387" stroke="none" stroke-width="1"/>
+<circle cx="600" cy="612" r="12" fill="none" stroke="#24654d" stroke-width="1.8"/>
+<text x="600" y="592" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="middle">picks one</text>
+<path d="M600 676 L600 744" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
+<circle cx="627" cy="691" r="11" fill="#f3f1ea" stroke="#24654d" stroke-width="1.8"/>
+<text x="627" y="696" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#24654d" text-anchor="middle">3</text>
+<text x="644" y="696" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#24654d" text-anchor="start">run</text>
+<path d="M744 506 L744 568" fill="none" stroke="#56645c" stroke-width="2" stroke-dasharray="1.5 4.5" stroke-linecap="round" marker-start="url(#tip-ask)" marker-end="url(#tip-ask)"/>
+<rect x="682" y="572" width="124" height="64" fill="#f3f1ea" stroke="#56645c" stroke-width="1.6" stroke-dasharray="1.5 3.5" stroke-linecap="round"/>
+<text x="744" y="595" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#56645c" text-anchor="middle">inquiry</text>
+<text x="744" y="614" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">asks mid-turn;</text>
+<text x="744" y="630" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">the turn goes on</text>
+<path d="M744 640 L744 744" fill="none" stroke="#56645c" stroke-width="2" stroke-dasharray="1.5 4.5" stroke-linecap="round" marker-start="url(#tip-ask)" marker-end="url(#tip-ask)"/>
+<path d="M886 500 L886 568" fill="none" stroke="#9c2f6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#tip-send)"/>
+<rect x="824" y="572" width="124" height="64" fill="#f3f1ea" stroke="#9c2f6b" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="886" y="595" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#9c2f6b" text-anchor="middle">sent back</text>
+<text x="886" y="614" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">same Worker,</text>
+<text x="886" y="630" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">no routing</text>
+<path d="M886 636 L886 744" fill="none" stroke="#9c2f6b" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#tip-send)"/>
+<path d="M1000 748 L1000 680" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
+<rect x="966" y="532" width="494" height="144" fill="#f8f7f2" stroke="#24654d" stroke-width="2"/>
+<text x="1030" y="560" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">turn ends</text>
+<rect x="1029.0" y="585.0" width="16.1" height="16.1" fill="#5b6a62" stroke="none" stroke-width="1"/>
+<text x="1052" y="598" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="start">the blackboard seals the checkout as it stood</text>
+<path d="M1030.0 619.7 L1034.9 624.2 L1044.0 614.1" fill="none" stroke="#5b6a62" stroke-width="3.15" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="1052" y="624" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="start">the Host checks the Worker's report against the seal</text>
+<path d="M1037 635.9 L1046.1 645 L1037 654.1 L1027.9 645 Z" fill="#d85a30"/>
+<text x="1052" y="650" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="start">help, questions, out-of-scope edits wait for the Host</text>
+<path d="M1000 532 L1000 504" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
+<circle cx="1027" cy="516" r="11" fill="#f3f1ea" stroke="#24654d" stroke-width="1.8"/>
+<text x="1027" y="521" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#24654d" text-anchor="middle">4</text>
+<text x="1044" y="521" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#24654d" text-anchor="start">seal</text>
+<text x="56" y="734" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="21" font-weight="700" fill="#1f2a24" text-anchor="start">Worker buddies</text>
+<text x="242.64000000000001" y="734" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">harness · provider · model · effort</text>
+<text x="1444" y="734" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="end">each works in its own checkout of your repository</text>
+<rect x="56" y="748" width="230" height="140" fill="#ffffff" stroke="#cfcdc3" stroke-width="1.5"/>
+<rect x="72" y="768" width="11" height="11" fill="#66c8e4" stroke="none" stroke-width="1"/>
+<text x="90" y="779" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">ZCode</text>
+<circle cx="80" cy="805" r="7.9" fill="#1f2a24"/>
+<text x="96" y="810" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#1f2a24" text-anchor="start">running</text>
+<text x="72" y="836" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">mt-8b2c</text>
+<rect x="298" y="748" width="230" height="140" fill="#ffffff" stroke="#cfcdc3" stroke-width="1.5"/>
+<rect x="314" y="768" width="11" height="11" fill="#6137a5" stroke="none" stroke-width="1"/>
+<text x="332" y="779" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">Codex</text>
+<circle cx="322" cy="805" r="7.0" fill="#ffffff" stroke="#536057" stroke-width="2.62"/>
+<text x="338" y="810" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#1f2a24" text-anchor="start">free</text>
+<text x="314" y="836" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">mt-3c90</text>
+<text x="314" y="858" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">sent back once, then accepted</text>
+<rect x="1072" y="748" width="180" height="140" fill="#ffffff" stroke="#cfcdc3" stroke-width="1.5"/>
+<rect x="1088" y="768" width="11" height="11" fill="#fad58e" stroke="none" stroke-width="1"/>
+<text x="1106" y="779" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">Claude Code</text>
+<circle cx="1096" cy="805" r="7.9" fill="#1f2a24"/>
+<text x="1112" y="810" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#1f2a24" text-anchor="start">running</text>
+<text x="1088" y="836" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">mt-d417</text>
+<text x="1088" y="858" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">owned by the Lead</text>
+<rect x="1264" y="748" width="180" height="140" fill="#ffffff" stroke="#cfcdc3" stroke-width="1.5"/>
+<rect x="1280" y="768" width="11" height="11" fill="#acec6e" stroke="none" stroke-width="1"/>
+<text x="1298" y="779" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">Codex · Lead</text>
+<circle cx="1288" cy="805" r="7.9" fill="#1f2a24"/>
+<text x="1304" y="810" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#1f2a24" text-anchor="start">running</text>
+<text x="1280" y="836" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">mt-1a52</text>
+<text x="1280" y="858" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">delegated mt-d417</text>
+<text x="1280" y="875" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">and is its Host</text>
+<rect x="540" y="748" width="520" height="140" fill="#ffffff" stroke="#1f2a24" stroke-width="2"/>
+<rect x="556" y="768" width="11" height="11" fill="#025387" stroke="none" stroke-width="1"/>
+<text x="574" y="779" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="18" font-weight="650" fill="#1f2a24" text-anchor="start">DeepSeek Harness</text>
+<text x="556" y="801" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#56645c" text-anchor="start">chosen for mt-7f3a · works in its own checkout</text>
+<path d="M600 834.9 L609.1 844 L600 853.1 L590.9 844 Z" fill="#5b6a62"/>
+<rect x="628" y="834.4" width="172" height="19.2" fill="#025387" stroke="#cfcdc3" stroke-width="1"/>
+<path d="M744 834.9 L753.1 844 L744 853.1 L734.9 844 Z" fill="#ffffff" stroke="#56645c" stroke-width="2.27"/>
+<path d="M812 834.9 L821.1 844 L812 853.1 L802.9 844 Z" fill="#d85a30"/>
+<path d="M822 844 L880 844" stroke="#d85a30" stroke-width="2" stroke-dasharray="5 4"/>
+<rect x="886" y="834.4" width="98" height="19.2" fill="#025387" stroke="#cfcdc3" stroke-width="1"/>
+<rect x="992.0" y="836.0" width="16.1" height="16.1" fill="#5b6a62" stroke="none" stroke-width="1"/>
+<text x="744" y="825" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">inquiry</text>
+<text x="812" y="874" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">stops and asks</text>
+<text x="600" y="874" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">fixed input</text>
+<text x="1000" y="874" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="middle">sealed output</text>
 </g>
 </svg>
