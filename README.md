@@ -35,11 +35,11 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-en-dark.svg">
-  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, a Router buddy picks a Worker buddy, which runs a turn in its own checkout; the blackboard seals the result; the Host reviews it and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="docs/assets/architecture-en-light.svg" width="100%">
+  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, a Router buddy picks a Worker buddy, which runs a turn in its own checkout; the Host can ask that running turn a question through the blackboard; the blackboard seals the result; the Host reviews it and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="docs/assets/architecture-en-light.svg" width="100%">
 </picture>
 
 1. **Delegate.** The Host writes a micro task: what to do, which files it may change, and how to check it. Unless the Host names a buddy, a Router buddy picks one.
-2. **Work.** The Worker runs in its own harness and checkout. When it needs a decision or help, it stops and asks; the Host answers or continues it.
+2. **Work.** The Worker runs in its own harness and checkout. The Host can ask the running turn a question through the blackboard without stopping it; when the Worker needs a decision or help, it stops and asks, and the Host answers or continues it.
 3. **Accept.** The Host reviews the sealed result. It either integrates and accepts it, which verifies the integration and reclaims the checkout, or sends it back to the same micro task for another turn; work it gives up on is concluded.
 
 Micro tasks, decisions and results live on a local blackboard, a SQLite database owned by one private service. More in [workflow](docs/reference/workflow.md) and [architecture](docs/reference/architecture.md).

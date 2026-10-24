@@ -35,11 +35,11 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-zh-dark.svg">
-  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，由 Router buddy 选出一个 Worker buddy，它在自己的检出里跑一个回合；黑板封存结果；Host 审查之后，要么整合并验收进你的仓库，要么打回给同一个 Worker，不再经过路由。Lead buddy 为它委派的微任务按同一个循环担任 Host。" src="docs/assets/architecture-zh-light.svg" width="100%">
+  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，由 Router buddy 选出一个 Worker buddy，它在自己的检出里跑一个回合；Host 可以经黑板向这个运行中的回合问询；黑板封存结果；Host 审查之后，要么整合并验收进你的仓库，要么打回给同一个 Worker，不再经过路由。Lead buddy 为它委派的微任务按同一个循环担任 Host。" src="docs/assets/architecture-zh-light.svg" width="100%">
 </picture>
 
 1. **委派。** Host 写一个微任务：做什么、可以改哪些文件、怎样检查。除非 Host 点名，由 Router buddy 选出一个 buddy。
-2. **执行。** Worker 在自己的 harness 与检出里工作。需要决定或帮助时，它停下来提问；Host 回答，或者让它接着做。
+2. **执行。** Worker 在自己的 harness 与检出里工作。Host 可以经黑板向运行中的回合问询，回合不必停下；Worker 需要决定或帮助时，它停下来提问，Host 回答，或者让它接着做。
 3. **验收。** Host 审查封存的结果：要么整合并验收，验收会核对这次整合并回收检出；要么打回给同一个微任务再跑一个回合；放弃的工作以结论结束。
 
 微任务、决定与结果都记在本地的黑板上，黑板是一个由私有服务独占的 SQLite 数据库。详见[工作流](docs/reference/workflow.md)与[架构](docs/reference/architecture.md)。
