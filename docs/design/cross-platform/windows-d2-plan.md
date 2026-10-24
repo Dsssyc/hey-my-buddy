@@ -23,9 +23,9 @@ D2 修 Windows 上两类现存的缺陷：服务的启动与停止报法会把"�
 
 **不另起第二个服务。** 现状已经成立：冷启动在 start 锁里经 `_retire_stale_endpoint`（:323–344）核对 lifetime 锁，被持有就拒绝；新服务的 `acquire_exclusive`（`blackboard/service/daemon.py:84–93`）在锁被持有时以 `ALREADY_RUNNING` 退出。D2a 只把这两处的报法改成上面同一句说明。`control.json` 缺失、损坏、不可读都经 `_read_endpoint` 返回 `None`、走同一条分支，不另加分支；测试只分"锁被持有"与"锁空闲"两种。
 
-**独立启动。** `protocol/service_process.py:22` 的 `independent_service_popen` 用 detached、新进程组与显式 breakaway 创建服务，只把创建失败的错误 5 报成 `SERVICE_START_UNSUPPORTED`。调查发现：经 venv 转发器的启动在禁止脱离的外层 Job 里返回成功，服务却仍在外层里，外层关闭时一起退出；空句柄的 Job 查询只读到最内层。方案：挂起创建，要求 `IsProcessInJob(创建的进程, NULL)` 为假才恢复，否则终止这次创建的进程并报 `SERVICE_START_UNSUPPORTED`。检查的对象是还没有运行任何 venv 代码的创建进程；真正的解释器随后进入转发器自己的 Job，这不影响结论。冷启动与安装的 `start()` 共用这一处。
+**独立启动。** `protocol/service_process.py:22` 的 `independent_service_popen` 用 detached、新进程组与显式 breakaway 创建服务，只把创建失败的错误 5 报成 `SERVICE_START_UNSUPPORTED`。调查发现：经 venv 转发器的启动在禁止脱离的外层 Job 里返回成功，服务却仍在外层里，外层关闭时一起退出；空句柄的 Job 查询只读到最内层。原方案是挂起创建，要求 `IsProcessInJob(创建的进程, NULL)` 为假才恢复；2026-10-24 的实验之后不做，启动保持现状（见下一段）。
 
-先在 Windows 上实验再实现，都走产品实际的 venv 入口：自建禁止脱离的外层 Job 里应在服务代码运行前被拒绝、创建的进程已收尾；SSH 原样应通过，关掉 SSH 后服务仍在。桌面 PowerShell 与 VS Code 终端里不能误拒，否则产品在桌面上不能用：这一项要开发者在桌面上做，结果不成立就停下报 Host，不另想机制，不换 flags 重试。
+2026-10-24 在 Windows 上先做了实验，走产品实际的 venv 入口（Lead 的微任务 `a92cf5cf`，证据在它检出的 `tmp/d2-evidence/d2a-service-start-probe/`）：自建的禁止脱离的外层里，创建的进程在恢复之前被拒并收尾；但原样 SSH 下创建的进程同样在某个 Job 里，也被拒了。D1 的调查已观察到经 SSH 启动的服务在启动会话退出之后仍按原身份存活，所以“在某个 Job 里”不等于“会被收走”：这个谓词挡住了一个能用的环境，而会收走服务的外层只在实验里自建过，用户的环境里没有见到。按只兜实际发生过的情形，挂起检查不做，不改谓词，也不再诊断；哪天在用户的环境里真见到服务随启动窗口一起退出，带着证据再设计。这一条限制照旧写在参考文档里。
 
 **启动错误的归属与就绪判断。** 冷启动与安装都按 `startup-error.json` 的 `pid` 等于 `child.pid` 认领启动错误（`transport.py:424–427`、`install/upgrade.py:213–219`），安装的 `start()` 还要求 `control.json` 的 `pid` 等于 `child.pid` 才算就绪（`upgrade.py:224`）。服务写的是自己的 `os.getpid()`（`daemon.py:341`），经 venv 转发器时 `child` 是转发器，两者永远不等：Windows 上启动错误都会退化成 `SERVICE_START_FAILED`，每次安装都等满 45 秒再报 `UPGRADE_SHUTDOWN_UNCONFIRMED`（按代码推断，未在 Windows 上复现）。改为：两处启动都已持有 `control-start.lock`（`transport.py:370`、`install/upgrade.py:457、485`），spawn 之前删掉旧的 `startup-error.json`，之后出现的就属于这次启动，pid 比较与文件里的 `pid` 字段一并删掉；安装的就绪改用现有的 `probe(state, target)`（`upgrade.py:176–185`）。两个系统同一条规则；Popen 的 PID 只用来回收启动句柄。
 
@@ -79,7 +79,7 @@ D2 修 Windows 上两类现存的缺陷：服务的启动与停止报法会把"�
 - 身份判定（`protocol/test_process_identity.py`）：根缺席加错误 2、Job 可开但根已退而成员残留、PID 复用、查询失败；FILETIME 用大整数。
 - 确认与接回（`buddy/runtime/test_execution_process.py`、`blackboard/service/test_execution_scheduler.py`）：报到进程与根不同而同属根 Job 的成功例，不属于根 Job 或创建时间不符的拒绝例；重启后无句柄那一支的接纳；SQLite 提交失败。
 - 恢复（`blackboard/service/test_execution_recovery.py`、`blackboard/store/test_interruption_native_tree.py`、`protocol/test_native_process_journal.py`）：服务重启后接回、只有 intent 时 unknown、Windows 根的停止证据覆盖 pending 或缺失的 journal、POSIX 的 pending 照旧占用。
-- 服务启动与停止（`protocol/test_service_process.py`、`test_transport_attach.py`、`test_transport_errors.py`、`install/test_upgrade.py`）：挂起检查的通过、拒绝与查询失败；锁被持有而连不上不回答已停；所有者缺席时回答已停；启动错误的归属与 `probe` 就绪。
+- 服务启动与停止（`protocol/test_service_process.py`、`test_transport_attach.py`、`test_transport_errors.py`、`install/test_upgrade.py`）：锁被持有而连不上不回答已停；所有者缺席时回答已停；启动错误的归属与 `probe` 就绪。
 - 升级（`blackboard/store/test_upgrade_fixture.py` 等）：升级与新建的结构一致；POSIX 身份值逐行保留。
 
 不为没发生过的情形加测试，不照搬实现写断言（例如"Windows 不再调用 boot_id"），不在产品里加测试钩子，不新造 Windows 上冻结进程的测试机制（`test_install_without_upgrade.py:342–344` 那类用例测的是平台无关的逻辑，在 Windows 上跳过即可）。
@@ -95,13 +95,13 @@ D2 修 Windows 上两类现存的缺陷：服务的启动与停止报法会把"�
 
 **Host 验收时另派 Worker 复跑的：**
 
-1. 独立启动矩阵与挂起检查（D2a）。
+1. 挂起启动的前置实验（D2a）：2026-10-24 做过，原样 SSH 被误拒，挂起检查因此不做（第 2 节）。
 2. 两次 SSH 登录：一次登录里的私有服务活着，另一次登录发 `stop` 与冷启动：得到连不上与可能在另一次 Windows 登录里的说明，锁与端点都在，没有第二个服务进程。
 3. 私有服务上跑一个模型无关的 command 执行：重启服务，执行保持原 PID 与 FILETIME，被接回，只结算一次；再在两个 0.53.x 私有运行时之间做一次同契约安装与一次失败回滚，执行同样挺过去（若被运行时目录的忙文件挡住，记给阶段 F）。服务在执行确认之前重启，执行同样挺过去。
 4. 已登记的根被强杀与正常退出：按名得到错误 2、根身份缺席，尝试结算，后续调度继续。
 5. ARM64：CI 上跑完整检查，不单列原生实验。
 
-**需要开发者在桌面上做的：** 从普通 PowerShell 与 VS Code 终端启动私有服务，挂起检查不误拒；关掉启动窗口，服务继续存在；执行与它经 cmd、pwsh、git 派生的后代都没有窗口。
+**需要开发者在桌面上做的：** 从普通 PowerShell 与 VS Code 终端启动私有服务，关掉启动窗口，服务继续存在；执行与它经 cmd、pwsh、git 派生的后代都没有窗口。
 
 ## 6. 文档
 
