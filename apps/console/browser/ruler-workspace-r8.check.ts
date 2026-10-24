@@ -1,7 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { open, test } from "./preview";
+import { freezeTimelineClock, open, test } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
@@ -23,6 +23,7 @@ const ppm = (page: Page) => page.locator('[data-slot=timeline-canvas]').getAttri
 for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.describe(`ruler workspace ${theme} ${width}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: 900 }, reducedMotion: "reduce" });
   test("zooms at the ruler, pans with Shift and horizontal input, and exposes an overlay fit control", async ({ page }) => {
+    await freezeTimelineClock(page);
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await open(page, `#tasks/${A}`);
     const zoomRuler = ruler(page), view = page.locator('[data-slot=timeline-tracks]');
@@ -149,6 +150,7 @@ test.describe("scroll continuity", () => {
 test.describe("touch ruler", () => {
   test.use({ locale: "zh-CN", viewport: { width: 390, height: 900 }, hasTouch: true, reducedMotion: "reduce" });
   test("pinches through successive touch moves and double taps to fit", async ({ page }) => {
+    await freezeTimelineClock(page);
     await open(page, `#tasks/${A}`);
     const axis = page.locator('[data-slot=timeline-axis]');
     const p = await point(axis, .5), initial = await ppm(page);

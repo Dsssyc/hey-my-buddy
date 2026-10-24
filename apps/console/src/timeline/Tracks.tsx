@@ -2,7 +2,8 @@ import { buddyUsesLightInk, leadingBuddyColor, runningBuddyColor } from "./buddy
 import { IsolatedStatusMark } from "./IsolatedStatusMark";
 import { HarnessLogo } from "../buddies/HarnessLogo";
 import { Hint } from "../components/hint";
-import { useId, useLayoutEffect, useRef, useState } from "react";
+import { useId, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
+import type { Ref } from "react";
 import i18n from "i18next";
 import { cn } from "cn";
 import { useTranslation } from "react-i18next";
@@ -17,9 +18,17 @@ import { fitAdjacentLabel, fitLabel, useTextMeasure } from "./labels";
 import type { Interval, Label, Occupancy } from "./labels";
 import { MarkerCluster, markerAt, markerKey } from "./MarkerCluster";
 import { ConclusionMark, CONCLUSION_OUTSET_PX as INSET_PX } from "./ConclusionMark";
-import { clusterHalfWidth } from "./ClusterMark";
+import { CLUSTER_SELECTION_PADDING_PX, clusterHalfWidth } from "./ClusterMark";
 import type { TimelineMarker } from "./MarkerCluster";
 import type { OwnedWait } from "./lanes";
+
+const EVENT_SELECTION_RADIUS_PX = 10;
+const INQUIRY_SELECTION_RADIUS_PX = 9;
+
+function spanSelection(start: number, end: number): Interval {
+  const left = Math.max(-6, start - 2);
+  return { left, right: left + Math.max(5, end - start + 4) };
+}
 
 export function eventReadout(event: TimelineEvent): string {
   return [eventName(event), clockTime(event.at), eventDetails(event)].filter(Boolean).join(" · ");
@@ -144,12 +153,14 @@ function IdlePattern({ id }: { id: string }) {
 type PositionedSpan = { span: TimelineSpan; start: number; end: number; execution: boolean; outcome: ReturnType<typeof spanOutcome> };
 const diamond = (x: number, y: number) => `M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`;
 
-export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background" }: {
+export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOpen, onSelect, onHover, onFocusSpan, onMarker, buddyColors, selected, selectedKey = null, highlightedKey = null, ownedWaits, tabKey, boundary, height = 52, surface = "background", selectionRef }: {
   row: TimelineRow; spans: TimelineSpan[]; events: TimelineEvent[]; scale: TimelineScale; nowMs: number; ongoing: boolean;
   buddies?: readonly FriendlyBuddy[] | null; selected: boolean; tabKey?: string | null; boundary?: HTMLElement | null;
   /** Only this fragment is outlined; the selected row has its own neutral wash. */
   selectedKey?: string | null;
   highlightedKey?: string | null;
+  /** The drawn selection's scale coordinates, computed from the same facts and dimensions as the SVG. */
+  selectionRef?: Ref<Interval | null>;
   /** A Lead's waits for its owned micro tasks, drawn like other waits from the recorded facts. */
   ownedWaits?: readonly OwnedWait[];
   /** Row height; 52 keeps the bar, both name lines and their spacing proportionate, a lane header is taller. */
@@ -229,6 +240,21 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     ...markerGroups.filter(group => group.length > 1).map(group => String(group.length)),
     ...expected.map(entry => entry.text), ...markers.map(marker => eventName(marker.event)), acceptanceLabel, acceptance?.duration ?? ""];
   const { measure, ruler } = useTextMeasure(candidates);
+  useImperativeHandle<Interval | null, Interval | null>(selectionRef, () => {
+    const span = positioned.find(item => `span:${item.span.spanId}` === selectedKey);
+    let range: Interval;
+    if (span) range = spanSelection(span.start, span.end);
+    else {
+      const group = markerGroups.find(group => group.some(marker => markerKey(marker) === selectedKey));
+      if (!group) return null;
+      const center = group.reduce((sum, marker) => sum + marker.x, 0) / group.length;
+      const radius = group.length > 1
+        ? clusterHalfWidth(group.length, measure(String(group.length))) + CLUSTER_SELECTION_PADDING_PX
+        : group[0]!.kind === "event" ? EVENT_SELECTION_RADIUS_PX : INQUIRY_SELECTION_RADIUS_PX;
+      range = { left: center - radius, right: center + radius };
+    }
+    return { left: Math.max(-INSET_PX, range.left), right: Math.min(scale.widthPx + INSET_PX, range.right) };
+  });
   const lightInk = (span: TimelineSpan) => buddyUsesLightInk(buddyColors.get(buddyColorKey(span.buddy))!);
   const labels: Label[] = [];
   const occupied: Record<number, Occupancy[]> = { [topTextY]: [], [barTextY]: [...markerGroups.map(group => ({ x: group.reduce((sum, mark) => sum + mark.x, 0) / group.length, radius: group.length > 1 ? clusterHalfWidth(group.length, measure(String(group.length))) + 3 : 8 })), ...expected.map(mark => ({ x: mark.x, radius: 8 }))].map(mark => ({ kind: "obstacle" as const, left: mark.x - mark.radius, right: mark.x + mark.radius })) };
@@ -269,10 +295,12 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
     {ongoing && <line aria-hidden="true" data-slot="timeline-now" x1={scale.toX(nowMs)!} x2={scale.toX(nowMs)!} y2={height} className="stroke-live opacity-60"/>}
     {acceptance && <line data-slot="acceptance-wait" x1={acceptance.start} x2={acceptance.end} y1={middle} y2={middle} strokeWidth={acceptanceOpen ? 2 : 1.5} strokeDasharray={acceptanceOpen ? "5 4" : undefined} className={acceptanceOpen ? "stroke-hand-mark" : "stroke-ink3"}/>}
     {owned.map(entry => <line key={entry.wait.startMs} data-slot="owned-wait" x1={entry.start} x2={entry.end} y1={middle} y2={middle} strokeWidth={entry.wait.open ? 2 : 1.5} strokeDasharray={entry.wait.open ? "5 4" : undefined} className={entry.wait.open ? "stroke-hand-mark" : "stroke-ink3"}/>)}
-    {positioned.map(({ span, start, end, execution, outcome }) => <Hint key={span.spanId} text={span.kind === "execution" ? identity(span) : spanReadout(span, nowMs, buddies, row)}><g role="button" tabIndex={tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
+    {positioned.map(({ span, start, end, execution, outcome }) => {
+      const selection = spanSelection(start, end);
+      return <Hint key={span.spanId} text={span.kind === "execution" ? identity(span) : spanReadout(span, nowMs, buddies, row)}><g role="button" tabIndex={tabKey === `span:${span.spanId}` ? 0 : -1} data-at={instant(span.startAt)!} data-key={`span:${span.spanId}`} aria-pressed={selectedKey === `span:${span.spanId}`} aria-label={t("segment", { label: spanReadout(span, nowMs, buddies, row) })}
       onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onOpen(row.runId, `span:${span.spanId}`); } }}
       onFocus={() => onFocusSpan(span)} onBlur={() => onFocusSpan(null)} onClick={event => { if (event.detail > 1) return; onSelect(row.runId, `span:${span.spanId}`); onOpen(row.runId, `span:${span.spanId}`); }} onPointerEnter={() => onHover(span)} onPointerLeave={() => onHover(null)} className="group/fragment outline-none">
-      {isHighlighted(`span:${span.spanId}`) && <rect data-slot="selected-item" x={Math.max(-6, start - 2)} y={execution ? middle - 13 : middle - 3} width={Math.max(5, end - start + 4)} height={execution ? 26 : 6} fill="none" className="pointer-events-none stroke-focus"/>}
+      {isHighlighted(`span:${span.spanId}`) && <rect data-slot="selected-item" x={selection.left} y={execution ? middle - 13 : middle - 3} width={selection.right - selection.left} height={execution ? 26 : 6} fill="none" className="pointer-events-none stroke-focus"/>}
       <path data-slot="span-hit" d={hitPath(start, end)} fill="transparent"/>
       {execution ? <rect data-slot={span.kind === "routing" ? "routing-bar" : "execution-bar"} data-outcome={outcome} x={start} y={middle - 11} width={Math.max(1, end - start)} height={22}
         strokeDasharray={span.kind === "routing" && ["unknown", "cancelled", "abstention"].includes(outcome) ? "3 2" : undefined}
@@ -290,7 +318,8 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
       {span.kind === "execution" && outcome === "failed" && <IsolatedStatusMark slot="execution-failed" d={`M${end - 8} ${middle - 3}l6 6m0-6l-6 6`} paper={paper} stroke="stroke-fail" width={1.8}/>}
       {outcome === "unknown" && <IsolatedStatusMark slot="unconfirmed-end" d={`M${end - 4} ${middle - 11}l4 6-4 5 4 5-4 6`} paper={paper} stroke="stroke-hand-mark"/>}
       <rect aria-hidden="true" data-slot="fragment-focus" x={Math.max(-6, start - 5)} y={middle - 17} width={Math.max(12, end - start + 10)} height={34} fill="none" strokeWidth={2} className={cn("pointer-events-none stroke-ink opacity-0", !isHighlighted(`span:${span.spanId}`) && "group-focus/fragment:opacity-100")}/>
-    </g></Hint>)}
+    </g></Hint>;
+    })}
     {tails.map(tail => <rect key={tail.item.span.spanId} pointerEvents="none" data-slot="silent-tail" x={tail.x} y={middle - 10.25} width={Math.max(0, tail.item.end - tail.x)} height={20.5} className="fill-hand-wash"/>)}
     {positioned.filter(item => item.span.kind === "execution" && item.outcome === "running").map(({ span, start, end }) => <g key={span.spanId} pointerEvents="none">
       <defs><linearGradient id={`${pattern}-breath-${span.spanId}`}><stop stopColor={leadingBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)} stopOpacity={0}/><stop offset="1" stopColor={leadingBuddyColor(buddyColors.get(buddyColorKey(span.buddy))!)}/></linearGradient></defs>
@@ -306,14 +335,14 @@ export function Track({ row, spans, events, scale, nowMs, ongoing, buddies, onOp
       onPointerEnter={() => focusMarker(marker, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker(marker, "focus")} onBlur={() => focusMarker(null, "focus")}
       onClick={event => { if (event.detail > 1) return; onSelect(row.runId, markerKey(marker)); onOpen(row.runId, markerKey(marker)); }} onKeyDown={key => { if (key.key === "Enter") { key.preventDefault(); onOpen(row.runId, markerKey(marker)); } }} className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath(marker.x - 5.5, marker.x + 5.5)} fill="transparent"/>
-      {isHighlighted(markerKey(marker)) && <rect data-slot="selected-item" x={marker.x - 9} y={middle - 9} width={18} height={18} fill="none" className="pointer-events-none stroke-focus"/>}
+      {isHighlighted(markerKey(marker)) && <rect data-slot="selected-item" x={marker.x - INQUIRY_SELECTION_RADIUS_PX} y={middle - 9} width={INQUIRY_SELECTION_RADIUS_PX * 2} height={18} fill="none" className="pointer-events-none stroke-focus"/>}
       <path data-slot="inquiry-mark" d={diamond(marker.x, middle)} className="fill-card stroke-ink2" strokeWidth={1.3}/>
       <rect aria-hidden="true" data-slot="fragment-focus" x={marker.x - 8} y={middle - 10} width={16} height={20} fill="none" strokeWidth={2} className={cn("pointer-events-none stroke-ink opacity-0", !isHighlighted(markerKey(marker)) && "group-focus/fragment:opacity-100")}/>
     </g></Hint>)}
     {singletonEvents.map(({ event, x }) => <Hint key={event.seq} text={eventReadout(event)}><g role="button" tabIndex={tabKey === `event:${event.seq}` ? 0 : -1} data-at={instant(event.at)!} data-key={`event:${event.seq}`} aria-pressed={selectedKey === `event:${event.seq}`} aria-label={eventReadout(event)} onPointerEnter={() => focusMarker({ kind: "event", event, x }, "hover")} onPointerLeave={() => focusMarker(null, "hover")} onFocus={() => focusMarker({ kind: "event", event, x }, "focus")} onBlur={() => focusMarker(null, "focus")}
       onClick={click => { if (click.detail > 1) return; onSelect(row.runId, `event:${event.seq}`); onOpen(row.runId, `event:${event.seq}`); }} onKeyDown={key => { if (key.key === "Enter") { key.preventDefault(); onOpen(row.runId, `event:${event.seq}`); } }} className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath(x - (isConclusion(event) ? 8 : 2.5), x + (isConclusion(event) ? 8 : 2.5))} fill="transparent"/>
-      {isHighlighted(`event:${event.seq}`) && <rect data-slot="selected-item" x={x - 10} y={middle - 10} width={20} height={20} fill="none" className="pointer-events-none stroke-focus"/>}
+      {isHighlighted(`event:${event.seq}`) && <rect data-slot="selected-item" x={x - EVENT_SELECTION_RADIUS_PX} y={middle - 10} width={EVENT_SELECTION_RADIUS_PX * 2} height={20} fill="none" className="pointer-events-none stroke-focus"/>}
       {isConclusion(event) ? <g data-slot={event.kind === "accept" ? "accept-mark" : "failed-conclusion-mark"}>
         <ConclusionMark kind={event.kind === "accept" ? "accepted" : "failed"} x={x} y={middle}/>
       </g> : <circle data-slot="event-mark" cx={x} cy={middle} r={2.5} className="fill-past"/>}

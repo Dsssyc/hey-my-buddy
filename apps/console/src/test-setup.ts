@@ -10,6 +10,7 @@ globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {
 Element.prototype.hasPointerCapture ??= () => false;
 Element.prototype.releasePointerCapture ??= () => {};
 Element.prototype.scrollIntoView ??= () => {};
+Element.prototype.scrollTo ??= () => {};
 
 // Only semantic label-selection tests use this deterministic font metric. Real
 // glyph widths and collision geometry are checked in Playwright.
