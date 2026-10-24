@@ -84,9 +84,8 @@ class MicroTaskTestCase(WorkflowTestCase):
         self.finish_turn(board, claim, worker_id="parent-worker")
         return board.call("workflow_get", {"runId": parent["runId"]})
 
-    def remove_source_evidence(self, board, run_id):
-        # Reproduce records from before these optional event facts were written.
-        # Existing owner/actor labels remain, and must never be parsed as evidence.
+    def remove_source_event_fields(self, board, run_id):
+        # Event payloads are audit evidence; history reads the admission column.
         with board.store.db.write() as connection:
             connection.execute("UPDATE events SET payload_json=json_remove(payload_json, '$.microTask.sourceHostId',"
                                " '$.sourceHostId', '$.previousHostId', '$.previousOwnerGeneration') WHERE task_id=?", (run_id,))
@@ -173,6 +172,22 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertEqual(metadata["rootRunId"], run_id)
         self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
 
+    def test_project_uses_the_pinned_root_input_and_original_spec(self):
+        board = self.board()
+        submitted = self.submit(board, request_id="pinned-project", host_id="host-a", kind="worktree")
+        run_id = submitted["runId"]
+        original = self.micro_task_of(board, run_id)["project"]
+        with board.store.db.write() as connection:
+            connection.execute(
+                "UPDATE workflow_runs SET workspace_manifest_json=json_set(workspace_manifest_json,"
+                " '$.repositoryId', 'repo:later', '$.snapshot.repositoryPath', '/later/repository')"
+                " WHERE run_id=?", (run_id,),
+            )
+            connection.execute("UPDATE tasks SET cwd='/later/checkout' WHERE task_id=?", (run_id,))
+        self.assertEqual(self.micro_task_of(board, run_id)["project"], original)
+        self.assertEqual(original["path"], os.path.realpath(str(self.workdir())))
+        self.assertEqual(original["id"], f"repo:{original['path']}")
+
     def test_helper_keeps_the_host_that_delegated_it_across_a_root_takeover(self):
         board = self.board(max_concurrent=1)
         self.register(board)
@@ -209,34 +224,24 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         helper = self.micro_task_of(board, helper_id)
         self.assertEqual(micro_task["sourceHostId"], "host-a")
         self.assertEqual(micro_task["currentHostId"], "host-b")
-        # The helper's own generation-1 creation record still names the Host that
-        # authorized it, so the original delegating Host is recovered instead of the
-        # post-takeover controller.
+        # The helper retains its own admission source after the root changes owner.
         self.assertEqual(helper["sourceHostId"], "host-a")
         self.assertEqual(helper["currentHostId"], "host-b")
         self.assertEqual(helper["rootRunId"], micro_task_id)
 
-    def test_old_generation_one_source_is_fixed_by_its_first_new_takeover(self):
+    def test_frozen_source_survives_event_payload_removal_and_takeovers(self):
         board = self.board()
         original = self.submit(board, host_id="host-a")
-        self.remove_source_evidence(board, original["runId"])
+        self.remove_source_event_fields(board, original["runId"])
         self.assertEqual(self.micro_task_of(board, original["runId"])["sourceHostId"], "host-a")
         second = self.take_over(board, original, "host-b", "old-first-takeover")
         self.take_over(board, second, "host-c", "old-second-takeover")
         metadata = self.micro_task_of(board, original["runId"])
         self.assertEqual(metadata["sourceHostId"], "host-a")
         self.assertEqual(metadata["currentHostId"], "host-c")
-
-    def test_history_without_source_evidence_reports_unknown_after_takeover(self):
-        board = self.board()
-        original = self.submit(board, host_id="host-a")
-        second = self.take_over(board, original, "host-b", "historical-takeover")
-        self.remove_source_evidence(board, original["runId"])
-        self.take_over(board, second, "host-c", "new-later-takeover")
-        metadata = self.micro_task_of(board, original["runId"])
-        self.assertIsNone(metadata["sourceHostId"])
-        self.assertEqual(metadata["currentHostId"], "host-c")
-        self.assertEqual(self.history(board, hostId="host-a")["total"], 0)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT source_host_id FROM workflow_runs WHERE run_id=?",
+                                                (original["runId"],)).fetchone()[0], "host-a")
 
     def test_helper_source_survives_its_own_takeovers_without_changing_root_controller(self):
         board = self.board()
@@ -248,23 +253,6 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertEqual(metadata["sourceHostId"], "host-a")
         self.assertEqual(metadata["currentHostId"], "host-a")
         self.assertEqual(metadata["rootRunId"], parent["runId"])
-
-    def test_root_generation_one_cannot_supply_a_deep_helpers_missing_source(self):
-        board = self.board()
-        parent, child = self.parent_and_helper(board)
-        self.finish_turn(board, self.claim(board, run_id=child, claim_request_id="child-yields"), disposition="assistance")
-        view = board.call("workflow_get", {"runId": parent["runId"]})
-        self.decide(board, view, view["activeRequest"]["requestId"], command_id="deep-helper", helpers=[self.helper_spec("grandchild")])
-        grandchild = board.call("workflow_get", {"runId": child})["children"][0]["taskId"]
-        view = board.call("workflow_get", {"runId": grandchild})
-        view = self.take_over(board, view, "grandchild-host-b", "deep-first", console=True)
-        self.take_over(board, view, "grandchild-host-c", "deep-second", console=True)
-        self.remove_source_evidence(board, grandchild)
-        metadata = self.micro_task_of(board, grandchild)
-        self.assertEqual(board.call("workflow_get", {"runId": parent["runId"]})["ownerGeneration"], 1)
-        self.assertIsNone(metadata["sourceHostId"])
-        self.assertEqual(metadata["currentHostId"], "host-a")
-        self.assertEqual(metadata["parentRunId"], child)
 
     def test_proxy_micro_task_records_the_actual_authorizing_host_after_root_takeover(self):
         board = self.board()
@@ -283,6 +271,9 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertEqual(created["hostId"], "host-a", "provenance must not change the helper's authorization contract")
         self.assertEqual(self.micro_task_of(board, grandchild)["sourceHostId"], "host-b")
         self.assertEqual(self.micro_task_of(board, router_id)["sourceHostId"], "host-b")
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT source_host_id FROM workflow_runs WHERE run_id=?",
+                                                (grandchild,)).fetchone()[0], "host-b")
         root = board.call("workflow_get", {"runId": parent["runId"]})
         self.take_over(board, root, "host-c", "later-controller")
         self.assertEqual(self.micro_task_of(board, child)["sourceHostId"], "host-a")

@@ -88,7 +88,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 self.assertEqual(self.read(), expected)
                 self.assert_recomputed(counter, [])
 
-    def test_repository_location_precedence_and_corrections_invalidate_only_its_group(self):
+    def test_pinned_repository_location_corrections_invalidate_only_its_group(self):
         group = self.fixture.macros[0]
         root = self.root_for(group)
         self.sql("UPDATE workflow_runs SET workspace_manifest_json=json_set(workspace_manifest_json,"
@@ -108,18 +108,12 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                     task = self.fixture.board.call("task_get", {"runId": root})["task"]
                     self.assertEqual(task["lineage"]["project"]["label"], label)
                     self.assertEqual(task["lineage"]["project"]["id"], summary["project"]["id"])
-            # Changes to a lower-priority source cannot invalidate the derived
-            # repository location while the input artifact still supplies it.
+            # The current run manifest cannot invalidate the fixed input's
+            # repository location or its cached summary.
             self.sql("UPDATE workflow_runs SET workspace_manifest_json=json_set(workspace_manifest_json,"
                      "'$.snapshot.repositoryPath','/fictional/fallback-repository/.git') WHERE run_id=?", (root,))
             self.assertEqual(self.rows()[group]["project"]["label"], "bare-repository")
             self.assert_recomputed(counter, [])
-            self.sql("UPDATE workflow_artifacts SET manifest_json=json_remove(manifest_json,"
-                     "'$.snapshot.repositoryPath') WHERE run_id=? AND kind='input'", (root,))
-            self.assertEqual(self.rows()[group]["project"]["label"], "fallback-repository")
-            self.assert_recomputed(counter, [group])
-            task = self.fixture.board.call("task_get", {"runId": root})["task"]
-            self.assertEqual(task["lineage"]["project"]["label"], "fallback-repository")
 
     def test_root_helper_and_router_stop_changes_are_selective(self):
         group = self.fixture.macros[0]
@@ -297,6 +291,8 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(self.rows(projectId=project)[group]["matchingRuns"], 1)
             self.assert_recomputed(counter, [group])
             self.sql("UPDATE events SET payload_json=json_set(payload_json,'$.microTask.sourceHostId','fictional-corrected-source') WHERE task_id=? AND kind='task.submitted'", (root,))
+            self.assertNotIn(group, self.rows(query="fictional-corrected-source"))
+            self.sql("UPDATE workflow_runs SET source_host_id='fictional-corrected-source' WHERE run_id=?", (root,))
             self.assertEqual(self.rows(query="fictional-corrected-source")[group]["matchingRuns"], 1)
             self.assert_recomputed(counter, [group])
 

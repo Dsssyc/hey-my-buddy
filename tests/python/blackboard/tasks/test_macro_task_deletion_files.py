@@ -23,21 +23,24 @@ class DeletionFileTests(BoardTestCase):
         path.write_text(json.dumps(document), encoding="utf-8", newline="\n")
         return path
 
-    def test_private_roots_follow_historical_adapter_bindings_and_leave_links(self):
+    def test_private_roots_follow_adapter_bindings_and_leave_legacy_roots_and_links(self):
         board = self.board()
         scope = self.scope()
         scope.attempt_rows = [{'task_id':'owned','adapter':'decision','model_harness':name,
                                'attempt_id':'attempt-'+name} for name in ('claude','zcode','dsh')]
         paths = []
+        legacy = []
         for name in ('codex','claude','zcode','dsh'):
-            for root in (private_dirs.micro_task_root(board.directory,name,'owned'),
-                         board.directory / 'harnesses' / name / hashlib.sha256(b'owned').hexdigest()):
-                paths.append(self.file(root / 'native' / 'payload',{'private':True}))
+            root = private_dirs.micro_task_root(board.directory,name,'owned')
+            paths.append(self.file(root / 'native' / 'payload',{'private':True}))
+            old_root = board.directory / 'harnesses' / name / hashlib.sha256(b'owned').hexdigest()
+            legacy.append(self.file(old_root / 'native' / 'payload',{'private':True}))
         attempts = self.file(board.directory / 'attempts' / 'owned' / 'attempt-1' / 'payload',{})
         untouched = self.file(private_dirs.micro_task_root(board.directory,'codex','other') / 'payload',{})
         with patch.object(deletion,'_rows',return_value=[]):
             self.assertEqual(deletion._delete_private_roots(board.store,scope),[])
         self.assertTrue(all(not path.exists() for path in paths))
+        self.assertTrue(all(path.exists() for path in legacy))
         self.assertFalse(attempts.exists())
         self.assertTrue(untouched.exists())
         user = self.file(board.directory / 'user' / 'payload',{'user':True})

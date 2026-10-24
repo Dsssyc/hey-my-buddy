@@ -124,7 +124,7 @@ def dependencies(connection, members):
              " FROM workflow_host_conclusions WHERE run_id IN ({}) ORDER BY run_id"),
             ("request", "SELECT run_id,request_id,turn_id,attempt_id,child_task_id,kind,state,expected_revision,decided_at"
              " FROM workflow_requests WHERE run_id IN ({}) ORDER BY run_id,request_id"),
-            ("child", "SELECT child_task_id,parent_run_id,request_id,state,role,integrator"
+            ("child", "SELECT child_task_id,parent_run_id,request_id,state,role"
              " FROM workflow_children WHERE child_task_id IN ({}) ORDER BY child_task_id"),
             ("route", "SELECT route.run_id,route.decision_id,decision.task_id,route.state,route.owner_generation"
              " FROM workflow_routes route JOIN decision_requests decision USING(decision_id)"

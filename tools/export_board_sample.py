@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, SECRET_KEY, initialize_defaults
-from hey_my_buddy.blackboard.tasks.macro_tasks import MEMBERS_SQL, RUN_GROUPS_SQL
+from hey_my_buddy.blackboard.tasks.macro_tasks import RUN_GROUPS_SQL
 from hey_my_buddy.state_root import get_state_dir
 
 MAX_TASKS = 100
@@ -39,6 +39,17 @@ def _rows(connection, table: str, column: str, values) -> list[dict]:
     return [dict(row) for row in connection.execute(
         f'SELECT * FROM "{table}" WHERE "{column}" IN ({",".join("?" for _ in values)}) ORDER BY rowid',
         values)]
+
+
+def _session_groups(records: dict, groups: dict[str, str]) -> dict[str, str]:
+    # Session locations need only ownership links, independent of the current
+    # history reader's presentation columns and their stored forms.
+    result = dict(groups)
+    routed_groups = {row['decision_id']: groups[row['run_id']] for row in records['workflow_routes']}
+    for dispatch in records['router_dispatches']:
+        if dispatch['decision_id'] in routed_groups:
+            result[dispatch['task_id']] = routed_groups[dispatch['decision_id']]
+    return result
 
 
 def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str]]]:
@@ -92,10 +103,9 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
         run['submission_verifier'] = None
     for attempt in records['attempts']:
         attempt['nonce_verifier'] = secrets.token_hex(32)
-    sessions = [(row['task_id'], row['attempt_id'], row['group_id']) for row in connection.execute(
-        f'SELECT a.task_id,a.attempt_id,m.group_id FROM attempts a '
-        f'JOIN ({MEMBERS_SQL}) m ON m.task_id=a.task_id '
-        f'WHERE a.task_id IN ({",".join("?" for _ in task_ids)})', tuple(task_ids))]
+    session_groups = _session_groups(records, groups)
+    sessions = [(row['task_id'], row['attempt_id'], session_groups[row['task_id']])
+                for row in records['attempts'] if row['task_id'] in session_groups]
     return records, sessions
 
 
@@ -195,8 +205,8 @@ def export_sample(source: Path, output: Path) -> Path:
                                        f'({",".join("?" for _ in row)})', tuple(row.values()))
                 # The surviving lineage determines each destination session's
                 # group; source group identity still locates the original file.
-                target_groups = {row['task_id']: row['group_id'] for row in writer.execute(
-                    f'SELECT task_id,group_id FROM ({MEMBERS_SQL})')}
+                target_groups = _session_groups(records, {
+                    row['run_id']: row['group_id'] for row in writer.execute(RUN_GROUPS_SQL)})
                 for task, attempt, group in sessions:
                     origin = private_dirs.session_record_path(source, group, attempt)
                     target = private_dirs.session_record_path(stage, target_groups[task], attempt)

@@ -536,6 +536,17 @@ class LifecycleTests(WorkflowTestCase):
         approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=helpers)
         children = [child["taskId"] for child in approved["children"]]
         self.assertEqual(sorted(child["integrator"] for child in approved["children"]), [False, True])
+        with board.store.db.read() as connection:
+            roles = connection.execute(
+                "SELECT c.child_task_id,c.role,t.request_id FROM workflow_children c"
+                " JOIN tasks t ON t.task_id=c.child_task_id WHERE c.parent_run_id=?", (submitted["runId"],)
+            ).fetchall()
+        self.assertEqual({row['request_id']: row['role'] for row in roles},
+                         {'helper-1': 'helper', 'helper-2': 'integrator'})
+        self.assertEqual(
+            {child["taskId"]: child["integrator"] for child in board.call("workflow_get", {"runId": submitted["runId"]})["children"]},
+            {row['child_task_id']: row['role'] == 'integrator' for row in roles},
+        )
         # The first helper yields attention; the Host sees it while the sibling runs.
         first_helper = self.claim(board, claim_request_id="c2", run_id=children[0])
         self.finish_turn(board, first_helper, disposition="attention")

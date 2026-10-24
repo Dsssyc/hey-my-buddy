@@ -90,7 +90,8 @@ def ensure_idle(state: Path) -> int:
         return _idle_board(connection)
 
 
-def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
+def idle_snapshot(state: Path, *, event_head: int | None = None,
+                  column_projections: dict[str, tuple[str, ...]] | None = None) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = _idle_board(connection)
@@ -100,10 +101,13 @@ def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
             "SELECT key,value FROM meta WHERE key!='schema_version' ORDER BY key")]
         retained_meta_hash = hashlib.sha256(json.dumps(
             retained_meta, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
-        snapshot = backup.database_snapshot(connection, event_head=event_head)
+        if schema == UPGRADE_BASE_SCHEMA:
+            column_projections = schema_upgrade.RETAINED_COLUMN_PROJECTIONS
+        snapshot = backup.database_snapshot(connection, event_head=event_head, column_projections=column_projections)
         expected = ({'expectedEventsSha256': schema_upgrade.expected_events_fingerprint(
             connection, event_head=snapshot['eventHead'])} if schema == UPGRADE_BASE_SCHEMA else {})
-        return {**snapshot, 'schema': schema, 'retainedMetaSha256': retained_meta_hash, **expected}
+        return {**snapshot, 'schema': schema, 'retainedMetaSha256': retained_meta_hash, **expected,
+                **({'columnProjections': column_projections} if column_projections is not None else {})}
 
 
 def preflight(state: Path, *, contract_changed: bool) -> dict:
@@ -308,7 +312,8 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
     if contract_changed:
         converting = before['schema'] == UPGRADE_BASE_SCHEMA and expected_schema == SCHEMA_VERSION
-        actual = idle_snapshot(state, event_head=before.get('eventHead'))
+        actual = idle_snapshot(state, event_head=before.get('eventHead'),
+                               column_projections=before['columnProjections'] if converting else None)
         if actual['schema'] != expected_schema:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database schema did not match', tables=['meta'])
         if set(actual['tables']) != set(before['tables']):
@@ -585,9 +590,11 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 clear_journal(marker)
             except OSError as error:
                 journal_error = str(error)
+            legacy_cleanup = ({'legacyLayoutCleanup': schema_upgrade.cleanup_legacy_layout(state)}
+                              if contract_changed and before['schema'] == UPGRADE_BASE_SCHEMA else {})
             pruning = retain_runtimes(state, target, previous)
             return {'upgraded':True, **({'backup':backed_up} if backed_up is not None else {}), 'verification':evidence, 'previousRuntime':previous.name,
-                    'rollback':None, 'runtimePruning':pruning,
+                    'rollback':None, 'runtimePruning':pruning, **legacy_cleanup,
                     **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                     **({'journalError':journal_error} if journal_error is not None else {})}
 
@@ -617,8 +624,11 @@ def recover(state: Path, root: Path) -> dict:
             clear_journal(marker)
         except OSError as error:
             journal_error = str(error)
+        legacy_cleanup = ({'legacyLayoutCleanup': schema_upgrade.cleanup_legacy_layout(state)}
+                          if contract_changed and journal['expected']['schema'] == UPGRADE_BASE_SCHEMA else {})
         pruning = retain_runtimes(state, target, previous)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence, 'runtimePruning':pruning,
+                **legacy_cleanup,
                 **({'backup':journal['backup']} if 'backup' in journal else {}),
                 **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                 **({'journalError':journal_error} if journal_error is not None else {})}

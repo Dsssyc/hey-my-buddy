@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest import mock
 from threading import Event
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
-from hey_my_buddy.blackboard.store import backup
+from hey_my_buddy.blackboard.store import backup, upgrade as schema_upgrade
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
 from hey_my_buddy import locking, private_dirs
 from hey_my_buddy.blackboard.tasks import storage
@@ -123,6 +123,8 @@ class UpgradeTests(BoardTestCase):
         state, root = board.directory, self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         previous.mkdir(parents=True)
+        retired = state / 'worker.log'
+        retired.write_bytes(b'preserve on same-contract install')
         skill = self.directory / 'skills/hey-my-buddy'
         source = self.directory / 'new-skill'
         for path, content in ((skill, 'old'), (source, 'new')):
@@ -149,19 +151,27 @@ class UpgradeTests(BoardTestCase):
              mock.patch.object(upgrade, 'detach'), \
              mock.patch.object(upgrade, 'start', return_value=health) as start, \
              mock.patch.object(upgrade, 'retain_runtimes', return_value={'complete': True}), \
+             mock.patch.object(schema_upgrade, 'cleanup_legacy_layout', side_effect=AssertionError('unexpected legacy cleanup')) as legacy_cleanup, \
              mock.patch('hey_my_buddy.install.skill_install._link_claude', return_value={'status': 'already-linked'}), \
              mock.patch.object(upgrade.shutil, 'rmtree', side_effect=refuse_previous):
             result = upgrade.upgrade(state, skill_source=source, skill_target=skill)
         self.assertTrue(result['upgraded'], result)
+        self.assertNotIn('legacyLayoutCleanup', result)
+        legacy_cleanup.assert_not_called()
+        self.assertEqual(retired.read_bytes(), b'preserve on same-contract install')
         self.assertIn('skill cleanup denied', result['skillCleanupError'])
         self.assertFalse((state / 'upgrade.json').exists())
         self.assertEqual(launcher.read_private(state / 'active-runtime.json')['runtimeDir'], str(target))
         self.assertEqual((skill / 'SKILL.md').read_text(encoding='utf-8'), 'new')
         start.assert_called_once_with(state, target)
 
-    def test_verified_recovery_reports_skill_cleanup_failure_without_rollback(self):
+    def test_same_contract_verified_recovery_skips_legacy_cleanup_after_skill_failure(self):
         state, root = self.directory / 'state', self.directory / 'runtimes'
         state.mkdir()
+        goals = state / 'harnesses/codex/goals'
+        goals.mkdir(parents=True)
+        (goals / 'retired.jsonl').write_bytes(b'retired native history')
+        (state / 'worker.log').write_bytes(b'retired worker log')
         previous, target = root / ('a' * 32), root / ('b' * 32)
         skill = self.directory / 'skills/hey-my-buddy'
         staged = skill.with_name('.hey-my-buddy-upgrade-stage-' + 'c' * 32)
@@ -176,11 +186,16 @@ class UpgradeTests(BoardTestCase):
              mock.patch.object(upgrade, 'verify_started', return_value={}), \
              mock.patch.object(upgrade, '_verify_skill_generation'), \
              mock.patch.object(upgrade, 'retain_runtimes', return_value={'complete': True}), \
+             mock.patch.object(schema_upgrade, 'cleanup_legacy_layout', side_effect=AssertionError('unexpected legacy cleanup')) as legacy_cleanup, \
              mock.patch.object(upgrade.shutil, 'rmtree', side_effect=PermissionError('cleanup denied')), \
              mock.patch.object(upgrade, 'start', side_effect=AssertionError('rollback')):
             result = upgrade.recover(state, root)
         self.assertTrue(result['upgraded'])
         self.assertIn('cleanup denied', result['skillCleanupError'])
+        self.assertNotIn('legacyLayoutCleanup', result)
+        legacy_cleanup.assert_not_called()
+        self.assertEqual((goals / 'retired.jsonl').read_bytes(), b'retired native history')
+        self.assertEqual((state / 'worker.log').read_bytes(), b'retired worker log')
         self.assertTrue(old_skill.exists())
         self.assertFalse((state / 'upgrade.json').exists())
 
@@ -203,7 +218,7 @@ class UpgradeTests(BoardTestCase):
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         journal = {'phase': 'verified', 'contractChanged': True, 'previous': str(previous),
-                   'target': str(target), 'before': {}, 'expected': {}}
+                   'target': str(target), 'before': {'schema': SCHEMA_VERSION}, 'expected': {'schema': SCHEMA_VERSION}}
         marker = state / 'upgrade.json'
         upgrade.write_journal(marker, journal)
 
@@ -216,9 +231,12 @@ class UpgradeTests(BoardTestCase):
              mock.patch.object(upgrade, 'probe', return_value={'runtimeContentId': target.name}), \
              mock.patch.object(upgrade, 'verify_started', return_value={'runtimeContentId': target.name, 'schemaVersion': SCHEMA_VERSION}), \
              mock.patch.object(upgrade, 'write_active_runtime'), \
-             mock.patch.object(upgrade, 'clear_journal', side_effect=refuse_clear):
+             mock.patch.object(upgrade, 'clear_journal', side_effect=refuse_clear), \
+             mock.patch.object(schema_upgrade, 'cleanup_legacy_layout', side_effect=AssertionError('unexpected legacy cleanup')) as cleanup:
             result = upgrade.recover(state, root)
         self.assertTrue(result['upgraded'])
+        self.assertNotIn('legacyLayoutCleanup', result)
+        cleanup.assert_not_called()
         self.assertEqual(result['journalError'], 'denied')
         self.assertTrue(marker.exists())
         self.assertEqual(json.loads(marker.read_text(encoding="utf-8"))['phase'], 'verified')

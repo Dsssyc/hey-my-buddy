@@ -481,6 +481,55 @@ CREATE TABLE IF NOT EXISTS workflow_turns (
 #: logical task (``run_id`` = ``task_id``) plus durable turn, request, helper,
 #: continuation, workspace-reservation, pinned-artifact and attempt-scoped
 #: credential records.
+WORKFLOW_RUNS_DDL = """
+CREATE TABLE IF NOT EXISTS workflow_runs (
+    run_id                  TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    macro_task_id            TEXT REFERENCES macro_tasks(macro_task_id) ON DELETE RESTRICT,
+    title                   TEXT,
+    activity_seq            INTEGER NOT NULL DEFAULT 0,
+    activity_at             TEXT,
+    host_id                 TEXT,
+    source_host_id          TEXT,
+    owner_generation        INTEGER NOT NULL DEFAULT 1,
+    control_verifier        TEXT NOT NULL,
+    request_fingerprint     TEXT,
+    buddy_json TEXT,
+    buddy_revision INTEGER NOT NULL DEFAULT 0,
+    validated_buddy_revision INTEGER,
+    current_routing_id      TEXT,
+    submission_verifier     TEXT,
+    execution_workspace_json TEXT NOT NULL,
+    workspace_manifest_json TEXT NOT NULL,
+    state                   TEXT NOT NULL
+        CHECK (state IN ('executing','awaiting-host','waiting-helpers','waiting-owned','delivered','accepted','concluded','cancelled','failed')),
+    active_request_id       TEXT,
+    current_turn_id         TEXT,
+    current_attempt_id      TEXT,
+    continuation_count      INTEGER NOT NULL DEFAULT 0,
+    final_artifact_id       TEXT,
+    final_attempt_id        TEXT,
+    revision                INTEGER NOT NULL DEFAULT 1,
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    buddy_locked    INTEGER NOT NULL DEFAULT 0 CHECK (buddy_locked IN (0,1)),
+    delegation_authority INTEGER NOT NULL DEFAULT 0 CHECK (delegation_authority IN (0,1))
+);
+"""
+
+WORKFLOW_CHILDREN_DDL = """
+CREATE TABLE IF NOT EXISTS workflow_children (
+    child_task_id       TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    parent_run_id       TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    request_id          TEXT NOT NULL,
+    decision_command_id TEXT NOT NULL,
+    role                TEXT NOT NULL DEFAULT 'helper',
+    state               TEXT NOT NULL CHECK (state IN ('active','succeeded','failed','cancelled','attention')),
+    workspace_manifest_json TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+"""
+
 WORKFLOW_TABLES = (
     """
 CREATE TABLE IF NOT EXISTS macro_tasks (
@@ -499,39 +548,7 @@ CREATE INDEX IF NOT EXISTS macro_tasks_project_idx ON macro_tasks(project_id, ac
     # The logical micro task plus its Host ownership generation and prepared workspace.
     # The immutable submitted spec and fingerprint live in tasks; continuations
     # record their own effective input in workflow_continuations.
-    """
-CREATE TABLE IF NOT EXISTS workflow_runs (
-    run_id                  TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
-    macro_task_id            TEXT REFERENCES macro_tasks(macro_task_id) ON DELETE RESTRICT,
-    title                   TEXT,
-    activity_seq            INTEGER NOT NULL DEFAULT 0,
-    activity_at             TEXT,
-    host_id                 TEXT,
-    owner_generation        INTEGER NOT NULL DEFAULT 1,
-    control_verifier        TEXT NOT NULL,
-    request_fingerprint     TEXT,
-    buddy_json TEXT,
-    buddy_revision INTEGER NOT NULL DEFAULT 0,
-    validated_buddy_revision INTEGER,
-    current_routing_id      TEXT,
-    submission_verifier     TEXT,
-    execution_workspace_json TEXT NOT NULL,
-    workspace_manifest_json TEXT,
-    state                   TEXT NOT NULL
-        CHECK (state IN ('executing','awaiting-host','waiting-helpers','waiting-owned','delivered','accepted','concluded','cancelled','failed')),
-    active_request_id       TEXT,
-    current_turn_id         TEXT,
-    current_attempt_id      TEXT,
-    continuation_count      INTEGER NOT NULL DEFAULT 0,
-    final_artifact_id       TEXT,
-    final_attempt_id        TEXT,
-    revision                INTEGER NOT NULL DEFAULT 1,
-    created_at              TEXT NOT NULL,
-    updated_at              TEXT NOT NULL,
-    buddy_locked    INTEGER NOT NULL DEFAULT 0 CHECK (buddy_locked IN (0,1)),
-    delegation_authority INTEGER NOT NULL DEFAULT 0 CHECK (delegation_authority IN (0,1))
-);
-""",
+    WORKFLOW_RUNS_DDL,
     """
 CREATE INDEX IF NOT EXISTS workflow_runs_state_idx ON workflow_runs(state, updated_at);
 CREATE INDEX IF NOT EXISTS workflow_runs_macro_task_idx ON workflow_runs(macro_task_id, activity_seq DESC, run_id DESC);
@@ -567,20 +584,7 @@ CREATE INDEX IF NOT EXISTS workflow_turns_attempt_idx ON workflow_turns(attempt_
 CREATE INDEX IF NOT EXISTS workflow_requests_run_idx ON workflow_requests(run_id, state);
 """,
     # Explicitly scoped ordinary helper tasks created only by an approval.
-    """
-CREATE TABLE IF NOT EXISTS workflow_children (
-    child_task_id       TEXT PRIMARY KEY REFERENCES tasks(task_id) ON DELETE RESTRICT,
-    parent_run_id       TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
-    request_id          TEXT NOT NULL,
-    decision_command_id TEXT NOT NULL,
-    role                TEXT NOT NULL DEFAULT 'helper',
-    integrator          INTEGER NOT NULL DEFAULT 0,
-    state               TEXT NOT NULL CHECK (state IN ('active','succeeded','failed','cancelled','attention')),
-    workspace_manifest_json TEXT,
-    created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL
-);
-""",
+    WORKFLOW_CHILDREN_DDL,
     """
 CREATE INDEX IF NOT EXISTS workflow_children_parent_idx ON workflow_children(parent_run_id, state);
 """,

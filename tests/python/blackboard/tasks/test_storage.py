@@ -213,14 +213,16 @@ class StorageTests(BoardTestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
 
-    def test_unknown_native_owner_and_durable_state_are_never_reclaimed(self):
+    def test_legacy_harness_layout_and_durable_state_are_not_reclaimed(self):
         board = self.board()
         previous_board = board.directory / 'backups/current/board.sqlite3.gz'
         previous_board.parent.mkdir(parents=True)
         previous_board.write_bytes(b'previous board')
-        native = board.directory / 'harnesses/zcode/unknown'
-        native.mkdir(parents=True)
-        (native / 'sessions.sqlite').write_bytes(b'protected')
+        legacy = [board.directory / 'harnesses' / adapter / 'unknown'
+                  for adapter in ('zcode', 'codex')]
+        for root in legacy:
+            root.mkdir(parents=True)
+            (root / 'sessions.sqlite').write_bytes(b'protected')
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
             planned = board.call('storage_plan', {})
             backup_row = next(row for row in planned['categories'] if row['id'] == 'backup')
@@ -230,13 +232,12 @@ class StorageTests(BoardTestCase):
             })
             self.assertEqual(backup_row['bytes'], previous_board.stat().st_size)
             self.assertEqual(backup_row['reclaimableBytes'], 0)
-            native_row = next(r for r in planned['candidates'] if r['category'] == 'zcode')
-            self.assertFalse(native_row['eligible'])
-            self.assertIn('owner-unproven', native_row['reasons'])
+            self.assertFalse(any(row['id'] == 'zcode' for row in planned['categories']))
+            self.assertFalse(any(Path(row['path']) in legacy for row in planned['candidates']))
             params = {'planId':planned['planId'], 'commandId':'apply-once', 'confirm':True}
             result = board.call('storage_apply', params)
             self.assertEqual(result['removedBytes'], 0)
-            self.assertTrue((native / 'sessions.sqlite').exists())
+            self.assertTrue(all((root / 'sessions.sqlite').exists() for root in legacy))
             self.assertEqual(previous_board.read_bytes(), b'previous board')
             self.assertEqual(board.call('storage_apply', params), result)
 
@@ -352,18 +353,15 @@ class StorageTests(BoardTestCase):
         self.assertEqual(len(result['removed']), 0)
         self.assertEqual(len(result['skipped']), 11)
 
-    def test_linked_native_ancestor_is_listed_without_claiming_ownership(self):
+    def test_linked_legacy_native_ancestor_is_ignored(self):
         board=self.board()
         outside=self.directory/'outside-native';outside.mkdir();sentinel=outside/'sessions.sqlite';sentinel.write_bytes(b'outside')
         (board.directory/'harnesses').mkdir()
         (board.directory/'harnesses/zcode').symlink_to(outside, target_is_directory=True)
         with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
             planned=board.call('storage_plan',{})
-            rows=[r for r in planned['candidates'] if r['category']=='zcode']
-            self.assertEqual(len(rows),1)
-            self.assertFalse(rows[0]['eligible'])
-            self.assertEqual(rows[0]['bytes'],len(b'outside'))
-            self.assertNotIn('linked-path', rows[0]['reasons'])
+            self.assertFalse(any(Path(row['path']) == board.directory/'harnesses/zcode'
+                                 for row in planned['candidates']))
             board.call('storage_apply',{'planId':planned['planId'],'commandId':'linked-no-delete','confirm':True})
         self.assertEqual(sentinel.read_bytes(),b'outside')
 

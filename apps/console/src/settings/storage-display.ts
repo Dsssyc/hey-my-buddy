@@ -2,7 +2,7 @@ import i18n from "i18next";
 import { locale } from "../i18n";
 import { formatNumber } from "../i18n/format";
 
-export const CATEGORY_ORDER = ["session-records", "harnesses", "zcode", "workspaces", "runtimes", "backup", "durable"] as const;
+export const CATEGORY_ORDER = ["session-records", "harnesses", "workspaces", "runtimes", "backup", "durable"] as const;
 export const ALWAYS_PROTECTED = new Set(["session-records", "backup", "durable"]);
 
 export function categoryText(id: string): string {
