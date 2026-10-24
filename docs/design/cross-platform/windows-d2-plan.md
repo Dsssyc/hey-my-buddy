@@ -35,7 +35,7 @@ D2 修 Windows 上两类现存的缺陷：服务的启动与停止报法会把"�
 
 ### 开发者 2026-10-24 定的两处设计改动
 
-1. **根 Job 的长期句柄交给服务创建的进程。** 原设计让执行自己按名打开并持有根 Job。执行要等解释器起来（零点几秒以上，经转发器更久）才打开；在这之前服务的创建句柄是唯一的句柄，有序重启与同契约安装（安装的 detach 总会先发 restart，`install/upgrade.py:188–190`）一关掉它，kill-on-close 就杀掉这个执行；服务停止时 `_settle_unidentified` 一看到停止就退出（`blackboard/service/execution_scheduler.py:295`）；原设计又把 marker 推到确认之后才写，这个尝试只剩启动意图，恢复永远返回 unknown（`blackboard/tasks/interruption.py:191–197`），名额与 claims 一直占着。改为：服务在恢复它创建的进程之前，把根 Job 的句柄以不可继承的方式复制进这个进程（`DuplicateHandle`），然后才可以关掉自己的。被创建的进程在 Windows 产品链里是运行时 venv 的 `Scripts\python.exe` 转发器：它等真解释器退出才退出，自己被杀时它内层的 Job（`KILL_ON_JOB_CLOSE | SILENT_BREAKAWAY_OK`）带走真解释器；所以根 Job 正好活到执行结束，始终带着 kill-on-close。执行不再打开根 Job。
+1. **根 Job 的长期句柄交给服务创建的进程。** 原设计让执行自己按名打开并持有根 Job。执行要等解释器起来（零点几秒以上，经转发器更久）才打开；在这之前服务的创建句柄是唯一的句柄，有序重启与同契约安装（安装的 detach 总会先发 restart，`install/upgrade.py:188–190`）一关掉它，kill-on-close 就杀掉这个执行；服务停止时 `_settle_unidentified` 一看到停止就退出（`blackboard/service/execution_scheduler.py:295`）；原设计又把 marker 推到确认之后才写，这个尝试只剩启动意图，恢复永远返回 unknown（`blackboard/tasks/interruption.py:191–197`），名额与 claims 一直占着。改为：服务在恢复它创建的进程之后，把根 Job 的句柄以不可继承的方式复制进这个进程（`DuplicateHandle`），然后才可以关掉自己的（次序与理由见第 3 节“创建次序”）。被创建的进程在 Windows 产品链里是运行时 venv 的 `Scripts\python.exe` 转发器：它等真解释器退出才退出，自己被杀时它内层的 Job（`KILL_ON_JOB_CLOSE | SILENT_BREAKAWAY_OK`）带走真解释器；所以根 Job 正好活到执行结束，始终带着 kill-on-close。执行不再打开根 Job。
 2. **删去 Windows 会话号（`ProcessIdToSessionId` 的值）。** 停止证据本来就要求根的完整身份缺席；根缺席之后，还能撑着根 Job 的只有服务的临时句柄，而做恢复的服务持有 lifetime 锁、是唯一的服务，也知道自己有没有开着句柄。会话号只多挡住旧服务退出时"先释放锁、后关句柄"的微秒级竞态，代价是一列、一处核对，以及重启后会话号变了时尝试永远 unknown；它也区分不了登录（几次 SSH 登录都是 0）。
 
 ### 身份
