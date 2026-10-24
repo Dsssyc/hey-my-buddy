@@ -103,6 +103,8 @@
 
 ## 运行环境
 
+**Windows 上同一用户的另一次登录连不上服务，客户端也不核对服务端是谁。**（2026-10-24 Windows 调查 `bed8c1bb` 实测前一条；astra 研判 C-Two 0.8.2 源码时发现后一条，Host 核对过源码，未实测） 两条都在 C-Two：Windows 端点按登录 SID 推导（管道名、DACL、共享内存、属主绑定都用它），新的 SSH 登录推出另一条不存在的管道；客户端只按名字打开管道，另一个本机账户可以先建同名管道冒充服务。开发者 2026-10-24 定：C-Two 改为按用户作用域，并在客户端发出任何内容之前核对服务端进程的用户；hey-my-buddy 的首次发版不等它，[operations](../reference/operations.md#installation) 写明这两处限制，D2 只修产品自己的那处（连不上服务时不回答已停，明确说服务在另一次登录里）。C-Two 完成瘦身并发布带这两项的新版之后，作为之后的一次更新：升级 C-Two，在 Windows 上复跑跨登录的连接、调用与停止，删掉 operations 里的这两处限制，并看 D2 里“服务在另一次登录里”的报法是否还需要。研判全文是微任务 `81879013` 的回合结果。
+
 **Windows 上 harness 发现的两项测试不能运行。**（2026-10-24 Windows 调查 `bed8c1bb` 复跑时见到，候选与基线相同） `tests/python/buddy/harnesses/test_harness_discovery.py` 的 `test_native_environment_is_allowlisted_and_command_prepends_bins` 用 `PATH.split(":")` 取第一项，在 Windows 上得到盘符 `C`；`test_partial_manager_defaults_match_installed_versions_and_direct_root` 要建名为 `.nvm/alias/lts/*` 的文件，Windows 的文件名不允许 `*`。两处都是测试本身的问题。改法：前者按 `os.pathsep` 拆；后者是 nvm 在 POSIX 上的布局（nvm 不支持 Windows），按平台限定。随 D2 顺带做，在 V 的 Windows 复跑之前。
 
 **机器忙时检查套件偶发超时：`test_parallel_dispatch`。**（2026-10-23 完整检查时撞到一次） `blackboard.tasks.test_parallel_dispatch` 的 `test_command_processes_use_free_slots_then_complete` 在 `--jobs 4` 的完整检查里等两个命令执行启动，等满 60 秒失败，失败信息里的服务日志是空的；单独跑两次都通过（约 50 秒）。归入发版一步里的“机器忙时的偶发失败”，先量清楚它在等什么。
