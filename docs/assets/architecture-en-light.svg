@@ -59,8 +59,8 @@
 <path d="M744 237 L744 275" fill="none" stroke="#56645c" stroke-width="2" stroke-dasharray="1.5 4.5" stroke-linecap="round" marker-start="url(#tip-ask)" marker-end="url(#tip-ask)"/>
 <path d="M766 246.9 L775.1 256 L766 265.1 L756.9 256 Z" fill="#ffffff" stroke="#56645c" stroke-width="2.27"/>
 <text x="780" y="261" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="650" fill="#56645c" text-anchor="start">inquiry</text>
-<rect x="40" y="278" width="1420" height="220" rx="10" fill="#f2f4ef" stroke="#1d2a24" stroke-width="2.5"/>
-<path d="M50 278 H1450 A10 10 0 0 1 1460 288 V324 H40 V288 A10 10 0 0 1 50 278 Z" fill="#1d2a24"/>
+<rect x="40" y="278" width="1420" height="220" rx="5" fill="#f2f4ef" stroke="#1d2a24" stroke-width="2.5"/>
+<path d="M45 278 H1455 A5 5 0 0 1 1460 283 V324 H40 V283 A5 5 0 0 1 45 278 Z" fill="#1d2a24"/>
 <text x="60" y="313" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="32" font-weight="700" fill="#f1efe8" text-anchor="start">Blackboard</text>
 <text x="263.20000000000005" y="310" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="16" font-weight="400" fill="#f1efe8" text-anchor="start">one private service · SQLite</text>
 <text x="1440" y="309" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="15" font-weight="400" fill="#c9d6cf" text-anchor="end">buddies talk only through it · every step is kept · work outlives your session</text>
@@ -111,7 +111,7 @@
 <path d="M1000 461 L1000 475" stroke="#24654d" stroke-width="1.5"/>
 <text x="916" y="485" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="end">delegated by the Lead</text>
 <text x="60" y="490" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#56645c" text-anchor="start">the private console shows these timelines; you set preferences there</text>
-<rect x="40" y="730" width="1420" height="198" rx="10" fill="#e5e2d8" stroke="#cfcdc3" stroke-width="1.5"/>
+<rect x="40" y="730" width="1420" height="198" rx="5" fill="#e5e2d8" stroke="#cfcdc3" stroke-width="1.5"/>
 <path d="M600 498 L600 539" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>
 <circle cx="627" cy="520" r="11" fill="#f3f1ea" stroke="#24654d" stroke-width="1.8"/>
 <text x="627" y="525" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="700" fill="#24654d" text-anchor="middle">2</text>
