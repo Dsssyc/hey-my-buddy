@@ -1287,14 +1287,18 @@ class ProducerContractTests(NativeRunCase):
         self.assertEqual((fact().available, fact().reason), (False, "journal-exceeds-limit"))
         # An existing file that cannot be opened keeps the unreadable reason.
         journal.write_bytes(b"")
-        journal.chmod(0)
-        self.addCleanup(journal.chmod, 0o644)
-        try:
-            self.assertEqual((fact().available, fact().reason), (False, "journal-unreadable"))
-        except AssertionError:
-            raise
-        finally:
-            journal.chmod(0o644)
+        if os.name == "nt":
+            # Windows chmod does not deny reads; inject that file-open failure
+            # at the external boundary and keep the real journal projection.
+            with mock.patch("hey_my_buddy.protocol.inquiry_journal.open_regular_fd",
+                            side_effect=PermissionError("fixture journal access denied")):
+                self.assertEqual((fact().available, fact().reason), (False, "journal-unreadable"))
+        else:
+            journal.chmod(0)
+            try:
+                self.assertEqual((fact().available, fact().reason), (False, "journal-unreadable"))
+            finally:
+                journal.chmod(0o644)
 
     def test_the_latest_legal_record_clears_an_older_rejection(self):
         # The Host's superseded-foreign-record case: the same question's first

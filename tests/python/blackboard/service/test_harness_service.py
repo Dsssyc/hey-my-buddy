@@ -135,11 +135,11 @@ class HarnessServiceTests(BoardTestCase):
         missing = {'harness': 'codex', 'status': 'missing',
                    'reason': {'code': 'harness.not-found', 'params': {'operation': 'probe'}}}
         with patch('hey_my_buddy.blackboard.service.harness_health._snapshot', return_value={'harness': 'codex', 'managerRecords': [], 'candidates': []}), patch('hey_my_buddy.blackboard.service.harness_health._discover', return_value=missing):
-            saved = self.call('harness_set', harness='codex', path='/custom/codex')
-            latest = self.call('harness_set', harness='codex', path='/other/codex')
-        self.assertEqual(saved['harness']['manualPath'], '/custom/codex')
-        self.assertEqual(latest['harness']['manualPath'], '/other/codex')
-        self.assertEqual(self.call('harness_set', harness='codex', path='/third/codex', expectedRevision=0)['error']['code'], 'INVALID_ARGUMENT')
+            saved = self.call('harness_set', harness='codex', path=str(self.directory / 'custom/codex'))
+            latest = self.call('harness_set', harness='codex', path=str(self.directory / 'other/codex'))
+        self.assertEqual(saved['harness']['manualPath'], str(self.directory / 'custom/codex'))
+        self.assertEqual(latest['harness']['manualPath'], str(self.directory / 'other/codex'))
+        self.assertEqual(self.call('harness_set', harness='codex', path=str(self.directory / 'third/codex'), expectedRevision=0)['error']['code'], 'INVALID_ARGUMENT')
 
     def test_router_catalog_eligibility_does_not_require_a_version_certificate(self):
         self.service.harnesses.catalog_refresh = self.service._refresh_harness_catalog

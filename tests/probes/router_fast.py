@@ -63,7 +63,7 @@ def run(args):
         raise ValueError('output root must be owner-private')
     document = packet(args)
     prepared = root / 'prepared.json'
-    if prepared.exists() and json.loads(prepared.read_text()) != document:
+    if prepared.exists() and json.loads(prepared.read_text(encoding='utf-8')) != document:
         raise ValueError('the prepared packet differs; use a new output root')
     if not prepared.exists():
         private_json(prepared, document)

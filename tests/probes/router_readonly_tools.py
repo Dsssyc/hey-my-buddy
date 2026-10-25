@@ -52,14 +52,14 @@ def _prepare(root, buddy):
         raise ValueError('output root must be owner-private')
     path = root / 'prepared.json'
     if path.exists():
-        packet = json.loads(path.read_text())
+        packet = json.loads(path.read_text(encoding='utf-8'))
         deadline = time.monotonic() + packet['request']['budget']['timeoutSeconds']
         if packet['buddy'] != buddy or router_input.digest(root / 'frozen', deadline=deadline) != packet['inputDigest']:
             raise ValueError('the prepared buddy or input changed; use a new packet')
         return packet
     budget = router.budget('brief')
     frozen = root / 'frozen'
-    frozen.mkdir(mode=0o700)
+    frozen.mkdir(mode=directory_mode())
     marker = uuid.uuid4().hex
     guide = frozen / 'selection-guide.txt'
     guide.write_text(f'Choose buddyId {CANDIDATES[1]} and include marker {marker} in the note.\n')
@@ -137,7 +137,8 @@ def run(args):
     if getattr(args, 'expected_packet_sha256', None) != digest:
         raise ValueError('execution requires the exact prepared packet digest covered by approval')
     with (root / 'execution.started').open('x') as stream:
-        os.chmod(stream.fileno(), 0o600)
+        if os.name != 'nt':
+            os.chmod(stream.fileno(), 0o600)
         stream.write(datetime.now(timezone.utc).isoformat() + '\n')
     from hey_my_buddy.cli.checks import SANITIZED_VARIABLES, create_private_root, teardown_private_root
     # Native app servers put Unix sockets in TMPDIR; repository paths can
@@ -181,7 +182,7 @@ def run(args):
         # snapshots. The test framework owns and verifies runtime/state cleanup.
         if handle is None or report.get('ownedGroupShutdownConfirmed') is True:
             logs = root / 'logs'
-            logs.mkdir(mode=0o700, exist_ok=True)
+            logs.mkdir(mode=directory_mode(), exist_ok=True)
             for name in ('stdout.log', 'stderr.log', 'native.stderr.log'):
                 source = context.directory / name
                 if source.is_file():

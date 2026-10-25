@@ -13,6 +13,7 @@ from admission import admit_board, admit_store
 
 import json
 import os
+import shlex
 import subprocess
 import unittest
 
@@ -115,6 +116,7 @@ class SharedStashInventoryTests(StashInventoryTestCase):
         self.assertIn("flood 0", inventory["entries"][-1]["description"])
         self.assertIn("flood 68", inventory["entries"][0]["description"])
 
+    @unittest.skipUnless(os.name == "posix", "raw undecodable argv bytes require POSIX")
     def test_undecodable_description_bytes_stay_canonically_encodable(self):
         commit = self.stash("temporary")
         self.git("stash", "drop", "stash@{0}")
@@ -297,7 +299,7 @@ class StashChangesNeverGateWorkTests(StashInventoryTestCase):
         comparison = workspace.shared_stash_comparison(start, seal)
         [lost] = comparison["lostEntries"]
         self.assertEqual(lost["commit"], commit)
-        restored = subprocess.run(["sh", "-c", lost["recoverCommand"]], cwd=self.repo,
+        restored = subprocess.run(shlex.split(lost["recoverCommand"]), cwd=self.repo,
                                   env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(restored.returncode, 0, restored.stderr)
         listing = self.git("stash", "list")

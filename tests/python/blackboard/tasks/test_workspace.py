@@ -5,14 +5,13 @@ import json
 from pathlib import Path
 import subprocess
 import shutil
-import tempfile
 import unittest
+from temporary import TemporaryDirectory
 from unittest.mock import patch
 from types import SimpleNamespace
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion_workspace, windows_paths
-from hey_my_buddy.cli.checks import remove_private_test_root
 from hey_my_buddy.paths import native_path
 
 
@@ -20,7 +19,7 @@ class WorkspaceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-repository-")
+        temporary = TemporaryDirectory(prefix="hey-my-buddy-workspace-repository-")
         cls.addClassCleanup(temporary.cleanup)
         fixture = cls(methodName="runTest")
         fixture.repo = Path(temporary.name) / "repo"
@@ -29,7 +28,7 @@ class WorkspaceTests(unittest.TestCase):
         cls._repository_template = fixture.repo
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-")
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-workspace-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.repo = self.root / "repo"
@@ -337,9 +336,9 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt"), output)
         integration = self.root / "integration"
         self.git("worktree", "add", "--detach", str(integration), manifest["inputCommit"])
-        self.git("apply", "--binary", output["diffPath"], cwd=integration)
+        self.git("-c", "core.symlinks=true", "apply", "--binary", output["diffPath"], cwd=integration)
         self.assertEqual((integration / "src/file.txt").read_bytes(), b"output\x00\xff\n")
-        self.assertEqual(os.readlink(integration / "src/link"), "../../external-missing")
+        self.assertEqual(Path(os.readlink(integration / "src/link")).as_posix(), "../../external-missing")
         self.assertEqual(bool((integration / "src/new.txt").stat().st_mode & 0o111), os.name != "nt")
         self.git("worktree", "unlock", str(target))
         self.git("worktree", "remove", "--force", str(target))
@@ -368,7 +367,6 @@ class WorkspaceTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "nt", "Git for Windows long file handling")
     def test_short_worktree_long_file_seals_and_returns_the_same_patch_as_the_source(self):
-        self.addCleanup(remove_private_test_root, native_path(self.root))
         relative = Path("src")
         # Use the same Git path in both cases: the source file stays below MAX_PATH,
         # while the managed checkout adds its workspace allocation to the prefix.

@@ -407,7 +407,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         foreign = self.directory / "foreign-worktree"
         git(self.repo, "worktree", "add", "-q", "--detach", str(foreign), "HEAD")
         shutil.rmtree(foreign)
-        foreign_path = str(foreign.resolve())
+        foreign_path = foreign.resolve().as_posix()
         self.assertIn(foreign_path, git(self.repo, "worktree", "list", "--porcelain"))
         applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])

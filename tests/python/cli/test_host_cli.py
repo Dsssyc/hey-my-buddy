@@ -265,7 +265,7 @@ class ParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):
         code, refused, _ = self.run_cli("status", "--params-file", str(missing))
         self.assertEqual(code, 1)
         self.assertEqual(refused["error"]["code"], "INVALID_ARGUMENT")
-        self.assertIn(str(missing), refused["error"]["message"])
+        self.assertIn(str(missing).replace("\\", "\\\\"), refused["error"]["message"])
 
 
 class MicroTaskParameterDocumentTests(PrivateCliTestCase, WorkflowTestCase):

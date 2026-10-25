@@ -1,5 +1,6 @@
 """B08/B09: selective reuse over real, fictional SQL relationships."""
 from __future__ import annotations
+from hey_my_buddy.paths import native_path
 
 import json
 import copy
@@ -40,7 +41,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
     def restore_seed(self, fixture):
         with closing(sqlite3.connect(fixture.board.store.db.path)) as connection:
             self.snapshot.backup(connection)
-        shutil.copytree(self.seed_root / "state", fixture.state, dirs_exist_ok=True,
+        shutil.copytree(native_path(self.seed_root / "state"), native_path(fixture.state), dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("board.sqlite3", "board.sqlite3-wal", "board.sqlite3-shm"))
         for name, value in copy.deepcopy(self.fixture_values).items():
             setattr(fixture, name, value)

@@ -134,7 +134,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         for oid in (b"\xff", b"not-an-oid"):
             with self.subTest(oid=oid):
                 def malformed(root, *args, **kwargs):
-                    if args[0] == "for-each-ref":
+                    if args[:2] == ("for-each-ref", "--format=%(refname)%00%(objectname)"):
                         return (b"refs/hey-my-buddy/workspaces/" + manifest["workspaceId"].encode()
                                 + b"/bad\x00" + oid + b"\n")
                     return original(root, *args, **kwargs)

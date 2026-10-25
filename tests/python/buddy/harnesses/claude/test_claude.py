@@ -24,6 +24,7 @@ from unittest import mock
 from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
 from private_acl import assert_private_path
 
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.roles import controller, run_execution, turn_io
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
@@ -576,7 +577,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertIn("--no-session-persistence", argv)
         for flag in ("--safe-mode", "--strict-mcp-config", "--setting-sources"):
             self.assertNotIn(flag, argv)
-        mounted = json.loads(Path(flag_value(argv, "--mcp-config")).read_text(encoding="utf-8"))["mcpServers"]
+        mounted = json.loads(native_path(Path(flag_value(argv, "--mcp-config"))).read_text(encoding="utf-8"))["mcpServers"]
         server_name, = mounted
         self.assertEqual(flag_value(argv, "--allowedTools").split(","),
                          [f"mcp__{server_name}__hey_my_buddy_checkpoint",

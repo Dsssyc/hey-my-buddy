@@ -91,6 +91,7 @@ class TestAtomicity(BoardTestCase):
         self.assertEqual(integrity["integrity"], "ok")
         self.assertEqual(integrity["foreignKeyViolations"], 0)
         store_two = type(board.store)(self.directory, max_concurrent=2)
+        self.addCleanup(store_two.db.close)
         store_two.initialize()
         self.assertEqual(store_two.task_get({"runId": task["runId"]})["task"]["requestId"], "atomic-3")
 
@@ -140,6 +141,7 @@ class TestConcurrency(BoardTestCase):
         task = board.submit_execution(requestId="restart-conflict", task="same", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
         client.cancel(runId=task["runId"])
         store_two = type(board.store)(self.directory, max_concurrent=2)
+        self.addCleanup(store_two.db.close)
         store_two.initialize()
         with self.assertRaises(BoardError) as caught:
             store_two.task_submit({"requestId": "restart-conflict", "task": "changed", "cwd": str(cwd),
@@ -971,12 +973,12 @@ class TestExtensibility(BoardTestCase):
             task="write a marker",
             cwd=str(cwd),
             adapter="command",
-            argv=["/bin/sh", "-c", f"echo one > {marker}; echo two"],
+            argv=[sys.executable, '-c', "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('one\\n', encoding='utf-8'); print('two')", str(marker)],
         )["task"]
         run_next(client)
         result = client.result(runId=task["runId"])
         self.assertEqual(result["result"]["status"], "ok")
-        self.assertEqual(result["result"]["argv"][0], "/bin/sh")
+        self.assertEqual(result["result"]["argv"][0], sys.executable)
         self.assertEqual(result["resultMeta"]["status"], "ok")
         self.assertEqual(marker.read_text(encoding="utf-8").strip(), "one")
         self.assertEqual(client.get(runId=task["runId"])["state"], "completed")
@@ -1062,7 +1064,7 @@ class TestPackaging(BoardTestCase):
         # Real work runs through the runtime-hosted daemon and its worker.
         task = self.submit_execution(
             requestId="runtime-1", task="run from the runtime", cwd=str(self.workdir()),
-            adapter="command", argv=["/bin/echo", "from-runtime"],
+            adapter="command", argv=[sys.executable, '-c', "print('from-runtime')"],
         )["task"]
         self.assertTrue(
             wait_for(

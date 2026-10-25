@@ -1,3 +1,4 @@
+from hey_my_buddy.paths import native_path
 """Fixed objects, individual retention refs and read-only cleanup proofs."""
 from pathlib import Path
 import unittest
@@ -63,7 +64,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         with patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")):
             cumulative = workspace.cumulative_patch(manifest, sealed, manifest["inputCommit"])
         self.assertEqual(cumulative["changedPaths"], ["src/file.txt"])
-        self.assertEqual(Path(cumulative["path"]).read_bytes(), Path(sealed["diffPath"]).read_bytes())
+        self.assertEqual(native_path(Path(cumulative["path"])).read_bytes(), native_path(Path(sealed["diffPath"])).read_bytes())
 
     def test_missing_staged_commit_rejects_turn_start_when_input_still_exists(self):
         source = self.repo / "src/file.txt"

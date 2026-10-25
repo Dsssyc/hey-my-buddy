@@ -23,6 +23,7 @@ import logging
 import os
 import re
 import secrets
+import socket
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -212,8 +213,11 @@ class _ConsoleHTTPServer(ThreadingHTTPServer):
     """A loopback server that never dumps a client-abort traceback into the log."""
 
     daemon_threads = True
+    allow_reuse_address = os.name != "nt"
 
     def server_bind(self):
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address
 

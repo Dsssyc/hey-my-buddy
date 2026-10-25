@@ -5,6 +5,7 @@ returned board is the preservation baseline, including its rebound base-format
 identities and digests. This module performs fixture preparation, not migration.
 """
 from __future__ import annotations
+from hey_my_buddy.paths import native_path
 
 from contextlib import closing
 import hashlib
@@ -123,15 +124,15 @@ def load_fixture(state: Path) -> dict:
     _git(repository, "update-ref", "--stdin", data=updates.encode("utf-8"))
     for relative, text in resources["files"].items():
         target = state / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
+        native_path(target.parent).mkdir(parents=True, exist_ok=True)
         if target.name == "result-receipt.json":
             # fsync_json writes this envelope with whitespace and UTF-8 text;
             # preserve those bytes while rebinding its referenced paths/hashes.
             content = replace(text, json_payload=True)
         else:
             content = _json(bind(json.loads(text)), ascii_json=True) if target.suffix == ".json" else replace(text)
-        target.write_bytes(content.encode("utf-8"))
-        target.chmod(0o600)
+        native_path(target).write_bytes(content.encode("utf-8"))
+        native_path(target).chmod(0o600)
     with closing(sqlite3.connect(state / "board.sqlite3")) as connection, connection:
         connection.executescript(stock["board.sql"])
         # Change values only. Never initialize with the current schema, insert a

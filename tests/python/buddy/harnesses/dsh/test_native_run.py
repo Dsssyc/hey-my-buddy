@@ -500,7 +500,7 @@ class FastSeamTests(NativeRunCase):
                           native_run.PLAN_MODE_ROW])
         pin = rows[0]
         self.assertTrue(pin["config"]["root"].startswith(str(self.root)))
-        self.assertTrue(pin["config"]["root"].endswith("/sessions"))
+        self.assertEqual(Path(pin["config"]["root"]).name, "sessions")
         policy = result.effective_policy.tools
         self.assertEqual(policy.requested.value["disabledRows"],
                          [row["id"] for row in rows[2:]])

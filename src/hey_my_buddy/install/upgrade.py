@@ -16,6 +16,7 @@ import uuid
 
 from ..blackboard.store import backup
 from .. import private_dirs, private_files
+from ..paths import native_path
 from . import runtime
 from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
@@ -350,12 +351,12 @@ def _restore_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None
     target, staged, previous = paths
     if previous.exists():
         if target.exists():
-            shutil.rmtree(target)
+            shutil.rmtree(native_path(target))
         previous.rename(target)
     elif journal.get('skillHadPrevious') is False and target.exists() and not staged.exists():
-        shutil.rmtree(target)
+        shutil.rmtree(native_path(target))
     if staged.exists():
-        shutil.rmtree(staged)
+        shutil.rmtree(native_path(staged))
     link = journal.get('claudeLink')
     from .skill_install import _is_link, _remove_claude_link
     if journal.get('claudeLinkWasMissing') and link and _is_link(Path(link)) and Path(os.path.realpath(link)) == target:
@@ -394,8 +395,8 @@ def _finish_skill(paths: tuple[Path, Path, Path] | None) -> str | None:
     errors = []
     for path in (previous, staged):
         try:
-            if path.exists():
-                shutil.rmtree(path)
+            if native_path(path).exists():
+                shutil.rmtree(native_path(path))
         except OSError as error:
             errors.append(f'{path}: {error}')
     return '; '.join(errors) if errors else None
@@ -483,7 +484,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 suffix = uuid.uuid4().hex
                 skill_stage = skill_target.with_name(f'.hey-my-buddy-upgrade-stage-{suffix}')
                 skill_previous = skill_target.with_name(f'.hey-my-buddy-upgrade-previous-{suffix}')
-                shutil.copytree(skill_source, skill_stage, symlinks=True)
+                shutil.copytree(native_path(skill_source), native_path(skill_stage), symlinks=True)
                 from .skill_install import write_runtime_hint
                 write_runtime_hint(skill_stage, target)
                 skill_paths = skill_target, skill_stage, skill_previous

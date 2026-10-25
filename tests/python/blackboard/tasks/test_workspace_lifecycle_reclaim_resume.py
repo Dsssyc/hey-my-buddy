@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import shlex
 import subprocess
 from pathlib import Path
 from unittest import mock
@@ -371,7 +372,7 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             self.reclaim(board, self.view(board, run_id))
         self.assertIn("attached-branch", blocked.exception.details["reasons"])
         command = blocked.exception.details["reclaim"]["attachedBranch"]["detachCommand"]
-        completed = subprocess.run(["sh", "-c", command], cwd=self.repo,
+        completed = subprocess.run(shlex.split(command), cwd=self.repo,
                                    env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8")
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(git(checkout, "rev-parse", "HEAD").strip(),

@@ -8,7 +8,7 @@ ignored environments and caches are excluded unless selected. This is not an OS
 sandbox or a claim that every physical file remains unchanged.
 """
 from contextlib import ExitStack, contextmanager
-from ...paths import is_absolute_path
+from ...paths import is_absolute_path, native_path
 from ... import locking
 from ... import private_dirs, private_files
 from collections import Counter
@@ -612,14 +612,14 @@ def _actor_identity(value, label, roles=("host", "lead", "console")):
 
 
 def _mkdir(path):
-    path.mkdir(mode=directory_mode(), exist_ok=True)
+    native_path(path).mkdir(mode=directory_mode(), exist_ok=True)
 
 
 def _workspace_directory(state_dir, request_id):
     if not isinstance(request_id, str) or not request_id or "\0" in request_id:
         raise BoardError("INVALID_WORKSPACE", "request_id must be a nonempty stable identity")
     state_dir = Path(state_dir).resolve()
-    state_dir.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
+    native_path(state_dir).mkdir(mode=directory_mode(), parents=True, exist_ok=True)
     workspace_id = "ws-" + _sha(_json([str(state_dir), request_id]))[:32]
     _mkdir(state_dir / "workspaces")
     directory = state_dir / "workspaces" / workspace_id
@@ -1112,7 +1112,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
             relative = path.relative_to(source["checkoutRoot"])
             path = target / relative
             if relative.parts:
-                with _parent(target, str(relative / ".cwd-placeholder"), create=True):
+                with _parent(target, (relative / ".cwd-placeholder").as_posix(), create=True):
                     pass
         actual = inspect(str(path))
         if source["repositoryId"] != actual["repositoryId"]:
@@ -1399,12 +1399,13 @@ def _record_scope_evidence(directory, evidence, task_id, attempt_id):
 
 def _scope_records(workspace_dir, manifest, task_id, attempt_id):
     folder = workspace_dir / "outputs" / _sha(_json([task_id, attempt_id])) / "scope-conflicts"
-    if not folder.exists():
+    if not native_path(folder).exists():
         return []
-    if not folder.is_dir():
+    if not native_path(folder).is_dir():
         raise BoardError("WORKSPACE_CONFLICT", "The scope evidence path is not a regular directory", path=str(folder))
     records = []
-    for path in sorted(folder.glob("*.json")):
+    for entry in sorted(native_path(folder).glob("*.json")):
+        path = folder / entry.name
         record = _record(path)
         if not isinstance(record, dict):
             raise BoardError("INVALID_WORKSPACE", "Malformed scope failure evidence", path=str(path))
@@ -1412,7 +1413,7 @@ def _scope_records(workspace_dir, manifest, task_id, attempt_id):
                 or record.get("workspaceId") != manifest["workspaceId"]
                 or record.get("manifestSha256") != manifest["manifestSha256"]):
             continue
-        records.append((path.stat().st_mtime_ns, path.name, record))
+        records.append((native_path(path).stat().st_mtime_ns, path.name, record))
     records.sort(key=lambda item: (item[0], item[1]), reverse=True)
     return [record for _, _, record in records]
 

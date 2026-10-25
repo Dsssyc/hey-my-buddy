@@ -1,5 +1,6 @@
 """Router 探针离线准备与假原生输出验证；绝不启动模型或服务。"""
 from __future__ import annotations
+from hey_my_buddy.paths import native_path
 
 import hashlib
 from types import SimpleNamespace
@@ -7,7 +8,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 import uuid
 from unittest.mock import Mock, patch
@@ -136,7 +137,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     if native_receipt is not None:
         receipt_path = private / "native-receipt.json"
         publish_bytes(receipt_path, canonical_json(native_receipt).encode(), immutable=True)
-        raw = receipt_path.read_bytes()
+        raw = native_path(receipt_path).read_bytes()
         evidence_refs = (EvidenceRef(kind="review-thread-receipt", location=str(receipt_path),
                                      size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()),)
     result = RunResult(
@@ -176,7 +177,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
 
 class RouterProbeTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="router-probe-test-")
+        self.temporary = TemporaryDirectory(prefix="router-probe-test-")
         self.addCleanup(self.cleanup_private_root)
         self.root = Path(self.temporary.name) / "probe"
         # 连 mock --execute 都不能产生子进程/网络；因此无法触达 Buddy 服务或原生模型。

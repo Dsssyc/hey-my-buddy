@@ -1,5 +1,6 @@
 """A private offline DSH CLI network error retains work for explicit continuation."""
 from __future__ import annotations
+from hey_my_buddy.paths import native_path
 
 import json
 
@@ -29,7 +30,7 @@ class NetworkErrorContinuationTests(MicroTaskWorkerTestCase):
             code, failed = self.cli("get", json.dumps({"runId": submitted["runId"], "output": "full"}), env=self.env())
             self.assertEqual(code, 0, failed)
             self.assertEqual(failed["state"], "failed")
-            records = list(self.directory.rglob("dsh-session-record.json"))
+            records = list(native_path(self.directory).rglob("dsh-session-record.json"))
             self.assertEqual(len(records), 1, {"failed": failed,
                                                "result": self.cli("result", json.dumps({"runId": submitted["runId"]}),
                                                                   env=self.env())})

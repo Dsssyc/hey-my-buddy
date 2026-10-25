@@ -3,7 +3,7 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
-import tempfile
+from temporary import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -20,7 +20,7 @@ spec.loader.exec_module(probe)
 
 class ReadonlyToolsProbeTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='private-readonly-probe-')
+        self.temp = TemporaryDirectory(prefix='private-readonly-probe-')
         self.addCleanup(self.temp.cleanup)
         self.args = SimpleNamespace(harness='codex', provider='openai', model='gpt-6.1-sol',
                                     effort='high', output_root=Path(self.temp.name) / 'probe', execute=False)

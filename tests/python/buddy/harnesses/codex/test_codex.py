@@ -22,6 +22,7 @@ from buddy.harnesses.fixture_selection import mock_role_workspace, select_comman
 from private_acl import assert_private_path
 from unittest import mock
 
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.roles import controller
@@ -256,15 +257,15 @@ class CodexAdapterTests(unittest.TestCase):
         self.assertEqual(first.status, 'ok', first.to_report())
         path = _binding_path(native_root(Path(self.environment['HMB_STATE_DIR']), 'codex', 'micro-task-1'),
                              first.result['sessionId'])
-        binding = json.loads(path.read_text(encoding="utf-8"))
+        binding = json.loads(native_path(path).read_text(encoding="utf-8"))
         self.assertEqual(set(binding), {'taskId', 'threadId', 'cwd', 'buddy',
                                         'lastTurnId', 'lastAttemptId', 'lastInputSha256'})
         second = self.execute(self.context(index=2, previous=first.result['sessionId']))
         self.assertEqual(second.status, 'ok', second.to_report())
         self.assertEqual(second.result['sessionId'], first.result['sessionId'])
-        binding = json.loads(path.read_text(encoding="utf-8"))
+        binding = json.loads(native_path(path).read_text(encoding="utf-8"))
         binding.update(codexHome='retired-private-home', credentialSource={'source': 'native'})
-        path.write_text(json.dumps(binding), encoding="utf-8", newline="\n")
+        native_path(path).write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         refused = self.execute(self.context(index=3, previous=first.result['sessionId']))
         self.assertEqual(refused.result['code'], 'native-resume-unavailable')
         self.assertIs(refused.result['modelStarted'], False)

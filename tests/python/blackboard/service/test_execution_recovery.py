@@ -1,5 +1,6 @@
 """A replacement private service reconnects executions using durable identity."""
 from __future__ import annotations
+from hey_my_buddy.paths import native_path
 
 import json
 import os
@@ -259,11 +260,11 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as daemon:
             run_id, release, before = self.command("bad-endpoint")
             endpoint = self.execution_dir(run_id, before["attemptId"]) / "execution-live.json"
-            original = endpoint.read_bytes()
+            original = native_path(endpoint).read_bytes()
             corrupted = json.loads(original)
             corrupted["token"] = "0" * 64 if corrupted["token"] != "0" * 64 else "1" * 64
-            endpoint.write_text(json.dumps(corrupted), encoding="utf-8", newline="\n")
-            os.chmod(endpoint, 0o600)
+            native_path(endpoint).write_text(json.dumps(corrupted), encoding="utf-8", newline="\n")
+            native_path(endpoint).chmod(0o600)
             self.restart(daemon)
         try:
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as daemon:
@@ -271,29 +272,29 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertIsNotNone(issue, self.client().get(runId=run_id))
                 self.assertEqual(issue["code"], "EXECUTION_UNKNOWN")
                 self.assert_retained(run_id, before["attemptId"])
-                endpoint.write_bytes(original)
-                os.chmod(endpoint, 0o600)
+                native_path(endpoint).write_bytes(original)
+                native_path(endpoint).chmod(0o600)
                 recovered = wait_for(lambda: self._running(run_id), timeout=30)
                 self.assertIsNotNone(recovered, self.client().get(runId=run_id))
                 self.assertEqual(recovered["selectedAttempt"]["ownership"], "owned")
-                endpoint.write_bytes(b"{broken json")
-                os.chmod(endpoint, 0o600)
+                native_path(endpoint).write_bytes(b"{broken json")
+                native_path(endpoint).chmod(0o600)
                 self.restart(daemon)
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
                 malformed = wait_for(lambda: self._connection_issue(run_id), timeout=30)
                 self.assertIsNotNone(malformed, self.client().get(runId=run_id))
                 self.assertEqual(malformed["code"], "EXECUTION_UNKNOWN")
                 self.assert_retained(run_id, before["attemptId"])
-                endpoint.write_bytes(original)
-                os.chmod(endpoint, 0o600)
+                native_path(endpoint).write_bytes(original)
+                native_path(endpoint).chmod(0o600)
                 reattached = wait_for(lambda: self._running(run_id), timeout=30)
                 self.assertIsNotNone(reattached, self.client().get(runId=run_id))
                 release.touch()
                 self.assertIsNotNone(wait_for(lambda: self._finished(run_id), timeout=35))
         finally:
-            if endpoint.exists():
-                endpoint.write_bytes(original)
-                os.chmod(endpoint, 0o600)
+            if native_path(endpoint).exists():
+                native_path(endpoint).write_bytes(original)
+                native_path(endpoint).chmod(0o600)
             release.touch()
 
     def _connection_issue(self, run_id):
@@ -364,7 +365,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             self.assertIsNotNone(before["processIdentity"])
             budget = attempt_root(self.directory, "dsh", run_id,
                                   before["attemptId"]) / "execution-budget.json"
-            self.assertTrue(wait_for(budget.exists, timeout=15))
+            self.assertTrue(wait_for(native_path(budget).exists, timeout=15))
             original_budget = json.loads(budget.read_text(encoding="utf-8"))
             self.restart(daemon)
         try:
@@ -401,7 +402,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 identity = attempt["processIdentity"]
                 budget = attempt_root(self.directory, "dsh", run_id,
                                       attempt["attemptId"]) / "execution-budget.json"
-                self.assertTrue(wait_for(budget.exists, timeout=15))
+                self.assertTrue(wait_for(native_path(budget).exists, timeout=15))
                 self.restart(daemon)
             with self.daemon(env=environment):
                 attached = wait_for(lambda: self._running(run_id), timeout=30)
@@ -550,7 +551,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
     def test_reconstructed_router_observer_honors_original_budget(self):
         _request, claim = self.claimed_decision()
         handle = self.recovered_handle(claim)
-        handle.budget_path.write_text(json.dumps({"binding": handle.execution_binding,
+        native_path(handle.budget_path).write_text(json.dumps({"binding": handle.execution_binding,
                                                   "deadline": time.monotonic() - 1}), encoding="utf-8", newline="\n")
         scheduler = ExecutionScheduler(self.board_.service, live_registry=self.board_.live_registry)
         client = Mock()

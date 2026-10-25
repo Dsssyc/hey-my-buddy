@@ -478,7 +478,8 @@ def _probe_posix(process: subprocess.Popen, stop_at: float,
         process.stdout.close()
 
 
-def _probe_windows(process: subprocess.Popen, stop_at: float, handle) -> tuple[str | None, bytes, bool]:
+def _probe_windows(process: subprocess.Popen, stop_at: float, handle,
+                   deadline: float | None) -> tuple[str | None, bytes, bool]:
     """Poll the pipe, then stop and observe the entire held Job, including conhost."""
     failure = None
     stopped = False
@@ -510,12 +511,12 @@ def _probe_windows(process: subprocess.Popen, stop_at: float, handle) -> tuple[s
             else:
                 time.sleep(0.01)
         else:
-            reason = "timeout"
+            reason = "scan-timeout" if deadline is not None and deadline <= stop_at else "timeout"
         if reason is None:
             try:
                 process.wait(timeout=max(0, stop_at - time.monotonic()))
             except subprocess.TimeoutExpired:
-                reason = "timeout"
+                reason = "scan-timeout" if deadline is not None and deadline <= stop_at else "timeout"
     except Exception as error:
         failure = error
         raise
@@ -568,7 +569,7 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
             except Exception:
                 process.stdout.close()
                 raise
-        code, output, stopped = (_probe_windows(process, stop_at, handle) if os.name == "nt" else
+        code, output, stopped = (_probe_windows(process, stop_at, handle, deadline) if os.name == "nt" else
                                  _probe_posix(process, stop_at, deadline))
     except Exception as error:
         creation = getattr(error, "owned_popen_evidence", None)
@@ -619,7 +620,7 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
         else:
             process.stdin.close()
             stop_at = min(start + _TIMEOUT, deadline)
-            code, output, _ = (_probe_windows(process, stop_at, handle) if os.name == "nt" else
+            code, output, _ = (_probe_windows(process, stop_at, handle, deadline) if os.name == "nt" else
                                _probe_posix(process, stop_at, deadline))
     except Exception as error:
         failure = error
