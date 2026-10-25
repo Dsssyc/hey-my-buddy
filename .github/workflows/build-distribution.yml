@@ -13,6 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Verify release tag matches project version
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+        shell: python {0}
+        run: |
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"]
+          if tag != f"v{version}":
+              raise SystemExit(f"Release tag {tag!r} does not match pyproject.toml version {version!r} (expected 'v{version}').")
+          print(f"Verified release tag {tag} matches pyproject.toml version {version}.")
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -31,9 +44,30 @@ jobs:
       - name: Write SHA-256 manifest
         run: |
           cd dist
-          sha256sum *.whl *.tar.gz > SHA256SUMS
+          sha256sum -- *.whl *.tar.gz > SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
           name: hey-my-buddy-distribution
           path: dist/*
           if-no-files-found: error
+
+  publish:
+    needs: build
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: hey-my-buddy-distribution
+          path: dist
+      - name: Verify distribution checksums
+        working-directory: dist
+        run: |
+          sha256sum --check SHA256SUMS
+          # PyPI accepts distributions only; the uploaded artifact retains the manifest.
+          rm SHA256SUMS
+      - name: Publish distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.3
