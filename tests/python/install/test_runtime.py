@@ -28,10 +28,10 @@ from hey_my_buddy.errors import BoardError
 
 class RuntimeInterpreterTests(unittest.TestCase):
     def test_platform_interpreter_layout(self):
-        directory = Path('/private/runtime')
-        with patch.object(runtime, 'os', SimpleNamespace(name='nt')):
-            self.assertEqual(str(runtime.runtime_python(directory)).replace('\\', '/'), '/private/runtime/venv/Scripts/python.exe')
-        self.assertEqual(runtime.runtime_python(directory), directory / 'venv/bin/python')
+        directory = Path('private/runtime')
+        for platform, suffix in (('nt', 'Scripts/python.exe'), ('posix', 'bin/python')):
+            with self.subTest(platform=platform), patch.object(runtime, 'os', SimpleNamespace(name=platform)):
+                self.assertEqual(runtime.runtime_python(directory), directory / 'venv' / suffix)
 
 
 class LexicalWindowsPath(PureWindowsPath):
@@ -119,22 +119,19 @@ def write_manifest(
 def fake_uv(directory: Path) -> Path:
     """A stand-in uv that publishes an interpreter without any dependency install."""
     directory.mkdir(parents=True, exist_ok=True)
-    script = directory / "uv"
+    script = directory / "uv.py"
     script.write_text(
-        f"#!{sys.executable}\n"
         "import os\n"
-        "from pathlib import Path, PurePosixPath, PureWindowsPath\n"
+        "from pathlib import Path\n"
         "base = Path(__file__).parent\n"
         "with (base / 'invocations').open('a', encoding='utf-8', newline='\\n') as stream:\n"
         "    stream.write('sync\\n')\n"
         "if (base / 'fail').exists():\n"
         "    raise SystemExit(7)\n"
-        "interpreter = Path(os.environ['UV_PROJECT_ENVIRONMENT']) / 'bin' / 'python'\n"
+        "interpreter = Path(os.environ['UV_PROJECT_ENVIRONMENT']) / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')\n"
         "interpreter.parent.mkdir(parents=True, exist_ok=True)\n"
-        "interpreter.write_text('#!/bin/sh\\n', encoding='utf-8', newline='\\n')\n"
-        "interpreter.chmod(0o755)\n", encoding="utf-8", newline="\n"
+        "interpreter.write_bytes(b'synthetic interpreter marker')\n", encoding="utf-8", newline="\n"
     )
-    script.chmod(0o755)
     return script
 
 
@@ -355,6 +352,14 @@ class RuntimeMaterializationTests(unittest.TestCase):
         self.runtime_root = base / "runtime"
         self.enterContext(private_runtime_root(self.runtime_root))
         self.uv = fake_uv(base / "bin")
+        run = subprocess.run
+
+        def run_fake_uv(command, **options):
+            if command[0] == str(self.uv):
+                command = [sys.executable, *command]
+            return run(command, **options)
+
+        self.enterContext(patch.object(runtime.subprocess, "run", side_effect=run_fake_uv))
         write_assets(self.root)
         write_manifest(self.root)
 

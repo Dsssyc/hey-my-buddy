@@ -17,6 +17,7 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
+from fake_executable import make_fake_executable
 from support import (
     _child_environment,
     shutdown_private_rpc,
@@ -31,6 +32,14 @@ from hey_my_buddy.errors import BoardError
 ROOT = Path(__file__).resolve().parents[3]
 DAEMON_FIXTURE = ROOT / "tests/python/blackboard/service/fixtures/daemon_with_catalog.py"
 DAEMON_COMMAND = [sys.executable, str(Path(__file__).resolve()), "--daemon-fixture"]
+
+
+def native_forbidden_executable(directory: Path, marker: Path) -> Path:
+    source = ("from pathlib import Path\n"
+              f"with Path({str(marker)!r}).open('a', encoding='utf-8') as stream:\n"
+              "    stream.write('unexpected native invocation')\n"
+              "raise SystemExit(99)\n")
+    return make_fake_executable(directory, "native-forbidden", source=source)
 
 
 def prepare_daemon_spawn(command, kwargs, state: Path):
@@ -330,9 +339,7 @@ class PublicStateTests(unittest.TestCase):
     def case(self, name: str) -> None:
         work = Path(tempfile.mkdtemp(prefix="public-state-", dir=os.environ.get("HMB_CHECKS_TMPDIR"))).resolve()
         environment = _child_environment(work)
-        sentinel = work / "native-forbidden"
-        sentinel.write_text("#!/bin/sh\nprintf 'unexpected native invocation' >> '" + str(work / "native-invoked") + "'\nexit 99\n", encoding="utf-8", newline="\n")
-        sentinel.chmod(0o700)
+        sentinel = native_forbidden_executable(work, work / "native-invoked")
         environment.update({"HMB_" + harness + "_CLI": str(sentinel) for harness in ("CLAUDE", "CODEX", "DSH", "ZCODE")})
         environment.pop("HMB_STATE_DIR")
         environment["HMB_MAX_CONCURRENT"] = "1"

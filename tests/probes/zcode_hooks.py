@@ -398,7 +398,7 @@ def selftest_hook(parts: dict, nonce: str) -> dict:
     }
     proc = subprocess.run(
         [
-            "/usr/bin/python3",
+            sys.executable,
             str(parts["hook_script"]),
             str(hook_log),
             nonce,

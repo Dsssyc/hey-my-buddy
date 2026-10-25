@@ -28,7 +28,7 @@ from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.contracts import ExecutionLive
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
-from protocol.fixtures.ctwo_controller import BUDDY, SELF, exchange
+from protocol.fixtures.ctwo_controller import BUDDY, SELF, exchange, join_exchanges
 
 
 @unittest.skipUnless(os.name == "posix", "private IPC inspection is POSIX")
@@ -253,6 +253,7 @@ class CTwoIntegrationTests(unittest.TestCase):
                 attempt("native SDK stop evidence", lambda: self.record("sdk-shutdown.json", shutdown))
                 attempt("native SDK stop confirmation", lambda: self.assertTrue(shutdown["completed"], shutdown))
             for process in self.processes:
+                attempt(f"saved Popen {process.pid} pipe threads join", lambda: join_exchanges(process))
                 for name in ("stdin", "stdout", "stderr"):
                     pipe = getattr(process, name)
                     if pipe is not None and not pipe.closed:

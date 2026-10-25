@@ -35,7 +35,7 @@ All controller reads go through one owned BoundedLineReader so the outer frame
 loop and every nested response wait see the same buffered bytes: a burst of
 back-to-back replies that reaches a single read is never partially lost.
 """
-import json, os, select, sys, time
+import json, os, queue, sys, threading, time
 
 case = "ok"
 report_path, nonce, reader = None, None, None
@@ -50,57 +50,60 @@ state = {"preferences": None, "frames": [], "replies": [], "methods": [], "turns
 
 
 class BoundedLineReader:
-    """Single owner of stdin reads for this fixture.
-
-    ``select()`` sees only the operating-system pipe, while a buffered
-    ``sys.stdin`` readline pulls whole chunks into an internal buffer that
-    select() cannot observe; mixing both loses every reply an earlier fill has
-    already buffered. select() is therefore consulted only when the owned buffer
-    holds no complete line, so any line already read stays visible to the next
-    waiter in the outer loop and in nested response waits alike.
-    """
+    """One background reader owns stdin and queues complete lines for every waiter."""
 
     MAX_LINE_BYTES = 8 * 1024 * 1024  # mirrors the transport's frame bound
 
     def __init__(self, stream):
         self._stream = stream
-        self._buffer = bytearray()
+        self._lines = queue.Queue(maxsize=2)
         self._eof = False
+        self._thread = threading.Thread(target=self._read, daemon=True)
+        self._thread.start()
 
     @property
     def eof(self):
-        return self._eof and not self._buffer
+        return self._eof
+
+    def _read(self):
+        buffer = bytearray()
+        try:
+            while chunk := os.read(self._stream.fileno(), 65536):
+                buffer.extend(chunk)
+                while (index := buffer.find(b"\n")) >= 0:
+                    if index >= self.MAX_LINE_BYTES:
+                        raise ValueError(f"stdin line exceeds {self.MAX_LINE_BYTES} bytes")
+                    self._lines.put(bytes(buffer[:index + 1]))
+                    del buffer[:index + 1]
+                if len(buffer) > self.MAX_LINE_BYTES:
+                    raise ValueError(f"stdin line exceeds {self.MAX_LINE_BYTES} bytes")
+            if buffer:
+                self._lines.put(bytes(buffer))
+        except Exception as error:
+            self._lines.put(error)
+        finally:
+            self._lines.put(None)
 
     def readline(self, timeout=None):
         """Next newline-terminated line as bytes, the final unterminated tail at
         EOF, or None on timeout or EOF with nothing buffered; timeout None
         blocks until a line or EOF."""
-        deadline = None if timeout is None else time.monotonic() + timeout
-        while True:
-            index = self._buffer.find(b"\n")
-            if index >= 0:
-                if index >= self.MAX_LINE_BYTES:
-                    raise ValueError(f"stdin line exceeds {self.MAX_LINE_BYTES} bytes")
-                line = bytes(self._buffer[:index + 1])
-                del self._buffer[:index + 1]
-                return line
-            if len(self._buffer) > self.MAX_LINE_BYTES:
-                raise ValueError(f"stdin line exceeds {self.MAX_LINE_BYTES} bytes")
-            if self._eof:
-                tail = bytes(self._buffer)
-                self._buffer.clear()
-                return tail or None
-            wait = None if deadline is None else deadline - time.monotonic()
-            if wait is not None and wait <= 0:
-                return None
-            ready, _, _ = select.select([self._stream], [], [], wait)
-            if not ready:
-                return None
-            chunk = os.read(self._stream.fileno(), 65536)
-            if chunk:
-                self._buffer.extend(chunk)
-            else:
-                self._eof = True
+        if self._eof:
+            return None
+        try:
+            line = self._lines.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        if isinstance(line, Exception):
+            raise line
+        if line is None:
+            self._eof = True
+        return line
+
+    def join(self, timeout=5):
+        self._thread.join(timeout)
+        if self._thread.is_alive():
+            raise TimeoutError("fixture stdin reader did not stop after EOF")
 
 
 def send(value):
@@ -251,6 +254,7 @@ def serve():
         if line is None:
             break
         handle(json.loads(line))
+    reader.join()
     write_report()
 
 
@@ -300,15 +304,22 @@ class FakeServerLineReaderTests(unittest.TestCase):
     def reader_over_pipe(self):
         read_fd, write_fd = os.pipe()
         stream = os.fdopen(read_fd, "rb", buffering=0)
-        self.addCleanup(stream.close)
+        write_open = True
 
         def close_write():
-            try:
+            nonlocal write_open
+            if write_open:
                 os.close(write_fd)
-            except OSError:
-                pass
-        self.addCleanup(close_write)
-        return self.namespace["BoundedLineReader"](stream), write_fd, close_write
+                write_open = False
+        reader = self.namespace["BoundedLineReader"](stream)
+        def cleanup():
+            close_write()
+            while not reader.eof:
+                reader.readline(5.0)
+            reader.join()
+            stream.close()
+        self.addCleanup(cleanup)
+        return reader, write_fd, close_write
 
     def test_both_replies_reaching_one_read_are_both_served(self):
         reader, write_fd, _close_write = self.reader_over_pipe()

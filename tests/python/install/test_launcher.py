@@ -2,7 +2,9 @@
 import os
 from pathlib import Path
 import json
-import shlex
+import shutil
+import sysconfig
+import venv
 import subprocess
 import sys
 import tempfile
@@ -11,67 +13,68 @@ from unittest import mock
 
 from hey_my_buddy.install import launcher, runtime
 from hey_my_buddy.errors import BoardError
+from install.test_packaging import LAUNCHER, current_environment, launcher_argv
 
 
 class LauncherTests(unittest.TestCase):
     def test_installed_launcher_uses_its_stable_hint_before_system_python(self):
-        import shutil
         from hey_my_buddy.install.skill_install import write_runtime_hint
-        source = Path(__file__).resolve().parents[3] / 'skills/hey-my-buddy/scripts/hey-my-buddy'
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             skill = root / 'hey-my-buddy'
-            (skill / 'scripts').mkdir(parents=True)
-            (skill / 'package').mkdir()
-            (skill / 'package/pyproject.toml').write_text('[project]\nname="fixture"\n', encoding="utf-8", newline="\n")
-            shutil.copy2(source, skill / 'scripts/hey-my-buddy')
+            shutil.copytree(LAUNCHER.parent, skill / 'scripts')
+            package = skill / 'package'
+            package.mkdir()
+            (package / 'pyproject.toml').write_text('[project]\nname="fixture"\n', encoding="utf-8", newline="\n")
+            entry = package / 'src/hey_my_buddy/install/launcher.py'
+            entry.parent.mkdir(parents=True)
+            entry.write_text("import json, sys\nprint(json.dumps({'used': 'stable-hint', 'python': sys.executable, 'args': sys.argv[1:]}))\nraise SystemExit(int(sys.argv[-1]))\n", encoding="utf-8", newline="\n")
             target = root / 'runtime' / ('f' * 32)
+            venv.EnvBuilder(with_pip=False, symlinks=os.name != 'nt').create(target / 'venv')
             python = runtime.runtime_python(target)
-            python.parent.mkdir(parents=True)
-            python.write_text('#!/bin/sh\nprintf \'{"used":"stable-hint"}\\n\'\n', encoding="utf-8", newline="\n")
-            python.chmod(0o700)
             write_runtime_hint(skill, target)
-            trap = root / 'bin'
-            trap.mkdir()
-            (trap / 'python3').write_text('#!/bin/sh\nexit 77\n', encoding="utf-8", newline="\n")
-            (trap / 'python3').chmod(0o700)
-            env = {'PATH': str(trap) + ':/usr/bin:/bin', 'HOME': str(root),
-                   'HMB_STATE_DIR': str(root / 'state'), 'HMB_RUNTIME_ROOT': str(root / 'runtime'), 'UV_BIN': str(root / 'missing-uv')}
-            result = subprocess.run(['/bin/sh', str(skill / 'scripts/hey-my-buddy'), 'ping'], env=env, capture_output=True, text=True, encoding="utf-8")
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(json.loads(result.stdout), {'used': 'stable-hint'})
+            environment = current_environment(HOME=str(root), HMB_STATE_DIR=str(root / 'state'),
+                                              HMB_RUNTIME_ROOT=str(root / 'runtime'), UV_BIN=str(root / 'missing-uv'))
+            environment.pop('HMB_BOOTSTRAP_PYTHON', None)
+            for status in (0, 37):
+                with self.subTest(exit_code=status):
+                    result = subprocess.run(launcher_argv('ping', str(status), launcher=skill / 'scripts/hey-my-buddy'),
+                                            env=environment, capture_output=True, text=True, encoding="utf-8", timeout=30)
+                    self.assertEqual(result.returncode, status, result.stdout + result.stderr)
+                    self.assertEqual(json.loads(result.stdout), {'used': 'stable-hint', 'python': str(python),
+                                                                 'args': ['ping', str(status)]})
 
-    def test_shell_daily_entry_uses_active_python_with_uv_unavailable(self):
-        script = Path(__file__).resolve().parents[3] / 'skills/hey-my-buddy/scripts/hey-my-buddy'
+    def test_native_daily_entry_uses_active_python_with_uv_unavailable(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             state = base / 'state'
             state.mkdir(mode=0o700)
             root = base / 'runtime'
             target = root / ('a' * 32)
-            python = target / 'venv/bin/python'
-            python.parent.mkdir(parents=True)
-            python.write_text('#!/bin/sh\nprintf \'{"used":"active"}\\n\'\n', encoding="utf-8", newline="\n")
-            python.chmod(0o700)
-            (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
+            venv.EnvBuilder(with_pip=False, symlinks=os.name != 'nt').create(target / 'venv')
+            python = runtime.runtime_python(target)
+            entry = target / 'src/hey_my_buddy/cli/main.py'
+            entry.parent.mkdir(parents=True)
+            entry.write_text("import json, sys\nprint(json.dumps({'used': 'active', 'python': sys.executable, 'args': sys.argv[1:]}))\nraise SystemExit(int(sys.argv[-1]))\n", encoding="utf-8", newline="\n")
+            site = Path(sysconfig.get_path('purelib', vars={'base': str(target / 'venv'), 'platbase': str(target / 'venv')}))
+            (site / 'fixture.pth').write_text(str(target / 'src') + '\n', encoding="utf-8", newline="\n")
             (target / 'READY.json').write_text(json.dumps({'format': 1, 'state': 'READY', 'contentId': target.name, 'python': str(python)}), encoding="utf-8", newline="\n")
             launcher.write_active_runtime(state, target)
-            bootstrap = base / 'bootstrap'
-            bootstrap.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} -S "$@"\n', encoding="utf-8", newline="\n")
-            bootstrap.chmod(0o700)
-            environment = {key: value for key, value in os.environ.items() if not key.startswith('HMB_')}
-            environment.update(HMB_STATE_DIR=str(state), HMB_RUNTIME_ROOT=str(root),
-                               HMB_BOOTSTRAP_PYTHON=str(bootstrap), UV_BIN=str(base / 'missing-uv'))
-            completed = subprocess.run(['/bin/sh', str(script), 'ping'], env=environment,
-                                       capture_output=True, text=True, check=False, encoding="utf-8")
-            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
-            self.assertEqual(json.loads(completed.stdout), {'used': 'active'})
+            environment = current_environment(HMB_STATE_DIR=str(state), HMB_RUNTIME_ROOT=str(root),
+                                              HMB_BOOTSTRAP_PYTHON=sys.executable, UV_BIN=str(base / 'missing-uv'))
+            for status in (0, 37):
+                with self.subTest(exit_code=status):
+                    completed = subprocess.run(launcher_argv('ping', str(status)), env=environment,
+                                               capture_output=True, text=True, check=False, encoding="utf-8", timeout=30)
+                    self.assertEqual(completed.returncode, status, completed.stdout + completed.stderr)
+                    self.assertEqual(json.loads(completed.stdout), {'used': 'active', 'python': str(python),
+                                                                   'args': ['ping', str(status)]})
 
     def test_daily_call_execs_active_python_without_uv(self):
         with tempfile.TemporaryDirectory() as temporary:
             state = Path(temporary)
             target = state / 'runtime' / ('a' * 32)
-            python = target / 'venv/bin/python'
+            python = runtime.runtime_python(target)
             (target / 'src' / 'hey_my_buddy').mkdir(parents=True)
             with mock.patch.dict(os.environ, {'HMB_STATE_DIR': str(state)}, clear=True), \
                     mock.patch('hey_my_buddy.install.launcher.selected_runtime', return_value=target), \

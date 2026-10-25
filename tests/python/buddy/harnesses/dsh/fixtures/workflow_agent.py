@@ -38,6 +38,8 @@ import os
 import time
 from pathlib import Path
 
+from hey_my_buddy.paths import native_path
+
 _SPEC = importlib.util.spec_from_file_location(
     "dsh_fake_agent_base", Path(__file__).resolve().parent.parent / "acp" / "fake_agent.py")
 fake_agent = importlib.util.module_from_spec(_SPEC)
@@ -136,8 +138,8 @@ class WorkflowAgent(fake_agent.FakeAgent):
         index = (turn_input.get("context") or {}).get("turnIndex")
         if type(index) is int and index >= 2:
             # The continuation captures exactly the context the service rebuilt.
-            (root / CONTEXT_FILE).write_text(json.dumps(turn_input.get("context") or {}), encoding="utf-8", newline="\n")
-        (root / OUTPUT_FILE).write_text(f"output for turn {turn_input.get('turnId')}\n", encoding="utf-8", newline="\n")
+            native_path(root / CONTEXT_FILE).write_text(json.dumps(turn_input.get("context") or {}), encoding="utf-8", newline="\n")
+        native_path(root / OUTPUT_FILE).write_text(f"output for turn {turn_input.get('turnId')}\n", encoding="utf-8", newline="\n")
 
     def run_quota_turn(self, message: dict, turn_input: dict, *, code: str | None = None,
                        edit: str = QUOTA_EDIT, message_text: str = QUOTA_MESSAGE) -> None:
@@ -153,7 +155,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
         self.last_session_id = session_id
         cwd = self.session_cwd.get(session_id)
         if cwd:
-            (Path(cwd) / "tracked.txt").write_text(edit, encoding="utf-8", newline="\n")
+            native_path(Path(cwd) / "tracked.txt").write_text(edit, encoding="utf-8", newline="\n")
         self.notify_client("session/update", {"sessionId": session_id, "update": {
             "sessionUpdate": "agent_message_chunk",
             "content": {"type": "text", "text": message_text}}})
@@ -168,7 +170,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
         assistant text, and the machine error turn end. A fixture written by the
         fake agent under this run's private session root, never a native record."""
         directory = self.sessions_dir()
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
         now_ms = int(time.time() * 1000)
         source = {"kind": "model", "provider": "deepseek-official", "model": "deepseek-flash"}
         events = [
@@ -196,7 +198,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
         lines = "".join(json.dumps(event) + "\n" for event in events)
         path = directory / f"{session_id}.v3.jsonl.zstd"
         import zstandard
-        path.write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
+        native_path(path).write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
         fake_agent.log(self.log_path, {"event": "quota-record-written", "path": str(path)})
 
     @staticmethod
@@ -231,8 +233,8 @@ def main() -> int:
     if not args.log:
         args.log = str(Path(args.patch).parent / "fixture-agent.log")
     log_path = Path(args.log)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    if not fake_agent.check_private_home(log_path):
+    native_path(log_path.parent).mkdir(parents=True, exist_ok=True)
+    if not fake_agent.check_private_home(log_path, Path(args.fixture_root)):
         return 3
     fake_agent.log(log_path, {"event": "launch-face", "profile": args.profile,
                               "patch": args.patch, "workflowMode": args.workflow_mode})

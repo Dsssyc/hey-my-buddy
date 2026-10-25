@@ -51,7 +51,10 @@ class MicroTaskWorkerTestCase(BoardTestCase):
     def setUp(self) -> None:
         super().setUp()
         self.catalog_fixture()
-        self.harness_cli = make_fake_executable(self.directory / "harness-bin", "dsh", source=FIXTURE)
+        source = ("import runpy, sys\n"
+                  f"sys.argv[1:1] = ['--fixture-root', {str(self.directory)!r}]\n"
+                  f"runpy.run_path({str(FIXTURE)!r}, run_name='__main__')\n")
+        self.harness_cli = make_fake_executable(self.directory / "harness-bin", "dsh", source=source)
         self.repo = self.directory / "repo"
         self.repo.mkdir()
         self.git("init", "-q", "-b", "main")

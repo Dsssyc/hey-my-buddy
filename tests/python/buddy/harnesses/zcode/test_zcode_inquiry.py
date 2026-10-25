@@ -15,7 +15,6 @@ from hey_my_buddy.protocol.inquiry_journal import MAX_JOURNAL_BYTES
 import hashlib
 import json
 import os
-import select
 import subprocess
 import sys
 import tempfile
@@ -699,6 +698,15 @@ class JournalBarrierTests(unittest.TestCase):
                        if not key.startswith(("HMB_", "ZCODE_")) and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         process = subprocess.Popen([sys.executable, "-m", "hey_my_buddy.buddy.roles.session_mcp", "--config", str(config_path)],
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, env=environment)
+        answer = []
+        answered = threading.Event()
+
+        def read_answer():
+            answer.append(process.stdout.readline())
+            answered.set()
+
+        reader = threading.Thread(target=read_answer, daemon=True)
+        reader.start()
 
         def stop():
             try:
@@ -706,6 +714,8 @@ class JournalBarrierTests(unittest.TestCase):
             except OSError:
                 pass
             process.wait(timeout=5)
+            reader.join(5)
+            self.assertFalse(reader.is_alive(), "MCP reply reader remained after child EOF")
             process.stdout.close()
 
         self.addCleanup(stop)
@@ -714,15 +724,15 @@ class JournalBarrierTests(unittest.TestCase):
             process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                                             "params": {"name": "hey_my_buddy_checkpoint", "arguments": {}}}).encode() + b"\n")
             process.stdin.flush()
-            ready, _, _ = select.select([process.stdout], [], [], 0.4)
-            self.assertFalse(ready, "the session tool observed the journal while the writer held the barrier")
+            self.assertFalse(answered.wait(0.4), "the session tool observed the journal while the writer held the barrier")
             os.write(fd, record)
             os.fsync(fd)
         finally:
             os.close(fd)  # closing releases the barrier for the other process
-        ready, _, _ = select.select([process.stdout], [], [], 10)
-        self.assertTrue(ready, "the session tool never answered after the barrier was released")
-        result = json.loads(process.stdout.readline().decode())["result"]
+        self.assertTrue(answered.wait(10), "the session tool never answered after the barrier was released")
+        reader.join(5)
+        self.assertFalse(reader.is_alive())
+        result = json.loads(answer[0].decode())["result"]
         receipt = verify_inquiry_receipt(result["content"][0]["text"], self.config, "inquiry-checkpoint")
         self.assertEqual(receipt["inquiries"][0]["inquiryId"], "q-cross-process")
 

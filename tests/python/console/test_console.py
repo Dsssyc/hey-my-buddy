@@ -16,6 +16,7 @@ from unittest import mock
 from pathlib import Path, PureWindowsPath
 from urllib.parse import quote, urlsplit
 
+from fake_executable import make_fake_executable
 from support import BoardTestCase, PYTHON_ROOT
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.errors import BoardError
@@ -632,23 +633,19 @@ class ConsoleDaemonTests(ConsoleTestCase):
         guard = self.directory / "discovery-guard"
         guard.mkdir(mode=0o700)
         trace = self.directory / "native-cli-calls.jsonl"
-        decoy = guard / "reject-native.py"
-        decoy.write_text(
-            f"#!{sys.executable}\n"
+        decoy = make_fake_executable(guard, "reject-native", source=(
             "import json, sys\n"
             f"with open({str(trace)!r}, 'a') as stream:\n"
             "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-            "raise SystemExit(86)\n", encoding="utf-8", newline="\n"
-        )
-        decoy.chmod(0o700)
+            "raise SystemExit(86)\n"))
         # Discovery ignores HOME when resolving system account homes. Intercept
         # its entry before it can inspect any installed CLI or account metadata.
         # The decoy still executes and records the harness that tried discovery.
         (guard / "sitecustomize.py").write_text(
-            "import subprocess, sys\n"
+            "import subprocess\n"
             "from hey_my_buddy.buddy.harnesses import discovery\n"
             "def reject(harness, **kwargs):\n"
-            f"    subprocess.run([sys.executable, {str(decoy)!r}, harness], check=False)\n"
+            f"    subprocess.run([{str(decoy)!r}, harness], check=False)\n"
             "    raise RuntimeError('R-05: native discovery reached the rejecting CLI')\n"
             "discovery.candidate_snapshot = reject\n", encoding="utf-8", newline="\n"
         )

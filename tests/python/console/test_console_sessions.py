@@ -4,7 +4,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import http.cookiejar
 import json
-import select
 import signal
 import subprocess
 import sys
@@ -244,9 +243,20 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 '{"browser":false,"wait":true}'], env=_child_environment(self.directory),
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, start_new_session=True, encoding="utf-8")
+            notices = []
+            reported = threading.Event()
+
+            def read_notice():
+                notices.append(child.stderr.readline())
+                reported.set()
+
+            reader = threading.Thread(target=read_notice, daemon=True)
+            reader.start()
             try:
-                self.assertTrue(select.select([child.stderr], [], [], 20)[0], 'CLI did not report the entry')
-                notice = child.stderr.readline()
+                self.assertTrue(reported.wait(20), 'CLI did not report the entry')
+                reader.join(5)
+                self.assertFalse(reader.is_alive())
+                notice = notices[0]
                 self.assertTrue(notice.startswith('hey-my-buddy console: the browser was not opened; entry URL: '))
                 browser = Browser(notice.partition('entry URL: ')[2].strip())
                 self.assertTrue(browser.bootstrap()['consoleSession']['id'])
@@ -271,5 +281,7 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 if child.poll() is None:
                     child.terminate()
                     child.communicate(timeout=10)
+                reader.join(5)
+                self.assertFalse(reader.is_alive(), 'CLI notice reader remained after child exit')
                 self.cli('execution-cancel', json.dumps({'runId': task['runId'], 'note': 'private test cleanup'}))
                 self.cli('await', json.dumps({'runId': task['runId'], 'waitSeconds': 15}))

@@ -12,7 +12,7 @@ import argparse
 import json
 import os
 from pathlib import Path
-import selectors
+import queue
 import subprocess
 import sys
 import threading
@@ -49,57 +49,66 @@ def emit(value):
 def exchange(process, value, *, timeout=5):
     """One bounded fixture-pipe exchange; this is not the SDK transport.
 
-    Check the saved child while waiting, including when another inherited pipe
-    writer keeps stdout open after that child fails. Nonblocking writes and
-    reads share one deadline; partial replies cannot hang in TextIO.readline.
+    Check the saved child while a thread performs blocking pipe I/O. The caller
+    has one deadline even when a partial reply leaves that thread waiting.
     """
     if process.poll() is not None:
         raise RuntimeError(f"owned fixture exited with code {process.returncode}")
     deadline = time.monotonic() + timeout
     source, target = process.stdout.fileno(), process.stdin.fileno()
-    modes = {fd: os.get_blocking(fd) for fd in (source, target)}
     payload = (canonical_json(value) + "\n").encode()
-    reply = bytearray()
-    try:
-        for fd in modes:
-            os.set_blocking(fd, False)
-        with selectors.DefaultSelector() as selector:
-            selector.register(target, selectors.EVENT_WRITE)
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError("owned fixture pipe exchange deadline expired")
-                events = selector.select(min(remaining, 0.05))
-                if not events and process.poll() is not None:
-                    raise RuntimeError(f"owned fixture exited with code {process.returncode}")
-                for key, _mask in events:
-                    if key.fd == target:
-                        try:
-                            count = os.write(target, payload)
-                        except BlockingIOError:
-                            continue
-                        payload = payload[count:]
-                        if not payload:
-                            selector.unregister(target)
-                            selector.register(source, selectors.EVENT_READ)
-                    else:
-                        try:
-                            chunk = os.read(source, 4096)
-                        except BlockingIOError:
-                            continue
-                        if not chunk:
-                            raise RuntimeError("owned fixture closed its reply pipe")
-                        reply.extend(chunk)
-                        if len(reply) > 1024 * 1024:
-                            raise RuntimeError("owned fixture reply exceeds its bound")
-                        if b"\n" in reply:
-                            line, _separator, extra = reply.partition(b"\n")
-                            if extra.strip():
-                                raise RuntimeError("owned fixture sent an unsolicited reply")
-                            return json.loads(line)
-    finally:
-        for fd, blocking in modes.items():
-            os.set_blocking(fd, blocking)
+    result = queue.Queue(maxsize=1)
+
+    def transfer():
+        try:
+            remaining_payload = payload
+            while remaining_payload:
+                remaining_payload = remaining_payload[os.write(target, remaining_payload):]
+            reply = bytearray()
+            while b"\n" not in reply:
+                chunk = os.read(source, 4096)
+                if not chunk:
+                    raise RuntimeError("owned fixture closed its reply pipe")
+                reply.extend(chunk)
+                if len(reply) > 1024 * 1024:
+                    raise RuntimeError("owned fixture reply exceeds its bound")
+            line, _separator, extra = reply.partition(b"\n")
+            if extra.strip():
+                raise RuntimeError("owned fixture sent an unsolicited reply")
+            result.put(json.loads(line))
+        except Exception as error:
+            result.put(error)
+
+    worker = threading.Thread(target=transfer, daemon=True)
+    if not hasattr(process, "fixture_exchange_threads"):
+        process.fixture_exchange_threads = []
+    process.fixture_exchange_threads.append(worker)
+    worker.start()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("owned fixture pipe exchange deadline expired")
+        try:
+            reply = result.get(timeout=min(remaining, 0.05))
+        except queue.Empty:
+            if process.poll() is not None:
+                raise RuntimeError(f"owned fixture exited with code {process.returncode}")
+            continue
+        worker.join(1)
+        if worker.is_alive():
+            raise TimeoutError("owned fixture pipe thread did not stop")
+        process.fixture_exchange_threads.remove(worker)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def join_exchanges(process):
+    """Reap transfers after the owned child and its pipe writers have stopped."""
+    for worker in getattr(process, "fixture_exchange_threads", ()):
+        worker.join(5)
+        if worker.is_alive():
+            raise TimeoutError("owned fixture pipe thread remained after child shutdown")
 
 
 def write_fact(path, value):
@@ -172,6 +181,7 @@ def simulated_run(module, request, *, services, **options):
         try:
             process.stdin.close()
             process.wait(timeout=5)
+            join_exchanges(process)
             stopped = owned.shutdown_confirmed()
             write_fact(root / "native-collected.json", {
                 "exitCode": process.returncode, "shutdownConfirmed": stopped})
