@@ -18,7 +18,7 @@ E 在 D2 的整合结果 `13e94123` 上开工（Host 已读完 D2a 与 D2b 的�
 ## 2. E2a 的规则
 
 1. **接收只查边界上的事。** 调用方（actor、generation、nonce）、固定路径、摘要、绑定与回执形状。接收事务在写事务里核对 attempt 还没结束（`_verify_attempt_actor` 不拒绝已结束的 attempt）。产物哈希、workflow 的预检与实时 stash 观察都放到最终结算，因为接收行只存摘要。
-2. **最终结算里的确定性错误当场结清。** 导入时抛出的确定性业务错误（如 `ANCESTOR_TERMINAL`、`SHUTDOWN_UNCONFIRMED`、`PREPARATION_CONFLICT`、`WORKSPACE_INVALID`、`ARTIFACT_*`，见 `buddy/runtime/receipts.py` 的 `REFUSED`）就在这次结算里按现有的 failed 加 `receiptRejection` 形式结清；只有暂时的错误才留给重试。否则 attempt 会永远停在 `finalizing`，名额、claims 与检出都放不出来。
+2. **最终结算里的确定性错误当场结清。** 导入时抛出的确定性业务错误（如 `ANCESTOR_TERMINAL`、`SHUTDOWN_UNCONFIRMED`、`PREPARATION_CONFLICT`、`WORKSPACE_INVALID`、`ARTIFACT_*`，见 `buddy/runtime/receipts.py` 的 `REFUSED`）就在这次结算里按 failed 加 `result.microTaskError` 结清（E2a 第三轮定：`receiptRejection` 只留给接收边界上的拒绝）；只有暂时的错误才留给重试。否则 attempt 会永远停在 `finalizing`，名额、claims 与检出都放不出来。
 3. **不加 `receipt-rejection.json`。** 接收时的拒绝只取决于冻结的回执与 attempt 行，恢复时在文件边界重读回执就能得出同样的结论；执行收到明确的拒绝，记日志后退出。
 4. **已接收的 attempt 只等停止证据。** 执行收到 ACK 后退出，连接随之关闭；这时不重连、不记“连接未知”、不改 `uncertain`、不写 issue（`store.py` 的 `execution_connection` 现在会做这些）。只有取不到停止证据时才报告。
 5. **强停不看回执。** 删掉 `blackboard/service/execution_scheduler.py` 的 `_force_if_required` 里“回执写着已停就不杀”的短路，连同 `test_confirmed_receipt_prevents_force_kill`：回执已经落盘，强停到期就按已核实的身份停根。

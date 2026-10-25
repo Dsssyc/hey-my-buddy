@@ -88,7 +88,7 @@ Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInf
 
 进程实验的 NO_WINDOW 与 new-console 均观察到 conhost 计入 ActiveProcesses，嵌套 native 成员退出后根中也可能剩 conhost。私有服务及 DSH CLI 0.2.1-rc.2 的版本命令结束后有残留 conhost，终止其受控 Job 后全空。Codex CLI 0.163.0 产品发现返回 harness.shutdown-unverified，但另外直接用 Node 加 JS 的受控版本命令退出 0 且 Job 已空；产品发现那次没有足够成员归因证据。因此 conhost 是 Codex 失败的待核对原因，不能写成同一根因已证实。DSH Electron shim 的解析实现由另一微任务负责，本设计不处理它。
 
-让 Job 全空的路径是：先走 harness 原生协议收尾并等待其主进程退出；若此时 native Job 仍非空，终止整个 native Job 并观察全空，记录实际发生的强停/清理，不把成功发 CTRL_BREAK 或主进程退出当作全空。无须判断剩下的是 conhost 还是业务后代。只有全空才关闭 native Job、封存输出并写回执；强停影响结果分类时沿现有 terminationReason 规则表达。正常回合也做这次非空观察，不能仅在取消路径清理。执行自己的根 Job 包含执行本身，不能由执行终止它来完成正常交付；执行退出时最后根句柄关闭收掉根中残留，服务按第 4 节停止证据结算，主动强停时只临时打开根句柄。
+让 Job 全空的路径是：先走 harness 原生协议收尾并等待其主进程退出；若此时 native Job 仍非空，终止整个 native Job 并观察全空，记录实际发生的强停/清理，不把成功发 CTRL_BREAK 或主进程退出当作全空。无须判断剩下的是 conhost 还是业务后代。确认全空才关闭 native Job、封存输出并写回执；确认不了时照实写 `shutdownConfirmed=false` 的回执，由服务在最终结算之前自己证明 native 已停（2026-10-25 随阶段 E 改正措辞）；强停影响结果分类时沿现有 terminationReason 规则表达。正常回合也做这次非空观察，不能仅在取消路径清理。执行自己的根 Job 包含执行本身，不能由执行终止它来完成正常交付；执行退出时最后根句柄关闭收掉根中残留，服务按第 4 节停止证据结算，主动强停时只临时打开根句柄。
 
 真实启动链实验必须分别复跑 Codex CLI 0.163.0 的产品版本发现与直接 Node 加 JS，记录 Job 全成员及主进程退出时刻，使用保留的 NO_WINDOW/new-group；DSH CLI 版本的既有残留证据只用于停止设计，其 shim 支持单独验收。需要验证嵌套 Job 中 conhost 究竟计入哪层，以及 native Job 全空、执行退出后根成员缺席均可达到。现有 CLI 实验没有运行模型回合，不据此宣布 interrupt/close 或完整 harness 已验证。
 
