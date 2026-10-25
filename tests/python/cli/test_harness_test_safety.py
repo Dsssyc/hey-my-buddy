@@ -82,7 +82,7 @@ class HarnessTestSafetyTests(unittest.TestCase):
         probe = ("import json, os\n"
                  "print(json.dumps({key: os.environ[key] for key in "
                  "('HMB_PREVIEW_PYTHON', 'HOME', 'USERPROFILE')}))\n")
-        for name in ("typescript/bin/tsc", "vitest/vitest.mjs"):
+        for name in ("typescript/bin/tsc", "vitest/vitest.mjs", "vite/bin/vite.js"):
             script = console / "node_modules" / name
             script.parent.mkdir(parents=True)
             script.write_text(probe, encoding="utf-8", newline="\n")
@@ -91,8 +91,8 @@ class HarnessTestSafetyTests(unittest.TestCase):
                 patch.object(checks.shutil, "which", return_value=sys.executable):
             outcome = checks.run_frontend_suite(checkout, self.root, set(), threading.Lock(), threading.Event())
         self.assertEqual(outcome.returncode, 0, outcome.stderr)
-        replies = [json.loads(line) for line in outcome.stdout.splitlines()]
-        self.assertEqual(len(replies), 2)
+        replies = [json.loads(line) for line in outcome.stdout.splitlines() if line.startswith("{")]
+        self.assertEqual(len(replies), 3)
         for reply in replies:
             self.assertEqual(reply["HMB_PREVIEW_PYTHON"], sys.executable)
             self.assertEqual(Path(reply["HOME"]), self.root / "frontend-home")
