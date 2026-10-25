@@ -9,12 +9,13 @@ from __future__ import annotations
 from contextlib import closing
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 import sqlite3
 import subprocess
 import tempfile
+
+from hey_my_buddy.blackboard.tasks.workspace import _git_command
 
 FIXTURE = Path(__file__).resolve().parents[3] / "fixtures/upgrade-base"
 
@@ -28,9 +29,9 @@ def _json(value, *, ascii_json=False) -> str:
 
 
 def _git(root: Path, *args: str, data=None) -> str:
-    env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args],
-                          input=data, capture_output=True, check=True, env=env).stdout.decode("utf-8").strip()
+    command, git_env = _git_command(root, *args)
+    return subprocess.run(command, input=data, capture_output=True, check=True,
+                          env=git_env).stdout.decode("utf-8").strip()
 
 
 def load_fixture(state: Path) -> dict:

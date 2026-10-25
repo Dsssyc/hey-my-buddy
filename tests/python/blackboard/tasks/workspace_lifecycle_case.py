@@ -26,8 +26,9 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import transport
 
 def git(path, *arguments: str) -> str:
+    command, git_env = workspace_module._git_command(path, *arguments)
     completed = subprocess.run(
-        ["git", "-C", str(path), *arguments], env={**os.environ, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8",
+        command, env={**git_env, **GIT_ENV}, capture_output=True, text=True, encoding="utf-8",
     )
     if completed.returncode != 0:
         raise AssertionError(f"git {' '.join(arguments)} failed: {completed.stderr}")
