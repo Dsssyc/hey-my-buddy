@@ -6,7 +6,7 @@
 
 三项独立清理微任务首次均未指定配置，走现有黑板路由：5-P1 回执核验，run 3b9a2305-b829-4e18-9561-a9f4c803d8f2，路由 dec-dcf974a5-f999-45e4-8388-828c74f62396 选 zcode / zai-api / GLM-5.3-Flash / max；5-P2 运行小段与 ZCode 阶段，run e5e8763a-b5eb-4e83-8952-512603026df1，路由 dec-ef85a626-94ef-4b96-95ec-746e5e8082be 选 zcode / zai-api / GLM-5.3 / max；5-P3 三类防护，run 939b427c-0fc0-4342-bc05-6e424fbf1ae9，路由 dec-6244b519-d4fb-4f4e-9652-b1416ac89a4a 选 zcode / zai-api / GLM-5.3-Flash / max。各自隔离 worktree、固定 43d8d63 基线、唯一可写路径已写入任务描述；公共值、角色与注册表归 Host。三个任务短根由 Host 创建并登记，Worker 不手动删除、不切分支，临时材料不覆盖；验收后按确切根回收。第三个监测子代理因容量被拒，Host 改用原 run 的前台 await，没有重提或更换 buddy。
 
-Host 先确认无生产调用方，再删除 structured_call.start/start_no_tool、旧结果 else/_collect_result 和 read_router_result；保留实际使用的冻结证据留存。控制器移除 before_try，prepare 变为无参数，所有现存启动点保持原位置与 FD 清场；collect_controller 要求显式 stop，删除可省略 stop 的旧分支及 Node 例外说明。原只为断言拒绝而调用 read_only.start 的测试改用实际角色入口。两项仅覆盖旧结果读取的测试随删除退役；外层停止强制布尔的测试与替换链接拒绝的测试改用真实公共请求、结果和角色收集，保留正向对照。
+Host 先确认无生产调用方，再删除 structured_call.start/start_no_tool、旧结果 else/_collect_result 和 read_router_result；保留实际使用的冻结证据留存。控制器移除 before_try，prepare 变为无参数，所有现存启动点保持原位置与 FD 关闭；collect_controller 要求显式 stop，删除可省略 stop 的旧分支及 Node 例外说明。原只为断言拒绝而调用 read_only.start 的测试改用实际角色入口。两项仅覆盖旧结果读取的测试随删除退役；外层停止强制布尔的测试与替换链接拒绝的测试改用真实公共请求、结果和角色收集，保留正向对照。
 
 Host 将角色中的四处厂商判断移到登记参数：冻结账户的读取规则，以及 WorkerReceiptOptions 的未知额度码过滤、只从已验证回合捕获会话、原生活动收据投影；各字段都有生产读取。BUDDY_PYTHON 经源码检索确认只有写入和放行，已删除全部生产引用；启动仍由明确 argv 的解释器、运行时身份与 PYTHONPATH 决定。相关测试不再断言无消费者的环境变量，私有分发回合改报真正的 sys.executable 来核对解释器归属。
 

@@ -198,7 +198,7 @@ F-D2 在脚本、配置、私有任务和停止标准明确后直接运行，授
 | 最终值机制 | Worker 完成插件 + awaited flush；fast 末条 stream 文本 | Worker Python MCP 签收并关联 ACP root/end；fast 选择经核对的完成机制，若 MCP 是必需则作为最终值交付服务，不开放任务工具 |
 | 工具与权限 | Worker 默认原生工具；fast tools=[]；review unavailable | 工具范围用公开启动配置，权限回调只处理升级请求；未核对或清单外的限制如实未知；4-D 补命令写入验证，增加 review 资格须另有逐项确认 |
 | 模型/推理配置 | Worker 报 requested；fast 严格核对 prepareCall；有硬编码 Node 默认 | 统一冻结配置和会话回读，拒绝静默改用另一个 buddy；若改变既有配置失败语义且超出已批准差异，先停下说明 |
-| 问询 | 原生 agent.steer 可实时插入，reply 工具相关联 | ACP 已核对为 cooperative-checkpoint；按实际签收/未答问题逐项结算并记录，不能模拟另一条运行通道 |
+| 问询 | 原生 agent.steer 可实时插入，reply 工具相关联 | ACP 已核对为 cooperative-checkpoint；按实际签收/未答问题逐项记下最终状态，不能模拟另一条运行通道 |
 | 会话私有存储 | attempt 私有 JSONL；Python 快速配置了 JSONL 但没有 Session | ACP 私有会话存储；需要证明配置覆盖确实生效；原生 user store 不能作为替代 |
 | 续接 | reconstructed-new-session，不 native resume | 依六问事实实现或记录 ACP load/resume 能力；原生续接成为新能力已在授权范围，仍要求私有状态、来源绑定与停止证据，不扩大历史/账户迁移 |
 | 取消与停止 | Node 对未知组观察异常可能当作 gone | Python 统一 conservative 双组观察；ACP cancel ack 只是中断事实；权限/未知 OS 错误均不报 stopped |

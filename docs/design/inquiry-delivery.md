@@ -195,9 +195,9 @@ env -u HMB_STATE_DIR -u HMB_RUNTIME_ROOT -u HMB_RUNTIME -u HMB_RUNTIME_IDENTITY 
 
 ### 已送达但在回合结束前未答
 
-先导入实际答案，再决定是否未答，避免把本批 bc620007 再次误判。桥的 `close()` 已把 queued/delivered 的未答条目标 unavailable；Codex 角色的 `buddy/roles/schema_worker.py::NativeSchemaWorker.delivery` 也已根据 unansweredDeliveredInquiries 把完成结果改为 attention。缺口是把这些事实投影到每条服务消息，并覆盖异常结束、取消与恢复路径，不是另造一套角色结果结算机制。
+先导入实际答案，再决定是否未答，避免把本批 bc620007 再次误判。桥的 `close()` 已把 queued/delivered 的未答条目标 unavailable；Codex 角色的 `buddy/roles/schema_worker.py::NativeSchemaWorker.delivery` 也已根据 unansweredDeliveredInquiries 把完成结果改为 attention。缺口是把这些事实投影到每条服务消息，并覆盖异常结束、取消与恢复路径，不是另造一套角色结束机制。
 
-建议消息结算保留 deliveredAt / nativeCorrelation，结为“已送达，本回合结束前未答”，用独立原因区分“从未送达”；界面不再显示无限期“等待答复”。queued 则按有无桥提交、协作式未被取走、明确拒绝等已有事实结清；未知仍为未知。即使导入失败也要展示证据不可用，不能把未知改成未答或已停止。有效的已落盘答案、Host 的显式终态决定与真正晚到的答复分别按现有边界处理，不靠统一放开终态来掩盖顺序问题。
+建议消息的最终状态保留 deliveredAt / nativeCorrelation，结为“已送达，本回合结束前未答”，用独立原因区分“从未送达”；界面不再显示无限期“等待答复”。queued 则按有无桥提交、协作式未被取走、明确拒绝等已有事实结清；未知仍为未知。即使导入失败也要展示证据不可用，不能把未知改成未答或已停止。有效的已落盘答案、Host 的显式终态决定与真正晚到的答复分别按现有边界处理，不靠统一放开终态来掩盖顺序问题。
 
 ### 协作式能力如何说明
 
