@@ -21,7 +21,7 @@ from unittest.mock import patch
 import c_two as cc
 from c_two.error import CallDeadlineExceeded
 
-from support import _child_environment, write_catalog_fixture
+from support import _child_environment, request_private_service_stop, write_catalog_fixture
 from hey_my_buddy.buddy.runtime.execution import LiveEndpointDescriptor
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import rpc_config
@@ -218,10 +218,10 @@ class CTwoIntegrationTests(unittest.TestCase):
         def request_service_stop():
             endpoint = self.service_endpoint or _read_endpoint(self.state)
             self.assertIsNotNone(endpoint, "service start failed; retain root for Host")
-            stopped = _request(endpoint, "service_control", {
-                "action": "stop", "drainSeconds": 1, 'note': "owned integration fixture"}, state_dir=self.state)
+            stopped = request_private_service_stop(self.state,
+                lambda operation, params: _request(endpoint, operation, params, state_dir=self.state),
+                drainSeconds=1, note="owned integration fixture")
             self.record("service-stop.json", stopped)
-            self.assertTrue(stopped["stopped"])
 
         try:
             if self.service is not None:

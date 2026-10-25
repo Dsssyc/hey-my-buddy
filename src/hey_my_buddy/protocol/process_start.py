@@ -76,6 +76,18 @@ class _FileTime(ctypes.Structure):
     _fields_ = [("low", ctypes.c_uint32), ("high", ctypes.c_uint32)]
 
 
+def windows_handle_start(handle: int, *, kernel) -> int:
+    """Read exact FILETIME creation ticks from an already held process handle."""
+    method = kernel.GetProcessTimes
+    method.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(_FileTime)] * 4
+    method.restype = ctypes.c_int
+    created, exited, kernel_time, user_time = (_FileTime() for _ in range(4))
+    if not method(handle, ctypes.byref(created), ctypes.byref(exited),
+                  ctypes.byref(kernel_time), ctypes.byref(user_time)):
+        raise OSError(ctypes.get_last_error(), "cannot inspect process creation time")
+    return (created.high << 32) | created.low
+
+
 def _windows_process_start(pid: int, *, include_exited: bool) -> int | None:
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
     open_process = kernel.OpenProcess
@@ -97,14 +109,7 @@ def _windows_process_start(pid: int, *, include_exited: bool) -> int | None:
                 return None
             if result != 0x102:  # WAIT_TIMEOUT
                 raise OSError(ctypes.get_last_error(), "cannot inspect process liveness")
-        method = kernel.GetProcessTimes
-        method.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(_FileTime)] * 4
-        method.restype = ctypes.c_int
-        created, exited, kernel_time, user_time = (_FileTime() for _ in range(4))
-        if not method(handle, ctypes.byref(created), ctypes.byref(exited),
-                      ctypes.byref(kernel_time), ctypes.byref(user_time)):
-            raise OSError(ctypes.get_last_error(), "cannot inspect process creation time")
-        return (created.high << 32) | created.low
+        return windows_handle_start(handle, kernel=kernel)
     finally:
         close = kernel.CloseHandle
         close.argtypes = [ctypes.c_void_p]

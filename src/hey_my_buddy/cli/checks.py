@@ -127,8 +127,11 @@ def _windows_owned_processes(root: Path) -> tuple[list[dict], list[str], list[st
             active = handle.job.active()
             finished = handle.finished
             if active or not finished:
-                findings.append({**identity, "source": "ownedJob", "activeProcesses": active,
-                                 "rootRunning": not finished})
+                finding = {**identity, "source": "ownedJob", "activeProcesses": active,
+                           "rootRunning": not finished, "members": []}
+                findings.append(finding)
+                if active:
+                    finding["members"] = handle.job.api.process_identities(handle.job.handle)
         except OSError as error:
             problems.append(f"owned suite observation failed: {error}")
     return findings, problems, []

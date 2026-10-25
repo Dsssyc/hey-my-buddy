@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy.protocol import windows_process as windows
+from hey_my_buddy.protocol.process_start import _FileTime
 
 
 class Win32Error(Exception):
@@ -34,7 +35,7 @@ class WindowsAPITests(unittest.TestCase):
         self.api.GetLastError.return_value = 0
         self.kernel = mock.Mock(spec=["CreateToolhelp32Snapshot", "Thread32First",
                                       "Thread32Next", "GetProcessIdOfThread",
-                                      "GetCurrentProcess", "DuplicateHandle"])
+                                      "GetCurrentProcess", "DuplicateHandle", "GetProcessTimes"])
         self.addCleanup(mock.patch.stopall)
         mock.patch.dict(sys.modules, {
             "pywintypes": SimpleNamespace(error=Win32Error), "win32job": self.job,
@@ -122,6 +123,38 @@ class WindowsAPITests(unittest.TestCase):
         self.job.AssignProcessToJobObject.side_effect = Win32Error(5)
         with self.assertRaises(OSError):
             self.boundary.assign(self.job_handle, self.child)
+
+    def test_member_identities_use_query_handles_exact_filetime_and_held_job_membership(self):
+        self.job.QueryInformationJobObject.return_value = [321, 654]
+        first, recycled = Handle(41), Handle(42)
+        self.api.OpenProcess.side_effect = [first, recycled]
+        self.job.IsProcessInJob.side_effect = [True, False]
+        started = 134000000000000003
+
+        def get_times(handle, created, *_):
+            self.assertEqual(handle, 41)
+            filetime = ctypes.cast(created, ctypes.POINTER(_FileTime)).contents
+            filetime.high, filetime.low = started >> 32, started & 0xffffffff
+            return True
+
+        self.kernel.GetProcessTimes.side_effect = get_times
+        self.assertEqual(self.boundary.process_identities(self.job_handle), [{"pid": 321, "startedAt": started}])
+        self.assertEqual(self.api.OpenProcess.call_args_list,
+                         [mock.call(0x1000, False, 321), mock.call(0x1000, False, 654)])
+        self.assertEqual(self.job.IsProcessInJob.call_args_list,
+                         [mock.call(first, self.job_handle), mock.call(recycled, self.job_handle)])
+        self.assertEqual(self.api.CloseHandle.call_args_list, [mock.call(first), mock.call(recycled)])
+        self.job.TerminateJobObject.assert_not_called()
+
+    def test_member_query_failure_closes_its_process_handle_and_remains_unknown(self):
+        self.job.QueryInformationJobObject.return_value = [321]
+        process = Handle(41)
+        self.api.OpenProcess.return_value = process
+        self.job.IsProcessInJob.side_effect = Win32Error(5)
+        with self.assertRaises(OSError):
+            self.boundary.process_identities(self.job_handle)
+        self.api.CloseHandle.assert_called_once_with(process)
+        self.job.TerminateJobObject.assert_not_called()
 
     def test_duplicate_carries_only_the_jobs_lifetime_into_the_created_process(self):
         target = Handle(55)
