@@ -164,6 +164,7 @@
   "macro-task-deletion.ref-changed": [],
   "macro-task-deletion.ref-unproven": [],
   "macro-task-deletion.repository-changed": [],
+  "macro-task-deletion.repository-missing": [],
   "macro-task-deletion.review": [],
   "macro-task-deletion.routing": [],
   "macro-task-deletion.running": [],

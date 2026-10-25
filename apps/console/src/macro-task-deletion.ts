@@ -30,7 +30,7 @@ export type MacroTaskDeletionPreview = {
 };
 export type ConfirmedMacroTaskDeletion = { macroTaskId: string; microTaskCount: number; confirm: true };
 
-const skippedCodes = ["ref-unproven", "ref-changed", "owner-unproven", "repository-changed", "dependency-retained",
+const skippedCodes = ["ref-unproven", "ref-changed", "owner-unproven", "repository-changed", "repository-missing", "dependency-retained",
   "not-a-managed-worktree", "unsafe-path", "checkout-missing", "identity-changed", "unregistered-checkout",
   "lock-mismatch", "attached-branch", "unsealed-changes", "unsealed-handoff", "sealed-output-invalid"];
 type DeletionSkippedReason = { code: string; params: Record<string, never> };

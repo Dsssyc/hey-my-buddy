@@ -23,8 +23,8 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         workspace_fixtures.WorkspaceTests._seed_repository(self)
         self.enterContext(patch.object(workflow, '_workspace_module', workspace))
 
-    def create(self, board, request_id='owned', *, settled=True, **extra):
-        run = self.submit(board, request_id=request_id, cwd=str(self.repo), kind='worktree', **extra)
+    def create(self, board, request_id='owned', *, settled=True, kind='worktree', **extra):
+        run = self.submit(board, request_id=request_id, cwd=str(self.repo), kind=kind, **extra)
         if settled:
             board.call('workflow_cancel', {'runId': run['runId'], **self.control(run)})
         return run
@@ -84,6 +84,62 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         self.assertEqual(self.command(browser, DELETE, {
             'macroTaskId': target, 'microTaskCount': 1, 'confirm': True,
         })['state'], 'deleted')
+
+    def test_missing_repository_with_allocation_deletes_macro_task_records(self):
+        self.missing_repository_deletion(layout='checkout')
+
+    def test_missing_repository_with_only_refs_deletes_macro_task_records(self):
+        self.missing_repository_deletion(layout='refs')
+
+    def test_missing_repository_with_logical_allocation_removes_private_records(self):
+        self.missing_repository_deletion(layout='logical')
+
+    def test_missing_repository_without_checkout_removes_private_records(self):
+        self.missing_repository_deletion(layout='no-checkout')
+
+    def missing_repository_deletion(self, *, layout):
+        board = self.board()
+        run = self.create(board, kind='existing' if layout == 'logical' else 'worktree',
+                          macroTask={'title': 'Missing repository'})
+        with board.store.db.read() as connection:
+            manifest = json.loads(connection.execute(
+                'SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
+                (run['runId'],)).fetchone()[0])
+        directory = board.store.directory / 'workspaces' / manifest['workspaceId']
+        if layout == 'refs':
+            directory.rename(directory.with_name('retained-' + manifest['workspaceId']))
+        elif layout == 'no-checkout':
+            (directory / 'checkout').rename(self.repo.with_name('retained-checkout'))
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        refs = self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix)
+        self.assertTrue(refs)
+        retained = self.repo.with_name('retained-repository')
+        self.repo.rename(retained)
+        try:
+            _, browser = self.open_console(board)
+            result = self.command(browser, DELETE, {
+                'macroTaskId': run['macroTaskId'], 'microTaskCount': 1, 'confirm': True,
+            })
+            self.assertEqual(result['state'], 'deleted')
+            self.assertIsNotNone(result['deletedAt'])
+            self.assertEqual(result['skipped'], [{
+                'kind': 'ref' if layout == 'refs' else 'allocation',
+                'path': manifest['snapshot']['repositoryPath'], 'workspaceId': manifest['workspaceId'],
+                'reason': {'code': 'macro-task-deletion.repository-missing', 'params': {}},
+            }])
+            self.command(browser, PREVIEW, {'macroTaskId': run['macroTaskId']}, status=404, code='NOT_FOUND')
+            with board.store.db.read() as connection:
+                for table in ('macro_tasks', 'macro_task_deletions', 'workflow_runs', 'tasks',
+                              'workflow_turns', 'workflow_artifacts', 'workflow_requests',
+                              'workspace_reservations', 'commands'):
+                    self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0, table)
+                self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
+            self.assertEqual(directory.exists(), layout == 'checkout')
+            self.assertFalse((directory.parent / ('.deleting-' + manifest['workspaceId'])).exists())
+            self.assertEqual(self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix,
+                                      cwd=retained), refs)
+        finally:
+            retained.rename(self.repo)
 
     def test_service_host_and_worker_credentials_do_not_authorize_either_operation(self):
         board = self.board()

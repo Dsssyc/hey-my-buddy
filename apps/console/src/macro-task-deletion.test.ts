@@ -73,9 +73,11 @@ describe("macro task deletion boundary", () => {
     expect(parseMacroTaskDeletionResult(confirmed, partial)).toEqual(partial);
     const skipped = [
       { kind: "ref", path: "refs/synthetic/retained", workspaceId: "ws-fixture", reason: { code: "macro-task-deletion.ref-changed", params: {} } },
+      { kind: "allocation", path: "/synthetic/allocation", workspaceId: "ws-changed", reason: { code: "macro-task-deletion.repository-changed", params: {} } },
+      { kind: "ref", path: "/synthetic/missing-repository/.git", workspaceId: "ws-missing", reason: { code: "macro-task-deletion.repository-missing", params: {} } },
       { objectKind: "private-root", path: "/synthetic/retained", reason: { code: "macro-task-deletion.owner-unproven", params: {} } },
     ];
-    expect(parseMacroTaskDeletionResult(confirmed, { ...receipt, duplicate: true, skipped }).state).toBe("deleted");
+    expect(parseMacroTaskDeletionResult(confirmed, { ...receipt, duplicate: true, skipped })).toEqual({ ...receipt, duplicate: true, skipped });
   });
 
   it("never accepts another scope or an incomplete acknowledgement as deletion", () => {
