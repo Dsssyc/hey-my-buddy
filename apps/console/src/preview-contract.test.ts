@@ -61,17 +61,18 @@ const previewScript = join(repositoryRoot, "tests", "probes", "macro_task_consol
 function resolveFixtures(): { directory: string; generated: boolean } {
   const configured = process.env.HMB_PREVIEW_FIXTURES;
   if (configured) return { directory: resolve(configured), generated: false };
-  const python = process.env.HMB_PREVIEW_PYTHON ?? "python3";
+  const python = process.env.HMB_PREVIEW_PYTHON;
+  const command = python ? [python] : ["uv", "run", "--no-project", "python"];
   const directory = mkdtempSync(join(tmpdir(), "hey-my-buddy-preview-"));
   const previewEnvironment = { ...process.env };
   for (const key of ["HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
     "HMB_WORKER_STATE", "HMB_WORKER_ID", "HMB_AGENT_CREDENTIAL_FILE", "HMB_AGENT_CREDENTIAL_FD",
     "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT"]) delete previewEnvironment[key];
-  const result = spawnSync(python, [previewScript, "--emit-fixtures", directory], {
+  const result = spawnSync(command[0], [...command.slice(1), previewScript, "--emit-fixtures", directory], {
     cwd: repositoryRoot, encoding: "utf8", env: previewEnvironment,
   });
   if (result.status !== 0) {
-    throw new Error(`could not emit the preview fixtures with ${python}: ${result.stdout ?? ""}${result.stderr ?? ""}`);
+    throw new Error(`could not emit the preview fixtures with ${command.join(" ")}: ${result.stdout ?? ""}${result.stderr ?? ""}`);
   }
   return { directory, generated: true };
 }

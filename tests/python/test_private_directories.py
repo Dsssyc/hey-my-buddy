@@ -11,10 +11,33 @@ from hey_my_buddy import private_dirs
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.private_files import publish_bytes, read_bytes
 from hey_my_buddy.errors import BoardError
+from private_acl import assert_inherited_private_acl
 from support import BoardTestCase
 
 
 class PrivateDirectoryTests(BoardTestCase):
+    def test_windows_private_children_inherit_parent_acl_without_0700(self):
+        if os.name != 'nt':
+            self.skipTest('Windows profile ACL')
+        parent = self.directory / 'private-parent'
+        child = parent / 'child'
+        original = Path.mkdir
+        created = []
+        expected = (native_path(parent), native_path(child))
+        def observed_mkdir(path, mode=0o777, parents=False, exist_ok=False):
+            if path in expected:
+                created.append((path, mode))
+            return original(path, mode=mode, parents=parents, exist_ok=exist_ok)
+        with mock.patch.object(Path, 'mkdir', observed_mkdir):
+            self.assertEqual(private_dirs.ensure_private_dir(child), child)
+        self.assertEqual(created, [(path, 0o777) for path in expected])
+        record = child / 'record.json'
+        publish_bytes(record, b'private fact')
+        self.assertEqual(read_bytes(record), b'private fact')
+        for path in (parent, child, record):
+            with self.subTest(path=path):
+                assert_inherited_private_acl(self, path)
+
     def test_relative_private_directory_is_made_absolute_on_both_platforms(self):
         with mock.patch.object(os, 'getcwd', return_value=str(self.directory)):
             directory = private_dirs.ensure_private_dir(Path('relative-private'))

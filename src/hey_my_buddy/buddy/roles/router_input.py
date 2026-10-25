@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import subprocess
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
@@ -13,6 +14,12 @@ from ...blackboard.tasks import workspace
 from ...private_dirs import directory_mode, remove_tree
 from ...paths import native_path
 from ...private_files import open_read
+
+
+def _git_error(code, message, command, *, stderr=None, returncode=None):
+    diagnostic, truncated = workspace._git_diagnostic(stderr)
+    return BoardError(code, message, argv=list(command), returncode=returncode,
+                      stderr=diagnostic, stderrTruncated=truncated)
 
 
 def _remaining(deadline: float) -> float:
@@ -74,28 +81,31 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple
     _remaining(deadline)
     root = directory / "frozen-input"
     native_path(root).mkdir(mode=directory_mode())
-    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    environment.update(GIT_NO_LAZY_FETCH="1", GIT_NO_REPLACE_OBJECTS="1", GIT_TERMINAL_PROMPT="0")
     def git(*arguments):
-        command = ["git", "-C", manifest["checkoutRoot"], *arguments]
+        command, environment = workspace._git_command(manifest["checkoutRoot"], *arguments)
         try:
             result = subprocess.run(command, capture_output=True, env=environment,
                                     timeout=_remaining(deadline), check=False)
         except subprocess.TimeoutExpired as error:
-            raise BoardError("router-input-unknown", "The frozen Git object read timed out") from error
+            raise _git_error("router-input-unknown", "The frozen Git object read timed out", command,
+                             stderr=error.stderr) from error
         if result.returncode:
-            raise BoardError("router-input-unavailable", "A frozen Git object is unavailable")
+            raise _git_error("router-input-unavailable", "A frozen Git object is unavailable", command,
+                             stderr=result.stderr, returncode=result.returncode)
         return result.stdout
     reader = None
     pool = None
+    diagnostics = None
     try:
         # Git archive/checkout can apply export-ignore, export-subst or smudge
         # filters. Read raw blobs so Router bytes equal the immutable input tree,
         # through one `cat-file --batch` process rather than one process per file.
         entries = git("ls-tree", "-rz", "--full-tree", manifest["inputTree"])
         _remaining(deadline)
-        reader = subprocess.Popen(["git", "-C", manifest["checkoutRoot"], "cat-file", "--batch"],
-                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        command, environment = workspace._git_command(manifest["checkoutRoot"], "cat-file", "--batch")
+        diagnostics = tempfile.TemporaryFile(dir=native_path(directory))
+        reader = subprocess.Popen(command,
+                                  stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=diagnostics,
                                   env=environment)
         pool = ThreadPoolExecutor(max_workers=1)
 
@@ -104,11 +114,13 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple
             reader.stdin.flush()
             header = reader.stdout.readline().split()
             if len(header) != 3 or header[0].decode("ascii") != object_id or header[1] != b"blob":
-                raise BoardError("router-input-unavailable", "A frozen Git object is unavailable")
+                raise _git_error("router-input-unavailable", "A frozen Git object is unavailable", command,
+                                 stderr=diagnostics, returncode=reader.poll())
             size = int(header[2])
             contents = reader.stdout.read(size)
             if len(contents) != size or reader.stdout.read(1) != b"\n":
-                raise BoardError("router-input-unavailable", "A frozen Git object is truncated")
+                raise _git_error("router-input-unavailable", "A frozen Git object is truncated", command,
+                                 stderr=diagnostics, returncode=reader.poll())
             return contents
 
         def blob(object_id: str) -> bytes:
@@ -118,7 +130,11 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple
                 return future.result(timeout=remaining)
             except FutureTimeout as error:
                 reader.kill()
-                raise BoardError("router-input-unknown", "The frozen Git object read timed out") from error
+                raise _git_error("router-input-unknown", "The frozen Git object read timed out", command,
+                                 stderr=diagnostics, returncode=reader.poll()) from error
+            except (OSError, ValueError) as error:
+                raise _git_error("router-input-unavailable", "A frozen Git object is unavailable", command,
+                                 stderr=diagnostics, returncode=reader.poll()) from error
 
         links = []
         for entry in entries.split(b"\0"):
@@ -175,6 +191,8 @@ def prepare(manifest: dict | None, directory: Path, *, deadline: float) -> tuple
                 if pool is not None:
                     pool.shutdown(wait=True)
                 reader.stdout.close()
+        if diagnostics is not None:
+            diagnostics.close()
 
 
 def discard(root: Path) -> None:

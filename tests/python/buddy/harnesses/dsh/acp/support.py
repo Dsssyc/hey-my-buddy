@@ -56,7 +56,8 @@ class AcpTestCase(unittest.TestCase):
 
     def agent_argv(self, *extra: str) -> list[str]:
         """The fake agent launched like the native one: absolute executable, log path."""
-        return [sys.executable, str(FAKE_AGENT), "--log", str(self.logs / "fake-agent.log"), *extra]
+        return [sys.executable, str(FAKE_AGENT), "--log", str(self.logs / "fake-agent.log"),
+                "--fixture-root", str(self.test_dir), *extra]
 
     def start_client(self, *extra: str, **kwargs):
         """Start the client against the fake agent with this test's private root."""

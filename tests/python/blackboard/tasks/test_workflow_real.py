@@ -21,6 +21,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from support import BoardTestCase
+from private_acl import assert_private_path
 from hey_my_buddy.cli.checks import prepare_test_home
 from protocol.fixtures import native_turn
 from buddy.harnesses.dsh.acp.support import FAKE_AGENT
@@ -245,7 +246,8 @@ class RealAdapterTests(RealWorkspaceTestCase):
     def _agent_record(self, index: int, *extra: str) -> Path:
         """A selected-harness record pointing at the offline fake ACP agent."""
         command = [sys.executable, str(FAKE_AGENT), "--log",
-                   str(self.directory / f"fake-agent-{index}.log"), *extra]
+                   str(self.directory / f"fake-agent-{index}.log"),
+                   "--fixture-root", str(self.directory), *extra]
         path = self.directory / f"harness-record-{index}.json"
         path.write_text(json.dumps({"dsh": {"status": "ready", "command": command}}), encoding="utf-8", newline="\n")
         return path
@@ -272,10 +274,12 @@ class RealAdapterTests(RealWorkspaceTestCase):
         attempt.mkdir(mode=0o700, parents=True, exist_ok=True)
         home = self.directory / f"agent-home-{index}"
         prepare_test_home(home)
+        self.enterContext(patch.dict(os.environ, {
+            "HOME": str(home), "USERPROFILE": str(home), "DSH_HOME": str(home / ".dsh")}))
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "HOME")}
         environment.update(
-            HOME=str(home), HMB_STATE_DIR=str(self.directory),
+            HOME=str(home), DSH_HOME=str(home / ".dsh"), HMB_STATE_DIR=str(self.directory),
             HMB_RUNTIME_ROOT=str(self.directory / "runtime"), HMB_DEV_SOURCE="1",
             PYTHONPATH=str(REPOSITORY_ROOT / "src") + os.pathsep + str(REPOSITORY_ROOT / "tests" / "python"),
             HMB_HARNESS_RECORD_FILE=str(record),
@@ -337,7 +341,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
             sha256_text(canonical_json(context.turn_input)),
         )
         self.assertTrue(context.credential_file().is_file())
-        self.assertEqual(context.credential_file().stat().st_mode & 0o777, 0o600)
+        assert_private_path(self, context.credential_file(), 0o600)
         self.assertFalse(context.turn_output_file().exists())
 
     def test_collect_imports_a_turn_only_with_confirmed_shutdown(self):

@@ -4,6 +4,7 @@ from __future__ import annotations
 from hey_my_buddy.blackboard.service.daemon import Daemon
 from hey_my_buddy.errors import BoardError
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from support import request_private_service_stop
 
 
 class MicroTaskServiceStopTests(WorkflowTestCase):
@@ -78,7 +79,7 @@ class MicroTaskServiceStopTests(WorkflowTestCase):
                     board.call("task_cancel", {"runId": submitted["runId"], **params})
                 self.assertEqual(raised.exception.code, expected)
         with self.assertRaises(BoardError) as raised:
-            board.call("service_control", {"action": "stop", "credential": claim["claim"]["agentCredential"]})
+            request_private_service_stop(self.directory, board.call, credential=claim["claim"]["agentCredential"])
         self.assertEqual(raised.exception.code, "FORBIDDEN")
         ordinary = board.submit_execution(**{
             "requestId": "ordinary", "adapter": "command", "task": "plain",

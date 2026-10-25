@@ -4,10 +4,13 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 
+from .process_start import windows_handle_start
+
 TH32CS_SNAPTHREAD = 0x00000004
 THREAD_SUSPEND_RESUME = 0x0002
 THREAD_QUERY_LIMITED_INFORMATION = 0x0800
 PROCESS_DUP_HANDLE = 0x0040
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 ERROR_FILE_NOT_FOUND = 2
 ERROR_ALREADY_EXISTS = 183
 
@@ -59,7 +62,7 @@ class WindowsAPI:
         except self.error as error:
             raise ctypes.WinError(error.winerror) from error
 
-    def create_job(self, name):
+    def create_job(self, name, *, limit_flags=None):
         handle = self._call(self.job.CreateJobObject, None, name)
         if self.api.GetLastError() == ERROR_ALREADY_EXISTS:
             self.close(handle)
@@ -67,7 +70,8 @@ class WindowsAPI:
         try:
             limits = self._call(self.job.QueryInformationJobObject, handle,
                                 self.job.JobObjectExtendedLimitInformation)
-            limits["BasicLimitInformation"]["LimitFlags"] = self.job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            limits["BasicLimitInformation"]["LimitFlags"] = (
+                self.job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE if limit_flags is None else limit_flags)
             self._call(self.job.SetInformationJobObject, handle,
                        self.job.JobObjectExtendedLimitInformation, limits)
             return handle
@@ -85,6 +89,18 @@ class WindowsAPI:
 
     def process_ids(self, job):
         return list(self._call(self.job.QueryInformationJobObject, job, self.job.JobObjectBasicProcessIdList))
+
+    def process_identities(self, job):
+        """Observe members of the held Job through query-only process handles."""
+        identities = []
+        for pid in self.process_ids(job):
+            process = self._call(self.api.OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            try:
+                if self._call(self.job.IsProcessInJob, process, job):
+                    identities.append({"pid": pid, "startedAt": windows_handle_start(int(process), kernel=self.kernel)})
+            finally:
+                self.close(process)
+        return identities
 
     def assign(self, job, process):
         # Popen retains this exact process handle; no OpenProcess/PID recovery.

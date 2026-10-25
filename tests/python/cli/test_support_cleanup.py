@@ -9,14 +9,15 @@ import sys
 import textwrap
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from support import (
     BoardTestCase, PYTHON_ROOT, _child_environment, _lock_held, private_state_dir,
-    remove_private_test_root, stop_private_service, wait_for, write_catalog_fixture,
+    remove_private_test_root, request_private_service_stop, stop_private_service, wait_for, write_catalog_fixture,
 )
 from hey_my_buddy import locking
 from hey_my_buddy.protocol.transport import _read_endpoint
+import support
 
 
 def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
@@ -30,6 +31,154 @@ def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
 
 
 class FixtureCleanupTests(unittest.TestCase):
+    def test_daemon_fixture_cooperates_on_windows_and_keeps_posix_sigterm(self):
+        for platform, fail_stop in (("nt", False), ("nt", True), ("posix", False)):
+            with self.subTest(platform=platform, fail_stop=fail_stop):
+                fixture = BoardTestCase("runTest")
+                fixture.setUp()
+                process = Mock()
+                process.poll.return_value = None
+                events = []
+                failure = AssertionError("cooperative shutdown unconfirmed")
+
+                def cooperate(directory):
+                    self.assertEqual(directory, fixture.directory)
+                    events.append("stop")
+                    if fail_stop:
+                        raise failure
+
+                process.terminate.side_effect = lambda: events.append("terminate")
+                process.wait.side_effect = lambda **kwargs: events.append("wait")
+                try:
+                    support._confirmed_private_stops.add(fixture.directory.resolve())
+                    with (patch.object(support, "os", wraps=os) as native,
+                          patch.object(support.subprocess, "Popen", return_value=process),
+                          patch("hey_my_buddy.protocol.rpc_config.configure_client"),
+                          patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture"}),
+                          patch("hey_my_buddy.protocol.transport._request", return_value={}),
+                          patch.object(support, "stop_private_service", side_effect=cooperate)):
+                        native.name = platform
+                        if fail_stop:
+                            with self.assertRaises(AssertionError) as raised:
+                                with fixture.daemon():
+                                    events.append("body")
+                            self.assertIs(raised.exception, failure)
+                            self.assertEqual(fixture._cleanup_failures, [failure])
+                        else:
+                            with fixture.daemon():
+                                self.assertNotIn(fixture.directory.resolve(), support._confirmed_private_stops)
+                                events.append("body")
+                    expected = (["body", "stop", "terminate", "wait"] if fail_stop else
+                                ["body", "stop", "wait"] if platform == "nt" else
+                                ["body", "terminate", "wait"])
+                    self.assertEqual(events, expected)
+                    process.kill.assert_not_called()
+                finally:
+                    process.poll.return_value = 0
+                    fixture._cleanup_failures.clear()
+                    fixture.doCleanups()
+
+    def test_private_tree_cleanup_keeps_posix_observation_over_the_whole_base(self):
+        from hey_my_buddy.cli import checks
+
+        with private_state_dir() as base:
+            state = base / "state"
+            for residue in ("process", "lock", "unknown"):
+                with (self.subTest(residue=residue),
+                      patch.object(support, "os", wraps=os) as native,
+                      patch.object(support, "stop_private_service") as stop,
+                      patch.object(support, "shutdown_private_rpc"),
+                      patch.object(checks, "request_cooperative_stop", return_value=[]) as drain,
+                      patch.object(checks, "held_locks", return_value={"daemon": [base / "elsewhere/board-owner.lock"]
+                                                                    if residue == "lock" else []}),
+                      patch.object(checks, "observed_processes", return_value=(
+                          [{"pid": 123}] if residue == "process" else [],
+                          ["observation incomplete"] if residue == "unknown" else [], [])) as observe,
+                      patch.object(support, "remove_private_test_root") as remove):
+                    native.name = "posix"
+                    with self.assertRaisesRegex(AssertionError, "preserved"):
+                        support.cleanup_private_tree(base, (state,))
+                    stop.assert_called_once_with(state)
+                    drain.assert_called_once_with(base)
+                    observe.assert_called_once_with(base)
+                    remove.assert_not_called()
+
+    def test_private_tree_cleanup_uses_windows_service_evidence_without_unregistered_jobs(self):
+        from hey_my_buddy.cli import checks
+
+        with private_state_dir() as base:
+            state = base / "state"
+            with (patch.object(support, "os", wraps=os) as native,
+                  patch.object(support, "stop_private_service") as stop,
+                  patch.object(support, "shutdown_private_rpc") as shutdown,
+                  patch.object(checks, "held_locks", return_value={"daemon": []}) as locks,
+                  patch.object(checks, "observed_processes", side_effect=AssertionError("unregistered Job")),
+                  patch.object(support, "remove_private_test_root") as remove):
+                native.name = "nt"
+                support.cleanup_private_tree(base, (state,))
+            stop.assert_called_once_with(state)
+            shutdown.assert_called_once_with()
+            locks.assert_called_once_with(base)
+            remove.assert_called_once_with(base)
+
+    def test_windows_service_check_uses_lifecycle_locks(self):
+        with private_state_dir() as root:
+            with (patch.object(support, "os", wraps=os) as windows,
+                  patch.object(support, "_lock_held", return_value=False),
+                  patch("hey_my_buddy.cli.checks.observed_processes",
+                        side_effect=AssertionError("Windows cannot prove shutdown by scanning open files"))):
+                windows.name = "nt"
+                support.assert_private_processes_gone(root)
+                with patch.object(support, "_lock_held", side_effect=lambda path: path.name == "board-owner.lock"):
+                    with self.assertRaisesRegex(AssertionError, "shutdown unconfirmed"):
+                        support.assert_private_processes_gone(root)
+
+    def test_windows_released_locks_do_not_replace_an_unconfirmed_drain(self):
+        from hey_my_buddy.protocol.transport import ServiceError
+
+        with private_state_dir() as root:
+            with (patch.object(support, "os", wraps=os) as windows,
+                  patch.object(support, "_lock_held", side_effect=[False, True, False, False, False]),
+                  patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture"}),
+                  patch("hey_my_buddy.protocol.transport._request", side_effect=ServiceError("UNAVAILABLE", "fixture lost reply"))):
+                windows.name = "nt"
+                with self.assertRaisesRegex(AssertionError, "stop reply unconfirmed"):
+                    stop_private_service(root)
+
+    def test_test_stop_confirmation_is_reused_while_windows_locks_are_releasing(self):
+        with private_state_dir() as root:
+            reply = {"stopped": True, "unresolvedAttempts": []}
+            call = Mock(return_value=reply)
+            self.assertIs(request_private_service_stop(root, call, drainSeconds=0), reply)
+            call.assert_called_once_with("service_control", {"action": "stop", "drainSeconds": 0})
+            with (patch.object(support, "os", wraps=os) as windows,
+                  patch.object(support, "_lock_held", side_effect=[False, True, False, False, False]),
+                  patch("hey_my_buddy.protocol.transport._request", side_effect=AssertionError("second stop request")),
+                  patch.object(support.time, "sleep") as sleep):
+                windows.name = "nt"
+                stop_private_service(root)
+            sleep.assert_called_once_with(.05)
+            self.assertNotIn(root.resolve(), support._confirmed_private_stops)
+
+    def test_unconfirmed_test_stop_cannot_be_reused_as_a_confirmation(self):
+        with private_state_dir() as root:
+            for reply in ({"stopped": False}, {"stopped": True, "unresolvedAttempts": ["attempt"]}):
+                with self.subTest(reply=reply):
+                    request_private_service_stop(root, Mock(return_value={"stopped": True}))
+                    with self.assertRaisesRegex(AssertionError, "shutdown unconfirmed"):
+                        request_private_service_stop(root, Mock(return_value=reply))
+                    self.assertNotIn(root.resolve(), support._confirmed_private_stops)
+
+    def test_confirmed_stop_still_requires_windows_locks_to_release(self):
+        with private_state_dir() as root:
+            request_private_service_stop(root, Mock(return_value={"stopped": True}))
+            with (patch.object(support, "os", wraps=os) as windows,
+                  patch.object(support, "_lock_held", side_effect=lambda path: path.name == "board-owner.lock"),
+                  patch("hey_my_buddy.protocol.transport._request", side_effect=AssertionError("second stop request"))):
+                windows.name = "nt"
+                with self.assertRaisesRegex(AssertionError, "still owns state"):
+                    stop_private_service(root, timeout=0)
+
     def test_unconfirmed_shutdown_preserves_private_state(self):
         directory = None
         try:
@@ -150,7 +299,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 selected = {key: value for key, value in os.environ.items()
                             if key in keys or key.startswith(('HMB_', 'ANTHROPIC_', 'C2_'))}
                 result = {'environment': selected, 'state': str(state),
-                          'database': str(store.db.path), 'ipc': str(ipc),
+                          'database': str(store.db.path), 'ipc': str(ipc) if ipc is not None else None,
                           'runtime': str(runtime_root()), 'catalog': payload['source']}
                 assert cc.shutdown()['completed']
                 print(json.dumps(result))
@@ -159,7 +308,7 @@ class FixtureCleanupTests(unittest.TestCase):
             probe = json.loads(completed.stdout)
             self.assertEqual(probe["state"], str(directory))
             self.assertEqual(probe["runtime"], str(directory / "runtime-root"))
-            self.assertEqual(probe["ipc"], str(directory / "ipc"))
+            self.assertEqual(probe["ipc"], None if os.name == "nt" else str(directory / "ipc"))
             self.assertEqual(probe["catalog"], f"file:{catalog}")
             self.assertEqual(probe["environment"]["HMB_MODEL_CATALOG_FILE"], str(catalog))
             for key in inherited.keys() - {"HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_MODEL_CATALOG_FILE",

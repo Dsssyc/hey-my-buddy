@@ -15,7 +15,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 
-from support import BoardTestCase, _child_environment
+from support import BoardTestCase, _child_environment, request_private_service_stop
 
 from hey_my_buddy.protocol.contracts import CONTROL_NAME, CONTRACT_VERSION, WAIT_NAME, BuddyControl, BuddyWait
 from hey_my_buddy.protocol.transport import _read_endpoint
@@ -50,7 +50,7 @@ class TestNamedContract(BoardTestCase):
                         break
                     self.assertLess(time.monotonic(), deadline)
                     time.sleep(.02)
-                client.call("service_control", {"action": "stop", "drainSeconds": 0})
+                request_private_service_stop(self.directory, client.call, drainSeconds=0)
                 self.assertEqual(holder.result(timeout=2)["error"]["code"], "SERVICE_STOPPING")
 
     def _endpoint(self):

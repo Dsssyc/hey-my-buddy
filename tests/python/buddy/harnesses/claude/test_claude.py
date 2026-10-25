@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import stat
 import sys
 import tempfile
 import threading
@@ -22,6 +21,7 @@ import uuid
 from pathlib import Path
 from unittest import mock
 from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
+from private_acl import assert_private_path
 
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.roles import controller, run_execution, turn_io
@@ -29,7 +29,7 @@ from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
 from hey_my_buddy.buddy.harnesses.claude.native_run import validate_turn_provenance
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy.private_dirs import context_root
+from hey_my_buddy.private_dirs import context_root, directory_mode
 from hey_my_buddy.protocol.tool_evidence import read_tool_calls
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
@@ -54,7 +54,7 @@ class ClaudeFixtureCase(unittest.TestCase):
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        (self.root / "state").mkdir(mode=0o700)
+        (self.root / "state").mkdir(mode=directory_mode())
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
         mock_role_workspace(self)
@@ -593,7 +593,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertFalse(settings["sandbox"]["network"]["strictAllowlist"])
         self.assertEqual(settings["sandbox"]["network"]["allowedDomains"], ["*"])
         self.assertTrue(settings["sandbox"]["network"]["allowLocalBinding"])
-        self.assertEqual(stat.S_IMODE(settings_path.stat().st_mode), 0o600)
+        assert_private_path(self, settings_path, 0o600)
 
     def test_read_only_workspace_refuses_write_and_bash_tools(self):
         context = self.context()
@@ -613,7 +613,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         context.agent_credential = "private-attempt-secret"
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertEqual(stat.S_IMODE(context.credential_file().stat().st_mode), 0o600)
+        assert_private_path(self, context.credential_file(), 0o600)
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
         self.assertNotIn("private-attempt-secret", json.dumps(outcome.to_report()))
         # Ordinary native Worker children do not receive launcher credentials or roots.

@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from install.test_packaging import LAUNCHER, ROOT, current_environment, load_build_skill
+from install.test_packaging import ROOT, current_environment, launcher_argv, load_build_skill
 
 OPERATIONS = ROOT / "docs" / "reference" / "operations.md"
 
@@ -36,8 +36,9 @@ class SkillInstallTests(unittest.TestCase):
                             "CODEX_HOME": str(self.base / "codex")}
 
     def cleanup_private(self):
-        from hey_my_buddy.cli.checks import teardown_private_root
-        self.assertIsNone(teardown_private_root(self.base), 'Private install did not stop; evidence retained')
+        from support import cleanup_private_tree
+
+        cleanup_private_tree(self.base, (self.base / "state",))
 
     def install(self, **extra):
         from hey_my_buddy.install.skill_install import install
@@ -150,8 +151,10 @@ class SkillInstallTests(unittest.TestCase):
                 patch.dict(os.environ, {"LOCALAPPDATA": "/Local"}):
             self.assertEqual(home.default_state_dir(), PurePosixPath("/Local/hey-my-buddy/state"))
             self.assertEqual(home.default_runtime_root(), PurePosixPath("/Local/hey-my-buddy/runtime"))
-        with patch.object(home.os, "name", "posix"):
-            self.assertEqual(home.data_root(), Path.home() / ".local/share/hey-my-buddy")
+        from types import SimpleNamespace
+        expected_home = Path.home()
+        with patch.object(home, "os", SimpleNamespace(name="posix")):
+            self.assertEqual(home.data_root(), expected_home / ".local/share/hey-my-buddy")
 
     def test_paths_reports_skill_data_and_runtime_locations_without_starting_anything(self):
         from hey_my_buddy.install.skill_install import paths
@@ -175,7 +178,7 @@ class SkillInstallTests(unittest.TestCase):
         cwd = self.base / "elsewhere"
         cwd.mkdir()
         completed = subprocess.run(
-            ["/bin/sh", str(LAUNCHER), "install"], cwd=cwd, capture_output=True, text=True, timeout=240,
+            launcher_argv("install"), cwd=cwd, capture_output=True, text=True, timeout=240,
             env=current_environment(**self.environment, HMB_DEV_SOURCE="1",
                                     UV_PROJECT_ENVIRONMENT=str(self.base / "cli-venv")), encoding="utf-8",
         )

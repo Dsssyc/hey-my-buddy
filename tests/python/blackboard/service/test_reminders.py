@@ -204,6 +204,7 @@ class ReminderPrivateServiceTests(BoardTestCase):
             "    while not release.exists(): time.sleep(.05)\n"
             "    return original(self, message)\n"
             "module.WorkflowAgent.run_micro_task_prompt = delayed\n"
+            f"sys.argv[1:1] = ['--fixture-root', {str(self.directory)!r}]\n"
             "raise SystemExit(module.main())\n", encoding="utf-8", newline="\n")
         private_home = self.directory / "native-home"
         private_home.mkdir()

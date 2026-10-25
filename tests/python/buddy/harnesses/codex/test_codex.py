@@ -12,19 +12,20 @@ import hashlib
 import json
 import math
 import os
-import stat
 import tempfile
 import time
 import unittest
 from pathlib import Path
 from buddy.harnesses.session_record_support import notifications
 from buddy.harnesses.fixture_selection import mock_role_workspace, select_command, select_fixture
+from private_acl import assert_private_path
 from unittest import mock
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
 from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
 from hey_my_buddy.buddy.roles import controller
 from hey_my_buddy.buddy.roles.controller import ReviewPreparation, start_router_preparation, worker_executor
+from hey_my_buddy.private_dirs import directory_mode
 
 FIXTURE = Path(__file__).parent / "fixtures/mock_codex.py"
 SOURCE = Path(__file__).resolve().parents[5] / "src"
@@ -39,7 +40,7 @@ class CodexAdapterTests(unittest.TestCase):
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        (self.root / "state").mkdir(mode=0o700)
+        (self.root / "state").mkdir(mode=directory_mode())
         self.cwd = self.root / "checkout"
         self.cwd.mkdir()
         mock_role_workspace(self)
@@ -381,7 +382,7 @@ class CodexAdapterTests(unittest.TestCase):
         context.agent_credential = "private-attempt-secret"
         outcome = self.execute(context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertEqual(stat.S_IMODE(context.credential_file().stat().st_mode), 0o600)
+        assert_private_path(self, context.credential_file(), 0o600)
         self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
         self.assertNotIn("private-attempt-secret", json.dumps(outcome.to_report()))
 

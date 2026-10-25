@@ -12,6 +12,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
@@ -602,7 +603,9 @@ class TestLifecycle(BoardTestCase):
             artifact = self.directory / "artifact.txt"
             task = self.submit_execution(
                 requestId="life-1", task="produce an artifact", cwd=str(cwd), adapter="command",
-                argv=["/bin/sh", "-c", f"sleep 8; echo durable > {artifact}"], expectedSeconds=120,
+                argv=[sys.executable, "-c", "import time; from pathlib import Path; "
+                      f"time.sleep(8); Path({str(artifact)!r}).write_text('durable', encoding='utf-8')"],
+                expectedSeconds=120,
             )["task"]
             run_id = task["runId"]
             self.assertEqual(task["state"], "queued")
@@ -612,18 +615,41 @@ class TestLifecycle(BoardTestCase):
             attempt_id = before["selectedAttemptId"]
             generation = before["attemptGeneration"]
             # Interrupt the waiting client: it observes the same task and never cancels it.
+            interrupt = cwd / "await-interrupt"
+            command = [sys.executable, "-m", "hey_my_buddy.cli.main", "await",
+                       json.dumps({"runId": run_id, "waitSeconds": 60})]
+            if os.name == "nt":
+                # The CLI runs in its own console. A thread in that console sends
+                # a real Ctrl+C after the parent confirms the wait was admitted.
+                launcher = (
+                    "import ctypes, os, site, sys, threading, time\n"
+                    f"site.addsitedir({sysconfig.get_path('purelib')!r})\n"
+                    "from pathlib import Path\n"
+                    "from hey_my_buddy.cli.main import main\n"
+                    "if not ctypes.windll.kernel32.SetConsoleCtrlHandler(None, False): os._exit(98)\n"
+                    "trigger = Path(sys.argv[1])\n"
+                    "def interrupt():\n"
+                    " while not trigger.exists(): time.sleep(0.01)\n"
+                    " if not ctypes.windll.kernel32.GenerateConsoleCtrlEvent(0, 0): os._exit(99)\n"
+                    "threading.Thread(target=interrupt, daemon=True).start()\n"
+                    "raise SystemExit(main(sys.argv[2:]))\n"
+                )
+                command = [sys._base_executable, "-c", launcher, str(interrupt), "await",
+                           json.dumps({"runId": run_id, "waitSeconds": 60})]
             waiting = subprocess.Popen(
-                [sys.executable, "-m", "hey_my_buddy.cli.main", "await", json.dumps({"runId": run_id, "waitSeconds": 60})],
+                command,
                 env={
                     **os.environ,
                     "HMB_STATE_DIR": str(self.directory),
-                    "PYTHONPATH": str(Path(__file__).resolve().parents[4] / "src"),
+                    "PYTHONPATH": os.pathsep.join((str(Path(__file__).resolve().parents[4] / "src"),
+                                                    sysconfig.get_path("purelib"))),
                     "HMB_DEV_SOURCE": "1",
                     "HMB_RUNTIME_ROOT": str(self.directory / "runtime-root"),
                 },
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True, encoding="utf-8",
+                creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
             )
             self.children.append(waiting)
             # Wait until the daemon has actually admitted the client's wait; that is
@@ -642,7 +668,10 @@ class TestLifecycle(BoardTestCase):
 
             self.assertTrue(wait_for(wait_admitted, 20), "the client was never admitted before it was interrupted")
             self.assertIsNone(waiting.poll(), "the client must be waiting before it is interrupted")
-            waiting.send_signal(signal.SIGINT)
+            if os.name == "nt":
+                interrupt.touch()
+            else:
+                waiting.send_signal(signal.SIGINT)
             abandoned_stdout, abandoned_stderr = waiting.communicate(timeout=20)
             self.assertEqual(waiting.returncode, 1, abandoned_stderr)
             abandoned = json.loads(abandoned_stdout)

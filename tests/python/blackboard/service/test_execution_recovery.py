@@ -7,7 +7,7 @@ import signal
 import subprocess
 import sys
 import time
-import unittest
+import psutil
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -24,6 +24,7 @@ from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.execution import fsync_json
 from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_group
+from hey_my_buddy.protocol.process_start import process_start
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
 from hey_my_buddy.private_dirs import attempt_root
@@ -31,6 +32,26 @@ from hey_my_buddy.private_dirs import attempt_root
 
 class PrivateExecutionRecoveryTests(BoardTestCase):
     """Only explicit command children run; each case owns its daemon and state."""
+
+    def freeze_execution(self, identity):
+        self.assertEqual(process_start(identity["pid"], include_exited=False), identity["startedAt"])
+        if os.name == "nt":
+            process = psutil.Process(identity["pid"])
+            process.suspend()
+            return process
+        os.kill(identity["pid"], signal.SIGSTOP)
+        return None
+
+    def resume_execution(self, identity, process):
+        if inspect_process_identity(identity) != "alive":
+            return
+        if os.name == "nt":
+            try:
+                process.resume()
+            except psutil.NoSuchProcess:
+                pass
+        else:
+            os.kill(identity["pid"], signal.SIGCONT)
 
     def client(self):
         return BoardClient(self.directory, autostart=False)
@@ -167,7 +188,11 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             self.restart(daemon)
         try:
             self.assertEqual(inspect_process_identity(identity), "alive")
-            os.killpg(identity["processGroupId"], signal.SIGKILL)
+            if os.name == "nt":
+                self.assertEqual(process_start(identity["pid"], include_exited=False), identity["startedAt"])
+                psutil.Process(identity["pid"]).kill()
+            else:
+                os.killpg(identity["processGroupId"], signal.SIGKILL)
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
                 finished = wait_for(lambda: self._finished(run_id), timeout=35)
                 self.assertIsNotNone(finished, self.client().get(runId=run_id))
@@ -177,17 +202,16 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         finally:
             release.touch()
 
-    @unittest.skipUnless(hasattr(signal, "SIGSTOP") and hasattr(os, "killpg"),
-                         "frozen execution requires POSIX process signals")
     def test_frozen_execution_is_unknown_then_forced_after_durable_stop_window(self):
         identity = None
+        frozen_process = None
         release = self.directory / "frozen-execution.release"
         try:
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}) as daemon:
                 run_id, release, before = self.command("frozen-execution")
                 identity = before["processIdentity"]
                 self.assertEqual(inspect_process_identity(identity), "alive")
-                os.kill(identity["pid"], signal.SIGSTOP)
+                frozen_process = self.freeze_execution(identity)
                 # A crashed service cannot wait for the frozen endpoint's long call.
                 daemon.kill()
                 self.assertIsNotNone(daemon.wait(timeout=10))
@@ -214,7 +238,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         finally:
             release.touch()
             if identity is not None and inspect_process_identity(identity) == "alive":
-                os.kill(identity["pid"], signal.SIGCONT)
+                self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
             for journal in self.directory.glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
@@ -287,7 +311,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         candidate = "dsh:deepseek-official:deepseek-v4-pro:max"
         script = self.directory / "fixture-router.py"
         script.write_text(
-            "import importlib.util,json,os,time\n"
+            "import importlib.util,json,os,sys,time\n"
             "from pathlib import Path\n"
             f"spec=importlib.util.spec_from_file_location('fixture_agent', {str(fixture)!r})\n"
             "module=importlib.util.module_from_spec(spec)\n"
@@ -305,6 +329,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             f"        self.final_answers=[json.dumps({{'buddyId':{candidate!r},'note':'offline fixture choice','evidence':[]}})]\n"
             "        return module.fake_agent.FakeAgent.run_final_prompt(self,message)\n"
             "module.WorkflowAgent=GatedAgent\n"
+            f"sys.argv[1:1] = ['--fixture-root', {str(self.directory)!r}]\n"
             "raise SystemExit(module.main())\n", encoding="utf-8", newline="\n"
         )
         entry = make_fake_executable(self.directory / "harness-bin", "dsh", source=script)
@@ -360,12 +385,11 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         finally:
             release.touch()
 
-    @unittest.skipUnless(hasattr(signal, "SIGSTOP") and hasattr(os, "killpg"),
-                         "forced Router recovery requires POSIX process signals")
     def test_reconnected_router_budget_forces_frozen_execution_after_eight_seconds(self):
         script, started, release, _candidate = self.offline_router()
         environment = {"HMB_MAX_CONCURRENT": "1", "HMB_DSH_CLI": str(script)}
         identity = None
+        frozen_process = None
         try:
             with self.daemon(env=environment) as daemon:
                 created = self.client().call("selection_request", {
@@ -384,7 +408,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertIsNotNone(attached, self.client().get(runId=run_id))
                 self.assertEqual(attached["selectedAttempt"]["ownership"], "owned")
                 self.assertEqual(inspect_process_identity(identity), "alive")
-                os.kill(identity["pid"], signal.SIGSTOP)
+                frozen_process = self.freeze_execution(identity)
                 material = json.loads(budget.read_text(encoding="utf-8"))
                 material["deadline"] = time.monotonic() - 1
                 fsync_json(budget, material)
@@ -412,7 +436,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         finally:
             release.touch()
             if identity is not None and inspect_process_identity(identity) == "alive":
-                os.kill(identity["pid"], signal.SIGCONT)
+                self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
             for journal in self.directory.glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
@@ -423,8 +447,6 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         decision = self.client().call("selection_get", {"decisionId": decision_id})["decision"]
         return decision if decision["status"] == "completed" else None
 
-    @unittest.skipUnless(hasattr(signal, "SIGSTOP") and hasattr(os, "killpg"),
-                         "forced wrap-up recovery requires POSIX process signals")
     def test_host_wrap_up_deadline_survives_restart_and_forces_at_expiry(self):
         script, _router_started, router_release, _candidate = self.offline_router()
         worker_started = self.directory / "worker.started"
@@ -440,6 +462,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
         subprocess.run(["git", "commit", "-q", "-m", "fixture"], cwd=repo,
                        check=True, capture_output=True)
         identity = None
+        frozen_process = None
         try:
             with self.daemon(env=environment) as daemon:
                 submitted = self.client().call("workflow_submit", {
@@ -462,7 +485,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 bridge = wait_for(lambda: self._live_bridge(run_id), timeout=20)
                 self.assertIsNotNone(bridge)
                 self.assertEqual(inspect_process_identity(identity), "alive")
-                os.kill(identity["pid"], signal.SIGSTOP)
+                frozen_process = self.freeze_execution(identity)
                 self.client().call("workflow_cancel", {"runId": run_id, **submitted["control"]})
                 stopped = self.client().get(runId=run_id)["selectedAttempt"]
                 self.assertEqual(stopped["stopInitiator"], "host")
@@ -489,7 +512,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             worker_release.touch()
             router_release.touch()
             if identity is not None and inspect_process_identity(identity) == "alive":
-                os.kill(identity["pid"], signal.SIGCONT)
+                self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
             for journal in self.directory.glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):

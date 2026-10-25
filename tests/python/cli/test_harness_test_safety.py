@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -73,3 +75,25 @@ class HarnessTestSafetyTests(unittest.TestCase):
             self.assertTrue((case.directory / 'board.sqlite3').is_file())
         finally:
             case.doCleanups()
+
+    def test_frontend_children_use_the_runner_interpreter_and_private_home(self):
+        checkout = self.directory / "checkout"
+        console = checkout / "apps/console"
+        probe = ("import json, os\n"
+                 "print(json.dumps({key: os.environ[key] for key in "
+                 "('HMB_PREVIEW_PYTHON', 'HOME', 'USERPROFILE')}))\n")
+        for name in ("typescript/bin/tsc", "vitest/vitest.mjs"):
+            script = console / "node_modules" / name
+            script.parent.mkdir(parents=True)
+            script.write_text(probe, encoding="utf-8", newline="\n")
+        self.addCleanup(lambda: self.assertIsNone(checks.teardown_private_root(self.root)))
+        with patch.dict(os.environ, {"HMB_PREVIEW_PYTHON": "untrusted-parent-python"}), \
+                patch.object(checks.shutil, "which", return_value=sys.executable):
+            outcome = checks.run_frontend_suite(checkout, self.root, set(), threading.Lock(), threading.Event())
+        self.assertEqual(outcome.returncode, 0, outcome.stderr)
+        replies = [json.loads(line) for line in outcome.stdout.splitlines()]
+        self.assertEqual(len(replies), 2)
+        for reply in replies:
+            self.assertEqual(reply["HMB_PREVIEW_PYTHON"], sys.executable)
+            self.assertEqual(Path(reply["HOME"]), self.root / "frontend-home")
+            self.assertEqual(reply["USERPROFILE"], reply["HOME"])

@@ -61,7 +61,7 @@ def _source_for(fixture: Path, harness: str, log: Path) -> str:
                "        return value\n"
                f"sys.stdin = _TeeInput(sys.stdin, {str(log.parent / 'stdin.bin')!r})\n"
                if harness == "claude" else "")
-            + (f"sys.argv[1:1] = ['--log', {str(log)!r}, '--prompt-mode', 'final', "
+            + (f"sys.argv[1:1] = ['--log', {str(log)!r}, '--fixture-root', {str(log.parent)!r}, '--prompt-mode', 'final', "
                "'--final-answer', '{\"choice\":\"a\"}']\n" if harness == "dsh" else "")
             + f"sys.path.insert(0, {str(fixture.parent)!r})\n"
             + f"runpy.run_path({str(fixture)!r}, run_name='__main__')\n")

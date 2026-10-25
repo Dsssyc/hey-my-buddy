@@ -5,10 +5,12 @@ import contextlib
 import io
 import json
 import os
+import psutil
 import shutil
 import signal
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import textwrap
 import threading
@@ -18,6 +20,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from hey_my_buddy.cli import checks
+from hey_my_buddy.protocol.process_start import process_start
 
 REPOSITORY = Path(__file__).resolve().parents[3]
 
@@ -50,14 +53,9 @@ def wait_until(predicate, timeout: float = 30.0, interval: float = 0.05):
     return None
 
 
-def process_exists(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+def process_exists(identity: dict) -> bool:
+    return (identity["startedAt"] is not None
+            and process_start(identity["pid"], include_exited=False) == identity["startedAt"])
 
 
 def loaded_ids(tests: Path, modules: list[str], environment: dict) -> dict:
@@ -325,11 +323,11 @@ class ParallelOutcomeTests(RunnerTestCase):
             self.module(
                 "checksfixture_killed",
                 """
-                import os, signal, unittest
+                import psutil, unittest
 
                 class Killed(unittest.TestCase):
                     def test_dies(self):
-                        os.kill(os.getpid(), signal.SIGKILL)
+                        psutil.Process().kill()
                 """,
             ),
         ]
@@ -344,7 +342,8 @@ class ParallelOutcomeTests(RunnerTestCase):
         self.assertIn("test_breaks (checksfixture_assertion.Failing.test_breaks)", output)
         self.assertIn("fixture assertion", output)
         self.assertIn("a_module_that_does_not_exist", output)
-        self.assertIn(f"checksfixture_killed FAILED (exit {-signal.SIGKILL})", output)
+        killed_exit = signal.SIGTERM if os.name == "nt" else -signal.SIGKILL
+        self.assertIn(f"checksfixture_killed FAILED (exit {killed_exit})", output)
 
 
 
@@ -383,22 +382,27 @@ class ParallelOutcomeTests(RunnerTestCase):
 class LeftoverProcessTests(RunnerTestCase):
     """A process a suite leaves behind never holds the runner or an interrupted run."""
 
-    def reap(self, pid: int) -> None:
-        with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.kill(pid, signal.SIGKILL)
+    def reap(self, identity: dict) -> None:
+        with contextlib.suppress(psutil.NoSuchProcess, psutil.ZombieProcess):
+            process = psutil.Process(identity["pid"])
+            if process_exists(identity):
+                process.kill()
+                process.wait(timeout=5)
 
     def test_a_leftover_process_holding_the_output_does_not_hold_the_runner(self):
         script = (
-            "import subprocess, sys\n"
+            "import json, os, subprocess, sys\n"
+            "from hey_my_buddy.protocol.process_start import process_start\n"
             "leftover = subprocess.Popen([sys.executable, '-c', 'import threading; threading.Event().wait(120)'], "
-            "start_new_session=True)\n"
-            "print(leftover.pid, flush=True)\n"
+            "start_new_session=os.name != 'nt', "
+            "creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0)\n"
+            "print(json.dumps({'pid': leftover.pid, 'startedAt': process_start(leftover.pid, include_exited=False)}), flush=True)\n"
         )
         outcome = checks.run_suite_child(
             REPOSITORY, self.private_root, "p000", "leftover", [[sys.executable, "-c", script]],
             set(), threading.Lock(), threading.Event(),
         )
-        leftover = int(outcome.stdout.strip())
+        leftover = json.loads(outcome.stdout.strip())
         self.addCleanup(self.reap, leftover)
         self.assertEqual(outcome.returncode, 0, outcome.stderr)
         self.assertTrue(process_exists(leftover), "the fixture process must still hold the inherited pipes")
@@ -407,14 +411,20 @@ class LeftoverProcessTests(RunnerTestCase):
         slow = """
             import json, os, subprocess, sys, threading, unittest
             from pathlib import Path
+            from hey_my_buddy.protocol.process_start import process_start
 
             class Slow(unittest.TestCase):
                 def test_blocks(self):
                     leftover = subprocess.Popen(
-                        [sys.executable, "-c", "import threading; threading.Event().wait(120)"], start_new_session=True
+                        [sys.executable, "-c", "import threading; threading.Event().wait(120)"],
+                        start_new_session=os.name != "nt",
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
                     )
                     marker = Path(os.environ["CHECKS_FIXTURE_MARKERS"]) / f"{__name__}.json"
-                    marker.write_text(json.dumps({"pid": os.getpid(), "leftover": leftover.pid}),
+                    marker.write_text(json.dumps({
+                        "suite": {"pid": os.getpid(), "startedAt": process_start(os.getpid(), include_exited=False)},
+                        "leftover": {"pid": leftover.pid, "startedAt": process_start(leftover.pid, include_exited=False)},
+                    }),
                                       encoding="utf-8", newline="\\n")
                     threading.Event().wait(120)
         """
@@ -422,24 +432,50 @@ class LeftoverProcessTests(RunnerTestCase):
         driver = self.directory / "driver.py"
         driver.write_text(textwrap.dedent(
             """
-            import sys
+            import ctypes, json, os, signal, site, sys, threading, time
             from pathlib import Path
+            if os.name == "nt":
+                site.addsitedir(os.environ["CHECKS_FIXTURE_SITE_PACKAGES"])
             from hey_my_buddy.cli import checks
 
-            checks.run_suites_parallel(Path(sys.argv[1]), Path(sys.argv[2]), 2, sys.argv[3:])
+            if os.name == "nt":
+                trigger = Path(sys.argv[3])
+                identities = Path(sys.argv[4])
+                def interrupt():
+                    while not trigger.exists():
+                        time.sleep(0.01)
+                    owned = checks._windows_suite_children[Path(sys.argv[2]).resolve()]
+                    identities.write_text(json.dumps([handle.identity() for handle in owned]),
+                                          encoding="utf-8", newline="\\n")
+                    # This driver alone owns its new console. Zero targets that
+                    # console's groups; its PID need not be a process-group ID.
+                    if not ctypes.windll.kernel32.GenerateConsoleCtrlEvent(signal.CTRL_BREAK_EVENT, 0):
+                        raise ctypes.WinError()
+                threading.Thread(target=interrupt, daemon=True).start()
+            checks.run_suites_parallel(Path(sys.argv[1]), Path(sys.argv[2]), 2,
+                                       sys.argv[5:] if os.name == "nt" else sys.argv[3:])
             """
         ), encoding="utf-8", newline="\n")
         environment = {**os.environ, **self.environment()}
         environment["PYTHONPATH"] = os.pathsep.join([str(REPOSITORY / "src"), environment["PYTHONPATH"]])
+        if os.name == "nt":
+            # Use one interpreter in the private console, without a venv
+            # forwarding process that can consume the console event first.
+            environment["CHECKS_FIXTURE_SITE_PACKAGES"] = sysconfig.get_path("purelib")
         log = (self.directory / "driver.log").open("w", encoding="utf-8", newline="\n")
         self.addCleanup(log.close)
+        trigger = self.directory / "interrupt"
+        identities = self.directory / "owned-identities.json"
         process = subprocess.Popen(
-            [sys.executable, str(driver), str(REPOSITORY), str(self.private_root), *names],
+            [sys._base_executable if os.name == "nt" else sys.executable,
+             str(driver), str(REPOSITORY), str(self.private_root),
+             *([str(trigger), str(identities)] if os.name == "nt" else []), *names],
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
         )
         self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait(timeout=30)))
 
@@ -456,10 +492,13 @@ class LeftoverProcessTests(RunnerTestCase):
         self.assertTrue(children, "the first two fixture files never started")
         for child in children:
             self.addCleanup(self.reap, child["leftover"])
-            self.addCleanup(self.reap, child["pid"])
+            self.addCleanup(self.reap, child["suite"])
         self.assertFalse((self.markers / f"{names[2]}.json").exists(), "two workers must leave the third file queued")
 
-        process.send_signal(signal.SIGINT)
+        if os.name == "nt":
+            trigger.touch()
+        else:
+            process.send_signal(signal.SIGINT)
         try:
             process.wait(timeout=90)
         except subprocess.TimeoutExpired:
@@ -467,8 +506,15 @@ class LeftoverProcessTests(RunnerTestCase):
         output = (self.directory / "driver.log").read_text(encoding="utf-8")
         self.assertNotEqual(process.returncode, 0, output)
         self.assertIn("KeyboardInterrupt", output)
+        if os.name == "nt":
+            owned = json.loads(identities.read_text(encoding="utf-8"))
+            self.assertEqual({identity["pid"] for identity in owned},
+                             {child["suite"]["pid"] for child in children})
+            self.assertTrue(all(identity["startedAt"] and identity["jobName"] for identity in owned))
+            self.assertEqual({(identity["pid"], identity["startedAt"]) for identity in owned},
+                             {(child["suite"]["pid"], child["suite"]["startedAt"]) for child in children})
         for child in children:
-            self.assertFalse(process_exists(child["pid"]), "an interrupted run left a suite child running")
+            self.assertFalse(process_exists(child["suite"]), "an interrupted run left a suite child running")
             self.assertTrue(process_exists(child["leftover"]), "the fixture process must outlive its suite child")
         self.assertFalse((self.markers / f"{names[2]}.json").exists(), "a queued file started after the interrupt")
 

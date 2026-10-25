@@ -11,6 +11,7 @@ from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.protocol.session_content import MessageChunk, SessionNotification, TextContent
 from buddy.harnesses.session_record_support import notifications
 from buddy.harnesses.codex.fixtures.protocol_items import item_frames
+from private_acl import assert_private_path
 
 
 class SessionProjectionTests(unittest.TestCase):
@@ -80,7 +81,7 @@ class SessionProjectionTests(unittest.TestCase):
     def test_attempt_path_private_permissions_and_jsonl_header(self):
         self.assertEqual(self.record.path, self.state / "attempt.jsonl")
         if os.name != "nt":
-            self.assertEqual(self.record.path.stat().st_mode & 0o777, 0o600)
+            assert_private_path(self, self.record.path, 0o600)
         self.assertEqual(json.loads(self.record.path.read_text(encoding="utf-8").splitlines()[0]),
                          {"protocol": "acp", "protocolVersion": 1, "projectionVersion": 1})
         with patch("os.fsync", side_effect=AssertionError("display writes never fsync")):

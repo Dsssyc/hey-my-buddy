@@ -14,6 +14,7 @@ import threading
 import venv
 from unittest import mock
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from private_acl import assert_private_path
 from hey_my_buddy.cli.blocking import await_run
 from hey_my_buddy.cli.main import _read_control, _scrub_and_save
 from hey_my_buddy.protocol.client import BoardClient
@@ -48,15 +49,19 @@ class HostCutoverTests(WorkflowTestCase):
         target = root / runtime.content_id(source)
         source.rename(target)
         environment = target / "venv"
-        venv.EnvBuilder(with_pip=False, symlinks=True).create(environment)
+        venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt").create(environment)
         # EnvBuilder records its creation command, including the fixture's own
         # runtime path. Installed uv environments have no such command field.
         configuration = environment / "pyvenv.cfg"
         configuration.write_text("\n".join(line for line in configuration.read_text(encoding="utf-8").splitlines()
                                            if not line.startswith("command =")) + "\n", encoding="utf-8", newline="\n")
-        site = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-        for name in ("c_two", "portalocker", "pydantic", "pydantic_core", "zstandard",
-                     "typing_extensions", "typing_inspection", "annotated_types"):
+        site = (environment / "Lib" / "site-packages" if os.name == "nt" else
+                environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
+        dependencies = ("c_two", "portalocker", "pydantic", "pydantic_core", "zstandard",
+                        "typing_extensions", "typing_inspection", "annotated_types", "psutil")
+        if os.name == "nt":
+            dependencies += ("pywin32",)
+        for name in dependencies:
             distribution = metadata.distribution(name.replace("_", "-"))
             # Copy distribution metadata and native libraries with the package.
             for file in distribution.files:
@@ -190,7 +195,7 @@ class HostCutoverTests(WorkflowTestCase):
             self.assertEqual(after['ownerGeneration'], before['ownerGeneration'])
             self.assertEqual(after['revision'], before['revision'])
             self.assertEqual(control_file.read_bytes(), control_bytes)
-            self.assertEqual(control_file.stat().st_mode & 0o777, 0o600)
+            assert_private_path(self, control_file, 0o600)
             self.assertEqual(_read_control(str(control_file)), control)
             self.assertEqual(client.call('workflow_scope_amend', request), {**receipt, 'duplicate': True})
             with closing(sqlite3.connect(self.directory / 'board.sqlite3')) as connection:

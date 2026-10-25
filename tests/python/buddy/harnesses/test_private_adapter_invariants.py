@@ -10,6 +10,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import uuid
 from unittest import mock
 
 from hey_my_buddy.blackboard.routing import router
@@ -25,6 +26,8 @@ from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
 from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
 from hey_my_buddy.private_dirs import cleanup_attempt_credentials, context_root, native_root
 from hey_my_buddy.protocol.process_identity import read_native_process_journal, native_process_journal_path
+from hey_my_buddy.protocol.owned_process import owned_popen
+from hey_my_buddy.protocol.process_handle import ProcessHandle
 from hey_my_buddy.buddy.runtime.receipts import receipt_directory
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.roles import structured_call as read_only, turn_io
@@ -366,8 +369,10 @@ class PrivateAdapterInvariants(unittest.TestCase):
                         "budget": {"timeoutSeconds": 5}}}
                 startup = receipt_directory(state, harness, task_id, attempt_id) / "execution-start.json"
                 startup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                job_name = f"Local\\HeyMyBuddy-{uuid.uuid4()}" if os.name == "nt" else None
                 startup.write_text(json.dumps({"claim": claim, "stateDir": str(state),
                     "nonce": "n" * 64,
+                    "jobName": job_name,
                     "sessionRecordPath": str(fixture.root / f"session-{harness}.jsonl")}), encoding="utf-8", newline="\n")
                 entry = fixture.root / f"execution-entry-{harness}.py"
                 entry.write_text(
@@ -382,10 +387,16 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     "identity_file.write_text(json.dumps({'pid': os.getpid(), "
                     "'startedAt': process_identity.process_start(os.getpid(), include_exited=True)}), encoding='utf-8', newline='\\n')\n"
                     f"marker = state / 'attempts' / {task_id!r} / {attempt_id!r} / 'spawn.marker'\n"
+                    f"job_name = {job_name!r}\n"
+                    "if os.name == 'nt':\n"
+                    "    process_record = {'pid': os.getpid(), 'startedAt': process_identity.process_start(\n"
+                    "        os.getpid(), include_exited=True), 'jobName': job_name}\n"
+                    "else:\n"
+                    "    process_record = {'bootId': process_identity.boot_id(), 'pid': os.getpid(),\n"
+                    "        'startedAt': process_identity.process_start(os.getpid(), include_exited=True),\n"
+                    "        'processGroupId': os.getpgrp(), 'jobName': None}\n"
                     f"fsync_json(marker, {{'taskId': {task_id!r}, 'attemptId': {attempt_id!r}, "
-                    "'generation': 1, 'processIdentity': {'bootId': process_identity.boot_id(), "
-                    "'pid': os.getpid(), 'startedAt': process_identity.process_start(os.getpid(), include_exited=True), "
-                    "'processGroupId': os.getpgrp(), 'jobName': None}})\n"
+                    "'generation': 1, 'processIdentity': process_record})\n"
                     "harness_health.HARNESSES = ()\n"
                     "class OfflineClient:\n"
                     "    def __init__(self, *args, **kwargs): pass\n"
@@ -399,9 +410,27 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     "client.BoardClient = OfflineClient\n"
                     "runpy.run_module('hey_my_buddy.buddy.runtime.execution', run_name='__main__')\n", encoding="utf-8", newline="\n"
                 )
-                completed = subprocess.run([sys.executable, str(entry), "--startup", str(startup)],
-                    env=env, cwd=evidence, capture_output=True, text=True, timeout=35,
-                    start_new_session=True, encoding="utf-8")
+                argv = [sys.executable, str(entry), "--startup", str(startup)]
+                if os.name == "nt":
+                    process = owned_popen(argv, env=env, cwd=evidence, stdout=subprocess.PIPE,
+                                          stderr=subprocess.PIPE, text=True, encoding="utf-8", job_name=job_name)
+                    handle = ProcessHandle(process, own_group=True, log_paths={})
+                    try:
+                        stdout, stderr = process.communicate(timeout=35)
+                    finally:
+                        if process.poll() is None:
+                            process._buddy_job.terminate()
+                            process.wait(timeout=5)
+                        stopped = handle.shutdown_confirmed()
+                        active = process._buddy_job.active()
+                        if not stopped:
+                            process._buddy_job.close()
+                    self.assertTrue(stopped, f"the offline execution Job did not stop: active={active}")
+                    self.assertEqual(active, 0, "the offline execution left a Job member running")
+                    completed = SimpleNamespace(returncode=process.returncode, stdout=stdout, stderr=stderr)
+                else:
+                    completed = subprocess.run(argv, env=env, cwd=evidence, capture_output=True,
+                                               text=True, timeout=35, start_new_session=True, encoding="utf-8")
                 self.assertEqual(completed.returncode, 0, completed.stderr[-4000:])
                 delivery = fixture.root / "execution-result.json"
                 self.assertTrue(delivery.is_file(), completed.stdout[-4000:])

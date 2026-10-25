@@ -131,6 +131,9 @@ def configure_local_endpoint(state_dir: Path, *, create: bool = True) -> Path | 
     """
     state = state_dir
     if os.name == "nt":
+        # Windows has a user-scoped Named Pipe domain, never a Unix root.
+        # Core rejects even an inherited root override before selecting it.
+        os.environ.pop("C2_IPC_ROOT", None)
         cc.set_local_endpoint()
         return None
     root = state / "ipc"

@@ -56,14 +56,15 @@ def _errors():
         raise BoardError("INVALID_WORKSPACE", "Malformed workspace argument or recovery record") from error
 
 
-def _git_command(root, *args):
+def _git_command(root, *args, repository_only=False):
     # Do not inherit a caller's private index, repository, worktree or config
     # override. Read operations must not refresh the source index or run hooks.
     git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1",
-                   GIT_NO_LAZY_FETCH="1", LC_ALL="C")
+                   GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", LC_ALL="C")
     command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-               "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false", "-C", str(root), *args]
+               "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false",
+               "-c", "core.longpaths=true", "--git-dir" if repository_only else "-C", str(root), *args]
     return command, git_env
 
 
@@ -135,12 +136,7 @@ def _git_in(git_dir, *args, allowed=(0,)):
     names the repository exactly; commands that read history and reflogs
     (``rev-parse``, ``reflog show``) need no work tree at all.
     """
-    git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-    git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1",
-                   GIT_NO_LAZY_FETCH="1", LC_ALL="C")
-    command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-               "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false",
-               "--git-dir", str(git_dir), *args]
+    command, git_env = _git_command(git_dir, *args, repository_only=True)
     try:
         result = subprocess.run(command, input=None, capture_output=True, env=git_env,
                                 timeout=_GIT_TIMEOUT_SECONDS, creationflags=service_creation_flags())

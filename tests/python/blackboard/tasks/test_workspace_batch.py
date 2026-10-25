@@ -9,9 +9,9 @@ byte handling fails here.
 """
 import hashlib
 import os
-import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -280,22 +280,28 @@ class BatchedObjectTests(unittest.TestCase):
 
     # -- structural process-count regression -----------------------------------
     def git_process_counter(self, tag):
-        """A PATH shim that logs every Git execution and forwards to the real Git."""
+        """A Python argv wrapper that records and forwards each real Git call."""
         real = shutil.which("git")
         self.assertTrue(real, "a real git binary is required")
-        bin_dir = self.root / f"git-bin-{tag}"
-        bin_dir.mkdir()
         log = self.root / f"git-count-{tag}.log"
-        script = "#!/bin/sh\nprintf 'x\\n' >> %s\nexec %s \"$@\"\n" % (shlex.quote(str(log)), shlex.quote(real))
-        wrapper = bin_dir / "git"
-        wrapper.write_text(script, encoding="utf-8", newline="\n")
-        wrapper.chmod(0o755)
-        return bin_dir, log
+        wrapper = self.root / f"git-counter-{tag}.py"
+        wrapper.write_text(
+            "import subprocess, sys\n"
+            f"with open({str(log)!r}, 'a', encoding='utf-8', newline='\\n') as stream:\n"
+            "    stream.write('x\\n')\n"
+            f"raise SystemExit(subprocess.call([{real!r}, *sys.argv[1:]]))\n",
+            encoding="utf-8", newline="\n")
+        return wrapper, log
 
     def count_git_processes(self, tag, operation, *args, **kwargs):
-        bin_dir, log = self.git_process_counter(tag)
-        shadowed = {"PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""), "W1_GIT_LOG": str(log)}
-        with patch.dict(os.environ, shadowed):
+        wrapper, log = self.git_process_counter(tag)
+        git_command = workspace._git_command
+
+        def counted_command(*arguments, **options):
+            command, environment = git_command(*arguments, **options)
+            return [sys.executable, str(wrapper), *command[1:]], environment
+
+        with patch.object(workspace, "_git_command", side_effect=counted_command):
             result = operation(*args, **kwargs)
         return len(log.read_text(encoding="utf-8").splitlines()), result
 
@@ -336,12 +342,10 @@ class BatchedObjectTests(unittest.TestCase):
             "s-small", workspace.seal, self.state, small_manifest, "task", "attempt")
         seal_large, large_output = self.count_git_processes(
             "s-large", workspace.seal, self.state, large_manifest, "task", "attempt")
-        # The shim must actually observe the operation's processes.
-        probe_bin, probe_log = self.git_process_counter("probe")
-        with patch.dict(os.environ, {"PATH": str(probe_bin) + os.pathsep + os.environ["PATH"],
-                                     "W1_GIT_LOG": str(probe_log)}):
-            subprocess.run(["git", "--version"], capture_output=True, check=True)
-        self.assertEqual(probe_log.read_text(encoding="utf-8").count("\n"), 1)
+        # The wrapper must actually observe the operation's processes.
+        probe_count, version = self.count_git_processes("probe", workspace._git, self.repo, "--version")
+        self.assertEqual(probe_count, 1)
+        self.assertTrue(version.startswith(b"git version "))
         self.assertGreaterEqual(small_count, 10)
         counts = {"prepare": (small_count, large_count), "verify": (verify_small, verify_large),
                   "seal": (seal_small, seal_large)}

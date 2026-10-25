@@ -183,7 +183,7 @@ class SeamCase(unittest.TestCase):
                 self.assertEqual(set(catalog['billingByProvider']), {expected})
                 self.assertEqual(catalog['billingByProvider'][expected]['kind'],
                                  'subscription' if expected == 'openai' else 'unknown')
-                billing = account_probe.read([str(FIXTURE)], dict(os.environ))
+                billing = account_probe.read([sys.executable, str(FIXTURE)], dict(os.environ))
                 self.assertEqual(billing['provider'], expected)
                 self.assertEqual(billing['kind'], 'subscription' if expected == 'openai' else 'unknown')
                 self.assertEqual(trace.read_bytes() if trace.exists() else None, before,

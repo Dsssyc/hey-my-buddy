@@ -11,17 +11,18 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from hey_my_buddy import locking, process_observation as observation
 from hey_my_buddy.cli import checks
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.blackboard.tasks import storage
 from process_observation_fakes import native_references, proc_references, process, processes
 
 
 def hold_lock(path: Path) -> int:
     """An open fd that owns ``path``'s lock until the caller closes it."""
-    fd = os.open(path, os.O_RDWR)
+    fd = os.open(native_path(path), os.O_RDWR)
     locking.lock(fd)
     return fd
 
@@ -108,7 +109,10 @@ class ChecksEnvironmentTests(unittest.TestCase):
         root = checks.create_private_root()
         try:
             self.assertTrue(root.name.startswith("hey-my-buddy-checks-"))
-            self.assertEqual(stat.S_IMODE(os.stat(root).st_mode), 0o700)
+            if os.name == "nt":
+                checks.state_root.check_state_root(root)
+            else:
+                self.assertEqual(stat.S_IMODE(os.stat(root).st_mode), 0o700)
             tmp = root / "tmp"
             self.assertTrue(tmp.is_dir())
             environment = checks.child_environment(Path("/repo"), root,
@@ -126,10 +130,21 @@ class ChecksEnvironmentTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_windows_temp_and_tmp_override_inherited_paths(self):
+        with tempfile.TemporaryDirectory(prefix="checks-temp-") as raw:
+            root = Path(raw)
+            with (patch.object(checks, "os", wraps=os) as windows,
+                  patch.dict(os.environ, {"TEMP": str(root / "outside-temp"), "TMP": str(root / "outside-tmp")})):
+                windows.name = "nt"
+                environment = checks.child_environment(Path("/repo"), root / "child", home_root=root / "home")
+            self.assertEqual(environment["TEMP"], str(root / "child/tmp"))
+            self.assertEqual(environment["TMP"], str(root / "child/tmp"))
+            self.assertEqual(environment["TMPDIR"], str(root / "child/tmp"))
+
     def test_daemon_stop_uses_explicit_state_and_ends_its_rpc_session(self):
         endpoint = {"address": "ipc://private-checks-mock", "token": "fixture"}
         state = Path("/private-test-state")
-        with patch("hey_my_buddy.protocol.transport._read_endpoint", return_value=endpoint), patch("hey_my_buddy.protocol.transport._request") as request, patch("c_two.shutdown", return_value={"completed": True}) as shutdown:
+        with patch("hey_my_buddy.protocol.transport._read_endpoint", return_value=endpoint), patch("hey_my_buddy.protocol.transport._request", return_value={"stopped": True, "unresolvedAttempts": []}) as request, patch("c_two.shutdown", return_value={"completed": True}) as shutdown:
             checks._request_daemon_stop(state)
         self.assertEqual(request.call_args.kwargs["state_dir"], state)
         shutdown.assert_called_once_with()
@@ -137,6 +152,72 @@ class ChecksEnvironmentTests(unittest.TestCase):
 
 
 class ResidueObservationTests(unittest.TestCase):
+    def test_linked_private_root_is_an_observation_failure(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
+            target = Path(raw) / "target"
+            target.mkdir()
+            link = Path(raw) / "linked-root"
+            if os.name == "nt":
+                result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                                        capture_output=True)
+                self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+            else:
+                link.symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(OSError, "private root is a link"):
+                checks.held_locks(link)
+
+    def test_unreadable_private_tree_is_an_observation_failure(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
+            root = Path(raw)
+            with patch.object(checks.os, "scandir", side_effect=PermissionError("scan refused")):
+                with self.assertRaisesRegex(PermissionError, "scan refused"):
+                    checks.held_locks(root)
+
+    def test_directory_with_a_lifetime_lock_name_is_not_silently_dropped(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
+            root = Path(raw)
+            (root / "board-owner.lock").mkdir()
+            with self.assertRaises(OSError):
+                checks.held_locks(root)
+
+    def test_long_lock_scans_do_not_enter_outside_links(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
+            container = Path(raw)
+            root = container / "private"
+            state = root
+            while len(str(state)) < 310:
+                state /= "directory-" + "a" * 35
+            native_path(state).mkdir(parents=True)
+            for name in ("board-owner.lock", "control-daemon.lock"):
+                native_path(state / name).touch()
+            outside = container / "outside"
+            outside.mkdir()
+            (outside / "control-daemon.lock").touch()
+            link = root / "outside-link"
+            if os.name == "nt":
+                result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+                                        capture_output=True)
+                self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+                self.assertTrue(link.is_junction())
+            else:
+                link.symlink_to(outside, target_is_directory=True)
+            inside_fd = hold_lock(state / "board-owner.lock")
+            outside_fd = hold_lock(outside / "control-daemon.lock")
+            try:
+                self.assertEqual(checks.held_locks(root), {"daemon": [state / "board-owner.lock"]})
+                with (patch.object(checks, "os", wraps=os) as windows,
+                      patch.object(checks, "_windows_owned_processes", return_value=([], [], [])),
+                      patch.object(checks, "held_locks", return_value={"daemon": []}),
+                      patch.object(checks, "_request_daemon_stop") as stop):
+                    windows.name = "nt"
+                    self.assertEqual(checks.request_cooperative_stop(root, timeout=0),
+                                     [f"private service stop reply unconfirmed: {state}"])
+                    stop.assert_not_called()
+            finally:
+                release_lock(inside_fd)
+                release_lock(outside_fd)
+                checks.remove_private_test_root(root)
+
     def test_lock_is_held_requires_an_owner(self):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
             path = Path(raw) / "lifetime.lock"
@@ -174,7 +255,8 @@ class PrivateRootTeardownTests(unittest.TestCase):
         root = checks.create_private_root()
         state = root / "tmp" / "hey-my-buddy-test-clean"
         state.mkdir(parents=True)
-        (state / "control-daemon.lock").write_text("", encoding="utf-8", newline="\n")
+        if os.name != "nt":
+            (state / "control-daemon.lock").write_text("", encoding="utf-8", newline="\n")
         self.assertIsNone(checks.teardown_private_root(root, drain_seconds=0.5))
         self.assertFalse(root.exists())
 
@@ -198,6 +280,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
             release_lock(fd)
             shutil.rmtree(root)
 
+    @unittest.skipIf(os.name == "nt", "POSIX observation of an unlinked lock")
     def test_teardown_waits_out_a_live_process_with_unlinked_lock(self):
         # A racing cleanup unlinks the lock file while its holder still runs; a clean
         # teardown may only return after that holder observably exited.
@@ -239,6 +322,7 @@ class PrivateRootTeardownTests(unittest.TestCase):
             if root.exists():
                 shutil.rmtree(root)
 
+    @unittest.skipIf(os.name == "nt", "POSIX observation of an unlinked lock")
     def test_teardown_reports_a_surviving_process_with_unlinked_lock(self):
         # No held lock is visible after the unlink, so only live-process observation
         # separates residue from a clean root; it must fail closed, not report clean.
@@ -283,6 +367,175 @@ class PrivateRootTeardownTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WindowsOwnedCleanupTests(unittest.TestCase):
+    def setUp(self):
+        self.container = self.enterContext(tempfile.TemporaryDirectory(prefix="checks-owned-"))
+        self.root = Path(self.container).resolve()
+        self.windows = self.enterContext(patch.object(checks, "os", wraps=os))
+        self.windows.name = "nt"
+        self.enterContext(patch.dict(checks._windows_suite_children, clear=True))
+        self.enterContext(patch.dict(checks._windows_spawn_problems, clear=True))
+        # The owned path must not silently fall back to a whole-machine scan.
+        self.enterContext(patch.object(checks, "_observation_snapshot", side_effect=AssertionError("unowned scan")))
+
+    def child(self, *, active=0, finished=True):
+        child = Mock()
+        child.identity.return_value = {"pid": 123, "startedAt": 134000000000000001,
+                                       "jobName": "Local\\HeyMyBuddy-test"}
+        child.finished = finished
+        child.job.handle = object()
+        child.job.active.return_value = active
+        child.job.api.process_identities.return_value = [{"pid": 456, "startedAt": 134000000000000003}]
+        checks._windows_suite_children[self.root] = [child]
+        return child
+
+    def test_exited_root_does_not_prove_its_descendants_stopped(self):
+        child = self.child(active=2)
+        processes, problems, _ = checks.observed_processes(self.root)
+        self.assertEqual(problems, [])
+        self.assertEqual(processes[0]["startedAt"], 134000000000000001)
+        self.assertEqual(processes[0]["activeProcesses"], 2)
+        self.assertFalse(processes[0]["rootRunning"])
+        self.assertEqual(processes[0]["members"], [{"pid": 456, "startedAt": 134000000000000003}])
+        child.job.api.process_identities.assert_called_once_with(child.job.handle)
+        child.job.active.return_value = 0
+        self.assertEqual(checks.observed_processes(self.root), ([], [], []))
+
+    def test_unreadable_member_identity_keeps_the_job_evidence_and_root(self):
+        child = self.child(active=2)
+        child.job.api.process_identities.side_effect = OSError("member creation time denied")
+        evidence = checks.teardown_private_root(self.root, drain_seconds=0)
+        self.assertTrue(self.root.exists())
+        self.assertEqual(evidence["processes"][0]["activeProcesses"], 2)
+        self.assertEqual(evidence["processes"][0]["members"], [])
+        self.assertIn("member creation time denied", evidence["observation"]["problems"][0])
+        child.terminate.assert_not_called()
+        child.job.terminate.assert_not_called()
+
+    def test_empty_job_does_not_replace_the_creating_process_handle(self):
+        self.child(active=0, finished=False)
+        processes, problems, _ = checks.observed_processes(self.root)
+        self.assertTrue(processes[0]["rootRunning"])
+        self.assertEqual(problems, [])
+        self.assertEqual(processes[0]["members"], [])
+        checks._windows_suite_children[self.root][0].job.api.process_identities.assert_not_called()
+
+    def test_closed_or_unqueryable_job_is_unknown_even_if_its_name_is_gone(self):
+        for closed in (False, True):
+            with self.subTest(closed=closed):
+                child = self.child()
+                if closed:
+                    child.job.handle = None
+                else:
+                    child.job.active.side_effect = OSError("query denied")
+                processes, problems, _ = checks.observed_processes(self.root)
+                self.assertEqual(processes, [])
+                self.assertTrue(problems)
+                if closed:
+                    child.job.active.assert_not_called()
+
+    def test_unknown_ownership_preserves_the_root_and_evidence(self):
+        evidence = checks.teardown_private_root(self.root, drain_seconds=0)
+        self.assertIsNotNone(evidence)
+        self.assertIn("handles unavailable", evidence["observation"]["problems"][0])
+        self.assertTrue((self.root / checks.EVIDENCE_FILE_NAME).is_file())
+        self.windows.kill.assert_not_called()
+
+    def test_stop_reply_must_confirm_draining_all_attempts(self):
+        for reply in ({"stopped": False}, {"stopped": True, "unresolvedAttempts": ["attempt"]}):
+            with (self.subTest(reply=reply),
+                  patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture"}),
+                  patch("hey_my_buddy.protocol.transport._request", return_value=reply),
+                  patch("c_two.shutdown", return_value={"completed": True})):
+                self.assertFalse(checks._request_daemon_stop(self.root))
+
+    def test_released_locks_do_not_replace_a_lost_stop_reply(self):
+        checks._windows_suite_children[self.root] = []
+        path = self.root / "control-daemon.lock"
+        with (patch.object(checks, "held_locks", side_effect=[{"daemon": [path]}, {"daemon": []}]),
+              patch.object(checks, "_request_daemon_stop", return_value=False)):
+            problems = checks.request_cooperative_stop(self.root, timeout=1)
+        self.assertIn("stop reply unconfirmed", problems[0])
+
+    def test_unconfirmed_stop_requests_each_state_only_once_and_continues_draining(self):
+        checks._windows_suite_children[self.root] = []
+        first = self.root / "first/control-daemon.lock"
+        second = self.root / "second/board-owner.lock"
+        with (patch.object(checks, "held_locks", side_effect=[{"daemon": [first, second]},
+                                                            {"daemon": [first, second]}, {"daemon": []}]),
+              patch.object(checks, "_request_daemon_stop", side_effect=[False, True]) as request):
+            problems = checks.request_cooperative_stop(self.root, timeout=2)
+        self.assertEqual([args.args[0] for args in request.call_args_list], [first.parent, second.parent])
+        self.assertEqual(problems, [f"private service stop reply unconfirmed: {first.parent}"])
+
+    def test_teardown_reports_one_observation_problem_and_releases_handles_once(self):
+        child = self.child()
+        child.job.active.side_effect = OSError("query denied")
+        with patch.object(checks, "_release_suite_handles", wraps=checks._release_suite_handles) as release:
+            evidence = checks._safe_teardown(self.root)
+        self.assertEqual(evidence["observation"]["problems"], ["owned suite observation failed: query denied"])
+        release.assert_called_once_with(self.root)
+        child.job.close.assert_called_once_with()
+
+    def test_parent_keeps_service_state_a_suite_left_without_a_stop_reply(self):
+        checks._windows_suite_children[self.root] = []
+        (self.root / "control-daemon.lock").touch()
+        with patch.object(checks, "lock_is_held", return_value=False):
+            evidence = checks.teardown_private_root(self.root, drain_seconds=0)
+        self.assertTrue(self.root.exists())
+        self.assertEqual(evidence["held"], {})
+        self.assertIn("stop reply unconfirmed", evidence["observation"]["problems"][0])
+
+
+@unittest.skipUnless(os.name == "nt", "Windows owned Job descendants")
+class NativeWindowsOwnedCleanupTests(unittest.TestCase):
+    def test_suite_job_allows_breakaway_without_kill_on_close(self):
+        api = checks._SuiteWindowsAPI()
+        import uuid
+
+        job = api.create_job(f"Local\\HeyMyBuddy-{uuid.uuid4()}")
+        try:
+            limits = api._call(api.job.QueryInformationJobObject, job, api.job.JobObjectExtendedLimitInformation)
+            flags = limits["BasicLimitInformation"]["LimitFlags"]
+            self.assertTrue(flags & api.job.JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+            self.assertFalse(flags & api.job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+        finally:
+            api.close(job)
+
+    def test_venv_descendant_survives_root_exit_until_held_job_becomes_empty(self):
+        import threading
+
+        root = checks.create_private_root()
+        release = root / "release"
+        recorded = root / "descendant.json"
+        descendant = ("import json,os,sys,time; from pathlib import Path; "
+                      "from hey_my_buddy.protocol.process_start import process_start; "
+                      "release=Path(sys.argv[1]); "
+                      f"Path({str(recorded)!r}).write_text(json.dumps({{'pid':os.getpid(),"
+                      "'startedAt':process_start(os.getpid(),include_exited=True)}),encoding='utf-8'); "
+                      "exec('while not release.exists(): time.sleep(0.02)')")
+        parent = ("import subprocess,sys; "
+                  f"subprocess.Popen([sys.executable,'-c',{descendant!r},{str(release)!r}])")
+        outcome = checks.run_suite_child(
+            Path(__file__).resolve().parents[3], root, "p000", "descendant",
+            [[sys.executable, "-c", parent]], set(), threading.Lock(), threading.Event(),
+        )
+        try:
+            self.assertEqual(outcome.returncode, 0, outcome.stderr)
+            self.assertTrue(wait_until(lambda: recorded.exists()))
+            expected = json.loads(recorded.read_text(encoding="utf-8"))
+            processes, problems, _ = checks.observed_processes(root)
+            self.assertEqual(problems, [])
+            self.assertTrue(processes[0]["activeProcesses"])
+            self.assertFalse(processes[0]["rootRunning"])
+            self.assertIn(expected, processes[0]["members"])
+            self.assertTrue(root.exists())
+        finally:
+            release.touch()
+            self.assertIsNone(checks.teardown_private_root(root, drain_seconds=15))
+        self.assertFalse(root.exists())
 
 
 class ProcessObservationTests(unittest.TestCase):

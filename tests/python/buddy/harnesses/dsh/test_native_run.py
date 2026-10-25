@@ -103,6 +103,7 @@ class NativeRunCase(unittest.TestCase):
 
     def agent_argv(self) -> list[str]:
         return [sys.executable, str(FAKE_AGENT), "--log", str(self.agent_log_path),
+                "--fixture-root", str(self.base),
                 *self.extra_agent_args]
 
     def fast_request(self, prompt: str, *, scope: str = "none", timeout: int = FAST_TIMEOUT,

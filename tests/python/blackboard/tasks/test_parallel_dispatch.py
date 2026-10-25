@@ -15,11 +15,12 @@ import c_two as cc
 import psutil
 from pathlib import Path
 
-from support import BoardTestCase, wait_for
+from support import BoardTestCase, request_private_service_stop, wait_for
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol import rpc_config, transport
 from hey_my_buddy.protocol.contracts import BuddyControl, CONTROL_NAME
 from hey_my_buddy.protocol.process_identity import inspect_process_identity
+from hey_my_buddy.protocol.process_start import process_start
 from hey_my_buddy.private_dirs import attempt_root
 
 
@@ -318,8 +319,19 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                 "processIdentity"), timeout=20))
             attempt_id = client.get(runId=run_id)["selectedAttemptId"]
             try:
-                reply = client.call("service_control", {"action": "stop", "drainSeconds": 0})
+                reply = {}
+
+                def stop(operation, params):
+                    reply.update(client.call(operation, params))
+                    return reply
+
+                # Zero drain initiates cancellation but cannot confirm the still
+                # executing attempt. The shared entry must reject that reply.
+                with self.assertRaisesRegex(AssertionError, "shutdown unconfirmed"):
+                    request_private_service_stop(self.directory, stop, drainSeconds=0)
                 self.assertEqual(reply["cancelRequested"], 1)
+                self.assertFalse(reply["stopped"])
+                self.assertTrue(reply["unresolvedAttempts"])
                 first.wait(timeout=20)
                 self.assertTrue(wait_for(lambda: self.native_stopped(int((self.directory / "zero-drain.pid").read_text(encoding="utf-8"))),
                                          timeout=12), "zero-drain stop never reached the running command")
@@ -365,7 +377,11 @@ class PrivateDaemonDispatchTests(BoardTestCase):
                     return (client.get(runId=run_id).get("selectedAttempt") or {}).get("processIdentity")
                 identity = wait_for(published, timeout=30)
                 self.assertIsNotNone(identity)
-                os.kill(identity["pid"], signal.SIGKILL)
+                if os.name == "nt":
+                    self.assertEqual(process_start(identity["pid"], include_exited=False), identity["startedAt"])
+                    psutil.Process(identity["pid"]).kill()
+                else:
+                    os.kill(identity["pid"], signal.SIGKILL)
                 self.assertTrue(wait_for(lambda: client.get(runId=run_id)["attemptState"] == "finished",
                                          timeout=60), client.get(runId=run_id))
                 view = client.get(runId=run_id)
@@ -382,6 +398,7 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             pid_path = self.directory / "frozen.pid"
             script = ("import os,pathlib,signal,time\n"
                       "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                      "if hasattr(signal, 'SIGBREAK'): signal.signal(signal.SIGBREAK, signal.SIG_IGN)\n"
                       f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='utf-8', newline='\\n')\n"
                       f"pathlib.Path({str(started)!r}).touch()\n"
                       "while True: time.sleep(1)\n")
@@ -400,8 +417,6 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             self.assertTrue(wait_for(lambda: self.native_stopped(execution_pid), timeout=10))
 
     def test_stopped_execution_is_killed_from_the_recorded_force_time(self):
-        if not hasattr(signal, "SIGSTOP"):
-            self.skipTest("SIGSTOP is unavailable")
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             client = BoardClient(self.directory, autostart=False)
             run_id, started, release = self.gated("freeze-execution")
@@ -409,8 +424,14 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             identity = wait_for(lambda: (client.get(runId=run_id).get("selectedAttempt") or {}).get(
                 "processIdentity"), timeout=20)
             self.assertIsNotNone(identity)
+            frozen_process = None
             try:
-                os.kill(identity["pid"], signal.SIGSTOP)
+                self.assertEqual(process_start(identity["pid"], include_exited=False), identity["startedAt"])
+                if os.name == "nt":
+                    frozen_process = psutil.Process(identity["pid"])
+                    frozen_process.suspend()
+                else:
+                    os.kill(identity["pid"], signal.SIGSTOP)
                 client.cancel(runId=run_id)
                 force_at = wait_for(lambda: (client.get(runId=run_id).get("selectedAttempt") or {}).get(
                     "forceRequestedAt"), timeout=15)
@@ -428,4 +449,10 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             finally:
                 release.touch()
                 if inspect_process_identity(identity) == "alive":
-                    os.kill(identity["pid"], signal.SIGCONT)
+                    if os.name == "nt":
+                        try:
+                            frozen_process.resume()
+                        except psutil.NoSuchProcess:
+                            pass
+                    else:
+                        os.kill(identity["pid"], signal.SIGCONT)

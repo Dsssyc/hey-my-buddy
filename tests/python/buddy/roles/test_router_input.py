@@ -63,17 +63,14 @@ class FrozenTreeEntryTests(unittest.TestCase):
         router_input.discard(frozen)
         self.assertFalse(frozen.exists())
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX file mode is part of the frozen snapshot')
     def test_mode_change_invalidates_the_snapshot(self):
         directory = self.root / 'mode-mirror'
         directory.mkdir()
         frozen, expected = router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
         path = frozen / 'first.txt'
-        path.chmod(0o444 if os.name == 'nt' else 0o644)
-        try:
-            self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
-        finally:
-            if os.name == 'nt':
-                path.chmod(0o666)
+        path.chmod(0o644)
+        self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
 
 
     def assert_refused_after_materializing_a_file(self, entry, message):
@@ -127,16 +124,73 @@ class FrozenTreeEntryTests(unittest.TestCase):
         self.assertEqual(refused.exception.code, "router-input-unknown")
         git.assert_not_called()
 
-    def test_tree_read_receives_remaining_call_budget_without_a_local_cap(self):
+    def test_tree_failure_keeps_budget_shared_git_policy_and_bounded_stderr(self):
         directory = self.root / "tree-budget"
         directory.mkdir()
-        failed = subprocess.CompletedProcess([], 1, stdout=b"")
+        diagnostic = b"e" * 3000 + b"git-tree-tail\xff"
+        failed = subprocess.CompletedProcess([], 1, stdout=b"", stderr=diagnostic)
         with mock.patch.object(router_input.time, "monotonic", return_value=100), \
              mock.patch.object(router_input.subprocess, "run", return_value=failed) as git:
             with self.assertRaises(BoardError) as refused:
                 router_input.prepare(self.manifest, directory, deadline=340)
         self.assertEqual(refused.exception.code, "router-input-unavailable")
         self.assertEqual(git.call_args.kwargs["timeout"], 240)
+        command, environment = router_input.workspace._git_command(
+            self.checkout, "ls-tree", "-rz", "--full-tree", self.tree)
+        self.assertEqual(git.call_args.args[0], command)
+        self.assertEqual(git.call_args.kwargs["env"], environment)
+        self.assertEqual(refused.exception.details["argv"], command)
+        self.assertEqual(refused.exception.details["returncode"], 1)
+        self.assertEqual(refused.exception.details["stderr"], diagnostic.decode(errors="replace")[-2000:])
+        self.assertTrue(refused.exception.details["stderrTruncated"])
+
+    def test_tree_timeout_retains_bounded_git_stderr_and_unknown_code(self):
+        directory = self.root / "tree-timeout"
+        directory.mkdir()
+        diagnostic = b"e" * 3000 + b"timeout-tail"
+        expired = subprocess.TimeoutExpired(["git"], 10, stderr=diagnostic)
+        with mock.patch.object(router_input.subprocess, "run", side_effect=expired):
+            with self.assertRaises(BoardError) as refused:
+                router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+        self.assertEqual(refused.exception.code, "router-input-unknown")
+        self.assertEqual(refused.exception.details["stderr"], diagnostic.decode()[-2000:])
+        self.assertTrue(refused.exception.details["stderrTruncated"])
+        self.assertFalse((directory / "frozen-input").exists())
+
+    def test_batch_failure_captures_large_stderr_without_blocking_or_leaking_the_reader(self):
+        diagnostic = b"e" * 262144 + b"batch-tail\xff"
+        listing = subprocess.CompletedProcess([], 0, stdout=(
+            b"100644 blob " + self.object_id + b"\tfirst.txt\0"))
+        original_popen = subprocess.Popen
+        for response, message in ((b"missing\n", "A frozen Git object is unavailable"),
+                                  (self.object_id + b" blob 8\nshort", "A frozen Git object is truncated")):
+            with self.subTest(message=message):
+                directory = self.root / ("truncated" if b"short" in response else "missing")
+                directory.mkdir()
+                process = None
+
+                def failed_reader(command, **kwargs):
+                    nonlocal process
+                    expected, environment = router_input.workspace._git_command(self.checkout, "cat-file", "--batch")
+                    self.assertEqual(command, expected)
+                    self.assertEqual(kwargs["env"], environment)
+                    process = original_popen([
+                        sys.executable, "-c", "import sys; sys.stdin.buffer.readline(); "
+                        "sys.stderr.buffer.write(b'e' * 262144 + b'batch-tail\\xff'); sys.stderr.buffer.flush(); "
+                        f"sys.stdout.buffer.write({response!r}); sys.stdout.buffer.flush(); sys.exit(128)",
+                    ], **kwargs)
+                    return process
+
+                with mock.patch.object(router_input.subprocess, "run", return_value=listing), \
+                        mock.patch.object(router_input.subprocess, "Popen", side_effect=failed_reader):
+                    with self.assertRaises(BoardError) as refused:
+                        router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
+                self.assertEqual(refused.exception.code, "router-input-unavailable")
+                self.assertEqual(refused.exception.message, message)
+                self.assertEqual(refused.exception.details["stderr"], diagnostic.decode(errors="replace")[-2000:])
+                self.assertTrue(refused.exception.details["stderrTruncated"])
+                self.assertIsNotNone(process.returncode)
+                self.assertEqual(list(directory.iterdir()), [])
 
     def test_blocked_blob_reader_is_reaped_at_call_deadline(self):
         directory = self.root / "batch"

@@ -121,31 +121,49 @@ def _lock_held(path: Path) -> bool:
         os.close(fd)
 
 
+_confirmed_private_stops: set[Path] = set()
+
+
+def request_private_service_stop(directory: Path, call, **params) -> dict:
+    """Confirm one private service's stop reply for its later lock drain."""
+    directory = Path(directory).resolve()
+    _confirmed_private_stops.discard(directory)
+    reply = call("service_control", {"action": "stop", **params})
+    if not reply.get("stopped") or reply.get("unresolvedAttempts"):
+        raise AssertionError(f"Test service shutdown unconfirmed; preserved {directory}: {reply}")
+    _confirmed_private_stops.add(directory)
+    return reply
+
+
 def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
     """Stop the daemon attached to this exact test directory and await its locks."""
     from hey_my_buddy.protocol.transport import ServiceError, _read_endpoint, _request
 
-    directory = Path(directory)
+    directory = Path(directory).resolve()
     deadline = time.monotonic() + timeout
-    requested = False
+    requested = directory in _confirmed_private_stops
+    observed_running = False
     while True:
         starting = _lock_held(directory / "control-start.lock")
         running = any(_lock_held(directory / name) for name in ("control-daemon.lock", "board-owner.lock"))
         if not starting and not running:
+            if os.name == "nt" and observed_running and not requested:
+                raise AssertionError(f"Test service stop reply unconfirmed; preserved {directory}")
+            _confirmed_private_stops.discard(directory)
             return
         if running and not requested:
+            observed_running = True
             endpoint = _read_endpoint(directory)
             if endpoint is not None:
                 try:
-                    reply = _request(endpoint, "service_control", {"action": "stop", "drainSeconds": 20,
-                                                                    'note': "private test cleanup"}, state_dir=directory)
+                    request_private_service_stop(directory,
+                        lambda operation, params: _request(endpoint, operation, params, state_dir=directory),
+                        drainSeconds=20, note="private test cleanup")
                 except ServiceError:
                     # The endpoint may have disappeared during a restart. Recheck
                     # the lifetime locks and attach to its replacement if needed.
                     pass
                 else:
-                    if not reply.get("stopped") or reply.get("unresolvedAttempts"):
-                        raise AssertionError(f"Test service shutdown unconfirmed; preserved {directory}: {reply}")
                     requested = True
         if time.monotonic() >= deadline:
             raise AssertionError(f"Test service still owns state; preserved {directory}")
@@ -154,6 +172,15 @@ def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
 
 def assert_private_processes_gone(directory: Path) -> None:
     """Keep private evidence if a service or execution still uses this state root."""
+    if os.name == "nt":
+        # stop_private_service confirms the drain reply before these lifecycle
+        # locks are released. The enclosing runner owns ordinary suite descendants
+        # in its held Job; a whole-machine file scan cannot prove them stopped.
+        held = [name for name in ("control-start.lock", "control-daemon.lock", "board-owner.lock")
+                if _lock_held(Path(directory) / name)]
+        if held:
+            raise AssertionError(f"Private test service shutdown unconfirmed; preserved {directory}: {held}")
+        return
     if not any((directory / name).exists() for name in ('control-daemon.lock', 'control.json')):
         return
     from hey_my_buddy.cli.checks import observed_processes
@@ -162,6 +189,30 @@ def assert_private_processes_gone(directory: Path) -> None:
     if processes or problems:
         raise AssertionError(f"Private test process shutdown unconfirmed; preserved {directory}: "
                              f"{len(processes)} process(es), {problems}")
+
+
+def cleanup_private_tree(directory: Path, state_directories: tuple[Path, ...]) -> None:
+    """Retire a fixture tree, draining its explicitly owned service states.
+
+    The enclosing checks Job covers ordinary Windows descendants. POSIX keeps
+    the full-tree argv, open-path and lifetime-lock observation before deletion.
+    """
+    from hey_my_buddy.cli.checks import held_locks, observed_processes, request_cooperative_stop
+
+    for state in state_directories:
+        stop_private_service(state)
+    shutdown_private_rpc()
+    problems = []
+    processes = []
+    if os.name != "nt":
+        problems = request_cooperative_stop(directory)
+        processes, observation_problems, _ = observed_processes(directory)
+        problems.extend(observation_problems)
+    held = held_locks(directory)["daemon"]
+    if held or processes or problems:
+        raise AssertionError(f"Private fixture shutdown unconfirmed; preserved {directory}: "
+                             f"{len(held)} lock(s), {len(processes)} process(es), {problems}")
+    remove_private_test_root(directory)
 
 
 _INHERITED_CHILD_KEYS = {
@@ -515,6 +566,7 @@ class BoardTestCase(unittest.TestCase):
 
         from hey_my_buddy.protocol.rpc_config import configure_client
         configure_client(self.directory)
+        _confirmed_private_stops.discard(self.directory.resolve())
         environment = self.child_environment(env)
         log = open(self.directory / "test-daemon.log", "ab")
         command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']
@@ -530,6 +582,14 @@ class BoardTestCase(unittest.TestCase):
         )
         self.children = getattr(self, "children", [])
         self.children.append(process)
+
+        def terminate_child():
+            process.terminate()
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:  # pragma: no cover - test watchdog
+                process.kill()
+
         deadline = time.monotonic() + 25
         try:
             while time.monotonic() < deadline:
@@ -551,13 +611,20 @@ class BoardTestCase(unittest.TestCase):
                 )
             yield process
         finally:
-            if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=15)
-                except subprocess.TimeoutExpired:  # pragma: no cover - test watchdog
-                    process.kill()
-            log.close()
+            try:
+                if process.poll() is None:
+                    if os.name == "nt":
+                        try:
+                            stop_private_service(self.directory)
+                            process.wait(timeout=15)
+                        except Exception as error:
+                            self._cleanup_failures.append(error)
+                            terminate_child()
+                            raise
+                    else:
+                        terminate_child()
+            finally:
+                log.close()
 
     def cli(self, *arguments: str, env: dict | None = None, timeout: int = 90) -> tuple[int, dict]:
         """Run the real CLI in a child process; returns (exit code, parsed stdout)."""
