@@ -24,6 +24,21 @@ F1b 的独立审查（2026-10-25）留给 Windows 阶段的三条：
 - F2 加一项：Router 的镜像文件被 `buddy/roles/router_input.py` 设成 0o444/0o555，在 Windows 上即 READONLY，正常流程里 `discard` 经 `private_dirs.remove_tree` 删除时可能以错误 5 失败（推断，未在 Windows 复现）。复现了就在产品里修根因。
 - F3 让 Windows 收尾真正删根时，核对 READONLY 叶子是不是指向根外的硬链接（例如 uv 在 Windows 上的硬链接缓存）：清属性会改到根外的同一个文件。
 
+## F2 的结果（2026-10-25）
+
+取证微任务 `a3abc85e` 在 `f17267f2` 上做，Host 读过报告与关键原始输出，证据在 Host 检出被忽略的 `tmp/storage/win-f2-evidence/`。
+
+- 真写者：16 个中断窗口都起基础解释器加锁定环境，结束的是写者本身。
+- SQLite 恢复：外部读写或只读连接持有看板时，恢复停在删除 WAL（WinError 32），看板、旁文件、日志与备份都在；释放后同一份日志续做完成。符合设计。
+- 删除续做：改名前持有叶子得 WinError 5，改名后持有得 WinError 32，都只记未完成（`STORAGE_INCOMPLETE`，已删的那份不计）；释放后同一计划只结算一次。符合设计。
+- 运行时保留：执行用着旧运行时时，回收因 `process-inspection-unavailable` 把它完整保留（1,381 个文件不变）。Windows 上现在只能这样保守保留，还不能把运行时映射到执行。
+- Router 镜像：正常流程里 `discard` 在 READONLY 的镜像文件上以 WinError 5 失败，镜像留下。推断已复现，F3 在产品里修根因。
+- 运行器：Windows 上的收尾只观察得到 cwd，三次都退出 3 保留根；套件后代与私有服务按身份核对都已结束。
+- **新发现：长路径。** 产品发布 `execution-start.json` 时，完整路径约 262 个字符，`windows_files.py` 的 CreateFile 返回原始错误 3，command 执行起不来（launch issue，`processCreated=false`）。0.52.1 就有，不是 D2、E 引入的。默认状态目录在 `%LOCALAPPDATA%\hey-my-buddy` 下，用户名短时最深的这类路径约 245 个字符，离上限不远；检查运行器的私有根更深，所以 Windows 上起 command 执行的用例都会因此失败。不改系统设置（开启长路径是用户的系统设置）。
+- 测试的可移植性：`test_execution_process.py` 有三项调用只在 POSIX 上有的 boot_id，一项替身缺 Windows 需要的进程与 Job。
+
+F3 因此加两项：产品自己的文件路径在 Windows 上超过 260 个字符时的做法（先在测试机上实验扩展长度路径能走到哪些操作，再在计划里比较），以及上面这几处测试的可移植性。
+
 ## 定下的收窄
 
 - 不加预防性重试：持续的读者、SQLite 连接、已加载的解释器都不会自己释放；只有实验捕获到会自行释放的短暂占用，才在唯一的文件边界讨论一次有界重试。
