@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the current source: transport protocol 2 and schema 29; the upgrade base is 0.51.0 (schema 28), and the upgrade from schema 28 to 29 ran on the daily board with the 0.53.0 install on 2026-10-26, so it is consumed and the base moves next. Startup never migrates. Installation and native verification facts remain in [acceptance records](../acceptance/installs/0.20.0.md).
+This page describes the current source: transport protocol 2 and schema 29; the upgrade base is 0.53.0 (schema 29) and no upgrade is pending. Startup never migrates. Installation and native verification facts remain in [acceptance records](../acceptance/installs/0.20.0.md).
 
 ## Process topology
 
@@ -43,7 +43,7 @@ hey-my-buddy transports bounded JSON strings through C-Two 0.7.6's named Python 
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 29) owns every authoritative fact in 55 tables. Startup accepts schema 29 only; installing this version converts a schema-28 board ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
+One schema-versioned SQLite database (`board.sqlite3`, schema version 29) owns every authoritative fact in 55 tables. Startup accepts schema 29 only, and no conversion is pending ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
 
 | Group | Tables |
 | --- | --- |
