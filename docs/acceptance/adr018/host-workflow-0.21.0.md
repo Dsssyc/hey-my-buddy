@@ -12,7 +12,7 @@
 | 12，文件与标准输入 | `--params-file PATH`、`-` 与 `--params-file -` 和原有单 JSON 参数等价；互斥输入、UTF-8、大小界限、非法 JSON、控制文件和执行凭据均经同一处理。`test_host_cli` 覆盖文件内容不经 shell 再解释。 | 命令参数格式没有启动模型或改变服务权限。 |
 | 13，方法帮助 | `help` 列出全部方法；`help METHOD` 从现有校验函数的 AST、签名和常量提取参数、默认值、条件及边界，无法简化的条件附实际拒绝表达式与来源。拼写错误返回最近候选。`test_host_cli` 覆盖全部方法、嵌套配置、输入文本界限和校验常量变化。 | 帮助不执行校验函数、不启动服务或模型；复杂条件保留源码表达式，不假称为无条件必填。 |
 | 14，objectiveOf | 服务在提交事务内解析被引用 run 的工作目标，校验原始 Host 与项目归属；不能跨 Host 或借用未归组 run，参与请求幂等。`test_host_workflow` 覆盖归属、拒绝与重复提交。 | 只是归组，不授予其他目标的控制权。 |
-| 15，等待 Host 时直接收尾 | `acknowledge` 绑定当前轮封存成果、已核实整合、当前控制权及全部停止证据；写 Host 收尾事件，保留 Worker 原来的 attention/assistance 结果。拒绝后可用新命令和当前 revision 再审；helper 收尾同时结算父子图。`test_host_workflow` 验证无需额外 Worker 回合。 | 活跃后代、未停止执行、待续做或工作区冲突仍阻止收尾。 |
+| 15，等待 Host 时直接完成 | `acknowledge` 绑定当前轮封存成果、已核实整合、当前控制权及全部停止证据；写 Host 完成事件，保留 Worker 原来的 attention/assistance 结果。拒绝后可用新命令和当前 revision 再审；helper 完成同时结算父子图。`test_host_workflow` 验证无需额外 Worker 回合。 | 活跃后代、未停止执行、待续做或工作区冲突仍阻止验收。 |
 | 16，失败/取消结论与清理 | `verdict:"recorded"` 追加独立 Host 结论，绑定被审查执行、owner generation、成果集合和可选整合记录；不改 failed/cancelled，不计为成功样本。清理仍验证固定成果与当前检出；续做及所有权变化使旧结论失效。`test_host_workflow` 与 `test_host_workflow_worker` 覆盖取消前未执行、失败成果保留、未封存改动拒绝清理。 | 清理只删除已审查的受管检出，保留补丁、清单与 Git 引用。 |
 | 17，被打断工作的部分成果 | 拥有子进程的 Worker 在确认停止后封存允许范围内的改动，由服务验证并随失败回执发布 `partial-output`。标明 partial、verified=false、final=false；额度原因和最后助手消息保留。`test_partial_output_safety` 拒绝未停止、明确未开始模型、超范围结果；`test_host_workflow_worker` 驱动真实 CLI/daemon/Worker 和模拟额度失败。 | 不把部分成果当成功；原生进程存活未知时不清理或伪造停止。 |
 | 18，更换配置与锁定 | 默认显式配置可由 Host 在 continue 中附理由换为启用且可用的配置，写 `configuration_overridden`；`configurationLocked:true` 保持硬约束。同一检出以固定部分提交续做；Codex 模拟额度失败后换至 DSH，重建输入含上一轮助手文本和未验收/非新指令标记。`test_host_workflow`、`test_host_workflow_worker` 验证禁用配置、锁定拒绝、跨 harness 恢复与历史成果保留。 | 全部额度恢复为离线夹具，无付费复跑；原生 resume 仍取决于各 adapter 已有绑定证据。 |
@@ -35,13 +35,13 @@
 
 ## 验证记录
 
-Host 的定点验证包含 schema 14 → 15、环境/安装/分发、CLI 帮助、Host 直接收尾和结论、部分成果、跨 harness 续做、用量/额度回执以及前端解析器。所有服务测试使用私有 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`；额度失败来自 `mock_quota_turn_runner.mjs` 与 `mock_quota_codex.py`。前端最终测试为 48 个文件、579 项通过；TypeScript 和 Vite 构建通过。Vite 保留单 bundle 超过 500 kB 的体积提示，不影响构建。
+Host 的定点验证包含 schema 14 → 15、环境/安装/分发、CLI 帮助、Host 直接完成和结论、部分成果、跨 harness 续做、用量/额度回执以及前端解析器。所有服务测试使用私有 `BUDDY_STATE_DIR`、`BUDDY_RUNTIME_ROOT`；额度失败来自 `mock_quota_turn_runner.mjs` 与 `mock_quota_codex.py`。前端最终测试为 48 个文件、579 项通过；TypeScript 和 Vite 构建通过。Vite 保留单 bundle 超过 500 kB 的体积提示，不影响构建。
 
 完整检查在冻结的 `18baa33a4f0dfd788e25b5718424f42318b32e61` 上运行 `uv run --frozen python -m buddy.checks`，PATH 前置受支持的 Node 24.21.0；退出码 0。Python 1,581 项全部通过（1,217.091 秒），Node 161 项、14 个 suite 全部通过（28.215 秒），无失败、取消、跳过或 todo。私有根 `/private/tmp/buddy-checks-8gcudqrr` 已由检查器的停止/存活核对流程移除。原始日志为忽略目录中的 `tmp/host-workflow/final-checks.log`。首次完整扫描发现两个旧断言需要同步：未完成原生 turn 的用量应标为 partial；安全测试应检查秘密字段/真实秘密值，不能把 tokenUsage 计数字段当作凭据。另同步了两处启动夹具（补全 runtime stable 字段、区分 Host 启动与 scoped Worker 拒绝），并修复新保护误拦已取消根目标明确续做的回归；相应定点验证通过，最终完整复测已覆盖这些修正。
 
 Host 在隔离合成预览的真实浏览器中核对了逐次用量、缓存子集、Host 补充路径、可展开的累计补丁、部分成果标签、失败结果与独立结论并列，以及额度来源、重置时间、stale 和未知窗口。1280 宽桌面与 390 宽窄屏没有页面横向溢出，浏览器 error 日志为空。此证据针对合成数据和已打包的本次前端；实际服务字段另由跨组件/HTTP/解析器测试验证。没有访问日常控制台或更改其设置。
 
-最终运行时代码冻结于 `18baa33a4f0dfd788e25b5718424f42318b32e61`。使用 `uv build --wheel` 构建 `tmp/host-workflow/dist-final/hey_my_buddy-0.21.0-py3-none-any.whl`（1,788,745 字节），SHA-256 为 `3fdff9fc11cd9fde485613f9743853528f9bdb2ac8f9a974ae10e790691451f9`。已打开 wheel 检查 skill marker、内嵌 package 的 build-info、版本/契约和 Skill 字节数，sourceCommit 均与该冻结提交一致。本轮不安装此 wheel。验收记录及状态索引随后以仅文档提交收尾。
+最终运行时代码冻结于 `18baa33a4f0dfd788e25b5718424f42318b32e61`。使用 `uv build --wheel` 构建 `tmp/host-workflow/dist-final/hey_my_buddy-0.21.0-py3-none-any.whl`（1,788,745 字节），SHA-256 为 `3fdff9fc11cd9fde485613f9743853528f9bdb2ac8f9a974ae10e790691451f9`。已打开 wheel 检查 skill marker、内嵌 package 的 build-info、版本/契约和 Skill 字节数，sourceCommit 均与该冻结提交一致。本轮不安装此 wheel。验收记录及状态索引随后以仅文档提交完成。
 
 ## 试用观察逐行对照
 
@@ -58,7 +58,7 @@ Host 在隔离合成预览的真实浏览器中核对了逐次用量、缓存子
 | 显式配置的目标失败后不能换模型续做，只能另开目标并手工提交半成品 | 第 17、18 条完成，模拟 Codex → DSH 在同一 checkout 续做并绑定部分输出；用户锁定与禁用配置拒绝有测试。 |
 | acknowledge 不接受失败的目标；未验收目标的检出无法清理 | 第 16 条完成，recorded 结论不改失败/取消结果；受管检出按停止和封存证据清理。 |
 | integration-record 不能记录 Host 的补充改动 | 第 19 条完成，hostPaths 独立核验、持久化并显示。 |
-| 已整合的成果只能靠取消或空跑一轮来收尾 | 第 15 条完成，直接收尾及 helper 结算不增加 Worker 回合。 |
+| 已整合的成果只能靠取消或空跑一轮来完成 | 第 15 条完成，直接验收及 helper 结算不增加 Worker 回合。 |
 | 多轮成果只有增量补丁，整合时要按顺序叠加 | 第 20 条完成，累计 patch 可从最初输入独立应用，并经清理保留。 |
 | 等待 Host 的时间轴缺少结束时间、标签被遮挡 | 保留既有 `0ad0e72`、`753981a` 修复；本轮前端套件和合成长标题浏览器验证覆盖当前呈现。 |
 | Codex 有效结构化结果被误判、续做丢失上下文 | 保留 0.19.0 修复；本轮 Codex 协议与模拟跨 harness 恢复覆盖 lastAssistantMessage 和原生身份边界，未做新的付费原生复验。 |

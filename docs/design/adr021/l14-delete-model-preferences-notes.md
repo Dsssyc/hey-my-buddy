@@ -220,7 +220,7 @@ client error (Connect)
 operation timed out
 ```
 
-局部检查也曾发现本微任务新增测试的准备错误：升级测试最初假设基点已有多个 effort，随后补私有变体时遗漏了基点必填的 updated_revision；目录候选顺序断言最初把第二、第三候选写反。均已改正并单文件重跑通过；升级夹具最终局部 6 项、decision 最终局部 35 项通过。收尾清理了未使用的测试变量，并补上新升级测试的连接关闭与 buddy ID 全集等价断言之后，在最终树上再次执行完整 Python 检查。
+局部检查也曾发现本微任务新增测试的准备错误：升级测试最初假设基点已有多个 effort，随后补私有变体时遗漏了基点必填的 updated_revision；目录候选顺序断言最初把第二、第三候选写反。均已改正并单文件重跑通过；升级夹具最终局部 6 项、decision 最终局部 35 项通过。最后整理时清理了未使用的测试变量，并补上新升级测试的连接关闭与 buddy ID 全集等价断言之后，在最终树上再次执行完整 Python 检查。
 
 最终完整 Python 检查通过：233 个文件、3,859 项测试，跳过 0 项；使用默认进程数，不带选择参数，退出 0，私有目录清除。最终树没有下载失败或其他失败留待重跑。
 
@@ -231,4 +231,4 @@ operation timed out
 
 全仓库按删除的表、视图、字段与偏好取值搜索。当前源码唯一旧视图读取在待做升级的基点设置读取里；Python 中仅旧夹具验证、私有旧形式准备与拒绝断言保留旧名，前端仅缺席断言保留 familyPreferenceChanges。project_identity_reason、recorded_project_id 与 identityReason 在当前源码和测试中无使用；harness 与登录开关无版本写入参数，微任务的同名版本参数保留。
 
-固定夹具、其基点生成脚本与历史设计或验收记录仍含基点形式；写入范围之外的 reference 与其他设计页尚待计划第 12 行的文档收尾。本次没有修改 tests/fixtures、packaging 或其他 docs，没有改动日常安装或运行日常服务、Worker，没有读取用户自己的 harness 配置、凭据或执行模型调用。安装类检查只在 runner 提供的私有目录里构建或安装，浏览器仅访问带 synthetic-fixture-data 标头的预览；真实日常看板、真实 harness、Windows 与实际安装后的运行不在本次验证内。
+固定夹具、其基点生成脚本与历史设计或验收记录仍含基点形式；写入范围之外的 reference 与其他设计页尚待计划第 12 行的文档最后整理。本次没有修改 tests/fixtures、packaging 或其他 docs，没有改动日常安装或运行日常服务、Worker，没有读取用户自己的 harness 配置、凭据或执行模型调用。安装类检查只在 runner 提供的私有目录里构建或安装，浏览器仅访问带 synthetic-fixture-data 标头的预览；真实日常看板、真实 harness、Windows 与实际安装后的运行不在本次验证内。

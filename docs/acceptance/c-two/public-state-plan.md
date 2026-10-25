@@ -28,11 +28,11 @@ Host 已从原候选归档独立复跑整合方原样的默认入口探针：空
 | PS-08 | 从固定源码只去掉 call_service、call_board、BoardClient(False) 的目录传递，各自既有目标断言失败；真实 RPC 或目标错误原因须保留，任意导入/权限/超时失败不能算证明 |
 | PS-09 | 全部旧测试编号保留，新增编号登记、未变化集合相等；固定产物审查、聚焦核对、整合后最终源默认并行数完整检查一次 |
 
-## 核对、环境与收尾
+## 核对、环境与最终处理
 
 微任务只跑受影响测试，不跑完整检查。建议新 public_state、transport_attach、rpc_config 与真实 service 的相关测试按各自独立解释器运行；实际目录、数目、命令、退出码、用时、失败与故障注入必须可重放。真实服务/冷启动的原生注册若受沙箱阻止，停止重复受限操作，交付固定助手与未验证边界，由 Host 在固定产物上补核，不能用 mock RPC 作为唯一证据。
 
-Worker 开始时建立短的系统临时任务根、创建时记下确切路径，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指入其中，依赖/cache、比较副本、夹具与一次性材料全部放进去；Worker 不删除任何文件或目录，框架自行收尾自建根除外。受管检出共用 stash/分支/标签：不使用 git stash，不新建、切换、移动或删除分支/标签，不自行提交，改动留工作区由黑板封存。交付报告根与所有未停止自建进程，验收后 Host 按确切路径回收受管检出与任务根，绝不手工删除 Buddy 管理检出或用通配符回收。
+Worker 开始时建立短的系统临时任务根、创建时记下确切路径，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指入其中，依赖/cache、比较副本、夹具与一次性材料全部放进去；Worker 不删除任何文件或目录，框架自行清场自建根除外。受管检出共用 stash/分支/标签：不使用 git stash，不新建、切换、移动或删除分支/标签，不自行提交，改动留工作区由黑板封存。交付报告根与所有未停止自建进程，验收后 Host 按确切路径回收受管检出与任务根，绝不手工删除 Buddy 管理检出或用通配符回收。
 
 清除继承 BUDDY_*、ANTHROPIC_*、C2_*、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT，只用已确认归属的空 HOME、状态与运行时根；默认目录测试仅在私有 HOME 中暂时不设置 BUDDY_STATE_DIR，服务始终用明确的同一私有目录启动。模型目录必须是固定夹具，原生 CLI 用 sentinel 或已存在模拟夹具，不发现真实账户或调用真实模型。依赖只在任务根的 uv 环境使用已核对公开锁定材料，不安装/升级/重启/替换日常服务、Worker 或运行时，不改日常配置、数据或登录，不读凭据内容。Too many open files 或日常委派服务故障出现立即停止报告。
 
@@ -42,13 +42,13 @@ Host 核对固定补丁与风险接缝、实际聚焦测试、目标故障注入
 
 3-A run `ef9677e7-df3e-4f57-b03b-4c7add95b85f`，微任务基线 `9e45e890e0c249250621a12d165001c9c76d7e8e`。首次四项配置全部省略，路由决定 `dec-7705e392-3073-4d96-9576-986a5c4eca38` 选 ZCode/zai-api/GLM-5.3/max；实际 nativeFailure.attribution 为 provider rate_limited、statusCode=429、providerErrorCode=1310、retryable=false，两层停止确认，没有固定修复交付。按本批既有许可，用完整 configuration 与独立 reason 在原 run continue 到 Codex/openai/gpt-6.1-sol/high（曾完成本批 C-Two 实施与夹具返修），revision 5 已排队，范围与规则不变。没有修改用户路由设置或为 ZCode 重试相同限流回合；既有三个付费冒烟和开发者暂不调用 ZCode 的决定不改写，微任务使用模型另按本 run 记录。请求、原始失败、路由与恢复响应保存在 `tmp/c073-host/public-state-repair*`。
 
-## 首份固定产物退回与 Host 自建实例收尾
+## 首份固定产物退回与 Host 自建实例停止
 
 固定候选 `cb33c21792bee0c589dfeaaeefd50595951ac713`、artifact `1148145a-93ed-4e5b-950c-b7d1c6c93886`、补丁 SHA-256 `739ab46e7a541e276ac6b705fe2160f5d06d1d2b2fc2d298856ccc6d7a2326ec` 只有四个范围内路径。生产三个边界改动简洁，内部缺根拒绝不变；Worker assistance 仅声称 50 项沙箱可运行验证，没有真实 RPC green。Host 在固定源码独立跑新 public_state 全 22 项，退出 1、62.348 秒、3 failures；旧 attach 全 28 项退出 0、1.997 秒，rpc_config 全 24 项退出 0、9.253 秒。新文件的默认 CLI、启动器、客户端、覆盖和已有服务 stop/restart 已走真实私有 RPC，但整份测试尚未通过，不签收。
 
-三个失败为新夹具范围内缺陷：cold-service/cold-board 的生产启动环境只传 src，替换为测试助手后没有补 tests/python，报 `ModuleNotFoundError: No module named 'support'`；readonly 把正在运行服务的 SQLite 状态树改成 0500，health 失败后未在 finally 恢复，收尾 stop 也失败并留下自己创建的 daemon。已按原 run continue（不指定配置，revision 9）打回，要求在测试内补齐私有启动环境、用实际 RPC 加现成变更观察器验证只读接入，并在任何失败下恢复夹具权限后 stop/wait，不能修改公共 launcher/support 或弱化断言。原始日志为 `public-state-host-{green,attach,rpc-config}.{json,log}`，首次完整新文件失败保留。
+三个失败为新夹具范围内缺陷：cold-service/cold-board 的生产启动环境只传 src，替换为测试助手后没有补 tests/python，报 `ModuleNotFoundError: No module named 'support'`；readonly 把正在运行服务的 SQLite 状态树改成 0500，health 失败后未在 finally 恢复，清场时的 stop 也失败并留下自己创建的 daemon。已按原 run continue（不指定配置，revision 9）打回，要求在测试内补齐私有启动环境、用实际 RPC 加现成变更观察器验证只读接入，并在任何失败下恢复夹具权限后 stop/wait，不能修改公共 launcher/support 或弱化断言。原始日志为 `public-state-host-{green,attach,rpc-config}.{json,log}`，首次完整新文件失败保留。
 
-Host 只对自己这一批检查创建且 endpoint PID/serviceId 与台账相等的实例操作：PID 32358、serviceId `01bc5a84-ecdb-42a4-9626-9f00b5c5069d`。将该实例 state 的 0500 恢复 0700，使用既有显式-root stop helper 合作停止；helper 返回 0、服务锁释放，首次随即 PID 仍在，原观察与工具断言失败保留。稍后单独确认该 PID 消失、控制端点已移除；没有发送信号，没有采用其他会话的进程，没有宣称由 Host 对非直属 Popen 完成 wait。该操作是失败夹具的运行收尾，不是代改微任务代码。两个阶段证据为 `public-state-first-residual-stop.json` 与 `public-state-first-residual-stop-confirmed.json`，不把后一个结果覆写到前一个。
+Host 只对自己这一批检查创建且 endpoint PID/serviceId 与台账相等的实例操作：PID 32358、serviceId `01bc5a84-ecdb-42a4-9626-9f00b5c5069d`。将该实例 state 的 0500 恢复 0700，使用既有显式-root stop helper 合作停止；helper 返回 0、服务锁释放，首次随即 PID 仍在，原观察与工具断言失败保留。稍后单独确认该 PID 消失、控制端点已移除；没有发送信号，没有采用其他会话的进程，没有宣称由 Host 对非直属 Popen 完成 wait。该操作是失败夹具的运行清场，不是代改微任务代码。两个阶段证据为 `public-state-first-residual-stop.json` 与 `public-state-first-residual-stop-confirmed.json`，不把后一个结果覆写到前一个。
 
 ## 2026-10-11 第二次 Host 复核补充：3-B 排队
 
@@ -56,7 +56,7 @@ Host 只对自己这一批检查创建且 endpoint PID/serviceId 与台账相等
 
 开发者提供的 path_probe 已复制并核对哈希，分别在候选 `8e793196` 与基线 `12eb4fcd` 的独立归档副本运行，模型调用为 0。仅在探针外层记录并把 tempfile.mkdtemp 创建物约束到各自短私有任务根，原探针逻辑和产品源未改。候选符号链接路径 preflight 报 LAUNCH_ACCESS_DENIED、未解析到真实目录；0755 preflight 同码失败且保持 0755；基线两项均通过，路径变为真实目录、0755 变 0700；两份新 HOME 默认预检都通过。外层两个命令均退出 0，0.279 / 0.144 秒；退出 0 只表示比较完成，不能写成候选被测预检成功。证据与创建路径台账为 `tmp/c073-host/path-preflight-red-owned-root.json` 及该根中原探针/两个 stdout、stderr。两副本使用当前已锁定 0.7.4 解释器；该探针只覆盖文件、本地预检与公开路径选择，不外推旧运行时传输互通。
 
-3-B 的生产选择：公开 get_state_dir 恢复基线的真实路径解析，角色下收到规范后的状态根；状态根之内的 ipc 等私有区继续拒绝链接和 `..`，不能从文件系统根拒绝用户选择的外部链接祖先。服务所有者在 cold_start_preflight 与 Daemon.run 恢复 mkdir/chmod 0700；只读 attach 不创建不 chmod。结构性 BoardError 原代码、消息与路径原样向上报告；系统拒绝写入/本地 IPC 才用 LAUNCH_ACCESS_DENIED，不能把所有 BoardError 当沙箱。移除 preflight 对 BUDDY_CHECKS_TMPDIR 的认识，使用已有通用临时目录机制/正常 TMPDIR，探针仍保留短私有根和合作收尾，不引入新的运行通道。
+3-B 的生产选择：公开 get_state_dir 恢复基线的真实路径解析，角色下收到规范后的状态根；状态根之内的 ipc 等私有区继续拒绝链接和 `..`，不能从文件系统根拒绝用户选择的外部链接祖先。服务所有者在 cold_start_preflight 与 Daemon.run 恢复 mkdir/chmod 0700；只读 attach 不创建不 chmod。结构性 BoardError 原代码、消息与路径原样向上报告；系统拒绝写入/本地 IPC 才用 LAUNCH_ACCESS_DENIED，不能把所有 BoardError 当沙箱。移除 preflight 对 BUDDY_CHECKS_TMPDIR 的认识，使用已有通用临时目录机制/正常 TMPDIR，探针仍保留短私有根和协作清场，不引入新的运行通道。
 
 3-B 唯一写入范围拟为 `src/hey_my_buddy/protocol/{transport,rpc_config}.py`、`src/hey_my_buddy/blackboard/service/daemon.py`、`tests/python/protocol/{test_public_state,test_rpc_config,test_transport_attach}.py`、`tests/python/blackboard/service/test_daemon.py` 及新 `docs/acceptance/c-two/path-state-repair.md`；开始时绑定已验收 3-A 的整合提交。没有额外客户端、角色、注册表、support、launcher 或其他公共文件写权，缺口交 Host 统一整合。新增 PATH-01 链接可达的私有状态 CLI health 真实成功且返回真实根；PATH-02 state/ipc 链接仍拒绝并报告自身路径；PATH-03 0755 冷启动/直接服务启动后为 0700、0500 只读 attach 不 chmod；PATH-04 CLI 保留结构拒绝代码/路径，与模拟系统权限拒绝分开；PATH-05 各删除真实路径解析、所有者修正、错误保留后目标断言失败，并保留既有内部缺根拒绝与旧编号。每项真实服务采用空 HOME、私有根、固定模型目录与 sentinel；范围内缺陷原 run continue。
 
@@ -66,7 +66,7 @@ Host 只对自己这一批检查创建且 endpoint PID/serviceId 与台账相等
 
 固定 `5b466de8c9bc61f4b81003ea485005cb62385585`、artifact `063b340b-897a-43f2-afa1-8c40d5fc5aba`、累积补丁 SHA-256 `74e4827cd7bfec3a877b8fe733be78d78df0461461d17e76197e9864495d4bd2` 仍只有四个范围内路径；两个生产文件与首份候选字节相等，旧 attach 文件未改。Host 对新文件全 26 项独立运行，通过、退出 0、27.411 秒（测试 26.704 秒）；默认 CLI、源码启动器、两个客户端、覆盖时机、既有 stop/restart、真实只读与两种真实冷启动均核对。旧 attach 全 28 项与 rpc_config 全 24 项的首份 Host green 因文件和生产配置未变继续适用，不因记录或夹具返修重跑。
 
-新文件证据有 27 个独立子场景，22 个实际自建进程回执均 wait 退出 0，所有场景 RPC shutdown 确认、没有非预期 cleanupFailures，原生 CLI sentinel 调用 0；readonly 的真实 ping 同服务身份、entry snapshot 与权限均保留。收尾故障的三个单元场景是明确的 substitutesOnly，不计入实际 Popen 台账。证据为 `public-state-host-r2-green.{json,log}`、`public-state-host-r2-process-proof.json`；首次 22 项三失败与旧实例两阶段停止证据原样保留。
+新文件证据有 27 个独立子场景，22 个实际自建进程回执均 wait 退出 0，所有场景 RPC shutdown 确认、没有非预期 cleanupFailures，原生 CLI sentinel 调用 0；readonly 的真实 ping 同服务身份、entry snapshot 与权限均保留。清场故障的三个单元场景是明确的 substitutesOnly，不计入实际 Popen 台账。证据为 `public-state-host-r2-green.{json,log}`、`public-state-host-r2-process-proof.json`；首次 22 项三失败与旧实例两阶段停止证据原样保留。
 
 Host 从本份固定源码重建三份只取消最终目录传递的生产变异，各跑原真实 call_service、call_board、BoardClient(False) 目标：正常 RPC 已通过，取消后均恰好一项 failure、无 errors、退出 1，实际错误为 PRIVATE_STATE_REQUIRED；命令耗时 1.978 / 1.979 / 1.980 秒。另两份只去掉夹具 import 路径或 finally 恢复，分别命中新 import 目标的缺 support 证据与恢复目标的 320!=448 断言，0.644 / 0.301 秒；这两项是夹具防护，不作为生产缺根或真实 RPC 证据。五项没有以沙箱、任意传输或停止失败算红灯，原始计划、日志与结果为 `public-state-host-r2-target-proofs.json` 及对应 red 文件。
 
@@ -92,7 +92,7 @@ Host 从本份固定源码重建三份只取消最终目录传递的生产变异
 | `protocol.test_transport_attach` | 28 | 0 | 1.381 |
 | `blackboard.service.test_daemon` | 13 | 0 | 5.618 |
 
-五个文件各自独立解释器、空 HOME、明确私有 state/runtime、固定 catalog 与原生 sentinel，共 103 项全部通过，日志为 `tmp/c073-host/path-state-host-{path,public,rpc,attach,daemon}.{json,log}`。真实 linked-cli 同时覆盖链接祖先和直接状态链接，两次 CLI health 及随后实际 RPC 的 serviceId、stateDir 与同一服务相符，实际传入路径为真实状态根，nativeRoot 为其 ipc。cold-755 在 preflight 返回瞬间为 0700，再真实启动；daemon-755 不走 preflight，直接启动后 0700。三个场景五个服务/CLI 直属 Popen 均 wait 退出 0、服务与 Worker 锁释放、RPC shutdown 完成、cleanupFailures 为空，native sentinel 没有调用。0500 只读核对用真实 C-Two tiny ping peer，不把 SQLite 访问混成传输结论；实际 RPC 到达、其余目录快照和权限 0500 不变，peer 请求停止并 wait 退出 0，RPC 收尾完成。实际 state/ipc 链接经 CLI 拒绝的 code/message/path 与 preflight 结构错误相等。
+五个文件各自独立解释器、空 HOME、明确私有 state/runtime、固定 catalog 与原生 sentinel，共 103 项全部通过，日志为 `tmp/c073-host/path-state-host-{path,public,rpc,attach,daemon}.{json,log}`。真实 linked-cli 同时覆盖链接祖先和直接状态链接，两次 CLI health 及随后实际 RPC 的 serviceId、stateDir 与同一服务相符，实际传入路径为真实状态根，nativeRoot 为其 ipc。cold-755 在 preflight 返回瞬间为 0700，再真实启动；daemon-755 不走 preflight，直接启动后 0700。三个场景五个服务/CLI 直属 Popen 均 wait 退出 0、服务与 Worker 锁释放、RPC shutdown 完成、cleanupFailures 为空，native sentinel 没有调用。0500 只读核对用真实 C-Two tiny ping peer，不把 SQLite 访问混成传输结论；实际 RPC 到达、其余目录快照和权限 0500 不变，peer 请求停止并 wait 退出 0，RPC 清场完成。实际 state/ipc 链接经 CLI 拒绝的 code/message/path 与 preflight 结构错误相等。
 
 Host 从固定源码独立重建 13 份目标变异并运行原目标测试：公开 realpath、两处所有者 chmod/mkdir、BoardError 保留、内部链接/..、结构 path、测试环境耦合，以及 3-A 的三种实际 RPC 目录传递。每份恰好一项 assertion failure、无 errors，命中相应路径、权限、错误对象或 PRIVATE_STATE_REQUIRED 断言，不以沙箱或任意导入/超时算 red；3-A 的三个目标这次仍经过真实私有 RPC。13 份命令墙钟为 0.315–0.705 秒。Host 本地结果分类器最初对五种消息预期过窄，汇总退出 1；逐个读取未改日志确认目标断言后补充准确消息标记，不重跑测试、不改源或掩盖首次汇总。初汇总 `path-state-host-target-proofs.json` 与复核 `path-state-host-target-proofs-reviewed.json` 均保留，各 red 日志不覆写。
 
@@ -106,7 +106,7 @@ Host 没有修改微任务代码或测试，只整合固定补丁及在本计划
 
 3-B 已整合 `8183fd05e0536f14446b5ca3f621f42fbfd6605e`，黑板整合 `int-cab5da29-2f54-45f8-acfd-86ea7b5a6a39` verified，原 run accepted/completed revision 10。其受管检出清理计划 `cln-f40af380-421e-4051-b21e-3471783333d6` 已 apply，removed=true；Worker 报告的 `/tmp/c073-b-cIzzzx` 尚保留，留存证据后由 Host 按确切根回收。两份修复成果保留，新 3-C 在 3-B 内部验收之后串行启动，没有同接缝的并行写入。
 
-开发者新要求抵达时，绑定 `8183fd05` 的默认并行全检已经启动，随后主动中断，命令会话退出 130，不是通过或完整结果。保留原启动/进程/输出及 `public-path-final-check-interrupted.json`；中断时检查器自己的 teardown 也被打断，Host 只对创建时绑定的该检查私有根重新调用现有 teardown_private_root，合作收尾与观测均完成、根已删除，没有信号/扫描清理日常服务。该检查不得当作最终完整检查证据，最终一次移到 3-C 整合后的源码上。
+开发者新要求抵达时，绑定 `8183fd05` 的默认并行全检已经启动，随后主动中断，命令会话退出 130，不是通过或完整结果。保留原启动/进程/输出及 `public-path-final-check-interrupted.json`；中断时检查器自己的 teardown 也被打断，Host 只对创建时绑定的该检查私有根重新调用现有 teardown_private_root，合作清场与观测均完成、根已删除，没有信号/扫描清理日常服务。该检查不得当作最终完整检查证据，最终一次移到 3-C 整合后的源码上。
 
 3-C 用一个串行微任务处理同一状态接缝。选择 `transport.get_state_dir` 作为唯一公开可选目录解析函数；CLI、BoardClient（保留既有调用时选择和注入 call 的边界）、call_service、call_board、ensure_service、request_stop 先解析，之后传真实 Path。公开入口相互复用时调用必要的必填内部 helper，避免重复选默认、重复读取环境或重复解析，不增加兼容包装。内部 _request/_healthy/_attach_read_only/preflight、rpc_config 三个 configure、C-Two endpoint/channel、roles/live 和 runtime/live 的参数一律必填，不读环境、不接受 None、不重做已成立的目录不变量。删除 rpc_config.resolve_state_dir 和 PRIVATE_STATE_REQUIRED 运行时规则；private_dirs.context_root 的同名内部兜底也纳入审查范围，不能换名字保留另一份冗余规则。
 
@@ -354,7 +354,7 @@ Host 在已登记 Worker 根 `/tmp/c073-c-H6SbNM` 做只读进程/持锁观测�
 
 唯一可写：src/hey_my_buddy/buddy/harnesses/c_two_live.py、src/hey_my_buddy/buddy/runtime/supervisor.py、src/hey_my_buddy/protocol/transport.py；tests/python/buddy/harnesses/test_c_two_live.py、tests/python/protocol/test_state_boundaries.py、tests/python/protocol/test_rpc_config.py、tests/python/blackboard/service/test_daemon.py；docs/acceptance/c-two/public-state-plan.md。本轮记录追加到本文件，不新建验收文件，不改其他历史事实。旧ID全量3519基线仅collect；新增/消失/改名逐条列，未变集合相等。Worker与Host仅跑这四项受影响测试及必要旧启动方/清点相关选择，文件分别私有解释器；Host独立固定补丁、实际focused、点变异，范围缺陷回当前窄run continue。
 
-Worker开始时建短任务专用系统临时根并记录确切路径，TMPDIR/BUDDY_CHECKS_TMPDIR、私有HOME/state/runtime、uv环境/cache/比较副本与日志全在根，Worker不删除任何文件目录，框架自己正常收尾例外；共享stash/分支/标签不使用或改动，改动留工作区由黑板封存。只跑受影响测试，不跑完整检查/前端/模型/账号发现；受限真实绑定不反复，由Host固定环境补核。清除继承BUDDY_/ANTHROPIC_/C2_及虚拟环境身份，使用现成fixture和公开锁定依赖；不安装升级重启停止替换日常服务Worker，不碰日常配置凭据或公共命名空间，Too many open files立即停下报告。测试服务行为只在自有私有服务上验证，权限链接目标均为自建，未知停止不说成已停止。路径写~或占位符、清理只由Host验收后按确切根；根外既有审计文件仍不动。修完提交已有最终记录后停等Claude Code Host验收，不开始后续。
+Worker开始时建短任务专用系统临时根并记录确切路径，TMPDIR/BUDDY_CHECKS_TMPDIR、私有HOME/state/runtime、uv环境/cache/比较副本与日志全在根，Worker不删除任何文件目录，框架自己正常清场例外；共享stash/分支/标签不使用或改动，改动留工作区由黑板封存。只跑受影响测试，不跑完整检查/前端/模型/账号发现；受限真实绑定不反复，由Host固定环境补核。清除继承BUDDY_/ANTHROPIC_/C2_及虚拟环境身份，使用现成fixture和公开锁定依赖；不安装升级重启停止替换日常服务Worker，不碰日常配置凭据或公共命名空间，Too many open files立即停下报告。测试服务行为只在自有私有服务上验证，权限链接目标均为自建，未知停止不说成已停止。路径写~或占位符、清理只由Host验收后按确切根；根外既有审计文件仍不动。修完提交已有最终记录后停等Claude Code Host验收，不开始后续。
 
 
 ## T3 本轮范围内返修交付与受限验证（待 Host 复核）
@@ -417,7 +417,7 @@ live-offline 为 WireFrame/EndpointAdmission/EndpointObservation/EndpointLifecyc
 
 一次复用现有 checks.observed_processes/held_locks 的只读根观测 exit1/1.014秒：`ps process enumeration failed; residue status is unknown`，daemon/supervisor heldLocks均空。没有为失败另试 ps、清扫公共端点、调用 stop 或删除根；不能写成根无残留进程。Host仍需对该精确根独立观察。附带只读定位曾把fixture路径误写为protocol/fixtures/ctwo_live_peer.py，rg报告不存在；随后按实际 test_c_two_live.FIXTURE_PATH 只读找到 buddy/harnesses/fixtures/c_two_live_peer.py，无代码影响。汇总助手初版按逐行 `... ok` 解析被输出换行触发 IndexError（非测试失败）；改用冻结ID集合与完整argv选择相交并对照testsRun计数，复算成功，不重写测试日志或初次失败结果。
 
-Worker没有删除任何文件目录；现有 TemporaryDirectory/BoardTestCase 的正常框架收尾照旧，未额外屏蔽收尾错误。原始root保留；未访问旧根外审计文件或其他会话材料，除明确允许的材料目录只读核对，没有根外写入、用户数据访问、日常服务/Worker操作或Too many open files。未使用stash、创建/切换/移动/删除refs或自行commit；工作区改动留黑板封存。七份代码/测试在fixed验证后byte/hash仍一致，本记录只追加，所有旧事实前缀保持原样。
+Worker没有删除任何文件目录；现有 TemporaryDirectory/BoardTestCase 的正常框架清场照旧，未额外屏蔽清场错误。原始root保留；未访问旧根外审计文件或其他会话材料，除明确允许的材料目录只读核对，没有根外写入、用户数据访问、日常服务/Worker操作或Too many open files。未使用stash、创建/切换/移动/删除refs或自行commit；工作区改动留黑板封存。七份代码/测试在fixed验证后byte/hash仍一致，本记录只追加，所有旧事实前缀保持原样。
 
 交付停在本轮授权复核边界：需要Host封存固定八路径diff后在允许真实IPC的私有环境补核受影响四文件（含失败目标与28个未运行ID）、独立点变异及精确根残留观察，再决定验收/回收；完整检查由Host合入后运行。范围内代码/测试缺陷回本窄run continue，微小措辞由Host修改登记。本轮不称整批已验收，不开始下一批。
 

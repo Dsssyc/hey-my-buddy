@@ -14,7 +14,7 @@
 | `native_run._TurnCollector.buffer` / `invalid-protocol`，初始化暂存超过 128 帧 | I | 保留别的进程输入的数量上限，与事件是否读懂无关。 | N `test_initialization_and_permission_request_bounds_still_refuse` |
 | `native_run._TurnCollector.on_request` / `native-request-limit`，权限请求超过 32 条 | I | 保留别的进程输入的数量上限；既有拒绝回执继续关联其原生 request ID。 | N `test_initialization_and_permission_request_bounds_still_refuse`、`test_a_denied_interaction_reaches_the_role_before_further_waiting` |
 | `native_run._check_terminal` / `native-turn-failed`，明确错误标志或错误 subtype | I | 原生明确的错误仍然失败，额度拒绝仍先归类；归属、初始化和背景任务检查保留。 | N `test_explicit_native_errors_remain_failures`、`test_a_native_failure_keeps_the_observed_stream_end`、`test_wrong_session_and_duplicate_results_are_rejected`、`test_background_work_must_settle_before_the_result_is_usable` |
-| `native_run._check_terminal`，既未证实 success 且非错误，也未识别真实失败 | F | 收尾接入共用 unknown，原因码为 `native-terminal-unread`；不生成完成证据、交付事实或 settled 成功通知。 | N `test_terminal_checks_separate_success_errors_and_unread_shapes`、`test_unread_terminal_ends_unknown_without_completed_delivery`、`test_unread_terminal_still_requires_confirmed_native_stop` |
+| `native_run._check_terminal`，既未证实 success 且非错误，也未识别真实失败 | F | 最后接入共用 unknown，原因码为 `native-terminal-unread`；不生成完成证据、交付事实或 settled 成功通知。 | N `test_terminal_checks_separate_success_errors_and_unread_shapes`、`test_unread_terminal_ends_unknown_without_completed_delivery`、`test_unread_terminal_still_requires_confirmed_native_stop` |
 | `native_run.run_discovery` / `<dynamic>`，启动异常附停止事实再抛出 | I | 保留；包装本身不增加资格检查，不吞掉异常，只携带已持有进程的真实停止事实；未知绝不表示已停。 | N `test_discovery_failures_carry_the_actual_native_stop_fact`、`test_discovery_refuses_an_unusable_cli` |
 | `native_run.run_discovery` / `<dynamic>`，初始化及目录异常附停止事实再抛出 | I | 未读懂的形状已在下层转换为事实并正常返回；真实 RPC 失败和列表超限仍抛出并附实际停止事实；即使目录未知，停止未确认仍拒绝。 | N `test_discovery_failures_carry_the_actual_native_stop_fact`、`test_oversized_catalog_still_refuses_with_confirmed_stop`、`test_discovery_metadata_error_with_an_unknown_stop_reports_false` |
 | `protocol.Connection._deliver` / `invalid-protocol`，type 不是字符串 | F | 删除形状拒绝；有界帧继续送给既有 collector，记录未读 type 的形状、帧字节数和 SHA-256，不保存任意 native 文本。事实状态为 incomplete。 | P `test_frame_without_a_type_continues_with_bounded_shape_facts`；N `test_untyped_event_continues_and_reaches_role_and_retained_facts` |
@@ -24,7 +24,7 @@
 
 ## 事实出口和边界
 
-回合沿用 `RunResult.evidence_refs` 中的 `native-observations`，保留 protocol 的 incomplete 状态、未读字段计数、形状样本、样本截断事实，以及 catalogStatus、catalogWarnings 和 configurationStatus；这些字段不生成 CompletionEvidence、checked 配置或停止事实。收尾将两个已有协议计数接到共用 unknownEvents，observer 同样只带分类计数，删除携带样本的 protocolObservations 快照。单帧仍先经过 8 MiB 严格 JSON 边界，最多留 16 个脱敏样本，其他帧只增加计数；sample 不保存未知 payload、字段内容、账户或原生错误文本。初始化目录沿用 warnings 出口，保留最多 14 个同样脱敏的样本，包括未读控制答复的关联 ID；运行结果中的样本及含样本的 catalogWarnings 只保存在 native-observations 文件，不投影到三种角色结果。
+回合沿用 `RunResult.evidence_refs` 中的 `native-observations`，保留 protocol 的 incomplete 状态、未读字段计数、形状样本、样本截断事实，以及 catalogStatus、catalogWarnings 和 configurationStatus；这些字段不生成 CompletionEvidence、checked 配置或停止事实。最后将两个已有协议计数接到共用 unknownEvents，observer 同样只带分类计数，删除携带样本的 protocolObservations 快照。单帧仍先经过 8 MiB 严格 JSON 边界，最多留 16 个脱敏样本，其他帧只增加计数；sample 不保存未知 payload、字段内容、账户或原生错误文本。初始化目录沿用 warnings 出口，保留最多 14 个同样脱敏的样本，包括未读控制答复的关联 ID；运行结果中的样本及含样本的 catalogWarnings 只保存在 native-observations 文件，不投影到三种角色结果。
 
 被取代的缺失 type 拒绝断言已经替换；目录资格断言现区分读取 unknown 与读懂后确实缺失，后者保留能力拒绝。发现测试中的 invalid-catalog 失败样本改用真实原生 initialize error，停止未知测试则检查 native-shutdown-failed。`_interrupt` 只在原生答复读懂后确认 acknowledged；确认停止依旧独立。R 的夹具给控制器一个动态解析到当前检出 src 的绝对 PYTHONPATH，因为控制器切到私有检出后，相对 src 会误读冻结解释器安装的旧源码；这一修正不改变产品启动环境。
 
@@ -32,7 +32,7 @@
 
 14 个完整条目均找到了；找不到的是 `_check_catalog` 原复合条件中“供应方必须为 anthropic”的子条件，当前源码已随供应方限制移除而删除。本批未恢复它，第三方供应方的现有回归继续保留。
 
-上一片留给 Host 的共享终态表示已在本轮输入中提供；本轮完成 `_check_terminal` 的拆分，见末尾“收尾”。角色层只从 ok 组装完成回合，Claude 的导入 provenance 继续要求 success 和 resultIsError=False，未知终态不再使用真实失败码。
+上一片留给 Host 的共享终态表示已在本轮输入中提供；本轮完成 `_check_terminal` 的拆分，见末尾“最后改动”。角色层只从 ok 组装完成回合，Claude 的导入 provenance 继续要求 success 和 resultIsError=False，未知终态不再使用真实失败码。
 
 上一片指出的目录聚合覆盖 unknown 问题，Host 已说明在本轮输入中修复；本轮没有修改范围外的聚合代码，也没有重新运行其测试。
 
@@ -59,7 +59,7 @@ env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME \
 
 打回 1 按 ADR-027 第 5 条恢复读懂目录的能力检查，替换上一候选中“目录确实缺失仍继续”的三处断言，并增加“有模型而没有 effort”在 user 消息之前拒绝的直接运行回归。未知目录的继续与事实、已列出配置的 checked 回归继续保留。本轮只运行 N 全文件，69 条测试通过，退出码 0，用时 11.871 秒：它使用私有假 Claude 子进程和管道；RoleSurfaceTests 的 endpoint 用于内存中的 publish/observe，没有调用 start、注册服务器或分配共享内存，不启动 hey-my-buddy 服务或 Worker。R 修改后的源码通过 compile 语法检查，未执行其控制器测试。
 
-上一轮需要 Host 跑 `test_claude.ClaudeAdapterTests.test_model_and_effort_absence_in_readable_catalog_refuses_before_model_start`，并建议按文件独立进程重跑 R 全文件，它通过角色控制器启动 C-Two 服务与共享内存，Worker 未执行；`test_claude_worker` 的 daemon/Worker 测试也没有再次执行。该轮尚未处理的终态与事实出口现由末尾“收尾”更新。
+上一轮需要 Host 跑 `test_claude.ClaudeAdapterTests.test_model_and_effort_absence_in_readable_catalog_refuses_before_model_start`，并建议按文件独立进程重跑 R 全文件，它通过角色控制器启动 C-Two 服务与共享内存，Worker 未执行；`test_claude_worker` 的 daemon/Worker 测试也没有再次执行。该轮尚未处理的终态与事实出口现由末尾“最后改动”更新。
 
 ## Host 的真实 Claude Code 无模型读取核对
 
@@ -90,11 +90,11 @@ PY
 
 私有探针目录留给 Host 查 stderr；若异常的 discovery_shutdown_confirmed 不是 True，继续保留目录和停止证据，不能按“读取未知”自动删除。上述方法验证的是初始化读取，未知形状的继续及脱敏已由可重复的管道/夹具测试验证，真实模型回合仍由 Host 单独验收。
 
-## 收尾
+## 最后改动
 
 本轮输入为 `98cb1536`。`Connection.observations()` 的 unknownEvents 和 unreadResponses 分别映射为共用 `NativeEvidence.unknown_events` 的 `event-type-unread` 与 `control-response-unread`，只投影非零分类及其总和；分类是固定短名字，不来自原生载荷。本次运行实际读取的 catalogStatus 为 unknown 时，unconfirmed 只加入 `model-catalog`，不把目录成员检查当作设置生效的回读，也不新增其他未证实名字。无对应事实时共用角色投影仍省略空项。Claude 没有自己的 `native_evidence(result)` 函数，因此没有重复键需要从该函数删除；原有 observer 的 protocolObservations 样本快照被删除，改用相同的分类计数，样本、关联 ID、目录 warnings 与配置细节仍保存在原来的 native-observations 文件，三个角色结果只带共用两项。
 
-`_check_terminal` 保留初始化、会话归属、背景任务与额度的既有检查，明确 `is_error=True`、`error` 或 `error_` subtype 继续使用真实失败 `native-turn-failed`，结构化额度拒绝继续使用 `quota-rejected`。只有 subtype 为 success 且 is_error 严格为 False 才确认成功；其他终态返回未证实，运行以 `unknown` 和本模块原因码 `native-terminal-unread` 结束，不制造原生失败包，不生成 CompletionEvidence 或 native-turn-facts，不发送 settled 成功通知，也不确认 StructuredOutput 交付工具。原生已给出的结构化值仍可作为 schema_status=unknown 的事实保留，角色层不采用它为答案或 Worker 完成交付。未知结束同样必须经过现有的停止确认；停止未确认或退出码非零时沿用 `native-shutdown-failed`。导入来源的 success 与 resultIsError=False 要求未改。真实失败仍在抛出后沿用原有结果组装路径，未借收尾改变失败回合的值处理。
+`_check_terminal` 保留初始化、会话归属、背景任务与额度的既有检查，明确 `is_error=True`、`error` 或 `error_` subtype 继续使用真实失败 `native-turn-failed`，结构化额度拒绝继续使用 `quota-rejected`。只有 subtype 为 success 且 is_error 严格为 False 才确认成功；其他终态返回未证实，运行以 `unknown` 和本模块原因码 `native-terminal-unread` 结束，不制造原生失败包，不生成 CompletionEvidence 或 native-turn-facts，不发送 settled 成功通知，也不确认 StructuredOutput 交付工具。原生已给出的结构化值仍可作为 schema_status=unknown 的事实保留，角色层不采用它为答案或 Worker 完成交付。未知结束同样必须经过现有的停止确认；停止未确认或退出码非零时沿用 `native-shutdown-failed`。导入来源的 success 与 resultIsError=False 要求未改。真实失败仍在抛出后沿用原有结果组装路径，未借这次修改改变失败回合的值处理。
 
 删除 `test_unknown_terminal_remains_refused_pending_shared_contract` 的未完成处置断言，替换为未知字段形状、明确错误、成功、停止未确认及来源导入检查。新增组合夹具同时产生两个未知分类、未知目录和未知终态，实际 read/write 运行经共用结果编码与解码后验证快速、审阅及 Worker 投影的唯一位置、分类总数、未证实项和样本不进入摘要；快速结果只验证共用投影，Claude 仍声明不支持原生 no-tool 运行，没有放松这项能力拒绝。未知终态的角色检查验证没有 rawAnswer、没有 Worker 交付调用或输出文件，仍保留模型启动、最后消息、流结束与停止事实。首轮共用出口检查有一条旧 Mock 夹具没有 observations 返回值，错误栈定位后只补齐该夹具，未增加运行时回退。
 

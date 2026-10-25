@@ -14,7 +14,7 @@
 
 ## 环境与依赖
 
-短任务根为 `/tmp/b2b-iptu2A`（系统解析为 `/private/tmp/b2b-iptu2A`）。TMPDIR 与 BUDDY_CHECKS_TMPDIR、uv 环境/cache、wheel、比较与变异副本均在此根；没有手工删除。测试框架按原规则自行收尾私有测试目录。安装只使用该根的 uv 环境，未升级日常 runtime。
+短任务根为 `/tmp/b2b-iptu2A`（系统解析为 `/private/tmp/b2b-iptu2A`）。TMPDIR 与 BUDDY_CHECKS_TMPDIR、uv 环境/cache、wheel、比较与变异副本均在此根；没有手工删除。测试框架按原规则自行清场私有测试目录。安装只使用该根的 uv 环境，未升级日常 runtime。
 
 复用 `checks.child_environment` 的逐解释器私有 state/runtime/tmp 规则，不调用完整检查运行器。执行包装器额外固定私有 HOME/XDG/SDK，并在任何原生 candidate_snapshot 之前记录拒绝；测试 support 为每个 daemon/CLI 再固定其自身的 HOME 与 SDK 路径。原生发现使用系统 passwd HOME 的产品行为未改。
 

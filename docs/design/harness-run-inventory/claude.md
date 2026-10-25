@@ -118,7 +118,7 @@ runner 内部的"划定用户消息边界 → 发送 user 帧 → 重放缓冲�
 
 控制器子进程的编排(日志、`owned_popen`、`ProcessHandle`、deadline)在两个实际入口已经同构(第 9 节第一条,`src/buddy/adapters/claude.py:122`-133;`src/buddy/adapters/read_only.py:144`-152),可以直接成为每个 harness 一个通用运行模块的骨架,差异只剩控制文件路径、cwd 与环境开关。
 
-runner 内部对原生 CLI 的启动与停止(版本探测、settings 写入、owned_popen、Connection、权限拒绝回调、finally 收尾)是三个分支共用的单份代码(`src/buddy/adapters/claude_runner.py:259`-313, 460-494),说明"harness 运行一次"的底层已经统一,分叉只发生在输入与结果处理,这层不必再抽。
+runner 内部对原生 CLI 的启动与停止(版本探测、settings 写入、owned_popen、Connection、权限拒绝回调、finally 退出处理)是三个分支共用的单份代码(`src/buddy/adapters/claude_runner.py:259`-313, 460-494),说明"harness 运行一次"的底层已经统一,分叉只发生在输入与结果处理,这层不必再抽。
 
 用户消息边界、结果等待与流排空在 Worker 与审阅两分支重复(第 9 节,`src/buddy/adapters/claude_runner.py:352`-383 与 175-198),可以合并为一个"送输入、收结果"原语;两处差异只有回调查活动的方式和审阅的预算检查(`src/buddy/adapters/claude_runner.py:181`-189)。
 

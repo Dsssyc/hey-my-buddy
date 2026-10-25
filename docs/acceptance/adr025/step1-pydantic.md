@@ -36,7 +36,7 @@ Buddy 实现微任务 `2d76ac80-d9a1-4f0a-a90d-a7cd483377de` 从 `45d6d7e` 的�
 
 重新加载 `0c8822b` 同代码的改动前输入：2532 个唯一 Python 编号、166 个模块、无 loader error；同时实读原始 2322 项基线清单，确认它完整包含于该输入。当前为 2497 个唯一编号、166 个模块，原 2322 项全部保留。变化是 36 项删除（21 项未使用角色观察/服务测试，15 项 legacy/Catalog 专属测试）、2 项迁移或改名、1 项新增逐层 wire 防护；对应全部 39 行变化见[测试对照表](step1-pydantic-test-map.tsv)。其中拒绝外来 usage 包的检查迁移出 LegacyMappingTests，保持断言；Protocol 用例随 discover 延后改名。
 
-第一次完整检查输入为 fce5469，`uv run --frozen python -m hey_my_buddy.cli.checks --jobs 2` 退出 0，Python 2497（跳过 1）/166 模块、Node 110。countsByType 修正后 61 项聚焦检查退出 0；随后对与 `9382c44` 源码/测试字节相同的输入再次运行完整命令，退出 0，同为 2497（跳过 1）/166/110。两个检查根与聚焦根均由运行器正常收尾，Host 只读确认完整检查根不再存在，没有手动清理。实现方报告的 10 个基线环境性失败没有在这两次标准运行器完整检查中出现，不将其解释成源码修复。控制台前端代码没有变化，本轮没有重复前端检查或安装。
+第一次完整检查输入为 fce5469，`uv run --frozen python -m hey_my_buddy.cli.checks --jobs 2` 退出 0，Python 2497（跳过 1）/166 模块、Node 110。countsByType 修正后 61 项聚焦检查退出 0；随后对与 `9382c44` 源码/测试字节相同的输入再次运行完整命令，退出 0，同为 2497（跳过 1）/166/110。两个检查根与聚焦根均由运行器正常清场，Host 只读确认完整检查根不再存在，没有手动清理。实现方报告的 10 个基线环境性失败没有在这两次标准运行器完整检查中出现，不将其解释成源码修复。控制台前端代码没有变化，本轮没有重复前端检查或安装。
 
 Host 保存旧实现的五类请求/结果/实时帧，并核对新 codec 的编码字节往返相等。311 个删键/键名结构变体与旧实现行为全部一致，其中旧实现接受的 2 个 NativeIdentity 合法子集继续接受。1764 个标量/容器变体中有 4 个明确类型收紧：旧 NetworkPolicy.from_payload 会把 allowedDomains 的空字符串、单字符字符串或空对象经 tuple(...) 隐式转成序列，新严格模型仅接受 JSON 数组/null；这些不符合声明形状的值现在被拒绝，其余 1760 个变体一致。该差异已显式记录并加断言，未宣称所有历史宽松输入完全等价。共享严格解码的重复键、NaN、Infinity 和 1e999 拒绝探针通过。
 
@@ -46,7 +46,7 @@ Host 保存旧实现的五类请求/结果/实时帧，并核对新 codec 的编
 
 当前生产路径仍走第一步合并后的旧适配器外层；RunRequest/RunResult 及 Live* 尚无生产构造/解码调用，角色层只引用类型/登记边界。34 个模型和各字段是保留给首次 ZCode 使用方的内部格式，ExistingLiveChannel 的后端也尚未进入生产调用；它们不能以测试引用作为生产使用证明。run_harness 同样暂未有生产调用，作为第二步明确的唯一调用点保留。已删除的 Catalog、legacy 转换与角色观察/服务没有留兼容入口。ZCode 真实运行走通后须逐字段、逐类报告未使用内容并删除；之后才并行接 Codex、Claude Code 与 DSH，每步继续报告，到第四步结束不得剩余无生产使用方内容。
 
-开发者本次转达的 ACP 客户端 71 项检查和已安装 DSH 无模型握手已通过，已据此对原 ACP 微任务和既有精确整合记录完成内部 acknowledged accepted，详见[ACP Host 收尾登记](dsh-acp-host-fixes-host.md)。公共接线仍等待第一步整步验收。当前提交后停下等 Claude Code Host 复核行数、测试编号、重复与依赖；通过前不开始第二步。
+开发者本次转达的 ACP 客户端 71 项检查和已安装 DSH 无模型握手已通过，已据此对原 ACP 微任务和既有精确整合记录完成内部 acknowledged accepted，详见[ACP Host 验收登记](dsh-acp-host-fixes-host.md)。公共接线仍等待第一步整步验收。当前提交后停下等 Claude Code Host 复核行数、测试编号、重复与依赖；通过前不开始第二步。
 
 
-收尾整合已登记 `int-4b4a1962-7523-49df-bc9f-8bc9d818bf05`，绑定固定 artifact 与目标提交 `72fcf1e`，明确列出 Host 修正的 run_contract.py、internal_models.py、test_run_contract.py 三条路径及四条 Host 文档。accepted 回执登记先拒收后的 Host 修正、红/绿及最终完整检查，并更正整合验证说明中的“21工具”笔误：实际为 canonical_json 与严格解码各一份实现。服务在内部 acknowledged accepted 后自动回收该受管实现 worktree；Host 后续读取 cleanup 记录确认 state=applied、removed=true，固定产物/引用/patch 保留，未再次删除。该内部收尾不代替第一步外部验收。
+最后阶段的整合已登记 `int-4b4a1962-7523-49df-bc9f-8bc9d818bf05`，绑定固定 artifact 与目标提交 `72fcf1e`，明确列出 Host 修正的 run_contract.py、internal_models.py、test_run_contract.py 三条路径及四条 Host 文档。accepted 回执登记先拒收后的 Host 修正、红/绿及最终完整检查，并更正整合验证说明中的“21工具”笔误：实际为 canonical_json 与严格解码各一份实现。服务在内部 acknowledged accepted 后自动回收该受管实现 worktree；Host 后续读取 cleanup 记录确认 state=applied、removed=true，固定产物/引用/patch 保留，未再次删除。该内部完成不代替第一步外部验收。

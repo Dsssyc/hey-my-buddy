@@ -32,7 +32,7 @@
 
 ## 清理与偏差
 
-任务根 `<task-root> = /private/tmp/a253b1-32983fq5`（Host 创建并登记）；所有命令的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`，一次性材料（编号清单、收集与故障注入脚本、变异副本、运行日志）在 `<task-root>/m/`，未手动删除任何对象；普通 fixture 与检查运行器自动收尾照常。未发现其他会话对象。偏差：无；`uv run` 在检出内创建的 `.venv` 为被忽略的标准工具产物，不属交付。固定交付后停止，等待 Host 验收。
+任务根 `<task-root> = /private/tmp/a253b1-32983fq5`（Host 创建并登记）；所有命令的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`，一次性材料（编号清单、收集与故障注入脚本、变异副本、运行日志）在 `<task-root>/m/`，未手动删除任何对象；普通 fixture 与检查运行器自动清场照常。未发现其他会话对象。偏差：无；`uv run` 在检出内创建的 `.venv` 为被忽略的标准工具产物，不属交付。固定交付后停止，等待 Host 验收。
 
 ## 第二轮：Host 拒绝 `106bb6e` 后的整改（同 run 继续）
 

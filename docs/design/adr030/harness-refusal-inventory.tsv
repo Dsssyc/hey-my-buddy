@@ -164,7 +164,7 @@ src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1011	run	INVALID_ARGUMENT	C
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1122	_take_feedback	INVALID_ARGUMENT	C	keep	角色观察器必须返回一个 RunFeedback 值。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1125	_take_feedback	INVALID_ARGUMENT	C	keep	格式纠正反馈只能在原生回合已结算时提出。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1127	_take_feedback	INVALID_ARGUMENT	C	keep	受治理 Worker 回合不接受调用方的格式纠正反馈。	
-src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1130	_take_feedback		H	keep	角色观察器确实要求停止，控制流转入取消与收尾。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1130	_take_feedback		H	keep	角色观察器确实要求停止，控制流转入取消与有序收尾。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1143	_worker_turn	wrong-native-turn	A	keep	Worker 的原生 turn/start 必须给出非空回合标识才能绑定证据。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1183	_worker_turn	native-turn-failed	A	keep	Worker 回合成功必须有已观察到的开始证据及原生 completed 状态。	
 src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1226	_structured_rounds	invalid-native-result	A	keep	无工具的 turn/start 必须给出非空原生回合标识。	

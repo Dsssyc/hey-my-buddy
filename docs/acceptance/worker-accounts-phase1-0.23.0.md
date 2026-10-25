@@ -19,7 +19,7 @@
 
 ## 完整检查与产物
 
-运行时代码冻结于 `a63d6a76fd1e2cab4d6b2c192e37909b83015ff7`。收尾先运行 `npm --prefix apps/console ci`，再运行 `uv run --frozen python -m buddy.checks`，PATH 前置 Node 24.21.0；完整检查退出码 0。Python 1,658 项通过，耗时 1,329.372 秒；Node 161 项、14 个 suite 全部通过，耗时 28.667 秒，无失败、取消、跳过或 todo。私有根 `/private/tmp/buddy-checks-7mklexno` 经检查器停止/存活核对后已移除，Host 另核对其不存在；原始日志 `tmp/worker-accounts/full-checks-verified.log`。
+运行时代码冻结于 `a63d6a76fd1e2cab4d6b2c192e37909b83015ff7`。最终验证阶段先运行 `npm --prefix apps/console ci`，再运行 `uv run --frozen python -m buddy.checks`，PATH 前置 Node 24.21.0；完整检查退出码 0。Python 1,658 项通过，耗时 1,329.372 秒；Node 161 项、14 个 suite 全部通过，耗时 28.667 秒，无失败、取消、跳过或 todo。私有根 `/private/tmp/buddy-checks-7mklexno` 经检查器停止/存活核对后已移除，Host 另核对其不存在；原始日志 `tmp/worker-accounts/full-checks-verified.log`。
 
 前端最终全量 50 个文件、596 项通过，TypeScript 与 Vite 构建通过；最后仅活动空态和契约旧断言修正，前端活动测试与 Python current-core 定点复核通过，随后重新准备依赖、构建并跑上述最终完整检查。Vite 保留单 bundle 超过 500 kB 的体积提示。本轮首次完整检查暴露了 `test_current_core` 的旧 `0.22.0` 字面断言，已同步至 `0.23.0`；审查修正期间的一次检查主动中断，退出码 130，其私有根 `/private/tmp/buddy-checks-h2seth4f` 也已核对移除。这两次不作为最终通过证据。
 

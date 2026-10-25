@@ -162,7 +162,7 @@ class LiveChannel(Protocol):
     def close(self, *, reason: str) -> None: ...
 ```
 
-`LiveCapabilities` 分别声明 `activity`、`inquiryDelivery: realtime/cooperative-checkpoint/unsupported`、`finishNotice`、`sessionContent`。Codex 与 Claude Code 当前只接活动，问询返回 unsupported；ZCode 保留 cooperative-checkpoint；DSH 在第四步前保留当前实时送达，ACP 后使用已核对的 cooperative-checkpoint。ADR-022 的提醒收尾和 ADR-024 的会话视图只预留消息种类与能力位，本任务不实现其业务、采集隐藏推理或扩大实时内容。
+`LiveCapabilities` 分别声明 `activity`、`inquiryDelivery: realtime/cooperative-checkpoint/unsupported`、`finishNotice`、`sessionContent`。Codex 与 Claude Code 当前只接活动，问询返回 unsupported；ZCode 保留 cooperative-checkpoint；DSH 在第四步前保留当前实时送达，ACP 后使用已核对的 cooperative-checkpoint。ADR-022 的提醒与有序收尾和 ADR-024 的会话视图只预留消息种类与能力位，本任务不实现其业务、采集隐藏推理或扩大实时内容。
 
 `LiveRequest` 为 `{formatVersion, identity, requestId, kind, payload}`，kind 为 inquiry/finish-notice；payload 的身份、问题/提醒字段使用闭集。`LiveReply` 为 `{identity, requestId, status, deliveryMode, nativeCorrelation, reasonCode}`，status 区分 queued/delivered/answered/unavailable/unsupported；queued 或插入缓冲不能升级成 delivered。`LiveSnapshot` 为 `{identity, sequence, activity, inquiries, events, unavailable, truncated}`，活动沿用现有闭集；会话事件仅承载上游已允许的事实类型。对同 requestId 同 payload 重放不重复送达，换 payload 为 conflict；传输认证材料由运行时的私有绑定持有，不进入模型或公共记录。
 
@@ -198,7 +198,7 @@ F-D2 在脚本、配置、私有任务和停止标准明确后直接运行，授
 | 最终值机制 | Worker 完成插件 + awaited flush；fast 末条 stream 文本 | Worker Python MCP 签收并关联 ACP root/end；fast 选择经核对的完成机制，若 MCP 是必需则作为最终值交付服务，不开放任务工具 |
 | 工具与权限 | Worker 默认原生工具；fast tools=[]；review unavailable | 工具范围用公开启动配置，权限回调只处理升级请求；未核对或清单外的限制如实未知；4-D 补命令写入验证，增加 review 资格须另有逐项确认 |
 | 模型/推理配置 | Worker 报 requested；fast 严格核对 prepareCall；有硬编码 Node 默认 | 统一冻结配置和会话回读，拒绝静默改用另一个 buddy；若改变既有配置失败语义且超出已批准差异，先停下说明 |
-| 问询 | 原生 agent.steer 可实时插入，reply 工具相关联 | ACP 已核对为 cooperative-checkpoint；按实际签收/未答问题收尾逐项记录，不能模拟另一条运行通道 |
+| 问询 | 原生 agent.steer 可实时插入，reply 工具相关联 | ACP 已核对为 cooperative-checkpoint；按实际签收/未答问题逐项结算并记录，不能模拟另一条运行通道 |
 | 会话私有存储 | attempt 私有 JSONL；Python 快速配置了 JSONL 但没有 Session | ACP 私有会话存储；需要证明配置覆盖确实生效；原生 user store 不能作为替代 |
 | 续接 | reconstructed-new-session，不 native resume | 依六问事实实现或记录 ACP load/resume 能力；原生续接成为新能力已在授权范围，仍要求私有状态、来源绑定与停止证据，不扩大历史/账户迁移 |
 | 取消与停止 | Node 对未知组观察异常可能当作 gone | Python 统一 conservative 双组观察；ACP cancel ack 只是中断事实；权限/未知 OS 错误均不报 stopped |
@@ -221,7 +221,7 @@ F-C1 已与 DSH 核对并行完成并经 Claude Code Host 验收，记录的是�
 
 服务先提交 question 的权威 message 行，释放事务后调用持有它的 Worker；Worker 转达本次控制器，签收/回答使用现有持久 journal 和相关原生事实，黑板保持幂等导入与第一份关联回答不覆盖的规则。调用失败显示不可达/不可用，保留原 deadline 与尚未完成的事实；observe 可返回持久的最后活动并注明 live 不可达。同步 observe 超时不能触发新模型 turn、改为直连或推断进程已停。
 
-活动通过 controller live snapshot/poll 进入 Worker，再走已有单调 progress 规则；可在控制器保留有界最新活动供恢复读取。最终 RunResult、回合文件、journal、回执、checkpoint 与停止证据继续落盘。第五步完成后删除活动 `activity.json` 的实时转报读写和两套问询 socket 实现、socketPath/Unix 路径预算、专用 token 文件的活通信用途；用于持久回执或旧验收事实的内容保留。提醒收尾/会话视图仅完成公共传输接口，不抢先做 ADR-022/024 的业务。
+活动通过 controller live snapshot/poll 进入 Worker，再走已有单调 progress 规则；可在控制器保留有界最新活动供恢复读取。最终 RunResult、回合文件、journal、回执、checkpoint 与停止证据继续落盘。第五步完成后删除活动 `activity.json` 的实时转报读写和两套问询 socket 实现、socketPath/Unix 路径预算、专用 token 文件的活通信用途；用于持久回执或旧验收事实的内容保留。提醒与有序收尾/会话视图仅完成公共传输接口，不抢先做 ADR-022/024 的业务。
 
 ## 8. 微任务、顺序与验收边界
 
@@ -237,7 +237,7 @@ F-C1 已与 DSH 核对并行完成并经 Claude Code Host 验收，记录的是�
 | 0-B1 源码与引用路径搬动 | 0-A 验收；独占整个实施 worktree | 按 TSV 用 `git mv` 搬 114 个源码/打包资产文件，补空源包目录、修改全库 import/启动/打包/检查/Vite/help 来源路径；测试文件暂留原位，仅改源码引用。只路径与配置定位，无函数/测试断言语义变化；现有测试完整检查通过后验收 |
 | 0-B2 测试目录搬动 | 0-B1 验收；继续独占同一实施 worktree | 按 TSV 用 `git mv` 搬 178 个测试/fixture 文件，补空发现目录，只改测试间 import、patch 与 fixture/源码定位；完成模块映射、集合对应及完整检查。0-B1/0-B2 一起审阅去掉映射后的 diff、资产摘要及保护文档摘要；保持文件整体 |
 | 0-C 私有旧布局安装升级 | 0-B2 验收；私有安装/运行时目录 | 使用 `2bdb497` 的固定旧布局 wheel/skill，在 `<upgrade-root>` 中运行旧安装 launcher，再用新 wheel/skill 执行现有 idle upgrade；旧包安装、活动指针、Python/源码/资源定位、备份和新 CLI 全链均有证据，覆盖升级失败回滚。fixture/检查可补到对应 install 测试，不能改升级行为来迁就测试 |
-| 0-D 编号对照与完整交付 | 0-C 验收；只补映射/记录 | 再列全部编号，按 TSV 模块前缀改名求双射，Node/Vitest 编号保持；入库模块改名表和脚本的集合/计数对应结果，例外逐条说明；原始编号留 `tmp/`，漏发现、无解释的额外用例、失败导入均阻塞。运行新完整检查、wheel/sdist/skill 与最小无模型启动，记录路径更新范围和私有根完全收尾 |
+| 0-D 编号对照与完整交付 | 0-C 验收；只补映射/记录 | 再列全部编号，按 TSV 模块前缀改名求双射，Node/Vitest 编号保持；入库模块改名表和脚本的集合/计数对应结果，例外逐条说明；原始编号留 `tmp/`，漏发现、无解释的额外用例、失败导入均阻塞。运行新完整检查、wheel/sdist/skill 与最小无模型启动，记录路径更新范围和私有根完全清场 |
 
 第零步不并行委派任何搬动或搬动中的修复；0-A 至 0-D 只有一个写入者。旧布局安装的构建输入使用单独固定 checkout/导出的材料，不能为测试改日常安装。新入口必须脱离源码目录仍可运行；合成 command 微任务通过同一黑板路径完成并保留回执，无须调用模型。验证“版本化旧 runtime 包仍保留、新活动指针可启动”与“构建 wheel 文件清单中不存在顶层 `buddy/` 兼容 namespace”是两项独立断言。后一项直接检查 wheel 的 ZIP 文件清单，不用 `import buddy`：`tests/python` 在 PYTHONPATH 上，其测试目录里的 `buddy` 包会令 import 成功。0-D 还列出三类跨边界 import：protocol 导入黑板/buddy 任一侧、buddy 导入黑板、黑板导入 buddy；保留文件/行号/目标模块和类别计数，只登记、不修。
 
@@ -334,7 +334,7 @@ Node 测试不按“删掉文件即删掉要求”处理；变化/删除的旧�
 
 初始修订后已并行开始第零步、F-D1 接 F-D2、F-C1；两项可行性核对现经 Host 验收，后续实施遵守新增的门槛与验证项。日常安装、升级和最终发布仍不在本宏任务授权内；不改用户配置、凭据或日常数据，不读取凭据文件内容。
 
-开发者于 2026-10-04 将后续微任务的清理规则改为“Worker 不删除”。每个任务描述必须指定一个开始时创建并登记确切路径的短系统临时目录；`TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向其中，Worker 的一次性材料全部放入，交付报告目录，Worker 不删除任何对象。验收后由本 Host 按该一个确切路径整体删除，不用通配符、不屏蔽报错，记录删除结果。检查运行器自己创建并收尾的根不在此列；测试夹具按其创建时取得的私有根正常收尾，不常驻清理台账。其他会话遗留对象一律不动，只在交付报告；同名、旧日期或无进程引用不能证明归属。违规只涉及本任务前缀或任务专用目录时，拒绝、披露并对原 run continue；可能涉及其他会话或日常数据时才暂停交开发者核对。
+开发者于 2026-10-04 将后续微任务的清理规则改为“Worker 不删除”。每个任务描述必须指定一个开始时创建并登记确切路径的短系统临时目录；`TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向其中，Worker 的一次性材料全部放入，交付报告目录，Worker 不删除任何对象。验收后由本 Host 按该一个确切路径整体删除，不用通配符、不屏蔽报错，记录删除结果。检查运行器自己创建并清场的根不在此列；测试夹具按其创建时取得的私有根正常清场，不常驻清理台账。其他会话遗留对象一律不动，只在交付报告；同名、旧日期或无进程引用不能证明归属。违规只涉及本任务前缀或任务专用目录时，拒绝、披露并对原 run continue；可能涉及其他会话或日常数据时才暂停交开发者核对。
 
 同日开发者明确 DSH“私有主目录”指 `DSH_HOME`：ACP 子进程沿用现有 `native_environment` 的环境保留规则，只强制私有 `DSH_HOME` 并保持现有路径校验；`HOME` 默认继承，调用方可为探针和测试显式指定私有 `HOME`。测试使用检查运行器的 `BUDDY_CHECKS_TMPDIR`，完成后不在检出留 run 目录与常驻台账；未确认子进程组停止时测试失败。本次 ACP 整改只做聚焦检查，不启动已安装 DSH 或模型，修完提交后停下，由 Claude Code Host 复核并做不调用模型的握手；公共接线仍等待第一步验收。
 
@@ -350,7 +350,7 @@ Node 测试不按“删掉文件即删掉要求”处理；变化/删除的旧�
 
 | 微任务 | 输入与唯一实施范围 | 独立验收与顺序 |
 | --- | --- | --- |
-| 2-P 格式保护与公共解码收尾 | `c48d31c`；公共控制器及三个严格结果读取调用处，格式与控制器的对应测试 | 证明解析前整帧上限及普通严格类型各有失败见证；去掉冗余 `decode` 参数；两个隔离变异被抓住。只跑受影响测试，先于 ZCode 代码接入整合 |
+| 2-P 格式保护与公共解码最后整理 | `c48d31c`；公共控制器及三个严格结果读取调用处，格式与控制器的对应测试 | 证明解析前整帧上限及普通严格类型各有失败见证；去掉冗余 `decode` 参数；两个隔离变异被抓住。只跑受影响测试，先于 ZCode 代码接入整合 |
 | 2-A Worker 角色与完成服务 | 2-P 整合后的固定提交；ZCode 的任务提示、完成服务及对应角色文件与测试 | 搬出任务书、六字段 outcome、协助、attention 和未回答问询的规则；原生 root、call、顺序与 HMAC 校验仍有逐项证据。先验收这份交付再开始 2-B |
 | 2-B 单一原生运行 | 2-A 整合提交；ZCode 驱动、原生协议、事实投影及对应测试 | 请求和结果真实穿过 `HarnessRun.run`；一次会话共用 create/resume、configure、subscribe/send、settlement、close 与停止收集。角色通过观察与本次服务提供不同结束要求；缺少公共接口时先提交缺口，由 Host 统一改动后同一 run 继续 |
 | 2-C 角色接线与删除旧入口 | 2-B 整合提交；公共角色调用点、注册表、ZCode 外层及调用测试，公共文件由 Host 统一整合 | Worker 与快速路由调用同一个运行模块；格式纠正、候选限制、六字段结果、检出及封存仍由角色负责；删除旧 ZCode structured 入口和模式控制文件分支，模型发现单独保持无 prompt |
@@ -360,7 +360,7 @@ Node 测试不按“删掉文件即删掉要求”处理；变化/删除的旧�
 
 ZCode 原生驱动只保留协议完整性、身份关联和工具/消息事实，角色持有未知事件、完成条件与重试决定；不因统一接口而放宽快速路由对未知事件的拒绝，也不把 Worker 当前可忽略的未知事件升级为失败。只读能力仍报告现有未实现结论，不在本步新增审阅资格。服务的 MCP 承载继续是现有会话内通道，问询继续经现有桥接并接入 `ExistingLiveChannel`，第五步才替换传输。
 
-每个微任务记录固定基线、允许写入的确切文件或目录、公共文件的整合归属，并通过路由选择 buddy。Worker 开始前使用 Host 已记录的短任务目录，`TMPDIR` 和 `BUDDY_CHECKS_TMPDIR` 指向其子目录；Worker 不手动删除材料，交付时报告路径。Host 验收后按这一个确切路径整体回收，检查运行器与普通测试 fixture 自己的生命周期收尾照常。只修记录的回合不重跑；已知且不改变验证结论的小型记录更正由 Host 直接改并登记。各微任务只做聚焦验证，一批整合后的完整检查可兼作本步完整检查。
+每个微任务记录固定基线、允许写入的确切文件或目录、公共文件的整合归属，并通过路由选择 buddy。Worker 开始前使用 Host 已记录的短任务目录，`TMPDIR` 和 `BUDDY_CHECKS_TMPDIR` 指向其子目录；Worker 不手动删除材料，交付时报告路径。Host 验收后按这一个确切路径整体回收，检查运行器与普通测试 fixture 自己的生命周期清场照常。只修记录的回合不重跑；已知且不改变验证结论的小型记录更正由 Host 直接改并登记。各微任务只做聚焦验证，一批整合后的完整检查可兼作本步完整检查。
 
 开发者明确授权清理的两份误发会话参数文件由 Host 核对为对应 run 的普通 JSON 后按确切路径删除，原始确认与删除凭据留在本检出的 `tmp/`；不读取它们引用的控制凭据文件，不扩大清理范围。
 
@@ -392,11 +392,11 @@ ZCode 原生驱动只保留协议完整性、身份关联和工具/消息事实�
 
 现有 blackboard/tasks/inquiry.py 的 bridge_request 机械移到 protocol/inquiry_transport.py，两侧共用同一份 socket client；ZCode 不再留第二份 bridge_ask 协议。保留原来的帧大小、id、超时、具体 reason/code 与 TERMINAL_BRIDGE_ERRORS 行为。黑板现有 message_post/message_update、等待结束条件与 store 事务不重写；新 ZCode 活运行通过角色及注册模块接缝取得 LiveChannel，泛用消费者不导入具体 harness。终态只读持久证据，Worker 转报继续按 attempt 绑定且只转发更新，不增加模型回合、不延长原生截止时间。
 
-聚焦验证贯穿真实 Python 桥、黑板问询函数和 Worker 转报函数，保留原测试并附变化编号与未变集合证明；用前后公开字段对照及迁移防护的少量故障注入验证答案来源、具体拒绝、身份与活动去重。微任务不跑完整检查、安装版 harness 或模型；整合后一次完整检查覆盖整步。Worker 只使用 Host 创建并记录的短任务根，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指其 t/，材料放 m/，不手动删除任何对象；普通 fixture 与检查运行器自己的收尾照常，Host 验收后按确切根回收。
+聚焦验证贯穿真实 Python 桥、黑板问询函数和 Worker 转报函数，保留原测试并附变化编号与未变集合证明；用前后公开字段对照及迁移防护的少量故障注入验证答案来源、具体拒绝、身份与活动去重。微任务不跑完整检查、安装版 harness 或模型；整合后一次完整检查覆盖整步。Worker 只使用 Host 创建并记录的短任务根，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指其 t/，材料放 m/，不手动删除任何对象；普通 fixture 与检查运行器自己的清场照常，Host 验收后按确切根回收。
 
 ### 2-D 的生产用途与删减边界
 
-2-C2 已整合为 `d4f3eaa`，一次真实 ZCode 无工具运行也已通过新格式（见第二步原生冒烟记录）。2-D 只核对和收紧本步新增内部格式，不再增加角色能力或另造消费点。逐字段、逐类区分：实际执行/判定读取；有非占位原生来源并经 `run_controller → runner.stdout → run_execution._artifacts → 黑板产物校验与列表` 对外交付的事实；仅测试、编解码自循环或恒定占位。第二类明确标为事实产物用途，不能写成已有业务判断；单凭 model_dump/to_payload 不算使用方。没有实际用途的字段和类删除，不为后续 harness、提醒收尾或会话内容预留。
+2-C2 已整合为 `d4f3eaa`，一次真实 ZCode 无工具运行也已通过新格式（见第二步原生冒烟记录）。2-D 只核对和收紧本步新增内部格式，不再增加角色能力或另造消费点。逐字段、逐类区分：实际执行/判定读取；有非占位原生来源并经 `run_controller → runner.stdout → run_execution._artifacts → 黑板产物校验与列表` 对外交付的事实；仅测试、编解码自循环或恒定占位。第二类明确标为事实产物用途，不能写成已有业务判断；单凭 model_dump/to_payload 不算使用方。没有实际用途的字段和类删除，不为后续 harness、提醒与有序收尾或会话内容预留。
 
 已由当前源码确定的删除候选是：未被运行模块读取的 network/frozen_account 请求值及相应类、预算里只有 timeout_seconds 之外的未消费项、续接请求四个未填关联字段、SessionService 除实际工具名以外的元数据；结果中的 quota/observed 恒定空值、model-start 事件序号、checked 值的空 native_identity、value.errors、拒绝事件的空 request_id/native_identity、unknown.truncated、策略 reported/limitations 与恒定未知 network、续接 checkpoint、恒定未知 controller 停止层与 interrupt.acknowledged、没有用途的 evidence retained。实现前按最终源再复核；实际已有非空来源或消费者的候选撤出并列明依据，不以一轮样本恰好为空作为删除理由。旧公开结果里的 observed/quota 等 None 键保持原行为，已有预算、账户环境、网络策略及证据验证不借格式删减改变。
 
@@ -420,7 +420,7 @@ DSH 沿用已接受的行为差异和核对限制：问询可能只在检查点�
 
 每条线收齐并整合自己的微任务后，Host 以默认并行数跑一次完整检查，不传 --jobs；确有降低的必要时先记明原因。已集成的其他线若被公共改动影响，运行其聚焦检查；失败按各线聚焦证据定位并对原 run continue，不由 Host 代改范围内的代码或测试。每条线完成后提交完整检查、最小原生冒烟次数和未使用字段/类清单，分别停等 Claude Code Host 验收，独立线可以继续。第二步留下的 18 个“有原生来源、无业务读取方”字段继续逐项跟踪，第四步结束时须有生产读取方或删除，不再仅以事实产物导出作为长期保留理由。第五步仍依赖所有 harness 抽取验收完成。
 
-第三、四步延续开发者授权的限流恢复：首次微任务提交不指定 buddy；供应方不可重试限流时，可以同一 run continue 指定已完成本步同类工作的 buddy 完整配置，登记原 buddy、替代 buddy 和路由决定编号。任务描述统一写明“不得在受管检出里新建或切换分支”。Worker 使用 Host 创建并即时登记的短任务根，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指向其 t/，一次性材料放 m/，交付报告根；Worker 不手动删除，普通测试 fixture 与检查运行器自行收尾照常。Host 验收后只按该确切根整体回收，不用通配符，也不动其他会话对象。准备微任务旧检出按开发者授权先 detach，再经 cleanup-plan/apply 成功回收后强制删除已补丁整合的分支，结果记入本轮整合登记。
+第三、四步延续开发者授权的限流恢复：首次微任务提交不指定 buddy；供应方不可重试限流时，可以同一 run continue 指定已完成本步同类工作的 buddy 完整配置，登记原 buddy、替代 buddy 和路由决定编号。任务描述统一写明“不得在受管检出里新建或切换分支”。Worker 使用 Host 创建并即时登记的短任务根，TMPDIR 与 BUDDY_CHECKS_TMPDIR 指向其 t/，一次性材料放 m/，交付报告根；Worker 不手动删除，普通测试 fixture 与检查运行器自行清场照常。Host 验收后只按该确切根整体回收，不用通配符，也不动其他会话对象。准备微任务旧检出按开发者授权先 detach，再经 cleanup-plan/apply 成功回收后强制删除已补丁整合的分支，结果记入本轮整合登记。
 
 三条线的首批微任务进一步按可独立验收的结果拆分：3-A1、3-B1、4-B1 分别交付直接接受 RunRequest、返回 RunResult、由模拟原生进程覆盖的分阶段原生主体及无输入发现；这些初版主体尚未注册，保留旧入口只到本线切换，不能当作整条线完成。微任务提交精确公共接口缺口，Host 统一补公共值、角色组装／观察／收集与注册。随后 3-A2、3-B2、4-B2 分别迁移本 harness 的完整角色测试与删除旧入口；3-C 独立核对 Claude StructuredOutput 修正，4-C 独立删除 DSH 项目 Node 集成及迁移其测试意图。每项都内部审查固定交付，任何范围内缺陷回到原 run；3-D／4-D 汇合本线的实际接线、原生冒烟、未消费内容清单与完整检查后才提交外部验收。这样原生协议抽取、共享角色接线、旧入口删除各有可检查成果，整条线终态没有兼容层。
 
@@ -438,13 +438,13 @@ DSH 沿用已接受的行为差异和核对限制：问询可能只在检查点�
 
 第四步接线取舍：DSH 本次保留原有 native_resume=false，支持重建新会话的继续；ACP 的 session/load 方法存在不等于真实回合续接已经验证，不为本次重构启用该可选新能力。带 reconstructed-new-session 的运行请求应建立新会话，native-session 明确拒绝。既有完成、检查点与问询使用从 ZCode 搬出的公共合作检查点桥，传入各 harness 的原生事件到元数据映射和原生错误构造，禁止为 DSH 复制队列、journal 或 socket 服务器。第五步再按已批准顺序把这一共同后端换成 C-Two。
 
-第四步收尾按可独立验收成果拆为 4-D1 与 4-D2：4-D1 只迁移两份黑板 Worker 流程测试及它们的旧 Node 夹具，保留真实 daemon/supervisor/Worker/签收/封存路径；4-D2 在 Host 提交共享格式精简后，只迁移四份 harness 原生测试中的旧字段断言，以仍被使用的工具事实、observer 和带摘要原始证据承接原保护。两项各自受管 worktree、首次走路由且不指定 buddy、唯一可写路径写入任务书。Host 负责公共格式与组装、跨目录适配、原生冒烟、分发验证和两项交付整合后的一次默认完整检查，完成第四步记录后停等外部验收。
+第四步最后一批按可独立验收成果拆为 4-D1 与 4-D2：4-D1 只迁移两份黑板 Worker 流程测试及它们的旧 Node 夹具，保留真实 daemon/supervisor/Worker/签收/封存路径；4-D2 在 Host 提交共享格式精简后，只迁移四份 harness 原生测试中的旧字段断言，以仍被使用的工具事实、observer 和带摘要原始证据承接原保护。两项各自受管 worktree、首次走路由且不指定 buddy、唯一可写路径写入任务书。Host 负责公共格式与组装、跨目录适配、原生冒烟、分发验证和两项交付整合后的一次默认完整检查，完成第四步记录后停等外部验收。
 
 第四步完整检查暴露的外围合成 fixture 继续按原测试意图迁移：4-E1 只改工作区/工作流/评估的合成回合与角色接缝测试，并复用一份明确的当前原生事实 fixture；不绕过生产 provenance 校验，不把合成数据称为原生验证。4-E2 只改 DSH 注册后共同实时通道的三份测试，保留绑定/答案/拒绝保护，明确检查点送达差异，不开始 C-Two 切换。两项互不写对方文件，Host 仅整合公共缺口与打包路径断言；各自聚焦、固定验收后再作默认完整检查，完成第四步才提交外部验收。
 
 ### 2026-10-07：第五步开头清理与验收要求
 
-第三、四步已由 Claude Code Host 验收，实施分支先合入 socu/buddy-core 再开始第五步。先整合清理批次，不为它单独停下：5-P1 合并公共回执核验及测试，证明完成身份、拒绝签名与问询身份三处变异被抓住；5-P2 抽实际重复的运行小段，按阶段拆 ZCode，保留厂商差异；5-P3 补 DSH 两项字面行名关闭、两层停止与 resumable、Claude 未启用 schema 交付的防护。三项固定同一输入基线和互不重叠的可写范围，公共值、角色与注册表归 Host；旧结构化启动/读取、可省略 stop 和无读取方的 BUDDY_PYTHON 由 Host 删除。微任务只跑聚焦检查，整批整合后的完整检查留到第五步收尾，用默认并行数一次执行；仅记录更正不重跑。
+第三、四步已由 Claude Code Host 验收，实施分支先合入 socu/buddy-core 再开始第五步。先整合清理批次，不为它单独停下：5-P1 合并公共回执核验及测试，证明完成身份、拒绝签名与问询身份三处变异被抓住；5-P2 抽实际重复的运行小段，按阶段拆 ZCode，保留厂商差异；5-P3 补 DSH 两项字面行名关闭、两层停止与 resumable、Claude 未启用 schema 交付的防护。三项固定同一输入基线和互不重叠的可写范围，公共值、角色与注册表归 Host；旧结构化启动/读取、可省略 stop 和无读取方的 BUDDY_PYTHON 由 Host 删除。微任务只跑聚焦检查，整批整合后的完整检查留到第五步末，用默认并行数一次执行；仅记录更正不重跑。
 
 第五步继续沿第七节与 5-A 至 5-D 的归属关系实施：一个 Worker 进程注册自己的端点，持有每个运行的控制器地址、完整身份和独立窄 token；黑板只持有 Worker 地址及另一份窄能力。正常关闭注销并关闭自身端点；异常退出仅在实际拥有的进程组确认消失、端点文件身份仍相同后清理该运行的确切文件，不扫描清理 /tmp/c_two_ipc 里的旧残留。设置必须在第一次连接或注册之前完成；服务重启后原 Worker 经实际认领身份 reconcile/renew 再登记，不以 PID、地址或端点失联推断停止。控制器请求由有界队列交给原生 owner loop，快照与活动保持现有限额、单调规则及真实未知值，持久结果、回合、journal 和停止证据继续保留。
 

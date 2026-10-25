@@ -62,7 +62,7 @@
 
 **T01：测试共用模块直接导入 `fcntl`，Windows 大量文件无法收集。** 位置：`tests/python/support.py:10,107-118`、`tests/python/test_locking.py:4`、`tests/python/cli/test_checks_cleanup.py:4`、`tests/python/cli/test_support_cleanup.py:4`、`tests/python/install/test_runtime.py:9`、`tests/python/buddy/harnesses/zcode/test_zcode_inquiry.py:14`；`tests/python/buddy/harnesses/dsh/acp/fake_agent.py:25` 还顶层导入 `pwd`。Linux：这些模块可用。Windows：`fcntl/pwd` 不存在，依赖 support 的测试在执行断言前就失败。产品 `src/hey_my_buddy/locking.py:1-37` 已用 portalocker，安装的 3.2.0 源码也支持只有 `fileno()` 的对象，不能把生产锁误报为仍直接依赖 fcntl。建议：测试共同锁契约走现有 locking/portalocker，共用假进程从显式测试环境取 home；仅检查 POSIX 互操作的测试限制在 POSIX，并保留 Windows 同契约验证，不能把整个服务测试目录跳过。代价：中；轻重：阻断检查。
 
-**T02：检查运行器的清理证据依赖 POSIX 命令，且路径/权限观察存在遗漏。** 位置：`src/hey_my_buddy/cli/checks.py:456-589,770-789`。Linux：需要 `ps`，打开文件观察依次用 `lsof` 和 `/proc`；`/proc/<pid>/fd` 读失败被逐项 `continue`，带空格的根被 `argv.split()` 拆散，均可能把不完整观察当成没有命中。Windows：普通环境没有 POSIX `ps`，普通运行无法证明清理完毕并保留根；`--sweep` 对候选根还直接调用 `os.getuid()`，会报错。正斜杠前缀比较也不适合 Windows 路径。建议：与 F07 共用已有 psutil 的结构化观察边界，明确能够证明哪些属于本次运行的进程/句柄；对相关进程的 AccessDenied、不完整句柄表保留 unknown，不能从缺项推出停止。psutil 不能保证 Windows 全句柄枚举，若无法从受控子进程所有权取得等价清理证据，退出 3 并保留现场仍是正确边界，应如实写该平台的自动清理尚不支持。代价：中至大；轻重：阻断检查收尾、危及清理证据。
+**T02：检查运行器的清理证据依赖 POSIX 命令，且路径/权限观察存在遗漏。** 位置：`src/hey_my_buddy/cli/checks.py:456-589,770-789`。Linux：需要 `ps`，打开文件观察依次用 `lsof` 和 `/proc`；`/proc/<pid>/fd` 读失败被逐项 `continue`，带空格的根被 `argv.split()` 拆散，均可能把不完整观察当成没有命中。Windows：普通环境没有 POSIX `ps`，普通运行无法证明清理完毕并保留根；`--sweep` 对候选根还直接调用 `os.getuid()`，会报错。正斜杠前缀比较也不适合 Windows 路径。建议：与 F07 共用已有 psutil 的结构化观察边界，明确能够证明哪些属于本次运行的进程/句柄；对相关进程的 AccessDenied、不完整句柄表保留 unknown，不能从缺项推出停止。psutil 不能保证 Windows 全句柄枚举，若无法从受控子进程所有权取得等价清理证据，退出 3 并保留现场仍是正确边界，应如实写该平台的自动清理尚不支持。代价：中至大；轻重：阻断检查清场、危及清理证据。
 
 **T03：假命令、信号、FIFO 与环境布局仍有大量 POSIX 夹具。** 位置：`tests/python/install/test_first_install.py:157-165`、`test_packaging.py:112-120`、`test_runtime.py:88-117,383-425`、`tests/python/cli/test_checks_parallel.py:259-281`、`tests/python/install/test_backup.py:266`、`test_upgrade.py:425`。Linux：多数成立，但精简容器还需 shell、Git、Node 和进程观察工具。Windows：直接 `/bin/sh`、可执行 shebang 假 uv、只创建 `venv/bin/python`、`SIGKILL`/负退出码、`mkfifo` 与管道 `select` 都不能作为共同测试基础。`tests/python/buddy/harnesses/test_discovery_stop_timing.py:40-84,92-93` 的 fork/setpgid 专项已正确标注 POSIX-only，不是遗漏的 Windows 收集阻断；扫描未发现生产代码直接 `fork` 或导入 `resource`。建议：通用假命令以 `sys.executable` 启动 Python 夹具，锁与取消用共同接口；FIFO 等真正系统机制的专项按能力说明支持范围，同时给 Windows Job/管道对应契约留实测。代价：大（跨多个测试目录）；轻重：阻断检查。
 
@@ -88,7 +88,7 @@
 
 ## 建议的分批、验证边界与开发者决定
 
-第一批先让 CI 产生可信的失败清单：按计划建立 Linux、Windows、macOS 独立 job，准备锁定 Python/Node 依赖，分开报告 Python、前端与浏览器结果，保留测试根和清理证据。Linux 先用普通原生 Ubuntu 跑全套；此前十个容器文件和打包工作流不能替代它。Windows 首轮预期会先在 T01 的导入及 T03 的 POSIX 夹具失败，随后仍有 T02 收尾、F03 安装锁、F01 权限误判、P01 执行发布、T04 换行等阻断；即便某一层修好，不能宣布整个系统可用。本次没有执行这一步。
+第一批先让 CI 产生可信的失败清单：按计划建立 Linux、Windows、macOS 独立 job，准备锁定 Python/Node 依赖，分开报告 Python、前端与浏览器结果，保留测试根和清理证据。Linux 先用普通原生 Ubuntu 跑全套；此前十个容器文件和打包工作流不能替代它。Windows 首轮预期会先在 T01 的导入及 T03 的 POSIX 夹具失败，随后仍有 T02 清场、F03 安装锁、F01 权限误判、P01 执行发布、T04 换行等阻断；即便某一层修好，不能宣布整个系统可用。本次没有执行这一步。
 
 第二批处理不改变权威事实语义的修缮：测试通用夹具、固定编码和 fixture 字节、目标解释器的 sysconfig 路径、结构化 argv/路径、发现时 PATHEXT 与注册表展开。锁文件生命周期应整批更换并删除旧的 unlink/inode 重试规则。每项只在所属边界修一次，不向各调用方复制 Windows 特判；对只读静态检查足够的文档修缮不额外堆测试。
 

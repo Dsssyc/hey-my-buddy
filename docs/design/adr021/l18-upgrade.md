@@ -125,7 +125,7 @@ R8 使 upgrade.idle_snapshot 只因 active 的 account-operation 或任意 accou
 | R12 保值与账户隔离守门 | 意见 4：migrations.py 的独立保值核对、两个弱触发器测试、旧列序的非默认数据与命名列全量比较、catalog pending 账户隔离测试或重复判断退休 | 三张重建表真实保值拒绝；删指纹比较、漏 token_usage_json 及相关非默认列、账户不一致判断的目标变异能被功能断言检出；不把 SQL 解析错误当检出 |
 | R13 探测公共入口 | 意见 5：把跨模块使用的 discovery._probe 移到公开入口并更新所有直接调用和测试 | 单一公开入口，无私有跨模块引用、旧别名或 wrapper；聚焦验证该调用链，不重复未变的停止逻辑测试 |
 
-Worker 不自行删除文件或目录，不用 stash、commit 或改分支标签；测试的正常私有清理沿用此前授权。只跑受影响测试，服务或真实私有进程实验在沙盒不能运行时由 Host 在固定产物补跑并写清执行者；保留源码、变异和功能断言的绑定，不用过早的 SQL/环境失败冒充目标检出。本轮新增/消失编号以 `8de5ee9f` 为基线，同时保留从原 `df9318f3` 的累计差集；收尾更新实现 Host 记录和确切临时目录，停下等整合 Host 复验。
+Worker 不自行删除文件或目录，不用 stash、commit 或改分支标签；测试的正常私有清理沿用此前授权。只跑受影响测试，服务或真实私有进程实验在沙盒不能运行时由 Host 在固定产物补跑并写清执行者；保留源码、变异和功能断言的绑定，不用过早的 SQL/环境失败冒充目标检出。本轮新增/消失编号以 `8de5ee9f` 为基线，同时保留从原 `df9318f3` 的累计差集；最后更新实现 Host 记录和确切临时目录，停下等整合 Host 复验。
 
 R10 固定初版 `bdd1d2c4` 的 Host 私有复核还复现了同类创建边界缺口：共享 `controller.launch_controller` 在 open_logs 因 EMFILE 失败时，实际 owned_popen 尚未调用，角色却已置 stopped=False，错误仍发布为停止未确认。这正属于意见 2 指出的文件描述符耗尽启动失败，不增加新目标。原 R10 尚未验收，追加授权 `src/hey_my_buddy/buddy/harnesses/controller.py` 和 `tests/python/buddy/harnesses/test_controller.py`，由同一微任务修共享创建边界并让角色消费创建方的真实 receipt；同时覆盖创建后日志描述符关闭失败，不能以没有返回句柄推断没有进程。保留此前未变源码的定向通过记录，只复验受新增边界影响的模块、用例和判断；沙盒无法执行的真实私有控制器或 socket 验证仍由 Host 在固定产物补跑。
 

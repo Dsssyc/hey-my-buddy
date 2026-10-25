@@ -68,7 +68,7 @@ DOM 实测四个桌面片段均高 22 px、没有片段文字、保留点阵。�
 
 ## 分发包
 
-执行 uv run --frozen python packaging/stage-plugin.py --destination tmp/stage-final/hey-my-buddy，再通过 stage_smoke.py 在独立临时根目录冷启动包内 CLI。移走分发源目录后仍可读取 health/runtime，stable=true、leaks=[]、resourcesMissing=[]。未验证 Router 的 selection-request 返回 needs-host、runId=null，没有启动模型。私有服务通过自身 CLI stop 收尾。
+执行 uv run --frozen python packaging/stage-plugin.py --destination tmp/stage-final/hey-my-buddy，再通过 stage_smoke.py 在独立临时根目录冷启动包内 CLI。移走分发源目录后仍可读取 health/runtime，stable=true、leaks=[]、resourcesMissing=[]。未验证 Router 的 selection-request 返回 needs-host、runId=null，没有启动模型。私有服务通过自身 CLI stop 清场。
 
 运行时内容 ID 以 stage-smoke.json 为准。详细路径、身份和停止回执见 tmp/stage-smoke.json。最终分发目录与已验证运行时核验字节一致。分发过程生成 build-info.json 记录源提交；除此项生成的溯源信息外，运行资产与源码逐项一致。
 
@@ -99,7 +99,7 @@ Host 又误把广告 effort 当作用户可用配置：文档 7e363262-0130-4b90
 
 已核对日常启用配置：Flash max/off、Codex Sol high/max、Claude Sonnet 5 medium、Opus 5.5 high。实际 capability 另报告 Codex CLI 缺失。后续必须同时核对配置和实际能力。没有修改用户启用状态、偏好、容量或发布模型评价。
 
-产物由 Host 独立检查、测试和整合；验收备注保留这些错误。收尾使用原 runId/controlFile 和官方 CLI：get → integration-record → acknowledge → workspace-cleanup-plan/apply，保留固定补丁、manifest 和 refs。逐项回执在 tmp/ledger/，测试迁移的早期回执在 test-integration.json、test-ack.json、test-cleanup-plan.json。被后续工作取代的初始前端 attention run 按取消收束，不伪造完成回合；私有服务在任务停止后关闭。
+产物由 Host 独立检查、测试和整合；验收备注保留这些错误。最后阶段使用原 runId/controlFile 和官方 CLI：get → integration-record → acknowledge → workspace-cleanup-plan/apply，保留固定补丁、manifest 和 refs。逐项回执在 tmp/ledger/，测试迁移的早期回执在 test-integration.json、test-ack.json、test-cleanup-plan.json。被后续工作取代的初始前端 attention run 按取消收束，不伪造完成回合；私有服务在任务停止后关闭。
 
 ## 复核修正
 

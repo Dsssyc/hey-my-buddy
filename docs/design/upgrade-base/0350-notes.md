@@ -14,7 +14,7 @@
 
 删除 `db.py` 中只代表已消耗升级的 `PREVIOUS_SCHEMA_VERSION`，启动错误不再建议从 schema 18 做升级；`idle_snapshot` 和备份清单的 schema 准入统一为当前 schema 19。`backup._verify` 原有的 schema 18 放行及免做当前 `Database.initialize()` 的分支仅供旧归档升级使用，本次删除；当前 schema 的清单、文件路径、摘要、SQLite 完整性、外键、快照比对和私有数据库初始化校验均保留。已有的历史归档没有被改写或删除，读取它们仍属于原来源提交的运行时。
 
-判断后保留的通用部分包括 `backup.create`、发布与恢复、`backup.preflight`、`backup_readiness`、`idle_snapshot` 的活跃任务与未确认停止检查、锁与所有权证明、`restore` 覆盖前的路径及链接防护、运行时准备与启动、启动身份及保留数据指纹验证、skill 的路径校验、发布、恢复与收尾、当前 runtime pointer 切换以及 journal 写入、失败回滚和中断恢复。安装前、持有升级围栏后和停止旧服务后的这些检查仍在；删除归档专用准入没有删掉当前安装或升级路径的校验。
+判断后保留的通用部分包括 `backup.create`、发布与恢复、`backup.preflight`、`backup_readiness`、`idle_snapshot` 的活跃任务与未确认停止检查、锁与所有权证明、`restore` 覆盖前的路径及链接防护、运行时准备与启动、启动身份及保留数据指纹验证、skill 的路径校验、发布、恢复与清理、当前 runtime pointer 切换以及 journal 写入、失败回滚和中断恢复。安装前、持有升级围栏后和停止旧服务后的这些检查仍在；删除归档专用准入没有删掉当前安装或升级路径的校验。
 
 本次删除了 13 个产品函数及 2 个仅服务旧升级的测试文件；测试文件及测试方法的具体取舍在最终验证记录中列明。
 

@@ -28,7 +28,7 @@ Worker 经 `worker_executor("claude")`（`WorkerRunExecutor`）走 `roles.run_co
 
 ## 清理与偏差
 
-任务根 `<task-root> = /private/tmp/a253b2-zj1z3acv`（Host 创建并登记）；所有命令的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`，一次性材料（两轮验证副本、两轮变异、编号清单与收集脚本、基线复核树、运行日志）在 `<task-root>/m/` 的新目录，未手动删除任何对象、未覆盖旧实验、脚本无删除重建分支；普通 fixture 与检查运行器自动收尾照常，未发现他人对象。偏差一：Host 实施检出的 `.venv/bin/python` 早于基线锁（site-packages 无 pydantic、装的是 0.26.0 旧包），无法导入基线包，改用受管检出同锁冻结解释器 `.venv/bin/python`（不 resolve 符号链接）加验证副本 PYTHONPATH，已记入组合清单。偏差二：`test_claude.py` 执行类在受管检出按 skip 条件跳过（未注册即无执行路径，这是接线微任务的设计事实），其权威运行环境是激活验证副本。未安装或升级日常运行时，未改用户配置、凭据或日常数据。
+任务根 `<task-root> = /private/tmp/a253b2-zj1z3acv`（Host 创建并登记）；所有命令的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`，一次性材料（两轮验证副本、两轮变异、编号清单与收集脚本、基线复核树、运行日志）在 `<task-root>/m/` 的新目录，未手动删除任何对象、未覆盖旧实验、脚本无删除重建分支；普通 fixture 与检查运行器自动清场照常，未发现他人对象。偏差一：Host 实施检出的 `.venv/bin/python` 早于基线锁（site-packages 无 pydantic、装的是 0.26.0 旧包），无法导入基线包，改用受管检出同锁冻结解释器 `.venv/bin/python`（不 resolve 符号链接）加验证副本 PYTHONPATH，已记入组合清单。偏差二：`test_claude.py` 执行类在受管检出按 skip 条件跳过（未注册即无执行路径，这是接线微任务的设计事实），其权威运行环境是激活验证副本。未安装或升级日常运行时，未改用户配置、凭据或日常数据。
 
 ## 第二轮：Host 配额事实形状问询后的整改（同 run 继续）
 

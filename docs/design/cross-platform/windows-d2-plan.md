@@ -13,7 +13,7 @@ D2 修 Windows 上两类现存的缺陷：服务的启动与停止报法会把"�
 - **D2a 服务的启动、停止报法与就绪判断。** 先做，因为 D2b 的保活需要服务本身不被认不出的外层 Job 支配。
 - **D2b 执行根的句柄归属、身份、接回与存储形式。** **门槛：** 第 5 节的句柄实验先由 Host 另派 Worker 做，成立之后 D2b 才开工；不成立，回到开发者，重新讨论"更新与安装时让执行挺过去"是否值得。2026-10-24 实验成立，见第 5 节。
 
-不在 D2 里的：阶段 E 的接收表、可靠接收后的 `finalizing`、ACK 之后才最终结算与删除 delivery 文件（ADR-031 第 1 条，及第 7 条里"已接收不是停止证据"那一半）；阶段 F 的忙文件与测试收尾；C-Two 按用户作用域的 Windows 管道与服务端身份核对（由 C-Two 做，hey-my-buddy 之后采用）。D2 的验收不宣称做到了 E 的部分。
+不在 D2 里的：阶段 E 的接收表、可靠接收后的 `finalizing`、ACK 之后才最终结算与删除 delivery 文件（ADR-031 第 1 条，及第 7 条里"已接收不是停止证据"那一半）；阶段 F 的忙文件与测试清场；C-Two 按用户作用域的 Windows 管道与服务端身份核对（由 C-Two 做，hey-my-buddy 之后采用）。D2 的验收不宣称做到了 E 的部分。
 
 版本：0.53.0 与契约 0.53.0 不动；D2 改的交接事实与 SQLite 形式追加进已开着的 schema 28 → 29 升级。
 
@@ -25,7 +25,7 @@ D2 修 Windows 上两类现存的缺陷：服务的启动与停止报法会把"�
 
 **独立启动。** `protocol/service_process.py:22` 的 `independent_service_popen` 用 detached、新进程组与显式 breakaway 创建服务，只把创建失败的错误 5 报成 `SERVICE_START_UNSUPPORTED`。调查发现：经 venv 转发器的启动在禁止脱离的外层 Job 里返回成功，服务却仍在外层里，外层关闭时一起退出；空句柄的 Job 查询只读到最内层。原方案是挂起创建，要求 `IsProcessInJob(创建的进程, NULL)` 为假才恢复；2026-10-24 的实验之后不做，启动保持现状（见下一段）。
 
-2026-10-24 在 Windows 上先做了实验，走产品实际的 venv 入口（Lead 的微任务 `a92cf5cf`，证据在它检出的 `tmp/d2-evidence/d2a-service-start-probe/`）：自建的禁止脱离的外层里，创建的进程在恢复之前被拒并收尾；但原样 SSH 下创建的进程同样在某个 Job 里，也被拒了。D1 的调查已观察到经 SSH 启动的服务在启动会话退出之后仍按原身份存活，所以“在某个 Job 里”不等于“会被收走”：这个谓词挡住了一个能用的环境，而会收走服务的外层只在实验里自建过，用户的环境里没有见到。按只兜实际发生过的情形，挂起检查不做，不改谓词，也不再诊断；哪天在用户的环境里真见到服务随启动窗口一起退出，带着证据再设计。这一条限制照旧写在参考文档里。
+2026-10-24 在 Windows 上先做了实验，走产品实际的 venv 入口（Lead 的微任务 `a92cf5cf`，证据在它检出的 `tmp/d2-evidence/d2a-service-start-probe/`）：自建的禁止脱离的外层里，创建的进程在恢复之前被拒并清场；但原样 SSH 下创建的进程同样在某个 Job 里，也被拒了。D1 的调查已观察到经 SSH 启动的服务在启动会话退出之后仍按原身份存活，所以“在某个 Job 里”不等于“会被收走”：这个谓词挡住了一个能用的环境，而会收走服务的外层只在实验里自建过，用户的环境里没有见到。按只兜实际发生过的情形，挂起检查不做，不改谓词，也不再诊断；哪天在用户的环境里真见到服务随启动窗口一起退出，带着证据再设计。这一条限制照旧写在参考文档里。
 
 **启动错误的归属与就绪判断。** 冷启动与安装都按 `startup-error.json` 的 `pid` 等于 `child.pid` 认领启动错误（`transport.py:424–427`、`install/upgrade.py:213–219`），安装的 `start()` 还要求 `control.json` 的 `pid` 等于 `child.pid` 才算就绪（`upgrade.py:224`）。服务写的是自己的 `os.getpid()`（`daemon.py:341`），经 venv 转发器时 `child` 是转发器，两者永远不等：Windows 上启动错误都会退化成 `SERVICE_START_FAILED`，每次安装都等满 45 秒再报 `UPGRADE_SHUTDOWN_UNCONFIRMED`（按代码推断，未在 Windows 上复现）。改为：两处启动都已持有 `control-start.lock`（`transport.py:370`、`install/upgrade.py:457、485`），spawn 之前删掉旧的 `startup-error.json`，之后出现的就属于这次启动，pid 比较与文件里的 `pid` 字段一并删掉；安装的就绪改用现有的 `probe(state, target)`（`upgrade.py:176–185`）。两个系统同一条规则；Popen 的 PID 只用来回收启动句柄。
 

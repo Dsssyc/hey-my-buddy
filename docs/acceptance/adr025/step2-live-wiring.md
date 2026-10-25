@@ -36,7 +36,7 @@ Worker（`buddy/runtime/worker.py`）：`_Renewal._forward_activity` 对注册 h
 
 ## 清理事实
 
-检出内无一次性材料、无 `__pycache__`（测试全部在 `<task>/m/` 副本内以 `PYTHONDONTWRITEBYTECODE=1` 运行）；`git status` 仅含 writeScope 内 10 个修改与 4 个新增文件。未手动删除任何对象、未用通配符；测试内 `TemporaryDirectory` 与桥 `close` 各自正常收尾。等待 Host 验收后按确切根 `/private/tmp/a252c2-jy5bpl7e` 整体回收；其他会话材料未触碰，未读取凭据内容，记录中路径均为 `~` 或占位符。
+检出内无一次性材料、无 `__pycache__`（测试全部在 `<task>/m/` 副本内以 `PYTHONDONTWRITEBYTECODE=1` 运行）；`git status` 仅含 writeScope 内 10 个修改与 4 个新增文件。未手动删除任何对象、未用通配符；测试内 `TemporaryDirectory` 与桥 `close` 各自正常清场。等待 Host 验收后按确切根 `/private/tmp/a252c2-jy5bpl7e` 整体回收；其他会话材料未触碰，未读取凭据内容，记录中路径均为 `~` 或占位符。
 
 ## 第一次退回的撤回与修正（同日续轮）
 

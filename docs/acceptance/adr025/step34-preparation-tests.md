@@ -4,11 +4,11 @@
 
 ## 范围与清理
 
-改动只落在 writeScope 四条之内：`tests/python/buddy/harnesses/zcode/test_native_run.py`、`tests/python/buddy/roles/test_role_live_seam.py`、`tests/python/protocol/test_inquiry_transport.py` 与本记录，`git status` 为证；生产源码、角色、公共值与注册表零改动。任务根 `/private/tmp/a253p-a4a03lnd`（Host 创建并登记）：`t/` 承载每次运行的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR`（含基线泄漏证据目录与 uv 自建的缓存锁文件），`m/` 放一次性材料（两份变异源码副本、各次运行日志、前后测试 ID 清单）；本 Worker 未手动删除任何对象、未使用通配符、未动其他会话材料。修正三新增的正是 fixture 自身生命周期的收尾，属任务说明中的 fixture 例外；普通 fixture 与检查运行器自建对象照常自动收尾。
+改动只落在 writeScope 四条之内：`tests/python/buddy/harnesses/zcode/test_native_run.py`、`tests/python/buddy/roles/test_role_live_seam.py`、`tests/python/protocol/test_inquiry_transport.py` 与本记录，`git status` 为证；生产源码、角色、公共值与注册表零改动。任务根 `/private/tmp/a253p-a4a03lnd`（Host 创建并登记）：`t/` 承载每次运行的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR`（含基线泄漏证据目录与 uv 自建的缓存锁文件），`m/` 放一次性材料（两份变异源码副本、各次运行日志、前后测试 ID 清单）；本 Worker 未手动删除任何对象、未使用通配符、未动其他会话材料。修正三新增的正是 fixture 自身生命周期的清场，属任务说明中的 fixture 例外；普通 fixture 与检查运行器自建对象照常自动清场。
 
 ## 修正一：运行模块停止未确认 → unknown 的真路径见证
 
-新增 `FastSeamTests.test_an_unconfirmed_native_group_stop_reports_unknown_not_gone`：经真实 `native_run.run` 走完整运行（真实伪造 app-server 子进程、真实 `RunRequest`、真实观察规则），只在最窄的停止观察点 `ProcessHandle.shutdown_confirmed` 注入不确认（记录每次被调的 handle 并返回 `False`）。生产停止路径原样执行：`_halt_owned_group` 关 stdin、等待收割 leader、因首个确认被拒而真实 `terminate` 该进程组；断言 `RunResult.stop_evidence.native.group_state == "unknown"`、`observation_basis == "owned-process-group"`、`started` 为真、`exit_code` 与 `leader_exited` 在场（leader 事实已收割，但无确认不得报告 gone——未知不是已停止），且已结算的回合因此被拒（`end.status == "error"`、`reason_code == "native-shutdown-failed"`）、停止层记录真实信号（interrupt `requested`、basis `owned-group-signal`）、本次运行的一个 handle 恰被观察两次。无孤儿证明：补丁作用域结束后，用真实（未打补丁的）`shutdown_confirmed` 复核被捕获的 handle——leader 已 `poll` 到返回码、整组确认消失、`group_alive()` 为假，即实际模拟子进程由正常停止链最终收尾。不测结果构造器，不修改结果喂给外层。
+新增 `FastSeamTests.test_an_unconfirmed_native_group_stop_reports_unknown_not_gone`：经真实 `native_run.run` 走完整运行（真实伪造 app-server 子进程、真实 `RunRequest`、真实观察规则），只在最窄的停止观察点 `ProcessHandle.shutdown_confirmed` 注入不确认（记录每次被调的 handle 并返回 `False`）。生产停止路径原样执行：`_halt_owned_group` 关 stdin、等待收割 leader、因首个确认被拒而真实 `terminate` 该进程组；断言 `RunResult.stop_evidence.native.group_state == "unknown"`、`observation_basis == "owned-process-group"`、`started` 为真、`exit_code` 与 `leader_exited` 在场（leader 事实已收割，但无确认不得报告 gone——未知不是已停止），且已结算的回合因此被拒（`end.status == "error"`、`reason_code == "native-shutdown-failed"`）、停止层记录真实信号（interrupt `requested`、basis `owned-group-signal`）、本次运行的一个 handle 恰被观察两次。无孤儿证明：补丁作用域结束后，用真实（未打补丁的）`shutdown_confirmed` 复核被捕获的 handle——leader 已 `poll` 到返回码、整组确认消失、`group_alive()` 为假，即实际模拟子进程由正常停止链最终停止。不测结果构造器，不修改结果喂给外层。
 
 ## 修正二：实时绑定逐项拒绝身份每个组成部分的不一致
 
@@ -16,7 +16,7 @@
 
 ## 修正三：问询传输测试回收自己的短 socket 目录
 
-`short_socket_dir` 由裸 `tempfile.mkdtemp`（无收尾，模块单独运行在私有临时根留下 8 个目录）改为 `TransportTests` 上的方法：标准库 `tempfile.TemporaryDirectory` 生命周期，`addCleanup` 注册其 `cleanup`；目录清理在测试随后注册的 socket 与服务线程清理之前登记，unittest 后注册先执行的顺序保证先停线程/关 socket、后删目录。`test_a_non_json_reply_is_invalid_and_a_silent_socket_times_out` 补上缺失的 `listener.close` 与 `silent.close` 注册，使失败路径上顺序同样成立；其余测试本就以内联 join/addCleanup 收尾。模块内无其他 `short_socket_dir` 引用，仓内无别处导入该符号。
+`short_socket_dir` 由裸 `tempfile.mkdtemp`（无清场，模块单独运行在私有临时根留下 8 个目录）改为 `TransportTests` 上的方法：标准库 `tempfile.TemporaryDirectory` 生命周期，`addCleanup` 注册其 `cleanup`；目录清理在测试随后注册的 socket 与服务线程清理之前登记，unittest 后注册先执行的顺序保证先停线程/关 socket、后删目录。`test_a_non_json_reply_is_invalid_and_a_silent_socket_times_out` 补上缺失的 `listener.close` 与 `silent.close` 注册，使失败路径上顺序同样成立；其余测试本就以内联 join/addCleanup 清场。模块内无其他 `short_socket_dir` 引用，仓内无别处导入该符号。
 
 ## 变异证明（隔离副本）
 

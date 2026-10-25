@@ -25,7 +25,7 @@
 
 ## 交 Host 的聚焦与单点变异助手
 
-`<task-root>/run-focused.py` 可重复执行，每次新建独立运行目录，并在测试框架正常收尾前保留自有 fixture 的 daemon 日志、诱饵 JSON 行记录和 child 停止状态。`green` 与 `mutant` 都由固定基线 `git archive` 的任务副本生成，仅覆盖最终 R-05 测试文件；绿色副本的 support SHA256 与基线同为 `e19593779da1c5dc47e3cb390887ff750959cd52b4dbb751e63c67f7b932015b`。没有修改工作区 support 或其它公共产物。
+`<task-root>/run-focused.py` 可重复执行，每次新建独立运行目录，并在测试框架正常清场前保留自有 fixture 的 daemon 日志、诱饵 JSON 行记录和 child 停止状态。`green` 与 `mutant` 都由固定基线 `git archive` 的任务副本生成，仅覆盖最终 R-05 测试文件；绿色副本的 support SHA256 与基线同为 `e19593779da1c5dc47e3cb390887ff750959cd52b4dbb751e63c67f7b932015b`。没有修改工作区 support 或其它公共产物。
 
 唯一故障注入仅在 `<task-root>/mutant/tests/python/support.py` 的 `BoardTestCase.daemon` 将 `environment = self.child_environment(env)` 改为 `environment = _child_environment(self.directory, env)`，CLI helper 保持不变，详见 `<task-root>/mutation.patch`。该副本尚未执行，不存在可报告的目标红灯或诱饵证据。
 
@@ -39,4 +39,4 @@ Host 在允许本地 bind 的执行环境中按以下三个命令补核，不需
 
 验收条件：最终 R-05 单项与 console 全文件 20 项均真实退出 0；同一 R-05 在唯一变异副本退出 1，最终明确目标断言附自建诱饵记录，或明确 file source/content 目标断言失败。助手的 `result.json` 仅在退出 1 且目标 native 断言伴随可解析诱饵记录、或明确 fixture 断言时设置 `targetFailureEvidence:true`；任意 AssertionError、HTTP500、bind、导入或依赖失败不计为有效目标证据。Host 仍需核对完整原始日志、编号、项数及所有 child 停止证据，不能仅依赖布尔分类。补核应产生每条命令的 `result.json`、`raw.log`、fixture evidence（变异含 `native-cli-calls.jsonl`）并将实际结论整合回本记录；此前 R-05 保持未验证。
 
-本轮自建 daemon PID `80219` 已退出，框架收尾后的 `returncode` 为 `2`，测试运行器也已退出；没有已知未停止自建进程。仅测试框架执行其正常 fixture 收尾，Worker 未手工删除任何文件或目录，未 stash、提交或改变分支/标签。任务根及助手、uv 环境、材料与副本全部保留，交 Host 验收后按上述确切根回收。
+本轮自建 daemon PID `80219` 已退出，框架清场后的 `returncode` 为 `2`，测试运行器也已退出；没有已知未停止自建进程。仅测试框架执行其正常 fixture 清场，Worker 未手工删除任何文件或目录，未 stash、提交或改变分支/标签。任务根及助手、uv 环境、材料与副本全部保留，交 Host 验收后按上述确切根回收。

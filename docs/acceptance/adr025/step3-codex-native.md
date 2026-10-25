@@ -34,9 +34,9 @@
 
 本模块未注册、未接线，`RunResult` 各字段的读取方要等 3-A2/2-C 型角色接线出现；当前生产读取方为零属预期，以下只列**公共契约本身**的既有缺口，未自行改动公共文件：(1) `RunContinuation` 缺旧 `context.nativeResume` 的三项关联（lastTurnId/lastAttemptId/lastInputSha256），缺省时新模块做可表达子集的核对，无法拒绝过期检查点续接，最小签名建议 `last_turn_id: OptionalText(512)`、`last_attempt_id: OptionalText(128)`、`last_input_sha256: Optional[Hex64]`；(2) checkpoint 无公共字段，模块以 evidence ref `native-checkpoint` 留存旧形状检查点，旧 `validated_checkpoint`/`checkpoint_resumable` 还核对旧 payload 顶层与 `processState`，3-A2 需 Host 定读证据文件加 `StopEvidence` 组合还是增公共包；(3) quota 快照无公共字段，以 evidence ref `quota-snapshot` 留存（旧读取方 adapter collect→`normalize_quota`）；(4) `RunBudget` 只有 timeout，审阅工具预算以累计 `toolCalls` 事实交角色停止，旧 `readonly-budget-exhausted` 码无驱动侧等价（映射为 observer-interrupt 加角色理由），fast 的 1..60 秒界仍在模块内；(5) 账户绑定经本 harness 的 `RunServices` 承载（`credential_source`/`account`/`activity_dir`），无公共改动需求，仅报备。另：fast `zeroToolVerified` 组合与旧 `elapsedMs` 时长事实无公共字段，留给接线投影；旧 Worker 结果的 `resolved` 本是请求值，新结果按 `ResultConfiguration` 分列 requested/checked（provider 读回 basis `native-readback`，model/effort 为 `catalog-membership`），不再混填。
 
-## 任务目录与收尾
+## 任务目录与清场记录
 
-任务目录 `/private/tmp/a253a1-fw9iw15z`（Host 创建并登记）：`t/` 为 `TMPDIR`/`BUDDY_CHECKS_TMPDIR`，含各测试 fixture 自建的私有根与自动收尾；`m/` 放 `focused-env.sh`、基线/最终编号清单、两次批次运行日志、`build-test-ids-tsv.py`、故障注入脚本/日志与 `fault-m1…m5` 五份变异副本。本 Worker 未手动删除任何对象，脚本不含 rm/rmtree 对任务根的使用（变异副本重建用 `shutil.rmtree` 只作用于 `m/` 内本轮自建的副本目录），未覆盖旧实验。worktree 内另有 `uv run` 自建 `.venv` 与 `__pycache__`（git 忽略的本地工具状态）。未发现其他会话遗留材料；Host 验收后按该确切路径整体回收。
+任务目录 `/private/tmp/a253a1-fw9iw15z`（Host 创建并登记）：`t/` 为 `TMPDIR`/`BUDDY_CHECKS_TMPDIR`，含各测试 fixture 自建的私有根与自动清场；`m/` 放 `focused-env.sh`、基线/最终编号清单、两次批次运行日志、`build-test-ids-tsv.py`、故障注入脚本/日志与 `fault-m1…m5` 五份变异副本。本 Worker 未手动删除任何对象，脚本不含 rm/rmtree 对任务根的使用（变异副本重建用 `shutil.rmtree` 只作用于 `m/` 内本轮自建的副本目录），未覆盖旧实验。worktree 内另有 `uv run` 自建 `.venv` 与 `__pycache__`（git 忽略的本地工具状态）。未发现其他会话遗留材料；Host 验收后按该确切路径整体回收。
 
 ## 验证边界
 

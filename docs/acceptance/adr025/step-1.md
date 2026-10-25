@@ -23,11 +23,11 @@
 
 Host 未代改这些固定交付的生产源码；由 Host 修改的两份实施测试文件先后登记于整合记录；首次修改的是写范围之外的 `tests/python/blackboard/store/test_blackboard.py`。首次完整检查揭示其中八处旧 mock 注入点（12 个 error 含五个子项）尚未跟随新角色接缝，Host 在 `44bf4cc` 把注入点改到真实消费的 worker_executor，并补模拟体 name，原断言、错误注入和编号完整保留。正规化 AST 只差这八个目标与八个字段；57 项聚焦绿，再把“外层退出可确认所有 harness 已停止”注入隔离 Worker 副本，既有停止防护五个子项全红，按字节恢复后绿。生产源码未变；第二轮出现的既有时序前提问题另由 Host 在 `0719e65` 修测试夹具：存活子进程由测试清理结束、发现的未确认分支严格保持不可用和输出私有，均有受控红/绿和恢复证据，详见整合登记。没有范围内代码缺陷由 Host 代改，也没有取消后另开这些微任务。
 
-独立 ACP 线的旧 run 已 internally accepted 而不能 continue；本次开发者新增整改因此另以关联微任务 `9ceb132c-e9a8-4cbf-b051-aab67197e8a0` 交付，没有取消原 run。整改固定 artifact `67ec3ae9-9d7a-45dd-8483-38570f1e89d2`、输出 `70c95a9a7de2c66f9432ca77db5a5a6791e71093`，整合为 `ccc8bee`，凭据 `int-f42076f2-de72-4700-9f27-4d27cbb4d521`。它仍是 delivered、未 acknowledge，方便在外部复核有缺陷时继续原整改 run。环境沿用 native_environment、只强制私有 DSH_HOME，HOME 默认继承；测试用 BUDDY_CHECKS_TMPDIR 自收尾，不留检出 run 目录或台账。71 项聚焦证据、用户默认 DSH 路径防护的红/恢复绿和改名/新增/删除表在[整改 Host 记录](dsh-acp-host-fixes-host.md)与[6 行变化表](dsh-acp-host-fixes-test-map.tsv)，不把该线写作第四步抽取或已获外部验收。
+独立 ACP 线的旧 run 已 internally accepted 而不能 continue；本次开发者新增整改因此另以关联微任务 `9ceb132c-e9a8-4cbf-b051-aab67197e8a0` 交付，没有取消原 run。整改固定 artifact `67ec3ae9-9d7a-45dd-8483-38570f1e89d2`、输出 `70c95a9a7de2c66f9432ca77db5a5a6791e71093`，整合为 `ccc8bee`，凭据 `int-f42076f2-de72-4700-9f27-4d27cbb4d521`。它仍是 delivered、未 acknowledge，方便在外部复核有缺陷时继续原整改 run。环境沿用 native_environment、只强制私有 DSH_HOME，HOME 默认继承；测试用 BUDDY_CHECKS_TMPDIR 自清场，不留检出 run 目录或台账。71 项聚焦证据、用户默认 DSH 路径防护的红/恢复绿和改名/新增/删除表在[整改 Host 记录](dsh-acp-host-fixes-host.md)与[6 行变化表](dsh-acp-host-fixes-test-map.tsv)，不把该线写作第四步抽取或已获外部验收。
 
 ## 检查与证据
 
-最终完整检查在 `0719e65` 执行 `uv run --frozen python -m hey_my_buddy.cli.checks --jobs 2`，退出 0：Python 2,532 项（跳过 1）/166 个文件全部执行，Node 110 项，耗时 729.38 秒，计数与独立加载器一致。原始日志、正确解析并行汇总的 summary、创建路径及脚本在 `<repo>/tmp/adr025-host/step1-full-gate-gbjq1lt4/`；运行器自建的 `<system-tmp>/buddy-checks-b3gcp1r0/` 正常收尾，确认不存在。三次完整检查的前两次失败保留，失败原因、聚焦修正与为什么重跑见整合登记；没有把失败文件的计数混入成功汇总，没有将早前 2,453/163/110 的成绩当作本轮结果。
+最终完整检查在 `0719e65` 执行 `uv run --frozen python -m hey_my_buddy.cli.checks --jobs 2`，退出 0：Python 2,532 项（跳过 1）/166 个文件全部执行，Node 110 项，耗时 729.38 秒，计数与独立加载器一致。原始日志、正确解析并行汇总的 summary、创建路径及脚本在 `<repo>/tmp/adr025-host/step1-full-gate-gbjq1lt4/`；运行器自建的 `<system-tmp>/buddy-checks-b3gcp1r0/` 正常清场，确认不存在。三次完整检查的前两次失败保留，失败原因、聚焦修正与为什么重跑见整合登记；没有把失败文件的计数混入成功汇总，没有将早前 2,453/163/110 的成绩当作本轮结果。
 
 控制台在 `a5c3c21` 使用本机已有受支持 Node v24.21.0 与既有锁定依赖：54 个文件 /659 项测试通过，typecheck 与 build 均退出 0；构建输出私有忽略目录 `<repo>/tmp/adr025-host/step1-console-cd167oot/dist/`，同目录保留 test/typecheck/build 日志及 summary。`apps/` 从该提交到本次输入字节相等，后续测试修正及记录不影响它，所以没有无理由重复；DSH Node 测试树与基线字节相同，由最终完整检查实跑 110 项。没有安装或升级日常 Node 或其他 runtime。
 
@@ -39,7 +39,7 @@ Host 在 `0719e65` 用真实 unittest loader 独立收集：166 模块、2,532 �
 
 1-D 最后 fixed artifact 经 Host 审查后已内部 acknowledged accepted（revision 11），其 self/descendants 停止都确认；固定补丁、三份编号 JSON、脚本、三组原始红/恢复绿及 SHA 共 16 份核心材料，连同首轮/最终 artifact metadata 与累积 patch 保留在 `<repo>/tmp/adr025-host/1d-final-review-cn_zlc9u/`。Host 随后只按开始时登记的一个确切任务根 `<system-tmp>/a25v-w6zbxl88/` 整体删除，含 3,738 个后代对象，成功且根已不存在；没有通配符或屏蔽错误，没有推断别的会话对象的归属，详细回执与删除清单在 `<repo>/tmp/adr025-host/1d-task-root-cleanup.json`。1-D 受管检出暂留供外部复核，没有清理其他会话的检出或材料。
 
-1-B/1-C 已验收任务根的确切删除和保留证据见其 Host 记录；本轮三个完整检查根以及聚焦/诊断/变异的自建检查根由检查函数各自创建登记并正常收尾。Host 的原始清单、所有失败材料、整合修正实验以及 Console 构建产物留在自己创建的忽略 tmp 目录。ACP 仍待外部复核，确切根 `<system-tmp>/a25f-u1fu7fbr/` 与原已分配但未使用的 `<system-tmp>/a25d-lhys8472/` 保留，不提前删除。Worker 不做手动清理，普通测试 fixture 与检查运行器自建自收尾按开发者例外执行；1-B 早先清理违规与撤回记录仍保留。
+1-B/1-C 已验收任务根的确切删除和保留证据见其 Host 记录；本轮三个完整检查根以及聚焦/诊断/变异的自建检查根由检查函数各自创建登记并正常清场。Host 的原始清单、所有失败材料、整合修正实验以及 Console 构建产物留在自己创建的忽略 tmp 目录。ACP 仍待外部复核，确切根 `<system-tmp>/a25f-u1fu7fbr/` 与原已分配但未使用的 `<system-tmp>/a25d-lhys8472/` 保留，不提前删除。Worker 不做手动清理，普通测试 fixture 与检查运行器自建自清场按开发者例外执行；1-B 早先清理违规与撤回记录仍保留。
 
 ## 外部验收边界
 

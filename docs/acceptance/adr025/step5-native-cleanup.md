@@ -39,7 +39,7 @@ Host 侧复核（Host 结论，本 run 未重放）：固定 artifact/commit 的
 - `run`（22 行）：接缝校验（harness 名、服务绑定类型、no-tool 挂载拒绝、无服务续接拒绝）后委托 `_run`——与 codex 的 run/_run 分层同款。
 - `_run`（136 行，owner loop）：准备（deadline、私有根、stderr 路径、cancel、facts/classifier/state/tools/outcome）、`notify`/`attention_sink`/`dispatch_feedback` 三个闭包、spawn 与 `runtime/capabilities` 握手、按 `completion_carrier` 分派载体、三个 except 分支、finally 调 `_stop_collection`、工具流包计算、证据留存与结果组装。zcode 测试对 `zcode.native_run._spawn_app_server`/`NativeConnection` 的补丁点不变（调用按模块全局名解析）。
 - `_final_message_rounds`（81 行）：final-message 载体轮次（fresh root、每轮新 `input_id`、settled 检查闭包读上一轮 protocol 的生命周期与原实现一致——修正轮不重置 protocol，直到 `before_send` 换新）。
-- `_governed_turn`（153 行）：governed completion-tool 载体（绑定校验、续接绑定读取、根开启、投影/用量/sidecar、问询桥、`observe`/`bind_worker_session`/`note_configured`/`after_admit`、settle 后收尾与 close、record/provenance）。
+- `_governed_turn`（153 行）：governed completion-tool 载体（绑定校验、续接绑定读取、根开启、投影/用量/sidecar、问询桥、`observe`/`bind_worker_session`/`note_configured`/`after_admit`、settle 后结束与 close、record/provenance）。
 - `_stop_collection`（55 行）：保留观测、桥关闭、保守组停止、EOF 排空、stdout 关闭、取消判定，返回 drained。
 - `_evidence_refs`（32 行）：私有证据按原顺序留存（provenance → inquiry → attention → denied → stderr），与 dsh 的 `_evidence_refs` 同款。
 - `_finish_result`（37 行）：`_build_result` 组装与 BoardError 降级 fallback（保留已观测阶段事实，只丢弃形状失败的包），与 claude 的 `compose(packages=...)` fallback 同款。

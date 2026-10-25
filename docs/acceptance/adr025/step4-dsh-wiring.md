@@ -1,6 +1,6 @@
 # ADR-025 第四步 4-B2：DSH ACP 主体接入共享角色、合作检查点问询与删除 Python 旧入口
 
-本记录是 ADR-025 第四步微任务 4-B2 的交付材料：在基线 `ee0e2f4` 的受管检出（唯一可写范围为 DSH Python 包、对应测试与两份验收记录）内，把 4-B1 的原生运行主体接到共享角色上——`DshAdapter` 改为纯能力描述（无 prepare/start/collect/cancel 与 direct-LLM 入口，`dsh/runner.py`、`dsh/catalog.py` 删除且无兼容层），Worker、fast 与无输入发现实际经 `dsh/native_run.py` 的 `run`/`run_discovery` 与唯一角色控制器 `roles/run_controller` 执行，Host 问询经公共 `harnesses/inquiry_bridge.py` 的合作检查点送达（共享 `bind_live_channel`，`EXISTING_CAPABILITIES["dsh"]`），读工具范围在原生 run 可用，DSH 公共 review 资格继续不开放，`native_resume` 保持 false（`reconstructed-new-session` 重建新根会话、`native-session` 明确拒绝）。输入状态 `2ded751` 是上一轮超时取消轮的未验收 partial（Host 已核对累计补丁摘要与路径、未整合未签收）；本轮在其上收尾三件事：恢复可用性回退、把测试与故障注入写成固定证据、补齐本记录与编号表。`harnesses/dsh/` Node 树与 `yaml_bridge.py` 及其安装资源留 4-C 删除，本项内部验收不等于第四步外部验收。
+本记录是 ADR-025 第四步微任务 4-B2 的交付材料：在基线 `ee0e2f4` 的受管检出（唯一可写范围为 DSH Python 包、对应测试与两份验收记录）内，把 4-B1 的原生运行主体接到共享角色上——`DshAdapter` 改为纯能力描述（无 prepare/start/collect/cancel 与 direct-LLM 入口，`dsh/runner.py`、`dsh/catalog.py` 删除且无兼容层），Worker、fast 与无输入发现实际经 `dsh/native_run.py` 的 `run`/`run_discovery` 与唯一角色控制器 `roles/run_controller` 执行，Host 问询经公共 `harnesses/inquiry_bridge.py` 的合作检查点送达（共享 `bind_live_channel`，`EXISTING_CAPABILITIES["dsh"]`），读工具范围在原生 run 可用，DSH 公共 review 资格继续不开放，`native_resume` 保持 false（`reconstructed-new-session` 重建新根会话、`native-session` 明确拒绝）。输入状态 `2ded751` 是上一轮超时取消轮的未验收 partial（Host 已核对累计补丁摘要与路径、未整合未签收）；本轮在其上完成三件事：恢复可用性回退、把测试与故障注入写成固定证据、补齐本记录与编号表。`harnesses/dsh/` Node 树与 `yaml_bridge.py` 及其安装资源留 4-C 删除，本项内部验收不等于第四步外部验收。
 
 ## 本轮整改（对上一轮 partial 的修复）
 

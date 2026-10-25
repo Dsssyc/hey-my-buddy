@@ -32,7 +32,7 @@ detach 可在本次 finished 后移除自己的映射，要求映射的完整 id
 
 ## 临时材料交接
 
-Host 已登记的任务根记为 `<task-root>`。原有材料为 `m/00-pristine/`、`m/01-mutations/` 与 `t/` 内遗留私有测试状态/uv 锁；本轮新增 `m/02-codex-gsrdmwem/`（首轮提交源副本、首次验证时的工作差异及原始绿日志）、`m/03-mutations-xt0so4rw/`（pristine、变异源码、脚本、7 个原始红日志、results.json）以及最终验证目录（在补记中指定）。本轮 uv 缓存也仅位于这些新材料目录。任务根的最终路径清单保存为最终验证目录的 materials-final.json；清单只枚举位置，不读取凭据文件内容。Worker 未删除任何对象，既有夹具正常生命周期收尾保持；验收后由 Host 按确切根整体删除。
+Host 已登记的任务根记为 `<task-root>`。原有材料为 `m/00-pristine/`、`m/01-mutations/` 与 `t/` 内遗留私有测试状态/uv 锁；本轮新增 `m/02-codex-gsrdmwem/`（首轮提交源副本、首次验证时的工作差异及原始绿日志）、`m/03-mutations-xt0so4rw/`（pristine、变异源码、脚本、7 个原始红日志、results.json）以及最终验证目录（在补记中指定）。本轮 uv 缓存也仅位于这些新材料目录。任务根的最终路径清单保存为最终验证目录的 materials-final.json；清单只枚举位置，不读取凭据文件内容。Worker 未删除任何对象，既有夹具正常生命周期清场保持；验收后由 Host 按确切根整体删除。
 
 ## 变异后最终核验
 

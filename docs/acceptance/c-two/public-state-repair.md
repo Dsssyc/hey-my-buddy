@@ -6,15 +6,15 @@
 
 两类失败均属本任务范围：cold-service / cold-board 替换 Popen 命令后，生产子环境只带 src PYTHONPATH，新助手在 import support 时报 ModuleNotFoundError；readonly fixture 把 state 改为 0500 后请求 health，真实 SQLite 访问失败，又因恢复 chmod 位于 try 内而跳过恢复，旧 finally 的 stop 失败并跳过 wait，留下 Host 创建的 daemon PID 32358。旧 finally 没有保证全部 wait，不能以旧 Worker 的 27 个已记录回执覆盖这个 Host 实例。
 
-Host 已只在自己创建、endpoint.serviceId/PID 一致的确切状态目录恢复 0700，显式 stop helper 退出 0、服务锁释放；初次随后检查 PID 仍在，Host 在 continue 时仍继续确认最终收尾。本轮 Worker 没有查询、chmod、stop 或接管 PID 32358，也没有把释放服务锁等同于该进程已经 wait。原失败、未回收实例与这次 Host 操作均保留，最终进程退出仍需 Host 补充证据。
+Host 已只在自己创建、endpoint.serviceId/PID 一致的确切状态目录恢复 0700，显式 stop helper 退出 0、服务锁释放；初次随后检查 PID 仍在，Host 在 continue 时仍继续确认最终停止。本轮 Worker 没有查询、chmod、stop 或接管 PID 32358，也没有把释放服务锁等同于该进程已经 wait。原失败、未回收实例与这次 Host 操作均保留，最终进程退出仍需 Host 补充证据。
 
 本轮只返修 `tests/python/protocol/test_public_state.py` 和本记录。两个生产文件与 `cb33c217` 字节一致，原 attach 文件没有修改；基线 `9e45e890`、core 冻结 `12eb4fcd`、五路径范围、无手工删除、无 refs/stash 操作等规则继续有效。没有重试已受沙箱阻止的真实服务监听或原生 register，没有完整检查、前端或真实模型。
 
 冷启动替换分支通过测试自己的 `prepare_daemon_spawn` 明确加入当前源码的 tests/python 和 src，并保留原 PYTHONPATH、私有 catalog/facts/checks pins 和字节码禁写设置。生产 launcher、service_environment 和 support 未改。新增 `--import-check` 助手在实际只含 src 的生产 allowlist 子环境中执行完整模块导入并核对目录 pins，在进入 daemon/register 前结束；它验证 import 接线，不是实际 RPC 或冷启动 green。
 
-readonly 场景维持自有 state 的 0700，复用原 `test_transport_attach.MutationRecorder` 包围默认 BoardClient(False).ping()，比较 state 的既有 entry snapshot 与 state/ipc 权限模式前后相等，并由真实 ping 的 serviceId、已就绪 health 的 stateDir、endpoint PID 和 nativeRoot 绑定同一个服务。ping 不执行 SQLite 扫描，避免把 live SQLite 的写需求作为公开只读 attach 的结论。该分支的 connect 和服务响应仍是真实 RPC；本轮仅验证了故障注入收尾，真实分支等待 Host 复跑，旧 0500/unsafe/owner 防护测试全部保留。
+readonly 场景维持自有 state 的 0700，复用原 `test_transport_attach.MutationRecorder` 包围默认 BoardClient(False).ping()，比较 state 的既有 entry snapshot 与 state/ipc 权限模式前后相等，并由真实 ping 的 serviceId、已就绪 health 的 stateDir、endpoint PID 和 nativeRoot 绑定同一个服务。ping 不执行 SQLite 扫描，避免把 live SQLite 的写需求作为公开只读 attach 的结论。该分支的 connect 和服务响应仍是真实 RPC；本轮仅验证了故障注入清场，真实分支等待 Host 复跑，旧 0500/unsafe/owner 防护测试全部保留。
 
-新 `cleanup_owned_case` 在 finally 先恢复自己创建且仍为自有真实目录的已记录权限，仅在模式确实变化时 chmod，再分别尝试 stop_service、stop_workers、每个 Popen.wait 和 RPC shutdown。一项失败不会跳过后续项；次级失败在 cleanupFailures 中保存，未知 wait 标为 shutdownUnconfirmed。有目标错误时保留原异常及错误码，没有目标错误而收尾失败时仍使测试失败。日志关闭/证据写入的失败也不覆盖既有目标异常。没有给内部 RPC 添加默认根或改停止策略。
+新 `cleanup_owned_case` 在 finally 先恢复自己创建且仍为自有真实目录的已记录权限，仅在模式确实变化时 chmod，再分别尝试 stop_service、stop_workers、每个 Popen.wait 和 RPC shutdown。一项失败不会跳过后续项；次级失败在 cleanupFailures 中保存，未知 wait 标为 shutdownUnconfirmed。有目标错误时保留原异常及错误码，没有目标错误而清场失败时仍使测试失败。日志关闭/证据写入的失败也不覆盖既有目标异常。没有给内部 RPC 添加默认根或改停止策略。
 
 当前固定源码位于本轮新建且保留的确切短任务根 `/private/tmp/ps3b-21te13_d/fixed/`，哈希为：
 
@@ -30,14 +30,14 @@ readonly 场景维持自有 state 的 0700，复用原 `test_transport_attach.Mu
 | --- | ---: | ---: | ---: | --- |
 | `fixture-repair` | 4 | 1 | 5.520 | 首次本地补充测试 3 errors；Mock Popen 与 MutationRecorder 的 autospec 重叠，随后局部 mock 未完成进入导致另外两项报错；原日志保留，不算目标变异 |
 | `fixture-repair-corrected` | 4 | 0 | 5.320 | 改为普通函数替身避免重叠，不修改公共 MutationRecorder；故障注入通过 |
-| `public-repair-final` | 13 | 0 | 10.382 | 最终源码原 9 个可运行项、新 import 子进程与 3 个收尾故障项 |
+| `public-repair-final` | 13 | 0 | 10.382 | 最终源码原 9 个可运行项、新 import 子进程与 3 个清场故障项 |
 | `mutant-call-service` | 1 | 1 | 3.071 | 实际 failure.code=PRIVATE_STATE_REQUIRED |
 | `mutant-call-board` | 1 | 1 | 3.222 | 实际 failure.code=PRIVATE_STATE_REQUIRED |
 | `mutant-readonly-client` | 1 | 1 | 2.723 | 实际 failure.code=PRIVATE_STATE_REQUIRED |
 | `fixture-mutant-import` | 1 | 1 | 2.511 | 单点取消测试 PYTHONPATH 传递，实际子进程 ModuleNotFoundError: No module named 'support' |
 | `fixture-mutant-restore` | 1 | 1 | 1.288 | 单点取消 finally 权限恢复，当前目标检查实际目录仍为 0500，320 != 448 |
 
-最终 13 项通过不是新文件 26 项全量通过。收尾单元项明确标 substitutesOnly=true，PID 使用 substitute-handle，未启动真实 daemon、Worker 或 native RPC；它们确认请求失败后权限已在 stop 前恢复、stop 再失败时仍调用 wait 并保留同一个原异常、没有主错误时次级收尾失败不能假通过。两份 fixture 变异仅证明新增助手及收尾回归，导入/权限错误绝不作为 PS-08 的缺根 red。三份生产目录变异与本轮最终测试绑定，都是各取消一条目录传递，目标未改且实际保存 PRIVATE_STATE_REQUIRED；真实 RPC 目标变异仍等待 Host。
+最终 13 项通过不是新文件 26 项全量通过。清场单元项明确标 substitutesOnly=true，PID 使用 substitute-handle，未启动真实 daemon、Worker 或 native RPC；它们确认请求失败后权限已在 stop 前恢复、stop 再失败时仍调用 wait 并保留同一个原异常、没有主错误时次级清场失败不能假通过。两份 fixture 变异仅证明新增助手及清场回归，导入/权限错误绝不作为 PS-08 的缺根 red。三份生产目录变异与本轮最终测试绑定，都是各取消一条目录传递，目标未改且实际保存 PRIVATE_STATE_REQUIRED；真实 RPC 目标变异仍等待 Host。
 
 本轮新增 4 个静态编号，cb33 的原 22 个 public-state 编号全部保留，当前新文件共 26 个；对原基线共新增 26，原 3412 个定义保持、当前总定义 3438。完整本轮差集在 test-id-diff.json，原 22 个新增编号仍见下文历史登记。本轮四个新增编号为：
 
@@ -46,7 +46,7 @@ readonly 场景维持自有 state 的 0700，复用原 `test_transport_attach.Mu
 | `PublicStateTests.test_ps06_cold_helper_imports_with_source_only_environment` | 实际 import 子进程通过；取消路径传递后失败 |
 | `FixtureRepairTests.test_ps05_request_failure_restores_permissions_before_stop_and_wait` | 通过；取消 finally 恢复后失败 |
 | `FixtureRepairTests.test_ps05_stop_failure_keeps_primary_error_and_still_waits` | 通过；原请求异常对象保留，次级 stop 错误单独记录 |
-| `FixtureRepairTests.test_ps05_cleanup_failure_without_target_is_reported` | 通过；无主错误的收尾失败仍导致场景失败 |
+| `FixtureRepairTests.test_ps05_cleanup_failure_without_target_is_reported` | 通过；无主错误的清场失败仍导致场景失败 |
 
 本轮没有创建真实 daemon 或 Worker，实际执行的是 unittest/import 场景和解释器助手；process-manifest.json 汇总 23 个具有真实整数 PID 的进程回执，全部已获得退出码，包括预期失败的变异进程。早期 setup 与前三次 test runner 只保留 subprocess.run 等待完成的命令/退出码，没有补造 PID；unit 的 substitute-handle 不计入真实进程台账。原 Host 实例 PID 32358 的最终 wait 不在本台账，仍待 Host 确认。
 
@@ -54,11 +54,11 @@ readonly 场景维持自有 state 的 0700，复用原 `test_transport_attach.Mu
 
 本轮根保留 `home/`、`venv/`、`uv-cache/`、`materials/`、`fixed/`、三份 `mutant-*`、两份 `fixture-mutant-*`、所有 `public-state-*` 与 `cleanup-unit-*`、run.py、原始日志及哈希/编号/变异/进程台账。权限负向变异留下确切自有目录 `/private/tmp/ps3b-21te13_d/cleanup-unit-2dodtin8/home/.local/share/hey-my-buddy/state` 为 0500，其中没有真实 daemon，记录在 permission-residuals.json，未手工删除或掩盖。两个任务根均由 Host 验收后按确切路径回收。
 
-请 Host 在允许本地监听与 C-Two 原生 I/O 的环境，按固定源码先复跑 `PublicStateTests.test_ps06_cold_start_probe_and_request_share_default` 的两个域与 `PublicStateTests.test_ps05_readonly_attach_preserves_permissions`，再对最终新文件每文件独立解释器执行 `python -m unittest -fv protocol.test_public_state`（26 项，固定私有模型目录和四个 sentinel）。保存真实 stateDir/serviceId/nativeRoot、所有自有 Popen stop/wait、snapshot/权限前后证据；不要把单元替身当真实 RPC。按本轮 mutation-manifest.json 三份副本分别补核原三个真实 PS-02 目标变异，要求各实际命中 PRIVATE_STATE_REQUIRED。原 attach 28 与 rpc_config 24 的 Host green 绑定 cb33 且源码未变，本轮不因 fixture/记录变化重复它们；原 PID 32358 的最终收尾证据另由 Host 补充。需要公共接线则 Host 处理，范围内缺陷仍退回同 run continue。
+请 Host 在允许本地监听与 C-Two 原生 I/O 的环境，按固定源码先复跑 `PublicStateTests.test_ps06_cold_start_probe_and_request_share_default` 的两个域与 `PublicStateTests.test_ps05_readonly_attach_preserves_permissions`，再对最终新文件每文件独立解释器执行 `python -m unittest -fv protocol.test_public_state`（26 项，固定私有模型目录和四个 sentinel）。保存真实 stateDir/serviceId/nativeRoot、所有自有 Popen stop/wait、snapshot/权限前后证据；不要把单元替身当真实 RPC。按本轮 mutation-manifest.json 三份副本分别补核原三个真实 PS-02 目标变异，要求各实际命中 PRIVATE_STATE_REQUIRED。原 attach 28 与 rpc_config 24 的 Host green 绑定 cb33 且源码未变，本轮不因 fixture/记录变化重复它们；原 PID 32358 的最终清场证据另由 Host 补充。需要公共接线则 Host 处理，范围内缺陷仍退回同 run continue。
 
 ## 上一回合 cb33c217 历史报告（已退回，不是当前验收）
 
-以下保留上一回合证据、编号和未验证声明，其状态截止 cb33c217 交付；当前结果和 Host 退回/操作以本次 continue 节为准。特别是旧 finally 的全量 wait 保证已被真实失败否定，上一根的已记录回执不能证明 Host 后续实例的收尾。
+以下保留上一回合证据、编号和未验证声明，其状态截止 cb33c217 交付；当前结果和 Host 退回/操作以本次 continue 节为准。特别是旧 finally 的全量 wait 保证已被真实失败否定，上一根的已记录回执不能证明 Host 后续实例的停止。
 
 微任务 3-A、run `ef9677e7-df3e-4f57-b03b-4c7add95b85f`、attempt `e35a7e41-c005-4da1-86a4-26d2e942d156` 的候选修复已留在授权检出，尚未通过微任务验收。本次基线为 `9e45e890e0c249250621a12d165001c9c76d7e8e`，core 冻结 `12eb4fcd`；遵循 [执行计划](public-state-plan.md)，没有合并 core、提交、操作分支/标签/stash、修改日常安装或调用真实模型。原 1-A accepted/completed rev20 与原产物 `5c67e96f-90da-4bff-b201-18515aec15ac` / `552ea251` 保留。
 
@@ -84,7 +84,7 @@ readonly 场景维持自有 state 的 0700，复用原 `test_transport_attach.Mu
 
 ## 私有环境、固定助手与公共接线边界
 
-创建时记录的确切系统临时任务根为 `/private/tmp/ps3a-34r52t5y`。TMPDIR、BUDDY_CHECKS_TMPDIR、uv 环境、uv cache、私有 HOME、比较/变异源码及一次性材料均位于该根。没有手工删除任何文件或目录；已有测试框架的 TemporaryDirectory 收尾仍按原实现运行，新 public-state 场景保留目录供 Host 审查。
+创建时记录的确切系统临时任务根为 `/private/tmp/ps3a-34r52t5y`。TMPDIR、BUDDY_CHECKS_TMPDIR、uv 环境、uv cache、私有 HOME、比较/变异源码及一次性材料均位于该根。没有手工删除任何文件或目录；已有测试框架的 TemporaryDirectory 清场仍按原实现运行，新 public-state 场景保留目录供 Host 审查。
 
 先核对 `/tmp/c073-h-x6lhuldm/delegate-materials/provenance.json` 中全部 18 个材料的 SHA256，再复制到任务根 `materials/`。检出 `uv.lock` 与公开锁材料同为 `5ae675829eb4c9aca5e2c933b86799abd3ab9a979e80f8d00c074adf5e27cdf8`，C-Two 0.7.4 wheel 为 `bb625650f186c6066992cac0948c0f44b95a22af46778c8e63bba30d80ee88b8`；完整核对表为 `materials-verified.json`。用 uv 在任务根创建 CPython 3.13.11 环境，再以 `uv pip sync --require-hashes --no-index --find-links "$TASK_ROOT/materials/wheelhouse"` 安装固定的 10 个锁定依赖，两个步骤均退出 0，耗时分别 0.547 / 0.774 秒。未安装项目到日常 runtime。
 
@@ -96,7 +96,7 @@ readonly 场景维持自有 state 的 0700，复用原 `test_transport_attach.Mu
 
 ## 实际验证与原始失败
 
-首次真实探针编号为 `protocol.test_public_state.PublicStateTests.test_ps02_default_call_service`，当时测试助手尚未增加禁用 Worker 池的入口。外层退出 1、5.667 秒、1 项失败；原始 `initial-real.log` 和 `public-state-in8uboi6/daemon.log` 保留。自建 daemon PID 2016 在 endpoint 发布前失败，原始机制为 `buddy: CONSOLE_PORT_IN_USE: Cannot bind 127.0.0.1:0; free the port or configure BUDDY_CONSOLE_PORT`，持有的 Popen 已 wait，退出 2。当时收尾断言另报 waitExit=2，原错误仍在日志；随后测试收尾调整为保存原失败而不以退出断言遮蔽它。没有以这次权限/监听失败作为缺根变异红灯，没有重复服务启动，也没有绕过 console 监听去重试 register。
+首次真实探针编号为 `protocol.test_public_state.PublicStateTests.test_ps02_default_call_service`，当时测试助手尚未增加禁用 Worker 池的入口。外层退出 1、5.667 秒、1 项失败；原始 `initial-real.log` 和 `public-state-in8uboi6/daemon.log` 保留。自建 daemon PID 2016 在 endpoint 发布前失败，原始机制为 `buddy: CONSOLE_PORT_IN_USE: Cannot bind 127.0.0.1:0; free the port or configure BUDDY_CONSOLE_PORT`，持有的 Popen 已 wait，退出 2。当时清场断言另报 waitExit=2，原错误仍在日志；随后测试清场调整为保存原失败而不以退出断言遮蔽它。没有以这次权限/监听失败作为缺根变异红灯，没有重复服务启动，也没有绕过 console 监听去重试 register。
 
 当前检出未包含 `tmp/c073-host/default-state-red-owned-root.json`，没有猜测或修改其他检出。只读查看了 `git show 8337b27f:docs/acceptance/c-two/074-host-review.md`：该 Host 记录给出默认 CLI、源码启动器、BoardClient(False) 三项真实 `PRIVATE_STATE_REQUIRED` 红灯，显式状态、公开解析对照与自有服务停止为绿灯。它是已有 Host 证据，不是本次 Worker 复跑结果；本次 PS-01 的独立真实重放仍需 Host。
 

@@ -84,7 +84,7 @@ Worker 回合的适配器侧 collect（zcode.py:117-172）：读 stdout 上的�
 
 取消与超时在控制器内表现为 NativeError：send 与 pump 在写或等之前检查 cancelled 事件与 deadline，分别抛 "cancelled" 与 "timeout"（zcode_protocol.py:857-861,874-878）；信号处理在 main 只 set 事件（zcode_runner.py:1187-1194）；NativeError code 为 "cancelled" 时 status 记 cancelled，其余记 error（zcode_runner.py:1097-1098）；run 末尾 cancelled 事件强制 status=cancelled 并丢弃回合记录（zcode_runner.py:1173-1175）。超时上限由 `execution_deadline` 给出，timeoutSeconds 为 0 时仅此一处无穷（zcode_runner.py:688-695）；版本探测、可选元数据读、取消与关闭等待各保有更短的有限上限（zcode_runner.py:913；zcode_protocol.py:34-35；zcode_runner.py:1142-1145）。
 
-finally 收尾（三模式共用，zcode_runner.py:1125-1146）：关 stdin；handle.wait 至多 3 秒且受剩余 deadline 约束；`shutdown_confirmed(0.2s)` 不成立则 terminate(1.0s)；再以 0.5 秒结算确认；发布 `processState={shutdownConfirmed, nativeExitCode}`（zcode_runner.py:1146）。
+finally 结束处理（三模式共用，zcode_runner.py:1125-1146）：关 stdin；handle.wait 至多 3 秒且受剩余 deadline 约束；`shutdown_confirmed(0.2s)` 不成立则 terminate(1.0s)；再以 0.5 秒结算确认；发布 `processState={shutdownConfirmed, nativeExitCode}`（zcode_runner.py:1146）。
 
 停止证据的产生（共用）：status ok 要求 shutdown 且原生退出码为 0，否则 native-shutdown-failed 并丢弃记录（zcode_runner.py:1176-1178）；控制器把最终 JSON 结果写到 stdout（zcode_runner.py:1200）。适配器侧 Worker 另要求外层控制器进程组确认消失——控制器与原生 app-server 各成一组，缺一不可（zcode.py:123-125）；Worker 的证据链还要求会话 close 被 ack（zcode_runner.py:1090-1093）且 close 时间序进入 provenance（zcode_runner.py:1094-1096；zcode_protocol.py:1166-1178）。Worker 工件只在 shutdown 时收集：task.txt、turn-output.json、attention.json 与 runner stdout/stderr 日志，各带大小与 sha256（zcode.py:172,310-319）。快速路由的停止证据为 processState.shutdownConfirmed 加 handle.shutdown_confirmed 双确认（read_only.py:262-263），另加结算后 EOF 排干无违规（zcode_runner.py:1147-1167）；decision 侧发布 stopEvidence 汇总（decision.py:103-106）。
 
@@ -168,7 +168,7 @@ spec 与 access 校验写了两遍：适配器 prepare（zcode.py:61-69）与 `c
 
 ## 11. 抽取时的观察
 
-一、`run()` 已经是三种模式共用的"运行一次"函数（zcode_runner.py:886-1184）：环境清洗、提供方快照、ZCODE_* 变量、app-server spawn、版本探测与 finally 收尾（zcode_runner.py:893-930,1125-1146）对各模式逐字相同，可直接成为通用运行模块的主体（第 1、6 节）。
+一、`run()` 已经是三种模式共用的"运行一次"函数（zcode_runner.py:886-1184）：环境清洗、提供方快照、ZCODE_* 变量、app-server spawn、版本探测与 finally 结束处理（zcode_runner.py:893-930,1125-1146）对各模式逐字相同，可直接成为通用运行模块的主体（第 1、6 节）。
 
 二、`configure_session`（zcode_runner.py:629-651）与 `NativeConnection` 的传输层（zcode_protocol.py:822-962）不含角色逻辑，可整体上移（第 2、4 节）；唯一的模式分支是 requestRuntimePreferences 的 nativeSearchEnhancementsEnabled 取反（zcode_protocol.py:889-891），可用一个布尔参数替代。
 

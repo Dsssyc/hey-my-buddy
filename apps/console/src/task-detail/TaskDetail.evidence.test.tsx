@@ -392,7 +392,7 @@ describe("the turn that ended otherwise than it should", () => {
 
   it("names each cause in words, and a wrap-up that a Lead asked for as the Lead's", async () => {
     for (const [cause, words] of [["deadline", "Router 预算用完"], ["forced-stop", "强制停止"], ["console-stop", "控制台停止"], ["service-stop", "服务停止"],
-      ["unknown-stop", "停止（发起者未知）"], ["harness-error", "Harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "收尾宽限到期后停止"]] as const) {
+      ["unknown-stop", "停止（发起者未知）"], ["harness-error", "Harness 错误"], ["transport-error", "传输故障"], ["grace-expired", "有序收尾的宽限期到期后停止"]] as const) {
       cleanup();
       ended({ state: "failed", selectedAttempt: { result: { terminationReason: cause } } });
       await ready();
@@ -402,11 +402,11 @@ describe("the turn that ended otherwise than it should", () => {
     ended({ state: "cancelled", cancellation: { actor: { role: "lead", id: "review-lead" }, note: "Please summarize the current work" },
       selectedAttempt: { stopInitiator: "lead", result: { terminationReason: "wrap-up" } } });
     await ready();
-    expect(pane().textContent).toContain("Lead 收尾完成");
+    expect(pane().textContent).toContain("Lead 有序收尾完成");
     expect(pane().textContent).toContain("Lead 停止");
     expect(pane().textContent).toContain("review-lead");
     expect(pane().textContent).toContain("Please summarize the current work");
-    expect(pane().textContent).not.toContain("Host 收尾完成");
+    expect(pane().textContent).not.toContain("Host 有序收尾完成");
   });
 
   it("names the person who stopped it only when the stopper was a person, and the console or the service never by a name", async () => {
