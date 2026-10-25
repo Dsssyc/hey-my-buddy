@@ -1,7 +1,7 @@
 """Run the Python integration tests and frontend checks in isolated processes.
 
 ``python -m hey_my_buddy.cli.checks [--jobs N]`` runs all Python test files and
-the console typecheck and unit tests.
+the console typecheck, unit tests and packaged-asset build comparison.
 ``python -m hey_my_buddy.cli.checks [--jobs N] PATH...`` runs only the given
 ``tests/python/test_*.py`` files or package directories, relative to the checkout
 or absolute. On POSIX, ``python -m hey_my_buddy.cli.checks --sweep`` retires
@@ -385,25 +385,56 @@ def run_suite_child(root: Path, private_root: Path, directory_name: str, label: 
 
 def run_frontend_suite(root: Path, private_root: Path, live: set, guard: threading.Lock,
                        stop: threading.Event) -> ChildOutcome | None:
-    """One pool job, using the same private environment for both console commands."""
+    """One pool job: typecheck, unit tests, and a fresh build matching packaged assets."""
     started = time.monotonic()
     console = root / "apps" / "console"
     node = shutil.which(os.environ.get("HMB_NODE") or "node")
     tsc = console / "node_modules" / "typescript" / "bin" / "tsc"
     vitest = console / "node_modules" / "vitest" / "vitest.mjs"
-    if not node or not tsc.is_file() or not vitest.is_file():
+    vite = console / "node_modules" / "vite" / "bin" / "vite.js"
+    if not node or not tsc.is_file() or not vitest.is_file() or not vite.is_file():
         return ChildOutcome(
             FRONTEND_LABEL, 1, "",
             "Frontend checks require Node.js and console dev dependencies; "
             "run `npm --prefix apps/console ci` first.\n", time.monotonic() - started,
         )
-    return run_suite_child(
+    built = private_root / "frontend" / "assets"
+    outcome = run_suite_child(
         root, private_root, "frontend", FRONTEND_LABEL,
         [[node, str(tsc), "--noEmit"],
-         [node, str(vitest), "run", "--maxWorkers=1", "--reporter=dot"]],
+         [node, str(vitest), "run", "--maxWorkers=1", "--reporter=dot"],
+         [node, str(vite), "build", "--outDir", str(built)]],
         live, guard, stop, cwd=console,
         environment_overrides={"HMB_PREVIEW_PYTHON": sys.executable},
     )
+    if outcome is None:
+        return None
+    if outcome.returncode == 0:
+        packaged = root / "src" / "hey_my_buddy" / "console" / "assets"
+        packaged_files = {path.relative_to(packaged): path
+                          for path in packaged.rglob("*") if path.is_file()}
+        built_files = {path.relative_to(built): path
+                       for path in built.rglob("*") if path.is_file()}
+        different = {path for path in packaged_files.keys() & built_files.keys()
+                     if packaged_files[path].read_bytes() != built_files[path].read_bytes()}
+        differences = []
+        for label, paths in (
+            ("Extra packaged files", packaged_files.keys() - built_files.keys()),
+            ("Missing packaged files", built_files.keys() - packaged_files.keys()),
+            ("Files with different content", different),
+        ):
+            if paths:
+                differences.append(f"{label}:\n" + "".join(f"  {path.as_posix()}\n" for path in sorted(paths)))
+        if differences:
+            outcome.returncode = 1
+            outcome.stderr += (
+                "Packaged console assets differ from a fresh build.\n" + "".join(differences)
+                + "Run `npm --prefix apps/console run build` and commit the rebuilt assets.\n"
+            )
+        else:
+            outcome.stdout += f"Packaged console assets match the fresh build ({len(built_files)} files).\n"
+    outcome.seconds = time.monotonic() - started
+    return outcome
 
 
 def _report_child_output(outcome: ChildOutcome) -> None:
