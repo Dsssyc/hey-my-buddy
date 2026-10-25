@@ -86,7 +86,7 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
     original_open = process_controller.open_logs
     original_spawn = process_controller.owned_popen
     original_close = os.close
-    original_killpg = os.killpg
+    original_killpg = os.killpg if os.name != "nt" else None
     original_observe = ProcessHandle.shutdown_confirmed
 
     def open_logs(paths):
@@ -127,14 +127,25 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
             raise PermissionError(errno.EPERM, "fixture group observation refused")
         return original_killpg(pgid, sig)
 
+    def active(job):
+        if state["process"] is not None and job is state["process"]._buddy_job:
+            raise PermissionError(errno.EPERM, "fixture Job observation refused")
+        return original_active(job)
+
+    original_active = windows_process.OwnedJob.active
+
     try:
         with mock.patch.object(process_controller, "open_logs", open_logs), \
              mock.patch.object(process_controller, "owned_popen", spawn), \
              mock.patch.object(process_controller.os, "close", close), \
              mock.patch.object(ProcessHandle, "shutdown_confirmed", observe):
             if observation_blocked:
-                with mock.patch.object(process_controller.os, "killpg", killpg):
-                    yield state
+                if os.name == "nt":
+                    with mock.patch.object(windows_process.OwnedJob, "active", active):
+                        yield state
+                else:
+                    with mock.patch.object(process_controller.os, "killpg", killpg):
+                        yield state
             else:
                 yield state
     finally:
@@ -715,7 +726,8 @@ class RouterCollectCoercionTests(unittest.TestCase):
 
 class SignalNameTests(unittest.TestCase):
     def test_only_negative_exit_codes_name_a_signal(self):
-        for code, expected in ((None, None), (0, None), (15, None), (-15, "SIGTERM"), (-9, "SIGKILL"),
+        kill_name = "signal-9" if os.name == "nt" else "SIGKILL"
+        for code, expected in ((None, None), (0, None), (15, None), (-15, "SIGTERM"), (-9, kill_name),
                                (-999, "signal-999")):
             with self.subTest(code=code):
                 self.assertEqual(signal_name(code), expected)

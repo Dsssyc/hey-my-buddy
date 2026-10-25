@@ -6,7 +6,6 @@ from contextlib import closing, contextmanager
 import json
 import os
 from pathlib import Path
-import signal
 import sqlite3
 import sys
 import threading
@@ -340,19 +339,18 @@ class InstallWithoutUpgradeTests(BoardTestCase):
         return decision if decision["status"] == "completed" else None
 
     def test_frozen_execution_stays_unknown_until_identity_based_cancel(self):
-        if not hasattr(signal, "SIGSTOP") or not hasattr(os, "killpg"):
-            self.skipTest("frozen execution requires POSIX signals")
         first = self.private_runtime("frozen-one", 1)
         second = self.private_runtime("frozen-two", 2)
         self.catalog_fixture()
         identity = None
+        frozen_process = None
         release = self.directory / "frozen-install.release"
         try:
             with self.installation(second):
                 self.start(first)
                 run_id, release, before = self.command("frozen-install")
                 identity = before["processIdentity"]
-                os.kill(identity["pid"], signal.SIGSTOP)
+                frozen_process = recovery_fixture.PrivateExecutionRecoveryTests.freeze_execution(self, identity)
                 result = upgrade.upgrade(self.directory)
                 self.assertTrue(result["upgraded"], result)
                 self.assertNotIn("backup", result)
@@ -374,7 +372,7 @@ class InstallWithoutUpgradeTests(BoardTestCase):
         finally:
             release.touch()
             if identity is not None and inspect_process_identity(identity) == "alive":
-                os.kill(identity["pid"], signal.SIGCONT)
+                recovery_fixture.PrivateExecutionRecoveryTests.resume_execution(self, identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
             for journal in self.directory.glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):

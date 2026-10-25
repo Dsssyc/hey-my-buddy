@@ -14,6 +14,7 @@ import threading
 import venv
 from unittest import mock
 from blackboard.tasks.test_workflow import WorkflowTestCase
+from private_acl import assert_private_path
 from hey_my_buddy.cli.blocking import await_run
 from hey_my_buddy.cli.main import _read_control, _scrub_and_save
 from hey_my_buddy.protocol.client import BoardClient
@@ -194,7 +195,7 @@ class HostCutoverTests(WorkflowTestCase):
             self.assertEqual(after['ownerGeneration'], before['ownerGeneration'])
             self.assertEqual(after['revision'], before['revision'])
             self.assertEqual(control_file.read_bytes(), control_bytes)
-            self.assertEqual(control_file.stat().st_mode & 0o777, 0o600)
+            assert_private_path(self, control_file, 0o600)
             self.assertEqual(_read_control(str(control_file)), control)
             self.assertEqual(client.call('workflow_scope_amend', request), {**receipt, 'duplicate': True})
             with closing(sqlite3.connect(self.directory / 'board.sqlite3')) as connection:

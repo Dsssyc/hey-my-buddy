@@ -82,8 +82,15 @@ class StorageTests(BoardTestCase):
         expired = storage.time.time() - storage.GRACE_SECONDS - 60
         if path.is_dir() and not path.is_symlink():
             for child in path.rglob('*'):
-                os.utime(child, (expired, expired), follow_symlinks=False)
-        os.utime(path, (expired, expired), follow_symlinks=False)
+                if os.name == 'nt':
+                    if not private_dirs.linked(child):
+                        os.utime(child, (expired, expired))
+                else:
+                    os.utime(child, (expired, expired), follow_symlinks=False)
+        if os.name == 'nt':
+            os.utime(path, (expired, expired))
+        else:
+            os.utime(path, (expired, expired), follow_symlinks=False)
 
     def test_runtime_leftovers_require_age_free_locks_and_unretained_real_paths(self):
         board = self.board()
@@ -316,7 +323,7 @@ class StorageTests(BoardTestCase):
         rows=[r for r in planned['candidates'] if r['category']=='runtimes']
         self.assertEqual(len(rows),3)
         self.assertTrue(all(not r['eligible'] for r in rows))
-        self.assertIn('runtime-identity-unproven', next(r for r in rows if r['path'].endswith('/' + older))['reasons'])
+        self.assertIn('runtime-identity-unproven', next(r for r in rows if Path(r['path']).name == older)['reasons'])
 
     def test_pruning_reports_bad_entries_and_keeps_older_ready_format(self):
         board = self.board()

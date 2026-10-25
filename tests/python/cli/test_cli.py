@@ -11,13 +11,13 @@ import contextlib
 import io
 import json
 import os
-import stat
 import unittest
 from functools import partial
 from pathlib import Path
 from unittest import mock
 
 from support import BoardTestCase, InProcessBoard
+from private_acl import assert_private_path
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
 import hey_my_buddy.cli.main as cli
@@ -339,8 +339,8 @@ class ControlFileTests(PrivateStateTestCase):
         triple = {"hostId": "host-1", "ownerGeneration": 2, "controlToken": "token-2"}
         path = cli._save_control("run-1", triple, state_dir=self.directory)
         self.assertEqual(Path(path).name, "run-1.g2.json")
-        self.assertEqual(stat.S_IMODE(Path(path).stat().st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(Path(path).parent.stat().st_mode), 0o700)
+        assert_private_path(self, Path(path), 0o600)
+        assert_private_path(self, Path(path).parent, 0o700)
         self.assertEqual(cli._read_control(path), triple)
         # A different generation never overwrites another generation's capability.
         other = cli._save_control("run-1", {"hostId": "host-2", "ownerGeneration": 3, "controlToken": "token-3"}, state_dir=self.directory)
@@ -418,7 +418,7 @@ class ControlFileTests(PrivateStateTestCase):
         self.assertNotIn("controlToken", encoded)
         path = result["controlFile"]
         self.assertEqual(result["control"]["controlFile"], path)
-        self.assertEqual(stat.S_IMODE(Path(path).stat().st_mode), 0o600)
+        assert_private_path(self, Path(path), 0o600)
 
         untouched = {"runId": "run-2", "status": "queued"}
         cli._scrub_and_save(untouched, state_dir=self.directory)
@@ -432,8 +432,8 @@ class ControlFileTests(PrivateStateTestCase):
         files = list((self.directory / "submissions").glob("*.json"))
         self.assertEqual(len(files), 2)
         for path in files:
-            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE((self.directory / "submissions").stat().st_mode), 0o700)
+            assert_private_path(self, path, 0o600)
+        assert_private_path(self, self.directory / "submissions", 0o700)
         with self.assertRaises(BoardError) as missing:
             cli._submission_token("", {}, state_dir=self.directory)
         self.assertEqual(missing.exception.code, "INVALID_ARGUMENT")
@@ -535,14 +535,14 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         run_id = submitted["runId"]
         self.assertNotIn("controlToken", json.dumps(submitted))
         control_path = Path(submitted["controlFile"])
-        self.assertEqual(stat.S_IMODE(control_path.stat().st_mode), 0o600)
-        self.assertEqual(stat.S_IMODE(control_path.parent.stat().st_mode), 0o700)
+        assert_private_path(self, control_path, 0o600)
+        assert_private_path(self, control_path.parent, 0o700)
 
         # The private submission capability was created before the RPC, and a replay
         # recovers the same owner generation without printing a token.
         files = list((self.directory / "submissions").glob("*.json"))
         self.assertEqual(len(files), 1)
-        self.assertEqual(stat.S_IMODE(files[0].stat().st_mode), 0o600)
+        assert_private_path(self, files[0], 0o600)
         code, replay = self.run_cli("submit", self.submit_payload())
         self.assertEqual(code, 0, replay)
         self.assertEqual(replay["runId"], run_id)
@@ -599,7 +599,7 @@ class MicroTaskCliTests(PrivateStateTestCase, WorkflowTestCase):
         self.assertEqual(taken["ownerGeneration"], 2)
         new_control = Path(taken["controlFile"])
         self.assertEqual(new_control.name, f"{submitted['runId']}.g2.json")
-        self.assertEqual(stat.S_IMODE(new_control.stat().st_mode), 0o600)
+        assert_private_path(self, new_control, 0o600)
 
         # The superseded generation is fenced, not adopted.
         code, stale = self.run_cli(

@@ -25,7 +25,9 @@ from support import (
     write_catalog_fixture,
 )
 from protocol.test_transport_attach import MutationRecorder, snapshot
+from private_acl import assert_inherited_private_acl
 from hey_my_buddy.protocol import transport
+from hey_my_buddy import private_dirs
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.errors import BoardError
 
@@ -40,6 +42,32 @@ def native_forbidden_executable(directory: Path, marker: Path) -> Path:
               "    stream.write('unexpected native invocation')\n"
               "raise SystemExit(99)\n")
     return make_fake_executable(directory, "native-forbidden", source=source)
+
+
+def endpoint_process(process, pid):
+    """Match the native service to its created root, including a venv forwarder."""
+    if os.name != "nt":
+        assert pid == process.pid
+        return {"pid": pid}
+    import psutil
+    import win32api
+    import win32con
+    import win32job
+    from hey_my_buddy.protocol.process_start import process_start, windows_handle_start
+    from hey_my_buddy.protocol.windows_process import WindowsAPI
+
+    api = WindowsAPI()
+    assert process.poll() is None
+    root_start = windows_handle_start(int(process._handle), kernel=api.kernel)
+    native = psutil.Process(pid)
+    assert process.pid in {item.pid for item in (native, *native.parents())}
+    assert process_start(process.pid, include_exited=False) == root_start
+    handle = win32api.OpenProcess(win32con.PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    try:
+        return {"pid": pid, "startedAt": windows_handle_start(int(handle), kernel=api.kernel),
+                "jobName": "name unavailable; membership confirmed" if win32job.IsProcessInJob(handle, None) else None}
+    finally:
+        handle.Close()
 
 
 def prepare_daemon_spawn(command, kwargs, state: Path):
@@ -156,13 +184,14 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
             assert not state.exists(), "read-only/no-service call created default state"
             return
 
-        state.mkdir(mode=0o700, parents=True)
-        restore_modes[state] = stat.S_IMODE(state.stat().st_mode)
+        state.mkdir(mode=private_dirs.directory_mode(), parents=True)
+        if os.name != 'nt':
+            restore_modes[state] = stat.S_IMODE(state.stat().st_mode)
         if name == "unsafe-path":
             # PS-07 now guards the private IPC tree. Public state roots are
             # canonicalized by the user's second Host review decision.
             target = state / "target"
-            target.mkdir(mode=0o700)
+            target.mkdir(mode=private_dirs.directory_mode())
             link = state / "ipc"
             link.symlink_to(target, target_is_directory=True)
             endpoint = {"address": "ipc://unused", "token": "fixture"}
@@ -185,7 +214,8 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
             # Supplemental parameter regression only: native connection is
             # substituted; the real _request/configure_client receive the selected
             # root. This is never evidence of a successful real RPC.
-            (state / "ipc").mkdir(mode=0o700)
+            if os.name != 'nt':
+                (state / "ipc").mkdir(mode=private_dirs.directory_mode())
             endpoint = {"address": "ipc://public-state-parameter-fixture", "token": "fixture"}
             proxy = MagicMock()
             proxy.__enter__.return_value = proxy
@@ -206,6 +236,8 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
             else:
                 attach.assert_called_once_with(state)
             assert evidence["requests"][0]["state"] == str(state)
+            if os.name == 'nt':
+                assert not (state / 'ipc').exists(), 'Windows must not create a Unix IPC root'
             evidence["connectionSubstitute"] = True
             return
 
@@ -279,14 +311,22 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
                     reply = transport.call_board("health", state_dir=state if name.startswith("explicit") else None)
                 elif name in {"client-auto", "client-readonly", "readonly"} or name.endswith("client"):
                     if name == "readonly":
-                        modes = {path: stat.S_IMODE(path.stat().st_mode) for path in (state, state / "ipc")}
-                        restore_modes.update(modes)
+                        observed_paths = (state,) if os.name == 'nt' else (state, state / 'ipc')
+                        modes = {path: stat.S_IMODE(path.stat().st_mode) for path in observed_paths}
+                        if os.name != 'nt':
+                            restore_modes.update(modes)
+                        acl_before = ({path: assert_inherited_private_acl(unittest.TestCase(), path)
+                                       for path in (state, state / 'control.json')}
+                                      if os.name == 'nt' else {})
                         before = snapshot(state)
                         with MutationRecorder() as recorder:
                             reply = BoardClient(autostart=False).ping()
                         recorder.assert_no_mutation()
                         assert snapshot(state) == before, "read-only client changed state entries"
                         assert {path: stat.S_IMODE(path.stat().st_mode) for path in modes} == modes
+                        if os.name == 'nt':
+                            assert {path: assert_inherited_private_acl(unittest.TestCase(), path)
+                                    for path in acl_before} == acl_before
                         evidence["readonlySnapshotPreserved"] = True
                     else:
                         with patch.object(transport, "_cold_start_preflight") as cold, \
@@ -300,7 +340,7 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
                 else:
                     reply = transport.call_service("health", state_dir=state if name.startswith("explicit") else None)
                 assert reply["serviceId"] == ready["serviceId"], "public call reached another service"
-                assert endpoint["pid"] == process.pid
+                evidence["endpointProcess"] = endpoint_process(process, endpoint["pid"])
 
             evidence["reply"] = reply
             service_state = ready["stateDir"] if name == "readonly" else reply["stateDir"]
@@ -308,8 +348,12 @@ def run_case(name: str, work: Path, *, substitutes_only: bool = False) -> None:
             evidence["serviceStateDir"] = service_state
             # This is the native public context after real local I/O, not a mock
             # report inferred from the directory supplied to configure_client.
-            evidence["nativeRoot"] = str(transport.cc.local_endpoint_context().root)
-            assert evidence["nativeRoot"] == str(state / "ipc")
+            native_root = transport.cc.local_endpoint_context().root
+            evidence["nativeRoot"] = None if native_root is None else str(native_root)
+            assert evidence["nativeRoot"] == (None if os.name == 'nt' else str(state / 'ipc'))
+            if os.name == 'nt':
+                assert not (state / 'ipc').exists(), 'Windows must not create a Unix IPC root'
+                assert_inherited_private_acl(unittest.TestCase(), state)
             assert all(item["state"] == str(state) for item in evidence["requests"]), evidence["requests"]
             assert not (work / "native-invoked").exists(), "native CLI sentinel was invoked"
     except BaseException as error:
@@ -434,6 +478,7 @@ class PublicStateTests(unittest.TestCase):
     def test_ps06_supplied_endpoint_keeps_default_directory(self):
         self.case("boundary-endpoint")
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX IPC path guard')
     def test_ps07_public_resolution_preserves_path_guards(self):
         self.case("unsafe-path")
 
@@ -494,12 +539,15 @@ class FixtureRepairTests(unittest.TestCase):
         self.assertEqual([failure["stage"] for failure in evidence["cleanupFailures"]], ["stop_service"] if stop_fails else [])
         return evidence
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX directory mode mutation')
     def test_ps05_request_failure_restores_permissions_before_stop_and_wait(self):
         self.simulate_readonly()
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX directory mode mutation')
     def test_ps05_stop_failure_keeps_primary_error_and_still_waits(self):
         self.simulate_readonly(stop_fails=True)
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX directory mode mutation')
     def test_ps05_cleanup_failure_without_target_is_reported(self):
         self.simulate_readonly(target_fails=False, stop_fails=True)
 

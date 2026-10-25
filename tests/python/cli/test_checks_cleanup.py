@@ -152,6 +152,27 @@ class ChecksEnvironmentTests(unittest.TestCase):
 
 
 class ResidueObservationTests(unittest.TestCase):
+    def test_linked_private_root_is_an_observation_failure(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
+            target = Path(raw) / "target"
+            target.mkdir()
+            link = Path(raw) / "linked-root"
+            if os.name == "nt":
+                result = subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                                        capture_output=True)
+                self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+            else:
+                link.symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(OSError, "private root is a link"):
+                checks.held_locks(link)
+
+    def test_unreadable_private_tree_is_an_observation_failure(self):
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
+            root = Path(raw)
+            with patch.object(checks.os, "scandir", side_effect=PermissionError("scan refused")):
+                with self.assertRaisesRegex(PermissionError, "scan refused"):
+                    checks.held_locks(root)
+
     def test_directory_with_a_lifetime_lock_name_is_not_silently_dropped(self):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-checks-test-") as raw:
             root = Path(raw)

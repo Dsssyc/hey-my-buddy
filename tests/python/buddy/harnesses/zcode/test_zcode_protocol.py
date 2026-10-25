@@ -2,6 +2,7 @@
 import errno
 import json
 import math
+import os
 from pathlib import Path
 import queue
 import subprocess
@@ -962,14 +963,27 @@ class OwnedProcessEvidenceTests(unittest.TestCase):
     def test_failed_group_observation_cannot_confirm_shutdown(self):
         process = mock.Mock(pid=12345)
         process.poll.return_value = 0
-        with mock.patch("hey_my_buddy.protocol.process_handle.os.getpgid", return_value=12345), \
-             mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
+        if os.name == "nt":
+            job = mock.Mock()
+            process._buddy_job = job
+        with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
             handle = ProcessHandle(process, own_group=True, log_paths={})
         for error in (OSError(errno.EIO, "process observation unavailable"), PermissionError()):
-            with self.subTest(error=type(error).__name__), mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=error):
-                self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
-        with mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=ProcessLookupError()):
+            with self.subTest(error=type(error).__name__):
+                if os.name == "nt":
+                    job.active.side_effect = error
+                    self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
+                else:
+                    with mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=error):
+                        self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
+        if os.name == "nt":
+            job.active.side_effect = None
+            job.active.return_value = 0
             self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
+            job.close.assert_called_once_with(confirmed=True)
+        else:
+            with mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=ProcessLookupError()):
+                self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
 
 
 if __name__ == "__main__":

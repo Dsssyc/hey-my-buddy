@@ -124,14 +124,21 @@ class FailoverTests(RouterDispatchTestCase):
         self._router_budget_stop(stop_delay=11)
 
     def _router_budget_stop(self, *, stop_delay):
+        stopped = self.directory / f"native-stop-{stop_delay}"
+
         class SleepingRouter(CommandAdapter):
             name = "decision"
 
             def argv(self):
                 return [sys.executable, "-c", (
-                    "import signal, time\n"
-                    f"def stop(*_): time.sleep({stop_delay}); raise SystemExit(0)\n"
-                    "signal.signal(signal.SIGTERM, stop)\n"
+                    "import os, signal, threading, time\n"
+                    "from pathlib import Path\n"
+                    f"def stop(*_): Path({str(stopped)!r}).touch(); time.sleep({stop_delay}); raise SystemExit(0)\n"
+                    "signal.signal(signal.SIGBREAK if os.name == 'nt' else signal.SIGTERM, stop)\n"
+                    # Bound a failed stop delivery so the file reports the
+                    # missing signal instead of holding the entire check run.
+                    "def watchdog(): time.sleep(18); os._exit(99)\n"
+                    "threading.Thread(target=watchdog, daemon=True).start()\n"
                     "while True: time.sleep(.05)\n")]
 
             def prepare(self, context):
@@ -172,6 +179,7 @@ class FailoverTests(RouterDispatchTestCase):
             with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()):
                 receipt = execution._execute_selected(first, first["task"], spec, first["attempt"], directory, holder)
             elapsed = time.monotonic() - started
+            self.assertTrue(stopped.exists(), "the native stop signal was not delivered")
             self.assertLess(elapsed, 20)
             if stop_delay:
                 self.assertGreater(elapsed, 11)

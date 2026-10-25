@@ -1767,7 +1767,7 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIsNotNone(process._buddy_job.handle)
         self.assertTrue(process.stdout.closed)
 
-    @unittest.skipIf(os.name == "nt", "POSIX private-process regression")
+    @unittest.skipIf(os.name == "nt", "POSIX process group; Windows Job stop is tested above")
     def test_fd_close_failure_after_posix_creation_keeps_actual_stop(self):
         error = OSError("fixture stderr close failed")
         with self.assertRaises(Exception) as caught:
@@ -1778,7 +1778,7 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIsNotNone(self.fd_close_child.poll())
         self.assertTrue(self.fd_close_child.stdout.closed)
 
-    @unittest.skipIf(os.name == "nt", "POSIX private-process regression")
+    @unittest.skipIf(os.name == "nt", "POSIX group observation; Windows Job uncertainty is tested above")
     def test_fd_close_failure_after_posix_creation_keeps_unknown_stop(self):
         error = OSError("fixture stderr close failed")
         real_killpg = os.killpg

@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from hey_my_buddy import state_root
+from hey_my_buddy import windows_files
 from hey_my_buddy.blackboard.service.daemon import Daemon
 from hey_my_buddy.blackboard.service import daemon
 from hey_my_buddy.errors import BoardError
@@ -20,6 +21,34 @@ class ReachedBoundary(RuntimeError):
 
 
 class StateRootTests(BoardTestCase):
+    def test_windows_acl_policy_accepts_profile_trustees_and_rejects_unsafe_descriptors(self):
+        user = 'S-1-5-21-1000'
+        allowed = [(0, 0), 0, user]
+        inherited = [allowed, [(0, 0), 0, windows_files.SYSTEM_SID],
+                     [(0, 0), 0, windows_files.ADMINISTRATORS_SID],
+                     [(0, 0), 0, windows_files.OWNER_RIGHTS_SID]]
+        for owner in (user, windows_files.ADMINISTRATORS_SID):
+            with self.subTest(owner=owner):
+                windows_files.validate_acl(owner, user, True, inherited)
+        for owner, present, aces in (
+            ('S-1-5-21-2000', True, inherited),
+            (user, False, inherited), (user, True, None),
+            (user, True, [((1, 0), 0, user)]),
+            (user, True, [((0, 0), 0, 'S-1-5-21-2000')]),
+            (user, True, [((0, 0, 0), 0, user)]),
+        ):
+            with self.subTest(owner=owner, present=present, aces=aces), \
+                    self.assertRaises(BoardError) as refused:
+                windows_files.validate_acl(owner, user, present, aces)
+            self.assertEqual(refused.exception.code, 'PRIVATE_PATH_UNSAFE')
+
+    @unittest.skipUnless(os.name == 'nt', 'Windows profile ACL')
+    def test_windows_owner_creates_a_root_accepted_under_the_current_account(self):
+        root = self.directory / 'state-with-inherited-acl'
+        self.assertEqual(state_root.check_state_root(root, create=True), root)
+        self.assertTrue(root.is_dir())
+        self.assertEqual(state_root.check_state_root(root), root)
+
     def test_windows_root_normalizes_dotdot_without_resolving_links(self):
         target = self.directory / 'actual'
         target.mkdir()

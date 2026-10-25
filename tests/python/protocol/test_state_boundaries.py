@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from hey_my_buddy import private_dirs
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import client, rpc_config, transport
 from hey_my_buddy.protocol.client import BoardClient
@@ -21,8 +22,8 @@ class StateBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="state-boundary-")).resolve()
         self.state = self.root / "state"
-        self.state.mkdir(mode=0o700)
-        (self.state / "ipc").mkdir(mode=0o700)
+        self.state.mkdir(mode=private_dirs.directory_mode())
+        (self.state / "ipc").mkdir(mode=private_dirs.directory_mode())
         self.endpoint = {"token": "fixture", "address": "ipc://fixture"}
 
     def test_internal_parameters_are_required_path_without_another_resolver(self):
@@ -149,8 +150,13 @@ class StateBoundaryTests(unittest.TestCase):
     def test_configuration_uses_supplied_root_without_environment_or_client_fallback(self):
         with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.root / "foreign")}), \
                 patch.object(rpc_config.cc, "set_local_endpoint") as select:
-            self.assertEqual(rpc_config.configure_local_endpoint(self.state, create=False), self.state / "ipc")
-            select.assert_called_once_with(root=str(self.state / "ipc"))
+            selected = rpc_config.configure_local_endpoint(self.state, create=False)
+            if os.name == "nt":
+                self.assertIsNone(selected)
+                select.assert_called_once_with()
+            else:
+                self.assertEqual(selected, self.state / "ipc")
+                select.assert_called_once_with(root=str(self.state / "ipc"))
 
     def test_unavailable_ping_is_unhealthy_but_other_errors_escape_unchanged(self):
         with patch.object(transport, "_read_endpoint", return_value=self.endpoint):
@@ -170,6 +176,7 @@ class StateBoundaryTests(unittest.TestCase):
                     transport._healthy(self.state)
                 self.assertIs(raised.exception, error)
 
+    @unittest.skipIf(os.name == "nt", "Unix IPC directory; Windows uses the user-scoped pipe domain")
     def test_missing_ipc_is_a_direct_read_only_condition(self):
         with patch.object(transport, "_read_endpoint", return_value=self.endpoint), patch.object(transport, "_request") as request:
             self.assertIsNone(transport._attach_read_only(self.root / "absent"))
@@ -180,9 +187,10 @@ class StateBoundaryTests(unittest.TestCase):
         with patch.object(transport, "os", SimpleNamespace(name="nt")),                 patch.object(transport, "_read_endpoint", return_value=self.endpoint),                 patch.object(transport, "_request", return_value={"status": "ok"}):
             self.assertIs(transport._healthy(self.root / "without-ipc"), self.endpoint)
 
+    @unittest.skipIf(os.name == "nt", "Unix IPC directory; Windows state-root guards own filesystem validation")
     def test_dangling_ipc_link_still_reaches_the_structural_guard(self):
         state = self.root / "dangling-state"
-        state.mkdir(mode=0o700)
+        state.mkdir(mode=private_dirs.directory_mode())
         (state / "ipc").symlink_to(self.root / "missing-target", target_is_directory=True)
         with patch.object(transport, "_read_endpoint", return_value=self.endpoint),                 patch.object(transport.cc, "connect") as connect:
             with self.assertRaises(BoardError) as raised:
@@ -195,7 +203,7 @@ class StateBoundaryTests(unittest.TestCase):
         environment = {k: v for k, v in os.environ.items() if not k.startswith(("HMB_", "ANTHROPIC_", "C2_"))
                        and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         home = self.root / "home"
-        home.mkdir(mode=0o700)
+        home.mkdir(mode=private_dirs.directory_mode())
         environment.update(HOME=str(home), USERPROFILE=str(home))
         for module, arguments in (("blackboard.service.daemon", []),
                                   ("buddy.runtime.execution", ["--startup", str(self.root / "absent-startup")]),

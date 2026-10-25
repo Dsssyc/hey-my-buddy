@@ -299,7 +299,7 @@ class FixtureCleanupTests(unittest.TestCase):
                 selected = {key: value for key, value in os.environ.items()
                             if key in keys or key.startswith(('HMB_', 'ANTHROPIC_', 'C2_'))}
                 result = {'environment': selected, 'state': str(state),
-                          'database': str(store.db.path), 'ipc': str(ipc),
+                          'database': str(store.db.path), 'ipc': str(ipc) if ipc is not None else None,
                           'runtime': str(runtime_root()), 'catalog': payload['source']}
                 assert cc.shutdown()['completed']
                 print(json.dumps(result))
@@ -308,7 +308,7 @@ class FixtureCleanupTests(unittest.TestCase):
             probe = json.loads(completed.stdout)
             self.assertEqual(probe["state"], str(directory))
             self.assertEqual(probe["runtime"], str(directory / "runtime-root"))
-            self.assertEqual(probe["ipc"], str(directory / "ipc"))
+            self.assertEqual(probe["ipc"], None if os.name == "nt" else str(directory / "ipc"))
             self.assertEqual(probe["catalog"], f"file:{catalog}")
             self.assertEqual(probe["environment"]["HMB_MODEL_CATALOG_FILE"], str(catalog))
             for key in inherited.keys() - {"HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_MODEL_CATALOG_FILE",

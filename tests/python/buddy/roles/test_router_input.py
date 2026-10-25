@@ -63,17 +63,14 @@ class FrozenTreeEntryTests(unittest.TestCase):
         router_input.discard(frozen)
         self.assertFalse(frozen.exists())
 
+    @unittest.skipIf(os.name == 'nt', 'POSIX file mode is part of the frozen snapshot')
     def test_mode_change_invalidates_the_snapshot(self):
         directory = self.root / 'mode-mirror'
         directory.mkdir()
         frozen, expected = router_input.prepare(self.manifest, directory, deadline=time.monotonic() + 120)
         path = frozen / 'first.txt'
-        path.chmod(0o444 if os.name == 'nt' else 0o644)
-        try:
-            self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
-        finally:
-            if os.name == 'nt':
-                path.chmod(0o666)
+        path.chmod(0o644)
+        self.assertFalse(router_input.verify(self.manifest, frozen, expected, deadline=time.monotonic() + 120)['unchanged'])
 
 
     def assert_refused_after_materializing_a_file(self, entry, message):

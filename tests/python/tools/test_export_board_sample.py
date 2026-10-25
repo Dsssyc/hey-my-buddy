@@ -13,6 +13,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 from blackboard.store.upgrade_fixture import load_fixture
 from console.test_console import Browser
 from support import InProcessBoard, write_catalog_fixture, _child_environment, wait_for
+from private_acl import assert_private_path
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, SECRET_KEY, Database
 from hey_my_buddy import private_dirs
 from hey_my_buddy.errors import BoardError
@@ -85,7 +86,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         board.store.db.close()
         before = files(board.directory)
         output = export_sample(board.directory, self.directory / 'sample')
-        self.assertEqual(output.stat().st_mode & 0o777, 0o700)
+        assert_private_path(self, output, 0o700)
         self.assertFalse((output / 'controls').exists())
         self.assertFalse((output / 'harnesses').exists())
         self.assertEqual([p.name for p in (output / 'sessions').rglob('*.jsonl')], [attempt + '.jsonl'])

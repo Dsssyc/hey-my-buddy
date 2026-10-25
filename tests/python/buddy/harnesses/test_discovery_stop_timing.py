@@ -1,4 +1,4 @@
-"""Real POSIX probe groups, with private fixtures and controlled stop timing."""
+"""Real POSIX fork/group timing; Windows Job and pipe timing live in test_windows_probe_pipe."""
 from __future__ import annotations
 
 from contextlib import contextmanager
@@ -89,7 +89,7 @@ os._exit(0)
 '''
 
 
-@unittest.skipIf(os.name == "nt", "actual POSIX process groups")
+@unittest.skipIf(os.name == "nt", "POSIX fork/group race; Windows Job probe has its own pipe tests")
 class DiscoveryStopTimingTests(unittest.TestCase):
     def wait_for(self, predicate, description):
         deadline = time.monotonic() + 20

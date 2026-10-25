@@ -17,10 +17,10 @@ native checks, and only this file's own dummy credential bytes appear anywhere.
 from __future__ import annotations
 
 import os
-import stat
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
+from private_acl import assert_private_path
 
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
@@ -117,7 +117,7 @@ class CandidatePrepareTests(BoardTestCase):
         self.assertNotEqual(first_root, second_root)
         native = Path(expected)
         self.assertTrue(native.is_dir())
-        self.assertEqual(stat.S_IMODE(native.stat().st_mode) & 0o777, 0o700)
+        assert_private_path(self, native, 0o700)
 
         # Each attempt holds its own input and credential; the run control is
         # an in-process object rather than a second-process handoff file.

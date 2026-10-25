@@ -119,9 +119,10 @@ class ProcessIdentityTests(unittest.TestCase):
             with self.subTest(failure=failure):
                 identity.kill_verified_process_group(RECORD, source=source)
                 self.assertEqual(source.signals, [])
-        source = Source()
-        identity.kill_verified_process_group(RECORD, source=source)
-        self.assertEqual(source.signals, [(301, signal.SIGKILL)])
+        if os.name != "nt":
+            source = Source()
+            identity.kill_verified_process_group(RECORD, source=source)
+            self.assertEqual(source.signals, [(301, signal.SIGKILL)])
         windows = Source(started_at=WINDOWS_RECORD["startedAt"])
         identity.kill_verified_process_group(WINDOWS_RECORD, source=windows)
         self.assertEqual(windows.signals, [("job", WINDOWS_RECORD["jobName"])])

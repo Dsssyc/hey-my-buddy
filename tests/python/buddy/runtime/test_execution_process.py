@@ -26,6 +26,17 @@ from hey_my_buddy.buddy.runtime import command
 from hey_my_buddy.buddy.harnesses.live import LiveRequest, InquiryPayload
 
 
+def self_identity_for_endpoint() -> dict:
+    """Describe this test host in the platform's current identity shape."""
+    pid = os.getpid()
+    started_at = _creation_time(pid)
+    if os.name == "nt":
+        return {"pid": pid, "startedAt": started_at,
+                "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-000000000001"}
+    return {"bootId": boot_id(), "pid": pid, "startedAt": started_at,
+            "processGroupId": pid, "jobName": None}
+
+
 class ExecutionEndpointTests(unittest.TestCase):
     def test_service_claim_turn_shape_is_checked_at_process_boundary(self):
         base = {"task": {"taskId": "task", "spec": {"adapter": "command"}},
@@ -190,27 +201,51 @@ class ExecutionEndpointTests(unittest.TestCase):
             state = Path(directory)
             claim = {"task": {"taskId": "task-3", "spec": {"adapter": "command"}},
                      "attempt": {"taskId": "task-3", "attemptId": "attempt-3", "generation": 1}}
-            handle = SimpleNamespace(pid=301)
-            identity = {"bootId": "linux:00000000-0000-4000-8000-000000000001",
-                        "pid": 301, "startedAt": 105, "processGroupId": 301, "jobName": None}
+            handle = SimpleNamespace(pid=301, process=object(), job=object() if os.name == "nt" else None)
+            if os.name == "nt":
+                identity = {"pid": 301, "startedAt": 1339247086400000000}
+            else:
+                identity = {"bootId": "linux:00000000-0000-4000-8000-000000000001",
+                            "pid": 301, "startedAt": 105, "processGroupId": 301, "jobName": None}
 
             def launched(**_kwargs):
                 evidence = state / "attempts/task-3/attempt-3"
                 self.assertTrue((evidence / "spawn.intent").exists())
                 private = launch_protocol.execution_directory(claim, state)
                 self.assertTrue((private / "execution-start.json").exists())
+                self.assertEqual(json.loads((evidence / "spawn.intent").read_text(encoding="utf-8")),
+                                 {"taskId": "task-3", "attemptId": "attempt-3", "generation": 1})
+                startup = json.loads((private / "execution-start.json").read_text(encoding="utf-8"))
+                self.assertEqual(startup["claim"], claim)
+                self.assertEqual(startup["stateDir"], str(state))
+                self.assertEqual(startup["nonce"], "n" * 64)
+                self.assertEqual(startup["sessionRecordPath"], None)
+                self.assertEqual(startup["jobName"] is not None, os.name == "nt")
+                if os.name == "nt":
+                    self.assertEqual(startup["jobName"], _kwargs["job_name"])
+                    identity["jobName"] = _kwargs["job_name"]
                 return handle
 
             with mock.patch.object(launch_protocol, "launch_controller",
-                            side_effect=launched), \
-                 mock.patch.object(launch_protocol, "capture_process_identity", return_value=identity):
+                            side_effect=launched) as controller, \
+                 mock.patch.object(launch_protocol, "capture_process_identity", return_value=identity), \
+                 mock.patch.object(launch_protocol, "transfer_job_to_child") as transfer:
                 launched_handle = launch_protocol.launch_execution(claim, state, "n" * 64)
             self.assertIs(launched_handle, handle)
             self.assertEqual(handle.process_identity, identity)
             self.assertEqual((state / "attempts/task-3/attempt-3/spawn.marker").is_file(), True)
+            job_name = controller.call_args.kwargs.get("job_name")
+            if os.name == "nt":
+                self.assertTrue(job_name.startswith("Local\\HeyMyBuddy-"))
+                transfer.assert_called_once_with(handle.process, handle.job)
+            else:
+                self.assertIsNone(job_name)
+                transfer.assert_not_called()
             self.assertEqual(json.loads((handle.execution_directory / "execution-start.json").read_text(encoding="utf-8")),
                              {"claim": claim, "stateDir": str(state), "nonce": "n" * 64,
-                              "jobName": None, "sessionRecordPath": None})
+                              "jobName": job_name, "sessionRecordPath": None})
+            marker = json.loads((state / "attempts/task-3/attempt-3/spawn.marker").read_text(encoding="utf-8"))
+            self.assertEqual(marker["processIdentity"], identity)
 
     def test_startup_write_failure_never_creates_a_child(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -301,8 +336,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                      "attempt": {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}}
             execution = Execution(claim, state, "a" * 64, client=object())
             execution.directory.mkdir(parents=True, mode=0o700)
-            process_identity = {"bootId": boot_id(), "pid": os.getpid(),
-                "startedAt": _creation_time(os.getpid()), "processGroupId": os.getpid(), "jobName": None}
+            process_identity = self_identity_for_endpoint()
             execution.live.start(process_identity)
             try:
                 endpoint_file = execution.directory / "execution-live.json"
@@ -362,8 +396,12 @@ class ExecutionEndpointTests(unittest.TestCase):
                                        return_value={"status": "reaped"}) as reap:
                     self.assertEqual(launch_protocol.cleanup_execution_endpoint(
                         execution.directory, process_identity, state_dir=state,
-                        stopped_evidence="identity-absent")["status"], "reaped")
-                    reap.assert_called_once()
+                        stopped_evidence="identity-absent")["status"],
+                        "not-applicable" if os.name == "nt" else "reaped")
+                    if os.name == "nt":
+                        reap.assert_not_called()
+                    else:
+                        reap.assert_called_once()
                     self.assertFalse((execution.directory / "execution-live.json").exists())
             finally:
                 execution.live.finish()
@@ -375,8 +413,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                      "attempt": {"taskId": "task-shared", "attemptId": "attempt-shared", "generation": 1}}
             execution = Execution(claim, state, "c" * 64, client=object())
             execution.directory.mkdir(parents=True, mode=0o700)
-            process_identity = {"bootId": boot_id(), "pid": os.getpid(),
-                "startedAt": _creation_time(os.getpid()), "processGroupId": os.getpid(), "jobName": None}
+            process_identity = self_identity_for_endpoint()
             execution.live.start(process_identity)
             clients = []
             try:
@@ -414,8 +451,7 @@ class ExecutionEndpointTests(unittest.TestCase):
 
             execution = Execution(claim, state, "b" * 64, client=Client())
             execution.directory.mkdir(parents=True, mode=0o700)
-            process_identity = {"bootId": boot_id(), "pid": os.getpid(),
-                "startedAt": _creation_time(os.getpid()), "processGroupId": os.getpid(), "jobName": None}
+            process_identity = self_identity_for_endpoint()
             execution.live.start(process_identity)
             self.assertTrue((execution.directory / "execution-live.json").exists())
             receipt = execution.receipt(claim, {"status": "ok", "shutdownConfirmed": True},
