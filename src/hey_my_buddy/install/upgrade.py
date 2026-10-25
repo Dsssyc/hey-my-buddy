@@ -16,7 +16,7 @@ import uuid
 
 from ..blackboard.store import backup
 from .. import private_dirs, private_files
-from ..paths import native_path
+from ..paths import native_path, resolved_path
 from . import runtime
 from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
@@ -329,11 +329,11 @@ def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
     from .skill_install import agent_skills_home, claude_skills_home, _is_link, SKILL
     try:
         target, staged, previous = (Path(journal[name]) for name in ('skillTarget', 'skillStage', 'skillPrevious'))
-        expected = agent_skills_home().resolve() / SKILL
+        expected = resolved_path(agent_skills_home()) / SKILL
         suffix = staged.name.removeprefix('.hey-my-buddy-upgrade-stage-')
         if (not all(is_absolute_path(path) and not _is_link(path) for path in (target, staged, previous))
-                or target.resolve() != expected or staged.parent.resolve() != expected.parent
-                or previous.parent.resolve() != expected.parent
+                or resolved_path(target) != expected or resolved_path(staged.parent) != expected.parent
+                or resolved_path(previous.parent) != expected.parent
                 or re.fullmatch(r'[0-9a-f]{32}', suffix) is None
                 or staged.name != '.hey-my-buddy-upgrade-stage-' + suffix
                 or previous.name != '.hey-my-buddy-upgrade-previous-' + suffix):
@@ -341,7 +341,7 @@ def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
         if journal.get('claudeLink') and Path(journal['claudeLink']).absolute() != claude_skills_home() / SKILL:
             raise ValueError('unsafe Claude link')
         return target, staged, previous
-    except (KeyError, TypeError, ValueError):
+    except (BoardError, KeyError, TypeError, ValueError):
         raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal skill paths do not match this installation') from None
 
 
@@ -349,17 +349,17 @@ def _restore_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None
     if paths is None:
         return
     target, staged, previous = paths
-    if previous.exists():
-        if target.exists():
+    if native_path(previous).exists():
+        if native_path(target).exists():
             shutil.rmtree(native_path(target))
-        previous.rename(target)
-    elif journal.get('skillHadPrevious') is False and target.exists() and not staged.exists():
+        native_path(previous).rename(native_path(target))
+    elif journal.get('skillHadPrevious') is False and native_path(target).exists() and not native_path(staged).exists():
         shutil.rmtree(native_path(target))
-    if staged.exists():
+    if native_path(staged).exists():
         shutil.rmtree(native_path(staged))
     link = journal.get('claudeLink')
     from .skill_install import _is_link, _remove_claude_link
-    if journal.get('claudeLinkWasMissing') and link and _is_link(Path(link)) and Path(os.path.realpath(link)) == target:
+    if journal.get('claudeLinkWasMissing') and link and _is_link(Path(link)) and resolved_path(Path(link)) == target:
         _remove_claude_link(Path(link))
 
 
@@ -367,9 +367,9 @@ def _publish_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None
     if paths is None:
         return
     target, staged, previous = paths
-    if target.exists():
-        target.rename(previous)
-    staged.rename(target)
+    if native_path(target).exists():
+        native_path(target).rename(native_path(previous))
+    native_path(staged).rename(native_path(target))
     from .skill_install import _link_claude
     linked = _link_claude(target)
     if linked['status'] == 'linked':
@@ -380,7 +380,7 @@ def _verify_skill_generation(paths: tuple[Path, Path, Path] | None, target: Path
     if paths is None:
         return
     from .skill_install import _marker
-    skill = paths[1] if paths[1].exists() else paths[0]
+    skill = paths[1] if native_path(paths[1]).exists() else paths[0]
     marker = _marker(skill)
     ready = runtime.read_ready(target)
     if (marker is None or marker.get('contract') != health.get('contractVersion')
@@ -479,7 +479,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 if skill_target is None or _is_link(skill_target):
                     raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is missing or linked')
                 from .skill_install import _marker, _is_product_skill
-                if skill_target.exists() and not (_marker(skill_target) or _is_product_skill(skill_target)):
+                if native_path(skill_target).exists() and not (_marker(skill_target) or _is_product_skill(skill_target)):
                     raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is not a hey-my-buddy skill')
                 suffix = uuid.uuid4().hex
                 skill_stage = skill_target.with_name(f'.hey-my-buddy-upgrade-stage-{suffix}')
@@ -494,8 +494,8 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 from .skill_install import claude_skills_home, SKILL
                 claude_link = claude_skills_home() / SKILL
                 journal.update(skillTarget=str(skill_target), skillStage=str(skill_stage), skillPrevious=str(skill_previous),
-                               skillHadPrevious=skill_target.exists(), claudeLink=str(claude_link),
-                               claudeLinkWasMissing=not claude_link.exists() and not _is_link(claude_link))
+                               skillHadPrevious=native_path(skill_target).exists(), claudeLink=str(claude_link),
+                               claudeLinkWasMissing=not native_path(claude_link).exists() and not _is_link(claude_link))
             write_journal(marker, journal)
             backed_up = None
             active = previous

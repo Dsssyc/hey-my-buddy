@@ -10,6 +10,7 @@ from unittest import mock
 
 from hey_my_buddy.install import skill_package, skill_install
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.private_dirs import ensure_private_dir
 
 
@@ -109,6 +110,53 @@ class SkillPackageTests(unittest.TestCase):
             self.assertEqual(placement, 'updated')
             self.assertTrue(skill_install._matches(source, target, marker))
             self.assertEqual((previous / 'scripts/hey-my-buddy').read_text(encoding="utf-8"), 'damaged')
+
+    def test_deep_skill_install_and_upgrade_restore_keep_ordinary_paths(self):
+        from hey_my_buddy.install import upgrade
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            home = root.joinpath(*(f'depth-{index}-' + 'x' * 38 for index in range(5)))
+            target = home / skill_install.SKILL
+            self.assertGreater(len(str(target)), 260)
+            native_path(home).mkdir(parents=True)
+            try:
+                source = root / 'source'
+                native_path(source).mkdir()
+                native_path(source / 'skill.json').write_text(
+                    json.dumps({'name': skill_install.SKILL, 'version': 'new'}), encoding='utf-8')
+                native_path(source / 'SKILL.md').write_text('new', encoding='utf-8')
+                native_path(target).mkdir()
+                native_path(target / 'skill.json').write_text(
+                    json.dumps({'name': skill_install.SKILL, 'version': 'old'}), encoding='utf-8')
+                native_path(target / 'SKILL.md').write_text('old', encoding='utf-8')
+
+                placement, previous = skill_install._place(source, target, skill_install._marker(source))
+                self.assertEqual(placement, 'updated')
+                self.assertEqual(native_path(target / 'SKILL.md').read_text(encoding='utf-8'), 'new')
+                self.assertEqual(native_path(previous / 'SKILL.md').read_text(encoding='utf-8'), 'old')
+                self.assertFalse(str(previous).startswith('\\\\?\\'))
+                shutil.rmtree(native_path(previous))
+
+                suffix = 'a' * 32
+                staged = home / ('.hey-my-buddy-upgrade-stage-' + suffix)
+                prior = home / ('.hey-my-buddy-upgrade-previous-' + suffix)
+                native_path(staged).mkdir()
+                native_path(staged / 'SKILL.md').write_text('future', encoding='utf-8')
+                claude_home = root / 'claude'
+                link = claude_home / skill_install.SKILL
+                journal = {'skillHadPrevious': True, 'claudeLinkWasMissing': True, 'claudeLink': str(link)}
+                with mock.patch.dict(os.environ, {'HMB_CLAUDE_SKILLS_DIR': str(claude_home)}):
+                    upgrade._publish_skill(journal, (target, staged, prior))
+                    self.assertEqual(native_path(target / 'SKILL.md').read_text(encoding='utf-8'), 'future')
+                    self.assertEqual(native_path(prior / 'SKILL.md').read_text(encoding='utf-8'), 'new')
+                    self.assertEqual(journal['createdClaudeLink'], str(link))
+                    upgrade._restore_skill(journal, (target, staged, prior))
+                self.assertEqual(native_path(target / 'SKILL.md').read_text(encoding='utf-8'), 'new')
+                self.assertFalse(native_path(prior).exists())
+                self.assertFalse(native_path(link).exists())
+                self.assertFalse(skill_install._is_link(link))
+            finally:
+                shutil.rmtree(native_path(home))
 
     def _upgrade_pair(self, root: Path) -> tuple[Path, Path]:
         """An assembled source and an identical copy at the agent skills home."""

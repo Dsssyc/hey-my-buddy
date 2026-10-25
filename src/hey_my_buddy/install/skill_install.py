@@ -19,6 +19,7 @@ from .. import private_dirs
 from ..protocol import schemas
 from . import skill_package
 from ..errors import BoardError
+from ..paths import native_path, resolved_path
 from .runtime import project_root
 from ..state_root import check_state_root, get_state_dir
 
@@ -34,30 +35,30 @@ def claude_skills_home() -> Path:
 
 
 def _is_link(path: Path) -> bool:
-    return path.is_symlink() or path.is_junction()
+    return native_path(path).is_symlink() or native_path(path).is_junction()
 
 
 def _create_claude_link(link: Path, target: Path) -> None:
     if os.name == "nt":
         from _winapi import CreateJunction
-        CreateJunction(str(target), str(link))
+        CreateJunction(str(native_path(target)), str(native_path(link)))
     else:
-        link.symlink_to(target, target_is_directory=True)
+        native_path(link).symlink_to(target, target_is_directory=True)
 
 
 def _remove_claude_link(link: Path) -> None:
     """Remove only the link, including a junction whose target is missing."""
-    if link.is_junction():
-        link.rmdir()
-    elif link.is_symlink():
-        link.unlink()
-    elif link.exists():
+    if native_path(link).is_junction():
+        native_path(link).rmdir()
+    elif native_path(link).is_symlink():
+        native_path(link).unlink()
+    elif native_path(link).exists():
         raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is no longer a link; move it away before retrying")
 
 
 def _marker(skill: Path) -> dict | None:
     try:
-        value = json.loads((skill / "skill.json").read_text(encoding="utf-8"))
+        value = json.loads(native_path(skill / "skill.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     return value if isinstance(value, dict) and value.get("name") == SKILL else None
@@ -72,7 +73,7 @@ def write_runtime_hint(skill: Path, target: Path) -> None:
 
 def _is_product_skill(path: Path) -> bool:
     try:
-        head = (path / "SKILL.md").read_text(encoding="utf-8").split("\n---\n", 1)[0]
+        head = native_path(path / "SKILL.md").read_text(encoding="utf-8").split("\n---\n", 1)[0]
     except OSError:
         return False
     return any(line.strip() == f"name: {SKILL}" for line in head.splitlines())
@@ -80,15 +81,15 @@ def _is_product_skill(path: Path) -> bool:
 
 def _matches(source: Path, target: Path, marker: dict) -> bool:
     """A version marker alone cannot prove that an installed skill is intact."""
-    current = _marker(target) if target.is_dir() and not _is_link(target) else None
+    current = _marker(target) if native_path(target).is_dir() and not _is_link(target) else None
     if not current or any(current.get(key) != marker.get(key) for key in ('version', 'contract', 'sourceCommit')):
         return False
     from .runtime import iter_assets
     names = ['SKILL.md', 'skill.json', 'scripts/hey-my-buddy', 'scripts/hey-my-buddy.cmd', 'scripts/hey-my-buddy.ps1', 'package/LICENSE']
-    names.extend(str(path.relative_to(source)) for path in (source / 'references').glob('*.md'))
+    names.extend('references/' + path.name for path in native_path(source / 'references').glob('*.md'))
     names.extend('package/' + relative for relative, _ in iter_assets(source / 'package'))
     try:
-        return all(not _is_link(target / name) and (target / name).read_bytes() == (source / name).read_bytes() for name in names)
+        return all(not _is_link(target / name) and native_path(target / name).read_bytes() == native_path(source / name).read_bytes() for name in names)
     except OSError:
         return False
 
@@ -97,31 +98,31 @@ def packaged_skill() -> Path | None:
     """The installed-format skill this process runs from, if any."""
     project = project_root()
     candidate = project.parent
-    if project.name == "package" and _marker(candidate) and (candidate / "scripts/hey-my-buddy").is_file():
+    if project.name == "package" and _marker(candidate) and native_path(candidate / "scripts/hey-my-buddy").is_file():
         return candidate
     return None
 
 
 def _place(source: Path, target: Path, marker: dict) -> tuple[str, Path | None]:
-    current = _marker(target) if target.is_dir() and not _is_link(target) else None
+    current = _marker(target) if native_path(target).is_dir() and not _is_link(target) else None
     if _matches(source, target, marker):
         return "already-current", None
-    if _is_link(target) or (target.exists() and not current and not _is_product_skill(target)):
+    if _is_link(target) or (native_path(target).exists() and not current and not _is_product_skill(target)):
         raise BoardError("SKILL_TARGET_CONFLICT", f"{target} exists and is not a hey-my-buddy skill; move it away first")
     staged = private_dirs.make_temporary_dir(prefix=".hey-my-buddy-install-", directory=target.parent)
-    previous = target.with_name(f".hey-my-buddy-install-previous-{uuid.uuid4().hex}") if target.exists() else None
+    previous = target.with_name(f".hey-my-buddy-install-previous-{uuid.uuid4().hex}") if native_path(target).exists() else None
     try:
-        shutil.copytree(source, staged / SKILL, symlinks=True)
+        shutil.copytree(native_path(source), native_path(staged / SKILL), symlinks=True)
         if previous is not None:
-            target.rename(previous)
+            native_path(target).rename(native_path(previous))
         try:
-            (staged / SKILL).rename(target)
+            native_path(staged / SKILL).rename(native_path(target))
         except OSError:
             if previous is not None:
-                previous.rename(target)
+                native_path(previous).rename(native_path(target))
             raise
     finally:
-        shutil.rmtree(staged, ignore_errors=True)
+        shutil.rmtree(native_path(staged), ignore_errors=True)
     return ("updated" if current else "installed"), previous
 
 
@@ -137,7 +138,7 @@ def _link_claude(target: Path) -> dict:
     if _check_claude_link(target):
         return {"path": str(link), "status": "already-linked"}
     try:
-        home.mkdir(parents=True, exist_ok=True)
+        native_path(home).mkdir(parents=True, exist_ok=True)
         _create_claude_link(link, target)
         if _claude_status(target) != "linked":
             _remove_claude_link(link)
@@ -154,10 +155,10 @@ def _link_claude(target: Path) -> dict:
 def _check_claude_link(target: Path) -> bool:
     link = claude_skills_home() / SKILL
     if _is_link(link):
-        if Path(os.path.realpath(link)) != Path(os.path.realpath(target)):
+        if resolved_path(link) != resolved_path(target):
             raise BoardError("SKILL_TARGET_CONFLICT", f"{link} links to another skill; move it away before installing")
         return True
-    elif link.exists():
+    elif native_path(link).exists():
         raise BoardError("SKILL_TARGET_CONFLICT", f"{link} is a separate directory; move it away before installing")
     return False
 
@@ -172,7 +173,7 @@ def install(params: dict) -> dict:
     planned_paths = [str(home / SKILL), str(claude_skills_home() / SKILL), str(state), str(runtime_root())]
     from ..protocol.contracts import CONTRACT_VERSION
     print(json.dumps({'contractVersion': CONTRACT_VERSION, 'action': 'install-plan', 'writePaths': planned_paths}), file=sys.stderr, flush=True)
-    home.mkdir(parents=True, exist_ok=True)
+    native_path(home).mkdir(parents=True, exist_ok=True)
     target = home / SKILL
     lock = private_dirs.open_lock_fd(home / f".{SKILL}-install.lock")
     built = None
@@ -194,7 +195,7 @@ def install(params: dict) -> dict:
         from . import runtime
         from .launcher import selected_runtime
         intact = _matches(source, target, marker)
-        if source.resolve() == target.resolve() and not intact:
+        if resolved_path(source) == resolved_path(target) and not intact:
             raise BoardError('SKILL_INVALID', 'The installed copy is incomplete; rerun the fixed-version package install command')
         if pointer.exists() and intact:
             active = selected_runtime(state, allow_overrides=False)
@@ -219,7 +220,7 @@ def install(params: dict) -> dict:
                     os.environ["HMB_DEV_SOURCE"] = old_dev
         if (state / "control.json").exists():
             from .upgrade import upgrade
-            current = _marker(target) if target.is_dir() and not _is_link(target) else None
+            current = _marker(target) if native_path(target).is_dir() and not _is_link(target) else None
             # Placement follows the actual content comparison above, not a marker
             # match: a same-version rebuild with changed files is an update.
             placement = "already-current" if intact else ("updated" if current else "installed")
@@ -239,7 +240,7 @@ def install(params: dict) -> dict:
             ready = runtime.read_ready(Path(installed["runtimeDir"]))
             if ready.get("sourceCommit") != marker.get("sourceCommit"):
                 raise BoardError("INSTALL_GENERATION_MISMATCH", "Skill and materialized runtime came from different source generations")
-            placement, previous_skill = (("already-current", None) if Path(os.path.realpath(source)) == Path(os.path.realpath(target)) else _place(source, target, marker))
+            placement, previous_skill = (("already-current", None) if resolved_path(source) == resolved_path(target) else _place(source, target, marker))
             created_link = False
             try:
                 claude = _link_claude(target)
@@ -253,14 +254,14 @@ def install(params: dict) -> dict:
                 if created_link:
                     _remove_claude_link(claude_skills_home() / SKILL)
                 if previous_skill is not None:
-                    shutil.rmtree(target)
-                    previous_skill.rename(target)
+                    shutil.rmtree(native_path(target))
+                    native_path(previous_skill).rename(native_path(target))
                 elif placement == "installed":
-                    shutil.rmtree(target)
+                    shutil.rmtree(native_path(target))
                 raise
             if previous_skill is not None:
                 try:
-                    shutil.rmtree(previous_skill)
+                    shutil.rmtree(native_path(previous_skill))
                 except OSError as error:
                     skill_cleanup_error = f'{previous_skill}: {error}'
             service = {"action": "none", "reason": "the first command starts the installed runtime"}
@@ -270,7 +271,7 @@ def install(params: dict) -> dict:
         raise
     finally:
         if built is not None:
-            shutil.rmtree(built, ignore_errors=True)
+            shutil.rmtree(native_path(built), ignore_errors=True)
         os.close(lock)
     result = {"skill": {"path": str(target), "version": marker["version"], "contract": marker["contract"],
                         "placement": placement},
@@ -287,8 +288,8 @@ def install(params: dict) -> dict:
 def _claude_status(target: Path) -> str:
     link = claude_skills_home() / SKILL
     if _is_link(link):
-        return "linked" if Path(os.path.realpath(link)) == Path(os.path.realpath(target)) else "conflict"
-    return "conflict" if link.exists() else "missing"
+        return "linked" if resolved_path(link) == resolved_path(target) else "conflict"
+    return "conflict" if native_path(link).exists() else "missing"
 
 
 def paths(params: dict) -> dict:
@@ -297,7 +298,7 @@ def paths(params: dict) -> dict:
     from .runtime import runtime_root
     home = agent_skills_home()
     target = home / SKILL
-    marker = _marker(target) if target.is_dir() else None
+    marker = _marker(target) if native_path(target).is_dir() else None
     running = packaged_skill()
     state = get_state_dir()
     from .launcher import read_private

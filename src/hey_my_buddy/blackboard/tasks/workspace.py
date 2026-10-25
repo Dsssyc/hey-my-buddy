@@ -1276,7 +1276,8 @@ def seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str) -> dict
     return _seal_output(state_dir, manifest, task_id, attempt_id, suffix="", kind=None)
 
 
-def host_seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *, allowed_paths=()) -> dict:
+def host_seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *, allowed_paths=(),
+              admission_check=None) -> dict:
     """Seal the Host's own unsealed managed changes as an independent partial output.
 
     A Host conclusion must never overwrite the Worker's earlier fixed partial
@@ -1285,13 +1286,15 @@ def host_seal(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *,
     ``allowed_paths`` names the exact paths an earlier Host decision (an adopted
     conflict site or a previous Host seal) already promoted; they are treated as
     authorized while any newly changed path outside the write scope still fails.
+    The caller's ``admission_check`` runs under the workspace lock before any
+    output write, sharing the fence used to mark macro task deletion.
     """
     return _seal_output(state_dir, manifest, task_id, attempt_id, suffix="-host", kind="host-output",
-                        allowed_paths=tuple(allowed_paths or ()))
+                        allowed_paths=tuple(allowed_paths or ()), admission_check=admission_check)
 
 
 def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str, *,
-                 suffix: str, kind: str | None, allowed_paths: tuple = ()) -> dict:
+                 suffix: str, kind: str | None, allowed_paths: tuple = (), admission_check=None) -> dict:
     with _errors():
         _validate_manifest(manifest)
         workspace_id = manifest["workspaceId"]
@@ -1299,6 +1302,8 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
         if _record(workspace_dir / "manifest.json") != manifest:
             raise BoardError("WORKSPACE_CONFLICT", "This state directory does not own the supplied workspace manifest")
         with _lock(workspace_dir):
+            if admission_check is not None:
+                admission_check()
             _mkdir(workspace_dir / "outputs")
             output_id = _sha(_json([task_id, attempt_id]))
             directory = workspace_dir / "outputs" / (output_id + suffix)
@@ -1834,7 +1839,9 @@ def _resolution_result(action, state, artifact, resolved, preserved, remaining, 
     }
 
 
-def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action: str, paths, observed_fingerprint: str, note: str | None = None, actor: dict | None = None):
+def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action: str, paths,
+            observed_fingerprint: str, note: str | None = None, actor: dict | None = None,
+            admission_check=None):
     """Mechanically settle one recorded out-of-scope failure site.
 
     ``restore`` returns the selected paths to their authorized content while
@@ -1844,6 +1851,8 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
     Compare-and-swap failures preserve the site and report the conflicting paths.
     All Git work happens here, outside any database transaction; the caller
     rechecks owner, revision and workspace identity before recording the result.
+    Its ``admission_check`` runs under the workspace lock before changing the
+    failed site or publishing a Git reference.
     """
     with _errors():
         _validate_manifest(manifest)
@@ -1863,6 +1872,8 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
         if _record(workspace_dir / "manifest.json") != manifest:
             raise BoardError("WORKSPACE_CONFLICT", "This state directory does not own the supplied workspace manifest")
         with _lock(workspace_dir):
+            if admission_check is not None:
+                admission_check()
             output_id = _sha(_json([task_id, attempt_id]))
             directory = workspace_dir / "outputs" / output_id
             _mkdir(directory)

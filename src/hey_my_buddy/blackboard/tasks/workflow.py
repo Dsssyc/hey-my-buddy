@@ -4514,7 +4514,9 @@ class WorkflowCoordinator:
             return None
         manifest, allowed, attempt_id = work
         try:
-            return workspace_module().host_seal(self.board.directory, manifest, run_id, attempt_id, allowed_paths=allowed)
+            return workspace_module().host_seal(
+                self.board.directory, manifest, run_id, attempt_id, allowed_paths=allowed,
+                admission_check=lambda: self._workspace_admission_check(run_id))
         except BoardError as error:
             if error.code == "WORKSPACE_SCOPE_VIOLATION":
                 raise BoardError(
@@ -4524,9 +4526,15 @@ class WorkflowCoordinator:
                 ) from error
             raise
 
+    def _workspace_admission_check(self, run_id: str) -> None:
+        """Check deletion marking while the workspace operation holds its lock."""
+        with self.db.read() as connection:
+            reject_deleting_run(connection, run_id)
+
     def _conclude_precheck(self, connection, run_row, task) -> dict:
         """Everything that must hold before one micro task may be concluded."""
         run_id = run_row["run_id"]
+        reject_deleting_run(connection, run_id)
         if run_row["state"] in ("accepted", "concluded"):
             raise BoardError("CONFLICT", "A finished micro task cannot receive another conclusion", runId=run_id)
         if run_row["state"] not in ("failed", "cancelled", "delivered"):
@@ -5060,6 +5068,7 @@ class WorkflowCoordinator:
                 self.board.directory, manifest, task_id=target_id,
                 attempt_id=conflict["attempt_id"], action=action, paths=paths,
                 observed_fingerprint=observed, note=note, actor=actor,
+                admission_check=lambda: self._workspace_admission_check(target_id),
             )
             resolved_artifact = result.get("artifact")
             if action != "abandon" and isinstance(resolved_artifact, dict):
