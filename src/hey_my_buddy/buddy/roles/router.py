@@ -6,7 +6,8 @@ import time
 
 from ...errors import BoardError
 from ...protocol.capabilities import PERMISSION_LEVELS, adapter_capabilities
-from ...private_dirs import context_root, directory_mode, ensure_private_dir
+from ...private_dirs import context_root, ensure_private_dir
+from ...paths import native_path
 from ...blackboard.routing import router
 from . import router_input
 from .prompts import router_prompt
@@ -32,7 +33,7 @@ def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
     no-tool buddy disables project input.
     """
     root = ensure_private_dir(context_root(context, native.name) / "no-tool-cwd")
-    if any(root.iterdir()):
+    if any(native_path(root).iterdir()):
         raise BoardError("CONFLICT", "The private no-tool cwd already contains files")
     request = NoToolStructuredRequest(str(root), router_prompt(router.render_prompt(document)), document["outputSchema"], timeout_seconds=60,
                                       capture_evidence=document.get("captureEvidence") is True)
@@ -84,7 +85,7 @@ class DecisionAdapter(Adapter):
         buddy = document.get("buddy") or {}
         native = adapter(buddy.get("harness"))
         fast = document.get("routingMode") == "fast"
-        context.directory.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
+        ensure_private_dir(context.directory)
         if fast:
             self._preparation = prepare_router_fast(document, buddy, native, context)
         else:

@@ -18,6 +18,9 @@ import json
 import os
 from pathlib import Path
 
+from ....paths import native_path
+from ....private_files import open_read
+
 from ....protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
 
 HARNESS = "zcode"
@@ -252,11 +255,12 @@ class ZcodeToolFacts:
 
     def read_denials(self) -> None:
         """Project permission refusals from this invocation's native JSONL log."""
-        if self._native_log_dir is None or not self._native_log_dir.exists():
+        if self._native_log_dir is None or not native_path(self._native_log_dir).exists():
             return
-        for path in sorted(self._native_log_dir.glob("zcode-*.jsonl")):
+        for name in sorted(path.name for path in native_path(self._native_log_dir).glob("zcode-*.jsonl")):
+            path = self._native_log_dir / name
             try:
-                with path.open("rb") as stream:
+                with open_read(path) as stream:
                     details = os.fstat(stream.fileno())
                     offset = self._log_offsets.get(path.name, 0)
                     if details.st_size < offset:

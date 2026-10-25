@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from ...text import configure_utf8_output
+from ...private_files import read_text
 from ...json_codec import canonical_json, decode_strict_json
 from ..harnesses.session_receipts import MAX_OUTCOME_BYTES
 from . import worker_services
@@ -59,7 +60,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     args = parser.parse_args()
-    configuration = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    configuration = json.loads(read_text(Path(args.config)))
     while raw := sys.stdin.buffer.readline(MAX_OUTCOME_BYTES + 16384):
         try:
             message = decode_strict_json(raw)

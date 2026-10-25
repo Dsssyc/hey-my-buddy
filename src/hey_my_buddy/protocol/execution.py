@@ -14,6 +14,7 @@ from pathlib import Path
 import c_two as cc
 
 from ..private_files import publish_bytes
+from ..paths import native_path
 from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
 from ..private_dirs import ensure_private_dir, attempt_root, open_regular_fd
@@ -437,5 +438,5 @@ def cleanup_execution_endpoint(directory: Path, process_identity: dict, *, state
             return {"status": "unverified", "reason": "endpoint-domain-mismatch"}
         result = cc.reap_endpoint(descriptor["address"], credential, context=context)
     if result["status"] in ("reaped", "already-absent", "not-applicable"):
-        path.unlink(missing_ok=True)
+        native_path(path).unlink(missing_ok=True)
     return result

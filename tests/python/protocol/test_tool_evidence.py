@@ -4,6 +4,7 @@ The check runner supplies a private state directory. No board or model call is
 needed: the collector writes digest-bound call summaries for the judge to read.
 """
 import os
+from contextlib import ExitStack
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,6 +13,8 @@ from unittest import mock
 from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.json_codec import canonical_json
+from hey_my_buddy import private_dirs
+from hey_my_buddy.paths import native_path
 
 STATE_DIR = Path(os.environ["HMB_STATE_DIR"])
 
@@ -148,6 +151,21 @@ class NormalizeToolEventTests(unittest.TestCase):
 
 
 class ToolEventEvidenceTests(unittest.TestCase):
+    def test_product_tool_path_over_260_characters_is_published_and_read_as_ordinary_path(self):
+        state = STATE_DIR / ('long-state-' + 'a' * 50)
+        binding = {**BINDING, 'taskId': 'f' * 36, 'attemptId': 'a' * 36}
+        evidence = tool_evidence.ToolEventEvidence(binding, state_dir=state)
+        for event in settled_events('read'):
+            evidence.observe(event)
+        try:
+            package = evidence.finish([IDENTITY], True)
+            reference = package['calls']
+            self.assertGreater(len(reference['path']), 260)
+            self.assertNotIn('\\\\?\\', reference['path'])
+            self.assertEqual(len(list(tool_evidence.read_tool_calls(package, state_dir=state))), 1)
+        finally:
+            private_dirs.remove_tree(state)
+
     def test_verified_delivery_exclusion_keeps_a_foreign_id_collision_and_an_open_call(self):
         evidence = tool_evidence.ToolEventEvidence(BINDING, state_dir=STATE_DIR)
         delivery = settled_events("other", call_id="shared", tool="mcp__session__finish")
@@ -454,16 +472,16 @@ class JudgeToolEvidenceTests(unittest.TestCase):
     def test_digest_tampering_is_rejected(self):
         package = collect(settled_events("read", call_id="digest-tamper-unique"))
         path = Path(package["calls"]["path"])
-        original = path.read_bytes()
+        original = native_path(path).read_bytes()
         try:
             changed = original.replace(b"digest-tamper-unique", b"digest-tamper-forged")
             self.assertEqual(len(changed), len(original))
             self.assertNotEqual(changed, original)
-            path.write_bytes(changed)
+            native_path(path).write_bytes(changed)
             self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=STATE_DIR),
                              tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
         finally:
-            path.write_bytes(original)
+            native_path(path).write_bytes(original)
 
     def test_oversized_call_row_is_rejected(self):
         good = collect(settled_events("read"))
@@ -507,7 +525,8 @@ class JudgeToolEvidenceTests(unittest.TestCase):
 
 class ExplicitStateRootTests(unittest.TestCase):
     def test_collection_without_an_environment_root_only_writes_the_explicit_private_root(self):
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory, ExitStack() as cleanup:
+            cleanup.callback(private_dirs.remove_tree, Path(directory))
             root = Path(directory)
             state_dir = root / "selected"
             with mock.patch.dict(os.environ), mock.patch(
@@ -520,10 +539,11 @@ class ExplicitStateRootTests(unittest.TestCase):
                 self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=state_dir))
             self.assertTrue(Path(package["calls"]["path"]).is_relative_to(state_dir))
             self.assertEqual(list(root.iterdir()), [state_dir])
-            self.assertEqual(len(list(state_dir.rglob("*.jsonl"))), 1)
+            self.assertEqual(len(list(native_path(state_dir).rglob("*.jsonl"))), 1)
 
     def test_another_state_root_cannot_adopt_a_valid_evidence_reference(self):
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory, ExitStack() as cleanup:
+            cleanup.callback(private_dirs.remove_tree, Path(directory))
             selected = Path(directory) / "selected"
             other = Path(directory) / "other"
             collector = tool_evidence.ToolEventEvidence(BINDING, state_dir=selected)

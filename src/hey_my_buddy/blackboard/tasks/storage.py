@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager, ExitStack
 from datetime import datetime, timedelta, timezone
-from ...paths import is_absolute_path
+from ...paths import is_absolute_path, native_path
 from ... import locking
 import hashlib
 import json
@@ -30,28 +30,29 @@ _RUNTIME_ID = r'[0-9a-f]{32}'
 _BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
 
 
-def tree_info(path: Path, *, excluded: frozenset[Path] = frozenset()) -> tuple[int, str, bool]:
+def tree_info(path: Path) -> tuple[int, str, bool]:
     """Size and mutation fingerprint without descending into linked entries."""
+    path = private_dirs._absolute(path)
     size = 0
     digest = hashlib.sha256()
     safe = not private_dirs.linked(path)
     if not safe:
         return 0, '', False
-    if not path.exists():
+    if not native_path(path).exists():
         return 0, '', safe
     paths = []
     def collect(item: Path):
         paths.append(item)
-        if private_dirs.linked(item) or not item.is_dir():
+        if private_dirs.linked(item) or not native_path(item).is_dir():
             return
-        with os.scandir(item) as entries:
-            children = [Path(entry.path) for entry in entries]
+        with os.scandir(native_path(item)) as entries:
+            children = [item / entry.name for entry in entries]
         for child in children:
             collect(child)
     collect(path)
     for item in sorted(paths):
-        stat = item.lstat()
-        if item not in excluded and not private_dirs.linked(item) and item.is_file():
+        stat = native_path(item).lstat()
+        if not private_dirs.linked(item) and native_path(item).is_file():
             size += stat.st_size
         digest.update(f'{item.relative_to(path)}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_mode}\n'.encode())
     return size, digest.hexdigest(), safe
@@ -394,11 +395,11 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     rows = []
     orphaned, commands, known = process_inventory(state)
     now = time.time()
-    def add(category, path, reasons, *, excluded=frozenset(), **metadata):
-        size, fingerprint, safe = tree_info(path, excluded=excluded)
+    def add(category, path, reasons, **metadata):
+        size, fingerprint, safe = tree_info(path)
         if not safe:
             reasons = [*reasons, 'linked-path']
-        if not path.exists() and not private_dirs.linked(path):
+        if not native_path(path).exists() and not private_dirs.linked(path):
             return
         row = {'id': hashlib.sha256(str(path).encode()).hexdigest()[:24], 'category': category,
                'path': str(path), 'bytes': size, 'eligible': not reasons, 'reasons': sorted(set(reasons)),
@@ -431,7 +432,8 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                 continue
             micro_tasks = adapter_root / 'micro-tasks'
             if micro_tasks.exists():
-                for path in sorted(micro_tasks.iterdir()):
+                for name in sorted(os.listdir(native_path(micro_tasks))):
+                    path = micro_tasks / name
                     run_id, reasons = native_owners.get(path.name, (None, ['owner-unproven']))
                     add('harnesses', path, reasons, runId=run_id, adapter=adapter)
     sessions = state / 'sessions'
@@ -788,7 +790,7 @@ def apply(store, params: dict) -> dict:
                         if tree_info(original)[1:] != (fresh['fingerprint'], True):
                             raise BoardError('STORAGE_CHANGED', 'Candidate changed')
                         tomb = original.with_name('.reclaim-' + plan_id + '-' + original.name)
-                        identity = original.lstat()
+                        identity = native_path(original).lstat()
                         result['pending'] = {'id':fresh['id'], 'path':str(original), 'tomb':str(tomb),
                                              'bytes':fresh['bytes'], 'fingerprint':fresh['fingerprint'],
                                              'device':identity.st_dev, 'inode':identity.st_ino}
@@ -817,25 +819,25 @@ def _finish_pending(result: dict, receipt: Path) -> None:
     """Resume only a previously journaled exact tomb; never count it as skipped."""
     pending = result['pending']
     original, tomb = Path(pending['path']), Path(pending['tomb'])
-    original_exists = original.exists()
-    tomb_exists = tomb.exists()
+    original_exists = native_path(original).exists()
+    tomb_exists = native_path(tomb).exists()
     if original_exists:
-        identity = original.lstat()
+        identity = native_path(original).lstat()
         if (tomb_exists or
                 (identity.st_dev != pending['device'] or identity.st_ino != pending['inode']) or
                 tree_info(original)[1:] != (pending['fingerprint'], True)):
             raise BoardError('STORAGE_CHANGED', 'Pending removal no longer matches its candidate')
-        os.rename(original, tomb)
+        os.rename(native_path(original), native_path(tomb))
         private_files.sync_directory(original.parent)
         tomb_exists = True
     if tomb_exists:
-        identity = tomb.lstat()
+        identity = native_path(tomb).lstat()
         if identity.st_dev != pending['device'] or identity.st_ino != pending['inode']:
             raise BoardError('STORAGE_CHANGED', 'Pending tomb no longer matches its candidate')
-        if tomb.is_dir():
+        if native_path(tomb).is_dir():
             private_dirs.remove_tree(tomb)
         else:
-            tomb.unlink()
+            native_path(tomb).unlink()
         private_files.sync_directory(tomb.parent)
     result['removed'].append({k:pending[k] for k in ('id','path','bytes')})
     result['removedBytes'] += pending['bytes']

@@ -3,15 +3,89 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy import private_dirs
+from hey_my_buddy.paths import native_path
+from hey_my_buddy.private_files import publish_bytes, read_bytes
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 
 
 class PrivateDirectoryTests(BoardTestCase):
+    def test_relative_private_directory_is_made_absolute_on_both_platforms(self):
+        with mock.patch.object(os, 'getcwd', return_value=str(self.directory)):
+            directory = private_dirs.ensure_private_dir(Path('relative-private'))
+        self.assertEqual(directory, self.directory / 'relative-private')
+        self.assertTrue(directory.is_dir())
+
+    def test_long_junction_is_not_followed_by_inventory_credentials_or_removal(self):
+        if os.name != 'nt':
+            self.skipTest('native Windows directory junction')
+        from hey_my_buddy.blackboard.tasks import storage
+        state = self.directory / 'junction-state'
+        self.addCleanup(private_dirs.remove_tree, state)
+        root = private_dirs.attempt_root(state, 'codex', 'junction-task', 'attempt')
+        deep = root
+        while len(str(deep)) < 310:
+            deep /= 'directory-' + 'a' * 35
+        private_dirs.ensure_private_dir(deep)
+        publish_bytes(deep / 'agent-credential.json', b'inside')
+        publish_bytes(deep / 'nul', b'literal')
+        outside = private_dirs.ensure_private_dir(self.directory / 'outside-junction')
+        sentinel = outside / 'agent-credential.json'
+        publish_bytes(sentinel, b'outside sentinel')
+        junction = deep / 'redirected'
+        result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(native_path(junction)), str(outside)], capture_output=True)
+        self.assertEqual(result.returncode, 0, repr(result.stdout) + repr(result.stderr))
+        size, _, safe = storage.tree_info(root)
+        self.assertEqual((size, safe), (len(b'inside') + len(b'literal'), True))
+        removed = private_dirs.cleanup_attempt_credentials(state, 'codex', 'junction-task', 'attempt')
+        self.assertEqual(removed['count'], 1)
+        self.assertEqual(read_bytes(sentinel), b'outside sentinel')
+        self.assertTrue(private_dirs.remove_tree(root))
+        self.assertFalse(native_path(root).exists())
+        self.assertEqual(read_bytes(sentinel), b'outside sentinel')
+
+    def test_long_tree_keeps_ordinary_subtree_and_file_paths(self):
+        root = self.directory / 'long-private'
+        deep = root
+        while len(str(deep)) < 310:
+            deep /= 'directory-' + 'a' * 35
+        kept = private_dirs.ensure_private_dir(deep / 'kept')
+        leaf = deep / 'kept.json'
+        publish_bytes(kept / 'evidence.json', b'kept subtree')
+        publish_bytes(leaf, b'kept file')
+        publish_bytes(deep / 'removed.json', b'remove')
+        self.assertNotIn('\\\\?\\', str(kept))
+        self.assertFalse(private_dirs.remove_tree(root, keep=frozenset({kept, leaf})))
+        self.assertEqual(read_bytes(kept / 'evidence.json'), b'kept subtree')
+        self.assertEqual(read_bytes(leaf), b'kept file')
+        self.assertFalse(native_path(deep / 'removed.json').exists())
+        self.assertTrue(private_dirs.remove_tree(root))
+        self.assertFalse(root.exists())
+
+    def test_scandir_path_spelling_cannot_change_keep_comparisons(self):
+        if os.name == 'nt':
+            self.skipTest('Windows native scandir spelling is covered by the long-tree test')
+        root = private_dirs.ensure_private_dir(self.directory / 'spelling')
+        kept = root / 'kept.json'
+        publish_bytes(kept, b'retain')
+        publish_bytes(root / 'removed.json', b'remove')
+        real_scandir = os.scandir
+        class Entries:
+            def __init__(self, path): self.source = real_scandir(path)
+            def __enter__(self):
+                return [SimpleNamespace(name=entry.name, path='//' + entry.path.lstrip('/'))
+                        for entry in self.source]
+            def __exit__(self, *args): self.source.close()
+        with mock.patch.object(private_dirs.os, 'scandir', Entries):
+            self.assertFalse(private_dirs.remove_tree(root, keep=frozenset({kept})))
+        self.assertEqual(list(root.iterdir()), [kept])
+        self.assertEqual(read_bytes(kept), b'retain')
+
     def test_concurrent_private_directory_creator_is_accepted_and_checked(self):
         if os.name == 'nt':
             self.skipTest('POSIX mkdir race; Windows inherits the parent ACL')

@@ -14,6 +14,9 @@ import time
 from collections import deque
 from pathlib import Path
 
+from .....paths import native_path
+from .....private_dirs import ensure_private_dir
+
 #: A single stdout line larger than this is a broken-frame fact, not a message.
 MAX_LINE_BYTES = 1024 * 1024
 
@@ -160,8 +163,8 @@ class AcpConnection:
     # -- lifecycle -------------------------------------------------------------
 
     def start(self) -> None:
-        self.facts_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with self.facts_path.open("x", encoding="utf-8"):
+        ensure_private_dir(self.facts_path.parent)
+        with native_path(self.facts_path).open("x", encoding="utf-8"):
             pass
         self._reader.start()
         self._stderr.start()
@@ -173,7 +176,7 @@ class AcpConnection:
 
     def _record_fact(self, kind: str, fact: dict) -> None:
         with self._fact_lock:
-            with self.facts_path.open("a", encoding="utf-8", newline="\n") as output:
+            with native_path(self.facts_path).open("a", encoding="utf-8", newline="\n") as output:
                 output.write(json.dumps({"recordType": kind, **fact}, ensure_ascii=False,
                                         sort_keys=True) + "\n")
 

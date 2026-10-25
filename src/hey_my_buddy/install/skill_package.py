@@ -16,6 +16,7 @@ excluded by construction, and the inventory is verified before publication.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -130,7 +131,7 @@ def assemble(source: Path, skill: Path) -> dict:
 
 def build(source: Path, destination: Path) -> Path:
     """Assemble the skill next to *destination* and publish it by rename."""
-    destination = Path(destination).expanduser().absolute()
+    destination = Path(os.path.abspath(Path(destination).expanduser()))
     if destination.name != SKILL_NAME:
         raise BoardError("SKILL_INVALID", "The skill directory must be named hey-my-buddy")
     destination.parent.mkdir(parents=True, exist_ok=True)

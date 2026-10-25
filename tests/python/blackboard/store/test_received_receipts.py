@@ -1,5 +1,6 @@
 """Reception survives execution/service crashes; settlement waits for full stop."""
 from pathlib import Path
+import hashlib
 from unittest.mock import patch
 
 from admission import admit_execution
@@ -13,9 +14,26 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import process_identity as processes
 from hey_my_buddy.protocol.execution import RECEIPT, read_execution_receipt, fsync_json
 from hey_my_buddy.protocol.run_identity import RunIdentity
+from hey_my_buddy import private_dirs
+from hey_my_buddy.private_files import publish_bytes
 
 
 class ReceivedReceiptTests(BoardTestCase):
+    def test_service_verifies_a_long_artifact_and_keeps_an_ordinary_location(self):
+        board = self.board()
+        root = self.directory / 'long-artifacts'
+        self.addCleanup(private_dirs.remove_tree, root)
+        directory = root
+        while len(str(directory)) < 310:
+            directory /= 'directory-' + 'a' * 35
+        target = private_dirs.ensure_private_dir(directory) / 'result.bin'
+        content = b'long artifact bytes'
+        publish_bytes(target, content)
+        claimed = {'kind': 'file', 'location': str(target), 'contentHash': hashlib.sha256(content).hexdigest(), 'sizeBytes': len(content)}
+        verified = board.store._verify_artifacts([claimed])
+        self.assertEqual(verified, [claimed])
+        self.assertNotIn('\\\\?\\', verified[0]['location'])
+
     def claimed(self, report=None):
         self.clock = FakeClock()
         board = self.board(max_concurrent=1, clock=self.clock)

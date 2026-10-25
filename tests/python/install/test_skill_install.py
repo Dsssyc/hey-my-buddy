@@ -1,4 +1,5 @@
 """The shared package carries all platform launcher entrypoints."""
+from contextlib import chdir
 from pathlib import Path
 import tempfile
 import unittest
@@ -16,6 +17,20 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class SkillPackageTests(unittest.TestCase):
+    def test_build_normalizes_a_relative_destination_before_staging(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            cwd = root / 'working'
+            cwd.mkdir()
+            def assemble(_source, destination):
+                destination.mkdir()
+            with chdir(cwd), \
+                 mock.patch.object(skill_package, 'assemble', side_effect=assemble):
+                result = skill_package.build(ROOT, Path('..') / 'dist' / 'hey-my-buddy')
+            self.assertEqual(result, root / 'dist' / 'hey-my-buddy')
+            self.assertTrue(result.is_dir())
+            self.assertNotIn('..', result.parts)
+
     def test_packaged_skill_carries_windows_and_posix_entrypoints(self):
         with tempfile.TemporaryDirectory() as temporary:
             skill = Path(temporary) / 'hey-my-buddy'
