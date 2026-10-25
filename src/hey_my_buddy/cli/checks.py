@@ -62,6 +62,7 @@ import time
 from ..text import configure_utf8_output
 from .. import locking, private_dirs, state_root
 from ..errors import BoardError
+from ..paths import native_path
 from ..process_observation import observe_open_paths, observe_process_argv
 from ..protocol.owned_process import owned_popen
 from ..protocol.process_handle import ProcessHandle
@@ -521,7 +522,7 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
 def lock_is_held(path: Path) -> bool:
     """True when some process still holds this hey-my-buddy lifetime lock."""
     try:
-        fd = os.open(path, os.O_RDWR)
+        fd = os.open(native_path(path), os.O_RDWR)
     except FileNotFoundError:
         return False
     try:
@@ -535,16 +536,30 @@ def lock_is_held(path: Path) -> bool:
         os.close(fd)
 
 
+def _private_lock_paths(root: Path):
+    """Find lifetime lock names without entering links or reparse points."""
+    if private_dirs.linked(root):
+        return
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        with os.scandir(native_path(directory)) as entries:
+            children = [directory / entry.name for entry in entries]
+        for path in children:
+            if private_dirs.linked(path):
+                continue
+            if path.name in DAEMON_LOCK_NAMES:
+                yield path
+            if native_path(path).is_dir():
+                pending.append(path)
+
+
 def held_locks(root: Path) -> dict[str, list[Path]]:
     """Held daemon lifetime locks below one private root."""
     residue: dict[str, list[Path]] = {"daemon": []}
-    for path in sorted(root.rglob("*.lock")):
-        if path.name in DAEMON_LOCK_NAMES:
-            kind = "daemon"
-        else:
-            continue
+    for path in sorted(_private_lock_paths(root)):
         if lock_is_held(path):
-            residue[kind].append(path)
+            residue["daemon"].append(path)
     return residue
 
 
@@ -685,8 +700,8 @@ def request_cooperative_stop(root: Path, timeout: float = 30.0) -> list[str]:
         if os.name == "nt":
             processes, problems, _ = _windows_owned_processes(root)
             live = bool(processes)
-            unconfirmed.update(path.parent for path in root.rglob("control-daemon.lock")
-                               if path.parent not in requested)
+            unconfirmed.update(path.parent for path in _private_lock_paths(root)
+                               if path.name == "control-daemon.lock" and path.parent not in requested)
         else:
             table = _ps_argv_table()
             if table is None:
@@ -734,12 +749,12 @@ def remove_private_test_root(directory: Path) -> None:
     The caller must first close its resources and confirm its work has stopped.
     A sharing violation or any other deletion failure preserves the remaining tree.
     """
-    directory = Path(directory)
+    directory = native_path(directory)
 
     def readonly_file(operation, name, error):
         if os.name != "nt" or operation is not os.unlink or getattr(error, "winerror", None) != 5:
             raise error
-        path = Path(name)
+        path = native_path(Path(name))
         # Open only a regular leaf within the private root, without traversing
         # a link or reparse ancestor.
         for part in (path, *path.parents):
@@ -765,7 +780,7 @@ def _delete_readonly_test_leaf(path: Path) -> None:
     from ..windows_files import WindowsFileAPI, DELETE, FILE_READ_ATTRIBUTES, OPEN_EXISTING
 
     api = WindowsFileAPI()
-    handle = api._open(path, DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
+    handle = api._open(native_path(path), DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
     try:
         # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE.
         flags = wintypes.DWORD(0x1 | 0x2 | 0x10)

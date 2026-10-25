@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import stat
+import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,19 +13,37 @@ from unittest.mock import Mock, call, patch
 from support import BoardTestCase, InProcessBoard, private_state_dir, remove_private_test_root
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.cli import checks
+from hey_my_buddy.paths import native_path
 
 
 class PrivateRootCleanupTests(unittest.TestCase):
-    @unittest.skipUnless(os.name == 'nt', 'Windows READONLY hardlink deletion')
-    def test_native_readonly_hardlink_preserves_the_other_link(self):
+    @unittest.skipUnless(os.name == 'nt', 'Windows long paths, READONLY hardlinks and junctions')
+    def test_long_root_cleanup_preserves_outside_hardlink_and_junction_target(self):
         with private_state_dir() as root:
             objects = root / 'objects'
-            objects.mkdir()
-            outside = root / 'uv-cache-object'
+            directory = objects
+            while len(str(directory)) < 310:
+                directory /= 'directory-' + 'a' * 35
+            native_path(directory).mkdir(parents=True)
+            ordinary = directory / 'ordinary'
+            readonly = directory / 'readonly'
+            native_path(ordinary).write_bytes(b'long ordinary file')
+            native_path(readonly).write_bytes(b'long readonly file')
+            native_path(readonly).chmod(stat.S_IREAD)
+            outside_directory = root / 'outside'
+            outside_directory.mkdir()
+            outside = outside_directory / 'uv-cache-object'
             outside.write_bytes(b'git object fixture')
-            path = objects / 'object'
-            os.link(outside, path)
+            path = directory / 'object'
+            os.link(outside, native_path(path))
             outside.chmod(stat.S_IREAD)
+            junction = objects / 'junction'
+            result = subprocess.run(['cmd', '/c', 'mklink', '/J', str(junction), str(outside_directory)],
+                                    capture_output=True)
+            self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
+            self.assertTrue(junction.is_junction())
+            for leaf in (ordinary, readonly, path):
+                self.assertGreater(len(str(leaf)), 260)
             before = outside.stat()
             try:
                 remove_private_test_root(objects)
@@ -42,18 +61,19 @@ class PrivateRootCleanupTests(unittest.TestCase):
                        mode=stat.S_IFREG, delete_error=None, ancestor_reparse=False):
         unlink = Mock()
         actual_lstat = Path.lstat
+        native_root, native_leaf = native_path(root), native_path(path)
 
         def information(part):
-            if part == path:
+            if part == native_leaf:
                 return SimpleNamespace(st_mode=mode, st_file_attributes=attributes)
-            if ancestor_reparse and part == path.parent:
+            if ancestor_reparse and part == native_leaf.parent:
                 return SimpleNamespace(st_mode=stat.S_IFDIR,
                                        st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT)
             return actual_lstat(part)
 
         def removal(directory, *, onexc):
-            self.assertEqual(directory, root)
-            onexc(unlink, str(path), error)
+            self.assertEqual(directory, native_root)
+            onexc(unlink, str(native_leaf), error)
 
         with (patch.object(checks, 'os', wraps=os) as windows,
               patch.object(checks.shutil, 'rmtree', side_effect=removal),
@@ -103,7 +123,7 @@ class PrivateRootCleanupTests(unittest.TestCase):
             with self.assertRaises(PermissionError) as raised:
                 self.windows_delete(root, path, self.failure(5), delete_error=error)
             self.assertIs(raised.exception, error)
-            self.assertEqual(self.delete_calls, [call(path)])
+            self.assertEqual(self.delete_calls, [call(native_path(path))])
             self.assertFalse(self.unlink_calls)
             self.assertTrue(path.exists())
 
@@ -112,7 +132,7 @@ class PrivateRootCleanupTests(unittest.TestCase):
             path = root / "object"
             path.write_bytes(b"fixture")
             self.windows_delete(root, path, self.failure(5))
-            self.assertEqual(self.delete_calls, [call(path)])
+            self.assertEqual(self.delete_calls, [call(native_path(path))])
             self.assertFalse(self.unlink_calls)
 
     def test_board_close_failure_is_reported_and_preserves_root(self):

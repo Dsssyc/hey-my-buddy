@@ -15,7 +15,7 @@ from hey_my_buddy.protocol import process_identity as processes
 from hey_my_buddy.protocol.execution import RECEIPT, read_execution_receipt, fsync_json
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from hey_my_buddy import private_dirs
-from hey_my_buddy.private_files import publish_bytes
+from hey_my_buddy.private_files import publish_bytes, read_bytes
 
 
 class ReceivedReceiptTests(BoardTestCase):
@@ -47,7 +47,7 @@ class ReceivedReceiptTests(BoardTestCase):
         self.attempt_id = actor["attemptId"]
         self.run_id = task["runId"]
         self.receipt_path = Path(reference["receipt"]["path"])
-        self.original = self.receipt_path.read_bytes()
+        self.original = read_bytes(self.receipt_path)
         return board, claim, reference
 
     def assert_settlement(self, board, *, pending):
@@ -65,7 +65,7 @@ class ReceivedReceiptTests(BoardTestCase):
         self.assertEqual(received, 1 if pending else 0)
         self.assertEqual(occupied, int(pending))
         self.assertEqual(bool(board.store.resource_claims()), pending)
-        self.assertEqual(self.receipt_path.read_bytes(), self.original)
+        self.assertEqual(read_bytes(self.receipt_path), self.original)
 
     def recover(self, board):
         with patch.object(processes, "inspect_process_identity", return_value="identity-absent"):
@@ -121,14 +121,15 @@ class ReceivedReceiptTests(BoardTestCase):
             self.assertEqual(connection.execute(
                 "SELECT COUNT(*) FROM events WHERE kind='execution.unknown'").fetchone()[0], 0)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM execution_issues").fetchone()[0], 0)
-        self.assertFalse((self.receipt_path.parent / "result-delivery.json").exists())
+        with self.assertRaises(FileNotFoundError):
+            read_bytes(self.receipt_path.parent / "result-delivery.json")
         self.assert_final(board)
 
     def test_force_and_unknown_stop_keep_capacity_claims_and_private_material(self):
         board, _claim, reference = self.claimed({"status": "failed", "shutdownConfirmed": False})
         board.call("execution_result", reference)
         credential = self.receipt_path.parent / "agent-credential.json"
-        credential.write_text("private fixture")
+        publish_bytes(credential, b"private fixture")
         native = {**IDENTITY, "pid": 456, "processGroupId": 456}
         journal = processes.native_process_journal_path(self.receipt_path.parent, IDENTITY)
         fsync_json(journal, {"binding": {"taskId": self.run_id, "attemptId": self.attempt_id, "generation": 1},
@@ -143,13 +144,14 @@ class ReceivedReceiptTests(BoardTestCase):
         with patch.object(processes, "stop_orphan_process", return_value="unknown"):
             self.assertEqual(self.recover(board), [])
         self.assert_settlement(board, pending=True)
-        self.assertTrue(credential.exists())
+        self.assertEqual(read_bytes(credential), b"private fixture")
         queued = board.submit_execution(requestId="conflict", task="conflict", cwd=str(self.workdir()),
                                          adapter="command", argv=["echo", "conflict"])["task"]
         self.assertIsNone(board.store.admit_execution("x" * 32, queued["runId"])["claim"])
         with patch.object(processes, "stop_orphan_process", return_value="orphan-stopped"):
             self.assertEqual(len(self.recover(board)), 1)
-        self.assertFalse(credential.exists())
+        with self.assertRaises(FileNotFoundError):
+            read_bytes(credential)
         self.assert_final(board)
 
     def test_final_import_crashes_before_commit_and_retries_the_same_receipt(self):
