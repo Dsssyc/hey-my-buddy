@@ -12,7 +12,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from hey_my_buddy import private_files
+from hey_my_buddy import private_files, private_dirs
+from hey_my_buddy.paths import native_path
 
 
 OLD = b'{"generation":"old","complete":true}\n'
@@ -160,6 +161,37 @@ def _spawn(path: Path, content_path: Path, stage: str, mode: str) -> subprocess.
 
 
 class PrivatePublicationTests(unittest.TestCase):
+    def test_long_publication_and_execution_facts_keep_ordinary_references(self):
+        from hey_my_buddy.protocol import execution
+        from hey_my_buddy.buddy.runtime import receipts
+        temporary = private_dirs.make_temporary_dir(prefix='long-facts-', directory=Path(tempfile.gettempdir()))
+        self.addCleanup(private_dirs.remove_tree, temporary)
+        root = Path(temporary)
+        while len(str(root)) < 300:
+            root /= 'private-facts-' + 'a' * 35
+        directory = private_dirs.ensure_private_dir(root)
+        mutable = directory / 'mutable.json'
+        private_files.publish_bytes(mutable, OLD)
+        with private_files.open_read(mutable) as old_reader:
+            private_files.publish_bytes(mutable, NEW)
+            self.assertEqual(old_reader.read(), OLD)
+            self.assertEqual(private_files.read_bytes(mutable), NEW)
+        immutable = directory / 'immutable.json'
+        private_files.publish_bytes(immutable, OLD, immutable=True)
+        private_files.publish_bytes(immutable, OLD, immutable=True)
+        with self.assertRaises(FileExistsError):
+            private_files.publish_bytes(immutable, NEW, immutable=True)
+        self.assertEqual(list(native_path(directory).glob('.*.tmp')), [])
+        binding = {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}
+        execution.fsync_json(directory / execution.STARTUP, binding)
+        self.assertEqual(execution._private_json(directory / execution.STARTUP), binding)
+        receipt = {**binding, 'createdAt': '2026-10-25T00:00:00+00:00', 'report': {}}
+        receipts.write_receipt(directory, receipt)
+        reference = execution.receipt_reference(directory)
+        self.assertEqual(reference['path'], str(directory / execution.RECEIPT))
+        self.assertNotIn('\\\\?\\', reference['path'])
+        self.assertEqual(execution.read_execution_receipt(directory, binding=binding, sha256=reference['sha256']), receipt)
+
     def test_spawn_handle_identifies_the_writer_process(self):
         writer = r'''
 import os, sys

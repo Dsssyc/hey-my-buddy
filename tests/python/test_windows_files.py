@@ -2,7 +2,7 @@
 import ctypes
 import errno
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import struct
 import subprocess
 import sys
@@ -13,9 +13,28 @@ from unittest import mock
 from hey_my_buddy import windows_files as files, private_dirs, state_root
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.private_files import publish_bytes
+from hey_my_buddy.paths import native_path, resolved_path, windows_path
 
 USER = 'S-1-5-21-100-200-300-1001'
 FOREIGN = 'S-1-5-21-100-200-300-1002'
+
+
+class WindowsPathTests(unittest.TestCase):
+    def test_drive_paths_and_existing_prefix_have_one_native_spelling(self):
+        for drive in ('C', 'c', 'Z', 'z'):
+            ordinary = drive + ':\\folder\\中文.json'
+            extended = '\\\\?\\' + ordinary
+            for value in (ordinary, extended, PureWindowsPath(ordinary)):
+                with self.subTest(value=value):
+                    self.assertEqual(windows_path(value), extended)
+                    self.assertEqual(windows_path(value, extended=False), ordinary)
+
+    def test_paths_without_a_local_drive_root_and_traversal_are_rejected(self):
+        for path in ('leaf', 'C:leaf', '\\leaf', r'C:\folder\..\leaf',
+                     r'\\?\C:\folder\..\leaf', r'\\.\NUL', r'\\?\GLOBALROOT\Device\HarddiskVolume1',
+                     'C:\\folder\\nul\0suffix'):
+            with self.subTest(path=path), self.assertRaises(BoardError):
+                windows_path(path)
 
 
 class FakeWinError(Exception):
@@ -110,7 +129,11 @@ class HandleBoundaryTests(unittest.TestCase):
         # Keep the production conversion Windows-only; supply its constructor
         # alongside the fake pywin32 modules on other test hosts.
         def win_error(code):
-            error = PermissionError(errno.EACCES, 'fixture') if code in (5, 32) else OSError(errno.EIO, 'fixture')
+            category, number = ((FileNotFoundError, errno.ENOENT) if code in (2, 3) else
+                                (FileExistsError, errno.EEXIST) if code in (80, 183) else
+                                (PermissionError, errno.EACCES) if code in (5, 32) else
+                                (OSError, errno.EIO))
+            error = category(number, 'fixture')
             error.winerror = code
             return error
 
@@ -136,21 +159,21 @@ class HandleBoundaryTests(unittest.TestCase):
             api = files.WindowsFileAPI()
             self.assertIs(api.kernel, files._RENAME_KERNEL)
             kernel.assert_not_called()
-        self.assertIs(api._open('leaf', files.GENERIC_READ, files.OPEN_EXISTING), handle)
+        self.assertIs(api._open(r'C:\folder\leaf', files.GENERIC_READ, files.OPEN_EXISTING), handle)
         self.native.CreateFile.assert_called_once_with(
-            'leaf', files.GENERIC_READ, files.FILE_SHARE_READ | files.FILE_SHARE_WRITE,
+            r'\\?\C:\folder\leaf', files.GENERIC_READ, files.FILE_SHARE_READ | files.FILE_SHARE_WRITE,
             None, files.OPEN_EXISTING,
             files.FILE_FLAG_OPEN_REPARSE_POINT | files.FILE_FLAG_BACKUP_SEMANTICS |
             files.FILE_ATTRIBUTE_NORMAL, None)
-        api._open('leaf', files.GENERIC_READ, files.OPEN_EXISTING, share_delete=True)
+        api._open(r'C:\folder\leaf', files.GENERIC_READ, files.OPEN_EXISTING, share_delete=True)
         self.assertTrue(self.native.CreateFile.call_args.args[2] & files.FILE_SHARE_DELETE)
         self.assertEqual(api.info(handle), (files.FILE_ATTRIBUTE_REPARSE_POINT,
                                             files.IO_REPARSE_TAG_SYMLINK))
         self.native.GetFileInformationByHandleEx.assert_called_once_with(handle, 9)
         self.assertEqual(api.name(handle), 'leaf')
         self.native.GetFinalPathNameByHandle.assert_called_once_with(handle, 0)
-        self.assertEqual(api.long_path('short'), r'C:\folder\Long Leaf')
-        self.native.GetLongPathName.assert_called_once_with('short')
+        self.assertEqual(api.long_path(r'C:\folder\short'), r'C:\folder\Long Leaf')
+        self.native.GetLongPathName.assert_called_once_with(r'\\?\C:\folder\short')
         self.assertEqual(api.file_type(handle), files.FILE_TYPE_DISK)
         api.delete(handle)
         self.native.SetFileInformationByHandle.assert_called_once_with(handle, 4, True)
@@ -169,10 +192,9 @@ class HandleBoundaryTests(unittest.TestCase):
             with self.subTest(code=code):
                 self.native.CreateFile.side_effect = FakeWinError(code)
                 with self.assertRaises(category) as raised:
-                    api.open_leaf('leaf')
+                    api.open_leaf(r'C:\folder\leaf')
                 self.assertIs(raised.exception.__cause__, self.native.CreateFile.side_effect)
-                if code not in (2, 3, 80, 183):
-                    self.assertEqual(raised.exception.winerror, code)
+                self.assertEqual(raised.exception.winerror, code)
                 self.assertIsInstance(raised.exception, OSError)
 
     def test_crt_transfer_detaches_only_after_success(self):
@@ -183,7 +205,7 @@ class HandleBoundaryTests(unittest.TestCase):
             'FileAttributes': files.FILE_ATTRIBUTE_NORMAL, 'ReparseTag': 0}
         self.native.GetFileType.return_value = files.FILE_TYPE_DISK
         self.crt.open_osfhandle.return_value = 456
-        self.assertEqual(files.open_regular_fd('leaf', os.O_RDONLY, api=api), 456)
+        self.assertEqual(files.open_regular_fd(r'C:\folder\leaf', os.O_RDONLY, api=api), 456)
         self.crt.open_osfhandle.assert_called_once_with(
             321, os.O_RDONLY | os.O_BINARY | os.O_NOINHERIT)
         self.assertTrue(handle.detached)
@@ -193,7 +215,7 @@ class HandleBoundaryTests(unittest.TestCase):
         self.native.CreateFile.return_value = failed
         self.crt.open_osfhandle.side_effect = OSError('transfer failed')
         with self.assertRaisesRegex(OSError, 'transfer failed'):
-            files.open_regular_fd('leaf', os.O_RDONLY, api=api)
+            files.open_regular_fd(r'C:\folder\leaf', os.O_RDONLY, api=api)
         self.assertFalse(failed.detached)
         self.assertTrue(failed.closed)
 
@@ -206,7 +228,7 @@ class HandleBoundaryTests(unittest.TestCase):
             'ReparseTag': files.IO_REPARSE_TAG_SYMLINK,
         }
         with self.assertRaises(BoardError):
-            files.open_regular_fd('link', os.O_RDONLY, api=api)
+            files.open_regular_fd(r'C:\folder\link', os.O_RDONLY, api=api)
         self.assertTrue(handle.closed)
         self.assertFalse(handle.detached)
         self.crt.open_osfhandle.assert_not_called()
@@ -215,15 +237,16 @@ class HandleBoundaryTests(unittest.TestCase):
         api = files.WindowsFileAPI.__new__(files.WindowsFileAPI)
         api.kernel, api.msvcrt = mock.Mock(), mock.Mock()
         api.msvcrt.get_osfhandle.return_value = 321
-        target = Path('published-中文.json').absolute()
+        target = PureWindowsPath(r'C:\facts\published-中文.json')
+        expected = r'\\?\C:\facts\published-中文.json'
 
         def rename(handle, kind, buffer, size):
             info = files._RenameInfo.from_buffer(buffer)
             self.assertEqual((handle, kind, info.Flags, info.RootDirectory), (321, 22, 3, None))
             name = ctypes.string_at(ctypes.addressof(buffer) + files._RenameInfo.FileName.offset,
                                     info.FileNameLength).decode('utf-16-le')
-            self.assertEqual(name, str(target))
-            self.assertEqual(size, files._RenameInfo.FileName.offset + len(str(target).encode('utf-16-le')) + 2)
+            self.assertEqual(name, expected)
+            self.assertEqual(size, files._RenameInfo.FileName.offset + len(expected.encode('utf-16-le')) + 2)
             self.assertEqual(buffer.raw[size - 2:size], b'\0\0')
             return True
 
@@ -246,18 +269,18 @@ class HandleBoundaryTests(unittest.TestCase):
         api.close.assert_not_called()
 
     def test_private_open_refuses_parent_traversal_and_truncation_before_opening(self):
-        api = mock.Mock()
-        for path, flags in ((Path('parent/../leaf'), os.O_RDONLY),
-                            (Path('leaf'), os.O_WRONLY | os.O_TRUNC),
-                            (Path('leaf'), os.O_WRONLY | os.O_CREAT | os.O_TRUNC)):
-            with self.subTest(path=path, flags=flags), self.assertRaises(BoardError):
-                private_dirs.open_regular_fd(path, flags)
-        api._open.assert_not_called()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for path, flags in ((root / 'parent/../leaf', os.O_RDONLY),
+                                (root / 'leaf', os.O_WRONLY | os.O_TRUNC),
+                                (root / 'leaf', os.O_WRONLY | os.O_CREAT | os.O_TRUNC)):
+                with self.subTest(path=path, flags=flags), self.assertRaisesRegex(BoardError, 'parent traversal|without traversal|Unsafe ordinary-file open'):
+                    private_dirs.open_regular_fd(path, flags)
 
     def test_directory_open_pins_against_rename(self):
         api = files.WindowsFileAPI()
         self.native.CreateFile.return_value = FakeHandle(123)
-        api.open_dir(Path('parent'))
+        api.open_dir(r'C:\parent')
         args = self.native.CreateFile.call_args.args
         self.assertTrue(args[1] & files.GENERIC_READ)
         self.assertFalse(args[2] & files.FILE_SHARE_DELETE)
@@ -309,6 +332,26 @@ class LauncherTransferTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'nt', 'native Windows ACL/handle evidence')
 class NativePrivateFilesTests(unittest.TestCase):
+
+    def test_long_resolve_checks_links_and_returns_ordinary_paths(self):
+        temporary = private_dirs.make_temporary_dir(prefix='resolve-', directory=Path(tempfile.gettempdir()))
+        self.addCleanup(private_dirs.remove_tree, temporary)
+        root = temporary
+        while len(str(root)) < 310:
+            root /= 'directory-' + 'a' * 35
+        self.assertEqual(private_dirs.ensure_private_dir(root), root)
+        target = root / 'target.json'
+        publish_bytes(target, b'content')
+        link = root / 'link'
+        try:
+            native_path(link).symlink_to(target.name)
+        except OSError as error:
+            if error.winerror == 1314:
+                self.skipTest('symbolic-link privilege is unavailable')
+            raise
+        self.assertEqual(resolved_path(link), target)
+        self.assertEqual(private_dirs._absolute(native_path(root)), root)
+        self.assertNotIn('\\\\?\\', str(resolved_path(root)))
 
     def test_private_path_accepts_different_case(self):
         with tempfile.TemporaryDirectory() as temporary:

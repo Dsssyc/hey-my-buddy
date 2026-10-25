@@ -19,6 +19,7 @@ from functools import partial
 from pathlib import Path
 
 from ...errors import BoardError
+from ...paths import native_path, resolved_path
 from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
 from ...private_files import open_read, publish_bytes, read_bytes, read_text
@@ -605,7 +606,7 @@ class WorkerRunExecutor:
             raise BoardError("INVALID_ARGUMENT", "Coding requires an explicit turn resume mode", harness=self.name)
         if context.turn_input.get("resumeMode") == "native-session" and not self.description.native_resume:
             raise BoardError("INVALID_ARGUMENT", "This harness does not support native-session resume", harness=self.name)
-        if context.turn_output_file().exists():
+        if native_path(context.turn_output_file()).exists():
             raise BoardError("CONFLICT", "The attempt already has a turn result; it cannot execute twice", harness=self.name)
         turn_io.prepare_turn(context)
         state = context.environment["HMB_STATE_DIR"]
@@ -615,7 +616,7 @@ class WorkerRunExecutor:
         inquiry = turn_io.inquiry_paths(context)
         context.role_run_control = {
             "operation": "worker", "harness": self.name,
-            "directory": str(context.directory.resolve()),
+            "directory": str(resolved_path(context.directory)),
             "privateRoot": str(context_root(context, self.name)), "nativeRoot": str(root),
             "sessionRecordPath": context.session_record_path,
             "cwd": str(Path(context.cwd).resolve()), "timeoutSeconds": context.timeout_seconds,
@@ -759,9 +760,9 @@ def _artifacts(context: ExecutionContext) -> list[dict]:
              ("native-attention", context.directory / "attention.json")]
     artifacts = []
     for kind, path in paths:
-        if path.is_file():
+        if native_path(path).is_file():
             raw = read_bytes(path)
-            artifacts.append({"kind": kind, "location": str(path.resolve()), "sizeBytes": path.stat().st_size,
+            artifacts.append({"kind": kind, "location": str(resolved_path(path)), "sizeBytes": native_path(path).stat().st_size,
                               "contentHash": hashlib.sha256(raw).hexdigest()})
     return artifacts
 
@@ -839,7 +840,7 @@ def _native_operation(name: str, operation: str, *, state_dir: Path, **arguments
             return payload.get(specification["resultKey"])
         finally:
             if stopped and directory is not None:
-                shutil.rmtree(directory)
+                shutil.rmtree(native_path(directory))
     except Exception as error:
         error.discovery_shutdown_confirmed = stopped
         raise

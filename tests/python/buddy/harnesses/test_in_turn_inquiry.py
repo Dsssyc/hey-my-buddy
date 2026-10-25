@@ -10,9 +10,23 @@ from hey_my_buddy.buddy.harnesses.in_turn_inquiry import prepare_inquiry_service
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError
 from hey_my_buddy.buddy.roles.session_mcp import respond
+from hey_my_buddy import private_dirs
+from hey_my_buddy.protocol.inquiry_journal import read_shared_snapshot, MAX_JOURNAL_BYTES
 
 
 class InTurnInquiryTests(unittest.TestCase):
+    def test_long_inquiry_journal_uses_the_same_writer_and_reader_path(self):
+        container = Path(self.directory.name) / 'long-inquiry'
+        self.addCleanup(private_dirs.remove_tree, container)
+        directory = container
+        while len(str(directory)) < 310:
+            directory /= 'native-inquiry-' + 'a' * 35
+        self.bridge.journal_path = private_dirs.ensure_private_dir(directory) / 'inquiries.jsonl'
+        self.bridge.activate('native-session')
+        self.assertTrue(self.ask('long-question')['ok'])
+        records = read_shared_snapshot(self.bridge.journal_path, MAX_JOURNAL_BYTES)
+        self.assertEqual(json.loads(records.splitlines()[-1])['inquiryId'], 'long-question')
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)

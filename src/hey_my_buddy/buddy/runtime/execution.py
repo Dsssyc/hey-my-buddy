@@ -28,6 +28,7 @@ from typing import Any
 import c_two as cc
 
 from ...text import configure_utf8_output
+from ...paths import native_path
 from ...errors import BoardError
 from ...protocol.client import BoardClient
 from ...protocol import activity as activity_module
@@ -241,7 +242,7 @@ class _ExecutionLive:
                 cc.unregister(self.name)
             finally:
                 cc.shutdown()
-                (self.execution.directory / execution_protocol.LIVE).unlink(missing_ok=True)
+                native_path(self.execution.directory / execution_protocol.LIVE).unlink(missing_ok=True)
 
     def _auth(self, raw: str, fields: set[str]) -> dict:
         if not isinstance(raw, str) or len(raw.encode()) > 65536:
@@ -413,7 +414,7 @@ class Execution:
                     delay = min(10.0, delay * 2)
         receipt = self.execute()
         if receipt["report"]["shutdownConfirmed"] is True:
-            (self.directory / BUDGET).unlink(missing_ok=True)
+            native_path(self.directory / BUDGET).unlink(missing_ok=True)
         self.control.raise_fatal()
         return deliver_receipt(self.client, receipt, self.directory, nonce=self.nonce, log=self.log,
                                flush_hints=self._flush_delivery_hints)
@@ -776,7 +777,7 @@ class Execution:
         log_paths = (context.log_paths() if spec["adapter"] == "command" else {
             "stdout": str(self.evidence_directory / "execution.stdout.log"),
             "stderr": str(self.evidence_directory / "execution.stderr.log")})
-        report["logPaths"] = {name: path for name, path in log_paths.items() if Path(path).is_file()}
+        report["logPaths"] = {name: path for name, path in log_paths.items() if native_path(Path(path)).is_file()}
         report["runtimeIdentity"] = context.runtime.get("identity")
         return self.receipt(claim, report, directory)
 

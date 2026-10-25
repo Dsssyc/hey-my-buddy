@@ -53,6 +53,7 @@ from ..inquiry_bridge import InquiryBridge
 from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
 from ....private_files import open_read, read_bytes
+from ....paths import native_path
 from ...roles.turn_io import canonical_json, private_json
 from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ..version import VersionShutdownError, probe_version
@@ -483,7 +484,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
     Once created, the handle is retained before descriptor cleanup or connection
     setup, and each failure leaves the actual cleanup receipt or unknown handle.
     """
-    fd = os.open(prep.stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    fd = os.open(native_path(prep.stderr_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
     process = None
     try:
         try:
@@ -1741,9 +1742,9 @@ def _evidence_refs(request: RunRequest, state: _RunState, facts: _RunFacts) -> t
     def retain(kind: str, path: Path, value: dict | None) -> None:
         if value is not None:
             private_json(path, value, exclusive=True)
-        if not path.is_file():
+        if not native_path(path).is_file():
             return
-        raw = path.read_bytes()
+        raw = read_bytes(path)
         refs.append(EvidenceRef(kind=kind, location=str(path), size_bytes=len(raw),
                                 sha256=hashlib.sha256(raw).hexdigest()))
 

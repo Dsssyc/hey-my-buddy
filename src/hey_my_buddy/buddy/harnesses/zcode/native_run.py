@@ -43,6 +43,8 @@ from ....errors import BoardError
 from ....protocol.reasons import reason as make_reason
 from ....json_codec import canonical_json, decode_strict_json
 from ....private_dirs import ensure_private_dir
+from ....paths import native_path
+from ....private_files import read_bytes
 from ...roles.turn_io import private_json
 from ...roles.attention import AttentionRecorder
 from ..version import VersionShutdownError, probe_version
@@ -411,7 +413,7 @@ def session_facts(native_root: Path, session_id: str | None) -> dict:
         "harness": "zcode", "sessionId": session_id, "captured": session_id is not None,
         "storageScope": "task-private", "storageOwner": "hey-my-buddy-micro-task",
         "nativeAppVisibility": "not-listed-in-native-app",
-        "bindingPresent": binding is not None and binding.is_file(),
+        "bindingPresent": binding is not None and native_path(binding).is_file(),
         "note": (
             "the root session is stored in this micro task's private ZCode native root (ZCODE_SESSION_DB_PATH/"
             "ZCODE_STORAGE_DIR); the installed ZCode app lists only sessions in its own user home, so the "
@@ -703,7 +705,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
                         "ZCODE_STORAGE_DIR": str(root / "storage"), "ZCODE_SESSION_DB_PATH": str(root / "sessions.sqlite"),
                         "ZCODE_LOG_DIR": str(private / "native-logs"), "ZCODE_LOG_CONSOLE": "0"})
     version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
-    fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(native_path(stderr_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     process = None
     try:
         try:
@@ -1298,7 +1300,7 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
     if mode == "native-session":
         outcome.binding_path = native_root / (hashlib.sha256(previous.encode()).hexdigest() + ".json")
         try:
-            binding = decode_strict_json(outcome.binding_path.read_bytes())
+            binding = decode_strict_json(read_bytes(outcome.binding_path))
         except (OSError, ValueError):
             raise NativeError("native-resume-unavailable", "the previous native session has no private micro task binding") from None
         if binding != {"taskId": request.identity.task_id, "sessionId": previous,
@@ -1499,7 +1501,7 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
     def retain(kind: str, name: str, value: dict) -> None:
         target = invocation_root / name
         private_json(target, value, exclusive=True)
-        raw = target.read_bytes()
+        raw = read_bytes(target)
         refs.append(EvidenceRef(kind=kind, location=str(target), size_bytes=len(raw),
                                 sha256=hashlib.sha256(raw).hexdigest()))
 
@@ -1522,8 +1524,8 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
         # stay as their clearly-sourced evidence reference; the common result
         # carries the method/action/reason triple.
         retain("denied-interactions", "denied-interactions.json", {"records": facts.denied})
-    if stderr_path.is_file():
-        raw_stderr = stderr_path.read_bytes()
+    if native_path(stderr_path).is_file():
+        raw_stderr = read_bytes(stderr_path)
         refs.append(EvidenceRef(kind="native-stderr", location=str(stderr_path),
                                 size_bytes=len(raw_stderr),
                                 sha256=hashlib.sha256(raw_stderr).hexdigest()))
@@ -1658,7 +1660,7 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
     continuation = None
     if binding_path is not None and session_id is not None:
         continuation = ContinuationFacts(
-            resumable=bool(state.status == "ok" and not binding_save_failed and binding_path.is_file()
+            resumable=bool(state.status == "ok" and not binding_save_failed and native_path(binding_path).is_file()
                            and state.shutdown and record is not None))
     return RunResult(
         identity=request.identity, harness="zcode",

@@ -55,6 +55,8 @@ from ....protocol.reasons import reason as make_reason
 from ....errors import BoardError
 from ....json_codec import canonical_json
 from ....private_dirs import ensure_private_dir
+from ....paths import native_path
+from ....private_files import read_bytes
 from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
 from ..in_turn_inquiry import INQUIRY_TOOLS, InquiryServices, prepare_inquiry_services
@@ -311,7 +313,7 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
     """Spawn the one owned native CLI and connect its stdio protocol."""
     version = probe_version(command, environment, cwd=cwd, deadline=deadline, owned=owned)
     stderr_path = invocation_root / _NATIVE_STDERR_FILE
-    fd = os.open(stderr_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    fd = os.open(native_path(stderr_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
     process = None
     try:
         try:
@@ -792,7 +794,7 @@ def _usable(converter: Callable[[dict], Any], value: dict | None) -> dict | None
 def _retain(evidence_refs: list, invocation_root: Path, kind: str, name: str, value: dict) -> None:
     target = invocation_root / name
     private_json(target, value, exclusive=True)
-    raw = target.read_bytes()
+    raw = read_bytes(target)
     evidence_refs.append(EvidenceRef(kind=kind, location=str(target), size_bytes=len(raw),
                                      sha256=hashlib.sha256(raw).hexdigest()))
 
@@ -976,8 +978,8 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             _retain(evidence_refs, invocation_root, "inquiry-tool-failures", "inquiry-tool-failures.json",
                     {"records": collector.inquiry_tool_failures, "dropped": collector.inquiry_tool_failures_dropped})
         stderr_path = invocation_root / _NATIVE_STDERR_FILE
-        if stderr_path.is_file():
-            raw_stderr = stderr_path.read_bytes()
+        if native_path(stderr_path).is_file():
+            raw_stderr = read_bytes(stderr_path)
             evidence_refs.append(EvidenceRef(kind="native-stderr", location=str(stderr_path),
                                              size_bytes=len(raw_stderr),
                                              sha256=hashlib.sha256(raw_stderr).hexdigest()))
