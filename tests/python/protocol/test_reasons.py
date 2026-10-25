@@ -229,7 +229,10 @@ class SourceReasonTests(unittest.TestCase):
             module = ast.parse(path.read_text(encoding="utf-8"))
             produced = []
             for node in ast.walk(module):
-                if isinstance(node, ast.Dict):
+                if isinstance(node, ast.Dict) and not any(
+                        isinstance(key, ast.Constant) and key.value == "message" for key in node.keys):
+                    # Receipt refusals carry diagnostic code/message pairs, not a
+                    # registered system reason with code/params.
                     produced.extend(value.value for key, value in zip(node.keys, node.values)
                                     if isinstance(key, ast.Constant) and key.value == "code"
                                     and isinstance(value, ast.Constant) and isinstance(value.value, str))

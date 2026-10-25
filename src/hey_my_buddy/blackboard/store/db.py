@@ -205,17 +205,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempts_effective_unique ON attempts(task_id)
 CREATE INDEX IF NOT EXISTS attempts_active_idx ON attempts(execution_state);
 CREATE INDEX IF NOT EXISTS attempts_model_service_idx
     ON attempts(model_harness, model_provider, model_model) WHERE model_model IS NOT NULL;
+"""
 
+#: One row per recorded execution root. POSIX roots carry their boot session and
+#: process-group leader with no Job; Windows roots carry the exclusively created
+#: root Job with no boot or process-group id. Fresh boards and the pending
+#: schema-28 upgrade build this table from the same DDL.
+ATTEMPT_PROCESS_IDENTITIES_DDL = """
 CREATE TABLE IF NOT EXISTS attempt_process_identities (
     attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
-    boot_id             TEXT NOT NULL,
+    boot_id             TEXT,
     root_pid            INTEGER NOT NULL CHECK (root_pid > 0),
     root_started_at     INTEGER NOT NULL CHECK (root_started_at > 0),
     process_group_id    INTEGER CHECK (process_group_id > 0),
     job_name            TEXT,
-    CHECK ((process_group_id IS NOT NULL AND job_name IS NULL)
-        OR (process_group_id IS NULL AND job_name IS NOT NULL))
+    CHECK ((boot_id IS NOT NULL AND process_group_id IS NOT NULL AND job_name IS NULL)
+        OR (boot_id IS NULL AND process_group_id IS NULL AND job_name IS NOT NULL))
 );
+"""
+
+ATTEMPT_RECEIVED_RECEIPTS_DDL = """
+CREATE TABLE IF NOT EXISTS attempt_received_receipts (
+    attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
+    sha256              TEXT NOT NULL
+);
+"""
+
+CORE_SCHEMA_TAIL = """
 
 CREATE TABLE IF NOT EXISTS attempt_interruptions (
     attempt_id          TEXT PRIMARY KEY REFERENCES attempts(attempt_id) ON DELETE RESTRICT,
@@ -1013,7 +1029,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_expected_idx
 CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
     ON attempt_reminders(attempt_id, silence_started_at) WHERE kind = 'native-silence';
 """
-SCHEMA = "\n".join((CORE_SCHEMA, EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
+SCHEMA = "\n".join((CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
+                    EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
                     HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
                     CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))
 

@@ -212,32 +212,6 @@ class ExecutionEndpointTests(unittest.TestCase):
                              {"claim": claim, "stateDir": str(state), "nonce": "n" * 64,
                               "jobName": None, "sessionRecordPath": None})
 
-    def test_marker_failure_keeps_created_handle_for_service_recovery(self):
-        with tempfile.TemporaryDirectory() as directory:
-            state = Path(directory)
-            claim = {"task": {"taskId": "task-4", "spec": {"adapter": "command"}},
-                     "attempt": {"taskId": "task-4", "attemptId": "attempt-4", "generation": 1}}
-            handle = SimpleNamespace(pid=401)
-            identity = {"bootId": "linux:00000000-0000-4000-8000-000000000001",
-                        "pid": 401, "startedAt": 106, "processGroupId": 401, "jobName": None}
-            original = launch_protocol.fsync_json
-
-            def write(path, value):
-                if path.name == "spawn.marker":
-                    raise OSError("marker write failed")
-                original(path, value)
-
-            with mock.patch.object(launch_protocol, "launch_controller",
-                            return_value=handle), \
-                 mock.patch.object(launch_protocol, "capture_process_identity", return_value=identity), \
-                 mock.patch.object(launch_protocol, "fsync_json", side_effect=write):
-                with self.assertRaises(OSError) as caught:
-                    launch_protocol.launch_execution(claim, state, "n" * 64)
-            self.assertTrue(caught.exception.spawn_created)
-            self.assertIs(caught.exception.execution_handle, handle)
-            self.assertEqual(handle.process_identity, identity)
-            self.assertFalse((state / "attempts/task-4/attempt-4/spawn.marker").exists())
-
     def test_startup_write_failure_never_creates_a_child(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
@@ -258,20 +232,67 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertFalse(caught.exception.spawn_created)
             self.assertTrue((state / "attempts/task-5/attempt-5/spawn.intent").is_file())
 
-    def test_capture_failure_retains_the_unidentified_owned_handle(self):
+    def test_windows_launch_publishes_the_marker_before_resume_and_transfer(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
-            claim = {"task": {"taskId": "task-6", "spec": {"adapter": "command"}},
-                     "attempt": {"taskId": "task-6", "attemptId": "attempt-6", "generation": 1}}
-            handle = SimpleNamespace(pid=601)
-            with mock.patch.object(launch_protocol, "launch_controller", return_value=handle), \
-                 mock.patch.object(launch_protocol, "capture_process_identity",
-                                   side_effect=OSError("identity capture failed")):
-                with self.assertRaises(OSError) as caught:
-                    launch_protocol.launch_execution(claim, state, "n" * 64)
-            self.assertIs(caught.exception.execution_handle, handle)
-            self.assertIsNone(handle.process_identity)
-            self.assertTrue(caught.exception.spawn_created)
+            claim = {"task": {"taskId": "task-7", "spec": {"adapter": "command"}},
+                     "attempt": {"taskId": "task-7", "attemptId": "attempt-7", "generation": 1}}
+            order = []
+            handle = mock.Mock()
+            identity = {"pid": 301, "startedAt": 1339247086400000000,
+                        "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-000000000007"}
+            original = launch_protocol.fsync_json
+
+            def write(path, value):
+                order.append(path.name)
+                original(path, value)
+
+            windows_os = SimpleNamespace(name="nt", environ=dict(os.environ))
+            with mock.patch.object(launch_protocol, "os", windows_os), \
+                 mock.patch.object(launch_protocol, "launch_controller", return_value=handle) as controller, \
+                 mock.patch.object(launch_protocol, "capture_process_identity", return_value=identity), \
+                 mock.patch.object(launch_protocol, "transfer_job_to_child",
+                                   side_effect=lambda *_args: order.append("transfer")) as transfer, \
+                 mock.patch.object(launch_protocol, "fsync_json", side_effect=write):
+                launched = launch_protocol.launch_execution(claim, state, "n" * 64)
+            self.assertIs(launched, handle)
+            self.assertEqual(order, ["spawn.intent", "execution-start.json", "spawn.marker", "transfer"])
+            transfer.assert_called_once_with(handle.process, handle.job)
+            job_name = controller.call_args.kwargs["job_name"]
+            self.assertTrue(job_name.startswith("Local\\HeyMyBuddy-"))
+            marker = json.loads((state / "attempts/task-7/attempt-7/spawn.marker").read_text(encoding="utf-8"))
+            self.assertEqual(marker["processIdentity"], identity)
+            startup = json.loads((launch_protocol.execution_directory(claim, state)
+                                  / "execution-start.json").read_text(encoding="utf-8"))
+            self.assertEqual(startup["jobName"], job_name)
+
+    def test_spawn_marker_is_read_once_at_its_file_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            evidence = state / "attempts/task-9/attempt-9"
+            evidence.mkdir(parents=True)
+            binding = {"taskId": "task-9", "attemptId": "attempt-9", "generation": 1}
+            self.assertIsNone(launch_protocol.read_spawn_marker(state, binding))
+            windows = {"pid": 301, "startedAt": 1339247086400000000,
+                       "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-000000000009"}
+            launch_protocol.fsync_json(evidence / "spawn.marker", {**binding, "processIdentity": windows})
+            self.assertEqual(launch_protocol.read_spawn_marker(state, binding), windows)
+            for value in ({**binding, "processIdentity": windows, "extra": 1},
+                          {**binding, "processIdentity": windows, "generation": 2},
+                          {**binding, "processIdentity": {"pid": 301, "startedAt": 105, "jobName": None}}):
+                with self.subTest(value=value):
+                    launch_protocol.fsync_json(evidence / "spawn.marker", value)
+                    with self.assertRaises(BoardError):
+                        launch_protocol.read_spawn_marker(state, binding)
+            launch_protocol.fsync_json(evidence / "spawn.marker", {**binding, "processIdentity": windows})
+            material = {"claim": {"task": {"taskId": "task-9"},
+                                  "attempt": {"attemptId": "attempt-9", "generation": 1}},
+                        "stateDir": str(state)}
+            self.assertEqual(launch_protocol.execution_root_identity(material), windows)
+            (evidence / "spawn.marker").unlink()
+            with self.assertRaises(BoardError) as caught:
+                launch_protocol.execution_root_identity(material)
+            self.assertEqual(caught.exception.code, "PROCESS_IDENTITY_UNKNOWN")
 
     def test_private_endpoint_authenticates_and_accepts_stop(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -420,4 +441,5 @@ class ExecutionEndpointTests(unittest.TestCase):
                     execution.live.finish()
             self.assertFalse(thread.is_alive())
             self.assertFalse((execution.directory / "execution-live.json").exists())
-            self.assertTrue((execution.directory / "result-delivery.json").exists())
+            self.assertFalse((execution.directory / "result-delivery.json").exists())
+            self.assertTrue((execution.directory / "result-receipt.json").exists())

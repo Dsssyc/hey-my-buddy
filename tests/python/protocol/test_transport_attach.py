@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, call, patch
 from hey_my_buddy.errors import BoardError
-from hey_my_buddy import state_root
+from hey_my_buddy import locking, state_root
 from hey_my_buddy.protocol import transport
 from hey_my_buddy.protocol import service_process
 
@@ -196,6 +196,158 @@ class ReadOnlyAttachTests(AttachFixture):
         recorder.assert_no_mutation()
         # The CLI method maps onto one named board operation.
         self.assertEqual(self.request.call_args_list[1].args[1], "service_control")
+
+
+class EndpointlessObservationTests(unittest.TestCase):
+    """Stop/restart and endpoint-less reads answer through lifetime-lock observation."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-stop-")
+        self.addCleanup(self.temp.cleanup)
+        self.directory = Path(self.temp.name) / "state"
+        self.directory.mkdir(mode=0o700)
+
+    def hold(self, name: str) -> int:
+        fd = os.open(self.directory / name, os.O_CREAT | os.O_RDWR, 0o600)
+        locking.lock(fd)
+        return fd
+
+    def idle_locks(self) -> None:
+        for name in transport.LIFETIME_LOCKS:
+            (self.directory / name).touch(mode=0o600)
+
+    def test_a_held_lifetime_lock_reports_unavailable_instead_of_stopped(self):
+        # A service holding a lock in another login answers nothing; a failed
+        # connection is not stop evidence, and each lock alone must refuse.
+        (self.directory / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
+        for name in transport.LIFETIME_LOCKS:
+            with self.subTest(lock=name):
+                holder = self.hold(name)
+                try:
+                    with patch.object(transport, "_attach_read_only", return_value=None), MutationRecorder() as recorder:
+                        for method in ("stop", "restart"):
+                            with self.assertRaises(ServiceError) as refused:
+                                transport.call_service(method, {"drainSeconds": 0}, self.directory)
+                            self.assertEqual(refused.exception.code, "SERVICE_UNAVAILABLE")
+                            self.assertIn("lifetime locks", refused.exception.message)
+                    recorder.assert_no_mutation()
+                    self.assertTrue((self.directory / "control.json").exists(), "an endpoint is never deleted by observation")
+                finally:
+                    os.close(holder)
+
+    def test_a_busy_start_fence_reports_a_start_in_progress_instead_of_stopped(self):
+        # A held start fence means a start is in progress right now. Even with
+        # both lifetime locks free beside it, that is neither stop evidence nor
+        # a held lifetime lock, so neither the stopped answer nor the owner
+        # message may appear.
+        (self.directory / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
+        self.idle_locks()
+        holder = self.hold("control-start.lock")
+        try:
+            before = snapshot(self.directory)
+            with patch.object(transport, "_attach_read_only", return_value=None), MutationRecorder() as recorder:
+                for method in ("stop", "restart"):
+                    with self.assertRaises(ServiceError) as refused:
+                        transport.call_service(method, {"drainSeconds": 0}, self.directory)
+                    self.assertEqual(refused.exception.code, "SERVICE_UNAVAILABLE")
+                    self.assertIn("A board service start is in progress", refused.exception.message)
+                    self.assertNotIn("lifetime locks", refused.exception.message)
+            recorder.assert_no_mutation()
+            self.assertEqual(before, snapshot(self.directory), "observation must not change the state directory")
+            self.assertTrue((self.directory / "control.json").exists(), "an endpoint is never deleted by observation")
+        finally:
+            os.close(holder)
+
+    def test_free_lifetime_locks_report_the_service_as_stopped_without_mutation(self):
+        (self.directory / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
+        self.idle_locks()
+        before = snapshot(self.directory)
+        with patch.object(transport, "_attach_read_only", return_value=None), MutationRecorder() as recorder:
+            for method in ("stop", "restart"):
+                self.assertEqual(transport.call_service(method, {"drainSeconds": 0}, self.directory),
+                                 {"status": "stopped", "alreadyStopped": True, "stopped": True})
+        recorder.assert_no_mutation()
+        self.assertEqual(before, snapshot(self.directory), "reporting stopped must not retire the stale endpoint")
+
+    def test_wait_and_read_only_paths_report_a_held_owner_instead_of_no_service(self):
+        holder = self.hold("control-daemon.lock")
+        try:
+            messages = []
+            with patch.object(transport, "_attach_read_only", return_value=None), MutationRecorder() as recorder:
+                with self.assertRaises(ServiceError) as refused:
+                    transport._call_board_read_only("ping", None, self.directory)
+                messages.append(refused.exception.message)
+                with self.assertRaises(ServiceError) as refused:
+                    with transport._event_waiter(self.directory):
+                        pass
+                messages.append(refused.exception.message)
+                with self.assertRaises(ServiceError) as refused:
+                    transport.ensure_service(self.directory, resource="wait")
+                messages.append(refused.exception.message)
+            self.assertTrue(all("lifetime locks" in message for message in messages), messages)
+            recorder.assert_no_mutation()
+        finally:
+            os.close(holder)
+
+    def test_wait_and_read_only_paths_report_a_start_in_progress_behind_a_busy_fence(self):
+        self.idle_locks()
+        holder = self.hold("control-start.lock")
+        try:
+            messages = []
+            with patch.object(transport, "_attach_read_only", return_value=None), MutationRecorder() as recorder:
+                with self.assertRaises(ServiceError) as refused:
+                    transport._call_board_read_only("ping", None, self.directory)
+                messages.append(refused.exception.message)
+                with self.assertRaises(ServiceError) as refused:
+                    with transport._event_waiter(self.directory):
+                        pass
+                messages.append(refused.exception.message)
+                with self.assertRaises(ServiceError) as refused:
+                    transport.ensure_service(self.directory, resource="wait")
+                messages.append(refused.exception.message)
+            self.assertEqual(len(set(messages)), 1, "one observation must give every entry the same refusal")
+            self.assertIn("A board service start is in progress", messages[0])
+            self.assertNotIn("lifetime locks", messages[0])
+            recorder.assert_no_mutation()
+        finally:
+            os.close(holder)
+
+    def test_wait_and_read_only_paths_keep_the_plain_refusal_when_locks_are_free(self):
+        self.idle_locks()
+        messages = []
+        with patch.object(transport, "_attach_read_only", return_value=None):
+            with self.assertRaises(ServiceError) as refused:
+                transport._call_board_read_only("ping", None, self.directory)
+            messages.append(refused.exception.message)
+            with self.assertRaises(ServiceError) as refused:
+                with transport._event_waiter(self.directory):
+                    pass
+            messages.append(refused.exception.message)
+            with self.assertRaises(ServiceError) as refused:
+                transport.ensure_service(self.directory, resource="wait")
+            messages.append(refused.exception.message)
+        self.assertTrue(all("No board service is running" in message for message in messages), messages)
+
+    def test_wait_refusal_under_the_start_lock_observes_without_reacquiring_the_fence(self):
+        # The upgrade branch holds the start lock itself; observing lifetime locks
+        # from inside that fence must not take the same lock a second time.
+        self.idle_locks()
+        (self.directory / "control-start.lock").touch(mode=0o600)
+        marker = self.directory / "upgrade.json"
+        marker.write_text("{}", encoding="utf-8", newline="\n")
+        original_lock = locking.lock
+
+        def finish_while_fencing(fd, *args, **options):
+            original_lock(fd, *args, **options)
+            if not options.get("shared"):
+                marker.unlink()
+
+        with patch.object(transport, "_attach_read_only", return_value=None), \
+             patch.object(transport.locking, "lock", side_effect=finish_while_fencing):
+            with self.assertRaises(ServiceError) as refused:
+                transport.ensure_service(self.directory, resource="wait")
+        self.assertEqual(refused.exception.code, "SERVICE_UNAVAILABLE")
+        self.assertIn("No board service is running", refused.exception.message)
 
 
 class TrustBoundaryTests(AttachFixture):
@@ -601,7 +753,6 @@ class ColdStartTests(unittest.TestCase):
         error = CoreError("lifecycle", "fixture native lifecycle failure")
         error.lifecycle_kind = "startup_timeout"
         child = self.spawn.return_value
-        child.pid = os.getpid()
 
         def fail_startup(*_args, **_kwargs):
             with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}), \
@@ -634,7 +785,7 @@ class ColdStartTests(unittest.TestCase):
                 error.io_operation = "bind"
 
                 def fail_startup(*_args, **_kwargs):
-                    child = Mock(pid=os.getpid())
+                    child = Mock()
                     child.wait.return_value = 2
                     with patch.dict(os.environ, {"HMB_STATE_DIR": str(self.directory)}), \
                          patch.object(daemon.Daemon, "run", side_effect=error), \
@@ -651,14 +802,16 @@ class ColdStartTests(unittest.TestCase):
                 expected = {"code": code, "message": str(error), "details": {
                     "category": "transport", "transport_kind": "ipc", "io_kind": kind,
                     "raw_os_error": raw_error, "io_operation": "bind"}}
-                self.assertEqual(recorded, {"pid": os.getpid(), **expected})
+                self.assertEqual(recorded, expected)
                 self.assertEqual(caught.exception.payload(), expected)
 
-    def test_startup_error_from_another_pid_is_not_attributed_to_the_new_daemon(self):
+    def test_cold_start_clears_the_previous_startup_error_before_spawning(self):
         self.directory.mkdir(mode=0o700)
         from hey_my_buddy.blackboard.service.daemon import atomic_json
+        # The record's pid equals the spawned child: only clearing the record
+        # before the spawn keeps it from impersonating this start's failure.
         atomic_json(self.directory / "startup-error.json", {
-            "pid": 4241, "code": "SERVICE_START_TIMEOUT", "message": "earlier daemon timeout",
+            "pid": 4242, "code": "SERVICE_START_TIMEOUT", "message": "earlier daemon timeout",
         })
         self.spawn.return_value.pid = 4242
         self.spawn.return_value.poll.return_value = 2
@@ -666,6 +819,30 @@ class ColdStartTests(unittest.TestCase):
             with self.assertRaises(ServiceError) as failure:
                 ensure_service(self.directory)
         self.assertEqual(failure.exception.code, "SERVICE_START_FAILED")
+        self.assertEqual(failure.exception.message, "The board daemon failed to start; inspect control.log")
+        self.assertFalse((self.directory / "startup-error.json").exists(),
+                         "the previous start's record must be cleared before the spawn")
+
+    def test_cold_start_claims_a_startup_error_written_after_the_spawn(self):
+        self.directory.mkdir(mode=0o700)
+        from hey_my_buddy.blackboard.service.daemon import atomic_json
+        child = Mock(pid=4242)
+        child.poll.return_value = 2
+
+        def spawn_records_the_daemons_error(*_args, **_kwargs):
+            # The failing daemon records its own pid, which differs from the
+            # Popen handle the cold start reaps: attribution cannot match pids.
+            atomic_json(self.directory / "startup-error.json", {
+                "pid": 4241, "code": "SERVICE_START_TIMEOUT", "message": "this daemon's own timeout",
+            })
+            return child
+
+        self.spawn.side_effect = spawn_records_the_daemons_error
+        with patch.object(transport, "_healthy", return_value=None):
+            with self.assertRaises(ServiceError) as failure:
+                ensure_service(self.directory)
+        self.assertEqual(failure.exception.code, "SERVICE_START_TIMEOUT")
+        self.assertEqual(failure.exception.message, "this daemon's own timeout")
 
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_cold_start_and_later_attach_share_the_same_trust_rule_under_a_shared_parent(self):

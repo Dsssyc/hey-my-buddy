@@ -403,13 +403,9 @@ class BoundaryReadingTests(RouterDispatchTestCase):
     def test_unknown_stop_blocks_micro_task_commands_and_does_not_claim_prior_output(self):
         request, first = self.start()
         self.report(first, self.failure(first), status="failed", shutdown=False)
-        result = self.boundary(request["decisionId"], run_id="run-1", revision=3)
-        trial = result["routerTrials"][0]
-        self.assertEqual(trial["outcome"], "stopUnknown")
-        self.assertFalse(trial["shutdownConfirmed"])
-        for command in result["commands"].values():
-            self.assertTrue(command["blocked"])
-            self.assertNotIn("reason", command)
+        self.assertIsNone(self.boundary(request["decisionId"], run_id="run-1", revision=3))
+        self.assertEqual(self.decision_row(request["decisionId"])["status"], "running")
+        self.assertEqual(self.board_.client().get(runId=first["task"]["taskId"])["attemptState"], "finalizing")
         self.assertEqual(len(self.tasks()), 1)
         self.assertEqual(self.router_events("router.no_answer", "router.answered"), [])
 

@@ -7,7 +7,7 @@ from unittest.mock import patch
 from blackboard.tasks import test_lead_owned as lead_helpers
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from blackboard.routing.test_decision import DecisionTestCase
-from support import FakeClock
+from support import settle_fixture_receipt, FakeClock
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import workflow
@@ -122,10 +122,16 @@ class LeadLifecycleTests(WorkflowTestCase):
                 if disposition == "cancelled":
                     board.call("workflow_cancel", {"runId": child["runId"], **self.control(child)})
                 else:
-                    self.finish_owned(board, child, runner_status="failed" if disposition == "failed" else "ok",
+                    self.finish_owned(board, child, runner_status="failed" if disposition in ("failed", "uncertain") else "ok",
                                       disposition="completed" if disposition in ("failed", "uncertain") else disposition,
                                       shutdown=disposition != "uncertain",
-                                      exit_code=1 if disposition == "failed" else 0)
+                                      exit_code=1 if disposition in ("failed", "uncertain") else 0)
+                if disposition == "uncertain":
+                    self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
+                    self.assertEqual(self.wakeups(board, lead), [])
+                    pending = board.call("task_get", {"runId": child["runId"]})["task"]["selectedAttempt"]
+                    self.assertEqual(pending["executionState"], "finalizing")
+                    settle_fixture_receipt(board, pending["attemptId"], native_stopped=True)
                 self.assertEqual(self.current(board, lead)["state"], "executing")
                 wakeups = self.wakeups(board, lead)
                 self.assertEqual(len(wakeups), 1)
@@ -371,7 +377,7 @@ class LeadLifecycleTests(WorkflowTestCase):
     def test_lead_waits_until_a_stopped_owned_micro_tasks_helpers_settle(self):
         self._lead_waits_for_helper_stop_report(shutdown=True)
 
-    def test_unconfirmed_nested_stop_report_wakes_without_claiming_stopped(self):
+    def test_unconfirmed_nested_stop_report_waits_for_proof_before_waking(self):
         self._lead_waits_for_helper_stop_report(shutdown=False)
 
     def _lead_waits_for_helper_stop_report(self, *, shutdown):
@@ -395,12 +401,16 @@ class LeadLifecycleTests(WorkflowTestCase):
         self.assertEqual(len(self.wakeups(board, lead)), prior_wakeups)
         self.finish_turn(board, helper_claim, worker_id="w2", runner_status="cancelled", seal=False, shutdown=shutdown)
         self.assertEqual(self.current(board, child)["task"]["workflowShutdown"]["descendantsConfirmed"], shutdown)
+        if not shutdown:
+            self.assertEqual(self.current(board, lead)["state"], "waiting-owned")
+            self.assertEqual(len(self.wakeups(board, lead)), prior_wakeups)
+            settle_fixture_receipt(board, helper_claim["claim"]["attempt"]["attemptId"], native_stopped=True)
         self.assertEqual(self.current(board, lead)["state"], "executing")
         self.assertEqual(len(self.wakeups(board, lead)), prior_wakeups + 1)
         trigger = json.loads(self.wakeups(board, lead)[-1]["trigger_event_json"])
         with board.store.db.read() as connection:
             event = connection.execute("SELECT payload_json FROM events WHERE seq=?", (trigger["seq"],)).fetchone()
-            self.assertEqual(json.loads(event["payload_json"])["stopConfirmed"], shutdown)
+            self.assertEqual(json.loads(event["payload_json"])["stopConfirmed"], True)
 
     def test_lead_waits_until_a_stopped_owned_micro_tasks_router_settles(self):
         self.catalog_fixture()

@@ -106,8 +106,9 @@ class SelectionPublicationTests(RouterDispatchTestCase):
         request, first = self.start(three=True, micro_task=True)
         self.invalidate(B, "disabled")
         response = self.report(first, self.answer(first, buddy_id=B), shutdown=False)
-        self.assertEqual(response["decision"]["outcome"], "changed", response)
-        self.assertEqual(response["decision"]["status"], "needs-host")
+        self.assertFalse(response["committed"])
+        self.assertEqual(response["attempt"]["executionState"], "finalizing")
+        self.assertEqual(self.decision_row(request["decisionId"])["status"], "running")
         self.assertEqual(self.current_task(request["decisionId"]), first["task"]["taskId"])
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM router_dispatches").fetchone()[0], 1)

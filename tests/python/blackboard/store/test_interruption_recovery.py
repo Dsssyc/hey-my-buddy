@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -12,6 +13,30 @@ from hey_my_buddy.blackboard.service.execution_scheduler import _ExecutionObserv
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import process_identity as processes
 from hey_my_buddy.protocol.execution import fsync_json, RECEIPT
+
+
+class CommitFailingConnection:
+    """Delegate one cached SQLite connection, failing its next COMMIT once.
+
+    ``Database.write`` holds its per-thread connection in a cache; substituting
+    that entry lets the real transaction run every statement and fail exactly
+    at ``connection.execute("COMMIT")``, with no product test hook.
+    """
+
+    def __init__(self, connection):
+        self._connection = connection
+        self.fail_commit = False
+        self.statements = []
+
+    def execute(self, sql, parameters=()):
+        self.statements.append(sql)
+        if self.fail_commit and sql == "COMMIT":
+            self.fail_commit = False  # The fault is removed after firing once.
+            raise RuntimeError("commit failed")
+        return self._connection.execute(sql, parameters)
+
+    def __getattr__(self, attribute):
+        return getattr(self._connection, attribute)
 
 IDENTITY = {'bootId': 'macos:00000000-0000-0000-0000-000000000001', 'pid': 123,
             'startedAt': 123250000, 'processGroupId': 123, 'jobName': None}
@@ -54,6 +79,71 @@ class InterruptionRecoveryTests(BoardTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempt_process_identities').fetchone()[0], 1)
             self.assertEqual(interruption.read_identity(connection, actor['attemptId']), IDENTITY)
+
+    def test_verified_windows_progress_records_the_marker_root_not_the_reporter(self):
+        windows = {'pid': 301, 'startedAt': 1339247086400000000,
+                   'jobName': 'Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000d1'}
+        reporter = {'pid': 402, 'startedAt': 815, 'jobName': windows['jobName']}
+        for stored in ('absent', 'recorded'):
+            with self.subTest(stored=stored):
+                board, _client, task, _claim, actor = self.claimed(identity=False)
+                evidence = board.directory / 'attempts' / task['runId'] / actor['attemptId']
+                fsync_json(evidence / 'spawn.marker', {'taskId': task['runId'], 'attemptId': actor['attemptId'],
+                                                       'generation': 1, 'processIdentity': windows})
+                if stored == 'recorded':
+                    board.call('execution_progress', {**actor, 'processIdentity': windows})
+                seen = []
+
+                def verify(attempt_id, reported, root):
+                    seen.append((attempt_id, reported, root))
+                    return root
+
+                board.store.execution_progress({**actor, 'processIdentity': reporter}, verify_identity=verify)
+                self.assertEqual(seen, [(actor['attemptId'], reporter, windows)])
+                with board.store.db.read() as connection:
+                    self.assertEqual(interruption.read_identity(connection, actor['attemptId']), windows)
+                self.assertTrue(board.store.execution_identity_confirmed(actor['attemptId']))
+
+    def test_refused_progress_confirms_no_identity(self):
+        board, _client, _task, _claim, actor = self.claimed(identity=False)
+        reporter = {'pid': 402, 'startedAt': 815,
+                    'jobName': 'Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000d2'}
+        with self.assertRaises(BoardError) as caught:
+            board.store.execution_progress({**actor, 'processIdentity': reporter},
+                                           verify_identity=lambda *_args: None)
+        self.assertEqual(caught.exception.code, 'UNAUTHORIZED')
+        with board.store.db.read() as connection:
+            self.assertIsNone(interruption.read_identity(connection, actor['attemptId']))
+        self.assertFalse(board.store.execution_identity_confirmed(actor['attemptId']))
+
+    def test_failed_identity_commit_does_not_confirm_the_report(self):
+        board, _client, _task, _claim, actor = self.claimed(identity=False)
+        windows = {'pid': 301, 'startedAt': 1339247086400000000,
+                   'jobName': 'Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000d3'}
+        # Substitute this thread's cached connection so the real transaction
+        # fails at Database.write's own COMMIT, after every statement ran.
+        with board.store.db.connect() as connection:
+            proxy = CommitFailingConnection(connection)
+        board.store.db._connections[(threading.get_ident(), 0)] = proxy
+        proxy.fail_commit = True
+        with self.assertRaises(RuntimeError):
+            board.store.execution_progress({**actor, 'processIdentity': windows},
+                                           verify_identity=lambda *_args: windows)
+        # Both writes were issued inside the transaction; the failed COMMIT is
+        # the last statement, so the failure is the commit and nothing earlier.
+        issued = ' '.join(proxy.statements)
+        self.assertIn('INSERT INTO attempt_process_identities', issued)
+        self.assertIn('identity_confirmed_at', issued)
+        self.assertEqual(proxy.statements[-1], 'COMMIT')
+        with board.store.db.read() as connection:
+            self.assertIsNone(interruption.read_identity(connection, actor['attemptId']))
+        self.assertFalse(board.store.execution_identity_confirmed(actor['attemptId']))
+        # The failed commit fences nothing: the same report, retried through
+        # the service path after the fault is gone, confirms normally.
+        board.call('execution_progress', {**actor, 'processIdentity': windows})
+        with board.store.db.read() as connection:
+            self.assertEqual(interruption.read_identity(connection, actor['attemptId']), windows)
+        self.assertTrue(board.store.execution_identity_confirmed(actor['attemptId']))
 
     def test_normal_startup_waits_for_endpoint_without_unknown_or_reconnect_events(self):
         from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler, _RecoveredExecution
@@ -299,7 +389,6 @@ class InterruptionRecoveryTests(BoardTestCase):
 
     def test_refused_receipt_is_never_replayed_and_settles_failed_with_released_capacity(self):
         from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
-        from hey_my_buddy.protocol.execution import DELIVERY
         board, client, task, _, actor = self.claimed()
         directory = Path(self.journal(board, actor['attemptId'])['path']).parent
         binding = {'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation']}
@@ -309,9 +398,8 @@ class InterruptionRecoveryTests(BoardTestCase):
         original = (directory / RECEIPT).read_bytes()
         self.assertEqual(board.store.capacity_report()['totalActive'], 1)
         self.assertFalse(deliver_receipt(client, receipt, directory, nonce=actor['nonce']))
-        decision = json.loads((directory / DELIVERY).read_text())
-        self.assertEqual(decision['error']['code'], 'INVALID_ARGUMENT')
-        self.assertFalse(decision['accepted'])
+        refusal = {'code': 'INVALID_ARGUMENT', 'message': "status must be 'ok', 'failed' or 'cancelled'"}
+        self.assertFalse((directory / 'result-delivery.json').exists())
         # A rejection records no stop proof. Until the root is absent it still
         # owns capacity; recovery must not replay its invalid report afterwards.
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):
@@ -324,9 +412,10 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(commit.call_args.args[0]['status'], 'failed')
         view = client.get(runId=task['runId'])
         self.assertEqual(view['state'], 'failed')
-        self.assertEqual(view['selectedAttempt']['result']['result']['receiptRejection'], decision['error'])
+        self.assertEqual(view['selectedAttempt']['result']['result']['receiptRejection'], refusal)
+        self.assertNotIn('microTaskError', view['selectedAttempt']['result']['result'])
         self.assertIn('INVALID_ARGUMENT', view['selectedAttempt']['result']['error'])
-        self.assertIn(decision['error']['message'], view['selectedAttempt']['result']['error'])
+        self.assertIn(refusal['message'], view['selectedAttempt']['result']['error'])
         self.assertTrue(view['shutdownConfirmed'])
         self.assertEqual(board.store.capacity_report()['totalActive'], 0)
         self.assertEqual((directory / RECEIPT).read_bytes(), original)
@@ -402,19 +491,6 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(board.store.recover_executions(), [])
         self.assertEqual(board.store.head(), head)
 
-    def test_absent_execution_confirms_success_without_replacing_its_result(self):
-        board, client, task, _, actor = self.claimed()
-        report = {'status': 'ok', 'result': {'native': 'preserved', 'output': {'status': 'ok'}},
-                  'shutdownConfirmed': False}
-        board.call('execution_result', {**actor, **report})
-        original = client.result(runId=task['runId'])['selectedAttempt']['result']
-        self.assertEqual(client.get(runId=task['runId'])['state'], 'reconciliation-needed')
-        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
-            self.assert_idempotently_confirmed(board, client, task, actor, original, state='completed')
-        replay = board.call('execution_result', {**actor, **report})
-        self.assertTrue(replay['duplicate'])
-        self.assertTrue(replay['attempt']['shutdownConfirmed'])
-
     def test_partial_native_journal_can_gain_proof_on_the_next_recovery(self):
         board, client, task, _, actor = self.claimed()
         journal = self.journal(board, actor['attemptId'])
@@ -435,25 +511,9 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertEqual(stored, first['result']['interruptionEvidence']['kind'])
         self.assertEqual(client.get(runId=task['runId'])['selectedAttempt']['shutdownEvidence']['kind'], 'orphan-stopped')
 
-    def test_committed_unconfirmed_receipt_left_on_disk_is_not_resubmitted(self):
-        board, client, task, _, actor = self.claimed()
-        report = {'status': 'ok', 'result': {'native': 'receipt survives commit'}, 'shutdownConfirmed': False}
-        board.call('execution_result', {**actor, **report})
-        original = client.result(runId=task['runId'])['selectedAttempt']['result']
-        with board.store.db.read() as db:
-            attempt = dict(board.store._attempt_row(db, actor['attemptId']))
-            self.assertIsNone(db.execute("SELECT * FROM commands WHERE kind='execution.result'").fetchone())
-        fsync_json(interruption._directory(board.store, attempt) / RECEIPT, {
-            'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
-            'createdAt': board.store.now(), 'report': report})
-        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
-            self.assert_idempotently_confirmed(board, client, task, actor, original, state='completed')
-        with board.store.db.read() as db:
-            self.assertIsNone(db.execute("SELECT * FROM commands WHERE kind='execution.result'").fetchone())
-
     def test_bad_receipt_is_visible_once_and_does_not_block_startup_or_later_attempts(self):
         cases = (
-            ('json', '{bad json', 'JSONDecodeError'),
+            ('json', '{bad json', 'INVALID_ARGUMENT'),
             ('shape', {'wrong': 'envelope'}, 'INVALID_ARGUMENT'),
             ('binding', {'bindingMismatch': True}, 'INVALID_ARGUMENT'),
             ('result', {'status': 'not-a-status'}, 'INVALID_ARGUMENT'),
@@ -492,11 +552,13 @@ class InterruptionRecoveryTests(BoardTestCase):
                     'createdAt': board.store.now(),
                     'report': {'status': 'ok', 'result': {'native': 'later'}, 'shutdownConfirmed': True}})
                 with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
-                    self.assertEqual(board.store.reconcile_startup()['interrupted'], 1)
+                    self.assertEqual(board.store.reconcile_startup()['interrupted'], 2)
                     self.assertEqual(client.get(runId=good_task['runId'])['state'], 'completed')
-                    issue = client.get(runId=task['runId'])['selectedAttempt']['issues'][0]
-                    self.assertEqual(issue['stage'], 'recovery')
-                    self.assertEqual(issue['code'], code)
+                    result = client.get(runId=task['runId'])['selectedAttempt']['result']
+                    self.assertEqual(result['status'], 'failed')
+                    marker = 'microTaskError' if name == 'artifacts' else 'receiptRejection'
+                    self.assertEqual(result['result'][marker]['code'], code)
+                    self.assertNotIn('receiptRejection' if name == 'artifacts' else 'microTaskError', result['result'])
                     head = board.store.head()
                     self.assertEqual(board.store.recover_executions(), [])
                     self.assertEqual(board.store.head(), head)
@@ -525,13 +587,14 @@ class InterruptionRecoveryTests(BoardTestCase):
         fsync_json(directory / STARTUP, {'nonce': 'private nonce'})
         fsync_json(directory / LIVE, {'token': 'private token'})
         fsync_json(directory / RECEIPT, {'bad': 'receipt'})
-        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
+        with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
+             patch.object(interruption, '_stop_native', return_value=(False, None)):
             board.store.recover_executions()
         self.assertTrue((directory / STARTUP).exists())
         # A failed endpoint reap keeps the sole cleanup credential for retry.
         self.assertTrue((directory / LIVE).exists())
         self.assertTrue((directory / RECEIPT).exists())
-        self.assertTrue(client.get(runId=task['runId'])['selectedAttempt']['issues'])
+        self.assertFalse(client.get(runId=task['runId'])['shutdownConfirmed'])
 
     def test_reaped_child_before_identity_ack_confirms_no_native_work(self):
         board, client, task, _, actor = self.claimed(identity=False)

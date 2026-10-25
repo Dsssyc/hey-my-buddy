@@ -7,6 +7,7 @@ from ctypes import wintypes
 TH32CS_SNAPTHREAD = 0x00000004
 THREAD_SUSPEND_RESUME = 0x0002
 THREAD_QUERY_LIMITED_INFORMATION = 0x0800
+PROCESS_DUP_HANDLE = 0x0040
 ERROR_FILE_NOT_FOUND = 2
 ERROR_ALREADY_EXISTS = 183
 
@@ -41,6 +42,11 @@ class WindowsAPI:
         for name, (result, arguments) in signatures.items():
             method = getattr(kernel, name)
             method.restype, method.argtypes = result, arguments
+        kernel.GetCurrentProcess.restype = wintypes.HANDLE
+        kernel.DuplicateHandle.restype = wintypes.BOOL
+        kernel.DuplicateHandle.argtypes = [wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
+                                           ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD,
+                                           wintypes.BOOL, wintypes.DWORD]
 
     @staticmethod
     def _error():
@@ -83,6 +89,23 @@ class WindowsAPI:
     def assign(self, job, process):
         # Popen retains this exact process handle; no OpenProcess/PID recovery.
         self._call(self.job.AssignProcessToJobObject, job, int(process._handle))
+
+    def duplicate_job_into(self, pid, job):
+        """Carry one Job handle's lifetime into the created process, nothing else.
+
+        The verified arguments (desiredAccess=0, inheritHandle=FALSE, options=0)
+        grant the target no Job operation; the copy only keeps the Job alive
+        until the created process exits. The target-side value is never closed
+        or read here.
+        """
+        target = self._call(self.api.OpenProcess, PROCESS_DUP_HANDLE, False, pid)
+        try:
+            duplicated = wintypes.HANDLE()
+            if not self.kernel.DuplicateHandle(self.kernel.GetCurrentProcess(), int(job), int(target),
+                                               ctypes.byref(duplicated), 0, False, 0):
+                self._error()
+        finally:
+            self.close(target)
 
     def _primary_thread(self, snapshot, pid):
         entry = _ThreadEntry()

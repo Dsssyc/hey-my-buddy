@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from admission import admit_execution
-from support import BoardTestCase
+from support import BoardTestCase, settle_fixture_receipt
 from hey_my_buddy.blackboard.tasks import interruption
 from hey_my_buddy.protocol import process_identity as processes
 from blackboard.store.test_interruption_recovery import IDENTITY
@@ -95,14 +95,15 @@ class InquirySettlementTests(BoardTestCase):
         self.journal_facts(board, task, attempt)
         report = {"status": "failed", "shutdownConfirmed": False}
         client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
-        self.assertEqual(client.get(runId=task["runId"])["attemptState"], "uncertain")
+        self.assertEqual(client.get(runId=task["runId"])["attemptState"], "finalizing")
         self.assertEqual(client.get_message("q-pending", runId=task["runId"])["state"], "queued")
-        board.store.confirm_execution_shutdown(attempt["attemptId"], {"kind": "identity-absent"})
+        settle_fixture_receipt(board, attempt["attemptId"], native_stopped=True)
         self.assertEqual(client.get(runId=task["runId"])["attemptState"], "finished")
         self.assert_settled_once(board, client, task, attempt)
         self.assert_imported(client, task)
+        board.store.recover_executions(attempt["attemptId"], stopped_evidence={"kind": "process-reaped"})
         head = board.store.head()
-        board.store.confirm_execution_shutdown(attempt["attemptId"], {"kind": "identity-absent"})
+        board.store.recover_executions(attempt["attemptId"], stopped_evidence={"kind": "process-reaped"})
         self.assertEqual(board.store.head(), head)
 
     def test_confirmed_result_from_uncertain_state_settles_question(self):
@@ -123,7 +124,7 @@ class InquirySettlementTests(BoardTestCase):
         board.store.record_execution_deadline(attempt["attemptId"], "forced-stop")
         client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32,
                              {"status": "cancelled", "shutdownConfirmed": False})
-        board.store.confirm_execution_shutdown(attempt["attemptId"], {"kind": "identity-absent"})
+        settle_fixture_receipt(board, attempt["attemptId"], native_stopped=True)
         self.assert_settled_once(board, client, task, attempt)
         self.assert_imported(client, task)
 

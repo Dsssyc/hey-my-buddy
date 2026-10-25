@@ -33,7 +33,8 @@ class WindowsAPITests(unittest.TestCase):
         self.api, self.process = mock.Mock(), mock.Mock()
         self.api.GetLastError.return_value = 0
         self.kernel = mock.Mock(spec=["CreateToolhelp32Snapshot", "Thread32First",
-                                      "Thread32Next", "GetProcessIdOfThread"])
+                                      "Thread32Next", "GetProcessIdOfThread",
+                                      "GetCurrentProcess", "DuplicateHandle"])
         self.addCleanup(mock.patch.stopall)
         mock.patch.dict(sys.modules, {
             "pywintypes": SimpleNamespace(error=Win32Error), "win32job": self.job,
@@ -121,6 +122,44 @@ class WindowsAPITests(unittest.TestCase):
         self.job.AssignProcessToJobObject.side_effect = Win32Error(5)
         with self.assertRaises(OSError):
             self.boundary.assign(self.job_handle, self.child)
+
+    def test_duplicate_carries_only_the_jobs_lifetime_into_the_created_process(self):
+        target = Handle(55)
+        current = Handle(-1)
+        self.api.OpenProcess.return_value = target
+        self.kernel.GetCurrentProcess.return_value = current
+        arguments = []
+
+        def duplicate(source, source_handle, target_process, out, access, inherit, options):
+            arguments.append((source, source_handle, target_process, access, inherit, options))
+            return 1
+
+        self.kernel.DuplicateHandle.side_effect = duplicate
+        self.boundary.duplicate_job_into(321, self.job_handle)
+        self.api.OpenProcess.assert_called_once_with(0x40, False, 321)
+        self.assertEqual(arguments, [(current, 77, 55, 0, False, 0)])
+        # The target-side duplicated value is never closed or read here.
+        self.assertEqual(self.api.CloseHandle.call_args_list, [mock.call(target)])
+        self.job.TerminateJobObject.assert_not_called()
+
+    def test_duplicate_failure_closes_the_target_and_raises(self):
+        for open_fails in (False, True):
+            with self.subTest(open_fails=open_fails):
+                target = Handle(55)
+                if open_fails:
+                    self.api.OpenProcess.side_effect = Win32Error(5)
+                else:
+                    self.kernel.DuplicateHandle.return_value = 0
+                    self.api.OpenProcess.return_value = target
+                with mock.patch.object(windows.ctypes, "get_last_error", return_value=5, create=True), \
+                     self.assertRaises(OSError):
+                    self.boundary.duplicate_job_into(321, self.job_handle)
+                if open_fails:
+                    self.api.CloseHandle.assert_not_called()
+                else:
+                    self.api.CloseHandle.assert_called_once_with(target)
+                self.api.OpenProcess.side_effect = None
+                self.api.CloseHandle.reset_mock()
 
     def resume(self):
         with mock.patch.object(self.boundary, "_primary_thread", return_value=19) as primary:

@@ -2,10 +2,14 @@
 
 The child starts suspended and joins a uniquely named Job before its primary
 thread runs. A replacement service may reopen that Job by its persisted name,
-but only after checking the complete saved execution identity.
+but only after checking the complete saved execution identity. An execution
+root's creating handle is duplicated into the created process, so the service
+closes its own handle immediately and later queries and stops reopen the Job
+briefly by name.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import os
 import subprocess
@@ -22,11 +26,29 @@ class OwnedJob:
     def __init__(self, api, handle, name):
         self.api, self.handle, self.name = api, handle, name
         self.empty_confirmed = False
+        self.transferred = False
+
+    @contextmanager
+    def _reopened(self):
+        """Open the transferred Job by name for one bounded query or stop."""
+        handle = self.api.open_job(self.name)
+        try:
+            yield handle
+        finally:
+            if handle is not None:
+                self.api.close(handle)
 
     def active(self):
-        if self.handle is None:
-            return 0 if self.empty_confirmed else None
-        return self.api.active(self.handle)
+        if self.handle is not None:
+            return self.api.active(self.handle)
+        if self.empty_confirmed:
+            return 0
+        if not self.transferred:
+            return None
+        with self._reopened() as handle:
+            # A Job whose name is gone has no members left; kill-on-close
+            # ended the whole tree with the last held handle.
+            return 0 if handle is None else self.api.active(handle)
 
     def members(self):
         return self.api.process_ids(self.handle)
@@ -34,6 +56,10 @@ class OwnedJob:
     def terminate(self):
         if self.handle is not None:
             self.api.terminate(self.handle)
+        elif self.transferred and not self.empty_confirmed:
+            with self._reopened() as handle:
+                if handle is not None:
+                    self.api.terminate(handle)
 
     def close(self, *, confirmed=False):
         if self.handle is not None:
@@ -50,6 +76,21 @@ class OwnedJob:
                 self.close()
             except OSError:
                 pass
+
+
+def transfer_job_to_child(process, job) -> None:
+    """Resume the suspended root and hand its Job's lifetime to the child.
+
+    The copy inside the created process keeps the kill-on-close Job alive for
+    exactly as long as that process lives, so an orderly service restart or a
+    same-contract install no longer kills the execution. The service's own
+    handle closes as soon as the copy exists; the marker precedes the resume,
+    so a crash in between is settled by kill-on-close from the recorded root.
+    """
+    job.api.resume(process)
+    job.api.duplicate_job_into(process.pid, job.handle)
+    job.transferred = True
+    job.close()
 
 
 @dataclass(frozen=True)
@@ -87,7 +128,8 @@ def check_windows_command_line(argv, *, windows: bool | None = None) -> None:
         raise WindowsCommandLineTooLong(units)
 
 
-def owned_popen(*args, windows_api=None, job_name: str | None = None, **kwargs):
+def owned_popen(*args, windows_api=None, job_name: str | None = None,
+                defer_resume: bool = False, **kwargs):
     """Create a process with tree ownership before any user code can run.
 
     Every failure carries ``owned_popen_evidence`` (ProcessCreationEvidence).
@@ -97,6 +139,9 @@ def owned_popen(*args, windows_api=None, job_name: str | None = None, **kwargs):
     the original exception; unknown cleanup raises RuntimeError with the same
     evidence and the original failure as its cause. Consumers use the evidence,
     never exception text or type, to judge shutdown.
+
+    ``defer_resume`` leaves the assigned child suspended for the execution-root
+    launch, which must publish its spawn marker before the child runs.
     """
     from .process_identity import begin_native_process_spawn, discard_confirmed_native_spawn
 
@@ -121,7 +166,8 @@ def owned_popen(*args, windows_api=None, job_name: str | None = None, **kwargs):
         process = subprocess.Popen(*args, **kwargs)
         api.assign(job.handle, process)
         assigned = True
-        api.resume(process)
+        if not defer_resume:
+            api.resume(process)
         process._buddy_job = job
         process._buddy_native_intent = intent
         return process

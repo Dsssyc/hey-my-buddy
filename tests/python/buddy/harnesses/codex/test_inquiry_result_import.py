@@ -86,7 +86,7 @@ class InquiryResultImportTests(BoardTestCase):
 
         evidence.completed = {"id": "native-turn-1", "status": "completed"}
         bridge.close()
-        board.store.execution_result({"attemptId": attempt_id, "generation": attempt["generation"],
+        board.call("execution_result", {"attemptId": attempt_id, "generation": attempt["generation"],
                                       "nonce": NONCE, "status": "ok", "shutdownConfirmed": True})
         # No inquiry observe or second Host request may be needed to see this.
         message = board.store.message_get({"runId": task_id, "inquiryId": "q1"})["message"]

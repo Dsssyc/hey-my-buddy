@@ -148,7 +148,9 @@ class CoolingWorkflowTests(WorkflowTestCase):
         self.enable(1)
         settled = self.reject_turn(first)
         self.assertTrue(settled["workflow"]["autoContinued"])
-        self.assertTrue(self.reject_turn(first)["duplicate"])
+        with self.assertRaises(BoardError) as caught:
+            self.reject_turn(first)
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
         with self.board_.store.db.read() as db:
             self.assertEqual(quota_routing.provider_state(db, "dsh", self.identities[0]["provider"])["consecutiveRejections"], 1)
             self.assertEqual(db.execute("SELECT state FROM agent_credentials WHERE attempt_id=?",
@@ -232,8 +234,15 @@ class CoolingWorkflowTests(WorkflowTestCase):
     def test_rate_limit_is_not_a_quota_reroute_or_cooldown(self):
         self.assert_host_failure(code="rate-limited")
 
-    def test_unconfirmed_stop_stays_with_host(self):
-        self.assert_host_failure(shutdown=False)
+    def test_unconfirmed_stop_retains_the_turn_without_publishing_cooling(self):
+        run = self.routed()
+        turn = self.claim(self.board_, run_id=run["runId"])
+        received = self.reject_turn(turn, shutdown=False)
+        self.assertFalse(received["committed"])
+        self.assertEqual(received["attempt"]["executionState"], "finalizing")
+        self.assertEqual(self.board_.call("workflow_get", {"runId": run["runId"]})["state"], "executing")
+        with self.board_.store.db.read() as db:
+            self.assertIsNone(quota_routing.provider_state(db, "dsh", self.identities[0]["provider"]))
 
     def test_cancelled_attempt_does_not_reroute(self):
         self.assert_host_failure(cancel=True)

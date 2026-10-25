@@ -27,7 +27,9 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_legacy_cleanup_keeps_link_targets_and_current_private_files(self):
         state = self.root / 'state'
-        state.mkdir()
+        database = Database(state)
+        database.initialize()
+        self.addCleanup(database.close)
         outside = self.root / 'outside'
         (outside / 'goals').mkdir(parents=True)
         survivor = outside / 'goals/native.jsonl'
@@ -53,12 +55,48 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertFalse((state / 'worker.log').exists())
 
 
+    def test_legacy_delivery_cleanup_keeps_link_target(self):
+        fixture, _connection = self.restored()
+        relative = fixture['deliveryStock']['path']
+        path = fixture['state'] / relative
+        content = path.read_bytes()
+        outside = self.root / 'outside-delivery.json'
+        path.rename(outside)
+        path.symlink_to(outside)
+        result = schema_upgrade.cleanup_legacy_layout(fixture['state'])
+        self.assertFalse(result['complete'])
+        self.assertEqual([(item['path'], item['code']) for item in result['failures']],
+                         [(relative, 'PRIVATE_PATH_UNSAFE')])
+        self.assertEqual(outside.read_bytes(), content)
+        self.assertTrue(path.is_symlink())
+
+
     def restored(self, name='state'):
         fixture = load_fixture(self.root / name)
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
         return fixture, connection
+
+    def test_windows_identity_stock_violates_the_rebuild_and_rolls_back(self):
+        fixture, connection = self.restored('windows-identity-stock')
+        stock = connection.execute('SELECT rowid,* FROM attempt_process_identities ORDER BY rowid').fetchall()
+        connection.execute(
+            "UPDATE attempt_process_identities SET boot_id='windows:00000000-0000-4000-8000-0000000000ff',"
+            " process_group_id=NULL, job_name='Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000f1'"
+            ' WHERE rowid=?', (stock[0]['rowid'],))
+        connection.commit()
+        changed = connection.execute('SELECT rowid,* FROM attempt_process_identities ORDER BY rowid').fetchall()
+        # Real boards hold no such stock; an old Windows row is neither
+        # converted nor cleaned up, and the whole upgrade rolls back to it.
+        with self.assertRaises(sqlite3.IntegrityError):
+            schema_upgrade.migrate_schema(fixture['state'])
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT rowid,* FROM attempt_process_identities ORDER BY rowid')],
+                         [tuple(row) for row in changed])
+        self.assertNotEqual([tuple(row) for row in changed], [tuple(row) for row in stock])
+        self.assertEqual(connection.execute(
+            "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(UPGRADE_BASE_SCHEMA))
 
 
     def sample(self, fixture, connection):
@@ -294,7 +332,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                              [tuple(row) for row in baseline.execute(query)])
         after = upgrade.idle_snapshot(state, column_projections=before['columnProjections'])
         self.assertEqual(after['schema'], SCHEMA_VERSION)
-        self.assertEqual(after['tables'], {**before['tables'],
+        self.assertEqual(after['tables'], {**before['tables'], 'attempt_received_receipts': 0,
                                          'router_requests': before['tables']['router_requests'] + 5})
         self.assertNotIn('expectedTableCounts', before)
         for name, fingerprint in before['fingerprints'].items():
@@ -329,6 +367,16 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual((state / 'board.sqlite3').read_bytes(), board)
         self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+        cleanup = schema_upgrade.cleanup_legacy_layout(state)
+        self.assertTrue(cleanup['complete'], cleanup)
+        retired = {Path('harnesses') / harness / 'goals' for harness in ('codex', 'claude', 'zcode', 'dsh')}
+        retired.update(Path(name) for name in ('decisions', 'legacy-worker-cleanup.lock', 'worker.log'))
+        retired.add(Path(fixture['deliveryStock']['path']))
+        self.assertEqual(set(cleanup['removed']), {path.as_posix() for path in retired})
+        self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
+                          if p.is_file() and not p.name.startswith('board.sqlite3')},
+                         {path: content for path, content in files.items()
+                          if not any(path == entry or entry in path.parents for entry in retired)})
 
     def test_delivery_and_scope_stock_loses_only_the_old_writers_checked_copies(self):
         fixture, connection = self.restored('delivery-and-scope-stock')
@@ -958,9 +1006,18 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         references = [entry['params']['receipt'] for entry in fixture['operations']
                       if entry['operation'] == 'execution_result']
-        self.assertEqual(len(references), 20)
+        self.assertEqual(len(references), 21)
+        delivery = fixture['deliveryStock']
+        path = fixture['state'] / delivery['path']
+        self.assertEqual(json.loads(path.read_bytes()), {'attemptId': delivery['attemptId'], 'accepted': True})
+        self.assertEqual(delivery['taskId'], fixture['stableIds']['accepted'])
+        self.assertEqual(connection.execute('SELECT task_id FROM attempts WHERE attempt_id=?',
+                                           (delivery['attemptId'],)).fetchone()[0], delivery['taskId'])
         for reference in references:
             receipt = read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'])
+            if Path(reference['path']).parent == path.parent:
+                self.assertIsNone(receipt)
+                continue
             self.assertIsNotNone(receipt)
             attempt = connection.execute('SELECT task_id,generation FROM attempts WHERE attempt_id=?',
                                          (receipt['attemptId'],)).fetchone()

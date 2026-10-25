@@ -724,7 +724,7 @@ class ShutdownHistoryTests(MicroTaskTestCase):
         task = self.execution_task(board, "uncertain-execution")
         claim = self.claim(board, "command-worker", run_id=task["runId"], claim_request_id="uncertain-claim")["claim"]
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': 'cancelled', 'result': {'error': 'stop not observed'}, 'shutdownConfirmed': False})
-        self.assertEqual(self.task_view(board, task["runId"])["state"], "reconciliation-needed")
+        self.assertEqual(self.task_view(board, task["runId"])["state"], "running")
         self.assertEqual([row["runId"] for row in self.history(board, filter="active", limit=1)["runs"]], [task["runId"]])
         self.assertEqual(self.history(board, filter="review")["total"], 0)
 

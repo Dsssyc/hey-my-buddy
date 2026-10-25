@@ -511,14 +511,21 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(health['boundsRejectedCount'], 0)
         self.readonly_start.assert_not_called()
 
-    def test_malformed_native_output_fails_without_touching_the_table(self):
+    def test_malformed_native_output_waits_for_stop_without_touching_the_table(self):
+        from hey_my_buddy.blackboard.tasks.interruption import _directory
+        from hey_my_buddy.protocol.execution import read_execution_receipt
         board = self.board()
         self.seed(board)
         decision = self.outcome(board, "malformed")
-        self.assertEqual(decision["status"], "failed")
-        self.assertEqual(decision["output"]["code"], "router-stop-unconfirmed")
-        self.assertEqual(self.own_receipt(board, decision)["result"]["code"], "invalid-native-result")
-        self.assertFalse(decision["stopEvidence"]["shutdownConfirmed"])
+        self.assertEqual(decision["status"], "running")
+        self.assertIsNone(decision["output"])
+        task = board.call("task_get", {"runId": decision["runId"]})["task"]
+        self.assertEqual(task["attemptState"], "finalizing")
+        with board.store.db.read() as connection:
+            attempt = board.store._attempt_row(connection, task["selectedAttempt"]["attemptId"])
+            receipt = read_execution_receipt(_directory(board.store, attempt))
+        self.assertEqual(receipt["report"]["result"]["code"], "invalid-native-result")
+        self.assertFalse(receipt["report"]["shutdownConfirmed"])
 
     def test_native_error_envelope_fails_honestly(self):
         board = self.board()
@@ -696,9 +703,9 @@ class DecisionFailureTests(DecisionTestCase):
             with self.subTest(mode=mode):
                 decision = self.outcome(board, mode, request_id=mode)
                 task = board.call("task_get", {"runId": decision["runId"]})["task"]
-                self.assertEqual(decision["status"], "failed")
+                self.assertEqual(decision["status"], "running")
                 self.assertFalse(task["shutdownConfirmed"])
-                self.assertEqual(task["attemptState"], "uncertain")
+                self.assertEqual(task["attemptState"], "finalizing")
                 self.assertIsNone(decision["inputVerification"])
                 self.input_verify.assert_not_called()
 
@@ -721,7 +728,7 @@ class DecisionFailureTests(DecisionTestCase):
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "cancelled")
         task = board.call("task_get", {"runId": request["runId"]})["task"]
         self.assertFalse(task["shutdownConfirmed"])
-        self.assertEqual(task["attemptState"], "uncertain")
+        self.assertEqual(task["attemptState"], "finalizing")
 
     def test_worker_deadline_is_bounded_without_inventing_native_stop_evidence(self):
         board = self.board()
@@ -732,7 +739,7 @@ class DecisionFailureTests(DecisionTestCase):
         started = time.monotonic()
         self.run_worker(board, worker_id="w-deadline")
         self.assertLess(time.monotonic() - started, 30)
-        self.assertEqual(self.decision(board, request["decisionId"])["status"], "failed")
+        self.assertEqual(self.decision(board, request["decisionId"])["status"], "running")
         task = board.call("task_get", {"runId": request["runId"]})["task"]
         self.assertFalse(task["shutdownConfirmed"])
 
@@ -829,12 +836,12 @@ class DecisionFailureTests(DecisionTestCase):
         report = {"status": "ok", "result": envelope, "shutdownConfirmed": True, "exitCode": 0}
         first = client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, report)
         revisions = board.call("console_snapshot", {})["decisions"]
-        replay = client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, report)
+        with self.assertRaises(BoardError) as caught:
+            client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, report)
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
         self.assertTrue(first["committed"])
         self.assertNotIn("kind", first["decision"])
-        # The identical result is replayed idempotently: no second execution, no new
-        # publication, and the decision history is byte-identical.
-        self.assertTrue(replay.get("replayed") or replay.get("duplicate"), replay.get("duplicate"))
+        # A finished attempt refuses another result; publication stays unchanged.
         self.assertEqual(self.decision(board, request["decisionId"])["status"], "completed")
         self.assertEqual(board.call("console_snapshot", {})["decisions"], revisions)
 

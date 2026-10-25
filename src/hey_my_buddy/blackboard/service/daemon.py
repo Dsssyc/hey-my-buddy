@@ -28,7 +28,7 @@ from .service import BoardService, WaitAdmission, WaitService
 from .execution_scheduler import ExecutionScheduler
 from .live_registry import LiveRegistry
 from ..store.store import BoardStore
-from ...protocol.transport import ServiceError
+from ...protocol.transport import LIFETIME_LOCKS, ServiceError, owner_held_message
 from ...state_root import check_state_root, get_state_dir
 
 DRAIN_SECONDS_DEFAULT = 10
@@ -82,14 +82,14 @@ class Daemon:
         self.scheduler: ExecutionScheduler | None = None
 
     def acquire_exclusive(self) -> None:
-        for name in ("control-daemon.lock", "board-owner.lock"):
+        for name in LIFETIME_LOCKS:
             from ...private_dirs import open_regular_fd
             fd = open_regular_fd(self.directory / name, os.O_CREAT | os.O_RDWR, 0o600)
             try:
                 locking.lock(fd, blocking=False)
             except BlockingIOError:
                 os.close(fd)
-                raise ServiceError("ALREADY_RUNNING", "Another owner is already running for this state directory", lock=name)
+                raise ServiceError("ALREADY_RUNNING", owner_held_message(), lock=name)
             self.lock_fds.append(fd)
 
     def queue_workspace_cleanup(self, run_id: str) -> None:
@@ -338,7 +338,7 @@ def main() -> int:
                 error = ServiceError("SERVICE_START_TIMEOUT", str(error))
             else:
                 raise
-        atomic_json(directory / "startup-error.json", {"pid": os.getpid(), **error.payload()})
+        atomic_json(directory / "startup-error.json", error.payload())
         # An actionable, non-destructive failure: never fall back to an old
         # implementation and never rewrite records.
         sys.stderr.write(f"hey-my-buddy: {error.code}: {error}\n")

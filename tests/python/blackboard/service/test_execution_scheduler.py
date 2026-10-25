@@ -4,6 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from contextlib import contextmanager
 from types import SimpleNamespace
+import contextlib
+import os
 import queue
 import threading
 import json
@@ -16,10 +18,16 @@ from unittest.mock import Mock, call, patch
 
 import c_two as cc
 
+from admission import admit_execution
+from support import BoardTestCase, InProcessBoard
+from buddy.runtime.test_execution_delivery import WindowsOSProxy
+from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
 from hey_my_buddy.blackboard.service.execution_scheduler import (
     ExecutionScheduler, _RecoveredExecution, _ExecutionObservation)
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
+from hey_my_buddy.protocol import execution as launch_protocol
+from hey_my_buddy.protocol import owned_process, process_identity
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from blackboard.tasks.test_workflow import WorkflowTestCase
 
@@ -226,8 +234,8 @@ class ExecutionObservationTests(unittest.TestCase):
                     "processGroupId": 123, "jobName": None}
         scheduler._handles["attempt-1"] = (handle, None)
         with patch("hey_my_buddy.blackboard.service.execution_scheduler.boot_id", return_value="test-boot"):
-            self.assertFalse(scheduler.verify_identity("attempt-1", {**identity, "startedAt": 111}))
-            self.assertTrue(scheduler.verify_identity("attempt-1", identity))
+            self.assertIsNone(scheduler.verify_identity("attempt-1", {**identity, "startedAt": 111}, None))
+            self.assertEqual(scheduler.verify_identity("attempt-1", identity, None), identity)
         claim = {"attempt": {"attemptId": "attempt-1"}, "task": {"taskId": "task-1"}}
         with patch.object(scheduler, "_observe") as observe:
             self.monitor(scheduler, claim, handle)
@@ -307,14 +315,67 @@ class ExecutionObservationTests(unittest.TestCase):
         service = Mock()
         scheduler = ExecutionScheduler(service, live_registry=self.live_registry)
         handle = Mock()
+        captured = {"bootId": "test-boot", "pid": 1, "startedAt": 11,
+                    "processGroupId": 1, "jobName": None}
         with scheduler._lock:
-            scheduler._handles["owned"] = (handle, {"pid": 1})
-        self.assertFalse(scheduler.verify_identity("owned", {"pid": 2}))
-        self.assertTrue(scheduler.verify_identity("owned", {"pid": 1}))
+            scheduler._handles["owned"] = (handle, captured)
+        report = {**captured, "pid": 2, "processGroupId": 2}
+        self.assertIsNone(scheduler.verify_identity("owned", report, None))
+        self.assertEqual(scheduler.verify_identity("owned", captured, None), captured)
         with patch("hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity",
-                   side_effect=["alive", "unknown"]):
-            self.assertTrue(scheduler.verify_identity("restarted", {"pid": 2}))
-            self.assertFalse(scheduler.verify_identity("unverified", {"pid": 2}))
+                   side_effect=["alive", "unknown", "alive"]):
+            self.assertEqual(scheduler.verify_identity("restarted", report, report), report)
+            self.assertIsNone(scheduler.verify_identity("unverified", report, report))
+            # Before the creator's marker write completes, a live reporter is the root.
+            self.assertEqual(scheduler.verify_identity("unrecorded", report, None), report)
+
+    def test_windows_report_from_another_pid_of_the_root_job_verifies_and_records_the_root(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        root = {"pid": 301, "startedAt": 1339247086400000000,
+                "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000c1"}
+        reporter = {"pid": 402, "startedAt": 815, "jobName": root["jobName"]}
+        handle = Mock(pid=301, process_started_at=root["startedAt"],
+                      job=SimpleNamespace(name=root["jobName"]))
+        scheduler._handles["attempt-1"] = (handle, None)
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member",
+                   return_value=True) as member:
+            self.assertEqual(scheduler.verify_identity("attempt-1", reporter, None), root)
+            self.assertEqual(scheduler.verify_identity("attempt-1", reporter, root), root)
+            # The child's report closes the failed parent-side capture with the root.
+            self.assertEqual(scheduler.verify_identity("attempt-1", reporter, None), root)
+        member.assert_called_with(reporter, root["jobName"])
+        adopted = scheduler._handles["attempt-1"]
+        self.assertIs(adopted[0], handle)
+        self.assertEqual(adopted[1], root)
+
+    def test_windows_report_outside_the_root_job_or_without_a_root_is_refused(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        root = {"pid": 301, "startedAt": 1339247086400000000,
+                "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000c2"}
+        reporter = {"pid": 402, "startedAt": 815, "jobName": root["jobName"]}
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member",
+                   return_value=False) as member:
+            self.assertIsNone(scheduler.verify_identity("attempt-1", reporter, root))
+        member.assert_called_once_with(reporter, root["jobName"])
+        # A reporter naming another Job never reaches the membership check.
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member") as member:
+            self.assertIsNone(scheduler.verify_identity(
+                "attempt-1", {**reporter, "jobName": root["jobName"] + "0"}, root))
+            member.assert_not_called()
+        # Without a handle, a recorded root, or a marker there is nothing to verify against.
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member") as member:
+            self.assertIsNone(scheduler.verify_identity("attempt-1", reporter, None))
+            member.assert_not_called()
+
+    def test_windows_report_after_restart_uses_the_recorded_root_without_a_handle(self):
+        scheduler = ExecutionScheduler(Mock(), live_registry=self.live_registry)
+        root = {"pid": 301, "startedAt": 1339247086400000000,
+                "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000c3"}
+        reporter = {"pid": 402, "startedAt": 815, "jobName": root["jobName"]}
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.verify_job_member",
+                   side_effect=[True, False]):
+            self.assertIs(scheduler.verify_identity("restarted", reporter, root), root)
+            self.assertIsNone(scheduler.verify_identity("restarted", reporter, root))
 
     def test_router_budget_is_durable_before_forced_stop(self):
         with tempfile.TemporaryDirectory() as root:
@@ -361,13 +422,6 @@ class ExecutionObservationTests(unittest.TestCase):
         self.assertEqual(client.stop.call_args.kwargs,
                          {"initiator": "host", "grace_deadline": None, "force": True})
 
-    def test_confirmed_receipt_prevents_force_kill(self):
-        handle = Mock()
-        with patch("hey_my_buddy.blackboard.service.execution_scheduler.read_execution_receipt",
-                   return_value={"report": {"shutdownConfirmed": True}}), patch(
-                   "hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group") as kill:
-            self.assertTrue(ExecutionScheduler._force_if_required(handle, {"pid": 1}))
-        kill.assert_not_called()
 
     def test_conflict_is_retried_and_other_admission_errors_are_recorded(self):
         store = Mock()
@@ -1101,6 +1155,100 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler._admit_available()
         self.assertEqual(launch.call_args.kwargs["session_record_path"], claim["sessionRecordPath"])
         store.db.read.assert_not_called()
+
+
+class RootCreationTeardownTests(BoardTestCase):
+    """A failure inside the extended creation boundary never returns a root.
+
+    The real launch_execution runs its Windows path over a faked OS boundary
+    (Popen and the Win32 API), and the real scheduler and store settle the
+    attempt: the root is stopped on the Job handle the service still holds and
+    the failure is reported as creation evidence, never as a live handle.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.case_index = 0
+
+    def launched_windows_root(self, *, fail_at=None, fail_capture=False, fail_marker=False):
+        self.case_index += 1
+        board = InProcessBoard(self.directory / f"case-{self.case_index}")
+        self._stack.append(board)
+        client = board.client()
+        task = board.submit_execution(requestId="creation-failure", task="work", adapter="command",
+                                      cwd=str(self.workdir()), argv=["echo", "work"])["task"]
+        claim = admit_execution(client, "n" * 32)["claim"]
+        scheduler = ExecutionScheduler(board.service, live_registry=board.live_registry)
+        process = FakeProcess()
+        api = FakeAPI(process)
+        api.fail_at = fail_at
+        original = launch_protocol.fsync_json
+
+        def write(path, value):
+            if fail_marker and path.name == "spawn.marker":
+                raise OSError("marker write failed")
+            original(path, value)
+
+        with contextlib.ExitStack() as stack:
+            for boundary in (
+                    patch.object(board.service, "admit_execution", return_value={"claim": claim}),
+                    patch.object(launch_protocol, "os", WindowsOSProxy()),
+                    patch.object(owned_process, "os", WindowsOSProxy()),
+                    patch.object(owned_process, "WindowsAPI", return_value=api),
+                    patch.object(owned_process.subprocess, "Popen", return_value=process),
+                    patch.object(process_identity, "_creation_time", return_value=10),
+                    patch.object(launch_protocol, "fsync_json", side_effect=write)):
+                stack.enter_context(boundary)
+            if fail_capture:
+                stack.enter_context(patch.object(launch_protocol, "capture_process_identity",
+                                                 side_effect=OSError("identity capture failed")))
+            scheduler._admit_available()
+        return board, client, task, claim, api, process, scheduler
+
+    def test_failure_before_the_resume_stops_the_suspended_root_and_settles_creator_reaped(self):
+        for fail_capture, fail_marker in ((True, False), (False, True)):
+            with self.subTest(fail_capture=fail_capture, fail_marker=fail_marker):
+                board, client, task, claim, api, process, scheduler = self.launched_windows_root(
+                    fail_capture=fail_capture, fail_marker=fail_marker)
+                attempt_id = claim["attempt"]["attemptId"]
+                self.assertEqual(scheduler._handles, {})
+                # The suspended root is stopped on the service-held Job handle
+                # and observed empty; no resume or duplication ever happens.
+                self.assertEqual(api.events, ["create", ("assign", 77, 42), ("terminate", 77),
+                                              ("active", 77), ("close", 77)])
+                self.assertEqual(process.returncode, 1)
+                self.assertFalse((board.directory / "attempts" / task["runId"] / attempt_id
+                                  / "spawn.marker").exists())
+                view = client.get(runId=task["runId"])
+                self.assertEqual(view["attemptState"], "finished")
+                self.assertTrue(view["shutdownConfirmed"])
+                self.assertEqual(board.store.capacity_report()["totalActive"], 0)
+
+    def test_duplicate_failure_after_the_resume_stops_the_root_and_settles_creator_reaped(self):
+        board, client, task, claim, api, process, scheduler = self.launched_windows_root(fail_at="duplicate")
+        attempt_id = claim["attempt"]["attemptId"]
+        self.assertEqual(scheduler._handles, {})
+        self.assertEqual(api.events, ["create", ("assign", 77, 42), ("resume", 42),
+                                      ("duplicate", 321, 77), ("terminate", 77),
+                                      ("active", 77), ("close", 77)])
+        self.assertEqual(process.returncode, 1)
+        self.assertTrue((board.directory / "attempts" / task["runId"] / attempt_id
+                         / "spawn.marker").is_file())
+        view = client.get(runId=task["runId"])
+        self.assertEqual(view["attemptState"], "finished")
+        self.assertTrue(view["shutdownConfirmed"])
+        self.assertEqual(board.store.capacity_report()["totalActive"], 0)
+
+    def test_unconfirmed_root_stop_keeps_the_attempt_unknown_and_occupied(self):
+        board, client, task, claim, api, _process, scheduler = self.launched_windows_root(
+            fail_at="active", fail_marker=True)
+        self.assertEqual(scheduler._handles, {})
+        self.assertIn(("terminate", 77), api.events)  # A kill request is not stop evidence.
+        view = client.get(runId=task["runId"])
+        self.assertNotEqual(view["attemptState"], "finished")
+        self.assertFalse(view["shutdownConfirmed"])
+        self.assertEqual(board.store.capacity_report()["totalActive"], 1)
+        self.assertTrue(any(issue["stage"] == "launch" for issue in view["selectedAttempt"]["issues"]))
 
 
 class SessionRecordGroupingTests(WorkflowTestCase):

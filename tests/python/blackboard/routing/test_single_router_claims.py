@@ -219,8 +219,8 @@ class SingleRouterClaimTests(DecisionTestCase):
         self.report(board, claim, {'status': 'error', 'code': 'router-review-unavailable', 'modelStarted': False},
                     status='failed', shutdown=False)
         decision = self.decision(board, request['decisionId'])
-        self.assertEqual(decision['status'], 'failed')
-        self.assertEqual(decision['reason']['code'], 'router-stop-unconfirmed')
+        self.assertEqual(decision['status'], 'running')
+        self.assertIsNone(decision['reason'])
         self.assertIsNone(self.claim_route(board, request, command='no-retry', worker='second-worker')['claim'])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute('SELECT shutdown_confirmed FROM attempts').fetchone()[0], 0)
@@ -336,9 +336,8 @@ class SingleRouterClaimTests(DecisionTestCase):
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
         with patch.object(board.store.decisions, '_publish_select', side_effect=RuntimeError('publication bug')):
-            with self.assertRaises(BoardError) as caught:
+            with self.assertRaisesRegex(RuntimeError, 'publication bug'):
                 self.report(board, claim, stopped_answer(claim, state_dir=board.directory))
-        self.assertEqual(caught.exception.code, 'INTERNAL_ERROR')
         decision = self.decision(board, request['decisionId'])
         self.assertEqual(decision['status'], 'running')
         with board.store.db.read() as connection:

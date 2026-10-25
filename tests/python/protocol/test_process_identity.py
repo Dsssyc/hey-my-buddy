@@ -20,15 +20,16 @@ from hey_my_buddy.protocol import process_identity as identity
 
 RECORD = {"bootId": "linux:00000000-0000-4000-8000-000000000001", "pid": 301,
           "startedAt": 105, "processGroupId": 301, "jobName": None}
-WINDOWS_RECORD = {**RECORD, "bootId": "windows:00000000-0000-4000-8000-000000000001",
-                  "processGroupId": None,
+#: A Windows root carries no boot identifier: the raw kernel FILETIME integer
+#: plus the exclusively created Job is the complete identity.
+WINDOWS_RECORD = {"pid": 301, "startedAt": 1339247086400000000,
                   "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-000000000003"}
 
 
 class Source:
-    def __init__(self):
+    def __init__(self, *, started_at=105):
         self.boot = RECORD["bootId"]
-        self.start = 105
+        self.start = started_at
         self.group = True
         self.job = [301]
         self.signals = []
@@ -61,10 +62,18 @@ class Source:
 
 
 class ProcessIdentityTests(unittest.TestCase):
-    def test_identity_has_one_current_form_without_worker(self):
+    def test_identity_has_one_current_form_per_platform(self):
         self.assertIs(identity.validate_process_identity(RECORD), RECORD)
+        self.assertIs(identity.validate_process_identity(WINDOWS_RECORD), WINDOWS_RECORD)
         for value in ({**RECORD, "worker": {}}, {**RECORD, "pid": True},
-                      {**RECORD, "startedAt": 10.5}, {**RECORD, "processGroupId": None}):
+                      {**RECORD, "startedAt": 10.5}, {**RECORD, "processGroupId": None},
+                      {**WINDOWS_RECORD, "bootId": "windows:00000000-0000-4000-8000-000000000001"},
+                      {**WINDOWS_RECORD, "processGroupId": None},
+                      {**WINDOWS_RECORD, "bootId": None, "processGroupId": None},
+                      {**WINDOWS_RECORD, "jobName": None},
+                      {**WINDOWS_RECORD, "pid": True},
+                      {**WINDOWS_RECORD, "startedAt": 10.5},
+                      {"pid": 301, "startedAt": 105}):
             with self.subTest(value=value), self.assertRaises(BoardError):
                 identity.validate_process_identity(value)
 
@@ -113,22 +122,19 @@ class ProcessIdentityTests(unittest.TestCase):
         source = Source()
         identity.kill_verified_process_group(RECORD, source=source)
         self.assertEqual(source.signals, [(301, signal.SIGKILL)])
-        source = Source()
-        source.boot = WINDOWS_RECORD["bootId"]
-        identity.kill_verified_process_group(WINDOWS_RECORD, source=source)
-        self.assertEqual(source.signals, [("job", WINDOWS_RECORD["jobName"])])
+        windows = Source(started_at=WINDOWS_RECORD["startedAt"])
+        identity.kill_verified_process_group(WINDOWS_RECORD, source=windows)
+        self.assertEqual(windows.signals, [("job", WINDOWS_RECORD["jobName"])])
 
     def test_windows_job_presence_absence_and_reverified_stop(self):
-        source = Source()
-        source.boot = WINDOWS_RECORD["bootId"]
+        source = Source(started_at=WINDOWS_RECORD["startedAt"])
         self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD, source=source), "orphan-stopped")
         self.assertEqual(source.signals, [("job", WINDOWS_RECORD["jobName"])])
         source.job = None
         self.assertEqual(identity.inspect_process_identity(WINDOWS_RECORD, source=source), "identity-absent")
 
     def test_empty_windows_job_waits_for_original_root_exit(self):
-        source = Source()
-        source.boot = WINDOWS_RECORD["bootId"]
+        source = Source(started_at=WINDOWS_RECORD["startedAt"])
         source.job = []
         self.assertEqual(identity.inspect_process_identity(WINDOWS_RECORD, source=source), "unknown")
         source.start = None
@@ -146,8 +152,8 @@ class ProcessIdentityTests(unittest.TestCase):
                 api.process_ids.return_value = [301, 302]
                 api.active.side_effect = [1, 0]
                 with mock.patch.object(windows_process, "WindowsAPI", return_value=api), \
-                     mock.patch.object(identity._SystemSource, "boot_id", return_value=WINDOWS_RECORD["bootId"]), \
-                     mock.patch.object(identity._SystemSource, "started_at", side_effect=[105, None]):
+                     mock.patch.object(identity._SystemSource, "started_at",
+                                       side_effect=[WINDOWS_RECORD["startedAt"], None]):
                     if hard_stop:
                         identity.kill_verified_process_group(WINDOWS_RECORD)
                     else:
@@ -159,7 +165,7 @@ class ProcessIdentityTests(unittest.TestCase):
     def test_windows_unreadable_mismatched_or_absent_job_never_authorizes_termination(self):
         from hey_my_buddy.protocol import windows_process
 
-        for case in ("missing", "empty", "reused-root", "members-denied", "open-denied", "boot-changed"):
+        for case in ("missing", "empty", "reused-root", "members-denied", "open-denied"):
             with self.subTest(case=case):
                 api = mock.Mock()
                 api.open_job.return_value = None if case == "missing" else 77
@@ -168,14 +174,12 @@ class ProcessIdentityTests(unittest.TestCase):
                     api.process_ids.side_effect = PermissionError("members denied")
                 if case == "open-denied":
                     api.open_job.side_effect = PermissionError("open denied")
-                boot = RECORD["bootId"] if case == "boot-changed" else WINDOWS_RECORD["bootId"]
+                observed = WINDOWS_RECORD["startedAt"] + 1 if case == "reused-root" else WINDOWS_RECORD["startedAt"]
                 with mock.patch.object(windows_process, "WindowsAPI", return_value=api), \
-                     mock.patch.object(identity._SystemSource, "boot_id", return_value=boot), \
-                     mock.patch.object(identity._SystemSource, "started_at", return_value=106 if case == "reused-root" else 105):
-                    self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD, settle_seconds=0),
-                                     "boot-changed" if case == "boot-changed" else "unknown")
+                     mock.patch.object(identity._SystemSource, "started_at", return_value=observed):
+                    self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD, settle_seconds=0), "unknown")
                 api.terminate.assert_not_called()
-                if case in ("missing", "open-denied", "boot-changed"):
+                if case in ("missing", "open-denied"):
                     api.close.assert_not_called()
                 else:
                     api.close.assert_called_once_with(77)
@@ -193,14 +197,38 @@ class ProcessIdentityTests(unittest.TestCase):
                     api.active.side_effect = PermissionError("active denied")
                 if case == "terminate-denied":
                     api.terminate.side_effect = PermissionError("terminate denied")
+                observed = WINDOWS_RECORD["startedAt"] if case == "root-alive" else None
                 with mock.patch.object(windows_process, "WindowsAPI", return_value=api), \
-                     mock.patch.object(identity._SystemSource, "boot_id", return_value=WINDOWS_RECORD["bootId"]), \
-                     mock.patch.object(identity._SystemSource, "started_at", return_value=105 if case == "root-alive" else None):
+                     mock.patch.object(identity._SystemSource, "started_at", return_value=observed):
                     self.assertEqual(identity.stop_orphan_process(WINDOWS_RECORD, settle_seconds=0),
                                      "orphan-stopped" if case == "stopped" else "unknown")
                 api.open_job.assert_called_once_with(WINDOWS_RECORD["jobName"])
                 api.terminate.assert_called_once_with(77)
                 api.close.assert_called_once_with(77)
+
+    def test_windows_capture_reads_no_boot_identifier(self):
+        handle = SimpleNamespace(pid=301, process_started_at=WINDOWS_RECORD["startedAt"],
+                                 pgid=None, job=SimpleNamespace(name=WINDOWS_RECORD["jobName"]))
+        with mock.patch.object(identity, "boot_id", side_effect=AssertionError("no boot read")):
+            record = identity.capture_process_identity(handle)
+        self.assertEqual(record, WINDOWS_RECORD)
+        self.assertIs(identity.validate_process_identity(record), record)
+
+    def test_job_member_report_needs_membership_and_matching_creation_time(self):
+        reporter = {"pid": 302, "startedAt": 815, "jobName": WINDOWS_RECORD["jobName"]}
+        source = Source()
+        source.job = [301, 302]
+        source.start = 815
+        self.assertTrue(identity.verify_job_member(reporter, WINDOWS_RECORD["jobName"], source=source))
+        source.start = 816  # A recycled reporter PID is not the reporting process.
+        self.assertFalse(identity.verify_job_member(reporter, WINDOWS_RECORD["jobName"], source=source))
+        source.job = [301]  # The reporter does not belong to the root Job.
+        self.assertFalse(identity.verify_job_member(reporter, WINDOWS_RECORD["jobName"], source=source))
+        source.job = None  # The root Job is gone; its members cannot report.
+        self.assertFalse(identity.verify_job_member(reporter, WINDOWS_RECORD["jobName"], source=source))
+        source.job = [301, 302]
+        source.started_at = mock.Mock(side_effect=OSError("observation failed"))
+        self.assertFalse(identity.verify_job_member(reporter, WINDOWS_RECORD["jobName"], source=source))
 
     @unittest.skipIf(os.name == "nt", "POSIX process group test")
     def test_real_owned_process_identity_and_orphan_stop(self):

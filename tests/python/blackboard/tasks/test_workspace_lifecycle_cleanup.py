@@ -47,7 +47,12 @@ class CleanupLifecycleTests(LifecycleTestCase):
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
             planned = board.call('storage_plan', {})
             request = {'planId':planned['planId'], 'commandId':'native-interrupted', 'confirm':True}
-            with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.remove_tree', side_effect=OSError('injected')):
+            remove_tree = private_dirs.remove_tree
+            def fail_native_tomb(path, **kwargs):
+                if Path(path).parent == native.parent and Path(path).name.endswith('-' + native.name):
+                    raise OSError('injected')
+                return remove_tree(path, **kwargs)
+            with mock.patch('hey_my_buddy.blackboard.tasks.storage.private_dirs.remove_tree', side_effect=fail_native_tomb):
                 with self.assertRaises(BoardError) as caught:
                     board.call('storage_apply', request)
             self.assertEqual(caught.exception.code, 'STORAGE_INCOMPLETE')

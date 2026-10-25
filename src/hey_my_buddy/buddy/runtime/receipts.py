@@ -5,17 +5,11 @@ import time
 from pathlib import Path
 
 from ...protocol.execution import (fsync_json, read_execution_receipt as read_receipt,
-                                  receipt_reference, RECEIPT, DELIVERY)
+                                  receipt_reference, RECEIPT, REFUSED)
 
 from ...errors import BoardError
 
 RETRYABLE = frozenset({"SERVICE_UNAVAILABLE", "UPGRADE_IN_PROGRESS"})
-# The execution.result boundary and its result transaction make these decisions.
-REFUSED = frozenset({"MESSAGE_TOO_LARGE", "INVALID_ARGUMENT", "UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND",
-                    "STALE_GENERATION", "ATTEMPT_FINISHED", "PRIVATE_PATH_UNSAFE", "RECEIPT_MISSING",
-                    "RECEIPT_MISMATCH", "ARTIFACT_MISSING", "ARTIFACT_MISMATCH", "CONFLICT",
-                    "ILLEGAL_TRANSITION", "REVISION_CONFLICT", "WORKSPACE_INVALID", "ANCESTOR_TERMINAL",
-                    "SHUTDOWN_UNCONFIRMED", "PREPARATION_CONFLICT"})
 
 
 def receipt_directory(state: Path, private_adapter: str, task_id: str, attempt_id: str) -> Path:
@@ -53,12 +47,6 @@ def deliver_receipt(client, receipt: dict, directory: Path, *, nonce: str, log=l
                 break
         time.sleep(delay)
         delay = min(10.0, delay * 2)
-    # Recovery reads this decision before considering a pending receipt. A
-    # refused receipt remains evidence, and can never be replayed as a result.
-    fsync_json(directory / DELIVERY, {**{key: receipt[key] for key in ("taskId", "attemptId", "generation")},
-                                      "accepted": accepted, "error": refusal}, immutable=True)
     if refusal is not None:
         log(f"result refused: {refusal['code']}: {refusal['message']}")
-    if accepted:
-        (directory / RECEIPT).unlink(missing_ok=True)
     return accepted

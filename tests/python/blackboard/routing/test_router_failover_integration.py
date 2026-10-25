@@ -329,8 +329,9 @@ class FailoverTests(RouterDispatchTestCase):
         request, first = self.start()
         output = self.failure(first)
         self.assert_switch(request, first, output)
-        duplicate = self.report(first, output)
-        self.assertTrue(duplicate["duplicate"])
+        with self.assertRaises(BoardError) as caught:
+            self.report(first, output)
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
         duplicate_request = self.request()
         self.assertTrue(duplicate_request["duplicate"])
         with self.board_.store.db.write() as db:
@@ -397,10 +398,12 @@ class FailoverTests(RouterDispatchTestCase):
 
     def test_outer_unknown_stop_preserves_generic_capacity(self):
         request, first = self.start()
-        self.assert_boundary(request, first, self.failure(first), outcome="stop-unconfirmed", shutdown=False)
+        response = self.report(first, self.failure(first), shutdown=False)
+        self.assertFalse(response["committed"])
+        self.assertEqual(self.decision_row(request["decisionId"])["status"], "running")
         with self.board_.store.db.read() as db:
             attempt = db.execute("SELECT execution_state,shutdown_confirmed FROM attempts WHERE attempt_id=?", (first["attempt"]["attemptId"],)).fetchone()
-            self.assertEqual(tuple(attempt), ("uncertain", 0))
+            self.assertEqual(tuple(attempt), ("finalizing", 0))
             self.assertEqual(len(router_history.active_executions(db, buddy_id=A)), 1)
         self.assertEqual(len(self.tasks()), 1)
 
@@ -522,7 +525,9 @@ class FailoverTests(RouterDispatchTestCase):
             receipt = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
                                            (first["attempt"]["attemptId"],)).fetchone()[0])
             self.assertEqual(receipt["result"], output)
-        self.assertTrue(self.report(first, output)["duplicate"])
+        with self.assertRaises(BoardError) as caught:
+            self.report(first, output)
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
         self.assertEqual(len(self.tasks()), 1)
 
     def test_publish_select_is_dto_only(self):

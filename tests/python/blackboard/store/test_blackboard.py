@@ -99,18 +99,14 @@ class TestAtomicity(BoardTestCase):
         task = board.submit_execution(requestId="atomic-4", task="do", cwd=str(cwd), adapter="command", argv=["/bin/true"])["task"]
         claim = admit_execution(client, "n" * 32)
         attempt = claim["claim"]["attempt"]
-        with self.assertRaises(BoardError) as caught:
-            client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, {
-                    "status": "ok",
-                    "result": {"status": "ok"},
-                    "shutdownConfirmed": True,
-                    "artifacts": [{"location": str(cwd / "missing.bin"), "kind": "file"}],
-                })
-        self.assertEqual(caught.exception.code, "ARTIFACT_MISSING")
+        response = client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, {
+            "status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True,
+            "artifacts": [{"location": str(cwd / "missing.bin"), "kind": "file"}],
+        })
+        self.assertEqual(response["attempt"]["result"]["result"]["microTaskError"]["code"], "ARTIFACT_MISSING")
         kinds = [event["kind"] for event in board.store.events_read({"after": 0})["events"]]
         self.assertNotIn("task.completed", kinds)
-        self.assertNotIn("task.completed", kinds)
-        self.assertEqual(client.get(runId=task["runId"])["state"], "running")
+        self.assertEqual(client.get(runId=task["runId"])["state"], "failed")
 
 
 class TestConcurrency(BoardTestCase):
@@ -577,8 +573,9 @@ class TestCrashWindows(BoardTestCase):
                                  {**report, "commandId": "retired-result-command"})
         self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
         first = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, dict(report))
-        second = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, dict(report))
-        self.assertTrue(second.get("duplicate") or second.get("replayed"))
+        with self.assertRaises(BoardError) as caught:
+            client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, dict(report))
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
         completed = [event for event in board.store.events_read({"after": 0})["events"] if event["kind"] == "task.completed"]
         self.assertEqual(len(completed), 1, "a replayed result must not append a second completion event")
 
@@ -593,7 +590,7 @@ class TestCrashWindows(BoardTestCase):
         client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "ok", "result": {"status": "ok"}, "shutdownConfirmed": True})
         with self.assertRaises(BoardError) as caught:
             client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "failed", "result": {"status": "nonzero"}, "shutdownConfirmed": True})
-        self.assertEqual(caught.exception.code, "CONFLICT")
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
 
 
 class TestLifecycle(BoardTestCase):
@@ -832,10 +829,11 @@ class TestDelivery(BoardTestCase):
         claim = admit_execution(client, "a" * 32)
         attempt = claim["claim"]["attempt"]
         result = client.submit_result(attempt["attemptId"], attempt["generation"], "a" * 32, {"status": "cancelled", "result": {"status": "cancelled"}, "shutdownConfirmed": False})
-        self.assertEqual(result["taskState"], "reconciliation-needed")
+        self.assertEqual(result["task"]["state"], "running")
+        self.assertEqual(result["attempt"]["executionState"], "finalizing")
         claims = board.store.resource_claims()
         self.assertEqual(len(claims), 1, "an unconfirmed cancellation must retain its reservation")
-        self.assertEqual(claims[0]["state"], "retained")
+        self.assertEqual(claims[0]["state"], "held")
         nested = cwd / "sub"
         nested.mkdir()
         blocked = board.submit_execution(

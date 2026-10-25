@@ -203,6 +203,9 @@ def detach(state: Path, target: Path, *, require_idle: bool) -> None:
 
 def start(state: Path, target: Path) -> dict:
     from .launcher import entry_modules
+    # Callers hold control-start.lock: the record is cleared before the spawn, so
+    # every startup error that appears afterwards belongs to this start alone.
+    (state / 'startup-error.json').unlink(missing_ok=True)
     log = private_dirs.open_regular_fd(state / 'upgrade-start.log', os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
     try:
         # A rollback starts the previous runtime's installed daemon.
@@ -216,15 +219,14 @@ def start(state: Path, target: Path) -> dict:
         if child.poll() is not None:
             from .launcher import read_private
             failure = read_private(state / 'startup-error.json') or {}
-            if failure.get('pid') == child.pid and isinstance(failure.get('code'), str):
-                raise BoardError(failure['code'], str(failure.get('message') or 'Replacement daemon failed'))
+            if isinstance(failure.get('code'), str):
+                details = failure.get('details')
+                raise BoardError(failure['code'], str(failure.get('message') or 'Replacement daemon failed'),
+                                 **(details if isinstance(details, dict) else {}))
             raise BoardError('UPGRADE_START_FAILED', 'Replacement daemon exited; see private upgrade-start.log')
-        try:
-            endpoint = _read_json(state / 'control.json')
-            if endpoint.get('pid') == child.pid:
-                return command(state, target, 'health')
-        except (OSError, ValueError, BoardError):
-            pass
+        health = probe(state, target)
+        if health is not None:
+            return health
         time.sleep(.2)
     # SIGTERM runs the daemon's task-cancelling stop handler. Even a rollback
     # startup may be preserving work admitted before a legacy detach, so an
@@ -323,9 +325,10 @@ def verify_started(state: Path, target: Path, health: dict, before: dict, *, con
                                column_projections=before['columnProjections'] if converting else None)
         if actual['schema'] != expected_schema:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database schema did not match', tables=['meta'])
-        if set(actual['tables']) != set(before['tables']):
+        expected_tables = set(before['tables']) | ({'attempt_received_receipts'} if converting else set())
+        if set(actual['tables']) != expected_tables:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed',
-                             tables=sorted(set(actual['tables']) ^ set(before['tables'])))
+                             tables=sorted(set(actual['tables']) ^ expected_tables))
         changed = [name for name, value in before['fingerprints'].items()
                    if not (name == 'meta' and before['schema'] != expected_schema)
                    and actual['fingerprints'].get(name) != (
@@ -428,7 +431,11 @@ def retain_runtimes(state: Path, target: Path, previous: Path) -> dict:
     from ..blackboard.tasks.storage import prune_old_runtimes
     try:
         write_journal(state / 'runtime-retention.json', {'current':target.name, 'previous':previous.name})
-        return prune_old_runtimes(BoardStore(state))
+        store = BoardStore(state)
+        try:
+            return prune_old_runtimes(store)
+        finally:
+            store.db.close()
     except (BoardError, OSError) as cleanup_error:
         return {'complete':False, 'error':cleanup_error.code if isinstance(cleanup_error, BoardError) else type(cleanup_error).__name__,
                 'message':str(cleanup_error),

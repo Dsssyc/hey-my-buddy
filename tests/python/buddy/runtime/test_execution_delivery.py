@@ -24,6 +24,15 @@ CLAIM = {"task": {"taskId": "task-1", "spec": {"adapter": "command"}},
          "attempt": {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}}
 
 
+class WindowsOSProxy:
+    """Pretend only this module's ``os.name`` is Windows; other modules stay POSIX."""
+
+    name = "nt"
+
+    def __getattr__(self, attribute):
+        return getattr(os, attribute)
+
+
 class ExecutionDeliveryTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -183,11 +192,11 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual([name for name, _ in calls], ["hint", "result", "hint", "result"])
         self.assertEqual(calls[1][1], calls[3][1])
         self.assertEqual(calls[1][1], ("attempt-1", 1, "n" * 64, reference))
-        self.assertFalse((self.execution.directory / "result-receipt.json").exists())
-        self.assertTrue((self.execution.directory / "result-delivery.json").exists())
+        self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
+        self.assertFalse((self.execution.directory / "result-delivery.json").exists())
 
     def test_uncertain_delivery_fails_once_and_preserves_exact_receipt(self):
-        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY, RECEIPT
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt, RECEIPT
         receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
         write_receipt(self.execution.directory, receipt)
@@ -204,10 +213,10 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 client.submit_result.assert_called_once()
                 pause.assert_not_called()
                 self.assertEqual((self.execution.directory / RECEIPT).read_bytes(), original)
-                self.assertFalse((self.execution.directory / DELIVERY).exists())
+                self.assertFalse((self.execution.directory / "result-delivery.json").exists())
 
-    def test_explicit_refusal_records_reason_and_retains_receipt_as_evidence(self):
-        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY
+    def test_explicit_refusal_logs_reason_and_retains_receipt_as_evidence(self):
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt
         for code in ("ATTEMPT_FINISHED", "STALE_GENERATION", "UNAUTHORIZED", "CONFLICT",
                      "INVALID_ARGUMENT", "RECEIPT_MISMATCH", "ARTIFACT_MISSING", "ARTIFACT_MISMATCH"):
             with self.subTest(code=code):
@@ -218,11 +227,11 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 write_receipt(directory, receipt)
                 client = mock.Mock()
                 client.submit_result.side_effect = BoardError(code, "attempt refused")
-                self.assertFalse(deliver_receipt(client, receipt, directory, nonce="n" * 64))
+                logs = []
+                self.assertFalse(deliver_receipt(client, receipt, directory, nonce="n" * 64, log=logs.append))
                 self.assertEqual(read_execution_receipt(directory), receipt)
-                self.assertEqual(json.loads((directory / DELIVERY).read_text()),
-                                 {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1,
-                                  "accepted": False, "error": {"code": code, "message": "attempt refused"}})
+                self.assertEqual(logs, [f"result refused: {code}: attempt refused"])
+                self.assertFalse((directory / "result-delivery.json").exists())
 
     def test_result_waits_for_hint_already_in_backoff(self):
         receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
@@ -257,21 +266,6 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual(client.progress.call_args.kwargs["data"],
                          {"activity": {"phase": "completed"}})
         client.submit_result.assert_called_once()
-        self.assertIsNone(read_execution_receipt(self.execution.directory))
-
-    def test_refusal_is_durable_before_a_log_failure_can_exit_delivery(self):
-        from hey_my_buddy.buddy.runtime.receipts import write_receipt
-        from hey_my_buddy.protocol.execution import read_execution_delivery
-        receipt = {'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
-                   'report': {'status': 'ok'}, 'createdAt': 'fixture'}
-        write_receipt(self.execution.directory, receipt)
-        self.execution.client.submit_result.side_effect = BoardError('INVALID_ARGUMENT', 'report rejected')
-        with self.assertRaisesRegex(OSError, 'log failed'):
-            deliver_receipt(self.execution.client, receipt, self.execution.directory, nonce='n' * 64,
-                            log=mock.Mock(side_effect=OSError('log failed')))
-        decision = read_execution_delivery(self.execution.directory,
-                    binding={'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1})
-        self.assertEqual(decision['error'], {'code': 'INVALID_ARGUMENT', 'message': 'report rejected'})
         self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
 
     def test_repeated_wrap_up_does_not_extend_deadline_and_force_escalates(self):
@@ -287,6 +281,14 @@ class ExecutionDeliveryTests(unittest.TestCase):
         from hey_my_buddy.protocol.execution import fsync_json
         startup = self.execution.directory / "execution-start.json"
         fsync_json(startup, {"claim": CLAIM, "stateDir": str(self.state), "nonce": "n" * 64, "sessionRecordPath": None})
+        # A Windows main reads the published root from the marker before it can
+        # replay the deferred stop; POSIX never reads it.
+        evidence = self.state / "attempts/task-1/attempt-1"
+        evidence.mkdir(parents=True, exist_ok=True)
+        fsync_json(evidence / "spawn.marker",
+                   {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1,
+                    "processIdentity": {"pid": 301, "startedAt": 1339247086400000000,
+                                        "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000de"}})
         seen = []
 
         def run(execution):
@@ -295,7 +297,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         entry._early_signals.append(signal.SIGTERM)
         self.addCleanup(entry._early_signals.clear)
         with mock.patch.object(sys, "argv", ["execution", "--startup", str(startup)]), \
-             mock.patch.object(entry.execution_protocol, "self_execution_process_identity", return_value={}), \
+             mock.patch.object(entry.execution_protocol, "self_process_identity", return_value={}), \
              mock.patch.object(entry.Execution, "run", run), \
              mock.patch.object(entry._ExecutionLive, "start"), \
              mock.patch.object(entry._ExecutionLive, "finish"), \
@@ -306,8 +308,8 @@ class ExecutionDeliveryTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "POSIX session identity")
     def test_execution_can_capture_its_identity_without_a_parent_marker(self):
         command = ("import json; from hey_my_buddy.protocol.execution import "
-                   "self_execution_process_identity; "
-                   "print(json.dumps(self_execution_process_identity(None)))")
+                   "self_process_identity; "
+                   "print(json.dumps(self_process_identity(None)))")
         child = subprocess.run([sys.executable, "-c", command], start_new_session=True,
                                capture_output=True, text=True, timeout=10, encoding="utf-8")
         self.assertEqual(child.returncode, 0, child.stderr)
@@ -315,6 +317,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual(identity["pid"], identity["processGroupId"])
         self.assertIsNone(identity["jobName"])
 
+    @unittest.skipIf(os.name == "nt", "POSIX reports its own identity without a marker")
     def test_main_reports_identity_without_a_parent_marker(self):
         from hey_my_buddy.protocol.execution import fsync_json
         startup = self.execution.directory / "execution-start.json"
@@ -330,7 +333,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
             return {"report": {"status": "ok", "shutdownConfirmed": True}}
 
         with mock.patch.object(sys, "argv", ["execution", "--startup", str(startup)]), \
-             mock.patch.object(entry.execution_protocol, "self_execution_process_identity",
+             mock.patch.object(entry.execution_protocol, "self_process_identity",
                                return_value=identity), \
              mock.patch.object(entry, "BoardClient", return_value=client), \
              mock.patch.object(entry.Execution, "execute", execute), \
@@ -343,11 +346,52 @@ class ExecutionDeliveryTests(unittest.TestCase):
         client.progress.assert_called_once_with(
             "attempt-1", 1, "n" * 64, process_identity=identity, phase="executing", data=None)
 
+    def test_main_reports_the_marker_root_and_carries_its_own_windows_identity(self):
+        from hey_my_buddy.protocol.execution import fsync_json
+        job_name = "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000dd"
+        root = {"pid": 301, "startedAt": 1339247086400000000, "jobName": job_name}
+        own = {"pid": 402, "startedAt": 815, "jobName": job_name}
+        startup = self.execution.directory / "execution-start.json"
+        fsync_json(startup, {"claim": CLAIM, "stateDir": str(self.state), "nonce": "n" * 64,
+                             "jobName": job_name, "sessionRecordPath": None})
+        evidence = self.state / "attempts/task-1/attempt-1"
+        evidence.mkdir(parents=True, exist_ok=True)
+        fsync_json(evidence / "spawn.marker",
+                   {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "processIdentity": root})
+        client = mock.Mock()
+        started = []
+        reported = []
+
+        def execute(_execution):
+            reported.append(client.progress.call_args)
+            return {"report": {"status": "ok", "shutdownConfirmed": True}}
+
+        windows_os = WindowsOSProxy()
+        with mock.patch.object(sys, "argv", ["execution", "--startup", str(startup)]), \
+             mock.patch.object(entry, "os", windows_os), \
+             mock.patch.object(entry.execution_protocol, "self_process_identity", return_value=own), \
+             mock.patch.object(entry, "BoardClient", return_value=client), \
+             mock.patch.object(entry.Execution, "execute", execute), \
+             mock.patch.object(entry, "deliver_receipt", return_value=True), \
+             mock.patch.object(entry._ExecutionLive, "start", side_effect=lambda identity: started.append(identity)), \
+             mock.patch.object(entry._ExecutionLive, "finish"), \
+             mock.patch.object(signal, "signal"), \
+             mock.patch("hey_my_buddy.protocol.process_identity.install_native_process_journal") as journal:
+            self.assertEqual(entry.main(), 0)
+        # The live descriptor binds the marker's root; progress reports the
+        # interpreter itself, and no native journal is written on Windows.
+        self.assertEqual(started, [root])
+        self.assertEqual(reported[0].kwargs["process_identity"], own)
+        journal.assert_not_called()
+
     def test_native_work_waits_for_initial_identity_acknowledgement(self):
         client = mock.Mock()
         journal_installed = []
         def progress(*_args, **_kwargs):
-            self.assertEqual(journal_installed, [True])
+            # POSIX installs the empty journal before the first progress; a
+            # Windows execution writes no journal and still gates native work.
+            if os.name != "nt":
+                self.assertEqual(journal_installed, [True])
             if client.progress.call_count == 1:
                 raise BoardError("SERVICE_UNAVAILABLE", "offline")
             return {}
@@ -373,10 +417,13 @@ class ExecutionDeliveryTests(unittest.TestCase):
              mock.patch.object(entry.time, "monotonic", side_effect=lambda: clock[0]), \
              mock.patch.object(entry.time, "sleep", side_effect=advance) as pause:
             execution.run()
-        journal.assert_called_once()
+        if os.name == "nt":
+            journal.assert_not_called()
+        else:
+            journal.assert_called_once()
         pause.assert_called_once_with(0.25)
 
-    def test_identity_refusal_prevents_native_work_after_empty_journal(self):
+    def test_identity_refusal_prevents_native_work(self):
         for code in ("INVALID_ARGUMENT", "CONFLICT"):
             with self.subTest(code=code):
                 client = mock.Mock()
@@ -389,8 +436,12 @@ class ExecutionDeliveryTests(unittest.TestCase):
                         execution.run()
                 self.assertEqual(caught.exception.code, code)
                 native.assert_not_called()
-                journal.assert_called_once()
+                if os.name == "nt":
+                    journal.assert_not_called()
+                else:
+                    journal.assert_called_once()
 
+    @unittest.skipIf(os.name == "nt", "POSIX installs the native journal before acknowledging")
     def test_journal_failure_prevents_identity_acknowledgement_and_native_work(self):
         client = mock.Mock()
         execution = entry.Execution(CLAIM, self.state, "n" * 64, client=client)
@@ -505,7 +556,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 self.assertEqual(execution._hints, {})
 
     def test_unknown_progress_failure_during_delivery_leaves_receipt_and_exits(self):
-        from hey_my_buddy.buddy.runtime.receipts import write_receipt, DELIVERY, RECEIPT
+        from hey_my_buddy.buddy.runtime.receipts import write_receipt, RECEIPT
         receipt = {'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
                    'report': {'status': 'ok', 'shutdownConfirmed': True}, 'createdAt': 'fixture'}
         write_receipt(self.execution.directory, receipt)
@@ -522,7 +573,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 self.execution.client.submit_result.assert_not_called()
                 self.assertEqual((self.execution.directory / RECEIPT).read_bytes(), original)
                 self.assertEqual(self.execution._hints, {'waitingReason': None})
-                self.assertFalse((self.execution.directory / DELIVERY).exists())
+                self.assertFalse((self.execution.directory / "result-delivery.json").exists())
 
     def test_budget_cleanup_failure_exits_with_the_original_durable_receipt(self):
         from hey_my_buddy.protocol.execution import BUDGET, RECEIPT

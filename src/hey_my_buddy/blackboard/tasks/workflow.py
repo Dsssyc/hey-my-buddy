@@ -3698,7 +3698,7 @@ class WorkflowCoordinator:
             (task_id,),
         ).fetchall():
             if attempt["cancel_requested_at"] is not None and (
-                    initiator in WRAP_UP_INITIATORS or attempt["stop_initiator"] in ("console", "service")):
+                    initiator in WRAP_UP_INITIATORS or attempt["stop_initiator"] not in WRAP_UP_INITIATORS):
                 continue
             deadline = attempt["grace_deadline"]
             if (wrap_up and initiator in WRAP_UP_INITIATORS
@@ -3753,6 +3753,7 @@ class WorkflowCoordinator:
         disposition = None
         if (attempt["shutdown_confirmed"] and payload is not None
                 and payload.get("terminationReason") != "grace-expired"
+                and not self.result_payload(payload).get("microTaskError")
                 and turn is not None and self._validate_turn(turn, turn_row, attempt) is None):
             disposition = turn["outcome"]["disposition"]
             connection.execute(
@@ -6840,8 +6841,10 @@ class WorkflowCoordinator:
         # that froze a start observation — completed, failed, cancelled or late.
         # It is evidence only and never changes this import's state machine.
         shared_refs = self._pin_shared_refs(connection, run_row, attempt, turn_row, seal_stash, now)
+        # Recovery may seal a stopped checkout after rejecting its receipt at the boundary.
         if (attempt["shutdown_confirmed"] and self.result_payload(payload).get("partialWorkspaceSeal")
-                and not self.result_payload(payload).get("microTaskError")):
+                and not self.result_payload(payload).get("microTaskError")
+                and not self.result_payload(payload).get("receiptRejection")):
             self._pin_result_artifacts(connection, run_row, attempt, payload, turn_row["turn_id"], now)
             self.board._append_event(connection, "workflow.partial_output_preserved", task_id=run_row["run_id"], attempt_id=attempt["attempt_id"], payload={"partial": True, "verified": False, "final": False})
         ancestor = self._terminal_ancestor(connection, run_row["run_id"])

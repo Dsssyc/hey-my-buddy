@@ -9,8 +9,10 @@ from unittest.mock import Mock, patch
 from c_two.error import CoreError
 
 from support import BoardTestCase
+from hey_my_buddy import locking
 from hey_my_buddy.blackboard.service.daemon import Daemon, _env_int, main
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.transport import LIFETIME_LOCKS, ServiceError
 
 
 class DaemonAdmissionTests(BoardTestCase):
@@ -67,6 +69,20 @@ class DaemonAdmissionTests(BoardTestCase):
                 with self.assertRaises(BoardError) as caught:
                     Daemon(self.directory / "state")
                 self.assertEqual(caught.exception.code, "INVALID_ARGUMENT")
+
+    def test_a_held_lifetime_lock_refuses_the_second_daemon_with_the_shared_explanation(self):
+        daemon = Daemon(self.directory / "state")
+        daemon.directory.mkdir(parents=True)
+        holder = os.open(daemon.directory / LIFETIME_LOCKS[0], os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            locking.lock(holder)
+            with self.assertRaises(ServiceError) as caught:
+                daemon.acquire_exclusive()
+        finally:
+            os.close(holder)
+        self.assertEqual(caught.exception.code, "ALREADY_RUNNING")
+        self.assertEqual(caught.exception.details["lock"], LIFETIME_LOCKS[0])
+        self.assertIn("lifetime locks", caught.exception.message)
 
     def test_workspace_cleanup_failure_is_visible_and_other_work_continues(self):
         daemon = Daemon(self.directory / "state")
@@ -154,7 +170,7 @@ class DaemonAdmissionTests(BoardTestCase):
              patch("sys.stderr", new_callable=io.StringIO) as stderr:
             self.assertEqual(main(), 2)
         failure = json.loads((self.directory / "startup-error.json").read_text(encoding="utf-8"))
-        self.assertEqual(failure, {"pid": os.getpid(), "code": "SERVICE_START_TIMEOUT", "message": str(error)})
+        self.assertEqual(failure, {"code": "SERVICE_START_TIMEOUT", "message": str(error)})
         self.assertIn("SERVICE_START_TIMEOUT", stderr.getvalue())
 
     def test_runtime_identity_failure_prevents_startup_and_records_the_cause(self):
@@ -170,7 +186,6 @@ class DaemonAdmissionTests(BoardTestCase):
                 run.assert_not_called()
             failure = json.loads((self.directory / 'startup-error.json').read_text(encoding='utf-8'))
             self.assertEqual(failure['code'], cause.code if isinstance(cause, BoardError) else 'RUNTIME_IDENTITY_INVALID')
-            self.assertEqual(failure['pid'], os.getpid())
             self.assertNotEqual(failure.get('runtimeIdentity'), 'runtime:unavailable')
 
     def test_other_native_errors_are_reraised_even_with_timeout_wording(self):

@@ -20,6 +20,7 @@ from hey_my_buddy.protocol.owned_process import (
     OwnedJob,
     ProcessCreationEvidence,
     owned_popen,
+    transfer_job_to_child,
 )
 from hey_my_buddy.protocol import process_controller
 from hey_my_buddy.protocol.service_process import CREATE_NO_WINDOW, CREATE_BREAKAWAY_FROM_JOB
@@ -51,16 +52,30 @@ class FakeProcess:
 
 
 class FakeAPI:
+    ROOT_NAME = "Local\\HeyMyBuddy-00000000-0000-4000-8000-0000000000aa"
+
     def __init__(self, process):
         self.process = process
         self.events = []
         self.count = 1
         self.fail_at = None
+        self.job_gone = False
 
     def create_job(self, name):
         self.name = name
         self.events.append("create")
         return 77
+
+    def open_job(self, name):
+        self.events.append(("open", name))
+        if self.fail_at == "open":
+            raise OSError("open failed")
+        return None if self.job_gone else 88
+
+    def duplicate_job_into(self, pid, job):
+        self.events.append(("duplicate", pid, job))
+        if self.fail_at == "duplicate":
+            raise OSError("duplicate failed")
 
     def assign(self, job, process):
         self.events.append(("assign", job, process._handle))
@@ -317,6 +332,56 @@ class WindowsProcessTests(unittest.TestCase):
         handle = ProcessHandle(process, own_group=True, log_paths={})
         self.assertEqual(handle.wait(timeout=5), 0)
         self.assertTrue(handle.shutdown_confirmed(settle_seconds=1))
+
+    def suspended_root(self, api=None, process=None):
+        process = process or FakeProcess()
+        api = api or FakeAPI(process)
+        with mock.patch("hey_my_buddy.protocol.owned_process.subprocess.Popen", return_value=process):
+            child = owned_popen(["child"], windows_api=api, job_name=FakeAPI.ROOT_NAME, defer_resume=True)
+        return api, process, child, child._buddy_job
+
+    def test_execution_root_stays_suspended_for_its_marker_before_any_resume(self):
+        api, _process, _child, job = self.suspended_root()
+        self.assertEqual(api.events, ["create", ("assign", 77, 42)])
+        self.assertEqual(job.name, FakeAPI.ROOT_NAME)
+
+    def test_transfer_resumes_then_duplicates_and_closes_the_service_handle(self):
+        api, _process, child, job = self.suspended_root()
+        transfer_job_to_child(child, job)
+        self.assertEqual(api.events[-3:], [("resume", 42), ("duplicate", 321, 77), ("close", 77)])
+        self.assertTrue(job.transferred)
+        self.assertIsNone(job.handle)
+
+    def test_transferred_job_observes_and_stops_through_its_recorded_name(self):
+        api, process, child, job = self.suspended_root()
+        transfer_job_to_child(child, job)
+        with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
+            handle = ProcessHandle(child, own_group=True, log_paths={})
+        api.events.clear()
+        process.returncode = 0  # The created root exited; its descendants remain.
+        self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
+        self.assertIn(("open", FakeAPI.ROOT_NAME), api.events)
+        self.assertIn(("active", 88), api.events)
+        api.fail_at = "open"
+        self.assertTrue(handle.group_alive())  # An unobservable Job is not proven gone.
+        api.fail_at = None
+        with mock.patch.object(signal, "CTRL_BREAK_EVENT", 1, create=True), \
+             mock.patch.object(child, "kill", side_effect=AssertionError("PID kill")):
+            handle.terminate(grace_seconds=0)
+        self.assertIn(("terminate", 88), api.events)
+        api.events.clear()
+        api.job_gone = True  # The last lifetime copy closed with the created process.
+        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
+        self.assertEqual(api.events, [("open", FakeAPI.ROOT_NAME)])
+
+    def test_confirmed_transferred_job_never_reopens_its_name(self):
+        api = mock.Mock()
+        job = OwnedJob(api, 77, FakeAPI.ROOT_NAME)
+        job.transferred = True
+        job.close(confirmed=True)
+        self.assertEqual(job.active(), 0)
+        job.terminate()
+        api.open_job.assert_not_called()
 
 
 class WindowsPipeTests(unittest.TestCase):

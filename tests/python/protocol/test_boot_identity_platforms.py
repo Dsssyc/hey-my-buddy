@@ -168,18 +168,9 @@ class StableBootIdentityTests(unittest.TestCase):
             self.assertEqual(process_identity.boot_id(), 'macos:' + BOOT)
         self.assertEqual(library.sysctlbyname.call_count, 2)
 
-    def test_windows_reads_boot_environment_guid_and_rejects_api_failure(self):
-        def query(kind, output, size, _returned):
-            self.assertEqual(kind, 0x5A)
-            self.assertEqual(size, 32)
-            ctypes.memmove(output, uuid.UUID(BOOT).bytes_le + bytes(16), 32)
-            return 0
-        library = Mock()
-        library.NtQuerySystemInformation = Mock(side_effect=query)
-        with patch.object(process_identity.sys, 'platform', 'win32'), \
-             patch.object(ctypes, 'WinDLL', return_value=library, create=True):
-            self.assertEqual(process_identity.boot_id(), 'windows:' + BOOT)
-            library.NtQuerySystemInformation.side_effect = None
-            library.NtQuerySystemInformation.return_value = -1
+    def test_windows_has_no_boot_identifier_to_read(self):
+        # A Windows identity records no boot value, so the reader refuses the
+        # platform instead of returning an unused number.
+        with patch.object(process_identity.sys, 'platform', 'win32'):
             with self.assertRaises(OSError):
                 process_identity.boot_id()

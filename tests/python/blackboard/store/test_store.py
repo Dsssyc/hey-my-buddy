@@ -215,8 +215,8 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
         self.register(board, "w2")
         first = self.claim_micro_task(board, "w1", "uncertain-1")
         second = self.claim_micro_task(board, "w2", "uncertain-2")
-        # A completed result with unconfirmed shutdown leaves the attempt
-        # uncertain: a survivor may still be running, so its model service slot stays.
+        # A received result with unconfirmed shutdown leaves the attempt
+        # finalizing: a survivor may still be running, so its model service slot stays.
         self.finish(board, "w2", second, shutdown=False)
         self.register(board, "w3")
         blocked = self.claim_micro_task(board, "w3", "uncertain-3")
@@ -227,7 +227,7 @@ class ModelServiceQuotaTests(StoreConcurrencyTestCase):
                 "SELECT execution_state, model_harness, model_provider, model_model FROM attempts WHERE attempt_id=?",
                 (second["claim"]["attempt"]["attemptId"],),
             ).fetchone()
-        self.assertEqual(row["execution_state"], "uncertain")
+        self.assertEqual(row["execution_state"], "finalizing")
         self.assertEqual((row["model_harness"], row["model_provider"], row["model_model"]), MODEL_SERVICE_A)
         # A confirmed completion frees the slot for the next claim.
         self.finish(board, "w1", first, shutdown=True)
@@ -319,10 +319,12 @@ class ExpectedDurationTests(BoardTestCase):
         client = board.client()
         pass  # Admission is owned by the service.
         claim = admit_execution(client, "n" * 32, task_id=task["runId"])["claim"]
-        with self.assertRaises(BoardError) as raised:
-            client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "failed", "shutdownConfirmed": True, "terminationReason": "deadline"})
-        self.assertIn("Router budget", raised.exception.message)
-        self.assertFalse(client.get(runId=task["runId"])["shutdownConfirmed"])
+        response = client.submit_result(claim["attempt"]["attemptId"], claim["attempt"]["generation"], "n" * 32, {"status": "failed", "shutdownConfirmed": True, "terminationReason": "deadline"})
+        rejection = response["attempt"]["result"]["result"]["microTaskError"]
+        self.assertEqual(rejection["code"], "INVALID_ARGUMENT")
+        self.assertIn("Router budget", rejection["message"])
+        self.assertNotIn("receiptRejection", response["attempt"]["result"]["result"])
+        self.assertTrue(client.get(runId=task["runId"])["shutdownConfirmed"])
 
 
 class ServiceAdmissionWindowTests(BoardTestCase):

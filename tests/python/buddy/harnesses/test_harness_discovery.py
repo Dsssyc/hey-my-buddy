@@ -426,8 +426,8 @@ class HarnessDiscoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             defaults = {
-                home / ".nvm/alias/default": "lts/*",
-                home / ".nvm/alias/lts/*": "24.2",
+                home / ".nvm/alias/default": "lts/iron",
+                home / ".nvm/alias/lts/iron": "24.2",
                 home / ".fnm/aliases/default": "24",
                 home / ".tool-versions": "nodejs 24",
                 home / ".config/mise/config.toml": '[tools]\nnode = "24"\n',
@@ -454,10 +454,10 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 node_snapshot = discovery.candidate_snapshot("node", environment={"PATH": ""})
             found = [item["path"] for item in snapshot["candidates"] if item["exists"]]
             self.assertTrue(all(str(path) in found for path in locations))
-            nvm = [path for path in found if "/.nvm/" in path]
+            nvm = [path for path in found if ".nvm" in Path(path).parts]
             self.assertEqual(nvm[:2], [str(locations[1]), str(locations[0])])
             self.assertIn(str(direct_node), [item["path"] for item in node_snapshot["candidates"]])
-            self.assertIn(str(home / ".nvm/alias/lts/*"),
+            self.assertIn(str(home / ".nvm/alias/lts/iron"),
                           [item["path"] for item in snapshot["managerRecords"]])
             (home / ".nvm/alias/default").write_text("node", encoding="utf-8", newline="\n")
             with patch.object(discovery, "_home", return_value=home), patch.object(
@@ -610,7 +610,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                                                    "HTTPS_PROXY": "proxy", "OPENAI_API_KEY": "secret",
                                                    "ANTHROPIC_BASE_URL": "third-party",
                                                    "HMB_AGENT_CREDENTIAL_FILE": "/private/attempt"}, command=[str(cli)])
-            self.assertEqual(result["PATH"].split(":")[0], str(cli.parent))
+            self.assertEqual(result["PATH"].split(os.pathsep)[0], str(cli.parent))
             self.assertEqual(result["HOME"], "/home/user")
             self.assertNotIn("OPENAI_API_KEY", result)
             self.assertNotIn("ANTHROPIC_BASE_URL", result)

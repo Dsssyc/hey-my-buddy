@@ -21,13 +21,16 @@ class UpgradeCutoverTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         self.state = self.directory / "state"
-        load_fixture(self.state)
+        fixture = load_fixture(self.state)
         resources = json.loads((FIXTURE / 'workspace-resources.json').read_text(encoding='utf-8'))
         self.private_files = {relative: (self.state / relative).read_bytes() for relative in resources['files']}
         self.legacy_files = {relative for relative in self.private_files
                              if '/goals/' in relative or relative.startswith('decisions/')
-                             or relative in ('legacy-worker-cleanup.lock', 'worker.log')}
-        self.assertEqual(len(self.legacy_files), 7)
+                             or relative in ('legacy-worker-cleanup.lock', 'worker.log', fixture['deliveryStock']['path'])}
+        self.delivery = self.state / fixture['deliveryStock']['path']
+        self.assertEqual(json.loads(self.delivery.read_bytes()),
+                         {'attemptId': fixture['deliveryStock']['attemptId'], 'accepted': True})
+        self.assertEqual(len(self.legacy_files), 8)
         (self.state / "console-settings.json").write_text('{"theme":"dark"}', encoding="utf-8", newline="\n")
         store = BoardStore(self.state)
         store.db.close()
@@ -134,7 +137,7 @@ class UpgradeCutoverTests(BoardTestCase):
             self.state, column_projections=self.before['columnProjections'] if migrated else None)
         if migrated:
             self.assertEqual(actual['schema'], SCHEMA_VERSION)
-            self.assertEqual(set(actual['tables']), set(self.before['tables']))
+            self.assertEqual(set(actual['tables']), set(self.before['tables']) | {'attempt_received_receipts'})
             self.assertEqual(actual['retainedMetaSha256'], self.before['retainedMetaSha256'])
             for table, fingerprint in self.before['fingerprints'].items():
                 if table != 'meta':
@@ -173,7 +176,8 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertTrue(result['legacyLayoutCleanup']['complete'])
         self.assertEqual(set(result['legacyLayoutCleanup']['removed']),
                          {'harnesses/' + harness + '/goals' for harness in ('codex', 'claude', 'zcode', 'dsh')}
-                         | {'decisions', 'legacy-worker-cleanup.lock', 'worker.log'})
+                         | {'decisions', 'legacy-worker-cleanup.lock', 'worker.log',
+                            self.delivery.relative_to(self.state).as_posix()})
         self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], SCHEMA_VERSION)
         self.assertNotIn("archive", result)
         self.assertEqual(backup.verify(Path(result["backup"]["path"]))["schema"], UPGRADE_BASE_SCHEMA)
@@ -216,7 +220,7 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertTrue(result['upgraded'], result)
         self.assertTrue(result['recoveredJournal'])
         self.assertTrue(result['legacyLayoutCleanup']['complete'])
-        self.assertEqual(len(result['legacyLayoutCleanup']['removed']), 7)
+        self.assertEqual(len(result['legacyLayoutCleanup']['removed']), 8)
         self.assertFalse((self.state / 'upgrade.json').exists())
         self.assert_history_preserved(migrated=True)
 
@@ -241,6 +245,30 @@ class UpgradeCutoverTests(BoardTestCase):
         self.assertFalse((self.state / 'harnesses/claude/goals').exists())
         self.assertFalse((self.state / 'worker.log').exists())
         self.assertFalse((self.state / 'upgrade.json').exists())
+
+    def test_delivery_cleanup_failure_is_reported_after_verified_cutover(self):
+        target = self.runtime_root / ('b' * 32)
+        unlink = Path.unlink
+
+        def refuse_delivery(path, *args, **options):
+            if path == self.delivery:
+                raise PermissionError('retired delivery file is busy')
+            return unlink(path, *args, **options)
+
+        with mock.patch.object(Path, 'unlink', refuse_delivery):
+            result = self.cutover(self.previous, target)
+        self.assertTrue(result['upgraded'], result)
+        self.assertIsNone(result['rollback'])
+        self.assertFalse(result['legacyLayoutCleanup']['complete'])
+        relative = self.delivery.relative_to(self.state).as_posix()
+        self.assertEqual(result['legacyLayoutCleanup']['failures'], [
+            {'path': relative, 'code': 'PermissionError', 'message': 'retired delivery file is busy'}])
+        self.assertEqual(self.delivery.read_bytes(), self.private_files[relative])
+        self.assertEqual(self.started_runtimes, [target])
+        self.assertEqual(upgrade.idle_snapshot(self.state)['schema'], SCHEMA_VERSION)
+        self.assertFalse((self.state / 'worker.log').exists())
+        self.assertFalse((self.state / 'upgrade.json').exists())
+        self.assertEqual(json.loads((self.state / 'upgrade-last.json').read_bytes())['phase'], 'verified')
 
     def test_failed_new_runtime_returns_to_previous_runtime_with_history(self):
         target = self.runtime_root / ("b" * 32)

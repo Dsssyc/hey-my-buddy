@@ -241,7 +241,9 @@ class CurrentCoreTests(BoardTestCase):
                 self.assertEqual(len(unavailable), 2)
                 self.assertEqual(unavailable[0]["attemptId"], attempt["attemptId"])
                 head = board.store.head()
-                client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
+                with self.assertRaises(BoardError) as caught:
+                    client.submit_result(attempt["attemptId"], attempt["generation"], "n" * 32, report)
+                self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
                 self.assertEqual(board.store.head(), head)
                 self.assertEqual(client.get_message("q-other", runId=other["runId"])["state"], "queued")
                 client.submit_result(other_attempt["attemptId"], other_attempt["generation"], "o" * 32,
