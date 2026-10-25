@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -99,8 +100,8 @@ class SeamCase(unittest.TestCase):
         developer_source = mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"})
         developer_source.start()
         self.addCleanup(developer_source.stop)
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-seam-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-seam-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.cwd = self.base / "checkout"
@@ -111,7 +112,7 @@ class SeamCase(unittest.TestCase):
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("HMB_") and key not in
                             ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "OPENAI_API_KEY", "CODEX_API_KEY")}
-        self.environment.update(HOME=str(self.base), CODEX_HOME=str(self.home),
+        self.environment.update(HOME=str(self.base), USERPROFILE=str(self.base), CODEX_HOME=str(self.home),
                                 HMB_STATE_DIR=str(self.base / "state"),
                                 HMB_RUNTIME_ROOT=str(self.base / "runtime"))
         select_fixture(self.environment, self.base, "codex", FIXTURE)
@@ -455,8 +456,12 @@ class FastSeamTests(SeamCase):
         # says the interrupt went out unconfirmed.
         self.assertEqual(result.stop_evidence.interrupt.basis, "native-turn-interrupt-unconfirmed")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
-        # The native SIGTERM survives as its own exit-code fact.
-        self.assertEqual(result.end.native_exit_code, -15)
+        # POSIX records SIGTERM; Windows records the owned Job termination.
+        if os.name == "nt":
+            self.assertIsInstance(result.end.native_exit_code, int)
+            self.assertNotEqual(result.end.native_exit_code, 0)
+        else:
+            self.assertEqual(result.end.native_exit_code, -15)
         self.assertFalse((Path(request.private_state.native_root) / "codex-home" / "auth.json").is_symlink())
 
     def test_unverified_no_tool_policy_continues_with_readback_facts(self):
@@ -683,7 +688,8 @@ class ReviewSeamTests(CodexSeamCase):
         self.assert_discovered_provider_runs('read', REVIEW_SCHEMA)
 
     def test_review_uses_worker_read_sandbox_with_unusual_checkout(self):
-        self.cwd = self.base / '.managed worktree' / 'space "quote"' / 'checkout'
+        quoted = "space 'quote'" if os.name == 'nt' else 'space "quote"'
+        self.cwd = self.base / '.managed worktree' / quoted / 'checkout'
         self.cwd.mkdir(parents=True)
         request = self.request(permission="read", output_schema=REVIEW_SCHEMA, prompt="Review")
         prep = native_run._prepare(request, "review")
@@ -1717,8 +1723,13 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertEqual(result.end.reason_code, "user-cancel")
         self.assertTrue(result.stop_evidence.interrupt.requested)
         self.assertEqual(result.stop_evidence.interrupt.basis, "native-turn-interrupt-unconfirmed")
-        # The native SIGTERM survives as its own exit-code fact.
-        self.assertEqual(result.end.native_exit_code, -15)
+        # POSIX records SIGTERM; Windows records the owned Job termination.
+        if os.name == "nt":
+            self.assertEqual(result.stop_evidence.native.group_state, "gone")
+            self.assertIsInstance(result.end.native_exit_code, int)
+            self.assertNotEqual(result.end.native_exit_code, 0)
+        else:
+            self.assertEqual(result.end.native_exit_code, -15)
 
     def test_interrupted_terminal_turn_keeps_a_checkpoint_bound_resume(self):
         cancelled = self.cancel_after_native_start()
@@ -1771,15 +1782,16 @@ class DiscoveryBoundaryTests(unittest.TestCase):
     """Private commands and the actual public probe/owned-creation boundaries."""
 
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix='hey-my-buddy-codex-discovery-boundary-',
-                                                dir=os.environ.get('HMB_CHECKS_TMPDIR', '/tmp'))
+        temporary = TemporaryDirectory(prefix='hey-my-buddy-codex-discovery-boundary-',
+                                                dir=os.environ.get('HMB_CHECKS_TMPDIR', tempfile.gettempdir()))
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)
         self.command = self.base / 'native.py'
         self.command.write_text("import sys, time\nif '--version' in sys.argv:\n    print('fixture-version')\nelse:\n    time.sleep(60)\n", encoding="utf-8", newline="\n")
         self.home = self.base / 'home'
         self.home.mkdir()
-        environment = {**os.environ, 'HOME': str(self.home), 'CODEX_HOME': str(self.home / '.codex')}
+        environment = {**os.environ, 'HOME': str(self.home), 'USERPROFILE': str(self.home),
+                       'CODEX_HOME': str(self.home / '.codex')}
         environment.pop('HMB_CODEX_CLI', None)
         environment.pop('HMB_HARNESS_RECORD_FILE', None)
         self.environment = environment

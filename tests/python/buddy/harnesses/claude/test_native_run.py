@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import tempfile
+from temporary import TemporaryDirectory
 import unittest
 import uuid
 from pathlib import Path
@@ -64,8 +65,8 @@ class NativeRunCase(unittest.TestCase):
 
     def setUp(self):
         super().setUp()
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-seam-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-claude-seam-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
         self.cwd = self.base / "checkout"

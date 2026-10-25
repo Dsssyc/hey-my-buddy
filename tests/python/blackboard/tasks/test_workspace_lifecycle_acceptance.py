@@ -5,6 +5,7 @@ One ``accept`` must verify the exact final artifact against its recorded target
 history, and a target that moved under the review is refused.
 """
 from __future__ import annotations
+import os
 from pathlib import Path
 from unittest import mock
 from blackboard.tasks.test_workflow_real import BUDDY
@@ -276,6 +277,9 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         checkout = Path(manifest["path"])
         (checkout / "tracked.txt").unlink()
         (checkout / "mode.txt").chmod(0o755)
+        if os.name == "nt":
+            # Git for Windows does not observe chmod through the worktree.
+            git(checkout, "update-index", "--chmod=+x", "mode.txt")
         seal = workspace_module.seal(self.directory, manifest, submitted["runId"],
                                      claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)

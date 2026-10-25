@@ -12,6 +12,7 @@ import queue
 import subprocess
 import sys
 import tempfile
+from temporary import TemporaryDirectory
 import threading
 import traceback
 
@@ -22,7 +23,7 @@ class CheckpointDomain:
     def __init__(self, test, case):
         from support import _child_environment
 
-        temporary = tempfile.TemporaryDirectory(prefix="zh-", dir=Path(tempfile.gettempdir()).resolve())
+        temporary = TemporaryDirectory(prefix="zh-", dir=Path(tempfile.gettempdir()).resolve())
         test.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.log = (self.root / "owner.log").open("wb")
@@ -111,7 +112,7 @@ def read_command(commands, timeout=60):
 
 def serve():
     # Determine every private root before importing the SDK or role modules.
-    temporary = tempfile.TemporaryDirectory(prefix="zd-", dir=Path(tempfile.gettempdir()).resolve())
+    temporary = TemporaryDirectory(prefix="zd-", dir=Path(tempfile.gettempdir()).resolve())
     root = Path(temporary.name).resolve()
     home, state, runtime = root / "home", root / "state", root / "runtime"
     for directory in (home, state, runtime, state / "ipc"):
@@ -143,7 +144,7 @@ def serve():
 
     fixture = ZcodeFixtureCase()
     # Reuse its complete setup, selecting our already-created private root.
-    with patch("buddy.harnesses.zcode.test_zcode.tempfile.TemporaryDirectory",
+    with patch("buddy.harnesses.zcode.test_zcode.TemporaryDirectory",
                return_value=temporary):
         fixture.setUp()
     fixture.addCleanup(shutdown_private_rpc)

@@ -11,6 +11,7 @@ from support import BoardTestCase, InProcessBoard
 from hey_my_buddy.blackboard.tasks import interruption
 from hey_my_buddy.blackboard.service.execution_scheduler import _ExecutionObservation
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import process_identity as processes
 from hey_my_buddy.protocol.execution import fsync_json, RECEIPT
 
@@ -53,11 +54,11 @@ class InterruptionRecoveryTests(BoardTestCase):
         claim = admit_execution(client, 'n' * 32)['claim']
         actor = {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'],
                  'nonce': 'n' * 32}
-        (board.directory / 'attempts' / task['runId'] / actor['attemptId']).mkdir(parents=True)
+        native_path(board.directory / 'attempts' / task['runId'] / actor['attemptId']).mkdir(parents=True)
         if identity:
             board.call('execution_progress', {**actor, 'processIdentity': IDENTITY})
             journal = self.journal(board, actor['attemptId'])
-            Path(journal['path']).parent.mkdir(parents=True, exist_ok=True)
+            native_path(Path(journal['path']).parent).mkdir(parents=True, exist_ok=True)
             processes.NativeProcessJournal(Path(journal['path']), journal['binding'])
         return board, client, task, claim, actor
 
@@ -288,7 +289,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                 board, client, task, _, actor = self.claimed()
                 root = Path(self.journal(board, actor['attemptId'])['path']).parent
                 credential = root / 'agent-credential.json'
-                credential.write_text('private fixture')
+                native_path(credential).write_text('private fixture')
                 if exit_path == 'delivered':
                     board.call('execution_result', {**actor, 'status': 'ok', 'shutdownConfirmed': True})
                 elif exit_path == 'forced':
@@ -296,11 +297,11 @@ class InterruptionRecoveryTests(BoardTestCase):
                     board.store.record_execution_deadline(actor['attemptId'], 'forced-stop')
                 with patch.object(processes, 'inspect_process_identity', return_value='alive'):
                     board.store.recover_executions()
-                self.assertTrue(credential.exists(), 'execution identity still exists')
+                self.assertTrue(native_path(credential).exists(), 'execution identity still exists')
                 with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
                     board.store.recover_executions()
                 self.assertTrue(client.get(runId=task['runId'])['shutdownConfirmed'])
-                self.assertFalse(credential.exists())
+                self.assertFalse(native_path(credential).exists())
                 with board.store.db.read() as connection:
                     self.assertFalse(board.store._attempt_row(connection, actor['attemptId'])['cleanup_pending'])
 
@@ -308,66 +309,66 @@ class InterruptionRecoveryTests(BoardTestCase):
         board, client, task, _, actor = self.claimed()
         root = Path(self.journal(board, actor['attemptId'])['path']).parent
         credential = root / 'agent-credential.json'
-        credential.write_text('private fixture')
+        native_path(credential).write_text('private fixture')
         startup = root / 'execution-start.json'
         fsync_json(startup, {'claim': {'agentCredential': 'private fixture'}})
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch.object(interruption, '_stop_native', return_value=(False, None)):
             board.store.recover_executions()
         self.assertFalse(client.get(runId=task['runId'])['shutdownConfirmed'])
-        self.assertTrue(credential.exists())
-        self.assertTrue(startup.exists())
+        self.assertTrue(native_path(credential).exists())
+        self.assertTrue(native_path(startup).exists())
         with board.store.db.read() as connection:
             self.assertTrue(board.store._attempt_row(connection, actor['attemptId'])['cleanup_pending'])
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             board.store.recover_executions()
         self.assertTrue(client.get(runId=task['runId'])['shutdownConfirmed'])
-        self.assertFalse(credential.exists())
-        self.assertFalse(startup.exists())
+        self.assertFalse(native_path(credential).exists())
+        self.assertFalse(native_path(startup).exists())
 
     def test_credential_cleanup_failure_is_visible_and_retried_without_losing_receipt(self):
         board, client, task, _, actor = self.claimed()
         root = Path(self.journal(board, actor['attemptId'])['path']).parent
         credential = root / 'agent-credential.json'
-        credential.write_text('private fixture')
+        native_path(credential).write_text('private fixture')
         receipt = {'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
                    'createdAt': board.store.now(), 'report': {'status': 'ok', 'shutdownConfirmed': True}}
         fsync_json(root / RECEIPT, receipt)
-        original = (root / RECEIPT).read_bytes()
+        original = native_path(root / RECEIPT).read_bytes()
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch('hey_my_buddy.private_dirs.cleanup_attempt_credentials', side_effect=OSError('remove denied')):
             board.store.recover_executions()
         issues = client.get(runId=task['runId'])['selectedAttempt']['issues']
         self.assertTrue(any(issue['stage'] == 'credential-cleanup' and 'remove denied' in issue['message']
                             for issue in issues), issues)
-        self.assertTrue(credential.exists())
-        self.assertEqual((root / RECEIPT).read_bytes(), original)
+        self.assertTrue(native_path(credential).exists())
+        self.assertEqual(native_path(root / RECEIPT).read_bytes(), original)
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             board.store.recover_executions()
-        self.assertFalse(credential.exists())
-        self.assertEqual((root / RECEIPT).read_bytes(), original)
+        self.assertFalse(native_path(credential).exists())
+        self.assertEqual(native_path(root / RECEIPT).read_bytes(), original)
         self.assertFalse(client.get(runId=task['runId'])['selectedAttempt']['issues'])
 
     def test_failed_recovery_commit_retains_exact_receipt_and_credentials(self):
         board, client, task, _, actor = self.claimed()
         root = Path(self.journal(board, actor['attemptId'])['path']).parent
         credential = root / 'agent-credential.json'
-        credential.write_text('private fixture')
+        native_path(credential).write_text('private fixture')
         receipt = {'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
                    'createdAt': board.store.now(), 'report': {'status': 'ok', 'shutdownConfirmed': True}}
         fsync_json(root / RECEIPT, receipt)
-        original = (root / RECEIPT).read_bytes()
+        original = native_path(root / RECEIPT).read_bytes()
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch.object(board.store, 'execution_result', side_effect=RuntimeError('commit failed')):
             self.assertEqual(board.store.recover_executions(), [])
-        self.assertEqual((root / RECEIPT).read_bytes(), original)
-        self.assertTrue(credential.exists())
+        self.assertEqual(native_path(root / RECEIPT).read_bytes(), original)
+        self.assertTrue(native_path(credential).exists())
         self.assertTrue(any(issue['stage'] == 'recovery' for issue in
                             client.get(runId=task['runId'])['selectedAttempt']['issues']))
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             self.assertEqual(len(board.store.recover_executions()), 1)
-        self.assertEqual((root / RECEIPT).read_bytes(), original)
-        self.assertFalse(credential.exists())
+        self.assertEqual(native_path(root / RECEIPT).read_bytes(), original)
+        self.assertFalse(native_path(credential).exists())
 
     def test_unknown_connection_logs_diagnostics_and_deduplicates_a_stable_issue(self):
         from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
@@ -395,11 +396,11 @@ class InterruptionRecoveryTests(BoardTestCase):
         receipt = {**binding, 'createdAt': board.store.now(),
                    'report': {'status': 'invalid-status', 'shutdownConfirmed': True}}
         fsync_json(directory / RECEIPT, receipt)
-        original = (directory / RECEIPT).read_bytes()
+        original = native_path(directory / RECEIPT).read_bytes()
         self.assertEqual(board.store.capacity_report()['totalActive'], 1)
         self.assertFalse(deliver_receipt(client, receipt, directory, nonce=actor['nonce']))
         refusal = {'code': 'INVALID_ARGUMENT', 'message': "status must be 'ok', 'failed' or 'cancelled'"}
-        self.assertFalse((directory / 'result-delivery.json').exists())
+        self.assertFalse(native_path(directory / 'result-delivery.json').exists())
         # A rejection records no stop proof. Until the root is absent it still
         # owns capacity; recovery must not replay its invalid report afterwards.
         with patch.object(processes, 'inspect_process_identity', return_value='alive'):
@@ -418,7 +419,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         self.assertIn(refusal['message'], view['selectedAttempt']['result']['error'])
         self.assertTrue(view['shutdownConfirmed'])
         self.assertEqual(board.store.capacity_report()['totalActive'], 0)
-        self.assertEqual((directory / RECEIPT).read_bytes(), original)
+        self.assertEqual(native_path(directory / RECEIPT).read_bytes(), original)
 
     def test_unchanged_progress_notifies_observer_without_creating_an_event(self):
         board, _, _, _, actor = self.claimed()
@@ -469,7 +470,7 @@ class InterruptionRecoveryTests(BoardTestCase):
 
     def test_missing_journal_settles_without_claiming_native_shutdown(self):
         board, client, task, _, actor = self.claimed()
-        Path(self.journal(board, actor['attemptId'])['path']).unlink()
+        native_path(Path(self.journal(board, actor['attemptId'])['path'])).unlink()
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             self.assertEqual(len(board.store.recover_executions()), 1)
         view = client.get(runId=task['runId'])
@@ -544,9 +545,9 @@ class InterruptionRecoveryTests(BoardTestCase):
                 path = interruption._directory(board.store, attempt) / RECEIPT
                 fsync_json(path, envelope)
                 if name == 'json':
-                    path.write_text(bad, encoding="utf-8", newline="\n")
+                    native_path(path).write_text(bad, encoding="utf-8", newline="\n")
                 later_root = interruption._directory(board.store, later)
-                later_root.mkdir(parents=True)
+                native_path(later_root).mkdir(parents=True)
                 fsync_json(later_root / RECEIPT, {
                     'taskId': good_task['runId'], 'attemptId': good_actor['attemptId'], 'generation': 1,
                     'createdAt': board.store.now(),
@@ -590,10 +591,10 @@ class InterruptionRecoveryTests(BoardTestCase):
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
              patch.object(interruption, '_stop_native', return_value=(False, None)):
             board.store.recover_executions()
-        self.assertTrue((directory / STARTUP).exists())
+        self.assertTrue(native_path(directory / STARTUP).exists())
         # A failed endpoint reap keeps the sole cleanup credential for retry.
-        self.assertTrue((directory / LIVE).exists())
-        self.assertTrue((directory / RECEIPT).exists())
+        self.assertTrue(native_path(directory / LIVE).exists())
+        self.assertTrue(native_path(directory / RECEIPT).exists())
         self.assertFalse(client.get(runId=task['runId'])['shutdownConfirmed'])
 
     def test_reaped_child_before_identity_ack_confirms_no_native_work(self):
@@ -671,14 +672,14 @@ class InterruptionRecoveryTests(BoardTestCase):
                       return_value={'status': 'unverified', 'reason': 'temporary cleanup failure'}):
             self.assertEqual(len(board.store.recover_executions()), 1)
         self.assertEqual(client.get(runId=task['runId'])['attemptState'], 'finished')
-        self.assertFalse((directory / STARTUP).exists())
-        self.assertTrue((directory / LIVE).exists())
+        self.assertFalse(native_path(directory / STARTUP).exists())
+        self.assertTrue(native_path(directory / LIVE).exists())
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch('hey_my_buddy.protocol.execution.cleanup_execution_endpoint',
                       return_value={'status': 'reaped', 'reason': None}) as reap:
             self.assertEqual(board.store.recover_executions(), [])
             reap.assert_called_once()
-        self.assertFalse((directory / LIVE).exists())
+        self.assertFalse(native_path(directory / LIVE).exists())
         self.assertFalse(client.get(runId=task['runId'])['selectedAttempt']['issues'])
         self.assertEqual(board.store.resource_claims(), [])
 
@@ -743,13 +744,13 @@ class InterruptionRecoveryTests(BoardTestCase):
                 patch('hey_my_buddy.protocol.execution.cleanup_execution_endpoint') as reap:
             self.assertEqual(board.store.recover_executions(), [])
             reap.assert_not_called()
-        self.assertTrue((directory / STARTUP).exists())
+        self.assertTrue(native_path(directory / STARTUP).exists())
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                 patch('hey_my_buddy.protocol.execution.cleanup_execution_endpoint',
                       return_value={'status': 'reaped', 'reason': None}):
             self.assertEqual(board.store.recover_executions(), [])
-        self.assertFalse((directory / STARTUP).exists())
-        self.assertFalse((directory / LIVE).exists())
+        self.assertFalse(native_path(directory / STARTUP).exists())
+        self.assertFalse(native_path(directory / LIVE).exists())
         with board.store.db.read() as db:
             self.assertEqual(board.store._attempt_row(db, actor['attemptId'])['cleanup_pending'], 0)
         self.assertEqual(client.result(runId=task['runId'])['result'], {'already': 'committed'})
@@ -771,7 +772,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         board, client, task, _, actor = self.claimed()
         board.store.task_cancel({'runId': task['runId']}, initiator='service')
         journal = self.journal(board, actor['attemptId'])
-        Path(journal['path']).unlink()
+        native_path(Path(journal['path'])).unlink()
         with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):
             self.assertEqual(len(board.store.recover_executions()), 1)
             original = client.result(runId=task['runId'])['selectedAttempt']['result']

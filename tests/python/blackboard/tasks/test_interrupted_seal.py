@@ -11,6 +11,7 @@ from support import BoardTestCase
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 from hey_my_buddy.blackboard.tasks import interruption, workflow, workspace
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import process_identity as processes
 from hey_my_buddy.private_dirs import attempt_root
 
@@ -43,7 +44,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
             "binding": {"taskId": attempt["task_id"], "attemptId": attempt_id,
                         "generation": attempt["generation"]}}
         journal_path = Path(journal["path"])
-        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        native_path(journal_path.parent).mkdir(parents=True, exist_ok=True)
         processes.NativeProcessJournal(journal_path, journal["binding"])
         return board, submitted, claim, Path(claim["turn"]["input"]["executionWorkspace"]["path"])
 
@@ -129,7 +130,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
             attempt = dict(board.store._attempt_row(db, attempt_id))
         journal = processes.native_process_journal_path(
             attempt_root(board.directory, attempt['adapter'], attempt['task_id'], attempt_id), IDENTITY)
-        journal.unlink()
+        native_path(journal).unlink()
         self.assertEqual(self.recover(board)['interrupted'], 1)
         with board.store.db.read() as db:
             original = json.loads(board.store._attempt_row(db, attempt_id)['result_json'])
@@ -160,9 +161,9 @@ class CommandJournalTests(BoardTestCase):
                    "generation": attempt["generation"]}
         path = processes.native_process_journal_path(
             attempt_root(self.directory, "command", attempt["task_id"], attempt["attempt_id"]), IDENTITY)
-        path.parent.mkdir(parents=True)
-        path.write_text(json.dumps({"binding": binding, "pending": [],
-                                    "identities": [native]}), encoding="utf-8", newline="\n")
+        native_path(path.parent).mkdir(parents=True)
+        native_path(path).write_text(json.dumps({"binding": binding, "pending": [],
+                                                "identities": [native]}), encoding="utf-8", newline="\n")
         with patch.object(processes, "stop_orphan_process", return_value="unknown"):
             self.assertEqual(interruption._stop_native(board, attempt, IDENTITY, "identity-absent"),
                              (False, None))

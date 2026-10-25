@@ -192,7 +192,7 @@ class DeclaredManifestTests(unittest.TestCase):
     """The manifest is the only layout declaration; nothing is guessed."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-runtime-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-runtime-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         base = Path(self.temp.name).resolve()
         self.root = base / "project"
@@ -378,7 +378,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
     """A runtime is published only from declared assets and keeps its own paths."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-runtime-build-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-runtime-build-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         base = Path(self.temp.name).resolve()
         self.root = base / "project"
@@ -842,7 +842,7 @@ class CheckoutRuntimeTests(unittest.TestCase):
     """The real checkout declares exactly the current resources and identity."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-runtime-real-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-runtime-real-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.runtime_root = Path(self.temp.name) / "runtime"
         self.enterContext(private_runtime_root(self.runtime_root))

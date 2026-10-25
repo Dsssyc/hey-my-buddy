@@ -6,7 +6,7 @@ attempt-private session path; the directory is not a configuration home.
 from __future__ import annotations
 
 import math
-import tempfile
+from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -15,6 +15,7 @@ from pathlib import Path
 from hey_my_buddy.buddy.harnesses.dsh.native_run import execution_deadline, run
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
 from hey_my_buddy.protocol.schemas import normalize_spec
+from hey_my_buddy.paths import native_path
 
 from buddy.harnesses.dsh.test_native_run import NativeRunCase
 
@@ -22,7 +23,7 @@ from buddy.harnesses.dsh.test_native_run import NativeRunCase
 class DshWorkspaceDefaultTests(unittest.TestCase):
     def test_the_removed_workspace_switch_is_rejected_on_submission(self):
         from hey_my_buddy.errors import BoardError
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-dsh-spec-") as root:
+        with TemporaryDirectory(prefix="hey-my-buddy-dsh-spec-") as root:
             common = {"requestId": "dsh-default", "task": "bounded task", "cwd": root}
             # Every DSH run is execution-private now: the grouping switch is an
             # unknown submit field whatever harness or value carries it.
@@ -60,9 +61,9 @@ class StorageSplitTests(NativeRunCase):
         self.assertTrue(list((self.root / "sessions").glob(f"{session}.v3.jsonl*")),
                         "the Worker rollout lives under the task's native-root sessions dir")
         self.assertTrue((self.root / "sessions" / f"{session}.fake-session.json").is_file())
-        self.assertFalse((invocation / "dsh-home").exists())
-        self.assertTrue((invocation / "dsh-launch-patch.json").is_file())
-        self.assertTrue(Path(mount.bridge_config_path).is_file())
+        self.assertFalse(native_path(invocation / "dsh-home").exists())
+        self.assertTrue(native_path(invocation / "dsh-launch-patch.json").is_file())
+        self.assertTrue(native_path(Path(mount.bridge_config_path)).is_file())
         self.assertFalse((self.root / "dsh-home").exists())
 
     def test_a_fast_run_keeps_its_original_attempt_private_session_path(self):

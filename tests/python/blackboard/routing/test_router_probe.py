@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
+from private_acl import assert_private_path
 
 PROBE_PATH = Path(__file__).resolve().parents[3] / "probes" / "router_readonly.py"
 spec = importlib.util.spec_from_file_location("router_probe", PROBE_PATH)
@@ -253,8 +254,8 @@ class RouterProbeTests(unittest.TestCase):
                                  {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8, "bytesRead": 131072})
                 self.assertEqual(report["inputHashesBefore"], report["inputHashesAfter"])
                 self.assertEqual(report["sentinelBefore"], report["sentinelAfter"])
-                self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
-                self.assertEqual((self.root / "report.json").stat().st_mode & 0o777, 0o600)
+                assert_private_path(self, self.root, 0o700)
+                assert_private_path(self, self.root / "report.json", 0o600)
                 marker = (self.root / "frozen/marker.txt").read_text(encoding="utf-8").strip()
                 sentinel = next(self.root.glob("outside-*.txt"))
                 self.assertNotIn(marker, report["request"]["prompt"])

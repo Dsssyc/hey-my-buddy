@@ -13,6 +13,7 @@ import json
 import math
 import os
 import tempfile
+from temporary import TemporaryDirectory
 import time
 import unittest
 from pathlib import Path
@@ -36,8 +37,8 @@ class CodexAdapterTests(unittest.TestCase):
         developer_source = mock.patch.dict(os.environ, {'HMB_DEV_SOURCE': '1'})
         developer_source.start()
         self.addCleanup(developer_source.stop)
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-test-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-test-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "state").mkdir(mode=directory_mode())
@@ -49,7 +50,7 @@ class CodexAdapterTests(unittest.TestCase):
         self.environment = {key: value for key, value in os.environ.items()
                             if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         self.environment.update(HMB_CONSOLE_PORT="0", HMB_CODEX_FIXTURE_STATE=str(self.root / "fixture.json"),
-                                CODEX_HOME=str(self.home), HOME=str(self.root),
+                                CODEX_HOME=str(self.home), HOME=str(self.root), USERPROFILE=str(self.root),
                                 HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                                 HMB_DEV_SOURCE="1",
                                 PYTHONPATH=str(SOURCE) + os.pathsep + self.environment.get("PYTHONPATH", ""))

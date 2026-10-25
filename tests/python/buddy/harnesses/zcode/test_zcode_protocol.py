@@ -7,7 +7,7 @@ from pathlib import Path
 import queue
 import subprocess
 import sys
-import tempfile
+from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -55,7 +55,7 @@ class ActivityReasonTests(unittest.TestCase):
 
 class ReceiptTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="zcode-receipt-attention-")
+        temporary = TemporaryDirectory(prefix="zcode-receipt-attention-")
         self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,
@@ -322,7 +322,7 @@ class ReceiptSeamTests(unittest.TestCase):
     """
 
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="zcode-seam-attention-")
+        temporary = TemporaryDirectory(prefix="zcode-seam-attention-")
         self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,

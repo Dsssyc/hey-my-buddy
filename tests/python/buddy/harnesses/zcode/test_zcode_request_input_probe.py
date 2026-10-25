@@ -19,7 +19,7 @@ import io
 import json
 import os
 import sys
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -367,7 +367,7 @@ class FakeServerLineReaderTests(unittest.TestCase):
 
 class ProbeFixtureCase(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-input-probe-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-input-probe-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.probe = load_probe()

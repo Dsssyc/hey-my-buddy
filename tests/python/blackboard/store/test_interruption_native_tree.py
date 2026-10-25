@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from blackboard.store import test_interruption_recovery as recovery_fixture
 from hey_my_buddy.blackboard.tasks import interruption
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import process_identity as processes
 from hey_my_buddy.protocol.execution import fsync_json
 
@@ -44,7 +45,7 @@ class NativeTreeTests(BoardTestCase):
         journal_path = processes.native_process_journal_path(interruption._directory(board.store, attempt),
                                                              WINDOWS_IDENTITY)
         if journal_state != 'missing':
-            Path(journal_path).parent.mkdir(parents=True, exist_ok=True)
+            native_path(Path(journal_path).parent).mkdir(parents=True, exist_ok=True)
             fsync_json(Path(journal_path), {'binding': {'taskId': task['runId'], 'attemptId': actor['attemptId'],
                                                         'generation': 1},
                                             'pending': [] if journal_state == 'empty' else ['a' * 32],
@@ -56,7 +57,7 @@ class NativeTreeTests(BoardTestCase):
             with self.subTest(journal_state=journal_state):
                 board, client, task, actor, journal_path = self.windows_attempt(journal_state=journal_state)
                 # 'missing' is a truly absent file, not an empty or pending one.
-                self.assertEqual(journal_path.exists(), journal_state != 'missing')
+                self.assertEqual(native_path(journal_path).exists(), journal_state != 'missing')
                 with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'), \
                         patch.object(processes, 'stop_orphan_process') as stop:
                     board.store.recover_executions()

@@ -7,6 +7,7 @@ from unittest.mock import patch
 from admission import admit_execution
 from support import BoardTestCase, settle_fixture_receipt
 from hey_my_buddy.blackboard.tasks import interruption
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import process_identity as processes
 from blackboard.store.test_interruption_recovery import IDENTITY
 
@@ -81,7 +82,7 @@ class InquirySettlementTests(BoardTestCase):
             stored = board.store._attempt_row(connection, attempt["attemptId"])
             directory = interruption._directory(board.store, stored)
         journal = processes.native_process_journal_path(directory, IDENTITY)
-        Path(journal).parent.mkdir(parents=True, exist_ok=True)
+        native_path(Path(journal).parent).mkdir(parents=True, exist_ok=True)
         processes.NativeProcessJournal(Path(journal), {"taskId": task["runId"],
             "attemptId": attempt["attemptId"], "generation": attempt["generation"]})
         with patch.object(processes, "inspect_process_identity", return_value="identity-absent"):

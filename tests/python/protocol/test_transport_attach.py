@@ -461,7 +461,7 @@ class TrustBoundaryTests(AttachFixture):
         root-owned /tmp) is therefore unswappable and must be trusted, so a later
         attach reuses the running service instead of cold-starting again.
         """
-        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir())))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         nested = shared / "state"
@@ -477,7 +477,7 @@ class TrustBoundaryTests(AttachFixture):
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_state_directory_under_a_non_sticky_shared_parent_is_not_trusted(self):
         """Without the sticky bit another user can rename the entry, so refuse it."""
-        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir())))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777)
         nested = shared / "state"
@@ -492,7 +492,7 @@ class TrustBoundaryTests(AttachFixture):
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_sticky_shared_parent_owned_by_a_foreign_user_is_not_trusted(self):
         """A foreign owner of the sticky parent could still rename this user's entry."""
-        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir())))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         nested = shared / "state"
@@ -718,7 +718,7 @@ class ColdStartTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_existing_service_under_a_shared_sticky_parent_attaches_read_only(self):
         """Regression: a service under a root-owned sticky /tmp is reused, not re-spawned."""
-        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir())))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         directory = shared / "state"
@@ -865,7 +865,7 @@ class ColdStartTests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "POSIX owner, mode and ancestor policy")
     def test_cold_start_and_later_attach_share_the_same_trust_rule_under_a_shared_parent(self):
         """A /tmp-style state dir is trusted by cold start and by every later attach."""
-        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp")))
+        shared = Path(tempfile.mkdtemp(prefix="hey-my-buddy-shared-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir())))
         self.addCleanup(lambda: shutil.rmtree(shared, ignore_errors=True))
         shared.chmod(0o777 | stat.S_ISVTX)
         directory = shared / "state"

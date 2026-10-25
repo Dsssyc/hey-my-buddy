@@ -7,7 +7,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
-import tempfile
+from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -119,7 +119,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
 
     @contextmanager
     def controlled_group(self, mode, *, exit_code=0):
-        with tempfile.TemporaryDirectory() as directory:
+        with TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             script = root / 'group.py'
             script.write_text(_GROUP_FIXTURE, encoding="utf-8", newline="\n")
@@ -202,7 +202,7 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                 self.clean_group(process)
 
     def test_short_lived_background_child_preserves_success(self):
-        with tempfile.TemporaryDirectory() as directory, self.capture_probe() as processes:
+        with TemporaryDirectory() as directory, self.capture_probe() as processes:
             result = discovery.probe(
                 ["/bin/sh", "-c", "sleep 0.2 >/dev/null 2>&1 & echo 1.2.3"],
                 {"PATH": "/usr/bin:/bin", "HOME": directory})

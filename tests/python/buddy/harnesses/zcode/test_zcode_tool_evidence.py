@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+from temporary import TemporaryDirectory
 import textwrap
 import time
 import unittest
@@ -217,7 +217,7 @@ class ProjectionTests(unittest.TestCase):
     """The fixed projection of real tool.updated frames into shared facts."""
 
     def setUp(self):
-        private = tempfile.TemporaryDirectory()
+        private = TemporaryDirectory()
         self.addCleanup(private.cleanup)
         self.state_dir = Path(private.name) / "state"
 
@@ -489,7 +489,7 @@ class ProjectionOrderingTests(unittest.TestCase):
     driver's own protocol checks run — the ordering the unified run preserves."""
 
     def setUp(self):
-        private = tempfile.TemporaryDirectory()
+        private = TemporaryDirectory()
         self.addCleanup(private.cleanup)
         self.state_dir = Path(private.name) / "state"
 
@@ -560,7 +560,7 @@ class FakeAppServerTests(unittest.TestCase):
     """The shared fake ZCode app-server harness (migrated from test_no_tool_zcode)."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-evidence-")
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-zcode-evidence-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "empty"

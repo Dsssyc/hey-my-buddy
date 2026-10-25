@@ -442,7 +442,6 @@ class InProcessBoard:
 
     def close(self) -> None:
         self._resources.close()
-        self.store.db.path.unlink(missing_ok=True)
 
 
 class BoardTestCase(unittest.TestCase):

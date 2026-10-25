@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from temporary import TemporaryDirectory
 import unittest
 import uuid
 from pathlib import Path
@@ -114,7 +115,7 @@ def settled_stream():
 
 class ProjectionTests(unittest.TestCase):
     def test_collector_uses_its_explicit_state_root(self):
-        with tempfile.TemporaryDirectory(prefix="claude-evidence-root-") as directory:
+        with TemporaryDirectory(prefix="claude-evidence-root-") as directory:
             state_dir = Path(directory) / "state"
             self.assertNotEqual(state_dir, Path(os.environ["HMB_STATE_DIR"]))
             collector = ReadOnlyToolEvidence(dict(BINDING), state_dir=state_dir)
@@ -515,8 +516,8 @@ class StructuredDeliveryProjectionTests(unittest.TestCase):
 
 class RunnerReceiptTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-claude-evidence-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-claude-evidence-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "checkout"

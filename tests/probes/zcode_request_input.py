@@ -53,6 +53,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from hey_my_buddy.buddy.roles.turn_io import canonical_json  # noqa: E402
 from hey_my_buddy.buddy.harnesses.zcode.config import cli_command, load_runtime_preferences, provider_paths  # noqa: E402
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeConnection, NativeError  # noqa: E402
+from hey_my_buddy.private_dirs import open_regular_fd  # noqa: E402
 
 #: Inherited runtime/worker/agent variables that must never reach a probe child,
 #: matching the AGENTS.md test-subprocess rule (plus every other HMB_* pin).
@@ -322,8 +323,9 @@ def run_probe(root: Path, *, cwd: Path, provider: str | None, model: str | None,
                     "cliCommand": [part if "zcode.cjs" not in part else "…/zcode.cjs" for part in command],
                     "cwd": str(cwd), "phases": [], "status": "error"}
     cancelled = threading.Event()
-    stderr_fd = os.open(root / "native.stderr.log", os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    stderr_fd = open_regular_fd(root / "native.stderr.log", os.O_WRONLY | os.O_CREAT)
     try:
+        os.ftruncate(stderr_fd, 0)
         process = subprocess.Popen([*command, "app-server", "--cwd", str(cwd)], env=environment, cwd=str(cwd),
                                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr_fd,
                                    start_new_session=True, close_fds=True)

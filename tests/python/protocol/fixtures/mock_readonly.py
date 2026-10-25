@@ -11,13 +11,14 @@ from unittest.mock import patch
 
 from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
 from hey_my_buddy.buddy.roles.router_input import verify as verify_frozen_input
+from hey_my_buddy.paths import native_path
 
 
 def prepare_input(manifest, directory, *, deadline):
     from hey_my_buddy.buddy.roles.router_input import digest
     root = directory / "mock-frozen-input"
-    root.mkdir(mode=0o700, parents=True)
-    (root / "input.txt").write_text("private service-protocol fixture\n", encoding="utf-8", newline="\n")
+    native_path(root).mkdir(mode=0o700, parents=True)
+    native_path(root / "input.txt").write_text("private service-protocol fixture\n", encoding="utf-8", newline="\n")
     return root, digest(root, deadline=deadline)
 
 
@@ -122,7 +123,7 @@ def start(harness, context, request, fixture, options):
         handle.thread.start()
         return handle
     if mode == "input_changed":
-        (Path(control["cwd"]) / "input.txt").write_text("mutated input\n", encoding="utf-8", newline="\n")
+        native_path(Path(control["cwd"]) / "input.txt").write_text("mutated input\n", encoding="utf-8", newline="\n")
     if mode == "malformed":
         handle.result = RunResult(
             identity=built_request.identity, harness=harness,

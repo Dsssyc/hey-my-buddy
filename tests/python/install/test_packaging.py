@@ -86,7 +86,7 @@ class CwdIndependentCliTests(unittest.TestCase):
     """The single launcher reaches the same CLI from any working directory."""
 
     def setUp(self):
-        base = Path(tempfile.mkdtemp(prefix="hey-my-buddy-launch-", dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))).resolve()
+        base = Path(tempfile.mkdtemp(prefix="hey-my-buddy-launch-", dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))).resolve()
         self.base = base
         self.addCleanup(self.cleanup_private)
         self.state = base / "state"

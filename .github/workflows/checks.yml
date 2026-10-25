@@ -229,6 +229,15 @@ jobs:
       # Flush each completed file even if another file hangs until the timeout.
       PYTHONUNBUFFERED: '1'
     steps:
+      - name: Use the user temporary directory on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $temporary = Join-Path $env:LOCALAPPDATA 'Temp'
+          New-Item -ItemType Directory -Force -Path $temporary | Out-Null
+          "TEMP=$temporary" >> $env:GITHUB_ENV
+          "TMP=$temporary" >> $env:GITHUB_ENV
+          "HMB_CHECKS_TMPDIR=$temporary" >> $env:GITHUB_ENV
       - name: Prepare evidence directory
         run: |
           mkdir -p "$RUNNER_TEMP/logs"
@@ -264,7 +273,7 @@ jobs:
         timeout-minutes: 25
         shell: python {0}
         env:
-          HMB_CHECKS_TMPDIR: ${{ runner.temp }}
+          HMB_CHECKS_TMPDIR: ${{ env.HMB_CHECKS_TMPDIR || runner.temp }}
         run: |
           import json
           import os
@@ -350,7 +359,7 @@ jobs:
         with:
           name: retained-root-logs-${{ matrix.os }}-shard-${{ matrix.shard }}
           path: |
-            ${{ runner.temp }}/hey-my-buddy-checks-*/teardown-evidence.json
-            ${{ runner.temp }}/hey-my-buddy-checks-*/**/*.log
+            ${{ env.HMB_CHECKS_TMPDIR || runner.temp }}/hey-my-buddy-checks-*/teardown-evidence.json
+            ${{ env.HMB_CHECKS_TMPDIR || runner.temp }}/hey-my-buddy-checks-*/**/*.log
           include-hidden-files: true
           if-no-files-found: error

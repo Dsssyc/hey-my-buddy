@@ -25,6 +25,7 @@ from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
 
 from hey_my_buddy.protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records, normalize_inquiry_record
 from hey_my_buddy.private_dirs import context_root
+from hey_my_buddy.paths import native_path
 
 
 class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
@@ -191,7 +192,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         # the race must end unavailable without any new native work.
         self.wait_file(context, "finish-accepted")
         self.ask(handle, "q-late", "Too late?", channel)
-        next(context_root(context, "zcode").glob("run-*/native-logs")).joinpath("late-asked").touch()
+        next(native_path(context_root(context, "zcode")).glob("run-*/native-logs")).joinpath("late-asked").touch()
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())

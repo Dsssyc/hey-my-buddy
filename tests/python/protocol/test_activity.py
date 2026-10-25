@@ -8,6 +8,7 @@ from __future__ import annotations
 from admission import admit_execution
 
 import json
+import sys
 import os
 import time
 import threading
@@ -177,7 +178,7 @@ class ActivityProjection(BoardTestCase):
     def post_activity(client, identity: dict, data: dict | None = None, *, message: str = "native activity") -> dict:
         return client.progress(identity["attemptId"], identity["generation"], identity["nonce"], message, data=data)
 
-    def claimed_attempt(self, board, *, request_id: str = "activity-1", argv=("/bin/sleep", "20")):
+    def claimed_attempt(self, board, *, request_id: str = "activity-1", argv=(sys.executable, "-c", "import time; time.sleep(20)")):
         client = board.client()
         cwd = self.workdir()
         task = board.submit_execution(
@@ -379,7 +380,7 @@ class ActivityProjection(BoardTestCase):
 class ExecutionActivityForwarding(BoardTestCase):
     """Execution reads its own endpoint locally and forwards to authoritative state."""
 
-    def live_attempt(self, *, lease_seconds: int = 15, argv=("/bin/sleep", "30"), expected_seconds: int = 120):
+    def live_attempt(self, *, lease_seconds: int = 15, argv=(sys.executable, "-c", "import time; time.sleep(30)"), expected_seconds: int = 120):
         board = self.board(lease_seconds=lease_seconds)
         client = board.client()
         cwd = self.workdir()

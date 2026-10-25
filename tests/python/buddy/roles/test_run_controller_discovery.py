@@ -48,14 +48,14 @@ class ControllerDiscoveryStopTests(unittest.TestCase):
 class PrivateControllerDiscoveryTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='hey-my-buddy-controller-launch-failure-',
-                                                dir=os.environ.get('HMB_CHECKS_TMPDIR', '/tmp'))
+                                                dir=os.environ.get('HMB_CHECKS_TMPDIR', tempfile.gettempdir()))
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 
     def discover(self):
         environment = {key: value for key, value in os.environ.items()
                        if key in ('PYTHONPATH', 'LANG', 'LC_ALL', 'SYSTEMROOT', 'WINDIR')}
-        environment.update(HOME=str(self.root), PATH=str(self.root / 'empty-path'), HMB_DEV_SOURCE='1',
+        environment.update(HOME=str(self.root), USERPROFILE=str(self.root), PATH=str(self.root / 'empty-path'), HMB_DEV_SOURCE='1',
                            HMB_STATE_DIR=str(self.root / 'state'), HMB_RUNTIME_ROOT=str(self.root / 'runtime'),
                            TMPDIR=str(self.root))
         record = {'harness': 'codex', 'status': 'unavailable', 'command': [],
@@ -248,14 +248,14 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
 
     def test_path_without_harness_keeps_no_child_fact_through_actual_controller(self):
         with tempfile.TemporaryDirectory(prefix='hey-my-buddy-controller-no-harness-',
-                                         dir=os.environ.get('HMB_CHECKS_TMPDIR', '/tmp')) as temporary:
+                                         dir=os.environ.get('HMB_CHECKS_TMPDIR', tempfile.gettempdir())) as temporary:
             root = Path(temporary)
             empty_path = root / 'empty-path'
             empty_path.mkdir()
             self.assertEqual(list(empty_path.iterdir()), [])
             environment = {key: value for key, value in os.environ.items()
                            if key in ('PYTHONPATH', 'LANG', 'LC_ALL', 'SYSTEMROOT', 'WINDIR')}
-            environment.update(HOME=str(root), PATH=str(empty_path), HMB_DEV_SOURCE='1',
+            environment.update(HOME=str(root), USERPROFILE=str(root), PATH=str(empty_path), HMB_DEV_SOURCE='1',
                                HMB_STATE_DIR=str(root / 'state'), HMB_RUNTIME_ROOT=str(root / 'runtime'),
                                TMPDIR=str(root))
             record = {'harness': 'codex', 'status': 'unavailable', 'command': [],

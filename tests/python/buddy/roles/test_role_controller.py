@@ -118,7 +118,7 @@ class RunSeamRegistryTests(unittest.TestCase):
 class RunCallPointTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-roles-seam-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.request = run_request(self.root)
@@ -306,7 +306,7 @@ class RouterCallPointTests(unittest.TestCase):
         registrations.start()
         self.addCleanup(registrations.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-roles-router-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
 

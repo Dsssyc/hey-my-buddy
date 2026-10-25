@@ -2,7 +2,7 @@
 import json
 import os
 from pathlib import Path
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 from buddy.harnesses.fixture_selection import select_fixture
@@ -20,7 +20,7 @@ FIXTURE = Path(__file__).parent / "fixtures/delete_sessions_codex.py"
 
 class DeleteSessionTests(unittest.TestCase):
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(dir=os.environ.get("HMB_CHECKS_TMPDIR"))
+        temporary = TemporaryDirectory(dir=os.environ.get("HMB_CHECKS_TMPDIR"))
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         (self.root / "codex-home").mkdir()
@@ -28,7 +28,7 @@ class DeleteSessionTests(unittest.TestCase):
         environment = {key: value for key, value in os.environ.items()
                        if not key.startswith("HMB_") and key not in
                        ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "OPENAI_API_KEY", "CODEX_API_KEY")}
-        environment.update(HOME=str(self.root), CODEX_HOME=str(self.root / "codex-home"),
+        environment.update(HOME=str(self.root), USERPROFILE=str(self.root), CODEX_HOME=str(self.root / "codex-home"),
                            HMB_DEV_SOURCE="1", HMB_STATE_DIR=str(self.root / "state"),
                            HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                            HMB_CODEX_FIXTURE_STATE=str(self.trace))

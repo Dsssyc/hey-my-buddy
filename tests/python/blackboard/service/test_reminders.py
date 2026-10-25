@@ -209,7 +209,7 @@ class ReminderPrivateServiceTests(BoardTestCase):
         private_home = self.directory / "native-home"
         private_home.mkdir()
         entry = make_fake_executable(self.directory / "harness-bin", "dsh", source=wrapper)
-        env = {"HOME": str(private_home), "HMB_DSH_CLI": str(entry)}
+        env = {"HOME": str(private_home), "USERPROFILE": str(private_home), "HMB_DSH_CLI": str(entry)}
         with self.daemon(env=env):
             code, submitted = self.cli("submit", json.dumps({
                 "requestId": "native-reminder-live", "hostId": "reminder-host", "task": "Observe native activity",

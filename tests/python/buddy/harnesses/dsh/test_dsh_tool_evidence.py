@@ -18,7 +18,7 @@ names through the real root-turn tracker.
 """
 from __future__ import annotations
 import json
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 
@@ -47,7 +47,7 @@ def update(session_id="session-1", call_id="call-1", name="read", kind="tool_cal
 
 class DshToolFactsTests(unittest.TestCase):
     def setUp(self):
-        private = tempfile.TemporaryDirectory()
+        private = TemporaryDirectory()
         self.addCleanup(private.cleanup)
         self.state_dir = Path(private.name) / "state"
 
@@ -183,7 +183,7 @@ class DshReceiptSeamTests(unittest.TestCase):
     """
 
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="dsh-receipt-attention-")
+        temporary = TemporaryDirectory(prefix="dsh-receipt-attention-")
         self.addCleanup(temporary.cleanup)
         self.bridge = {"identity": {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "logical"},
                        "inputSha256": "a" * 64, "key": "b" * 64,

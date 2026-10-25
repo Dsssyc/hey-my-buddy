@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -43,7 +43,7 @@ class DshNoToolTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-no-tool-dsh-")
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-no-tool-dsh-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "state").mkdir(mode=0o700)
@@ -60,7 +60,7 @@ class DshNoToolTests(unittest.TestCase):
         # must carry this test's private one, like the in-process cases pin it,
         # so the agent's forced-private-home tripwire holds off the invoking shell.
         (self.root / "home").mkdir(mode=0o700)
-        self.environment.update(HOME=str(self.root / "home"),
+        self.environment.update(HOME=str(self.root / "home"), USERPROFILE=str(self.root / "home"),
                                 DSH_HOME=str(self.root / "home" / ".dsh"),
                                 HMB_STATE_DIR=str(self.root / "state"),
                                 HMB_RUNTIME_ROOT=str(self.root / "runtime"),

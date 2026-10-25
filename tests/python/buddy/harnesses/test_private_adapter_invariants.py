@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
+from temporary import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 import uuid
@@ -30,6 +30,7 @@ from hey_my_buddy.protocol.owned_process import owned_popen
 from hey_my_buddy.protocol.process_handle import ProcessHandle
 from hey_my_buddy.buddy.runtime.receipts import receipt_directory
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 from hey_my_buddy.buddy.roles import structured_call as read_only, turn_io
 from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles.controller import FastPreparation, ReviewPreparation, start_router_preparation
@@ -47,7 +48,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
     """Evidence keeps frozen bindings and publication never follows a leaf link."""
 
     def setUp(self):
-        temporary = tempfile.TemporaryDirectory(prefix="no-tool-evidence-")
+        temporary = TemporaryDirectory(prefix="no-tool-evidence-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.cwd = self.root / "empty"
@@ -166,7 +167,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         if harness is not None:
             state = Path(context.environment["HMB_STATE_DIR"])
             native = native_root(state, harness, context.task_id)
-            native_names = {path.name for path in native.rglob("*") if path.is_file()}
+            native_names = {path.name for path in native_path(native).rglob("*") if path.is_file()}
             self.assertFalse(evidence_names & native_names,
                              "native state files must stay out of execution evidence")
 
@@ -184,15 +185,15 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assertEqual(outcome.status, "ok", outcome.to_report())
                 self.assertTrue(outcome.shutdown_confirmed)
                 private = context_root(context, harness)
-                self.assertTrue((private / "agent-credential.json").is_file())
+                self.assertTrue(native_path(private / "agent-credential.json").is_file())
                 cleanup_attempt_credentials(state, harness, context.task_id, context.attempt_id)
-                self.assertFalse((private / "agent-credential.json").exists())
+                self.assertFalse(native_path(private / "agent-credential.json").exists())
                 if harness == "zcode":
-                    self.assertFalse((private / "personal-provider.json").exists())
-                    self.assertFalse((private / "finish-bridge.json").exists())
-                    self.assertFalse((private / "inquiry.json").exists())
+                    self.assertFalse(native_path(private / "personal-provider.json").exists())
+                    self.assertFalse(native_path(private / "finish-bridge.json").exists())
+                    self.assertFalse(native_path(private / "inquiry.json").exists())
                 if harness in {"codex", "zcode"}:
-                    self.assertTrue(any(native_root(state, harness, context.task_id).glob("*.json")))
+                    self.assertTrue(any(native_path(native_root(state, harness, context.task_id)).glob("*.json")))
                 self.assert_partition(context, harness)
 
     def test_mock_dsh_fast_router_and_command_use_private_attempt_directories(self):
@@ -232,7 +233,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 fixture = self.fixture(kind)
                 if adapter.name == "codex":
                     environment = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
-                    environment.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
+                    environment.update(HOME=str(fixture.root), USERPROFILE=str(fixture.root), CODEX_HOME=str(fixture.home),
                         PYTHONPATH=os.pathsep.join((str(Path(__file__).parents[4] / "src"), os.environ.get('PYTHONPATH', ''))), HMB_DEV_SOURCE="1",
                         HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
                         HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
@@ -282,7 +283,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
         self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
         control = handle.role_run_control
         self.assertTrue(Path(control["nativeRoot"]).is_relative_to(context_root(context, "codex")))
-        self.assertFalse((context_root(context, "codex") / "review-native/codex-home/auth.json").exists())
+        self.assertFalse(native_path(context_root(context, "codex") / "review-native/codex-home/auth.json").exists())
         cleanup_attempt_credentials(Path(context.environment["HMB_STATE_DIR"]), "codex", context.task_id, context.attempt_id)
         self.assert_partition(context, "codex")
 
@@ -303,7 +304,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     spec = {"provider": "fixture-api", "model": "fixture-model", "effort": "low"}
                 else:
                     env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
-                    env.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
+                    env.update(HOME=str(fixture.root), USERPROFILE=str(fixture.root), CODEX_HOME=str(fixture.home),
                         PYTHONPATH=os.pathsep.join((str(Path(__file__).parents[4] / "src"), os.environ.get('PYTHONPATH', ''))), HMB_DEV_SOURCE="1",
                         HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
                         HMB_STATE_DIR=str(fixture.root / "state"), HMB_RUNTIME_ROOT=str(fixture.root / "runtime"))
@@ -347,7 +348,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                              "model": "fixture-model", "effort": "low"}
                 else:
                     env = {key: os.environ[key] for key in ("PATH", "TMPDIR", "LANG", "USER", "LOGNAME") if key in os.environ}
-                    env.update(HOME=str(fixture.root), CODEX_HOME=str(fixture.home),
+                    env.update(HOME=str(fixture.root), USERPROFILE=str(fixture.root), CODEX_HOME=str(fixture.home),
                         PYTHONPATH=os.pathsep.join((str(Path(__file__).parents[4] / "src"), os.environ.get("PYTHONPATH", ""))),
                         HMB_DEV_SOURCE="1",
                         HMB_CODEX_FIXTURE_STATE=str(fixture.root / "trace.json"),
@@ -467,16 +468,16 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 self.assertNotIn("executionLiveFile", control)
                 self.assertIsNone(handle.live_endpoint)
                 self.assertEqual(Path(control["nativeRoot"]), native_root(state, "dsh", context.task_id))
-                self.assertTrue((Path(control["nativeRoot"]) / "sessions").is_dir())
+                self.assertTrue(native_path(Path(control["nativeRoot"]) / "sessions").is_dir())
                 request = handle.request
-                self.assertFalse((Path(request.private_state.invocation_root) / "dsh-home").exists())
+                self.assertFalse(native_path(Path(request.private_state.invocation_root) / "dsh-home").exists())
                 self.assertTrue(Path(request.private_state.invocation_root).is_relative_to(context_root(context, "dsh")))
-                records = list((Path(control["nativeRoot"]) / "sessions").rglob("*.v3.jsonl.zstd"))
+                records = list(native_path(Path(control["nativeRoot"]) / "sessions").rglob("*.v3.jsonl.zstd"))
                 self.assertTrue(records, "the native rollout is in the shared task root")
                 before_cleanup = {path: path.read_bytes() for path in records}
                 cleanup_attempt_credentials(state, "dsh", "task", context.attempt_id)
                 self.assertEqual({path: path.read_bytes() for path in records}, before_cleanup)
-                self.assertFalse((context_root(context, "dsh") / "inquiry.json").exists())
+                self.assertFalse(native_path(context_root(context, "dsh") / "inquiry.json").exists())
                 self.assertIsNotNone(handle.result)
                 self.assert_partition(context, "dsh")
 

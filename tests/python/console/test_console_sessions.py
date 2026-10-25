@@ -239,11 +239,23 @@ class ConsoleForegroundTests(ConsoleTestCase):
             task = self.submit_execution(**{
                 'requestId': 'console-wait-owned-task', 'task': 'outlive the browser',
                 'cwd': str(self.workdir()), 'adapter': 'command',
-                'argv': ['/bin/sleep', '30'], 'expectedSeconds': 1800,
+                'argv': [sys.executable, '-c', 'import time; time.sleep(30)'], 'expectedSeconds': 1800,
             })["task"]
-            child = subprocess.Popen([sys.executable, '-m', 'hey_my_buddy.cli.main', 'console',
-                '{"browser":false,"wait":true}'], env=_child_environment(self.directory),
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            command = [sys.executable, '-m', 'hey_my_buddy.cli.main', 'console',
+                       '{"browser":false,"wait":true}']
+            if os.name == 'nt':
+                # A separate console-control event cannot reliably reach the child's
+                # console on Windows CI. Inject KeyboardInterrupt into its main
+                # thread, then verify the same fenced close and preserved work.
+                command = [sys.executable, '-c',
+                           'import _thread, runpy, sys, threading\n'
+                           'threading.Thread(target=lambda: (sys.stdin.readline(), _thread.interrupt_main()), daemon=True).start()\n'
+                           'sys.argv = ["hey_my_buddy.cli.main", *sys.argv[1:]]\n'
+                           'runpy.run_module("hey_my_buddy.cli.main", run_name="__main__")\n',
+                           'console', '{"browser":false,"wait":true}']
+            child = subprocess.Popen(command, env=_child_environment(self.directory),
+                stdin=subprocess.PIPE if os.name == 'nt' else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, start_new_session=True, encoding="utf-8")
             notices = []
             reported = threading.Event()
@@ -262,7 +274,13 @@ class ConsoleForegroundTests(ConsoleTestCase):
                 self.assertTrue(notice.startswith('hey-my-buddy console: the browser was not opened; entry URL: '))
                 browser = Browser(notice.partition('entry URL: ')[2].strip())
                 self.assertTrue(browser.bootstrap()['consoleSession']['id'])
-                child.send_signal(signal.SIGINT)
+                if os.name == 'nt':
+                    child.stdin.write('interrupt\n')
+                    child.stdin.flush()
+                    child.stdin.close()
+                    child.stdin = None
+                else:
+                    child.send_signal(signal.SIGINT)
                 self.assertTrue(wait_for(
                     lambda: not self.cli('console', '{"action":"status"}')[1]['running'], 30),
                     'the foreground CLI did not close its console after the interrupt')

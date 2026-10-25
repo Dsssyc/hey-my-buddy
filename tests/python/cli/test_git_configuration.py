@@ -50,7 +50,7 @@ class GitConfigurationTests(unittest.TestCase):
             directory = Path(temporary).resolve()
             home = directory / "selected home 用户"
             home.mkdir()
-            environment = _child_environment(directory, {"HOME": str(home)})
+            environment = _child_environment(directory, {"HOME": str(home), "USERPROFILE": str(home)})
             self.assert_maintenance_disabled(environment)
 
 

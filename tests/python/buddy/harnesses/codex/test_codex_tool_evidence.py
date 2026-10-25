@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from buddy.harnesses.fixture_selection import select_fixture
@@ -53,7 +54,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
     """The projector's facts over real typed and raw frame shapes."""
 
     def test_collector_uses_its_explicit_state_root(self):
-        with tempfile.TemporaryDirectory(prefix="codex-evidence-root-") as directory:
+        with TemporaryDirectory(prefix="codex-evidence-root-") as directory:
             state_dir = Path(directory) / "state"
             self.assertNotEqual(state_dir, Path(os.environ["HMB_STATE_DIR"]))
             projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir)
@@ -407,8 +408,8 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
     """The review controller projects unified evidence over the fixture stream."""
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-tool-evidence-",
-                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-tool-evidence-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.cwd = self.root / "empty"
@@ -423,7 +424,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
                        if not key.startswith("HMB_") and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
         environment.update(HMB_CONSOLE_PORT="0",
                            HMB_CODEX_FIXTURE_STATE=str(self.root / f"fixture-{index}.json"),
-                           CODEX_HOME=str(self.home), HOME=str(self.root),
+                           CODEX_HOME=str(self.home), HOME=str(self.root), USERPROFILE=str(self.root),
                            HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
                            HMB_DEV_SOURCE="1", HMB_CODEX_FIXTURE_CASE=case,
                            PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))

@@ -7,6 +7,7 @@ admission, claim, attempt and result transactions run without a model call.
 from __future__ import annotations
 from admission import admit_execution
 
+from contextlib import closing
 import sqlite3
 import unittest
 
@@ -105,11 +106,10 @@ class CurrentSchemaTests(BoardTestCase):
     def test_an_older_schema_marker_is_refused_without_any_migration(self):
         directory = self.directory / "archive"
         store = BoardStore(directory)
+        self.addCleanup(store.db.close)
         store.initialize()
-        connection = sqlite3.connect(store.db.path)
-        connection.execute("UPDATE meta SET value='10' WHERE key='schema_version'")
-        connection.commit()
-        connection.close()
+        with closing(sqlite3.connect(store.db.path)) as connection, connection:
+            connection.execute("UPDATE meta SET value='10' WHERE key='schema_version'")
         # Simulated schema-10 archive: the marker alone must make the current build
         # refuse to serve the file, with no importer and no conversion branch.
         with self.assertRaises(Corruption):

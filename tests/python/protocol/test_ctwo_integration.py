@@ -35,7 +35,7 @@ from protocol.fixtures.ctwo_controller import BUDDY, SELF, exchange, join_exchan
 class CTwoIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="ctwo-integration-",
-            dir=os.environ.get("HMB_CHECKS_TMPDIR", "/tmp"))).resolve()
+            dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))).resolve()
         self.state = self.root / "state"
         self.state.mkdir(mode=0o700)
         (self.root / "tmp").mkdir(mode=0o700)

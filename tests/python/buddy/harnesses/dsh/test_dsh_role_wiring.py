@@ -16,7 +16,7 @@ import importlib.util
 import json
 import os
 import sys
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -49,7 +49,7 @@ class DshRoleCase(unittest.TestCase):
     """One private root; the micro task attempt runs through the shared executor."""
 
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-dsh-role-")
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-dsh-role-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         from hey_my_buddy.protocol.rpc_config import configure_client
@@ -70,7 +70,7 @@ class DshRoleCase(unittest.TestCase):
         # carries this test's private one, so the agent's forced-private-home
         # tripwire holds off the invoking shell.
         (self.root / "home").mkdir(mode=0o700)
-        self.environment.update(HOME=str(self.root / "home"),
+        self.environment.update(HOME=str(self.root / "home"), USERPROFILE=str(self.root / "home"),
                                 DSH_HOME=str(self.root / "home" / ".dsh"),
                                 HMB_STATE_DIR=str(self.root / "state"),
                                 HMB_RUNTIME_ROOT=str(self.root / "runtime"),

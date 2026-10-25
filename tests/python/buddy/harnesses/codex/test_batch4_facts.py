@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import copy
 import queue
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,7 +20,7 @@ from hey_my_buddy.buddy.roles import run_execution
 
 class NativeFactsTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-facts-")
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-facts-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.request = RunRequest(
