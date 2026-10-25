@@ -607,7 +607,7 @@ class ColdStartTests(unittest.TestCase):
              patch.object(transport, "_healthy", side_effect=[None, None, ENDPOINT]):
             self.assertEqual(ensure_service(self.directory), ENDPOINT)
         self.spawn.assert_called_once()
-        self.assertEqual(self.spawn.call_args.kwargs["creationflags"], 0x01000208)
+        self.assertEqual(self.spawn.call_args.kwargs["creationflags"], 0x09000200)
         self.assertNotIn("start_new_session", self.spawn.call_args.kwargs)
 
     def test_windows_cold_start_refuses_denied_breakaway_without_retry(self):
