@@ -2,7 +2,7 @@
 
 ## 状态
 
-开发者于 2026-09-24 确认本方案，2026-09-25 的 0.7.0 源码实现本决定。已运行的服务、插件安装和源码验收分别记录；开发者要求完整验证后等待通知再安装。当前契约和维护流程见[评价与控制台参考](../reference/evaluation.md)及[维护参考](../reference/evaluation-maintenance.md)。
+开发者于 2026-09-24 确认本方案，2026-09-25 的 0.7.0 源码实现本决定。已运行的服务、插件安装和源码验收分别记录；开发者要求完整验证后等待通知再安装。当前契约和维护流程见[评价与控制台参考](../reference/evaluation.md)及`../reference/evaluation-maintenance.md`（已在 `63306ec5` 删除）。
 
 本决定调整 [ADR-004](004-buddy-decision-support-and-console.md) 中评价维护的发起方式和职责划分，保留 [ADR-005](005-shared-assessments-and-table-exclusion.md) 的共享评价与来源追溯原则，以及 [ADR-007](007-neutral-core-and-single-current-contract.md) 的单一黑板权威、Host 控制和当前契约原则。
 

@@ -10,7 +10,7 @@
 UV_CACHE_DIR=$PWD/tmp/adr021-l18-rework/uv-cache uv run --no-project --no-sync <prepared-python> packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/adr021-l18-rework/r8-fixture-01 --output-dir tests/fixtures/adr021-l18
 ```
 
-生成退出 0；SQLite integrity 为 ok，外键违反 0，49 张表、37 个事件，四个状态仍为 delivered / accepted / awaiting-host / cancelled。[metadata](../../../tests/fixtures/adr021-l18/metadata.json) 的 108 个基点源摘要逐个与该基点 Git 对象相符，生成器摘要和所有资源绑定均相符；catalog 重新导出后字节不变。源摘要审计在 `tmp/adr021-l18-rework/r8-fixture-audit.json`，原始生成日志为 `r8-fixture-01.log`。
+生成退出 0；SQLite integrity 为 ok，外键违反 0，49 张表、37 个事件，四个状态仍为 delivered / accepted / awaiting-host / cancelled。`../../../tests/fixtures/adr021-l18/metadata.json`（已在 `fc516168` 删除） 的 108 个基点源摘要逐个与该基点 Git 对象相符，生成器摘要和所有资源绑定均相符；catalog 重新导出后字节不变。源摘要审计在 `tmp/adr021-l18-rework/r8-fixture-audit.json`，原始生成日志为 `r8-fixture-01.log`。
 
 | 生成物 | SHA-256 |
 | --- | --- |

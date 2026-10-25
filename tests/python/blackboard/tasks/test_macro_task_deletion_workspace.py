@@ -167,6 +167,161 @@ class DeletionWorkspaceTests(unittest.TestCase):
         self.assertFalse(self.git("for-each-ref", "--format=%(refname)",
                                   f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
 
+    def repository_case(self, layout):
+        manifest = self.prepare("repository-" + layout, kind="existing" if layout == "logical" else "worktree")
+        directory = self.state / "workspaces" / manifest["workspaceId"]
+        if layout == "refs":
+            directory.rename(directory.with_name("retained-" + manifest["workspaceId"]))
+        elif layout == "no-checkout":
+            (directory / "checkout").rename(self.root / "retained-checkout")
+        return manifest, directory
+
+    def test_missing_repository_removes_only_allocations_without_checkout_and_preserves_refs(self):
+        for layout in ("checkout", "logical", "no-checkout", "refs"):
+            with self.subTest(layout=layout):
+                manifest, directory = self.repository_case(layout)
+                prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+                refs = self.git("for-each-ref", "--format=%(refname)%00%(objectname)", prefix)
+                self.assertTrue(refs)
+                retained = self.root / ("retained-repository-" + layout)
+                self.repo.rename(retained)
+                try:
+                    with patch.object(deletion_workspace, "_delete_refs") as delete_refs:
+                        skipped = self.delete(manifest)
+                    delete_refs.assert_not_called()
+                    self.assertEqual(skipped, [{
+                        "kind": "ref" if layout == "refs" else "allocation",
+                        "path": manifest["snapshot"]["repositoryPath"], "workspaceId": manifest["workspaceId"],
+                        "reason": {"code": "macro-task-deletion.repository-missing", "params": {}},
+                    }])
+                    self.assertEqual(directory.exists(), layout == "checkout")
+                    self.assertFalse(deletion_workspace._tombstone(self.state, manifest["workspaceId"]).exists())
+                    if layout == "checkout":
+                        self.assertTrue(Path(manifest["checkoutRoot"]).exists())
+                    self.assertEqual(self.git("for-each-ref", "--format=%(refname)%00%(objectname)", prefix,
+                                              cwd=retained), refs)
+                finally:
+                    retained.rename(self.repo)
+
+    def test_changed_repository_still_skips_without_touching_refs(self):
+        for layout in ("checkout", "logical", "no-checkout", "refs"):
+            with self.subTest(layout=layout):
+                manifest, directory = self.repository_case(layout)
+                repository = Path(manifest["snapshot"]["repositoryPath"])
+                prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+                refs = self.git("for-each-ref", "--format=%(refname)%00%(objectname)", prefix)
+                retained = self.root / ("retained-git-" + layout)
+                repository.rename(retained)
+                repository.mkdir()
+                try:
+                    with patch.object(deletion_workspace, "_delete_refs") as delete_refs:
+                        skipped = self.delete(manifest)
+                    delete_refs.assert_not_called()
+                    self.assertEqual(skipped, [{
+                        "kind": "ref" if layout == "refs" else "allocation",
+                        "path": prefix if layout == "refs" else str(directory),
+                        "workspaceId": manifest["workspaceId"],
+                        "reason": {"code": "macro-task-deletion.repository-changed", "params": {}},
+                    }])
+                    self.assertEqual(directory.exists(), layout != "refs")
+                finally:
+                    repository.rename(self.root / ("replacement-git-" + layout))
+                    retained.rename(repository)
+                self.assertEqual(self.git("for-each-ref", "--format=%(refname)%00%(objectname)", prefix), refs)
+
+    def test_repository_io_errors_are_not_skipped(self):
+        original = workspace._identity
+        for layout in ("checkout", "logical", "no-checkout", "refs"):
+            manifest, _ = self.repository_case(layout)
+            repository = Path(manifest["snapshot"]["repositoryPath"])
+            for error in (PermissionError("unreadable repository"), NotADirectoryError("invalid repository path"),
+                          OSError("repository I/O failed")):
+                with self.subTest(layout=layout, error=type(error).__name__):
+                    def identity(path):
+                        if Path(path) == repository:
+                            raise error
+                        return original(path)
+                    with patch.object(workspace, "_identity", side_effect=identity), \
+                            patch.object(deletion_workspace, "_delete_refs") as delete_refs:
+                        with self.assertRaises(type(error)):
+                            self.delete(manifest)
+                    delete_refs.assert_not_called()
+
+    def test_missing_repository_preserves_unproven_allocations(self):
+        for layout in ("logical", "no-checkout"):
+            with self.subTest(layout=layout):
+                manifest, directory = self.repository_case(layout)
+                request_path = directory / "request.json"
+                request = json.loads(request_path.read_text(encoding="utf-8"))
+                request["requestId"] = "another-owner"
+                request_path.write_bytes(workspace._json(request))
+                retained = self.root / ("retained-repository-" + layout)
+                self.repo.rename(retained)
+                try:
+                    skipped = self.delete(manifest)
+                    self.assertEqual(skipped, [{
+                        "kind": "allocation", "path": str(directory), "workspaceId": manifest["workspaceId"],
+                        "reason": {"code": "macro-task-deletion.owner-unproven", "params": {}},
+                    }])
+                    self.assertTrue(directory.exists())
+                finally:
+                    retained.rename(self.repo)
+
+    def test_missing_repository_replays_interrupted_private_record_removal(self):
+        manifest, directory = self.repository_case("logical")
+        tomb = deletion_workspace._tombstone(self.state, manifest["workspaceId"])
+        retained = self.root / "retained-repository"
+        self.repo.rename(retained)
+        original = private_dirs.remove_tree
+
+        def interrupt(path, **kwargs):
+            if path == tomb:
+                (path / "manifest.json").rename(self.root / "retained-manifest.json")
+                raise OSError("interrupted private record removal")
+            return original(path, **kwargs)
+
+        try:
+            with patch.object(private_dirs, "remove_tree", side_effect=interrupt):
+                with self.assertRaisesRegex(OSError, "interrupted private record removal"):
+                    self.delete(manifest)
+            self.assertFalse(directory.exists())
+            self.assertTrue(tomb.exists())
+            self.assertEqual(self.delete(manifest), [{
+                "kind": "ref", "path": manifest["snapshot"]["repositoryPath"],
+                "workspaceId": manifest["workspaceId"],
+                "reason": {"code": "macro-task-deletion.repository-missing", "params": {}},
+            }])
+            self.assertFalse(tomb.exists())
+        finally:
+            retained.rename(self.repo)
+
+    def test_repository_skip_preserves_checkout_and_only_reclaims_missing_repository_logical_records(self):
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                allocation = self.prepare(request="allocation-" + str(missing))
+                later = self.prepare(request="later-" + str(missing), kind="existing", cwd=allocation["path"])
+                directory = self.state / "workspaces" / later["workspaceId"]
+                repository = Path(allocation["snapshot"]["repositoryPath"])
+                refs = self.git("for-each-ref", "--format=%(refname)%00%(objectname)", deletion_workspace._PREFIX)
+                retained = self.root / ("retained-git-" + str(missing))
+                repository.rename(retained)
+                if not missing:
+                    repository.mkdir()
+                try:
+                    with patch.object(deletion_workspace, "_delete_refs") as delete_refs:
+                        skipped = delete_workspaces(SimpleNamespace(directory=self.state), [later, allocation], [])
+                    delete_refs.assert_not_called()
+                    self.assertEqual(directory.exists(), not missing)
+                    self.assertTrue(Path(allocation["checkoutRoot"]).exists())
+                    self.assertEqual({item["reason"]["code"] for item in skipped}, {
+                        "macro-task-deletion.repository-missing" if missing else "macro-task-deletion.repository-changed",
+                    })
+                finally:
+                    if not missing:
+                        repository.rename(self.root / ("replacement-git-" + str(missing)))
+                    retained.rename(repository)
+                self.assertEqual(self.git("for-each-ref", "--format=%(refname)%00%(objectname)", deletion_workspace._PREFIX), refs)
+
     def test_later_turn_on_same_allocation_keeps_its_seal_until_checkout_removal(self):
         allocation = self.prepare(request="allocation")
         later = self.prepare(request="later-turn", kind="existing", cwd=allocation["path"])
