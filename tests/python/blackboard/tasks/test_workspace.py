@@ -12,6 +12,8 @@ from types import SimpleNamespace
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion_workspace
+from hey_my_buddy.cli.checks import remove_private_test_root
+from hey_my_buddy.paths import native_path
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -354,6 +356,49 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotIn(b"outside.txt", self.git("ls-tree", "-r", output["commit"]))
         (self.repo / "outside.txt").write_text("changed excluded input\n", encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_SCOPE_VIOLATION", workspace.seal, self.state, manifest, "task", "new-attempt")
+
+    @unittest.skipUnless(os.name == "nt", "Git for Windows long file handling")
+    def test_short_worktree_long_file_seals_and_returns_the_same_patch_as_the_source(self):
+        self.addCleanup(remove_private_test_root, native_path(self.root))
+        relative = Path("src")
+        # Use the same Git path in both cases: the source file stays below MAX_PATH,
+        # while the managed checkout adds its workspace allocation to the prefix.
+        while len(str(self.repo / relative / "payload.bin")) + 33 <= 240:
+            relative /= "d" * 32
+        remaining = 240 - len(str(self.repo / relative / "payload.bin")) - 1
+        if remaining > 0:
+            relative /= "d" * remaining
+        relative /= "payload.bin"
+        source = self.repo / relative
+        self.assertLessEqual(len(str(source)), 240)
+        native_path(source.parent).mkdir(parents=True, exist_ok=True)
+        native_path(source).write_bytes(b"before\x00\xff\r\n")
+        self.git("add", "--", relative.as_posix())
+        self.git("commit", "-qm", "long file baseline")
+        config = (self.repo / ".git/config").read_bytes()
+
+        manifest = self.prepare(request="long-file")
+        checkout = Path(manifest["checkoutRoot"])
+        target = checkout / relative
+        self.assertLess(len(str(checkout)), 260)
+        self.assertGreater(len(str(target)), 260)
+        self.assertEqual(native_path(target).read_bytes(), b"before\x00\xff\r\n")
+        self.assertTrue(workspace.verify(manifest, require_unchanged=True)["unchanged"])
+        self.assertEqual(workspace._git(checkout, "status", "--porcelain=v1", "--untracked-files=all"), b"")
+        native_path(target).write_bytes(b"after\x00\xfe\r\n")
+        sealed = workspace.seal(self.state, manifest, "long-file", "attempt")
+        returned = workspace.cumulative_patch(manifest, sealed, manifest["inputCommit"])
+        self.assertEqual(workspace.verify_sealed_output(manifest, manifest, sealed)["changedPaths"],
+                         [relative.as_posix()])
+
+        ordinary = self.prepare(request="ordinary-file", kind="existing")
+        native_path(source).write_bytes(b"after\x00\xfe\r\n")
+        control = workspace.seal(self.state, ordinary, "ordinary-file", "attempt")
+        expected = workspace.cumulative_patch(ordinary, control, ordinary["inputCommit"])
+        self.assertEqual(native_path(returned["path"]).read_bytes(), native_path(expected["path"]).read_bytes())
+        self.assertEqual(returned["sha256"], expected["sha256"])
+        self.assertEqual(returned["changedPaths"], [relative.as_posix()])
+        self.assertEqual((self.repo / ".git/config").read_bytes(), config)
 
     def test_read_only_seal_rejects_index_only_and_untracked_drift(self):
         manifest = self.prepare(access="read", writeScope=[])
