@@ -52,7 +52,7 @@ DSH 原生测试删除 `assert_changed_permission`、read→write 和 write→fu
 
 ## 未运行的测试
 
-以下选择器在运行前排除；类或模块选择器包含其中全部测试及继承的测试，方法选择器只排除该方法。它们会执行真实服务、Worker、Supervisor、带 C-Two 端点的角色控制器或真实 C-Two peer，或在收尾枚举进程；完整检查与这些用例由 Host 在允许相应本机通信和进程操作的环境补跑。共享内存传输相关的两个 C-Two 类被排除，其余八个纯类的 55 项已通过；只构造本机端点 context、mock 凭据读取而不注册或连接端点的 role_live_seam 17 项也已通过。私有 session_mcp 子进程的日志屏障测试不启动服务或 Worker，已单独追加验证。
+以下选择器在运行前排除；类或模块选择器包含其中全部测试及继承的测试，方法选择器只排除该方法。它们会执行真实服务、Worker、Supervisor、带 C-Two 端点的角色控制器或真实 C-Two peer，或在清场枚举进程；完整检查与这些用例由 Host 在允许相应本机通信和进程操作的环境补跑。共享内存传输相关的两个 C-Two 类被排除，其余八个纯类的 55 项已通过；只构造本机端点 context、mock 凭据读取而不注册或连接端点的 role_live_seam 17 项也已通过。私有 session_mcp 子进程的日志屏障测试不启动服务或 Worker，已单独追加验证。
 
 ```text
 blackboard.routing.test_decision.DecisionFailureTests.test_abstention_may_cite_checkout_evidence

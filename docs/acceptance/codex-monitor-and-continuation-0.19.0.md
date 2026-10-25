@@ -42,7 +42,7 @@ Host 检查固定产物后记录 integration not required，并接受了唯一�
 
 摘要回归测试先在旧实现下失败，再在修复后通过；原始 9,797 字节消息离线 replay 成功。摘要修复的 Python 聚焦组 33 项通过，DSH Node 聚焦组 31 项通过。原生恢复回归测试先因缺少 checkpoint 失败，再通过；服务/工作流聚焦组 86 项通过。最终 Codex 控制器、协议与服务续做组 40 项通过，覆盖原生失败、格式失败、断流、错误 attempt 绑定、原生历史变化、harness 版本变化、最后助手消息传递与截断；包含真实 Python controller/mock App Server 跨进程执行到 service continue 的集成路径，不调用模型。补充的恢复拒绝链路在旧 begin_turn 实现下复现消息丢失，修复后的 6 项续做测试全部通过。
 
-首次全量检查通过 1,362 项 Python（1,133.736 秒）与 139 项 Node 测试；它在 `a23c5e9` 上启动，期间补入 `cbec057`，不作为最终冻结候选的全量证明。最终在冻结提交 `9b2d37dbab341ce96cfcdce0d9b3b125f0374043` 重新执行 `uv run --frozen python -m buddy.checks`：1,363 项 Python 测试通过（1,121.021 秒），139 项 Node 测试通过（27.556 秒），退出码 0。两次均使用独立 state/runtime/temp 根，最终根 `/private/tmp/buddy-checks-8zbv8pz3` 已由 harness 确认无持有锁、无存活进程后删除。[检查证据](evidence/codex-monitor-checks-20260929.json)包含冻结提交、计数和日志 SHA-256；收尾提交只更新验收文档与证据，不再改变运行时代码。
+首次全量检查通过 1,362 项 Python（1,133.736 秒）与 139 项 Node 测试；它在 `a23c5e9` 上启动，期间补入 `cbec057`，不作为最终冻结候选的全量证明。最终在冻结提交 `9b2d37dbab341ce96cfcdce0d9b3b125f0374043` 重新执行 `uv run --frozen python -m buddy.checks`：1,363 项 Python 测试通过（1,121.021 秒），139 项 Node 测试通过（27.556 秒），退出码 0。两次均使用独立 state/runtime/temp 根，最终根 `/private/tmp/buddy-checks-8zbv8pz3` 已由 harness 确认无持有锁、无存活进程后删除。[检查证据](evidence/codex-monitor-checks-20260929.json)包含冻结提交、计数和日志 SHA-256；最后的提交只更新验收文档与证据，不再改变运行时代码。
 
 两次完整检查的私有首次安装用例各产生一条 subprocess `ResourceWarning`，最终一条涉及 PID 84922；它发生在安装交接启动的子进程对象回收时。检查退出码均为 0，最终私有根清理确认进程已停止且没有残留；没有 SQLite 连接警告。本次未扩展修改该非阻塞警告。
 

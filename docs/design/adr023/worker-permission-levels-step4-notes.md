@@ -74,7 +74,7 @@
 | roles | 14 | 141 | 全部通过 |
 | routing | 33 | 530 | 全部通过 |
 
-交给 Host 的用例共 40 项，完整 ID 如下；NativeDeadlineTests 与 SubprocessLifecycleTests 要真实 C-Two 传输和共享内存，InquiryOwnerPeerTests 要真实端点，role_live_seam 的所有用例在 setUp 要 native endpoint context，readonly_tools_probe 的一个用例在收尾要 ps。ClaudeWorkerTests 的两个用例需要真实服务，已排除后续运行；前述误运行单独记录，不纳入本表。
+交给 Host 的用例共 40 项，完整 ID 如下；NativeDeadlineTests 与 SubprocessLifecycleTests 要真实 C-Two 传输和共享内存，InquiryOwnerPeerTests 要真实端点，role_live_seam 的所有用例在 setUp 要 native endpoint context，readonly_tools_probe 的一个用例在清场要 ps。ClaudeWorkerTests 的两个用例需要真实服务，已排除后续运行；前述误运行单独记录，不纳入本表。
 
 ```text
 buddy.harnesses.claude.test_claude_worker.ClaudeWorkerTests.test_governed_worker_seals_only_a_proven_claude_result

@@ -62,7 +62,7 @@ Router 的 `_configure_fast`、`_configure_review` 和 `_admit_turn` 的审阅�
 | blackboard.catalog.test_catalog | 14 | 通过 |
 | tests/python/blackboard/routing 全部 33 个 test 文件 | 531 | 530 项通过，1 项环境失败 |
 
-环境失败的完整测试 ID 是 `blackboard.routing.test_readonly_tools_probe.ReadonlyToolsProbeTests.test_only_one_execution_is_possible_for_the_prepared_packet`。该用例使用离线模拟执行，但探针的检查收尾需要枚举进程；当前沙盒的 ps 失败，得到 `ps process enumeration failed; residue status is unknown`，从而把探针结果标为 failed。保留的 teardown 证据已复制到 `tmp/step2-readonly-probe-teardown.json`；没有绕过沙盒或改动收尾检查，Host 需在能枚举进程的环境补跑此项。初次新增控制器测试曾误把 nativePolicy 当成角色层 workerPermission 的同层字段，两次修正断言后完整 native_run 文件 96 项通过；没有为此更改角色层或原生投影。
+环境失败的完整测试 ID 是 `blackboard.routing.test_readonly_tools_probe.ReadonlyToolsProbeTests.test_only_one_execution_is_possible_for_the_prepared_packet`。该用例使用离线模拟执行，但探针的检查清场需要枚举进程；当前沙盒的 ps 失败，得到 `ps process enumeration failed; residue status is unknown`，从而把探针结果标为 failed。保留的 teardown 证据已复制到 `tmp/step2-readonly-probe-teardown.json`；没有绕过沙盒或改动清场检查，Host 需在能枚举进程的环境补跑此项。初次新增控制器测试曾误把 nativePolicy 当成角色层 workerPermission 的同层字段，两次修正断言后完整 native_run 文件 96 项通过；没有为此更改角色层或原生投影。
 
 本环境未运行完整检查、需要真实启动器或真实服务的验证、真实 harness 探针、付费模型回合、安装、故障注入和 Windows/Linux 验证；这些属于 Host 的整合验收。前端未修改，没有运行前端检查。`git diff --check` 已通过。
 
@@ -74,4 +74,4 @@ Router 的 `_configure_fast`、`_configure_review` 和 `_admit_turn` 的审阅�
 
 Host 整合后还需运行完整检查，补跑上面的 readonly_tools_probe 环境失败项，并将私有看板副本的 17→18 升级、三档真实回合及续接换档结果写入正式验收记录。skill、参考文档与公共能力边界的更新按执行计划由 Host 完成；本次没有改动这些文件。
 
-打回 1 已把 `install.test_upgrade_migration` 的能力期望改为保留原有非权限能力并按各自 harness 当前声明派生权限能力，install 目录没有其他同类写死 read/write 的断言；本轮检查覆盖全部 16 个测试文件，可运行部分共 181 项按文件独立进程全部通过（其中打回文件 15 项），逐文件日志与完整选择器清单在 ignored `tmp/step2-install-test-summary.json`；延期 14 项交给 Host：`install.test_first_install.SkillInstallTests` 全部 10 项（真实首装或收尾需要 ps），`install.test_packaging.CwdIndependentCliTests` 全部 2 项（真实启动器、私有服务和收尾），`install.test_upgrade_service.UpgradeServiceTests.test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions`（真实服务与 IPC），`install.test_distribution.DistributionTests.test_wheel_and_sdist_are_complete_and_clean`（uv 构建与依赖隔离），其余文件的运行时物化与启动器测试使用离线假程序，没有安装依赖或启动真实服务。
+打回 1 已把 `install.test_upgrade_migration` 的能力期望改为保留原有非权限能力并按各自 harness 当前声明派生权限能力，install 目录没有其他同类写死 read/write 的断言；本轮检查覆盖全部 16 个测试文件，可运行部分共 181 项按文件独立进程全部通过（其中打回文件 15 项），逐文件日志与完整选择器清单在 ignored `tmp/step2-install-test-summary.json`；延期 14 项交给 Host：`install.test_first_install.SkillInstallTests` 全部 10 项（真实首装或清场需要 ps），`install.test_packaging.CwdIndependentCliTests` 全部 2 项（真实启动器、私有服务和清场），`install.test_upgrade_service.UpgradeServiceTests.test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions`（真实服务与 IPC），`install.test_distribution.DistributionTests.test_wheel_and_sdist_are_complete_and_clean`（uv 构建与依赖隔离），其余文件的运行时物化与启动器测试使用离线假程序，没有安装依赖或启动真实服务。

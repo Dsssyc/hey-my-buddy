@@ -19,7 +19,7 @@
 | `native_run.py::_configure` / `configuration-mismatch`（model） | I | 拆为未识别/缺失回读和明确不同两支：前者记未知，provider/model 的 checked 值为空，继续核对 effort；后者按清单的 Host 处置规则保留拒绝，不能将另一个配置的调用记在请求的评价单位下。非空但与声明值不同的原生编码也保守拒绝，未增加第二套解析。 | `test_unknown_model_readback_continues_and_only_effort_is_checked`；`test_confirmed_different_model_still_refuses_before_prompt` |
 | `native_run.py::_configure` / `configuration-mismatch`（effort） | I | 同样拆开：未知回读记事实且 checked effort 为空；已确认不同的强度仍拒绝。识别出的目录没有请求强度也保持拒绝。 | `test_unknown_effort_readback_continues_and_model_stays_checked`；`test_confirmed_different_effort_still_refuses_before_prompt`；`test_recognized_catalog_without_requested_effort_still_refuses` |
 | `native_run.py::_settle_stop_reason` / `invalid-protocol`（缺失 stopReason） | F，暂停 | 保持原实现：共享结束状态没有 unknown，角色以 ok 判定成功，无法在 DSH 范围内既继续又如实表达未知；具体依赖见下节。 | `test_missing_stop_reason_remains_refused_pending_shared_unknown_end` |
-| `native_run.py::_final_message_rounds::chunk_fold` / `answer-too-large` | I | 保留 65536 字节外来文本上限；这是边界资源限制，没有可以移成形状事实的另一半。本项不涉及收尾摘要数组。 | `test_final_answer_byte_limit_still_refuses`；`test_final_answer_at_byte_limit_continues` |
+| `native_run.py::_final_message_rounds::chunk_fold` / `answer-too-large` | I | 保留 65536 字节外来文本上限；这是边界资源限制，没有可以移成形状事实的另一半。本项不涉及最终摘要数组。 | `test_final_answer_byte_limit_still_refuses`；`test_final_answer_at_byte_limit_continues` |
 | `native_run.py::run_discovery` / `catalog-unavailable`（configOptions 形状） | F，暂停 | 保持原实现：目录聚合器会把返回的 unknown 改成 complete，单改 DSH 会把未读懂的目录发布成完整空目录；具体依赖见下节。会话 ID 缺失与关闭/进程停止未确认必须继续拒绝。 | `test_unknown_catalog_shape_remains_refused_pending_aggregate_fix` |
 
 ## 找不到的与替换的
@@ -113,7 +113,7 @@ for inject_unknown in (False, True):
 
 成功条件是两次都完成三项读取操作且 `run_discovery` 返回（它内部已确认正常退出与进程组停止），第二次保留握手未知诊断且不出现 session/prompt 或 authenticate。临时证据根供 Host 检查，收集后由 Host 删除；本 Worker 没有运行此探针。
 
-## 收尾
+## 最后改动
 
 2026-10-12，以 `98cb1536`（0.30.0，共用出口已合入）为依据的窄微任务：接上共用出口，并做完上一片暂缓的三处。写入范围是 `buddy/harnesses/dsh`、`tests/python/buddy/harnesses/dsh` 与本文；未安装、未做真实回合，等待 Host 验收。本节取代“需要 Host 处理的范围外根因”的三条与上表两处标为“暂停”的行：那三处的现状拒绝已在同一改动里全部删除，没有留下第二种读法。
 
@@ -147,7 +147,7 @@ for inject_unknown in (False, True):
 
 留给 Host 的两个文件在本环境不过，且在本检出的基线上失败数与失败点相同（都停在受管角色控制器子进程里的 ACP initialize：`native-disconnected`、原生退出码 3，与这次改动无关）：`buddy.harnesses.dsh.test_no_tool_dsh`（6 条，5 条不过）与 `buddy.harnesses.dsh.test_dsh_role_wiring`（12 条，9 条不过，只有 3 条 `DescriptionSeamTests` 通过）。Host 需要在自己的环境里补跑这两个文件，它们覆盖受管 Worker、受管发现路由与注册快速 seam。完整检查、真实 DSH 读取与回合、故障注入与安装仍由 Host 做；本节没有跑 `apps/console`，也没有启动任何服务与 Worker。
 
-## 收尾之后：选不了模型就不运行，流内未知计数进最终结果
+## 最后改动之后：选不了模型就不运行，流内未知计数进最终结果
 
 2026-10-12，以 `d272ceb2` 为依据的窄微任务，两处都在 `native_run.py`。写入范围是 `buddy/harnesses/dsh`、`tests/python/buddy/harnesses/dsh` 与本文；未安装、未做真实回合，等待 Host 验收。上表 `_configure / configuration-unavailable（configOptions 形状）` 一行与“共用出口”里的两处说法（“事实来源只有 `state.native_facts`”“流内未知种类计数继续只走观察器事实”）由本节取代，已在同一改动里改掉，没有留下第二种读法。
 

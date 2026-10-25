@@ -16,7 +16,7 @@
 | --- | --- | ---: | ---: | ---: | --- |
 | `python3.13 <task-root>/run.py baseline` | `<task-root>/venv/bin/python -m unittest -v buddy.harnesses.zcode.test_zcode_checkpoint` | 10 | 1 | 204.842 s | `baseline.log`、`baseline.json` |
 | `python3.13 <task-root>/run.py final` | 同上 | 10 | 1 | 202.561 s | `final.log`、`final.json` |
-| `python3.13 <task-root>/run.py final-source` | 同上；最后的私有夹具收尾版本 | 10 | 1 | 202.315 s | `final-source.log`、`final-source.json` |
+| `python3.13 <task-root>/run.py final-source` | 同上；最后的私有夹具清场版本 | 10 | 1 | 202.315 s | `final-source.log`、`final-source.json` |
 
 三次均为 `FAILED (failures=10)`，业务入口错误为 `AssertionError: the held controller endpoint never became ready`，不是有效的业务断言变异结果。原测试源保存在 `<task-root>/original-checkpoint.py`；日志的 review 副本将检出路径替换为 `<checkout>`，原始日志只保存在任务根。最终源码哈希在 `<task-root>/source-hashes.json`。语法编译、编号/八项 AST 比较和 `git diff --check` 成功；它们不替代原生 IPC 验证。
 
@@ -32,13 +32,13 @@
 | `collapsed-late-owner` | late 场景只创建一个 live 持有者并复用它 | 两名持有者的 `ownerPid` 不同 | 待 Host 原生 IPC 补核 |
 | `crossed-question` | own pipe 的单个 inquiry ID 由 own-question 改为 peer-question | `self.assertEqual(own_records['peer-question'], [])` | 待 Host 原生 IPC 补核 |
 
-助手生成的四个源码副本已实际准备到 `<task-root>/prepared-mutations` 并分别编译语法，清单见 `prepared-mutations.json`；没有执行这些变异，也没有声称助手或 reviewer 已运行。Host 需返回 `green.{log,json}`、三个变异各自的 `.log/.json` 和收尾事实，确认绿色 10 项、三个目标红灯均非环境错误、无编号减少，再更新本记录。
+助手生成的四个源码副本已实际准备到 `<task-root>/prepared-mutations` 并分别编译语法，清单见 `prepared-mutations.json`；没有执行这些变异，也没有声称助手或 reviewer 已运行。Host 需返回 `green.{log,json}`、三个变异各自的 `.log/.json` 和清场事实，确认绿色 10 项、三个目标红灯均非环境错误、无编号减少，再更新本记录。
 
 另有范围外接缝需要 Host 核对：原 `ZcodeFixtureCase.setUp` 只更新 `self.environment`，而 `ready_channel` 调用的 `handle_live_binding` 默认经 `rpc_config.resolve_state_dir` 读取进程环境的 BUDDY_STATE_DIR。若该值与 fixture.root/state 不同，角色通道默认域可能与 setup 选定的 SDK 域不同。本轮子进程将进程环境与 fixture 域一致设置；未改公共 fixture 或角色行为。沙箱恢复后若原八项仍因此失败，应由 Host 统一修复该接缝，不扩大本轮写范围。
 
 ## 保留与停止边界
 
-任务根确切路径为 `/tmp/c2d-16weKt`（macOS 解析别名 `/private/tmp/c2d-16weKt`）；材料、uv 环境/cache、一次性脚本、原始日志和比较副本全部保留，没有手工删除文件或目录。只允许原 TestCase/TemporaryDirectory 的正常收尾处理它们自己的目录；Host 验收后按此确切根回收。
+任务根确切路径为 `/tmp/c2d-16weKt`（macOS 解析别名 `/private/tmp/c2d-16weKt`）；材料、uv 环境/cache、一次性脚本、原始日志和比较副本全部保留，没有手工删除文件或目录。只允许原 TestCase/TemporaryDirectory 的正常清场处理它们自己的目录；Host 验收后按此确切根回收。
 
 最后一次运行的已保存直接持有者 Popen 为 PID 16067 和 20002：各自协作 stop 后 wait 的退出码为 0，自己的 controllerStopped 与 rpcShutdownConfirmed 均为 true，见 `<task-root>/checkpoint-domain-processes.jsonl`。它们的 nativeStopped 均为 null，不能解释成 native 已停止；控制器未提供正面的 native 停止收据。没有已知仍运行的已保存直接 Popen，也没有通过扫描 PID 接管任何进程；native 停止材料仍不清，需 Host 随绿色运行补齐。三个测试解释器均已 wait 返回退出码 1，未触碰日常 state/ipc、服务或 Worker。
 

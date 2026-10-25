@@ -82,7 +82,7 @@
 ## S5：停止来源只留一列
 
 - **微任务：** `01b17caf`，一个回合（输入 455.5 万 token，其中 442.9 万命中缓存；输出 2.3 万），合并提交 `345bd263`。
-- **内容：** 按开发者 2026-10-24 定的规则：先到的 console 或 service 停止不被覆盖；Host 与 Lead 不覆盖已有的停止；console 或 service 可以把 Host 或 Lead 的收尾升级为立即停止；第一次请求的时刻与宽限截止不变。结算回执时，`console-stop` 要求列里是 `console`，删去去事件流里找 console 停止作证的兜底。竞态下 Host 看到的 `stopInitiator` 因此改变，是 0.53.0 的契约变化之一，已写进 [architecture](../../reference/architecture.md)。
+- **内容：** 按开发者 2026-10-24 定的规则：先到的 console 或 service 停止不被覆盖；Host 与 Lead 不覆盖已有的停止；console 或 service 可以把 Host 或 Lead 的有序收尾升级为立即停止；第一次请求的时刻与宽限截止不变。结算回执时，`console-stop` 要求列里是 `console`，删去去事件流里找 console 停止作证的兜底。竞态下 Host 看到的 `stopInitiator` 因此改变，是 0.53.0 的契约变化之一，已写进 [architecture](../../reference/architecture.md)。
 - **Host 的核对：**
   - 读完差异；核对了发起者从 `attempts.stop_initiator`，经调度器的停止意图（只发列里的值），到执行进程停止视图的整条链路：列不变，调度器就不发新的停止，执行报出的原因与列一致；
   - 四种先后次序，以及“列不是 console 却报 `console-stop` 被拒”的测试都有；

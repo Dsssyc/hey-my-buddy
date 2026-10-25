@@ -38,7 +38,7 @@ ZCode 描述对象不再继承 Adapter，旧 prepare/start/collect/cancel、两�
 
 本沙箱实际失败的原 ID 为 `buddy.harnesses.zcode.test_zcode.ZcodeAdapterTests.test_success_uses_native_root_receipt_and_keeps_secrets_private`：原断言 `assertTrue(outcome.result["inquiry"]["mounted"])` 得到 False，原生报告 `the inquiry bridge socket could not be mounted: PermissionError`；在两个开发批次均遇同一限制。断言未改成 skip 或放宽。Host 需在允许本机 Unix socket bind 的环境补验该项及同样依赖桥的 16 个关联项；完整 17 个原 ID 固定在 `audit-final-kejftnnm/host-socket-tests.json`，其余 16 项本轮未执行，不预报通过。LiveBinding、安装版原生套件和 Windows 未验证；历史验收不能代替本轮证据。
 
-确切任务根 `/private/tmp/a252c1-oqd9h9pj`，TMPDIR/BUDDY_CHECKS_TMPDIR 始终指其 `t/`；实验、日志、源码副本与变异都在 `m/work-xw_h56zp/`，每次新目录，未覆盖旧实验。清理偏差如实登记：首次 uv 默认缓存访问 `~/.cache/uv/sdists-v9/.git` 被沙箱拒绝，随后缓存改指 m；未核实或清理外部缓存。早期控制器过滤 PYTHONDONTWRITEBYTECODE，自动在 `<checkout>/src` 生成 15 个 __pycache__ 目录，违反材料只放 m 的要求；未删除，确切相对路径在 `audit-final-kejftnnm/checkout-bytecode-final.json`，之后改用字节相等副本运行，目录集合未再增加。Worker 没有手动删除清理对象、使用通配符清理或触碰其他会话材料；常规 fixture 与产品发现收尾照旧。未安装升级日常运行时、修改用户配置/凭据/日常数据或读取用户凭据内容。Host 验收后按登记路径整体回收，并处理上述 checkout 字节码遗留。
+确切任务根 `/private/tmp/a252c1-oqd9h9pj`，TMPDIR/BUDDY_CHECKS_TMPDIR 始终指其 `t/`；实验、日志、源码副本与变异都在 `m/work-xw_h56zp/`，每次新目录，未覆盖旧实验。清理偏差如实登记：首次 uv 默认缓存访问 `~/.cache/uv/sdists-v9/.git` 被沙箱拒绝，随后缓存改指 m；未核实或清理外部缓存。早期控制器过滤 PYTHONDONTWRITEBYTECODE，自动在 `<checkout>/src` 生成 15 个 __pycache__ 目录，违反材料只放 m 的要求；未删除，确切相对路径在 `audit-final-kejftnnm/checkout-bytecode-final.json`，之后改用字节相等副本运行，目录集合未再增加。Worker 没有手动删除清理对象、使用通配符清理或触碰其他会话材料；常规 fixture 与产品发现清场照旧。未安装升级日常运行时、修改用户配置/凭据/日常数据或读取用户凭据内容。Host 验收后按登记路径整体回收，并处理上述 checkout 字节码遗留。
 
 固定交付目录为 `<m>/delivery-fljafa6w`，累计补丁 `cumulative.patch`、逐文件内容 `files/`、基线/文件/补丁 SHA 清单 `manifest.json` 和补丁验证 `patch-check.json` 供 Host 审查；本检出的唯一验收记录是本文件。以 Host 差分审查及 17 项 socket 补验为剩余边界，本项交付后停，不开展 2-C2/2-D。
 
@@ -60,6 +60,6 @@ B 修正：collect 先保留 typed 用量/消息等事实，再分别核对 inqu
 
 本轮生产新读取了 EffectivePolicy.tools.requested 与 CompletionEvidence.stream_end，前文对应的未消费字段清单仅描述首次交付，不能再沿用作本轮删除依据。新增 native_evidence 与 _worker_reports 都有生产消费；其余格式统一删减仍留 2-D，Live 生产接线仍留 2-C2。相对拒绝输出只改 native_run.py、run_execution.py、test_registered_run_wiring.py 与本记录，其他入口、格式、运行时和公共文件字节保持。
 
-确切任务根仍为 `/private/tmp/a252c1-oqd9h9pj`；TMPDIR/BUDDY_CHECKS_TMPDIR 指其 t/，新实验各建目录且材料都在 `<c1>`。前轮 15 个 checkout 字节码目录及 uv 外部缓存访问拒绝披露保留；目录集合没有新增或删除，清单为 `<c1>/checkout-bytecode-continue1.json`。没有手动删除、通配符清理、覆盖旧实验或触碰其他会话材料；常规 fixture 自己收尾照常。未安装升级运行时、修改用户配置/凭据/日常数据或读取用户凭据。本轮修正仍待 Host 审查固定差分后整合，交付后停止。
+确切任务根仍为 `/private/tmp/a252c1-oqd9h9pj`；TMPDIR/BUDDY_CHECKS_TMPDIR 指其 t/，新实验各建目录且材料都在 `<c1>`。前轮 15 个 checkout 字节码目录及 uv 外部缓存访问拒绝披露保留；目录集合没有新增或删除，清单为 `<c1>/checkout-bytecode-continue1.json`。没有手动删除、通配符清理、覆盖旧实验或触碰其他会话材料；常规 fixture 自己清场照常。未安装升级运行时、修改用户配置/凭据/日常数据或读取用户凭据。本轮修正仍待 Host 审查固定差分后整合，交付后停止。
 
 本轮固定交付为 `<c1>/delivery-x3692ua1`：相对拒绝输出的 `delta-1488c001.patch`、相对 ff1034e 的 `cumulative.patch`、四个修正文件 `files/`、逐文件/补丁 SHA 清单 `manifest.json` 及基线应用检查 `patch-check.json`。旧固定交付没有覆盖或删除；Host 后续审查本轮固定内容，前轮 socket 补验不再列为待办，2-C2/2-D 不开始。

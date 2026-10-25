@@ -1,6 +1,6 @@
 # ADR-030 批次 3c：ZCode 读它自己的供应方配置的验收
 
-2026-10-12，整合 Host。[ADR-030](../../decisions/030-harness-layer-scope.md) 第 2、3、5 条与[执行计划](../../design/adr030/execution-plan.md)的批次 3。一个微任务，五个回合（其中一个被供应方以“模型容量已满”中途结束，已有的改动由黑板封存，下一个回合收尾），Codex 的 Worker（gpt-6.1-sol / high）；最后一个回合的封存是 `7980506d`，合入整合分支的提交是 `c2c275c0`。实现方逐项的归类与依据在 [batch3c-notes.md](../../design/adr030/batch3c-notes.md)。
+2026-10-12，整合 Host。[ADR-030](../../decisions/030-harness-layer-scope.md) 第 2、3、5 条与[执行计划](../../design/adr030/execution-plan.md)的批次 3。一个微任务，五个回合（其中一个被供应方以“模型容量已满”中途结束，已有的改动由黑板封存，下一个回合完成），Codex 的 Worker（gpt-6.1-sol / high）；最后一个回合的封存是 `7980506d`，合入整合分支的提交是 `c2c275c0`。实现方逐项的归类与依据在 [batch3c-notes.md](../../design/adr030/batch3c-notes.md)。
 
 ## 做了什么
 

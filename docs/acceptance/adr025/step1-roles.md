@@ -62,7 +62,7 @@ services 接口按当前源码定义了具体方法与数据，最终契约没�
 
 ## 清理登记（任务根与创建对象，Worker 未删除任何对象）
 
-任务根为 Host 开始时原子创建并登记的 `/private/tmp/a25c-kcjpp32j`（t/m/h/d 已存在）；每条诊断/验证命令都显式将 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向其 `t/`。本微任务创建的对象全部在该根内并原样保留：`m/` 下 `inventory.py`、`focused_run.py`、`mutations.py`、`baseline_ids.json`、`after_ids.json`、`after_ids_sorted.json`、`focused-results.json`、`mutation-summary.json`、八个 `mutation-*.log`、15 个模块日志、两个 inventory 错误日志与 `pristine/`（三个交付文件副本加哈希）；`t/` 下三个自建容器 `run-0054777d`、`run-d221f523`、`mutation-3c704181`（各含 tmp/state/runtime，测试夹具按各自私有根正常收尾，容器本体未删）。`h/` 未使用，检出与系统临时目录中的其他会话物品一律未动。本微任务未执行 rm/unlink/rmdir/rmtree，未用通配符清理，未按同名/日期/无进程推断归属；该任务根由 Host 验收后按这一个确切路径整体删除。
+任务根为 Host 开始时原子创建并登记的 `/private/tmp/a25c-kcjpp32j`（t/m/h/d 已存在）；每条诊断/验证命令都显式将 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向其 `t/`。本微任务创建的对象全部在该根内并原样保留：`m/` 下 `inventory.py`、`focused_run.py`、`mutations.py`、`baseline_ids.json`、`after_ids.json`、`after_ids_sorted.json`、`focused-results.json`、`mutation-summary.json`、八个 `mutation-*.log`、15 个模块日志、两个 inventory 错误日志与 `pristine/`（三个交付文件副本加哈希）；`t/` 下三个自建容器 `run-0054777d`、`run-d221f523`、`mutation-3c704181`（各含 tmp/state/runtime，测试夹具按各自私有根正常清场，容器本体未删）。`h/` 未使用，检出与系统临时目录中的其他会话物品一律未动。本微任务未执行 rm/unlink/rmdir/rmtree，未用通配符清理，未按同名/日期/无进程推断归属；该任务根由 Host 验收后按这一个确切路径整体删除。
 
 ## Host 首轮审查与同 run continue 修正（第二实施回合 / 第一次 continue，2026-10-04）
 

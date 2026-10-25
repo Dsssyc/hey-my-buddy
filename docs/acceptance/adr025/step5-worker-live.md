@@ -32,7 +32,7 @@ Host 公共认证依赖提交为 `1e734e12fe2fcc830655f2b5bc57c4440625adcc`，�
 
 ## 实际输出与故障见证
 
-历史证据保留：首次 `b2-green1-709e5dt_/focused-green1.log` 因 tests/python 缺少 PYTHONPATH 而 import 失败；随后 `b2-green2-i413131c/focused-green2.log` 为 14 项本地通过、六项真实 peer 权限失败，stderr 为 C-Two response pool 的 `shm_open failed: Operation not permitted (os error 1)`。未取得端点描述符，不能作为转达或 socket 消失证据。随后 fixture 补初始化失败收尾、runtime 补 register 失败 shutdown，`b2-final-local-u60yucs1/final-local-green.log` 为 17 项本地通过，0.005 秒，exit 0。这些是上一轮源码的结果。
+历史证据保留：首次 `b2-green1-709e5dt_/focused-green1.log` 因 tests/python 缺少 PYTHONPATH 而 import 失败；随后 `b2-green2-i413131c/focused-green2.log` 为 14 项本地通过、六项真实 peer 权限失败，stderr 为 C-Two response pool 的 `shm_open failed: Operation not permitted (os error 1)`。未取得端点描述符，不能作为转达或 socket 消失证据。随后 fixture 补初始化失败结束处理、runtime 补 register 失败 shutdown，`b2-final-local-u60yucs1/final-local-green.log` 为 17 项本地通过，0.005 秒，exit 0。这些是上一轮源码的结果。
 
 上一轮 `b2-verification-1zpmlvzy` 的 identity、instance、来源门三组私有变异分别产生 4、2、1 个断言失败，exit 1；恢复后 16 项通过。Host 本次 continue 明确告知：它独立运行固定 `daad210f` 加最新固定公共后端，23 项通过、5.833 秒，含六项真实 peer，日志为 `phase/review-5b2-fixed1.log`。这是 Host 提供的旧固定产物运行结果，本 buddy 未执行或独立读取该日志；Host 随后因缺少 named detach 拒绝产物。23 项绿不等于满足该要求，也不能沿用到本轮修订。
 

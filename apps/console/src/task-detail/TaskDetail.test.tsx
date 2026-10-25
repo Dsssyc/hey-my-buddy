@@ -469,7 +469,7 @@ describe("a turn", () => {
       cancellation: { actor: HOST, note: "改由 Host 接手" } });
     open({ step: 7, replies: { task: stopped, workflow: workflow({ state: "cancelled" }) } });
     await ready();
-    expect(pane().textContent).toContain("终止原因：Host 收尾完成");
+    expect(pane().textContent).toContain("终止原因：Host 有序收尾完成");
     expect(pane().textContent).toContain("Host 停止");
     expect(pane().textContent).toContain("改由 Host 接手");
     cleanup();
@@ -731,7 +731,7 @@ describe("the acceptance", () => {
     cleanup();
     open({ step: 8, replies: { task: task({ selectedAttempt: { attemptId: "att-2", result: { terminationReason: "grace-expired" } } }) } });
     await ready();
-    expect(pane().textContent).toContain("收尾宽限到期后停止");
+    expect(pane().textContent).toContain("有序收尾的宽限期到期后停止");
   });
 });
 

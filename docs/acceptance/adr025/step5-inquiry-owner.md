@@ -70,7 +70,7 @@ Host 需要处理以下具体接口，不在此次五文件写入范围内：
 
 ## 交付和清理边界
 
-五个固定文件为 owner 实现、新 owner 测试、旧 ZCode 测试迁移、本记录和编号表。临时任务根只在交付报告中给出确切路径；原始材料保留在其 m/，既有 fixtures 按正常 teardown 收尾，没有手动删除任何东西，Host 验收后按登记根回收。首次 uv 自动准备产生 checkout 内忽略的 `.venv`（后续未使用），也保留未删除，交由 Host 决定回收。
+五个固定文件为 owner 实现、新 owner 测试、旧 ZCode 测试迁移、本记录和编号表。临时任务根只在交付报告中给出确切路径；原始材料保留在其 m/，既有 fixtures 按正常 teardown 清场，没有手动删除任何东西，Host 验收后按登记根回收。首次 uv 自动准备产生 checkout 内忽略的 `.venv`（后续未使用），也保留未删除，交由 Host 决定回收。
 
 实际 `git diff --check` 退出码 0；随后只对五个 scope 文件执行 `git add -- ...`，退出码 128，`<shared-git>/worktrees/<checkout>/index.lock` 创建被 `Operation not permitted` 拒绝。未运行 commit，未重建仓库、切换分支或更改 Git 权限。原始结果在 `<task-root>/m/owner-submit-f2fvlyg2`。需 Host 按五文件摘要代执行 staging/commit；公共接口与真实 peer 未验证完成前，本微任务不声称固定交付已验收。
 

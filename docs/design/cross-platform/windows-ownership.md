@@ -18,7 +18,7 @@ ADR-031 第 13 条已经定为开发流程约束：开发使用真实数据只�
 
 私有目录与文件的阶段 B 已实现、验收并合入 `755c476c`（[验收记录](../../acceptance/cross-platform/phase-b.md)）：Python 下限 3.12.4，pywin32 为直接依赖；`windows_files.py` 持有句柄层与唯一 ACL 规则，私有入口逐级以 0700 新建并在各级句柄上校验，句柄的最终路径须是请求路径的长名；服务、执行、启动器与 CLI 在提权令牌下先把默认属主设为当前用户。测试机上的独立复跑量到：提权与普通令牌交替在同一状态目录上起停私有服务，每个私有对象（含 SQLite 的 WAL、SHM）的属主都是当前用户，ACE 只有普通 allow 且受托者在白名单内，WAL、SHM 在每次换令牌后重新建出。它在 Windows 上把安装发布路径也送进了私有边界。同日开发者认为这套私有边界层层设防、与要防的情形不相称，定为精简：第 2 节重写，阶段 B2 删去逐次固定私有路径的祖先、逐次 ACL 校验、私有路径的名称比对、提权进程改默认属主与 Windows 上的 0o700（第 8 节），已验收并合入 `42cf38b9`（[验收记录](../../acceptance/cross-platform/phase-b2.md)）。B2 之后的独立复跑量到：提权、普通、再提权三种令牌交替在同一状态目录上起停私有服务，每个私有对象只有三条继承来的普通 allow ACE（SYSTEM、Administrators、本账户），提权建出的对象属主是 Administrators、普通令牌建出的是本账户，交替打开都成功。
 
-Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试文件已过 168 个，不能称为整轮通过。本批剩余失败按入口处理：私有目录/文件的 mode 判断归 B，Job 生存期及身份归 D/E，检查运行器用 `ps` 观察收尾而退出 3、`test_native_process_journal.py` 使用 `/bin/sleep` 归 F。旧第十轮错误行的粗计数不再作为实施依据。
+Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试文件已过 168 个，不能称为整轮通过。本批剩余失败按入口处理：私有目录/文件的 mode 判断归 B，Job 生存期及身份归 D/E，检查运行器用 `ps` 观察清场而退出 3、`test_native_process_journal.py` 使用 `/bin/sleep` 归 F。旧第十轮错误行的粗计数不再作为实施依据。
 
 ## 2. 私有目录与文件：继承 profile 的 ACL，边界上查一次
 
@@ -82,13 +82,13 @@ Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInf
 
 有序停止沿现有 ExecutionLive stop 进入 harness 原生 interrupt/close，宽限后强停 native Job，必要时强停根 Job。`process_handle.py:signal_group` 的 CTRL_BREAK 不是无控制台的通用软停：实验的 NO_WINDOW/new-group 替身调用成功但 0.5 秒后仍活着，私有停止文件协议则退出 0，TerminateJobObject 则强停后全空。停止文件仅为实验替身，产品不新增文件停止协议。command 替身无原生协议，不承诺 POSIX SIGTERM 的处理机会，不伪造负退出码。
 
-执行与 native 子进程保留 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`，仍先 suspended、加入 Job 再恢复，不设 breakaway；只有服务使用 detached 加 breakaway。NO_WINDOW 不证明没有 conhost，残留由终止 native Job 并观察全空处理。桌面实验已实测（[桌面实验记录](windows-experiments-desktop.md)）：detached 的服务替身以 flags=0 起的 Python 子进程得到可见窗口，从 PowerShell 与 VS Code 终端启动时都出现；而 NO_WINDOW 的执行经 cmd、pwsh、git 派生的后代，采样时都没有窗口。所以服务自己起的每一个控制台子进程都必须带 CREATE_NO_WINDOW，包括阶段 D 放进 Job 的发现探针。因此不为消除 conhost 改执行/native 的启动方式，补项 2、4 只验证保留方案的窗口及收尾，不安排 detached 对照。
+执行与 native 子进程保留 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP`，仍先 suspended、加入 Job 再恢复，不设 breakaway；只有服务使用 detached 加 breakaway。NO_WINDOW 不证明没有 conhost，残留由终止 native Job 并观察全空处理。桌面实验已实测（[桌面实验记录](windows-experiments-desktop.md)）：detached 的服务替身以 flags=0 起的 Python 子进程得到可见窗口，从 PowerShell 与 VS Code 终端启动时都出现；而 NO_WINDOW 的执行经 cmd、pwsh、git 派生的后代，采样时都没有窗口。所以服务自己起的每一个控制台子进程都必须带 CREATE_NO_WINDOW，包括阶段 D 放进 Job 的发现探针。因此不为消除 conhost 改执行/native 的启动方式，补项 2、4 只验证保留方案的窗口及停机过程，不安排 detached 对照。
 
 ## 5. 后代停止、conhost 与共同结算次序
 
 进程实验的 NO_WINDOW 与 new-console 均观察到 conhost 计入 ActiveProcesses，嵌套 native 成员退出后根中也可能剩 conhost。私有服务及 DSH CLI 0.2.1-rc.2 的版本命令结束后有残留 conhost，终止其受控 Job 后全空。Codex CLI 0.163.0 产品发现返回 harness.shutdown-unverified，但另外直接用 Node 加 JS 的受控版本命令退出 0 且 Job 已空；产品发现那次没有足够成员归因证据。因此 conhost 是 Codex 失败的待核对原因，不能写成同一根因已证实。DSH Electron shim 的解析实现由另一微任务负责，本设计不处理它。
 
-让 Job 全空的路径是：先走 harness 原生协议收尾并等待其主进程退出；若此时 native Job 仍非空，终止整个 native Job 并观察全空，记录实际发生的强停/清理，不把成功发 CTRL_BREAK 或主进程退出当作全空。无须判断剩下的是 conhost 还是业务后代。确认全空才关闭 native Job、封存输出并写回执；确认不了时照实写 `shutdownConfirmed=false` 的回执，由服务在最终结算之前自己证明 native 已停（2026-10-25 随阶段 E 改正措辞）；强停影响结果分类时沿现有 terminationReason 规则表达。正常回合也做这次非空观察，不能仅在取消路径清理。执行自己的根 Job 包含执行本身，不能由执行终止它来完成正常交付；执行退出时最后根句柄关闭收掉根中残留，服务按第 4 节停止证据结算，主动强停时只临时打开根句柄。
+让 Job 全空的路径是：先走 harness 原生协议停机流程并等待其主进程退出；若此时 native Job 仍非空，终止整个 native Job 并观察全空，记录实际发生的强停/清理，不把成功发 CTRL_BREAK 或主进程退出当作全空。无须判断剩下的是 conhost 还是业务后代。确认全空才关闭 native Job、封存输出并写回执；确认不了时照实写 `shutdownConfirmed=false` 的回执，由服务在最终结算之前自己证明 native 已停（2026-10-25 随阶段 E 改正措辞）；强停影响结果分类时沿现有 terminationReason 规则表达。正常回合也做这次非空观察，不能仅在取消路径清理。执行自己的根 Job 包含执行本身，不能由执行终止它来完成正常交付；执行退出时最后根句柄关闭收掉根中残留，服务按第 4 节停止证据结算，主动强停时只临时打开根句柄。
 
 真实启动链实验必须分别复跑 Codex CLI 0.163.0 的产品版本发现与直接 Node 加 JS，记录 Job 全成员及主进程退出时刻，使用保留的 NO_WINDOW/new-group；DSH CLI 版本的既有残留证据只用于停止设计，其 shim 支持单独验收。需要验证嵌套 Job 中 conhost 究竟计入哪层，以及 native Job 全空、执行退出后根成员缺席均可达到。现有 CLI 实验没有运行模型回合，不据此宣布 interrupt/close 或完整 harness 已验证。
 
@@ -100,7 +100,7 @@ Windows 可变文件发布优先选择 `SetFileInformationByHandle(FileRenameInf
 
 Windows 用禁止脱离的根/native Job 覆盖自然派生后代；通过既有外部进程代起的工作不自然属于 Job，照实记录边界。POSIX 的 native journal 只登记本项目创建的原生根，不能证明 setsid、双重 fork 或脱离后代已停；既有 ZCode CLI 待办没有核实其逃逸路径和版本，不扩写为已复现结论。本批不实现 cgroup、PID 递归或 cwd 扫描，也不以该后续批次阻塞本批安装，验收仍须写明缺口。
 
-## 6. 忙文件、运行时保留与测试收尾
+## 6. 忙文件、运行时保留与测试清场
 
 事实读者关闭自己不用的句柄并允许删除共享，读取校验针对持有的那一代；换代由第 3 节唯一实现承担。工作树操作固定的祖先，作用域在删除或改名目录自身前退出。普通读者和外部禁止删除共享者阻止删除/替换，实验实际出现错误 5 与 32，不能把 5 一律当 ACL 或把所有忙错误预设为 32；错误保留原始码、操作及受限相对路径。长期占用报忙并保留可恢复现场，不无限重试或删除目标再发布。
 
@@ -110,7 +110,7 @@ Windows 用禁止脱离的根/native Job 覆盖自然派生后代；通过既有
 
 已加载 Python 实测阻止删除可执行文件及完整 runtime，关闭后可删，但第一次递归删除可能已删掉其他文件。旧 runtime 必须在进入删除前按 ADR-031 第 10 条确认没有在跑或 unknown 执行引用，不能试删后才发现占用。安装切换失败保留恢复证据，切换后的延后清理报告保留原因，不吞失败或停止无关执行。目录联接的安装支持属第三批。
 
-测试辅助显式关闭手建 store、SQLite 连接、console、RPC 与线程；BoardTestCase 不递归搜未知对象。`test_harness_health.py` 的手建 health store 与 `test_backup.py` 只管理事务的 sqlite context 分别在原测试登记 close，不靠 gc/rmtree。检查运行器在 Windows 删除 `ps`/lsof 假设，优先使用它创建并登记的 Job/进程句柄和精确身份观察自建进程；通用枚举需要时复用已锁定 psutil，不实现另一套跨平台扫描器，不把 open_files 空列表当无文件占用的完整证明。不能确认收尾仍保存私有根且退出 3，不向扫描得到的陌生 PID 发信号。
+测试辅助显式关闭手建 store、SQLite 连接、console、RPC 与线程；BoardTestCase 不递归搜未知对象。`test_harness_health.py` 的手建 health store 与 `test_backup.py` 只管理事务的 sqlite context 分别在原测试登记 close，不靠 gc/rmtree。检查运行器在 Windows 删除 `ps`/lsof 假设，优先使用它创建并登记的 Job/进程句柄和精确身份观察自建进程；通用枚举需要时复用已锁定 psutil，不实现另一套跨平台扫描器，不把 open_files 空列表当无文件占用的完整证明。不能确认清场仍保存私有根且退出 3，不向扫描得到的陌生 PID 发信号。
 
 `tests/python/protocol/test_native_process_journal.py` 的 `/bin/sleep` 改为跨平台、可明确握手的 Python 替身；Windows 测试要结束真正写者/成员，不能只 kill 转发器。字节握手和有界 communicate 沿用 `e1e4d1d6` 的修复，不再阻塞读 stderr 等待未退出子进程。POSIX 专用 killpg/FIFO 用例标明平台并补 Windows Job 对应验证，不能只跳过失败。
 
@@ -118,7 +118,7 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 ## 7. 阶段 A 的补充实验与桌面协助
 
-阶段 A 已完成上述两份模型无关实验，相关结论逐项并入本文；剩余实验如下，不包含目录身份或电源操作。每项在新的独立实验根运行，记录源码、Python/CLI/工具版本、令牌、会话、完整身份、Job flags/成员、原始输出、错误码及最后收尾。显式安装探针 Python 使用私有根及 uv 的 `--no-bin --no-registry`，不触碰日常服务、看板和环境。只用模型无关替身及版本命令，不调用模型。
+阶段 A 已完成上述两份模型无关实验，相关结论逐项并入本文；剩余实验如下，不包含目录身份或电源操作。每项在新的独立实验根运行，记录源码、Python/CLI/工具版本、令牌、会话、完整身份、Job flags/成员、原始输出、错误码及最后清场。显式安装探针 Python 使用私有根及 uv 的 `--no-bin --no-registry`，不触碰日常服务、看板和环境。只用模型无关替身及版本命令，不调用模型。
 
 1. 桌面普通令牌与交替提权：开发者同一用户打开普通及管理员 PowerShell，分别记录 TokenElevation、TokenOwner 和组，特别记录普通令牌 Administrators 的 deny-only 属性；固定 Python 3.12.13，在宽继承父目录和默认父目录逐级用 0700 建根，读回每级 owner/DACL/继承。先测原样提权创建后普通访问，再测提权进程先把令牌默认属主设为当前用户的政策；普通建根后管理员创建子目录、凭据及 SQLite/WAL/SHM，普通窗口重新访问，再反向重复，另测 WAL/SHM 重建。覆盖默认状态目录及 PowerShell 先建目录的入口。若这一政策使两种令牌均可用就按此落地；若设置被拒，就采用第 2 节在提权启动边界拒绝的分支，不加主体、不自动修既有 ACL。已完成（[桌面实验记录](windows-experiments-desktop.md)）：提权进程把默认属主设为当前用户之后，目录、凭据、SQLite 及其 WAL/SHM 在两种令牌间可交替访问和重建；不设时普通令牌打不开管理员属主的对象。阶段 B 按这一政策落地；2026-10-22 起改为 Windows 上不用 0o700、继承 profile 的 ACL，两种令牌都直接可用，不再改默认属主（第 2 节）。
 
@@ -146,11 +146,11 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 D 改变执行/服务交接事实及 SQLite 身份形式，必须同步改 pyproject.toml 的中间号及 `protocol/contracts.py:CONTRACT_VERSION`，开启显式待执行升级；改 db 升级逻辑和 `tests/python/blackboard/store/upgrade_fixture.py`，由 test_upgrade_fixture 比较新建与升级结果。Windows 身份只含执行根（被创建的进程）的 pid、原始 startedAt FILETIME 和 jobName，不含 bootId 与会话号；POSIX 保持开机会话、PID/创建值与进程组形式。SQLite 身份表按已有 Job/进程组互斥关系区分：Windows 的 boot_id 为 NULL，POSIX 必填；Windows boot 值不转换成另一种假标识。marker、live 与 attempt_process_identities 里的 Windows 身份同步采用唯一新形式，intent 与 startup 不变，尚无 marker 时仍 unknown。根身份已登记后，根 Job 的停止证据覆盖其全部成员及 native 创建窗口，不靠补造缺失 PID 消除 pending。Popen 启动进程仅留创建者回收用的临时句柄，没有状态目录身份字段或副本用例。
 
-阶段 E：共同接收/最终结算与 Windows 全后代停止。依赖 D 和补项 4；改 ProcessHandle、原生运行统一收尾、native journal、receipts、store 结果入口、调度/interruption 与 db 的接收表。验收原生协议先行、native 全空才回执、服务已接收响应不等根退出、取得第 4 节停止证据前不释放、不启动冲突工作、不回收检出；服务先崩、执行先崩、强停残留、ACK 前后和完成事务前后崩溃均只结算一次。覆盖 execution delivery、run execution、native tree、execution recovery、store 结果/容量/claims 测试；POSIX 仅覆盖完整身份及原组，保留脱离后代缺口。
+阶段 E：共同接收/最终结算与 Windows 全后代停止。依赖 D 和补项 4；改 ProcessHandle、原生运行统一停止流程、native journal、receipts、store 结果入口、调度/interruption 与 db 的接收表。验收原生协议先行、native 全空才回执、服务已接收响应不等根退出、取得第 4 节停止证据前不释放、不启动冲突工作、不回收检出；服务先崩、执行先崩、强停残留、ACK 前后和完成事务前后崩溃均只结算一次。覆盖 execution delivery、run execution、native tree、execution recovery、store 结果/容量/claims 测试；POSIX 仅覆盖完整身份及原组，保留脱离后代缺口。
 
 E 的 ACK 语义、保留回执的交接规则和新增接收表均改变契约/存储形式，不能作为末号改动。若 D/E 在未安装的一批内合入，使用同一个新中间号/CONTRACT_VERSION，并在 D 开始的同一待执行升级中完成；若 D 的升级已经在真实板运行，消费升级、刷新基线与 fixture，E 再开下一次升级及中间号。删去旧 delivery 文件及无读者路径，对非封存存量在升级中显式清理；不保留旧“收到即释放”的解释或兼容分支。
 
-阶段 F：忙文件和测试观察/关闭。依赖 B 的文件边界、D/E 的生命周期；已核实的手建 store/SQLite close 与 `/bin/sleep` 替换可先独立修。改产品中第 6 节列出的恢复、清理入口及 `cli/checks.py`、`tests/python/support.py`、原关闭遗漏测试、native journal 和 checks cleanup 用例；失败保留恢复计划，私有测试根单独处理 READONLY，Windows 用已拥有的 Job/身份观察，完整收尾不能观察时保留根并退出 3。验收解除占用后同计划恢复、SQLite 全连接关闭、runtime 先保留后删除、转发器真子进程结束、无 ps 依赖。此阶段不另改事实/存储形式，产品代码单独安装移动末号，纯测试改动不移动版本。
+阶段 F：忙文件和测试观察/关闭。依赖 B 的文件边界、D/E 的生命周期；已核实的手建 store/SQLite close 与 `/bin/sleep` 替换可先独立修。改产品中第 6 节列出的恢复、清理入口及 `cli/checks.py`、`tests/python/support.py`、原关闭遗漏测试、native journal 和 checks cleanup 用例；失败保留恢复计划，私有测试根单独处理 READONLY，Windows 用已拥有的 Job/身份观察，完整清场不能观察时保留根并退出 3。验收解除占用后同计划恢复、SQLite 全连接关闭、runtime 先保留后删除、转发器真子进程结束、无 ps 依赖。此阶段不另改事实/存储形式，产品代码单独安装移动末号，纯测试改动不移动版本。
 
 阶段 G：Host 整合、独立审查与安装前演练。依赖 B、C 后续、D、E、F 分别验收和对应原生实验；独立审查检查是否仍有重复机制或代价不相称，不将设计批准或 Worker 完成当作验收。最终源码在三系统按 AGENTS.md 跑完整 Python 检查，分别保存退出码和 teardown；Windows 11 桌面/Defender/真实启动链证据单列。私有安装分别演练同契约服务重启保活和变契约的空闲、备份、失败回滚；旧版本发出的安装请求只用该版本接受的字段。G 不新增契约或存储形式，文档/证据本身不移动版本。日常安装由 Host 另行安排。
 
@@ -164,7 +164,7 @@ E 的 ACK 语义、保留回执的交接规则和新增接收表均改变契约/
 
 补入 venv 链中禁止脱离请求却成功的事实，新增真实解释器及孙进程显式/无标志脱离实验，失败就改基础解释器加 venv site 配置的启动链。执行/native 保留 NO_WINDOW/new-group，只有服务用 detached/breakaway；先核实无外层 Job 时 breakaway 被忽略，再省掉启动分支。提权进程启动时把令牌默认属主设为当前用户（Host 合入时改定，代替逐个对象改属主，覆盖 SQLite 自建的文件与提权运行时的重建），设置被拒就在提权启动边界明确拒绝，不改既有 ACL 或白名单；逐级私有目录每级显式建 0700。
 
-Windows 换代先试 FileRenameInfoEx 的 POSIX 语义改名，失败才测 ReplaceFileW，最终只留一个机制；补项 5 和阶段 C 后续随之调整。ACE 形状反例改为单元测试，junction/bootstrap 保留原生补项。修正回滚入口为 upgrade:start，将桌面实验置第 7 节、阶段置第 8 节，顺排节号；ADR 条款与 D 的身份/升级判断同步改写，阶段 E 接收结算及接收表、F 测试收尾和其余阶段版本判断保留。
+Windows 换代先试 FileRenameInfoEx 的 POSIX 语义改名，失败才测 ReplaceFileW，最终只留一个机制；补项 5 和阶段 C 后续随之调整。ACE 形状反例改为单元测试，junction/bootstrap 保留原生补项。修正回滚入口为 upgrade:start，将桌面实验置第 7 节、阶段置第 8 节，顺排节号；ADR 条款与 D 的身份/升级判断同步改写，阶段 E 接收结算及接收表、F 测试清场和其余阶段版本判断保留。
 
 2026-10-22 按补充实验（[a3 记录](windows-experiments-a3.md)）：补项 3 完成，保留 venv 入口，不改启动链；固定祖先改以 `GENERIC_READ` 打开，因为只请求 `FILE_READ_ATTRIBUTES` 的句柄挡不住改名；补项 6 的目录竞态完成。
 

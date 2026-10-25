@@ -12,7 +12,7 @@ Host assistance 提供的 `uv.lock`、wheelhouse、requirements 与 provenance �
 
 ## 本次环境与真实验证
 
-本回合创建新的短 `<task-tmp>`，确切路径在 outcome 提供，旧任务根及原失败材料保留。新根中包含私有 state/runtime/native fallback、uv cache、两个 CPython 3.13.3 环境、Host 材料副本、基线副本、源码快照、变异副本、构建产物及全部 `.log`/`.json`。命令包装先清除继承的 `BUDDY_*`、`ANTHROPIC_*`、`C2_*`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，再仅设置任务自有配置；TMPDIR/BUDDY_CHECKS_TMPDIR 指入新根，uv offline/no-index 与本地 wheelhouse 固定，模型事实离线且 harness CLI 为不可用哨兵。没有读取凭据内容、操作默认公共域、修改日常 runtime/配置/登录/凭据或管理日常服务/Worker；没有 Too many open files。Worker 没有删除文件/目录，原测试夹具的收尾按原逻辑执行。
+本回合创建新的短 `<task-tmp>`，确切路径在 outcome 提供，旧任务根及原失败材料保留。新根中包含私有 state/runtime/native fallback、uv cache、两个 CPython 3.13.3 环境、Host 材料副本、基线副本、源码快照、变异副本、构建产物及全部 `.log`/`.json`。命令包装先清除继承的 `BUDDY_*`、`ANTHROPIC_*`、`C2_*`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，再仅设置任务自有配置；TMPDIR/BUDDY_CHECKS_TMPDIR 指入新根，uv offline/no-index 与本地 wheelhouse 固定，模型事实离线且 harness CLI 为不可用哨兵。没有读取凭据内容、操作默认公共域、修改日常 runtime/配置/登录/凭据或管理日常服务/Worker；没有 Too many open files。Worker 没有删除文件/目录，原测试夹具的清场按原逻辑执行。
 
 最初冻结离线 sync 因注册表 URL 缓存缺失退出1；`uv pip install --require-hashes` 成功安装 10 个锁定依赖后，editable sync 因 Host wheelhouse 未含 `editables` 再退出1。两次失败保留，不变更项目或构建依赖声明。采用 uv 原生 `--no-editable` 路径后，`uv sync --frozen --no-editable --offline --no-index --find-links <wheelhouse>` 退出0，实际从交付锁完成非 editable 项目安装；测试通过 `uv run --no-sync` 使用该任务环境和检出源码。未声称默认 editable sync 已通过。
 
@@ -70,7 +70,7 @@ Host 应从最终固定产物独立运行1-A六模块完整82项、打包/runtim
 
 ## 本回合真实命令与边界
 
-本回合开始创建 `<task-tmp>`，确切路径在结构化 outcome 提供，所有包装脚本、日志、uv cache、项目环境和测试临时材料均在此根下，保留给 Host 按确切路径回收。`run.py` 在每条子命令前清除继承的 `BUDDY_*`、`ANTHROPIC_*`、`C2_*`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，再设置任务自有 state/runtime/native fallback、TMPDIR、BUDDY_CHECKS_TMPDIR、uv cache/project environment、离线模型事实夹具和不可用 harness 哨兵。没有读取凭据内容、清扫默认公共域、安装日常运行时或管理日常服务/Worker。Worker 未删除文件或目录；测试夹具自身收尾按原测试执行。
+本回合开始创建 `<task-tmp>`，确切路径在结构化 outcome 提供，所有包装脚本、日志、uv cache、项目环境和测试临时材料均在此根下，保留给 Host 按确切路径回收。`run.py` 在每条子命令前清除继承的 `BUDDY_*`、`ANTHROPIC_*`、`C2_*`、`VIRTUAL_ENV`、`UV_PROJECT_ENVIRONMENT`，再设置任务自有 state/runtime/native fallback、TMPDIR、BUDDY_CHECKS_TMPDIR、uv cache/project environment、离线模型事实夹具和不可用 harness 哨兵。没有读取凭据内容、清扫默认公共域、安装日常运行时或管理日常服务/Worker。Worker 未删除文件或目录；测试夹具自身清场按原测试执行。
 
 命令均从检出根经 `python3 <task-tmp>/run.py <label> <command>` 调用；每条有同名 `.log` 和记录 command、exitCode、seconds 的 `.json`。由于检出无 `.venv`、系统解释器无项目依赖，下面的系统 Python 批次仅记录加载/依赖失败，不能当作发布版实测。
 

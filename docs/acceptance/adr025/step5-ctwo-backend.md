@@ -25,7 +25,7 @@ Status: 待 Host 验收。2026-10-07 于隔离受管 worktree 完成，固定基
 
 聚焦运行（未跑完整检查、未调用真实 harness 或模型、未安装升级日常运行时）：`uv run --frozen python -m unittest -v buddy.harnesses.test_c_two_live buddy.harnesses.test_live_channel buddy.harnesses.test_run_contract`，环境按检查器口径清除继承变量、`PYTHONPATH=src:tests/python`、`BUDDY_DEV_SOURCE=1`、`TMPDIR`/`BUDDY_CHECKS_TMPDIR` 指向任务根。结果 109 项全部通过：新模块 34（其中 8 项为真实 C-Two 子进程生命周期）、相邻 `test_live_channel` 44、`test_run_contract` 31，两相邻模块编号与断言未动。迭代期间的失败原始输出（合并逻辑缺陷、帧缺 limit、同名跨线用例身份错误等）保留在任务材料目录。
 
-生命周期证据（每端点的创建/停止/删除，测试打印并写私有根）：正常 stop 后 `addressAfter=null` 且本次套接字文件消失；SIGKILL（exit -9、组消失）后持有者清理 `deleted`；同 server_id 重绑替换文件后旧描述符清理 `refused: socket-file-replaced` 且文件保留、新端点干净停止后消失。收尾扫描无本任务遗留 peer 进程，`/tmp/c_two_ipc` 中他人条目未触碰。
+生命周期证据（每端点的创建/停止/删除，测试打印并写私有根）：正常 stop 后 `addressAfter=null` 且本次套接字文件消失；SIGKILL（exit -9、组消失）后持有者清理 `deleted`；同 server_id 重绑替换文件后旧描述符清理 `refused: socket-file-replaced` 且文件保留、新端点干净停止后消失。清场扫描无本任务遗留 peer 进程，`/tmp/c_two_ipc` 中他人条目未触碰。
 
 ## 未用内容与 API 整合说明
 
@@ -35,7 +35,7 @@ Status: 待 Host 验收。2026-10-07 于隔离受管 worktree 完成，固定基
 
 ## 清理与材料
 
-任务短根为 Host 创建并登记的 `<task-root>`（`/private/tmp/a255a-88dphywi`）；`TMPDIR`/`BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`，一次性材料在 `<task-root>/m` 各新子目录：`smoke-1`（3 方法 CRM 跨进程冒烟探针及其 peer 私有家目录）、`run-subprocess-1/2/3`（子进程测试三轮原始输出，含失败迭代）、`run-focused-1`（最终 109 项聚焦输出与生命周期证据行）。未执行任何手动删除命令，未删除或重建旧副本；测试私有根由夹具自行收尾，被测端点按自身生命周期清理。Host 验收后按该确切根回收；其他会话对象未动。
+任务短根为 Host 创建并登记的 `<task-root>`（`/private/tmp/a255a-88dphywi`）；`TMPDIR`/`BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`，一次性材料在 `<task-root>/m` 各新子目录：`smoke-1`（3 方法 CRM 跨进程冒烟探针及其 peer 私有家目录）、`run-subprocess-1/2/3`（子进程测试三轮原始输出，含失败迭代）、`run-focused-1`（最终 109 项聚焦输出与生命周期证据行）。未执行任何手动删除命令，未删除或重建旧副本；测试私有根由夹具自行清场，被测端点按自身生命周期清理。Host 验收后按该确切根回收；其他会话对象未动。
 
 ## 交付 commit
 
@@ -74,4 +74,4 @@ Status: 待 Host 验收。2026-10-07 于隔离受管 worktree 完成，固定基
 
 **修正后验证。** 按指示只重跑新增/改变的 backend 测试与真实 peer 队列案例：`buddy.harnesses.test_c_two_live` 全模块 53 项全部通过（进程内 42 + 真实子进程 11；较上轮 +4：close/死槽不交付、零等待排空、满预算合流拒绝、settle 不覆盖已发布状态；并发合流用例正文随预算别名适配并加双 rid 绑定与改问拒绝断言）；live_channel 44、run_contract 31、卫生 5 未变未重跑（上轮 129 全过记录在案）。未跑完整检查、未启动 harness 或模型；旧材料全保留，本轮新实验在 `<task-root>/m/run4-unit-1`；未执行任何手动删除，无遗留 peer 进程。
 
-**现有消费者对照与接线点（如实：当前仅测试使用方）。** 本后端尚无生产调用方；`settle_request`/`publish_journal`/`publish_inquiry_state`/`publish_activity`/`publish_observation` 是 Host 接 InquiryBridge、活动 producer 与角色控制器时的调用点（owner 仅在原生桥实际 journal 提交后 settle `queued`，journal 事实用现有受锁读投影发布），`cleanup_abandoned_socket` 归持有方收尾；生产 `HarnessRunLive`/`WorkerRuntimeLive` contract、`CONTRACT_VERSION` 0.28→0.29 与公共接线仍归 Host。
+**现有消费者对照与接线点（如实：当前仅测试使用方）。** 本后端尚无生产调用方；`settle_request`/`publish_journal`/`publish_inquiry_state`/`publish_activity`/`publish_observation` 是 Host 接 InquiryBridge、活动 producer 与角色控制器时的调用点（owner 仅在原生桥实际 journal 提交后 settle `queued`，journal 事实用现有受锁读投影发布），`cleanup_abandoned_socket` 归持有方清理；生产 `HarnessRunLive`/`WorkerRuntimeLive` contract、`CONTRACT_VERSION` 0.28→0.29 与公共接线仍归 Host。

@@ -37,7 +37,7 @@
 
 ## 验证证据
 
-- 任务根以下记作 `<task-root>`（确切路径只在交付摘要与任务 tmp 台账）；全部命令 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指 `<task-root>/t/`。第一轮材料在新子目录 `<task-root>/m/d1-migration/`，第二轮在 `m/d1-turn2/`，第三轮在 `m/d1-turn3/`；未触碰任何旧实验或他人会话对象；普通测试夹具与检查运行器自有收尾照常。
+- 任务根以下记作 `<task-root>`（确切路径只在交付摘要与任务 tmp 台账）；全部命令 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指 `<task-root>/t/`。第一轮材料在新子目录 `<task-root>/m/d1-migration/`，第二轮在 `m/d1-turn2/`，第三轮在 `m/d1-turn3/`；未触碰任何旧实验或他人会话对象；普通测试夹具与检查运行器自有清场照常。
 - 第一轮（基线 `3c042df`，改动前）：`python -m unittest blackboard.tasks.test_workflow_worker.DshNativeStorageArgumentsTests blackboard.tasks.test_host_workflow_worker.HostQuotaRecoveryTests.test_quota_failure_cannot_override_a_user_locked_configuration` → 3 项全红（两项 `AttributeError: … no attribute 'arguments'`，一项配额流程无 partial-output）。迁移后第一轮检出内 `python -m unittest blackboard.tasks.test_host_workflow_worker blackboard.tasks.test_workflow_worker` → 9 项全绿（约 59 秒）。
 - 第二轮：以 Host 新基线 `bf34678` 的 archive 构造全新验证镜像 `m/d1-turn2/verify/`，其上应用唯一范围相对原基线 `3c042df` 的累计补丁（7 文件，`m/d1-turn2/scope.patch`），未在受管检出切换分支、未改公共文件；镜像内 `git apply` 干净。更正：`bf34678` 树仍含两个旧 Node 夹具，archive 出的基线携带它们，删除发生在应用累计补丁时（补丁即本任务授权的删除），并非"基线中已不存在"。以检出虚拟环境的解释器直接运行（`PYTHONPATH` 指镜像 `src` 与 `tests/python`，先以 `hey_my_buddy.__file__` 核验解析落点在镜像内）：两模块 9 项全绿（约 60 秒）。
 - 第三轮：以 Host `0603706` 的 archive 构造全新组合副本 `m/d1-turn3/verify/`（树仍含两旧夹具，应用相对原基线的累计补丁 `m/d1-turn3/scope.patch` 后按授权删除），仅运行一次 `python -m unittest blackboard.tasks.test_host_workflow_worker blackboard.tasks.test_workflow_worker` → 9 项全绿（约 58 秒）；`BUDDY_DSH_CLI` 直接指向夹具 `.py` 文件（无包装脚本），解析落点核验同前。测试计数三轮一致（无增删）。

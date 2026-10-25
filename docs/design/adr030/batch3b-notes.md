@@ -130,7 +130,7 @@ Host 在 `82638e50` 上报告完整 Python 3661 项、216 个文件与前端全�
 
 ### Host 无模型权限读回步骤
 
-在已获准读取用户 harness 配置的 Host 环境中，从候选源码根运行下面步骤，用 Host 选中的真实 codex 可执行文件及冻结检出替换两个占位参数；解释器与清环境规则同上。代码沿用本批的参数生成、环境白名单、连接与进程组收尾，只发送 initialize、initialized 通知及 config/read，不发送 account/read、model/list、thread/start 或 turn/start，也不创建任何私有 Codex 主目录；这是配置语法/回读检查，不是沙箱效果或真实回合的验收。本实现方没有运行这个真实 CLI 步骤。
+在已获准读取用户 harness 配置的 Host 环境中，从候选源码根运行下面步骤，用 Host 选中的真实 codex 可执行文件及冻结检出替换两个占位参数；解释器与清环境规则同上。代码沿用本批的参数生成、环境白名单、连接与进程组结束，只发送 initialize、initialized 通知及 config/read，不发送 account/read、model/list、thread/start 或 turn/start，也不创建任何私有 Codex 主目录；这是配置语法/回读检查，不是沙箱效果或真实回合的验收。本实现方没有运行这个真实 CLI 步骤。
 
 ```sh
 PYTHONPATH=src:tests/python <provided-python> - '<codex-executable>' '<frozen-checkout>' <<'PY'

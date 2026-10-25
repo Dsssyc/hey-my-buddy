@@ -37,7 +37,7 @@
 
 第一次最终整合检查默认4并行、189文件全部调度、186文件2981项通过（skip1），3模块失败，480.607秒；失败记录保留。两处范围外旧引用由Host修正，聚焦2项通过；Codex取消时序打回原5-D2 run，由其在真实fixture发出turn/started后写开始标记，测试有界等待再取消。Host固定整合副本的两取消用例通过12.005秒，删除标记的变异使两项断言失败20.778秒；原生产节流保留。
 
-最终整批代码b437090使用 `uv run --frozen python -m hey_my_buddy.cli.checks` 通过：3049个Python测试（原有skip1）、189/189模块、默认4并行、505.735秒、退出0；没有--jobs或BUDDY_CHECKS_JOBS覆盖。对应393份源码、测试与锁定配置SHA复核无变化，最终编号再次发现为3049且与已登记清单集合相等、装载错误零。运行器自己的私有根正常收尾并消失。原始输出、命令/时间/退出码与固定文件清单分别留 `<checkout>/tmp/adr025-host/<phase>/step5-final-full-check2.log`、`step5-final-full-check2-result.json`、`final-checked-code-manifest2.json`；此后只收尾记录，不为记录再跑检查。
+最终整批代码b437090使用 `uv run --frozen python -m hey_my_buddy.cli.checks` 通过：3049个Python测试（原有skip1）、189/189模块、默认4并行、505.735秒、退出0；没有--jobs或BUDDY_CHECKS_JOBS覆盖。对应393份源码、测试与锁定配置SHA复核无变化，最终编号再次发现为3049且与已登记清单集合相等、装载错误零。运行器自己的私有根正常清场并消失。原始输出、命令/时间/退出码与固定文件清单分别留 `<checkout>/tmp/adr025-host/<phase>/step5-final-full-check2.log`、`step5-final-full-check2-result.json`、`final-checked-code-manifest2.json`；此后只补充记录，不为记录再跑检查。
 
 全部微任务已内部验收，受管检出由黑板回收，13个创建时登记的任务根及本步Host根已按确切路径回收；命名原始日志、实际变异与SHA清单以及已核对wheel保留在本检出的tmp下。D1回收RPC曾返回WORKSPACE_CHANGED快照错误，后续官方接口确认原计划已applied/removed，物理路径也已消失；没有屏蔽错误或手动删除受管检出。本步实施worktree保留，等待Claude Code Host外部验收；日常运行时仍未安装或升级。
 

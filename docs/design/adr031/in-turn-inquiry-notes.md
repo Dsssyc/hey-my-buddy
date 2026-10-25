@@ -1,6 +1,6 @@
 # Codex 与 Claude Code 的回合内问询
 
-2026-10-16，基于 `c605b127` 的源码实现记录，等待 Host 验收；本微任务没有安装产品，也没有调用真实模型。首轮输出 `a176b992` 经开发者批准的 Host 真实回合核对未通过：Codex CLI 的 MCP 答复调用被审批策略拒绝，Claude Code CLI 在晚到输入的收尾窗口出现第二个根初始化。开发者随后决定 Codex CLI 改用 app-server 客户端工具，本记录描述调整后的源码。
+2026-10-16，基于 `c605b127` 的源码实现记录，等待 Host 验收；本微任务没有安装产品，也没有调用真实模型。首轮输出 `a176b992` 经开发者批准的 Host 真实回合核对未通过：Codex CLI 的 MCP 答复调用被审批策略拒绝，Claude Code CLI 在晚到输入的结束窗口出现第二个根初始化。开发者随后决定 Codex CLI 改用 app-server 客户端工具，本记录描述调整后的源码。
 
 ## 送达、答复与结束
 
@@ -34,4 +34,4 @@ Codex CLI 和 Claude Code CLI 的适配器声明新增 `inquiry`，实时通道�
 - Codex CLI 适配器：`tests/python/buddy/harnesses/codex/`：8 个文件、254 项测试；最后调整无效 Unicode 参数和日志失败重试边界后，另跑 `tests/python/buddy/harnesses/codex/test_in_turn_inquiry.py`：7 项测试。
 - 服务恢复与问询传输：`tests/python/blackboard/service/test_execution_recovery.py`、`tests/python/protocol/test_inquiry_transport.py`：2 个文件、20 项测试。
 
-假 app-server 覆盖客户端工具声明、根回合答复、子线程和旧回合、参数错误、问题未送达或已答、其他请求的原有拒绝；假 Claude Code CLI 流覆盖普通失败及重试、签名拒绝与伪造、首个根结果后紧跟第二个初始化和工具回调、阻止随后的测试写操作。服务测试覆盖具体原因、Host 边界已结束执行的日志，以及只按 runId 的分页刷新与拒绝证据。调整后的真实 Codex CLI 客户端工具调用、真实 Claude Code CLI 收尾时序、原生续接中的客户端工具可用性，以及合并后的完整检查和安装，均等待 Host 另行验收。
+假 app-server 覆盖客户端工具声明、根回合答复、子线程和旧回合、参数错误、问题未送达或已答、其他请求的原有拒绝；假 Claude Code CLI 流覆盖普通失败及重试、签名拒绝与伪造、首个根结果后紧跟第二个初始化和工具回调、阻止随后的测试写操作。服务测试覆盖具体原因、Host 边界已结束执行的日志，以及只按 runId 的分页刷新与拒绝证据。调整后的真实 Codex CLI 客户端工具调用、真实 Claude Code CLI 结束时序、原生续接中的客户端工具可用性，以及合并后的完整检查和安装，均等待 Host 另行验收。

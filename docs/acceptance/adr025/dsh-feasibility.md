@@ -139,7 +139,7 @@
 | 4 | ACP 运行尝试 1 | 探针缺陷(spawn 未用 PIPE stdin,进程继承关闭的 stdin 即退出);**零协议流量、零模型调用** |
 | 5 | ACP 运行尝试 2 | 探针缺陷(帧日志以文本模式写 bytes,收发双方日志崩);仅 initialize;**零模型调用** |
 | 6 | ACP 运行尝试 3 | 探针缺陷(响应提取返回 waiter 而非消息 + model 值用了数组而非声明 JSON 字符串);initialize+session/new 成功,两次 `set_config_option` 与 `session/prompt` 均 -32602 被协议层拒绝;**零模型调用**(`logs/main-attempt3-defect-frames.jsonl`) |
-| 7 | ACP 运行尝试 4 | 真实 prompt 已入 turn(写文件与 cat 哨兵完成、`session/steer` 实测 -32601);探针 steer 提取缺陷使回合中崩溃、以 stdin EOF 收尾;**消耗 1 次真实模型调用**(私有会话记录 `05db67e2`:inputTokens 9778、outputTokens 159,模型 deepseek-flash/effort low);**该次停止证据有缺口**:其探针摘要与帧在重跑前未另存而被覆盖(我的留证缺陷),留存的原生会话记录不含退出码/进程组事实,不能充当该次停止证据;Host 曾在覆盖前读到该摘要为 exit 0/组消失,但该原始日志已不在交付中,按缺口如实登记,不补写 |
+| 7 | ACP 运行尝试 4 | 真实 prompt 已入 turn(写文件与 cat 哨兵完成、`session/steer` 实测 -32601);探针 steer 提取缺陷使回合中崩溃、以 stdin EOF 结束;**消耗 1 次真实模型调用**(私有会话记录 `05db67e2`:inputTokens 9778、outputTokens 159,模型 deepseek-flash/effort low);**该次停止证据有缺口**:其探针摘要与帧在重跑前未另存而被覆盖(我的留证缺陷),留存的原生会话记录不含退出码/进程组事实,不能充当该次停止证据;Host 曾在覆盖前读到该摘要为 exit 0/组消失,但该原始日志已不在交付中,按缺口如实登记,不补写 |
 | 8 | ACP 运行尝试 5(最终完成) | 全流程完成:**1 次真实模型 prompt**,stopReason `end_turn`,耗时 11.8 秒;完整停止证据在留(`logs/main-summary.json`) |
 | 9 | `dsh --profile acp --patch …readonly-probe --dump-config`(第 2 回合补核) | exit 0,组消失;核实工具行/沙箱行的 patch 形状被组合面接受 |
 | 10 | `dsh --profile sdk --help`(第 2 回合补核,私有 home `homes/sdk`) | exit 0,组消失;help 仅一行用途说明 |

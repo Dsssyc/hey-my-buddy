@@ -10,7 +10,7 @@ E 要做到：native 工作停止后写不可变回执；服务核对调用方�
 
 E 在 D2 的整合结果 `13e94123` 上开工（Host 已读完 D2a 与 D2b 的差异），与 D2 同属 0.53.0 与同一次 28 → 29 升级，不开 29 → 30。两个依次的微任务，各自让树保持通过，中间不安装：
 
-- **E2a 协议主体。** 执行侧不再写 `result-delivery.json`、不再删回执；接收事务与最终结算事务；下面第 2 节的规则；恢复与调度的改写；接收表的 DDL 在新建与 28 → 29 里共用；`verify_started` 的预期表集合加上这张表；测试支持；停止来源的一般规则（`blackboard/tasks/workflow.py` 的 `_request_attempt_stop`：已有的、不是收尾的停止从不被替换，`unknown` 也一样）。
+- **E2a 协议主体。** 执行侧不再写 `result-delivery.json`、不再删回执；接收事务与最终结算事务；下面第 2 节的规则；恢复与调度的改写；接收表的 DDL 在新建与 28 → 29 里共用；`verify_started` 的预期表集合加上这张表；测试支持；停止来源的一般规则（`blackboard/tasks/workflow.py` 的 `_request_attempt_stop`：已有的、不是有序收尾的停止从不被替换，`unknown` 也一样）。
 - **E2b 退役旧存量。** 生成器用基线的写入路径补一份已接受的 delivery 存量并重新生成样板看板；`cleanup_legacy_layout` 加上由看板上的 attempt 推出的 `result-delivery.json`；对应的升级测试与文档。
 
 初稿的 E3（独立审查、三系统完整检查、安装演练）归阶段 G，不单列。
@@ -23,7 +23,7 @@ E 在 D2 的整合结果 `13e94123` 上开工（Host 已读完 D2a 与 D2b 的�
 4. **已接收的 attempt 只等停止证据。** 执行收到 ACK 后退出，连接随之关闭；这时不重连、不记“连接未知”、不改 `uncertain`、不写 issue（`store.py` 的 `execution_connection` 现在会做这些）。只有取不到停止证据时才报告。
 5. **强停不看回执。** 删掉 `blackboard/service/execution_scheduler.py` 的 `_force_if_required` 里“回执写着已停就不杀”的短路，连同 `test_confirmed_receipt_prevents_force_kill`：回执已经落盘，强停到期就按已核实的身份停根。
 6. **`finalizing` 只能走向 `finished`。** 改 `store.py` 的状态转换表；`execution_progress` 不再接受外来的 `finalizing`；`reconcile_startup` 与断线都不抹掉已接收的事实。
-7. **收尾期间不发提醒。** `blackboard/tasks/reminders.py` 选提醒对象时排除已接收的 attempt。
+7. **结算期间不发提醒。** `blackboard/tasks/reminders.py` 选提醒对象时排除已接收的 attempt。
 8. **未确认停止的回执照写、照收。** native 停止确认不了时，执行照实写 `shutdownConfirmed=false` 的失败回执，这是它唯一的事实。服务照常接收；最终结算的条件是执行根的停止证据，加上回执已确认或服务自己证明 native 已停（Windows 由 D2 的根 Job 证据覆盖，POSIX 由 `_stop_native` 读 native journal）。满足后只导入一次。回执路径上“先提交未确认的报告、再补证明”的两段（`interruption.py` 里收到回执后补 `confirm_execution_shutdown` 的分支、`store.py` 里原报告重放的分支）与 `test_result_shutdown_proof.py` 一并删掉；`confirm_execution_shutdown` 只留给没有回执的中断路径。设计第 5 节“只有全空才……写回执”改为“回执如实写明 native 是否已空；整条边界停止之前，服务不导入任何回执”。
 9. **测试支持的默认不变。** `tests/python/support.py` 的默认路径仍是“接收后由测试给出停止证据并结算”，现有一百多处用法不动；只有 E 自己的用例用拆开的 helper 去看 ACK 之后的窗口。不往产品里加暂停点或测试钩子。
 
@@ -44,7 +44,7 @@ E 在 D2 的整合结果 `13e94123` 上开工（Host 已读完 D2a 与 D2b 的�
 - 最终事务提交前后崩溃：提交前全部回滚、重试能完成；提交后恢复不重建接收行、不重发完成事实。
 - ACK 之后最终导入遇到确定性错误：当场按 failed 加 `receiptRejection` 结清一次。
 - 名额与 claims：一条用例同时看 `UNRESOLVED_SQL` 与 resource_claims，不按五种资源各测一遍。
-- 提醒不发给已接收的 attempt；停止来源：`unknown` 不被后来的普通停止替换，收尾升级为立即停止仍允许。
+- 提醒不发给已接收的 attempt；停止来源：`unknown` 不被后来的普通停止替换，有序收尾升级为立即停止仍允许。
 
 不写测 SQLite 原子性本身的用例，不按 harness 重测原生停止次序（`HaltOwnedGroupTests` 已有），不为升级拒绝时数据不变另写用例（现有升级测试已覆盖）。
 

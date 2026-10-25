@@ -18,11 +18,11 @@ Lead 提交仍经过 `normalize_workflow_submit`，包括完整 buddy、常规�
 
 Worker 的 Python 控制器仍持有其工具通信所需的黑板状态与执行凭据；四种 harness 的原生子进程仅在冻结回合输入的 `context.delegationAuthority` 为真时收到 `HMB_STATE_DIR`、`HMB_AGENT_CREDENTIAL_FILE` 及已有运行时选择变量。`HMB_LEAD_LAUNCHER` 只是在 Python 控制器内从该回合输入推导的标记，每次构造环境时清除继承值，不传给原生子进程，也不是用户配置或授权依据；普通 Worker 回合和发现、检查进程保持原有清理环境。真实普通 DSH 子进程的环境日志证明没有这些变量，Lead 的真实启动器子进程仍连接私有派发黑板，另一个黑板拒绝同一文件凭据。CLI 的 `await` 每次读取和等待均传递原执行凭据，按 `requestId` 直接读取目标；等待内部执行的停止证据时读取有权限的微任务的事件和汇总，不直接寻址内部 Router 或协助任务。
 
-Lead 停止名下微任务沿用既有的有期限收尾路径，保留 `stop_initiator='lead'`，六处判断共用 `protocol.stop.WRAP_UP_INITIATORS`，表示会给予收尾的发起者。控制台类型包括 `lead`，停止发起者、动作者和理由以与 Host 相同的结构显示为 Lead；收尾完成显示为“Lead 收尾完成”，不再落到“发起者未知”。`wrap_up.txt` 仍作为 `roles.wrap_up` 在资源声明中独立解析。
+Lead 停止名下微任务沿用既有的有期限的有序收尾路径，保留 `stop_initiator='lead'`，六处判断共用 `protocol.stop.WRAP_UP_INITIATORS`，表示会给予有序收尾的发起者。控制台类型包括 `lead`，停止发起者、动作者和理由以与 Host 相同的结构显示为 Lead；有序收尾完成显示为“Lead 有序收尾完成”，不再落到“发起者未知”。`wrap_up.txt` 仍作为 `roles.wrap_up` 在资源声明中独立解析。
 
 本回合 Python 检查均使用分配任务指定的解释器，经 `PYTHONPATH=src <指定测试解释器> -m hey_my_buddy.cli.checks <测试路径>` 运行，使用默认进程数和检查运行器自己创建的私有根。定向核心检查三个文件的 36 个测试通过；受影响检查选择 `tests/python/blackboard/tasks/`、`tests/python/blackboard/store/`、`tests/python/cli/`、`tests/python/protocol/`，以及 `tests/python/buddy/`、`tests/python/install/`、`tests/python/blackboard/service/`、`tests/python/blackboard/routing/` 和 `tests/python/blackboard/evaluation/test_native_observations.py`，覆盖 223 个文件。初次其中 221 个文件的 3,625 个测试通过，没有跳过，退出 1，私有根移除。
 
-初次受影响 Python 检查的两个失败文件是 `buddy/harnesses/claude/test_claude.py` 和 `buddy/harnesses/test_controller.py`：前者的旧断言仍期待普通回合获得启动器环境，后者的两个日志收尾用例使用的模拟上下文缺少新增读取的 `turn_input` 属性。更新断言和模拟上下文后，两个文件分别单独重跑，38 个和 45 个测试全部通过，均退出 0 且私有根移除；没有修改生产代码来迁就夹具，也没有遗留失败。
+初次受影响 Python 检查的两个失败文件是 `buddy/harnesses/claude/test_claude.py` 和 `buddy/harnesses/test_controller.py`：前者的旧断言仍期待普通回合获得启动器环境，后者的两个日志关闭用例使用的模拟上下文缺少新增读取的 `turn_input` 属性。更新断言和模拟上下文后，两个文件分别单独重跑，38 个和 45 个测试全部通过，均退出 0 且私有根移除；没有修改生产代码来迁就夹具，也没有遗留失败。
 
 行为检查证明：普通执行凭据仍逐项被拒绝新增操作，普通回合不会继承 Lead 的启动器环境标记，Lead 启动器仍连接签发黑板；Lead 可回答名下微任务的协助任务代理请求、验收及写结论，指向 Host 或其他 Lead 的协助任务仍被处理函数拒绝；升级删除存储操作集合而完整保留凭据。第一回合已建立的归属、宏任务、提交事务回滚、提交准备撤销、后续回合继续管理旧归属、有限读取、控制文件及真实 Git 工作区操作，均在本回合受影响检查中再次通过。定向环境检查开发期间修正了夹具的授予前置条件和原生日志定位，最终真实 Worker 相关七个测试通过。
 

@@ -1,4 +1,4 @@
-# ADR-030 批次 4：共用模块的两类拒绝收尾
+# ADR-030 批次 4：共用模块两类拒绝的最终处理
 
 本微任务基于 `5fbebe15`（0.30.0），按 ADR-030 第 7 条和拒绝清单中“Host 对待定 45 处的处置”拆开混着不同原因的拒绝。以下是 Worker 的源码修改与局部验证记录，尚待 Host 审查和验收。
 
@@ -16,7 +16,7 @@
 
 ## Router 冻结输入
 
-`roles/router_input.py:prepare` 把原条件拆成两个依次判断的拒绝：绝对路径、`..` 或 `.git` 组件报 `A frozen tree path is unsafe: absolute paths, parent traversal and Git metadata are forbidden`；非 blob 条目报 `Frozen Router input with submodules is not supported`。`git ls-tree -r` 中子模块的类型为 commit。这两类都继续报 `router-input-unavailable`，原有 discard 和 reader 收尾逻辑保留；删除了原来的混合条件和 `Unsupported frozen tree entry` 消息，没有新增拒绝范围。
+`roles/router_input.py:prepare` 把原条件拆成两个依次判断的拒绝：绝对路径、`..` 或 `.git` 组件报 `A frozen tree path is unsafe: absolute paths, parent traversal and Git metadata are forbidden`；非 blob 条目报 `Frozen Router input with submodules is not supported`。`git ls-tree -r` 中子模块的类型为 commit。这两类都继续报 `router-input-unavailable`，原有 discard 和 reader 清理逻辑保留；删除了原来的混合条件和 `Unsupported frozen tree entry` 消息，没有新增拒绝范围。
 
 新增 `buddy.roles.test_router_input.FrozenTreeEntryTests` 的 `test_absolute_and_parent_paths_are_refused_as_unsafe_and_cleaned_up`、`test_git_metadata_is_refused_as_unsafe_and_cleaned_up`、`test_submodule_is_refused_as_unsupported_and_cleaned_up`。测试使用私有真实 Git blob 与 cat-file 读取，只替换 manifest 验证和 ls-tree 返回的边界条目，以覆盖 Git 通常不会生成的不安全路径；每次先实际物化 `first.txt`，再触发拒绝，并在真实 discard 前核对内容，最后断言整个冻结目录消失、没有写出越界文件。没有被这次 Router 修改取代的旧消息断言。
 

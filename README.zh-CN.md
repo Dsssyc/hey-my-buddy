@@ -97,7 +97,7 @@ uvx hey-my-buddy@0.53.0 install
 ## 现状与限制
 
 - **尚未发布。** 还没有任何发布版本；版本号是 0.x 期间，契约可以在中间那位数字变动时改变。
-- **平台。** 每天在 macOS 上使用；完整的测试套件在 Linux 的持续集成上通过。Windows 11（x64 与 ARM64）的支持正在为首次发布收尾。
+- **平台。** 每天在 macOS 上使用；完整的测试套件在 Linux 的持续集成上通过。Windows 11（x64 与 ARM64）的支持正在为首次发布做最后的准备。
 - **Harness。** Codex 经它的实验性 App Server 运行。各个 harness 支持什么、验证到哪一步，见[harness](docs/reference/harnesses.md)。
 - **路由会看到任务。** 由路由来选 buddy 时，任务的文字会发给 Router 所在的模型供应方，即使最后做事的是别的模型。
 - **不是沙盒。** 检出与私有目录把工作隔开，但它们不是操作系统的沙盒；Worker 拥有它的 harness 给它的权限。

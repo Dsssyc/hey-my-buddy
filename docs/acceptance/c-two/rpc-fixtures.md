@@ -13,7 +13,7 @@
 | `tests/python/blackboard/service/test_harness_startup.py` | 注入的 Mock 明确提供真实私有 Worker state 路径并核对身份；重试次数、未知子进程和 whitelist 原断言保持。 |
 | `tests/python/buddy/runtime/test_live_lifecycle_integration.py` | Mock 与 channel 提供合法根；真实构造器 spy 核对 Worker 明确传根，核对两次 channel 的根，保持两次 attach/detach 和同一 runtime 原断言。 |
 | `tests/python/blackboard/service/test_daemon.py` | health 直接请求显式传根；标准 mock spy 先核对根并通过 DEFAULT 执行原生 `_request`，没有替换传输。 |
-| `tests/python/support.py` | 只新增 `assert_rpc_state_dir`：要求明确 str/Path 且 resolve 后等于当前夹具根，不接受任意其他根；2-B 环境防护、显式目录夹具、私有 HOME/SDK 与正常收尾均保留。 |
+| `tests/python/support.py` | 只新增 `assert_rpc_state_dir`：要求明确 str/Path 且 resolve 后等于当前夹具根，不接受任意其他根；2-B 环境防护、显式目录夹具、私有 HOME/SDK 与正常清场均保留。 |
 | `docs/acceptance/c-two/rpc-fixtures.md` | 本轮实测记录及 Host 补核边界。 |
 
 CLI 的现有公共入口 `main` 调用 `call_service` 时没有提供具体根，`await` 也没有向 `await_run` 提供根。本测试通过现有入口的 state_dir 参数进行夹具绑定，没有重写 API 或另造传输；这些测试验证绑定后的真实映射、事务和投影，不证明公共 CLI 的默认根选择。是否调整公共入口由 Host 统一判断和整合。
@@ -70,10 +70,10 @@ CLI 的现有公共入口 `main` 调用 `call_service` 时没有提供具体根�
 
 `compare-daemon-root`（1 项、退出 1、1.359 秒）和 `mutation-daemon-root`（1 项、退出 1、1.354 秒）都在 daemon socket 启动处受阻，未执行直接 health 请求，不能计为目标变异命中。已准备 `copy-daemon-root`，只去掉 health 请求的 state_dir；Host 实跑时应在 spy 的明确私有根断言失败，未变异用例则应通过原全部健康断言。
 
-## 原生边界、Host 补核和收尾
+## 原生边界、Host 补核和最终核对
 
 独立进程 `native` 实际安装的 C-Two 0.7.4 使用私有 state/ipc，通过现有 configure_server/configure_client、BuddyControl、InProcessBoard 和原生 cc.register 路径尝试注册及 ping；1 项、退出 1、0.719 秒，register 报 `CoreError: server failed to start: IO error: Operation not permitted (os error 1)`，尚未进入 connect/ping。`native/native-report.json` 保存错误及实际 cc.shutdown 返回，completed=true、server_was_started=false、ipc_clients_drained=true。没有切回默认端点、绕过沙箱或借用其他任务 SDK 进程域。
 
 Host 需要在允许私有 TCP/Unix socket 的环境，用保留的私有依赖与 runner、新 label 复跑最终 `blackboard.service.test_daemon` 全 13 项；再分别对 `comparison/` 和 `copy-daemon-root/` 执行 `blackboard.service.test_daemon.DaemonHealthTests.test_a_running_daemon_reports_the_shared_ceiling_and_pool`，要求原保护通过、变异命中 `RPC requires an explicit private state_dir` 目标断言而非启动/导入/SDK 错误。另以新 label 执行 `native_probe`，要求实际私有注册、connect/ping 成功且 shutdown.completed=true。命令格式为 `python3.13 <task-root>/run.py <new-label> <module-or-test> [<copy-root>]`；保持逐模块独立解释器、私有 HOME/state/runtime，无模型，无日常服务操作。补核证据应写回本固定验收记录，原始日志继续放任务根；公共 CLI/root 入口整合如需修改仍归 Host，不在本次测试范围内。
 
-所有 runner 自建测试解释器均已有 wait/退出证据，`process-receipt.json` 中 knownUnwaitedChildren=[]；七份原测试正常框架收尾负责停止并等待各自拥有的 subprocess。未独立枚举系统进程表，不能据此宣称每日服务或未知进程停止。本轮 daemon 在 console 启动处退出，未由该健康测试启动 managed pool；原生探针 shutdown 证据如上。没有已知未停止自建进程。任务根内 uv 环境、cache、日志、比较/变异副本和材料全部保留，未手工删除；Host 验收后按确切根 `/tmp/c2c-K4T737` 回收。
+所有 runner 自建测试解释器均已有 wait/退出证据，`process-receipt.json` 中 knownUnwaitedChildren=[]；七份原测试正常框架清场负责停止并等待各自拥有的 subprocess。未独立枚举系统进程表，不能据此宣称每日服务或未知进程停止。本轮 daemon 在 console 启动处退出，未由该健康测试启动 managed pool；原生探针 shutdown 证据如上。没有已知未停止自建进程。任务根内 uv 环境、cache、日志、比较/变异副本和材料全部保留，未手工删除；Host 验收后按确切根 `/tmp/c2c-K4T737` 回收。

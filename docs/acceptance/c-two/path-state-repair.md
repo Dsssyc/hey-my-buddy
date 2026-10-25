@@ -6,7 +6,7 @@
 
 公开 `get_state_dir` 恢复 `expanduser().resolve()`，显式根优先于环境、环境优先于默认及客户端调用时选择语义不变。`rpc_config.resolve_state_dir` 仅接受显式参数或环境，缺根仍报 `PRIVATE_STATE_REQUIRED`；先拒绝内部原始 `..` 再规范化所选状态根。私有 guard 从状态边界检查自身及下层条目，不再从 filesystem anchor 拒绝用户选用的链接祖先；`state/ipc` 和内部链接依然拒绝，结构错误有具体 `details.path`。没有仅靠导出环境掩盖问题。
 
-`_cold_start_preflight` 与 `Daemon.run` 各自在 RPC 配置前验证目录结构、mkdir 并 chmod 0700。只读 attach 路径仍不创建、不 chmod。preflight 只捕获 `OSError` 映射 `LAUNCH_ACCESS_DENIED`，不捕获并改写 `BoardError`；既有错误 code/message/details 保留。产品 preflight 不再读取 `BUDDY_CHECKS_TMPDIR`，短 socket probe 使用标准 tempfile/TMPDIR，并保留自己的正常收尾。没有新增失败码或公开 schema。
+`_cold_start_preflight` 与 `Daemon.run` 各自在 RPC 配置前验证目录结构、mkdir 并 chmod 0700。只读 attach 路径仍不创建、不 chmod。preflight 只捕获 `OSError` 映射 `LAUNCH_ACCESS_DENIED`，不捕获并改写 `BoardError`；既有错误 code/message/details 保留。产品 preflight 不再读取 `BUDDY_CHECKS_TMPDIR`，短 socket probe 使用标准 tempfile/TMPDIR，并保留自己的正常清场。没有新增失败码或公开 schema。
 
 旧“0755 状态可用”证据仅说明 rpc_config 可以选域、创建私有 IPC，不证明普通服务冷启动已可用。本份本地单元证明所有者修正；实际冷启动与直接服务启动成功仍待 Host 补核。旧历史记录保持原样。
 
@@ -18,7 +18,7 @@
 {"taskRoot":"/tmp/c073-b-cIzzzx","unconfirmedOwnedProcesses":[]}
 ```
 
-其下保留私有 uv 环境/cache、空 HOME、TMPDIR/BUDDY_CHECKS_TMPDIR、独立基线归档、变异、日志及一次性材料。清除继承 BUDDY_/ANTHROPIC_/C2_、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT；最终运行环境仅保留进程基础变量和自己的私有根。`delegate-materials/provenance.json` 的 18 项 SHA-256/size 与文件核对，材料 uv.lock 与仓库锁字节相等；私有 uv CPython 3.13.11 环境通过 offline/no-index/require-hashes 安装十个锁定运行依赖，无依赖升级。证明为 `$TASK_ROOT/dependency-hashes.json`。Worker 没有手工删除任何目录或文件；既有测试框架和产品自建 probe 正常自行收尾。整个任务根留给 Host 按确切路径回收。
+其下保留私有 uv 环境/cache、空 HOME、TMPDIR/BUDDY_CHECKS_TMPDIR、独立基线归档、变异、日志及一次性材料。清除继承 BUDDY_/ANTHROPIC_/C2_、VIRTUAL_ENV、UV_PROJECT_ENVIRONMENT；最终运行环境仅保留进程基础变量和自己的私有根。`delegate-materials/provenance.json` 的 18 项 SHA-256/size 与文件核对，材料 uv.lock 与仓库锁字节相等；私有 uv CPython 3.13.11 环境通过 offline/no-index/require-hashes 安装十个锁定运行依赖，无依赖升级。证明为 `$TASK_ROOT/dependency-hashes.json`。Worker 没有手工删除任何目录或文件；既有测试框架和产品自建 probe 正常自行清场。整个任务根留给 Host 按确切路径回收。
 
 ## 实际聚焦验证
 
@@ -90,7 +90,7 @@ PATH-01 真实服务首试在自有 daemon 的 console bind `127.0.0.1:0` 阶段
 
 初次变异中去 chmod 得到目标 accessDenied 的 1 error，随后将测试捕获该 BoardError 并明确 fail，最终表计的是对应 assertion failure；两次变异工具因文本定位命中数量不符中止，未记为产品 red。原始日志与各次副本留存，不删除或覆写历史日志；最终全表为 `mutation-results-r3.json`，具体改动、命令、结果及 AST 绑定为 `mutation-final-targets.json`。
 
-## 进程、收尾与残留
+## 进程、清场与残留
 
 首次真实助手创建的 daemon PID 23924 已由直属 Popen wait，exit 2；场景子解释器 PID 23917 communicate/wait exit 1。`path-real-r3ejc10q/evidence.json` 记录自身 service/Worker locks released=true、RPC shutdown completed=true、cleanupFailures=[]；服务未发布 endpoint，因此没有虚构 serviceId、成功 RPC 或 service_control stop。未触达日常状态/服务，也没有按未知 PID 发送信号。
 

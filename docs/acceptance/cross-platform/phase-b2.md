@@ -24,7 +24,7 @@
 
 ## 没有验证的
 
-- Windows 上的升级恢复测试（与阶段 C 后续相同，卡在 fixture 构造与收尾观察上）。
+- Windows 上的升级恢复测试（与阶段 C 后续相同，卡在 fixture 构造与清场观察上）。
 - Defender 实时扫描下的换代。
 - 状态目录在 Windows 上取 `absolute()`、在 POSIX 上取 `resolve()`，8.3 短名与长名混用的地方没有专门核对（B2-8）；CI 的 runner 临时目录是短名，没有因此出现新失败。
 

@@ -30,7 +30,7 @@
 
 ## 清理与偏差
 
-任务根 `<task-root> = /private/tmp/a253c-sxclkpp0`（Host 创建并登记）；所有命令的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`，一次性材料（编号清单、收集与故障注入脚本、三批次变异副本、运行日志）在 `<task-root>/m/a253c-3c-20261006/`，未手动删除任何对象；普通测试 fixture 与检查运行器自动收尾照常。未发现其他会话对象。偏差：无；`uv run` 在检出内创建的 `.venv` 为被忽略的标准工具产物，不属交付。本项未做安装版 Claude 模型运行。固定交付提交代码与本记录后停止，等待 Host 审查。
+任务根 `<task-root> = /private/tmp/a253c-sxclkpp0`（Host 创建并登记）；所有命令的 `TMPDIR` 与 `BUDDY_CHECKS_TMPDIR` 指向 `<task-root>/t`，一次性材料（编号清单、收集与故障注入脚本、三批次变异副本、运行日志）在 `<task-root>/m/a253c-3c-20261006/`，未手动删除任何对象；普通测试 fixture 与检查运行器自动清场照常。未发现其他会话对象。偏差：无；`uv run` 在检出内创建的 `.venv` 为被忽略的标准工具产物，不属交付。本项未做安装版 Claude 模型运行。固定交付提交代码与本记录后停止，等待 Host 审查。
 
 ## 第二轮：Host 拒绝封存 `0594ab0` 后的整改（同 run 继续）
 

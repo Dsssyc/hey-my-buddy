@@ -1,6 +1,6 @@
 # Windows 阶段 A：进程、Job、会话、身份与真实 CLI 实验
 
-2026-10-21，源码基线 `d5c908aaaed3cfd66c20822222570a1e267ff9f2`，对应 [windows-ownership.md](windows-ownership.md) 第 4 节及第 8 节阶段 A 的启动/Job、身份实验。只运行模型无关探针和 CLI 版本命令，没有修改产品代码，没有发起真实 harness 回合，没有安装或重启日常服务。实验和远端收尾均已完成。续轮按开发者授权用 uv 卸载本次私有 Python、清除全局入口；Host 核实消失的两组他根注册项是 A2 实验遗留并接受清理结果后，已删除工作目录并取得 `Test-Path=False`。最终进程和 HKCU 只读核对见最后一节。
+2026-10-21，源码基线 `d5c908aaaed3cfd66c20822222570a1e267ff9f2`，对应 [windows-ownership.md](windows-ownership.md) 第 4 节及第 8 节阶段 A 的启动/Job、身份实验。只运行模型无关探针和 CLI 版本命令，没有修改产品代码，没有发起真实 harness 回合，没有安装或重启日常服务。实验和远端清场均已完成。续轮按开发者授权用 uv 卸载本次私有 Python、清除全局入口；Host 核实消失的两组他根注册项是 A2 实验遗留并接受清理结果后，已删除工作目录并取得 `Test-Path=False`。最终进程和 HKCU 只读核对见最后一节。
 
 最需要回到设计处理的结果是：无 kill-on-close 的 Job 在创建者退出、最后句柄关闭后，原成员仍存活，但原名 `OpenJobObjectW` 返回错误码 2；同名 `CreateJobObjectW` 随后成功创建空 Job，原成员不属于新 Job。这否定了第 4 节“所有服务句柄关闭后仍因关联进程存活而可按名接回”的完整假设，也表明在这种情况下不能把原名不存在当作原工作已经结束。
 
@@ -8,7 +8,7 @@
 
 机器称“开发者的 Windows 11 测试机”。实测为 Windows 11 专业版 x64、版本 `10.0.26200`、固定 NTFS 卷；显式探针外壳为 Windows PowerShell CLI `5.1.26100.9444`，uv CLI `0.10.8`，Node CLI `v22.12.0`。uv 下载的基础解释器为 CPython `3.12.13`、AMD64、MSC v.1944；本次 Python 进程的令牌 `TokenElevation=1`，结果不代表非提权用户。原始记录为 `tmp/windows-process/00-inventory.json`、`18-join-setup.json`、`24-platform.json` 和 `27-core-base.json`。
 
-唯一远端工作根为 `%USERPROFILE%\hmb-work\64ee8084`。输入没有另给名为 runId 的值，因此使用本次 execution attemptId 的前 8 位标识这个私有根，此选择记在 `tmp/windows-process/metadata.json`。源码以 `git bundle` 打包、经 SCP 分块传输、在远端合并后克隆；本机与远端 bundle 的 SHA-256 同为 `d49c120d8f72ac7ce201fb67a8ca9233dce429eb52105db001a0111cdf3d8edb`，克隆 HEAD 与基线相同。依赖使用 `uv sync --frozen --python 3.12`，Python 安装、uv 缓存、venv、TEMP 和 TMP 均指定到工作根内；显式安装 Python 的 bin/registry 默认行为遗漏另见收尾。
+唯一远端工作根为 `%USERPROFILE%\hmb-work\64ee8084`。输入没有另给名为 runId 的值，因此使用本次 execution attemptId 的前 8 位标识这个私有根，此选择记在 `tmp/windows-process/metadata.json`。源码以 `git bundle` 打包、经 SCP 分块传输、在远端合并后克隆；本机与远端 bundle 的 SHA-256 同为 `d49c120d8f72ac7ce201fb67a8ca9233dce429eb52105db001a0111cdf3d8edb`，克隆 HEAD 与基线相同。依赖使用 `uv sync --frozen --python 3.12`，Python 安装、uv 缓存、venv、TEMP 和 TMP 均指定到工作根内；显式安装 Python 的 bin/registry 默认行为遗漏另见清场。
 
 每个编号 `.json` 记录实际 SSH 命令、完整 PowerShell 输入、退出码、耗时、stdout 和 stderr；同名 `.stdout.bin`、`.stderr.bin` 保留原始字节。实验使用 `tmp/windows-process/probe.py`、`supplement.py`、`ssh_lifetime.py` 和 `cli_probe.py`；Job 创建/分配/恢复/成员查询沿用产品 `WindowsAPI`，仅在实验中通过 ctypes 设置不同 flags、读取会话号和目录身份。基础解释器实验通过显式 `PYTHONPATH` 读取同一源码与私有 venv 的依赖，不改产品文件。
 
@@ -46,7 +46,7 @@
 
 ## conhost、控制台与停止
 
-用 `CREATE_NEW_CONSOLE` 启动后再分配根 Job，观察到 `root.active=2`，成员为 Python 和 conhost，conhost 的显式根 Job 成员检查为 true。再从已经属于根 Job 的控制器内部起 new-console 子进程，观察到 `root.active=4`，两个 Python 和两个 conhost 均列在根 Job 中。记录为 `tmp/windows-process/27-core-base.json` 的 `new_console_accounting`、`new_console_inherited_job`，两组收尾均为 0 个活成员；全机同时出现但 `inRoot=false` 的其他 conhost 没有计作本任务成员或被停止。
+用 `CREATE_NEW_CONSOLE` 启动后再分配根 Job，观察到 `root.active=2`，成员为 Python 和 conhost，conhost 的显式根 Job 成员检查为 true。再从已经属于根 Job 的控制器内部起 new-console 子进程，观察到 `root.active=4`，两个 Python 和两个 conhost 均列在根 Job 中。记录为 `tmp/windows-process/27-core-base.json` 的 `new_console_accounting`、`new_console_inherited_job`，两组清场均为 0 个活成员；全机同时出现但 `inRoot=false` 的其他 conhost 没有计作本任务成员或被停止。
 
 `CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP` 的成员报告 `consoleWindow=0`，根 Job 却仍列出 Python 与 conhost，`active=2`。父进程调用 `GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid)` 返回成功、错误码 0，0.5 秒后成员仍活着。记录为 `tmp/windows-process/27-core-base.json` 的 `no_console_ctrl_break`。结论：本机不能用没有控制台 HWND 或 NO_WINDOW 推断没有 conhost，也不能把控制台事件 API 成功当作软停完成；支持第 4 节对 conhost 计数和无控制台停止的验证要求，否定把计数中的 conhost 忽略掉的做法。
 
@@ -89,11 +89,11 @@
 
 ## 私有开发态服务与真实 CLI
 
-设置 `HMB_DEV_SOURCE=1`、显式私有 `HMB_STATE_DIR` 和 `HMB_RUNTIME_ROOT`，从克隆源码启动私有 daemon；探针持有一个 kill-on-close Job 作为最终收尾边界。服务 ping 摘录：`status=ok; protocol=2; contractVersion=0.50.0; schemaVersion=27; pid=34772; persistenceError=null`。记录为 `tmp/windows-process/26-cli.json`，服务 stdout/stderr 位于 `remote-raw/cli-v1/daemon.stdout`、`daemon.stderr`。venv 外层 Popen PID 为 4508，与服务实际 PID 不同；没有把外层 PID 单独当作服务身份。
+设置 `HMB_DEV_SOURCE=1`、显式私有 `HMB_STATE_DIR` 和 `HMB_RUNTIME_ROOT`，从克隆源码启动私有 daemon；探针持有一个 kill-on-close Job 作为最终清场边界。服务 ping 摘录：`status=ok; protocol=2; contractVersion=0.50.0; schemaVersion=27; pid=34772; persistenceError=null`。记录为 `tmp/windows-process/26-cli.json`，服务 stdout/stderr 位于 `remote-raw/cli-v1/daemon.stdout`、`daemon.stderr`。venv 外层 Popen PID 为 4508，与服务实际 PID 不同；没有把外层 PID 单独当作服务身份。
 
 在私有服务运行期间，调用产品发现函数取得 Codex CLI、DSH CLI 候选快照和有界发现结果，记录 subprocess 审计事件；服务健康表及其产品投影另以只读方式读取。没有强制刷新服务的完整健康流程：该流程还会读取账户和模型目录，超出本次纯发现/版本范围。因此以下“发现结果”与“服务中尚未检查的健康状态”分别记录，没有把两者混写成服务已经采用的可用命令。
 
-Codex CLI 候选为 `<Node 当前版本入口>\codex.cmd`，解析后的 JS 为 `<Node 版本目录>\node_modules\@openai\codex\bin\codex.js`。审计记录实际启动了 `[<Node 当前版本入口>\node.exe, --version]` 及 `[<Node 当前版本入口>\node.exe, <上述 codex.js>, --version]`，随后有探测收尾的 taskkill；发现最终返回 `status=unhealthy; available=false; command=[]; executable=null; version=null; reason.code=harness.shutdown-unverified`。记录为 `tmp/windows-process/26-cli.json` 的 `native_launch` 和 Codex `discovery`。结论：本候选 `.cmd` 能被产品转换为 Node 加 JS，但本轮产品未确认探测关闭，不能标为 ready；也未进入登录状态探测或任何回合。
+Codex CLI 候选为 `<Node 当前版本入口>\codex.cmd`，解析后的 JS 为 `<Node 版本目录>\node_modules\@openai\codex\bin\codex.js`。审计记录实际启动了 `[<Node 当前版本入口>\node.exe, --version]` 及 `[<Node 当前版本入口>\node.exe, <上述 codex.js>, --version]`，随后有探测清场的 taskkill；发现最终返回 `status=unhealthy; available=false; command=[]; executable=null; version=null; reason.code=harness.shutdown-unverified`。记录为 `tmp/windows-process/26-cli.json` 的 `native_launch` 和 Codex `discovery`。结论：本候选 `.cmd` 能被产品转换为 Node 加 JS，但本轮产品未确认探测关闭，不能标为 ready；也未进入登录状态探测或任何回合。
 
 DSH CLI 候选为 `<DSH 安装目录>\resources\runtime\cli\bin\dsh.cmd`。产品发现返回 `status=unhealthy; available=false; command=[]; executable=null; version=null; reason.code=harness.entry-unsupported`。补充只读解析表明该 shim 设置 `ELECTRON_RUN_AS_NODE=1`，经 `DeepSeek Harness.exe --expose-internals` 执行 app.asar 内的 CLI JS，产品 `_script_uses_node` 返回 `entry-unsupported`。记录为 `tmp/windows-process/26-cli.json` 和 `31-cli-versions.json`。结论：本机这一形式的 DSH CLI shim 未被当前产品接受，没有证据表明它已经被转换成可用 Node/JS command。
 
@@ -109,7 +109,7 @@ exit /b %errorlevel%
 
 另外用自己的受控 Job 只运行版本命令，以便区分安装是否可执行和产品发现是否可用。Codex 使用解析出的 Node 加 JS，退出 0，stdout 为 `codex-cli 0.163.0`，命令完成后 Job 已空。DSH 经 `cmd /d /c <dsh.cmd> --version`，退出 0，stdout 为 `0.2.1-rc.2`；命令结束后还有一个 conhost，终止该私有 Job 后观察到 `active=0`。记录为 `tmp/windows-process/31-cli-versions.json`，stdout/stderr 另有 Base64 原始字节。它证明 Codex CLI 0.163.0 与桌面应用所带 DSH CLI 0.2.1-rc.2 的纯版本命令能启动，不代表对应 app 版本，也不改变前述产品发现失败的结果。
 
-服务健康表未有这两个 harness 的行，产品健康投影均为 `status=unknown; revision=0; reason.code=harness.not-checked`。服务停止返回 `stopped=true; cancelledQueued=0; cancelRequested=0; unresolvedAttempts=[]`；等待外层进程退出码 0 后，私有 Job 尚有一个 conhost，最后强停该 Job 并再次查询得到 `active=0; members=[]`。记录为 `tmp/windows-process/26-cli.json` 的 `private_service_health_projection`、`private_service_stop`、`private_service_final_cleanup`。该补充 CLI 实验无法单独证实第 4 节的产品服务独立生存期或真实 harness 的工作能力；这里只证明私有开发态服务启动、读取、停止与本次探测的物理收尾。
+服务健康表未有这两个 harness 的行，产品健康投影均为 `status=unknown; revision=0; reason.code=harness.not-checked`。服务停止返回 `stopped=true; cancelledQueued=0; cancelRequested=0; unresolvedAttempts=[]`；等待外层进程退出码 0 后，私有 Job 尚有一个 conhost，最后强停该 Job 并再次查询得到 `active=0; members=[]`。记录为 `tmp/windows-process/26-cli.json` 的 `private_service_health_projection`、`private_service_stop`、`private_service_final_cleanup`。该补充 CLI 实验无法单独证实第 4 节的产品服务独立生存期或真实 harness 的工作能力；这里只证明私有开发态服务启动、读取、停止与本次探测的物理清场。
 
 ## 交开发者安排的实验
 
@@ -123,9 +123,9 @@ exit /b %errorlevel%
 
 睡眠与休眠：在同一私有替身活着时记录 bootId、创建 FILETIME、Job 和会话，分别进入睡眠、恢复和休眠、恢复，重复读取并比较真实值及身份。注销/重新登录也应独立记录相同信息。标识变化与进程是否存活分别记载，无法读取或检查时保留 unknown，不预设哪一种事件一定改变 BootIdentifier。
 
-## 收尾证据、约束偏差与 Host 所需处理
+## 清场证据、约束偏差与 Host 所需处理
 
-前一轮的进程收尾有三层证据：各受控 Job 终止后再次查询全空；所有存活服务替身经过停止文件后原身份缺席；最后按原始输出建立了 95 个精确身份及 162 个观察 PID 的登记表，并逐一核对。`tmp/windows-process/36-cleanup-check.json` 返回 `remainingRegistered=[]; privateRootLiveProcesses=[]`，162 个 PID 在当时的核对中全部为不存在，未触发任何追加强杀。环境扫描有 22 个其他进程拒绝读取环境，这不是全机无进程的证明；本次已登记进程没有 unknown。随后独立只读命令行扫描也未找到引用本工作根的活进程，记录为 `38-final-inspection.json` 和 `39-launcher-reference.json`。
+前一轮的进程清场有三层证据：各受控 Job 终止后再次查询全空；所有存活服务替身经过停止文件后原身份缺席；最后按原始输出建立了 95 个精确身份及 162 个观察 PID 的登记表，并逐一核对。`tmp/windows-process/36-cleanup-check.json` 返回 `remainingRegistered=[]; privateRootLiveProcesses=[]`，162 个 PID 在当时的核对中全部为不存在，未触发任何追加强杀。环境扫描有 22 个其他进程拒绝读取环境，这不是全机无进程的证明；本次已登记进程没有 unknown。随后独立只读命令行扫描也未找到引用本工作根的活进程，记录为 `38-final-inspection.json` 和 `39-launcher-reference.json`。
 
 前一轮没有删除目录，因为初次显式 `uv python install 3.12` 虽把安装目录放进私有根，却遗漏了 `--no-bin --no-registry`。当时 `%USERPROFILE%\.local\bin\python3.12.exe` 为 46,592 字节的普通启动器，UTF-8 内容引用 `%USERPROFILE%\hmb-work\64ee8084\python\cpython-3.12-windows-x86_64-none\python.exe`，SHA-256 为 `49ed44c28fbbf472279235a18eec2f3e9644d13398baf673b194ba8b2e0b6a12`。历史记录为 `tmp/windows-process/35-python-side-effects.json`、`38-final-inspection.json`、`39-launcher-reference.json`，不是本次卸载后的现状。
 
@@ -143,16 +143,16 @@ exit /b %errorlevel%
 
 对比中，默认 uv 管理根的全部 8,303 项清单及摘要未变，注册表此前提到的另两个安装目录在前后均不存在，`.local\bin` 其他四个文件的内容、属性和时间未变；该目录唯一差异是本次 `python3.12.exe` 被移除。HKCU 导出中没有任何值引用本工作根。这些是已经通过的局部核对，不能代替全部核对。
 
-上轮暂缓收尾的原因是注册表差异：卸载前，HKCU `Software\Python\Astral\CPython3.12.13`、`CPython3.12.3` 及各自 `InstallPath` 指向 `<另一私有根>`，并不指向本工作根；卸载后的两个注册表视图中，这两组版本键及其 InstallPath 都消失了。每个视图原有的 20 个版本值记录均缺失，比较结果列出全部键和值，没有把两个视图的导出记录当成独立物理注册项数量。`Software\Python\Astral` 自身的公司值未变，`Software\Astral` 在前后均不存在。
+上轮暂缓清场的原因是注册表差异：卸载前，HKCU `Software\Python\Astral\CPython3.12.13`、`CPython3.12.3` 及各自 `InstallPath` 指向 `<另一私有根>`，并不指向本工作根；卸载后的两个注册表视图中，这两组版本键及其 InstallPath 都消失了。每个视图原有的 20 个版本值记录均缺失，比较结果列出全部键和值，没有把两个视图的导出记录当成独立物理注册项数量。`Software\Python\Astral` 自身的公司值未变，`Software\Astral` 在前后均不存在。
 
-前后快照没有逐次注册表写入跟踪，当时不能自行给差异归因，因此机械比较保留 `step3Passed=false`，并按开发者的停止条件交回，暂未删除目录。随后 Host 核读卸载前后导出，确认两组登记都指向 A2 实验目录：A2 安装 Python 时遗漏 `--no-registry`，收尾只删目录而留下登记；清理前账户只有这两组 InstallPath，均不属于开发者既有安装。Host 确认这些指向不存在目录的残留随本次卸载被清理是正确结果，接受第 3 步差异并明确授权继续。该归属来自 Host 核实，记录在 `tmp/windows-process/registry-difference-disposition.json`；没有改写原始比较结果，也没有手工恢复或编辑注册表。
+前后快照没有逐次注册表写入跟踪，当时不能自行给差异归因，因此机械比较保留 `step3Passed=false`，并按开发者的停止条件交回，暂未删除目录。随后 Host 核读卸载前后导出，确认两组登记都指向 A2 实验目录：A2 安装 Python 时遗漏 `--no-registry`，清场只删目录而留下登记；清理前账户只有这两组 InstallPath，均不属于开发者既有安装。Host 确认这些指向不存在目录的残留随本次卸载被清理是正确结果，接受第 3 步差异并明确授权继续。该归属来自 Host 核实，记录在 `tmp/windows-process/registry-difference-disposition.json`；没有改写原始比较结果，也没有手工恢复或编辑注册表。
 
 最后执行 `tmp/windows-process/45-final-cleanup.ps1`，原始命令、退出码、stdout/stderr 位于同名 `.json`、`.stdout.bin`、`.stderr.bin`，汇总为 `remote-root-deletion.json`。先读取实验身份登记并通过 CIM 核对，再只删除 `%USERPROFILE%\hmb-work\64ee8084` 内的内容；遇到重解析目录仅移除链接，不遍历目标，Git 普通只读文件仅在该私有根内清除只读属性后删除。实际删除 4,068 个普通文件、627 个目录和 1 个私有 Python 别名 junction，随后 `Test-Path=False`，SSH 命令退出 0。
 
-删除前后均重新核对 162 个登记 PID：161 个不存在，1 个现有 PID 的创建时间晚于原实验观察，证明该数字已被重用，原实验进程已退出；没有把新进程算成本任务或向它发信号。两次 `remainingRegistered=[]`、`privateRootCommandLineMatches=[]`，没有查询未知项；本次 PowerShell 收尾观察器在 SSH 返回退出码 0 时也已结束。全局 `python3.12.exe` 仍不存在，目录删除和进程核对均有本轮新输出，未借用早期结果。
+删除前后均重新核对 162 个登记 PID：161 个不存在，1 个现有 PID 的创建时间晚于原实验观察，证明该数字已被重用，原实验进程已退出；没有把新进程算成本任务或向它发信号。两次 `remainingRegistered=[]`、`privateRootCommandLineMatches=[]`，没有查询未知项；本次 PowerShell 清场观察器在 SSH 返回退出码 0 时也已结束。全局 `python3.12.exe` 仍不存在，目录删除和进程核对均有本轮新输出，未借用早期结果。
 
-清理后对整个 HKCU 的 Registry64、Registry32 视图作只读搜索，两个视图累计读取 41,544 个键、87,756 个值；字符串、多字符串及二进制数据的 UTF-8/UTF-16 文本中，`hmb-work` 匹配为 0，读取失败为 0。因此最终核对未发现 HKCU 值引用 `hmb-work`，两组 A2 残留登记已随本次卸载清除。本项收尾已无待 Host 处理事项；既有 uv 安装与其他 bin 文件的前后摘要证据仍保留在第 3 步记录中。
+清理后对整个 HKCU 的 Registry64、Registry32 视图作只读搜索，两个视图累计读取 41,544 个键、87,756 个值；字符串、多字符串及二进制数据的 UTF-8/UTF-16 文本中，`hmb-work` 匹配为 0，读取失败为 0。因此最终核对未发现 HKCU 值引用 `hmb-work`，两组 A2 残留登记已随本次卸载清除。本项清场已无待 Host 处理事项；既有 uv 安装与其他 bin 文件的前后摘要证据仍保留在第 3 步记录中。
 
 另有前一轮已知网络约束偏差：内部只读脚本审查误用了 Microsoft Learn 网页工具查询，超出“网络只用于锁定依赖和 Windows SSH”的范围，发现后停止了该审查。没有采用网页内容作为实验结论；本续轮没有网页查询或委派其他代理。初次 Python 安装的默认外部副作用与该网络偏差仍保留记录，不因卸载成功而抹去。
 
-当前检出的写入仅为本文及被忽略的 `tmp/windows-process/`；续轮的远端变更是开发者授权的指定私有 Python 的 uv 卸载和实验目录删除，其外部状态差异及 Host 核实结果如实列于上文。本轮没有运行产品检查套件、修改分支/标签、推送、stash 或改日常看板。产品设计与实现、真实 harness 回合、桌面和电源实验均未实施；后续桌面、不同会话及电源实验的步骤已另列，本次实验交付与远端收尾已经完成。
+当前检出的写入仅为本文及被忽略的 `tmp/windows-process/`；续轮的远端变更是开发者授权的指定私有 Python 的 uv 卸载和实验目录删除，其外部状态差异及 Host 核实结果如实列于上文。本轮没有运行产品检查套件、修改分支/标签、推送、stash 或改日常看板。产品设计与实现、真实 harness 回合、桌面和电源实验均未实施；后续桌面、不同会话及电源实验的步骤已另列，本次实验交付与远端清场已经完成。

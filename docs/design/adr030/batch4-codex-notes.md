@@ -69,7 +69,7 @@ PY
 
 正常原生形状应照常得到 complete 目录；出现未读懂的页或游标则得到 unknown 与原因，同时正常完成确认停止。没有确认停止或原生读取明确失败仍抛出真实错误。输出只汇总版本、读取状态、模型数量与有界未知事件，避免输出账户详情或用户配置。这个核对直接验证 Codex 读取路径；修复上文消费者后，Host 还需核对服务保存的状态仍为 unknown。
 
-## 收尾
+## 最后改动
 
 本片以 `98cb1536` 为输入，接入已合入的共用结果约定。`native_run._build_result` 把 `_RunFacts.unknown_counts` 的有界类型计数和总数写入 `RunResult.native_evidence.unknown_events`；把 `policy_checks.configReadback`、`threadReceipt` 的 unknown 分别写为 `settings-readback`、`thread-receipt`，本次 `catalog_read.discovery.status` 为 unknown 时写为 `model-catalog`。`selectedModel` 未证实仍由空的 checked 模型及原有 policyCheck 表达，不新增短名字；确认的读取和未产生的事实不列为未证实项。`native_evidence(result)` 删除重复的 `unknownEvents` 投影，保留 Codex 的 `policyCheck`、`catalogRead`、配置与线程回读；`unknown-events.json` 及其证据引用继续保存。对应 `NativeFactsTests.test_shared_native_facts_reach_all_three_carrier_results_without_duplicate_keys` 经三个载体的构建及真实角色投影确认共用两项只在 `nativeEvidence` 下出现，`test_confirmed_reads_and_unreadable_selected_model_add_no_unconfirmed_name` 确认空事实不进入角色结果，`NoToolCodexTests.test_unknown_event_keeps_a_valid_answer` 验证控制器编码与采集后的快速结果。
 

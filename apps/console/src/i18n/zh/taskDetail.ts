@@ -64,7 +64,7 @@ export default {
   },
   activity: {
     unknown: "进展未知", starting: "正在启动", "waiting-model": "等待模型", "streaming-model": "模型输出中",
-    "tool-running": "工具执行中", "waiting-external": "等待外部结果", "waiting-host": "等待 Host", finishing: "正在收尾",
+    "tool-running": "工具执行中", "waiting-external": "等待外部结果", "waiting-host": "等待 Host", finishing: "正在结束",
     reported: "上报 {{when}}", notReported: "没有上报", modelTurns: "模型回合 {{n}}", toolCalls: "工具调用 {{n}}",
     basis: { tool: "收到工具活动", native: "收到原生活动", phase: "仅有阶段，没有原生活动", unknown: "活动依据未知" },
     lastTool: "最近工具活动 {{when}}", lastNative: "最近原生活动 {{when}}", event: "事件序号 {{n}}",
@@ -75,9 +75,9 @@ export default {
   },
   ending: { cause: "终止原因：{{cause}}", unrecorded: "终止原因未记录" },
   termination: {
-    "wrap-up": "Host 收尾完成", "grace-expired": "收尾宽限到期后停止", "forced-stop": "强制停止",
+    "wrap-up": "Host 有序收尾完成", "grace-expired": "有序收尾的宽限期到期后停止", "forced-stop": "强制停止",
     "service-stop": "服务停止", "unknown-stop": "停止（发起者未知）", deadline: "Router 预算用完", "harness-error": "Harness 错误",
-    "transport-error": "传输故障", "workspace-error": "工作区错误", completed: "正常完成", wrapUpLead: "Lead 收尾完成",
+    "transport-error": "传输故障", "workspace-error": "工作区错误", completed: "正常完成", wrapUpLead: "Lead 有序收尾完成",
   },
   quota: { "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },
   seal: {
