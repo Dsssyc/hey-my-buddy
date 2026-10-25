@@ -54,3 +54,4 @@
 | 2026-10-23 | [buddy 配色：在避开状态色的前提下，怎样让颜色分得开又好看](2026-10-23-buddy-palette.md) | ADR-029 第 13 条 |
 | 2026-10-23 | [README 怎样写得轻：几个开源项目的首页结构](2026-10-23-readme-structure.md) | README 与 README.zh-CN 的改写 |
 | 2026-10-23 | [要不要改用官方的 ACP Python SDK](2026-10-23-acp-sdk.md) | 轮子盘点的 E 项：暂不换，等 1.0 正式版 |
+| 2026-10-25 | [DeepSeek Harness 怎样记录决定，我们取什么](2026-10-25-dsh-agent-notes.md) | 文档卫生检查与 ADR 写法的提议，待开发者定 |
