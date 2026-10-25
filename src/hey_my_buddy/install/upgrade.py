@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import contextmanager, closing, ExitStack
 from ..paths import is_absolute_path
 import gzip
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -15,13 +14,13 @@ import subprocess
 import time
 import uuid
 
-from ..blackboard.store import backup, upgrade as schema_upgrade
+from ..blackboard.store import backup
 from .. import private_dirs, private_files
 from . import runtime
 from .launcher import write_active_runtime
 from ..protocol.contracts import CONTRACT_VERSION
 from ..protocol.service_process import independent_service_popen
-from ..blackboard.store.db import SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, utc_now
+from ..blackboard.store.db import SCHEMA_VERSION, utc_now
 from ..errors import BoardError
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
@@ -64,8 +63,8 @@ def file_lock(path: Path, *, timeout: float = 0):
 
 def _idle_board(connection: sqlite3.Connection) -> int:
     schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if schema is None or schema[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
-        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}')
+    if schema is None or schema[0] != str(SCHEMA_VERSION):
+        raise BoardError('UNSUPPORTED_SCHEMA', f'Upgrade requires schema {SCHEMA_VERSION}')
     # A micro-task Host boundary has no autonomous next turn. A recorded or
     # queued continuation still has work to prepare/claim, even if the run
     # currently reports a Host boundary. Routing and helper tasks are checked
@@ -91,30 +90,14 @@ def ensure_idle(state: Path) -> int:
         return _idle_board(connection)
 
 
-def idle_snapshot(state: Path, *, event_head: int | None = None,
-                  column_projections: dict[str, tuple[str, ...]] | None = None) -> dict:
+def idle_snapshot(state: Path, *, event_head: int | None = None) -> dict:
     with closing(sqlite3.connect((state / 'board.sqlite3').as_uri() + '?mode=ro', uri=True)) as connection:
         connection.execute('BEGIN')
         schema = _idle_board(connection)
         if connection.execute('PRAGMA integrity_check').fetchall() != [('ok',)] or connection.execute('PRAGMA foreign_key_check').fetchall():
             raise BoardError('UPGRADE_INVALID_BOARD', 'Board integrity or foreign key checks failed')
-        if schema == UPGRADE_BASE_SCHEMA:
-            schema_upgrade.validate_inquiry_and_scope_stock(connection)
-            column_projections = schema_upgrade.RETAINED_COLUMN_PROJECTIONS
-        retained_meta = [list(row) for row in connection.execute(
-            "SELECT key,value FROM meta WHERE key!='schema_version' ORDER BY key")]
-        retained_meta_hash = hashlib.sha256(json.dumps(
-            retained_meta, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
-        snapshot = backup.database_snapshot(connection, event_head=event_head, column_projections=column_projections)
-        expected = {}
-        if schema == UPGRADE_BASE_SCHEMA:
-            fingerprints = schema_upgrade.expected_router_fingerprints(connection)
-            fingerprints.update(schema_upgrade.expected_inquiry_and_scope_fingerprints(connection))
-            fingerprints['events'] = schema_upgrade.expected_events_fingerprint(
-                connection, event_head=snapshot['eventHead'])
-            expected = {'expectedFingerprints': fingerprints}
-        return {**snapshot, 'schema': schema, 'retainedMetaSha256': retained_meta_hash, **expected,
-                **({'columnProjections': column_projections} if column_projections is not None else {})}
+        snapshot = backup.database_snapshot(connection, event_head=event_head)
+        return {**snapshot, 'schema': schema}
 
 
 def preflight(state: Path, *, contract_changed: bool) -> dict:
@@ -311,33 +294,24 @@ def restore(state: Path, current: Path) -> None:
     private_files.sync_directory(state, follow_symlinks=False)
 
 
-def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True,
-                   expected_schema: int = SCHEMA_VERSION) -> dict:
-    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != expected_schema:
+def verify_started(state: Path, target: Path, health: dict, before: dict, *, contract_changed: bool = True) -> dict:
+    if health.get('runtimeContentId') != target.name or not health.get('runtimeStable') or health.get('schemaVersion') != SCHEMA_VERSION:
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Replacement runtime identity or schema did not match',
-                         tables=['meta'] if health.get('schemaVersion') != expected_schema else [])
+                         tables=['meta'] if health.get('schemaVersion') != SCHEMA_VERSION else [])
     settings = before.get('runtimeSettings', {})
     if any(health.get(key) != value for key, value in settings.items()):
         raise BoardError('UPGRADE_VERIFY_FAILED', 'Configured runtime capacity changed')
     if contract_changed:
-        converting = before['schema'] == UPGRADE_BASE_SCHEMA and expected_schema == SCHEMA_VERSION
-        actual = idle_snapshot(state, event_head=before.get('eventHead'),
-                               column_projections=before['columnProjections'] if converting else None)
-        if actual['schema'] != expected_schema:
-            raise BoardError('UPGRADE_VERIFY_FAILED', 'Database schema did not match', tables=['meta'])
-        expected_tables = set(before['tables']) | ({'attempt_received_receipts'} if converting else set())
+        actual = idle_snapshot(state, event_head=before.get('eventHead'))
+        expected_tables = set(before['tables'])
         if set(actual['tables']) != expected_tables:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Database table inventory changed',
                              tables=sorted(set(actual['tables']) ^ expected_tables))
         changed = [name for name, value in before['fingerprints'].items()
-                   if not (name == 'meta' and before['schema'] != expected_schema)
-                   and actual['fingerprints'].get(name) != (
-                       before['expectedFingerprints'].get(name, value) if converting else value)]
-        if before['retainedMetaSha256'] != actual['retainedMetaSha256'] and 'meta' not in changed:
-            changed.append('meta')
+                   if actual['fingerprints'].get(name) != value]
         if changed:
             raise BoardError('UPGRADE_VERIFY_FAILED', 'Retained database values changed', tables=changed)
-    return {'runtimeContentId': target.name, 'schemaVersion': expected_schema,
+    return {'runtimeContentId': target.name, 'schemaVersion': SCHEMA_VERSION,
             **({'retainedDataFingerprints': True} if contract_changed else {})}
 
 
@@ -538,8 +512,6 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                         write_journal(marker, journal)
                     journal.update(phase='prepared', expected=before)
                     write_journal(marker, journal)
-                    if contract_changed:
-                        schema_upgrade.migrate_schema(state)
                 active = target
                 health = start(state, target)
                 evidence = verify_started(state, target, health, before, contract_changed=contract_changed)
@@ -575,8 +547,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                     # A race admitted work before the old daemon detached: preserve it
                     # and restart the previous runtime without restoring an older DB.
                     recovered = start(state, previous)
-                    evidence = (verify_started(state, previous, recovered, before, contract_changed=contract_changed,
-                                               expected_schema=before['schema'])
+                    evidence = (verify_started(state, previous, recovered, before, contract_changed=contract_changed)
                                 if backed_up is not None or not contract_changed else {'runtimeContentId':previous.name, 'workPreserved':True})
                     write_active_runtime(state, previous, preserved)
                     journal.update(phase='rolled-back', rollback=evidence, failure=reason)
@@ -604,11 +575,9 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 clear_journal(marker)
             except OSError as error:
                 journal_error = str(error)
-            legacy_cleanup = ({'legacyLayoutCleanup': schema_upgrade.cleanup_legacy_layout(state)}
-                              if contract_changed and before['schema'] == UPGRADE_BASE_SCHEMA else {})
             pruning = retain_runtimes(state, target, previous)
             return {'upgraded':True, **({'backup':backed_up} if backed_up is not None else {}), 'verification':evidence, 'previousRuntime':previous.name,
-                    'rollback':None, 'runtimePruning':pruning, **legacy_cleanup,
+                    'rollback':None, 'runtimePruning':pruning,
                     **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                     **({'journalError':journal_error} if journal_error is not None else {})}
 
@@ -638,11 +607,8 @@ def recover(state: Path, root: Path) -> dict:
             clear_journal(marker)
         except OSError as error:
             journal_error = str(error)
-        legacy_cleanup = ({'legacyLayoutCleanup': schema_upgrade.cleanup_legacy_layout(state)}
-                          if contract_changed and journal['expected']['schema'] == UPGRADE_BASE_SCHEMA else {})
         pruning = retain_runtimes(state, target, previous)
         return {'upgraded':True, 'recoveredJournal':True, 'verification':evidence, 'runtimePruning':pruning,
-                **legacy_cleanup,
                 **({'backup':journal['backup']} if 'backup' in journal else {}),
                 **({'skillCleanupError':skill_cleanup_error} if skill_cleanup_error is not None else {}),
                 **({'journalError':journal_error} if journal_error is not None else {})}
@@ -685,8 +651,7 @@ def recover(state: Path, root: Path) -> dict:
         else:
             before = journal['before']
     health = start(state, previous)
-    evidence = verify_started(state, previous, health, before, contract_changed=contract_changed,
-                              expected_schema=before['schema'])
+    evidence = verify_started(state, previous, health, before, contract_changed=contract_changed)
     write_active_runtime(state, previous, journal.get('environment'))
     _restore_skill(journal, skill_paths)
     journal.update(phase='rolled-back', rollback=evidence)

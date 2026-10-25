@@ -25,7 +25,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hey_my_buddy import private_dirs
-from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, SECRET_KEY, initialize_defaults
+from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, initialize_defaults
 from hey_my_buddy.blackboard.tasks.macro_tasks import RUN_GROUPS_SQL
 from hey_my_buddy.state_root import get_state_dir
 
@@ -111,8 +111,8 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
 
 def _source_schema(connection) -> tuple[str, list[tuple[str, str]]]:
     version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if version is None or version[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
-        raise ValueError(f"Source must use schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}")
+    if version is None or version[0] != str(SCHEMA_VERSION):
+        raise ValueError(f"Source must use schema {SCHEMA_VERSION}")
     definitions = [(row['type'], row['sql']) for row in connection.execute(
         "SELECT type,sql FROM sqlite_master WHERE type IN ('table','index') "
         "AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' "

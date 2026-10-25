@@ -14,7 +14,7 @@ from blackboard.store.upgrade_fixture import load_fixture
 from console.test_console import Browser
 from support import InProcessBoard, write_catalog_fixture, _child_environment, wait_for
 from private_acl import assert_private_path
-from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, UPGRADE_BASE_SCHEMA, SECRET_KEY, Database
+from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, Database
 from hey_my_buddy import private_dirs
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
@@ -223,6 +223,20 @@ class ExportBoardSampleTests(WorkflowTestCase):
         self.assertFalse(output.exists())
         self.assert_source_unchanged(before, files(board.directory))
 
+    def test_unsupported_schema_preserves_source_and_publishes_no_sample(self):
+        board = self.source_board()
+        board.store.db.close()
+        for schema in (28, 30):
+            with self.subTest(schema=schema):
+                with closing(sqlite3.connect(board.directory / DB_FILE)) as connection, connection:
+                    connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(schema),))
+                before = files(board.directory)
+                output = self.directory / f'unsupported-{schema}'
+                with self.assertRaisesRegex(ValueError, f'Source must use schema {SCHEMA_VERSION}'):
+                    export_sample(board.directory, output)
+                self.assertFalse(output.exists())
+                self.assert_source_unchanged(before, files(board.directory))
+
     def test_fixture_export_keeps_schema_and_every_selected_attempt_journal(self):
         fixture = load_fixture(self.directory / 'source')
         source = fixture['state']
@@ -254,7 +268,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with closing(sqlite3.connect(output / DB_FILE)) as connection:
             self.assertEqual(connection.execute(
                 "SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                str(UPGRADE_BASE_SCHEMA))
+                str(SCHEMA_VERSION))
             self.assertEqual(list(connection.execute(
                 "SELECT type,name,tbl_name,sql FROM sqlite_master "
                 "WHERE type IN ('table','index') AND name NOT LIKE 'sqlite_%' "
