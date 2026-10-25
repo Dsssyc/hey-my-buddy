@@ -1,6 +1,6 @@
 # Architecture
 
-This page describes the current source: transport protocol 2 and schema 29; the upgrade base is 0.51.0 (schema 28), and the upgrade from schema 28 to 29 is pending: it has not run on a real board. Startup never migrates. Installation and native verification facts remain in [acceptance records](../acceptance/installs/0.20.0.md).
+This page describes the current source: transport protocol 2 and schema 29; the upgrade base is 0.51.0 (schema 28), and the upgrade from schema 28 to 29 ran on the daily board with the 0.53.0 install on 2026-10-26, so it is consumed and the base moves next. Startup never migrates. Installation and native verification facts remain in [acceptance records](../acceptance/installs/0.20.0.md).
 
 ## Process topology
 
@@ -9,7 +9,7 @@ Codex skill / CLI / private console
                   |  named C-Two RPC (private token)
         Python blackboard daemon  <-- only writer of authoritative state
           state machine + transactions + events + execution scheduler
-                  |  SQLite WAL (board.sqlite3, schema 28)
+                  |  SQLite WAL (board.sqlite3, schema 29)
         tasks / attempts / messages / artifacts
         events / command receipts / resource claims
         execution identities / shutdown evidence / execution and service issues
@@ -43,7 +43,7 @@ hey-my-buddy transports bounded JSON strings through C-Two 0.7.6's named Python 
 
 ## Data model
 
-One schema-versioned SQLite database (`board.sqlite3`, schema version 29) owns every authoritative fact in 54 tables. Startup accepts schema 29 only; installing this version converts a schema-28 board ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
+One schema-versioned SQLite database (`board.sqlite3`, schema version 29) owns every authoritative fact in 55 tables. Startup accepts schema 29 only; installing this version converts a schema-28 board ([operations](operations.md#installation)). Events and the records of scopes, workspace conflicts, integrations, cleanup plans and Host conclusions store who acted as a role (`host`, `lead`, `console`, `service`, `workflow` or `bridge`) and an identifier.
 
 | Group | Tables |
 | --- | --- |
@@ -205,7 +205,7 @@ The installation package transports the complete skill and runtime assets. Its i
 
 ## ADR-019 first-stage state (0.23.0)
 
-The current board uses schema 28. Ordinary access reads the ordered Router settings directly and does not read paid review certificates. Router skip windows derive from recorded no-answer outcomes plus the configurable retry interval, with no persisted circuit state. `routingHealth` reports each Router separately, counts timeouts as failures and resolves availability/current identity through the shared current-Router entry. Provider cooling is one `provider_cooling` row per harness provider while its quota refusals are unresolved; nonsecret account observations keep their existing storage and ownership.
+The current board uses schema 29. Ordinary access reads the ordered Router settings directly and does not read paid review certificates. Router skip windows derive from recorded no-answer outcomes plus the configurable retry interval, with no persisted circuit state. `routingHealth` reports each Router separately, counts timeouts as failures and resolves availability/current identity through the shared current-Router entry. Provider cooling is one `provider_cooling` row per harness provider while its quota refusals are unresolved; nonsecret account observations keep their existing storage and ownership.
 
 ## ADR-019 private-directory boundary (0.24.0)
 
@@ -217,4 +217,4 @@ Workspace cleanup reclaims its own stopped private micro task/session roots afte
 
 DSH Worker sessions use a micro task-shared JSONL session root for continuation; fast calls use an attempt-private root. The product session-grouping option, its workspace bridge and grouped-session listing/archiving were removed by ADR-021 decision 18, so these sessions stay separate from the native app store. Codex Worker turns store ordinary threads and SQLite state in the user's native directory; fast and review Router calls use ephemeral sessions. Its private binding records task, thread, checkout, buddy and last completed turn; old micro task-private session receipts reconstruct a new native session after ADR-030 batch 3b. This change still needs installed native verification.
 
-The named `worker_sessions` operation reads native identities only from authoritative receipts and lists Codex history read-only. Console macro task deletion uses that inventory to delete proven user-store sessions through the native harness operation, and removes private sessions with their owned roots. Upgrade does not implicitly alter native history in the user's harness directories. Runtime reclamation reports malformed entries separately and admits recognized older READY layouts only with positive unused-process inspection and current/previous retention. The current board uses schema 28.
+The named `worker_sessions` operation reads native identities only from authoritative receipts and lists Codex history read-only. Console macro task deletion uses that inventory to delete proven user-store sessions through the native harness operation, and removes private sessions with their owned roots. Upgrade does not implicitly alter native history in the user's harness directories. Runtime reclamation reports malformed entries separately and admits recognized older READY layouts only with positive unused-process inspection and current/previous retention. The current board uses schema 29.
