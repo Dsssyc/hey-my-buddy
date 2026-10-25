@@ -41,3 +41,12 @@
 - **harness 测试替身（`3fbeb749`，两个回合，`9d6bd825`）。** 替身改成显式的 Python argv；DSH 替身的私有 home 由测试给出的根判断；匿名管道改用读线程；第二回合查清 Windows 上 `test_workflow_real` 挂住的原因（替身往很深的会话目录写文件失败、出错的请求不答复），替身现在对失败的请求回错误并记日志。`test_launcher`、`test_runtime`、`test_packaging`、`test_first_install`、ZCode hooks 自检、`test_workflow_real`、`test_acp_launch` 通过。
 - **进程、信号、端点与权限的测试（`b0c59361`，`66d6540d`，44 个文件）。** 只在 POSIX 上有的调用标明平台，Windows 上按 Job、FILETIME 与 ACL 验证同一个目标；产品改两处：Windows 上忽略继承的 `C2_IPC_ROOT`（`rpc_config`，测试机上先复现了 C-Two 的 ValueError），检查运行器在 Windows 上把 SIGBREAK 当作中断、根是链接时锁的扫描失败。`test_rpc_config`、`test_process_identity`、`test_execution_process`、`test_path_state`、`test_transport_attach`、`test_storage`、`test_checks_parallel` 等通过。它查出两处产品缺陷（软停送不到无窗口的子进程；Windows 上发现探针丢掉总超时的分类），记在 [F3 计划](../../design/cross-platform/windows-f3-plan.md)；它没有覆盖到的只在 POSIX 上有的调用（探针与 ZCode 测试里的 `O_NOFOLLOW`、控制台会话的 SIGINT、Codex native run 的负退出码）归“残余”。
 - **核对。** 每批的差异 Host 都读过；合并冲突解决后两批都改过的六个文件在 macOS 上 86 项通过。证据副本在 Host 检出被忽略的 `tmp/storage/f3-*-evidence/`。
+
+## 残余（一）：测试与夹具（2026-10-26）
+
+微任务“残余一：Windows 测试与夹具”（run `a86becbc`，Codex CLI 的 `gpt-6.1-sol / max`），基点 `04162c28`，产物 `62e221a0`（92 个测试、探针与工作流文件，没有产品源码），合入 `3369a9fe`（一处与“样板看板的 Git 调用”的冲突由 Host 保留产品的 `_git_command`）。
+
+- **最大的一类（删除时文件被占用，WinError 32）的根因在测试支持：** `InProcessBoard.close` 关掉自己的资源后就删数据库，而同一测试里另一个看板还连着它；删除改由测试的私有根统一清场，实现方先在 Windows 基线上复现了这个错误。各测试自己建的数据库也显式关闭。
+- **其余：** 临时树经检查运行器已有的私有根删除；长路径经 `native_path`；只在 POSIX 上有的调用（`O_NOFOLLOW`、SIGINT、负退出码）给出 Windows 的对应验证；只设 HOME 的夹具同时设 USERPROFILE；文件模式与 Windows 上不合法的名字按平台；CI 的 Windows 任务把 TEMP 放到 `%LOCALAPPDATA%\Temp`（运行器的 `D:\a\_temp` 不在用户目录之下，状态根的规则拒绝它）；启动器测试的上限与同类的 240 秒一致。
+- **核对：** 合并后完整检查 324 个文件 5,036 项、前端 1,123 项通过，打包的控制台资源与构建一致。持续集成运行 `40229228436`：Windows x64 与 ARM64 各 324 个文件过 279 个（上一轮 256 个），新出现一个失败（`test_host_workflow_worker` 里测试自己调用的 `git apply` 碰上更长的 TEMP），交给残余（二）；Ubuntu 的失败从 39 个降到 30 个，余下的是“读不到的同账户进程”那一处（待开发者定）。测试机上（`LongPathsEnabled=0`）实现方最后一次复跑 325 个文件过 242 个。
+- **它查到、留给残余（二）的产品缺陷：** `catalog.py` 两处 `Database(...)` 用完不关；同级 cwd 映射用反斜杠后被 `validate_git_path` 拒绝；scope 冲突的创建路径没有转换（WinError 206）。还有它准备好未应用的 7 个文件的测试补丁。
