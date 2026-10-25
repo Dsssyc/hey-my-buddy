@@ -54,6 +54,8 @@ class DistributionTests(unittest.TestCase):
                     "hey_my_buddy/_distribution/skill.json",
                     "hey_my_buddy/_distribution/scripts/hey-my-buddy",
                     "hey_my_buddy/_distribution/package/pyproject.toml",
+                    "hey_my_buddy/_distribution/package/README.md",
+                    "hey_my_buddy/_distribution/package/LICENSE",
                     "hey_my_buddy/_distribution/package/uv.lock",
                     "hey_my_buddy/_distribution/package/packaging/runtime-assets.json",
                     "hey_my_buddy/_distribution/package/packaging/hatch_build.py",
@@ -68,6 +70,8 @@ class DistributionTests(unittest.TestCase):
                                      for name in wheel_files))
                 self.assertTrue(any(name.startswith("hey_my_buddy/_distribution/package/src/hey_my_buddy/console/assets/assets/") for name in wheel_files))
                 entry = next(name for name in wheel_files if name.endswith(".dist-info/entry_points.txt"))
+                metadata_path = next(name for name in wheel_files if name.endswith(".dist-info/METADATA"))
+                wheel_metadata = archive.read(metadata_path)
                 self.assertIn("hey-my-buddy = hey_my_buddy.install.package_install:main", archive.read(entry).decode())
                 self.assertFalse(any(line.startswith("buddy =") for line in archive.read(entry).decode().splitlines()))
                 self.assertFalse(any("node_modules" in name or "/tests/" in name or "/.venv/" in name for name in wheel_files))
@@ -75,7 +79,7 @@ class DistributionTests(unittest.TestCase):
                 self.assertEqual(json.loads(archive.read("hey_my_buddy/_distribution/skill.json"))["sourceCommit"], head)
             with tarfile.open(sdist) as archive:
                 names = archive.getnames()
-                for suffix in ("packaging/hatch_build.py", "packaging/runtime-assets.json", "uv.lock",
+                for suffix in ("README.md", "LICENSE", "packaging/hatch_build.py", "packaging/runtime-assets.json", "uv.lock",
                                "skills/hey-my-buddy/SKILL.md", "docs/reference/architecture.md",
                                "src/hey_my_buddy/install/runtime.py", "src/hey_my_buddy/protocol/reason-codes.json",
                                "src/hey_my_buddy/console/assets/index.html", "src/hey_my_buddy/build-info.json"):
@@ -93,6 +97,8 @@ class DistributionTests(unittest.TestCase):
             self.assertEqual(from_sdist.returncode, 0, from_sdist.stdout + from_sdist.stderr)
             with zipfile.ZipFile(next((root / "from-sdist").glob("*.whl"))) as archive:
                 marker = json.loads(archive.read("hey_my_buddy/_distribution/skill.json"))
+                metadata_path = next(name for name in archive.namelist() if name.endswith(".dist-info/METADATA"))
+                self.assertEqual(archive.read(metadata_path), wheel_metadata)
             self.assertEqual(marker["sourceCommit"], head)
 
 
