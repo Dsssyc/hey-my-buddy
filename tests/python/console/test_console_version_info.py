@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import io
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -57,15 +59,17 @@ class VersionInfoTests(unittest.TestCase):
     def actual(self):
         root = self.actual_root if hasattr(self, "actual_root") else self.source
         return {"package": str(root / "src/hey_my_buddy"), "prefix": str(root / "venv"),
-                "executable": str(root / "venv/bin/python"),
+                "executable": str(runtime.runtime_python(root)),
                 "resources": {"fixture": str(root / "src/hey_my_buddy/build-info.json")},
                 "missingResources": []}
 
     def ready(self, *, in_use=False, recorded=True, pin=True):
-        python = self.installed / "venv/bin/python"
-        python.parent.mkdir(parents=True)
-        python.write_text("# fixture only; never executed\n", encoding="utf-8", newline="\n")
+        subprocess.run([sys._base_executable, '-m', 'venv', '--without-pip',
+                        *(['--symlinks'] if os.name != 'nt' else []), str(self.installed / 'venv')],
+                       check=True, capture_output=True)
+        python = runtime.runtime_python(self.installed)
         marker = {"format": 1, "state": "READY", "contentId": self.installed.name,
+                  "environment": str(self.installed / 'venv'),
                   "python": str(python), "resources": {"fixture": str(self.installed / "src/hey_my_buddy/build-info.json")},
                   "privateToken": "do-not-expose", "files": ["do-not-expose"]}
         if recorded:

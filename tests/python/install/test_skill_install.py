@@ -16,6 +16,62 @@ from hey_my_buddy.private_dirs import ensure_private_dir
 ROOT = Path(__file__).resolve().parents[3]
 
 
+class ClaudeLinkTests(unittest.TestCase):
+    def setUp(self):
+        temporary = self.enterContext(tempfile.TemporaryDirectory())
+        self.root = Path(temporary).resolve()
+        self.target = self.root / 'agents/hey-my-buddy'
+        self.target.mkdir(parents=True)
+        (self.target / 'sentinel').write_bytes(b'canonical skill')
+        self.home = self.root / 'claude'
+        self.link = self.home / skill_install.SKILL
+        self.enterContext(mock.patch.object(skill_install, 'claude_skills_home', return_value=self.home))
+
+    def test_link_is_verified_reused_reported_and_removed_without_entering_its_target(self):
+        self.assertEqual(skill_install._link_claude(self.target)['status'], 'linked')
+        self.assertTrue(self.link.is_junction() if os.name == 'nt' else self.link.is_symlink())
+        self.assertEqual(self.link.resolve(), self.target.resolve())
+        skill_install._check_claude_link(self.target)
+        self.assertEqual(skill_install._claude_status(self.target), 'linked')
+        with mock.patch.object(skill_install, '_create_claude_link') as create:
+            self.assertEqual(skill_install._link_claude(self.target)['status'], 'already-linked')
+        create.assert_not_called()
+        skill_install._remove_claude_link(self.link)
+        self.assertFalse(self.link.exists() or self.link.is_junction() or self.link.is_symlink())
+        self.assertEqual((self.target / 'sentinel').read_bytes(), b'canonical skill')
+
+    def test_a_link_to_another_skill_is_a_conflict_even_when_its_target_is_missing(self):
+        foreign = self.root / 'foreign'
+        foreign.mkdir()
+        self.home.mkdir()
+        skill_install._create_claude_link(self.link, foreign)
+        foreign.rmdir()
+        self.assertEqual(skill_install._claude_status(self.target), 'conflict')
+        for operation in (skill_install._check_claude_link, skill_install._link_claude):
+            with self.assertRaises(BoardError) as failure:
+                operation(self.target)
+            self.assertEqual(failure.exception.code, 'SKILL_TARGET_CONFLICT')
+            self.assertIn(str(self.link), failure.exception.message)
+        skill_install._remove_claude_link(self.link)
+        self.assertEqual((self.target / 'sentinel').read_bytes(), b'canonical skill')
+
+    def test_the_canonical_skill_cannot_be_a_link(self):
+        self.home.mkdir()
+        skill_install._create_claude_link(self.link, self.target)
+        self.assertFalse(skill_install._matches(self.target, self.link, {}))
+        with self.assertRaises(BoardError) as failure:
+            skill_install._place(self.target, self.link, {})
+        self.assertEqual(failure.exception.code, 'SKILL_TARGET_CONFLICT')
+
+    def test_upgrade_rollback_removes_a_new_link_after_its_target_has_gone(self):
+        from hey_my_buddy.install import upgrade
+        skill_install._link_claude(self.target)
+        staged, previous = self.root / 'stage', self.root / 'previous'
+        upgrade._restore_skill({'skillHadPrevious': False, 'claudeLinkWasMissing': True,
+                                'claudeLink': str(self.link)}, (self.target, staged, previous))
+        self.assertFalse(self.link.exists() or self.link.is_junction() or self.link.is_symlink())
+
+
 class SkillPackageTests(unittest.TestCase):
     def test_build_normalizes_a_relative_destination_before_staging(self):
         with tempfile.TemporaryDirectory() as temporary:

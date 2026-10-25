@@ -31,6 +31,19 @@ FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
 IO_REPARSE_TAG_SYMLINK = 0xA000000C
 FILE_TYPE_DISK = 1
 FSCTL_GET_REPARSE_POINT = 0x000900A8
+FSCTL_SET_REPARSE_POINT = 0x000900A4
+
+
+def _link_with_print_name(raw, name):
+    """Keep the OS's native substitute path and the Git tree's original text."""
+    tag, _, _, offset, size, _, _, flags = struct.unpack_from("<IHHHHHHI", raw)
+    substitute = raw[20 + offset:20 + offset + size]
+    display = name.encode("utf-16-le")
+    body = substitute + b"\0\0" + display + b"\0\0"
+    return struct.pack("<IHHHHHHI", tag, 12 + len(body), 0, 0, len(substitute),
+                       len(substitute) + 2, len(display), flags) + body
+
+
 def _link_print_name(raw):
     if len(raw) < 20:
         raise OSError("invalid symbolic-link reparse data")
@@ -154,7 +167,23 @@ class WindowsFileAPI:
         return _link_print_name(raw)
 
     def symlink(self, target, path, *, directory=False):
-        os.symlink(target, windows_path(path), target_is_directory=directory)
+        native_target = target.replace("/", "\\")
+        os.symlink(native_target, windows_path(path), target_is_directory=directory)
+        if native_target == target:
+            return
+        # NTFS follows the substitute name verbatim: '/' in that name creates
+        # an unreadable link. Preserve Git's spelling in the print name instead.
+        handle = self._open(path, GENERIC_READ | GENERIC_WRITE | DELETE, OPEN_EXISTING)
+        try:
+            raw = self._call(self.win32file.DeviceIoControl,
+                             handle, FSCTL_GET_REPARSE_POINT, None, 16 * 1024)
+            self._call(self.win32file.DeviceIoControl, handle, FSCTL_SET_REPARSE_POINT,
+                       _link_with_print_name(raw, target), None)
+        except BaseException:
+            self.delete(handle)
+            raise
+        finally:
+            self.close(handle)
 
 
 READ_CONTROL = 0x00020000

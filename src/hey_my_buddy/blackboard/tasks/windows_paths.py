@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from ... import private_files
 from ...windows_files import (WindowsFileAPI, FILE_ATTRIBUTE_REPARSE_POINT,
                               FILE_ATTRIBUTE_DIRECTORY, FILE_TYPE_DISK, IO_REPARSE_TAG_SYMLINK)
-from ...paths import is_absolute_path, native_path
+from ...paths import is_absolute_path
 from ...errors import BoardError
 
 _FORBIDDEN = set('<>:"/\\|?*')
@@ -44,6 +44,61 @@ def validate_unique(paths):
                 raise BoardError("WORKSPACE_UNSUPPORTED", "Git paths collide on Windows",
                                  paths=[folded[key], prefix])
             folded[key] = prefix
+
+
+def symlink_types(root, entries, targets):
+    """Prove link types from the complete Git tree, without following disk paths."""
+    directories = {""}
+    for path in entries:
+        parts = path.split("/")
+        directories.update("/".join(parts[:count]) for count in range(1, len(parts)))
+    names = {path.casefold(): path for path in (*entries, *directories)}
+    root = PureWindowsPath(root)
+    result = {}
+    for link, target in targets.items():
+        def refuse(reason):
+            raise BoardError("WORKSPACE_UNSUPPORTED",
+                             f"Cannot create Windows symlink {link}: {reason}; "
+                             "use a target inside the Git tree and retry workspace preparation",
+                             path=link, target=target, reason=reason)
+
+        def resolve(parent, text, active):
+            if not text or "\0" in text:
+                refuse("the target is empty or contains a NUL character")
+            anchored = PureWindowsPath(text)
+            if anchored.anchor:
+                if anchored.drive.casefold() != root.drive.casefold() or not anchored.root:
+                    refuse("the target is outside the repository or depends on a drive's current directory")
+                try:
+                    text = anchored.relative_to(root).as_posix()
+                except ValueError:
+                    refuse("the absolute target points outside the repository")
+                parent = []
+            resolved = list(parent)
+            for part in text.replace("\\", "/").split("/"):
+                if "/".join(resolved) not in directories:
+                    refuse("the target traverses a file")
+                if part in ("", "."):
+                    continue
+                if part == "..":
+                    if not resolved:
+                        refuse("the target points outside the repository")
+                    resolved.pop()
+                    continue
+                candidate = names.get("/".join([*resolved, part]).casefold())
+                if candidate is None:
+                    refuse(f"the target is absent from the Git tree at {'/'.join([*resolved, part])}")
+                if candidate in targets:
+                    if candidate in active:
+                        refuse("the target contains a symlink cycle")
+                    resolved = resolve(resolved, targets[candidate], active | {candidate})
+                elif candidate in entries or candidate in directories:
+                    resolved = candidate.split("/")
+            return resolved
+
+        resolved = resolve(link.split("/")[:-1], target, {link})
+        result[link] = "/".join(resolved) in directories
+    return result
 
 
 def _checked(api, handle, name, *, directory=False, allow_symlink=False, long_name=False):
@@ -179,23 +234,29 @@ def remove(path, *, missing_ok=False, api=None, create_parents=False, repository
         _remove_held(api, path, missing_ok=missing_ok)
 
 
-def restore(path, data, *, symlink_target=None, api=None, repository=None):
+def _symlink_held(api, path, target, directory):
+    try:
+        api.symlink(target, path, directory=directory)
+    except OSError as error:
+        raise BoardError("WORKSPACE_UNSUPPORTED",
+                         f"Cannot create Windows symlink {path}: {error}; use an account permitted to create "
+                         "symlinks or replace this repository link and retry workspace preparation",
+                         path=str(path), target=target, reason=str(error)) from error
+
+
+def restore(path, data, *, link=None, api=None, repository=None):
     """Replace one recovery leaf while retaining every parent handle."""
     with parent(path, create=True, api=api, repository=repository) as (api, path):
         _remove_held(api, path, missing_ok=True)
-        if symlink_target is not None:
-            target_path = Path(os.path.normpath(path.parent / symlink_target))
-            api.symlink(symlink_target, path, directory=native_path(target_path).is_dir())
+        if link is not None:
+            _symlink_held(api, path, *link)
         elif data is not None:
             _write_held(api, path, data)
 
 
-def symlink(path, target, *, api=None, repository=None):
+def symlink(path, target, *, directory, api=None, repository=None):
     with parent(path, create=True, api=api, repository=repository) as (api, path):
-        # Windows needs this type bit at creation; the Git entry remains link text.
-        target_path = Path(os.path.normpath(path.parent / target))
-        directory = native_path(target_path).is_dir()
-        api.symlink(target, path, directory=directory)
+        _symlink_held(api, path, target, directory)
 
 
 def lock_fd(path, *, create=True, api=None, repository=None):

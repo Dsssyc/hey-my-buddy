@@ -226,6 +226,15 @@ class WorkspaceTests(unittest.TestCase):
         (self.repo / "src/link").symlink_to(outside)
         original_index = (self.repo / ".git/index").read_bytes()
         original_status = self.git("status", "--porcelain=v1", "-z")
+        if workspace._WINDOWS:
+            with self.assertRaises(BoardError) as failure:
+                self.prepare(includeUntracked=["src/selected.bin", "src/link"])
+            self.assertEqual(failure.exception.code, "WORKSPACE_UNSUPPORTED")
+            self.assertEqual(failure.exception.details['path'], 'src/link')
+            self.assertEqual(original_index, (self.repo / '.git/index').read_bytes())
+            self.assertEqual(original_status, self.git('status', '--porcelain=v1', '-z'))
+            self.assertEqual(outside.read_text(encoding='utf-8'), 'do not follow')
+            return
         manifest = self.prepare(includeUntracked=["src/selected.bin", "src/link"])
         target = Path(manifest["checkoutRoot"])
         self.assertEqual((target / "src/file.txt").read_bytes(), source.read_bytes())

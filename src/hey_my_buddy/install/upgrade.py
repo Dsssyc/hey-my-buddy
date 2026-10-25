@@ -325,12 +325,12 @@ def _failure_reason(error: Exception) -> dict:
 def _skill_paths(journal: dict) -> tuple[Path, Path, Path] | None:
     if not journal.get('skillTarget'):
         return None
-    from .skill_install import agent_skills_home, claude_skills_home, SKILL
+    from .skill_install import agent_skills_home, claude_skills_home, _is_link, SKILL
     try:
         target, staged, previous = (Path(journal[name]) for name in ('skillTarget', 'skillStage', 'skillPrevious'))
         expected = agent_skills_home().resolve() / SKILL
         suffix = staged.name.removeprefix('.hey-my-buddy-upgrade-stage-')
-        if (not all(is_absolute_path(path) and not path.is_symlink() for path in (target, staged, previous))
+        if (not all(is_absolute_path(path) and not _is_link(path) for path in (target, staged, previous))
                 or target.resolve() != expected or staged.parent.resolve() != expected.parent
                 or previous.parent.resolve() != expected.parent
                 or re.fullmatch(r'[0-9a-f]{32}', suffix) is None
@@ -357,8 +357,9 @@ def _restore_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None
     if staged.exists():
         shutil.rmtree(staged)
     link = journal.get('claudeLink')
-    if journal.get('claudeLinkWasMissing') and link and Path(link).is_symlink() and Path(os.path.realpath(link)) == target:
-        Path(link).unlink()
+    from .skill_install import _is_link, _remove_claude_link
+    if journal.get('claudeLinkWasMissing') and link and _is_link(Path(link)) and Path(os.path.realpath(link)) == target:
+        _remove_claude_link(Path(link))
 
 
 def _publish_skill(journal: dict, paths: tuple[Path, Path, Path] | None) -> None:
@@ -473,7 +474,8 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
             skill_stage = None
             skill_previous = None
             if skill_source is not None:
-                if skill_target is None or skill_target.is_symlink():
+                from .skill_install import _is_link
+                if skill_target is None or _is_link(skill_target):
                     raise BoardError('SKILL_TARGET_CONFLICT', 'Upgrade skill target is missing or linked')
                 from .skill_install import _marker, _is_product_skill
                 if skill_target.exists() and not (_marker(skill_target) or _is_product_skill(skill_target)):
@@ -492,7 +494,7 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                 claude_link = claude_skills_home() / SKILL
                 journal.update(skillTarget=str(skill_target), skillStage=str(skill_stage), skillPrevious=str(skill_previous),
                                skillHadPrevious=skill_target.exists(), claudeLink=str(claude_link),
-                               claudeLinkWasMissing=not claude_link.exists() and not claude_link.is_symlink())
+                               claudeLinkWasMissing=not claude_link.exists() and not _is_link(claude_link))
             write_journal(marker, journal)
             backed_up = None
             active = previous
