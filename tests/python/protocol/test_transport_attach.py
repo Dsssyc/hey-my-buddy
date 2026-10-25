@@ -217,7 +217,7 @@ class EndpointlessObservationTests(unittest.TestCase):
             (self.directory / name).touch(mode=0o600)
 
     def test_a_held_lifetime_lock_reports_unavailable_instead_of_stopped(self):
-        # A service holding a lock in another login answers nothing; a failed
+        # An unresponsive service can still hold either lifetime lock; a failed
         # connection is not stop evidence, and each lock alone must refuse.
         (self.directory / "control.json").write_text(json.dumps(ENDPOINT), encoding="utf-8", newline="\n")
         for name in transport.LIFETIME_LOCKS:
@@ -992,7 +992,7 @@ class RpcReadOnlySetupTests(unittest.TestCase):
         with patch.object(probe_fixture, "PROBE_SERVER", script):
             probe_fixture.ProbeServer.__init__(peer, self.directory)
         self.assertEqual(Path(json.loads(peer.endpoint_path.read_text(encoding="utf-8"))["root"]), self.directory / "ipc")
-        self.assertEqual(cc.__version__, "0.8.2")
+        self.assertEqual(cc.__version__, "0.9.0")
         self.enterContext(patch.object(transport, "BuddyControl", ProbeContract))
         self.enterContext(patch.object(transport, "CONTROL_NAME", "hey-my-buddy-probe"))
         endpoint = {**ENDPOINT, "address": peer.address, "pid": peer.pid}

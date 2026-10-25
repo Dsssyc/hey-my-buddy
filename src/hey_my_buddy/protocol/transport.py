@@ -39,9 +39,7 @@ LIFETIME_LOCKS = ("control-daemon.lock", "board-owner.lock")
 
 def owner_held_message() -> str:
     """The one owner-busy explanation shared by every lifetime-lock refusal."""
-    hint = (" The service may be running in another Windows login of the same user."
-            if os.name == "nt" else "")
-    return "A board owner still holds this state directory's lifetime locks." + hint
+    return "A board owner still holds this state directory's lifetime locks."
 
 #: CLI method -> (resource, C-Two operation). The CLI names are the only public
 #: surface; the C-Two operation names never change here. ``await`` is a CLI-level
