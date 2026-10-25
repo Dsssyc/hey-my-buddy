@@ -48,15 +48,19 @@ class HostCutoverTests(WorkflowTestCase):
         target = root / runtime.content_id(source)
         source.rename(target)
         environment = target / "venv"
-        venv.EnvBuilder(with_pip=False, symlinks=True).create(environment)
+        venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt").create(environment)
         # EnvBuilder records its creation command, including the fixture's own
         # runtime path. Installed uv environments have no such command field.
         configuration = environment / "pyvenv.cfg"
         configuration.write_text("\n".join(line for line in configuration.read_text(encoding="utf-8").splitlines()
                                            if not line.startswith("command =")) + "\n", encoding="utf-8", newline="\n")
-        site = environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
-        for name in ("c_two", "portalocker", "pydantic", "pydantic_core", "zstandard",
-                     "typing_extensions", "typing_inspection", "annotated_types"):
+        site = (environment / "Lib" / "site-packages" if os.name == "nt" else
+                environment / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
+        dependencies = ("c_two", "portalocker", "pydantic", "pydantic_core", "zstandard",
+                        "typing_extensions", "typing_inspection", "annotated_types", "psutil")
+        if os.name == "nt":
+            dependencies += ("pywin32",)
+        for name in dependencies:
             distribution = metadata.distribution(name.replace("_", "-"))
             # Copy distribution metadata and native libraries with the package.
             for file in distribution.files:

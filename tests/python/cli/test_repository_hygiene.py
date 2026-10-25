@@ -11,17 +11,18 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def personal_markers(home: Path, main_checkout: Path | None) -> dict[str, str]:
+def personal_markers(home: PurePath, main_checkout: PurePath | None) -> dict[str, str]:
     """The strings that identify one machine: its home and its project directory."""
     markers: dict[str, str] = {}
     # A bare "/root" or "/" is too short to be distinguishing.
     if len(home.parts) >= 3:
-        markers[str(home)] = "the absolute home directory"
+        for separator in ("/", "\\"):
+            markers[home.as_posix().replace("/", separator)] = "the absolute home directory"
     if main_checkout is None:
         return markers
     try:
@@ -64,44 +65,55 @@ def _git(*arguments: str) -> str | None:
 
 class PersonalMarkerTests(unittest.TestCase):
     def test_home_and_two_visible_project_levels_are_markers(self):
-        markers = personal_markers(Path("/Users/alice"), Path("/Users/alice/Desktop/code/project"))
-        self.assertEqual(
-            markers,
-            {
-                "/Users/alice": "the absolute home directory",
-                "Desktop/code/": "the project directory layout",
-                "Desktop\\code\\": "the project directory layout",
-            },
-        )
+        for home in (PurePosixPath("/Users/alice"), PureWindowsPath("C:/Users/alice")):
+            with self.subTest(home=home):
+                self.assertEqual(
+                    personal_markers(home, home / "Desktop/code/project"),
+                    {
+                        home.as_posix(): "the absolute home directory",
+                        str(home).replace("/", "\\"): "the absolute home directory",
+                        "Desktop/code/": "the project directory layout",
+                        "Desktop\\code\\": "the project directory layout",
+                    },
+                )
 
     def test_generic_hidden_or_foreign_locations_add_no_layout_marker(self):
-        home = Path("/Users/alice")
-        for checkout in (
-            Path("/Users/alice/project"),
-            Path("/Users/alice/src/project"),
-            Path("/Users/alice/.tool/worktrees/name/project"),
-            Path("/srv/build/checkouts/project"),
-            None,
-        ):
-            with self.subTest(checkout=checkout):
-                self.assertEqual(personal_markers(home, checkout), {"/Users/alice": "the absolute home directory"})
+        for home in (PurePosixPath("/Users/alice"), PureWindowsPath("C:/Users/alice")):
+            for checkout in (
+                home / "project",
+                home / "src/project",
+                home / ".tool/worktrees/name/project",
+                type(home)("/srv/build/checkouts/project"),
+                None,
+            ):
+                with self.subTest(home=home, checkout=checkout):
+                    self.assertEqual(personal_markers(home, checkout), {
+                        home.as_posix(): "the absolute home directory",
+                        str(home).replace("/", "\\"): "the absolute home directory",
+                    })
 
     def test_a_short_home_is_not_a_marker(self):
-        self.assertEqual(personal_markers(Path("/root"), None), {})
+        for home in (PurePosixPath("/root"), PureWindowsPath("C:/root")):
+            with self.subTest(home=home):
+                self.assertEqual(personal_markers(home, None), {})
 
     def test_only_text_files_carrying_a_marker_are_reported(self):
         directory = Path(tempfile.mkdtemp(prefix="hygiene-"))
         self.addCleanup(shutil.rmtree, directory, ignore_errors=True)
-        (directory / "clean.md").write_text("The archive is under ~/.local/share/example.\n", encoding="utf-8", newline="\n")
-        (directory / "leaky.md").write_text("The archive is under /Users/alice/.local/share/example.\n", encoding="utf-8", newline="\n")
-        (directory / "layout.ts").write_text('const path = "~/Desktop/code/project";\n', encoding="utf-8", newline="\n")
-        (directory / "binary.bin").write_bytes(b"\0\1/Users/alice/Desktop/code/")
-        names = ["clean.md", "leaky.md", "layout.ts", "binary.bin", "missing.md"]
-        markers = personal_markers(Path("/Users/alice"), Path("/Users/alice/Desktop/code/project"))
-        self.assertEqual(
-            offending_files(directory, names, markers),
-            ["layout.ts: the project directory layout", "leaky.md: the absolute home directory"],
-        )
+        for home in (PurePosixPath("/Users/alice"), PureWindowsPath("C:/Users/alice")):
+            with self.subTest(home=home):
+                (directory / "clean.md").write_text("The archive is under ~/.local/share/example.\n", encoding="utf-8", newline="\n")
+                (directory / "leaky.md").write_text(home.as_posix() + "/data\n", encoding="utf-8", newline="\n")
+                (directory / "backslashes.md").write_text(str(home).replace("/", "\\") + "\\data\n", encoding="utf-8", newline="\n")
+                (directory / "layout.ts").write_text('const path = "~/Desktop/code/project";\n', encoding="utf-8", newline="\n")
+                (directory / "binary.bin").write_bytes(b"\0\1" + str(home).encode() + b"/Desktop/code/")
+                names = ["clean.md", "leaky.md", "backslashes.md", "layout.ts", "binary.bin", "missing.md"]
+                markers = personal_markers(home, home / "Desktop/code/project")
+                self.assertEqual(
+                    offending_files(directory, names, markers),
+                    ["backslashes.md: the absolute home directory", "layout.ts: the project directory layout",
+                     "leaky.md: the absolute home directory"],
+                )
 
 
 class TrackedFileTests(unittest.TestCase):

@@ -172,7 +172,8 @@ class RoleBoundaryTests(unittest.TestCase):
         # parents up — not a path that only exists under this test runner.
         source = Path(__file__).resolve().parents[4] / "src"
         environment = {"PYTHONPATH": str(source)}
-        for name in ("PATH", "TMPDIR", "HMB_CHECKS_TMPDIR"):
+        for name in ("PATH", "HOME", "USERPROFILE", "LOCALAPPDATA", "TMPDIR", "TEMP", "TMP",
+                     "SystemRoot", "HMB_CHECKS_TMPDIR"):
             if name in os.environ:
                 environment[name] = os.environ[name]
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-role-boundary-") as outside:

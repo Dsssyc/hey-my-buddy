@@ -166,7 +166,7 @@ class CurrentCoreTests(BoardTestCase):
 
     def test_default_current_state_is_a_new_child_directory(self):
         home = self.directory / "home"
-        archive = home / ".local/share/hey-my-buddy"
+        archive = home / ("AppData/Local" if os.name == "nt" else ".local/share") / "hey-my-buddy"
         old_file = self.old_database(archive, "7")
         before = old_file.read_bytes()
         with patch.dict(os.environ, {}, clear=True), patch.object(Path, "home", return_value=home):

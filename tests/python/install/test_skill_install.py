@@ -72,7 +72,8 @@ class SkillPackageTests(unittest.TestCase):
     def _upgrade_environment(self, root: Path, state: Path) -> dict:
         return {'HMB_STATE_DIR': str(state), 'HMB_AGENT_SKILLS_DIR': str(root / 'agents'),
                 'HMB_CLAUDE_SKILLS_DIR': str(root / 'claude'), 'CODEX_HOME': str(root / 'codex'),
-                'HMB_RUNTIME_ROOT': str(root / 'runtime'), 'HOME': str(root / 'home')}
+                'HMB_RUNTIME_ROOT': str(root / 'runtime'), 'HOME': str(root / 'home'),
+                'USERPROFILE': str(root / 'home'), 'LOCALAPPDATA': str(root / 'home/AppData/Local')}
 
     def test_same_marker_with_changed_content_reports_an_update(self):
         with tempfile.TemporaryDirectory(prefix='hey-my-buddy-skill-content-') as temporary:
