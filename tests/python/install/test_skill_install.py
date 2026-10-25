@@ -1,7 +1,7 @@
 """The shared package carries all platform launcher entrypoints."""
 from contextlib import chdir
 from pathlib import Path
-import tempfile
+from temporary import TemporaryDirectory
 import unittest
 import json
 import os
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 class ClaudeLinkTests(unittest.TestCase):
     def setUp(self):
-        temporary = self.enterContext(tempfile.TemporaryDirectory())
+        temporary = self.enterContext(TemporaryDirectory())
         self.root = Path(temporary).resolve()
         self.target = self.root / 'agents/hey-my-buddy'
         self.target.mkdir(parents=True)
@@ -32,6 +32,7 @@ class ClaudeLinkTests(unittest.TestCase):
         self.assertEqual(skill_install._link_claude(self.target)['status'], 'linked')
         self.assertTrue(self.link.is_junction() if os.name == 'nt' else self.link.is_symlink())
         self.assertEqual(self.link.resolve(), self.target.resolve())
+        self.assertEqual(native_path(self.link / 'sentinel').read_bytes(), b'canonical skill')
         skill_install._check_claude_link(self.target)
         self.assertEqual(skill_install._claude_status(self.target), 'linked')
         with mock.patch.object(skill_install, '_create_claude_link') as create:
@@ -72,10 +73,34 @@ class ClaudeLinkTests(unittest.TestCase):
                                 'claudeLink': str(self.link)}, (self.target, staged, previous))
         self.assertFalse(self.link.exists() or self.link.is_junction() or self.link.is_symlink())
 
+    def test_a_link_in_a_deep_home_reads_the_ordinary_target(self):
+        self.home = self.root.joinpath(*(str(index) + 'x' * 46 for index in range(5)))
+        self.link = self.home / skill_install.SKILL
+        self.enterContext(mock.patch.object(skill_install, 'claude_skills_home', return_value=self.home))
+        self.assertGreater(len(str(self.link)), 260)
+        skill_install._link_claude(self.target)
+        self.assertEqual(native_path(self.link / 'sentinel').read_bytes(), b'canonical skill')
+        skill_install._remove_claude_link(self.link)
+        self.assertFalse(skill_install._is_link(self.link))
+        self.assertEqual((self.target / 'sentinel').read_bytes(), b'canonical skill')
+
+    @unittest.skipUnless(os.name == 'nt', 'Native Windows junction publication')
+    def test_failed_junction_publication_removes_only_its_placeholder(self):
+        import win32file
+        from hey_my_buddy.windows_files import WindowsFileAPI
+        for owner, method in ((WindowsFileAPI, '_open'), (win32file, 'DeviceIoControl')):
+            with self.subTest(method=method):
+                with mock.patch.object(owner, method, side_effect=OSError('injected junction failure')):
+                    with self.assertRaises(BoardError) as failure:
+                        skill_install._link_claude(self.target)
+                self.assertEqual(failure.exception.code, 'CLAUDE_LINK_FAILED')
+                self.assertFalse(native_path(self.link).exists() or skill_install._is_link(self.link))
+                self.assertEqual((self.target / 'sentinel').read_bytes(), b'canonical skill')
+
 
 class SkillPackageTests(unittest.TestCase):
     def test_build_normalizes_a_relative_destination_before_staging(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             cwd = root / 'working'
             cwd.mkdir()
@@ -89,7 +114,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertNotIn('..', result.parts)
 
     def test_packaged_skill_carries_windows_and_posix_entrypoints(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary:
             skill = Path(temporary) / 'hey-my-buddy'
             skill_package.assemble(ROOT, skill)
             for name in ('hey-my-buddy', 'hey-my-buddy.cmd', 'hey-my-buddy.ps1'):
@@ -97,7 +122,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertIn('active-runtime.json', (skill / 'package/src/hey_my_buddy/install/launcher.py').read_text(encoding="utf-8"))
 
     def test_same_marker_does_not_hide_a_damaged_launcher(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary:
             source, target = Path(temporary) / 'source/hey-my-buddy', Path(temporary) / 'installed/hey-my-buddy'
             skill_package.assemble(ROOT, source)
             target.parent.mkdir()
@@ -113,50 +138,47 @@ class SkillPackageTests(unittest.TestCase):
 
     def test_deep_skill_install_and_upgrade_restore_keep_ordinary_paths(self):
         from hey_my_buddy.install import upgrade
-        with tempfile.TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             home = root.joinpath(*(f'depth-{index}-' + 'x' * 38 for index in range(5)))
             target = home / skill_install.SKILL
             self.assertGreater(len(str(target)), 260)
             native_path(home).mkdir(parents=True)
-            try:
-                source = root / 'source'
-                native_path(source).mkdir()
-                native_path(source / 'skill.json').write_text(
-                    json.dumps({'name': skill_install.SKILL, 'version': 'new'}), encoding='utf-8')
-                native_path(source / 'SKILL.md').write_text('new', encoding='utf-8')
-                native_path(target).mkdir()
-                native_path(target / 'skill.json').write_text(
-                    json.dumps({'name': skill_install.SKILL, 'version': 'old'}), encoding='utf-8')
-                native_path(target / 'SKILL.md').write_text('old', encoding='utf-8')
+            source = root / 'source'
+            native_path(source).mkdir()
+            native_path(source / 'skill.json').write_text(
+                json.dumps({'name': skill_install.SKILL, 'version': 'new'}), encoding='utf-8')
+            native_path(source / 'SKILL.md').write_text('new', encoding='utf-8')
+            native_path(target).mkdir()
+            native_path(target / 'skill.json').write_text(
+                json.dumps({'name': skill_install.SKILL, 'version': 'old'}), encoding='utf-8')
+            native_path(target / 'SKILL.md').write_text('old', encoding='utf-8')
 
-                placement, previous = skill_install._place(source, target, skill_install._marker(source))
-                self.assertEqual(placement, 'updated')
-                self.assertEqual(native_path(target / 'SKILL.md').read_text(encoding='utf-8'), 'new')
-                self.assertEqual(native_path(previous / 'SKILL.md').read_text(encoding='utf-8'), 'old')
-                self.assertFalse(str(previous).startswith('\\\\?\\'))
-                shutil.rmtree(native_path(previous))
+            placement, previous = skill_install._place(source, target, skill_install._marker(source))
+            self.assertEqual(placement, 'updated')
+            self.assertEqual(native_path(target / 'SKILL.md').read_text(encoding='utf-8'), 'new')
+            self.assertEqual(native_path(previous / 'SKILL.md').read_text(encoding='utf-8'), 'old')
+            self.assertFalse(str(previous).startswith('\\\\?\\'))
+            shutil.rmtree(native_path(previous))
 
-                suffix = 'a' * 32
-                staged = home / ('.hey-my-buddy-upgrade-stage-' + suffix)
-                prior = home / ('.hey-my-buddy-upgrade-previous-' + suffix)
-                native_path(staged).mkdir()
-                native_path(staged / 'SKILL.md').write_text('future', encoding='utf-8')
-                claude_home = root / 'claude'
-                link = claude_home / skill_install.SKILL
-                journal = {'skillHadPrevious': True, 'claudeLinkWasMissing': True, 'claudeLink': str(link)}
-                with mock.patch.dict(os.environ, {'HMB_CLAUDE_SKILLS_DIR': str(claude_home)}):
-                    upgrade._publish_skill(journal, (target, staged, prior))
-                    self.assertEqual(native_path(target / 'SKILL.md').read_text(encoding='utf-8'), 'future')
-                    self.assertEqual(native_path(prior / 'SKILL.md').read_text(encoding='utf-8'), 'new')
-                    self.assertEqual(journal['createdClaudeLink'], str(link))
-                    upgrade._restore_skill(journal, (target, staged, prior))
-                self.assertEqual(native_path(target / 'SKILL.md').read_text(encoding='utf-8'), 'new')
-                self.assertFalse(native_path(prior).exists())
-                self.assertFalse(native_path(link).exists())
-                self.assertFalse(skill_install._is_link(link))
-            finally:
-                shutil.rmtree(native_path(home))
+            suffix = 'a' * 32
+            staged = home / ('.hey-my-buddy-upgrade-stage-' + suffix)
+            prior = home / ('.hey-my-buddy-upgrade-previous-' + suffix)
+            native_path(staged).mkdir()
+            native_path(staged / 'SKILL.md').write_text('future', encoding='utf-8')
+            claude_home = root / 'claude'
+            link = claude_home / skill_install.SKILL
+            journal = {'skillHadPrevious': True, 'claudeLinkWasMissing': True, 'claudeLink': str(link)}
+            with mock.patch.dict(os.environ, {'HMB_CLAUDE_SKILLS_DIR': str(claude_home)}):
+                upgrade._publish_skill(journal, (target, staged, prior))
+                self.assertEqual(native_path(target / 'SKILL.md').read_text(encoding='utf-8'), 'future')
+                self.assertEqual(native_path(prior / 'SKILL.md').read_text(encoding='utf-8'), 'new')
+                self.assertEqual(journal['createdClaudeLink'], str(link))
+                upgrade._restore_skill(journal, (target, staged, prior))
+            self.assertEqual(native_path(target / 'SKILL.md').read_text(encoding='utf-8'), 'new')
+            self.assertFalse(native_path(prior).exists())
+            self.assertFalse(native_path(link).exists())
+            self.assertFalse(skill_install._is_link(link))
 
     def _upgrade_pair(self, root: Path) -> tuple[Path, Path]:
         """An assembled source and an identical copy at the agent skills home."""
@@ -180,7 +202,7 @@ class SkillPackageTests(unittest.TestCase):
                 'USERPROFILE': str(root / 'home'), 'LOCALAPPDATA': str(root / 'home/AppData/Local')}
 
     def test_same_marker_with_changed_content_reports_an_update(self):
-        with tempfile.TemporaryDirectory(prefix='hey-my-buddy-skill-content-') as temporary:
+        with TemporaryDirectory(prefix='hey-my-buddy-skill-content-') as temporary:
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
             state = self._upgrade_state(root)
@@ -199,7 +221,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertEqual(result['service']['action'], 'upgrade')
 
     def test_same_marker_with_identical_content_stays_already_current(self):
-        with tempfile.TemporaryDirectory(prefix='hey-my-buddy-skill-current-') as temporary:
+        with TemporaryDirectory(prefix='hey-my-buddy-skill-current-') as temporary:
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
             state = self._upgrade_state(root)
@@ -218,7 +240,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertTrue(skill_install._matches(source, target, skill_install._marker(source)))
 
     def test_intact_install_does_not_restart_or_materialize(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary)
             state, home = root / 'state', root / 'skills'
             ensure_private_dir(state)
@@ -243,7 +265,7 @@ class SkillPackageTests(unittest.TestCase):
             upgrade.assert_not_called()
 
     def test_interrupted_install_recovers_before_attempting_the_next_generation(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
             (target / 'SKILL.md').write_text('changed generation', encoding='utf-8')
@@ -278,7 +300,7 @@ class SkillPackageTests(unittest.TestCase):
         recovered = {'upgraded': True, 'recoveredJournal': True, 'skillCleanupError': 'old skill cleanup denied',
                      'runtimePruning': {'complete': False, 'error': 'STORAGE_BUSY'}}
         for intact in (True, False):
-            with self.subTest(intact=intact), tempfile.TemporaryDirectory() as temporary:
+            with self.subTest(intact=intact), TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 source, target = self._upgrade_pair(root)
                 if not intact:
@@ -313,7 +335,7 @@ class SkillPackageTests(unittest.TestCase):
                                  [mock.call(state), mock.call(state, skill_source=source, skill_target=target)])
 
     def test_install_rejects_a_linked_lock_before_changing_the_skill(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary)
             home = root / 'agents'
             home.mkdir()
@@ -329,7 +351,7 @@ class SkillPackageTests(unittest.TestCase):
             source.assert_not_called()
 
     def test_paths_distinguishes_missing_from_unreadable_runtime_metadata(self):
-        with tempfile.TemporaryDirectory() as temporary:
+        with TemporaryDirectory() as temporary:
             root = Path(temporary)
             state = root / 'state'
             state.mkdir()
