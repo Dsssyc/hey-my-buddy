@@ -36,8 +36,9 @@ class SkillInstallTests(unittest.TestCase):
                             "CODEX_HOME": str(self.base / "codex")}
 
     def cleanup_private(self):
-        from hey_my_buddy.cli.checks import teardown_private_root
-        self.assertIsNone(teardown_private_root(self.base), 'Private install did not stop; evidence retained')
+        from support import cleanup_private_tree
+
+        cleanup_private_tree(self.base, (self.base / "state",))
 
     def install(self, **extra):
         from hey_my_buddy.install.skill_install import install

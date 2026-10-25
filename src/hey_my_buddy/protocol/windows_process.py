@@ -59,7 +59,7 @@ class WindowsAPI:
         except self.error as error:
             raise ctypes.WinError(error.winerror) from error
 
-    def create_job(self, name):
+    def create_job(self, name, *, limit_flags=None):
         handle = self._call(self.job.CreateJobObject, None, name)
         if self.api.GetLastError() == ERROR_ALREADY_EXISTS:
             self.close(handle)
@@ -67,7 +67,8 @@ class WindowsAPI:
         try:
             limits = self._call(self.job.QueryInformationJobObject, handle,
                                 self.job.JobObjectExtendedLimitInformation)
-            limits["BasicLimitInformation"]["LimitFlags"] = self.job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            limits["BasicLimitInformation"]["LimitFlags"] = (
+                self.job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE if limit_flags is None else limit_flags)
             self._call(self.job.SetInformationJobObject, handle,
                        self.job.JobObjectExtendedLimitInformation, limits)
             return handle
