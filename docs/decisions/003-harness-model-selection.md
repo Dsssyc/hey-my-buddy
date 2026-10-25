@@ -126,9 +126,9 @@ Jev 在当前拟用接入中是外部 API。启用此路线意味着普通候选
 
 所有外部推理在 SQLite 事务外进行。提交推荐或任务时核对版本，源记录与事件保持原子性。选择的 provider/model/effort 与旧参数同时提供时必须一致。实际配置无法确认的验收不能硬归给一个未被证实使用的精确模型。
 
-[现有 Adapter](../../src/buddy/adapters/base.py) 需要目录发现和参数解析；[store.py](../../src/buddy/store.py) 扩展评价与决策记录，[run.mjs](../../harnesses/dsh/scripts/run.mjs) 当前 requested 字段不能直接冒充实际配置。新增命名操作同时修改 [contracts.py](../../src/buddy/contracts.py)、[service.py](../../src/buddy/service.py)、[schemas.py](../../src/buddy/schemas.py)、client、CLI 和 transport。
+[现有 Adapter](../../src/hey_my_buddy/buddy/harnesses/base.py) 需要目录发现和参数解析；[store.py](../../src/hey_my_buddy/blackboard/store/store.py) 扩展评价与决策记录，`../../harnesses/dsh/scripts/run.mjs`（已在 `3c042df6` 删除） 当前 requested 字段不能直接冒充实际配置。新增命名操作同时修改 [contracts.py](../../src/hey_my_buddy/protocol/contracts.py)、[service.py](../../src/hey_my_buddy/blackboard/service/service.py)、[schemas.py](../../src/hey_my_buddy/protocol/schemas.py)、client、CLI 和 transport。
 
-[db.py](../../src/buddy/db.py) 当前 schema 为 5。新增事实及投影需要在私有旧库副本上验证显式升级和恢复，取得维护所有权、确认旧进程不再写入、备份数据库与恢复状态后再事务升级。原有 same-user token 也不能被宣称提供了独立 Host/Worker 授权；按 ADR-002 设计写入边界，不能用 actor 字符串代替身份校验。
+[db.py](../../src/hey_my_buddy/blackboard/store/db.py) 当前 schema 为 5。新增事实及投影需要在私有旧库副本上验证显式升级和恢复，取得维护所有权、确认旧进程不再写入、备份数据库与恢复状态后再事务升级。原有 same-user token 也不能被宣称提供了独立 Host/Worker 授权；按 ADR-002 设计写入边界，不能用 actor 字符串代替身份校验。
 
 ## 8. 相关已有探索
 
