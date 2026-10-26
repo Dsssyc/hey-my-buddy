@@ -6,11 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTaskList } from "./MacroTaskList";
 import { listFixture } from "./macro-task-fixtures";
 import type { MacroTaskListProps } from "./MacroTaskList";
+import i18n from "i18next";
 
 const props = (): MacroTaskListProps => ({
   sort: "activity-desc", onSortChange: vi.fn(),
   rows: listFixture(), totals: { all: 12, active: 2, host: 1, review: 3 }, loading: false, error: "", nextCursor: null, reorder: null,
-  filter: "all", query: "", selected: null, listNavigation: <span>宏任务</span>,
+  filter: "all", query: "", selected: null,
   onCollapse: vi.fn(), onFilterChange: vi.fn(), onQueryChange: vi.fn(), onSelect: vi.fn(), onMore: vi.fn(), onApplyReorder: vi.fn(),
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -72,9 +73,11 @@ describe("macro task list", () => {
     expect(screen.getByRole("button",{name:/独立微任务/}).getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByRole("button",{name:/宏任务时间轴：设计、接口与实现/})).toBeTruthy();
   });
-  it("shows server totals on four tabs and sends search and selection without write controls", async () => {
+  it("shows the total beside the heading and the other counts on their tabs, then sends search and selection without write controls", async () => {
     const p = props(); render(<MacroTaskList {...p}/>);
-    expect(screen.getByRole("tab", { name: "全部 12" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("heading", { name: "宏任务 12" }).querySelector("[data-slot=macro-list-total]")?.textContent).toBe("12");
+    expect(screen.getByRole("tab", { name: "全部" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("tab", { name: "全部" }).textContent).toBe("全部");
     for (const name of ["进行中 2", "等待 Host 1", "等待验收 3"]) expect(screen.getByRole("tab", { name })).toBeTruthy();
     await userEvent.click(screen.getByRole("tab", { name: "等待 Host 1" })); expect(p.onFilterChange).toHaveBeenCalledWith("host");
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "原文" } }); expect(p.onQueryChange).toHaveBeenCalledWith("原文");
@@ -83,6 +86,30 @@ describe("macro task list", () => {
     expect(within(row).getByText("进行中 1", { selector: ".sr-only" })).toBeTruthy();
     expect(within(row).getByText("已验收 2", { selector: ".sr-only" })).toBeTruthy();
     await userEvent.click(row); expect(p.onSelect).toHaveBeenCalledWith(p.rows[0].macroTaskId);
+  });
+  it("names every tab in full for readers and hints a translated short name", async () => {
+    await i18n.changeLanguage("en");
+    try {
+      render(<MacroTaskList {...props()}/>);
+      expect(screen.getByRole("heading", { name: "Macro tasks 12" }).querySelector("[data-slot=macro-list-total]")?.textContent).toBe("12");
+      expect(screen.getByRole("tab", { name: "All" }).textContent).toBe("All");
+      for (const name of ["Running 2", "Waiting for Host 1", "Awaiting acceptance 3"]) expect(screen.getByRole("tab", { name })).toBeTruthy();
+      const host = screen.getByRole("tab", { name: "Waiting for Host 1" });
+      expect(host.textContent).toBe("Host1");
+      expect(host.getAttribute("aria-description")).toBe("Waiting for Host");
+      const review = screen.getByRole("tab", { name: "Awaiting acceptance 3" });
+      expect(review.textContent).toBe("Acceptance3");
+      expect(review.getAttribute("aria-description")).toBe("Awaiting acceptance");
+      expect(screen.getByRole("tab", { name: "Running 2" }).hasAttribute("aria-description")).toBe(false);
+    } finally { await i18n.changeLanguage("zh"); }
+  });
+  it("gives a faded tab name its full text as the hint", () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(40);
+    vi.spyOn(HTMLElement.prototype, "scrollWidth", "get").mockReturnValue(80);
+    render(<MacroTaskList {...props()}/>);
+    const host = screen.getByRole("tab", { name: "等待 Host 1" });
+    expect(host.querySelector("[data-slot=macro-filter-name]")?.classList.contains("text-fade")).toBe(true);
+    expect(host.getAttribute("aria-description")).toBe("等待 Host");
   });
   it("shows the creation time under created sorts and the activity time otherwise, naming it for readers", () => {
     const p = props(); const view = render(<MacroTaskList {...p}/>);

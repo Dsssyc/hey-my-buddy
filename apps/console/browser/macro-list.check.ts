@@ -1,15 +1,23 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
 import { screenshots as shots, expectNoSidewaysScroll, open, settle, test } from "./preview";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
+const captures = fileURLToPath(new URL("../../../tmp/filter-row", import.meta.url));
 
 const words = [
-  { locale: "zh-CN", list: "宏任务列表", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目、Host 或编号", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
-  { locale: "en-US", list: "Macro task list", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search title, project, Host or ID", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity; update order" },
+  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目、Host 或编号", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
+  { locale: "en-US", list: "Macro task list", macro: "Macro tasks", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search title, project, Host or ID", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity; update order" },
+] as const;
+
+const countGroups = [
+  { all: 105, active: 1, host: 0, review: 0 },
+  { all: 123_456, active: 12, host: 12, review: 12 },
+  { all: 1_234_567, active: 1234, host: 1234, review: 1234 },
 ] as const;
 
 async function photograph(page: Page, name: string, locale: string, width: number, theme: string) {
@@ -127,7 +135,7 @@ async function assertListGeometry(page: Page, width: number) {
       if (box.left < frame.left - 1 || box.right > frame.right + 1) offenders.push(`${element.className}: outside list`);
       if (element.scrollWidth > element.clientWidth + 1 && element.dataset.slot !== "macro-entry") offenders.push(`${element.dataset.slot}: clipped ${element.scrollWidth}/${element.clientWidth}`);
     }
-    for (const element of node.querySelectorAll<HTMLElement>("[data-slot=macro-entry] time, [data-slot=macro-entry-counts], [data-slot=macro-group-heading] span, [data-slot=macro-filter-tabs] [data-slot=tabs-trigger]")) {
+    for (const element of node.querySelectorAll<HTMLElement>("[data-slot=macro-entry] time, [data-slot=macro-entry-counts], [data-slot=macro-group-heading] span, [data-slot=macro-filter-tabs] [data-slot=tabs-trigger], [data-slot=macro-filter-count], [data-slot=macro-list-total]")) {
       if (element.scrollWidth > element.clientWidth + 1) offenders.push(`${element.className}: text clipped`);
     }
     return offenders;
@@ -170,6 +178,83 @@ async function assertSelectedTabUnderline(page: Page) {
   expect(after.opacity).toBe(1);
   expect(after.height).toBeGreaterThanOrEqual(2);
   expect(after.background).not.toBe("rgba(0, 0, 0, 0)");
+}
+
+async function assertFilterRow(page: Page, w: typeof words[number], counts: typeof countGroups[number], group: number, width: number) {
+  const format = (value: number) => new Intl.NumberFormat(w.locale).format(value);
+  const list = page.locator("[data-slot=macro-list]");
+  const heading = list.locator("[data-slot=macro-list-heading]");
+  const total = list.locator("[data-slot=macro-list-total]");
+  const filterRow = list.locator("[data-slot=macro-filter-tabs]");
+  await expect(total).toHaveText(format(counts.all));
+  await expect(heading).toHaveAccessibleName(`${w.macro} ${format(counts.all)}`);
+  await expect(filterRow).toBeVisible();
+  const listBox = (await list.boundingBox())!;
+  for (const slot of ["macro-list-heading", "macro-search", "macro-filter-tabs"]) {
+    const box = (await list.locator(`[data-slot=${slot}]`).boundingBox())!;
+    expect(box.x, `${slot} starts inside the list`).toBeGreaterThanOrEqual(listBox.x - 1);
+    expect(box.x + box.width, `${slot} ends inside the list`).toBeLessThanOrEqual(listBox.x + listBox.width + 1);
+  }
+  await expectNoSidewaysScroll(page);
+
+  const fields = [
+    { name: w.all, full: w.all, count: undefined },
+    { name: w.active, full: w.active, count: counts.active },
+    { name: w.host, full: w.host, count: counts.host },
+    { name: w.review, full: w.review, count: counts.review },
+  ] as const;
+  const tabs = filterRow.getByRole("tab");
+  await expect(tabs).toHaveCount(fields.length);
+  for (const [index, field] of fields.entries()) {
+    const tab = tabs.nth(index);
+    await expect(tab).toHaveAccessibleName(field.count === undefined ? field.full : `${field.full} ${format(field.count)}`);
+    if (field.count === undefined) continue;
+    const count = tab.locator("[data-slot=macro-filter-count]");
+    await expect(count).toHaveText(format(field.count));
+    const number = await count.evaluate(node => ({ scroll: node.scrollWidth, client: node.clientWidth, wrap: getComputedStyle(node).whiteSpace }));
+    expect(number.scroll, `${w.locale} ${field.name}: the count is not cut`).toBeLessThanOrEqual(number.client + 1);
+    expect(number.wrap, `${w.locale} ${field.name}: the count stays on one line`).toBe("nowrap");
+  }
+  const totalNumber = await total.evaluate(node => ({ scroll: node.scrollWidth, client: node.clientWidth, numeric: getComputedStyle(node).fontVariantNumeric }));
+  expect(totalNumber.scroll, "the heading total is not cut").toBeLessThanOrEqual(totalNumber.client + 1);
+  expect(totalNumber.numeric, "the heading total uses tabular digits").toContain("tabular-nums");
+  const headingBox = (await heading.boundingBox())!;
+  const headingRight = headingBox.x + headingBox.width;
+  const buttonLeft = await list.locator("[data-slot=macro-list-toolbar] button").evaluateAll(nodes =>
+    Math.min(...nodes.filter(node => node.getClientRects().length).map(node => node.getBoundingClientRect().left)));
+  expect(headingRight, "the heading and its total clear the toolbar buttons").toBeLessThanOrEqual(buttonLeft + 1);
+
+  const metrics = await filterRow.evaluate(node => {
+    const list = node.querySelector<HTMLElement>("[data-slot=tabs-list]")!;
+    const tabs = [...list.querySelectorAll<HTMLElement>("[role=tab]")].map(tab => {
+      const name = tab.querySelector<HTMLElement>("[data-slot=macro-filter-name]")!;
+      const count = tab.querySelector<HTMLElement>("[data-slot=macro-filter-count]");
+      const gap = Number.parseFloat(getComputedStyle(tab).columnGap) || 0;
+      return { name: name.textContent ?? "", count: count?.scrollWidth ?? 0,
+        natural: name.scrollWidth + (count ? gap + count.scrollWidth : 0),
+        clipped: name.scrollWidth > name.clientWidth + 1, mask: getComputedStyle(name).maskImage };
+    });
+    return { frame: list.clientWidth, gap: Number.parseFloat(getComputedStyle(list).columnGap) || 0, tabs };
+  });
+  const required = metrics.tabs.reduce((sum, tab) => sum + tab.natural, 0) + metrics.gap * (metrics.tabs.length - 1);
+
+  if (group < 3) for (const tab of metrics.tabs) {
+    expect(tab.clipped, `${w.locale} group ${group}: ${tab.name} is not faded`).toBe(false);
+    expect(tab.mask, `${w.locale} group ${group}: ${tab.name} has no fade mask`).toBe("none");
+  }
+  if (group === 3) {
+    for (const [index, field] of fields.entries()) {
+      const tab = tabs.nth(index);
+      const name = metrics.tabs[index]!;
+      if (name.name === field.full && !name.clipped) continue;
+      await tab.locator("[data-slot=macro-filter-name]").hover();
+      await expect(page.getByRole("tooltip"), `${w.locale} ${field.full}: the tooltip gives the full name`).toHaveText(field.full);
+      await page.mouse.move(width - 8, 8);
+      await expect(page.getByRole("tooltip")).toBeHidden();
+    }
+  }
+  return { frame: metrics.frame, required: Math.round(required * 10) / 10,
+    names: metrics.tabs.map(tab => ({ name: tab.name, natural: Math.round(tab.natural * 10) / 10, faded: tab.clipped })) };
 }
 
 async function assertHeaderGeometry(page: Page) {
@@ -222,7 +307,10 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
         });
         await list.getByRole("tab", { name: new RegExp(`^${label}`) }).click();
         await read;
-        await expect(list.getByRole("tab", { name: new RegExp(`^${label} [1-9]`) })).toHaveAttribute("aria-selected", "true");
+        const selected = key === "all"
+          ? list.getByRole("tab", { name: label, exact: true })
+          : list.getByRole("tab", { name: new RegExp(`^${label} [1-9]`) });
+        await expect(selected).toHaveAttribute("aria-selected", "true");
         await expect(list.getByRole("status")).toHaveCount(0);
         await expect(list.locator("[data-slot=macro-filter-tabs]")).toBeVisible();
         await assertSelectedTabUnderline(page);
@@ -351,6 +439,66 @@ for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
     });
   });
 }
+
+// Any count, in either language, at either width: the filter row narrows its
+// names instead of leaving the list, and no number loses a digit.
+for (const w of words) for (const width of [1280, 390]) {
+  test.describe(`filter row counts in ${w.locale}, ${width}px`, () => {
+    test.use({ locale: w.locale, viewport: { width, height: width === 390 ? 844 : 800 }, reducedMotion: "reduce" });
+    test("keeps the heading total and every tab count whole as the total grows", async ({ page }) => {
+      await themeBeforeLoad(page, "light");
+      const measured: unknown[] = [];
+      let current: typeof countGroups[number] = countGroups[0];
+      await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
+        const response = await route.fetch();
+        const data = await response.json();
+        data.totals = { ...current };
+        await route.fulfill({ response, json: data });
+      });
+      for (const [index, counts] of countGroups.entries()) {
+        current = counts;
+        if (index) {
+          // A full reload starts the list from the root again, so a narrow
+          // window still shows the list after the first group's auto-selection.
+          await page.evaluate(() => history.replaceState(null, "", "#tasks"));
+          await page.reload();
+          await page.getByRole("navigation").first().waitFor();
+        } else await open(page, "#tasks");
+        await settle(page);
+        measured.push({ group: index + 1, total: counts.all, ...await assertFilterRow(page, w, counts, index + 1, width) });
+        if (width === 1280 && (index === 0 || index === 2)) {
+          await mkdir(captures, { recursive: true });
+          await page.screenshot({ path: join(captures, `filter-row-${w.locale}-${counts.all}.png`), animations: "disabled" });
+        }
+      }
+      await mkdir(captures, { recursive: true });
+      await writeFile(join(captures, `measurements-${w.locale}-${width}.json`), `${JSON.stringify(measured, null, 2)}\n`);
+    });
+  });
+}
+
+for (const w of words) test.describe(`collapsed macro list heading in ${w.locale}`, () => {
+  test.use({ locale: w.locale, viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" });
+  test("keeps the same total beside the heading on the detail side", async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.view.macro-task-list-collapsed", "true"));
+    await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
+      const response = await route.fetch();
+      const data = await response.json();
+      // No rows to select, so the collapsed detail side is the one that shows.
+      data.macroTasks = [];
+      data.totals = { all: 123_456, active: 12, host: 12, review: 12 };
+      await route.fulfill({ response, json: data });
+    });
+    await open(page, "#tasks");
+    await expect(page.locator("[data-slot=macro-list]")).toBeHidden();
+    const heading = page.locator("[data-slot=macro-list-heading]");
+    await expect(heading).toBeVisible();
+    const total = new Intl.NumberFormat(w.locale).format(123_456);
+    await expect(heading).toHaveAccessibleName(`${w.macro} ${total}`);
+    await expect(heading.locator("[data-slot=macro-list-total]")).toHaveText(total);
+    await expectNoSidewaysScroll(page);
+  });
+});
 
 // The former interaction probe: a poll refreshes facts in place, and the reader
 // decides when a new activity order can move under the pointer or a scroll.

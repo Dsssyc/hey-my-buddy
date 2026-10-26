@@ -1,4 +1,3 @@
-import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MacroTaskFilter, MacroTaskSort, MacroTaskSummary } from "./macro-task-types";
@@ -20,10 +19,25 @@ export type MacroTaskListProps = {
   loading: boolean; error: string; nextCursor: string | null; reorder: { count: number | null } | null;
   sort: MacroTaskSort; onSortChange: (sort: MacroTaskSort) => void;
   filter: MacroTaskFilter; query: string; selected: string | null; active?: boolean; visible?: boolean;
-  listNavigation?: ReactNode; onCollapse: () => void;
+  onCollapse: () => void;
   onFilterChange: (filter: MacroTaskFilter) => void; onQueryChange: (query: string) => void;
   onSelect: (id: string) => void; onMore: () => void; onApplyReorder: () => void;
 };
+/** The list's title carries its total: what the current search matches, or every macro task without one. */
+export function MacroListHeading({ count }: { count: number }) {
+  const { t } = useTranslation("tasks");
+  return <h2 data-slot="macro-list-heading" aria-label={`${t("macro")} ${formatNumber(count)}`} className="flex min-w-0 items-baseline gap-1.5 text-base font-semibold">
+    <span className="truncate">{t("macro")}</span>
+    <span data-slot="macro-list-total" className="shrink-0 text-sm font-normal tabular-nums text-ink3">{formatNumber(count)}</span>
+  </h2>;
+}
+function FilterTab({ value, label, full, count, tone }: { value: MacroTaskFilter; label: string; full: string; count?: number; tone?: "hand" }) {
+  const text = useFadingText(label);
+  return <Hint text={(text.hint || label !== full) ? full : undefined}><TabsTrigger value={value} className="min-w-0 flex-initial" aria-label={count === undefined ? full : `${full} ${formatNumber(count)}`}>
+    <span ref={text.ref} data-slot="macro-filter-name" className={cn("min-w-0", text.className)}>{label}</span>
+    {count !== undefined && <span data-slot="macro-filter-count" className={cn("shrink-0 tabular-nums", tone === "hand" ? "text-hand" : "text-ink3")}>{formatNumber(count)}</span>}
+  </TabsTrigger></Hint>;
+}
 export function ListFold({ label, onClick }: { label: string; onClick: () => void }) {
   return <Hint text={label}><Button data-slot="macro-fold" variant="ghost" size="icon-sm" aria-label={label} onClick={onClick}><PanelLeft aria-hidden="true"/></Button></Hint>;
 }
@@ -61,7 +75,7 @@ function Entry({ row, basis, selected, onSelect }: { row: MacroTaskSummary; basi
   </Hint></li>;
 }
 export function MacroTaskList(props: MacroTaskListProps) {
-  const { t, i18n } = useTranslation("tasks");
+  const { t } = useTranslation("tasks");
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(["standalone"]));
   const scroll = useRef<HTMLDivElement>(null), pointer = useRef(false), applying = useRef(false);
   const visible = props.visible ?? props.active !== false;
@@ -87,7 +101,7 @@ export function MacroTaskList(props: MacroTaskListProps) {
   const empty = !props.rows.length && !props.loading && !props.error;
   return <section data-slot="macro-list" className="flex h-full min-h-0 w-[316px] flex-col border-r bg-card text-sm max-[760px]:w-full" aria-label={t("list")} onPointerEnter={() => { pointer.current = true; }} onPointerLeave={() => { pointer.current = false; idle(); }}>
     <div className="shrink-0 px-4 pt-3.5">
-      <div data-slot="macro-list-toolbar" className="flex min-h-7 items-center gap-2">{props.listNavigation}
+      <div data-slot="macro-list-toolbar" className="flex min-h-7 items-center gap-2"><MacroListHeading count={props.totals.all}/>
         {props.reorder && <Hint text={t("update")}><Button data-slot="macro-update" variant="ghost" size="icon-sm" aria-label={t("update")} onClick={() => { apply(); scroll.current?.querySelector<HTMLElement>("[data-slot=scroll-area-viewport]")?.scrollTo?.(0, 0); }}><RefreshCw aria-hidden="true"/></Button></Hint>}
         <div className="ml-auto flex items-center gap-1">
           <MacroSort sort={props.sort} onChange={props.onSortChange}/>
@@ -98,7 +112,12 @@ export function MacroTaskList(props: MacroTaskListProps) {
       {!(empty && props.totals.all === 0 && !props.query && props.filter === "all") && <>
         <Input data-slot="macro-search" className="mt-2.5 h-8 text-sm" aria-label={t("search")} placeholder={t("search")} value={props.query} maxLength={200} onChange={e => props.onQueryChange(e.target.value)}/>
         <Tabs data-slot="macro-filter-tabs" className="mt-3 gap-0" value={props.filter} onValueChange={value => props.onFilterChange(value as MacroTaskFilter)}>
-          <TabsList variant="line" className="w-full justify-between gap-3" aria-label={t("list")}>{(["all", "active", "host", "review"] as const).map(key => <Hint key={key} text={i18n.language.startsWith("en") && (key === "host" || key === "review") ? t(key) : undefined}><TabsTrigger className="flex-none" value={key} aria-label={`${t(key)} ${formatNumber(props.totals[key])}`}>{t(key === "host" ? "filterHost" : key === "review" ? "filterReview" : key)}<span className={cn("tabular-nums", key === "host" || key === "review" ? "text-hand" : "text-ink3")}>{formatNumber(props.totals[key])}</span></TabsTrigger></Hint>)}</TabsList>
+          <TabsList variant="line" className="w-full justify-between gap-2" aria-label={t("list")}>
+            <FilterTab value="all" label={t("all")} full={t("all")}/>
+            <FilterTab value="active" label={t("active")} full={t("active")} count={props.totals.active}/>
+            <FilterTab value="host" label={t("filterHost")} full={t("host")} count={props.totals.host} tone="hand"/>
+            <FilterTab value="review" label={t("filterReview")} full={t("review")} count={props.totals.review} tone="hand"/>
+          </TabsList>
         </Tabs>
       </>}
     </div>
