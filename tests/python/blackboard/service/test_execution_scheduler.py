@@ -822,8 +822,9 @@ class ExecutionObservationTests(unittest.TestCase):
             store.record_execution_deadline.assert_called_once_with("attempt", "grace-expired")
 
     def test_unconfirmed_hard_stop_retries_after_unknown_identity_or_signalling_failure(self):
-        for first in ("unknown", "signal-error"):
-            with self.subTest(first=first), tempfile.TemporaryDirectory() as root:
+        for windows, first in ((windows, first) for windows in (False, True)
+                               for first in ("unknown", "signal-error")):
+            with self.subTest(windows=windows, first=first), tempfile.TemporaryDirectory() as root:
                 clock = [108.0]
                 store = Mock(directory=Path(root))
                 store.task_get.return_value = {"task": {"cancelRequested": True, "stopInitiator": "service",
@@ -831,7 +832,17 @@ class ExecutionObservationTests(unittest.TestCase):
                 scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
                 claim, location = self.recovered(root)
                 client = self.client()
-                identity = {"pid": 1, "jobName": None, "processGroupId": 1}
+                identity = {"pid": 1, "startedAt": 123, "jobName": "Local\\HeyMyBuddy-" + str(uuid.uuid4())}
+                if not windows:
+                    identity.update(bootId="linux:" + str(uuid.uuid4()), processGroupId=1, jobName=None)
+                source = Mock()
+                job = Mock()
+                job.active.return_value = 0
+                source.started_at.return_value = None
+                source.open_job.side_effect = lambda _name: contextlib.nullcontext(job)
+                signal = job.terminate if windows else source.signal_group
+                signal.side_effect = [OSError("signal failed"), None] if first == "signal-error" else None
+                observation = "_inspect_job_identity" if windows else "inspect_process_identity"
                 waits = []
                 def advance(_predicate, timeout=None):
                     waits.append(timeout)
@@ -844,17 +855,17 @@ class ExecutionObservationTests(unittest.TestCase):
                      patch("hey_my_buddy.blackboard.service.execution_scheduler.time.monotonic", side_effect=lambda: clock[0]), \
                      patch.object(scheduler, "_timestamp", return_value=100.0), \
                      patch.object(scheduler._condition, "wait_for", side_effect=advance), \
-                     patch("hey_my_buddy.protocol.process_identity.inspect_process_identity",
-                           side_effect=["unknown", "alive"] if first == "unknown" else ["alive", "alive"]), \
-                     patch("hey_my_buddy.protocol.process_identity._SystemSource.signal_group",
-                           side_effect=[OSError("signal failed"), None] if first == "signal-error" else None) as signal:
+                     patch.object(process_identity.signal, "SIGKILL", 9, create=True), \
+                     patch("hey_my_buddy.protocol.process_identity._SystemSource", return_value=source), \
+                     patch("hey_my_buddy.protocol.process_identity." + observation,
+                           side_effect=["unknown", "alive"] if first == "unknown" else ["alive", "alive"]):
                     self.monitor(scheduler, claim, location, identity)
                 self.assertAlmostEqual(waits[0], .1)
                 self.assertAlmostEqual(waits[1], .2)
                 self.assertEqual(signal.call_count, 1 if first == "unknown" else 2)
                 store.recover_executions.assert_not_called()
                 store.release_execution.assert_not_called()
-                if first == "signal-error":
+                if first == "signal-error" and not windows:
                     self.assertEqual(store.record_execution_issue.call_args.args[1], "force-stop")
 
     def test_budget_is_read_on_attachment_and_drives_force_without_a_notification(self):

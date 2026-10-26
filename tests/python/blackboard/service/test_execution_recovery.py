@@ -37,22 +37,41 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
     def freeze_execution(self, identity):
         self.assertEqual(process_start(identity["pid"], include_exited=False), identity["startedAt"])
         if os.name == "nt":
-            process = psutil.Process(identity["pid"])
-            process.suspend()
-            return process
+            from hey_my_buddy.protocol.windows_process import WindowsAPI
+
+            api = WindowsAPI()
+            job = api.open_job(identity["jobName"])
+            self.assertIsNotNone(job, identity)
+            frozen = {}
+            try:
+                # A venv root can be a launcher waiting for another Python.
+                # Freeze every member, including any created during this pass.
+                while True:
+                    pending = [member for member in api.process_identities(job)
+                               if (member["pid"], member["startedAt"]) not in frozen]
+                    if not pending:
+                        return list(frozen.values())
+                    for member in pending:
+                        process = psutil.Process(member["pid"])
+                        self.assertEqual(process_start(member["pid"], include_exited=False), member["startedAt"])
+                        process.suspend()
+                        frozen[member["pid"], member["startedAt"]] = (member, process)
+            finally:
+                api.close(job)
         os.kill(identity["pid"], signal.SIGSTOP)
         return None
 
     def resume_execution(self, identity, process):
-        if inspect_process_identity(identity) != "alive":
-            return
         if os.name == "nt":
-            try:
-                process.resume()
-            except psutil.NoSuchProcess:
-                pass
+            for member, frozen in reversed(process or []):
+                if process_start(member["pid"], include_exited=False) == member["startedAt"]:
+                    try:
+                        frozen.resume()
+                    except psutil.NoSuchProcess:
+                        pass
         else:
-            os.kill(identity["pid"], signal.SIGCONT)
+            if inspect_process_identity(identity) == "alive":
+                os.kill(identity["pid"], signal.SIGCONT)
 
     def client(self):
         return BoardClient(self.directory, autostart=False)
@@ -242,7 +261,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
-            for journal in self.directory.glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
+            for journal in native_path(self.directory).glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
                     kill_verified_process_group(native)
 
@@ -366,14 +385,14 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             budget = attempt_root(self.directory, "dsh", run_id,
                                   before["attemptId"]) / "execution-budget.json"
             self.assertTrue(wait_for(native_path(budget).exists, timeout=15))
-            original_budget = json.loads(budget.read_text(encoding="utf-8"))
+            original_budget = json.loads(native_path(budget).read_text(encoding="utf-8"))
             self.restart(daemon)
         try:
             with self.daemon(env=environment):
                 attached = wait_for(lambda: self._running(run_id), timeout=30)
                 self.assertIsNotNone(attached, self.client().get(runId=run_id))
                 self.assertEqual(attached["selectedAttempt"]["attemptId"], before["attemptId"])
-                self.assertEqual(json.loads(budget.read_text(encoding="utf-8")), original_budget)
+                self.assertEqual(json.loads(native_path(budget).read_text(encoding="utf-8")), original_budget)
                 self.assertNotEqual(self.client().call("selection_get", {
                     "decisionId": created["decisionId"]})["decision"]["status"], "completed")
                 release.touch()
@@ -410,12 +429,12 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertEqual(attached["selectedAttempt"]["ownership"], "owned")
                 self.assertEqual(inspect_process_identity(identity), "alive")
                 frozen_process = self.freeze_execution(identity)
-                material = json.loads(budget.read_text(encoding="utf-8"))
+                material = json.loads(native_path(budget).read_text(encoding="utf-8"))
                 material["deadline"] = time.monotonic() - 1
                 fsync_json(budget, material)
                 # Publish as the execution does: an authenticated progress hint
                 # wakes the observer even when waitingReason is unchanged.
-                startup = json.loads((budget.parent / "execution-start.json").read_bytes())
+                startup = json.loads(native_path(budget.parent / "execution-start.json").read_bytes())
                 self.client().progress(attempt["attemptId"], attempt["generation"], startup["nonce"],
                                        data={"waitingReason": None})
                 forced = wait_for(lambda: self.client().get(runId=run_id)["selectedAttempt"].get("forceRequestedAt"),
@@ -440,7 +459,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
-            for journal in self.directory.glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
+            for journal in native_path(self.directory).glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
                     kill_verified_process_group(native)
 
@@ -516,7 +535,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
                 kill_verified_process_group(identity)
-            for journal in self.directory.glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
+            for journal in native_path(self.directory).glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
                     kill_verified_process_group(native)
 

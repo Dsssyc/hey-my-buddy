@@ -23,7 +23,7 @@ from unittest import mock
 
 # ``support`` puts the project's own ``src`` directory first on sys.path, so the
 # tests exercise this checkout rather than any installed copy of the package.
-from support import BoardTestCase, wait_for
+from support import BoardTestCase, stop_private_service, wait_for
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
@@ -1035,7 +1035,7 @@ class TestPackaging(BoardTestCase):
             self.skipTest("uv is not available")
         runtime_root = self.directory / "runtime-root"
         environment = {"HMB_DEV_SOURCE": "", "HMB_RUNTIME_ROOT": str(runtime_root)}
-        self.addCleanup(lambda: self.cli("stop", "{}", env=environment, timeout=60))
+        self.addCleanup(stop_private_service, self.directory, timeout=60)
         # The production cold-start path: no daemon pre-started by the test.
         code, health = self.cli("health", env=environment, timeout=600)
         install_log = self.directory / "runtime-install.log"
