@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import re
 import stat
+import sys
 import time
 import uuid
 
@@ -66,7 +67,8 @@ def _service_process_modules() -> dict[str, str]:
 
 def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
     """Only observations. Commands and unrelated process details never escape."""
-    rows, known = observe_process_argv()
+    rows, problems = observe_process_argv()
+    known = not problems
     services = _service_process_modules()
     orphans, commands = [], []
     for process, argv in rows:
@@ -114,15 +116,22 @@ def process_inventory(state: Path) -> tuple[list[dict], list[str], bool]:
     return orphans, commands, known
 
 
-def runtime_usage(directory: Path, commands: list[str], known: bool) -> list[str]:
+def runtime_usage(directory: Path, commands: list[str], known: bool, *, reported: set[tuple[int, float]] | None = None) -> list[str]:
     if not known or os.name == 'nt':
         return ['process-inspection-unavailable']
     prefixes = {str(directory), str(directory.resolve())}
     if any(prefix in command for command in commands for prefix in prefixes):
         return ['runtime-in-use']
-    opened, error, available = observe_open_paths()
+    opened, error, available, denied = observe_open_paths()
     if error or not available:
         return ['process-inspection-unavailable']
+    if reported is None:
+        reported = set()
+    for observation in denied:
+        identity = observation.pid, observation.create_time
+        if identity not in reported:
+            print(f'hey_my_buddy.storage: {observation}', file=sys.stderr, flush=True)
+            reported.add(identity)
     if any(path == prefix or path.startswith(prefix + os.sep)
            for paths in opened.values() for path in paths for prefix in prefixes):
         return ['runtime-in-use']
@@ -394,6 +403,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
     state = store.directory.resolve()
     rows = []
     orphaned, commands, known = process_inventory(state)
+    reported: set[tuple[int, float]] = set()
     now = time.time()
     def add(category, path, reasons, **metadata):
         size, fingerprint, safe = tree_info(path)
@@ -544,7 +554,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
                     reasons.append('retention-grace')
                 reasons.extend(_runtime_lock_reasons(path))
                 if stat.S_ISDIR(path_stat.st_mode) and not reasons:
-                    reasons.extend(runtime_usage(path, commands, known))
+                    reasons.extend(runtime_usage(path, commands, known, reported=reported))
                 add('runtimes', path, reasons)
                 continue
             if not stat.S_ISDIR(path_stat.st_mode):
@@ -573,7 +583,7 @@ def inspect(store, *, git_proof: bool = True) -> dict:
             if not current_ready:
                 reasons.append('runtime-identity-unproven')
             if not reasons:
-                reasons.extend(runtime_usage(path, commands, known))
+                reasons.extend(runtime_usage(path, commands, known, reported=reported))
                 reasons.extend(_runtime_lock_reasons(path))
             add('runtimes', path, reasons)
     add('backup', state / 'backups', ['current-backup'])

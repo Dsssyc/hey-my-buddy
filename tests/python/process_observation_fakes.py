@@ -9,11 +9,12 @@ from hey_my_buddy import process_observation as observation
 
 
 def process(pid, argv=(), *, files=(), cwd='/', mappings=(), uid=None, effective_uid=None,
-            username='fixture-account'):
+            username='fixture-account', created=1234.5, name='fixture-process'):
     uid = getattr(os, 'geteuid', lambda: 0)() if uid is None else uid
     effective_uid = uid if effective_uid is None else effective_uid
     return SimpleNamespace(
         pid=pid,
+        create_time=Mock(return_value=created), name=Mock(return_value=name),
         status=Mock(return_value=observation.psutil.STATUS_RUNNING),
         cmdline=Mock(return_value=list(argv)), cwd=Mock(return_value=cwd),
         uids=Mock(return_value=SimpleNamespace(real=uid, effective=effective_uid)),
@@ -49,6 +50,12 @@ def native_references(output=None, *, stderr='', returncode=0):
 def proc_references(*paths):
     """One Linux descriptor list; entries may raise a readlink error."""
     handles = [Path('/proc/fixture/fd') / str(index) for index in range(len(paths))]
+    values = dict(zip(handles, paths))
+    def read(handle):
+        value = values[handle]
+        if isinstance(value, Exception):
+            raise value
+        return value
     with (patch.object(Path, 'iterdir', return_value=handles),
-          patch.object(observation.os, 'readlink', side_effect=paths)):
+          patch.object(observation.os, 'readlink', side_effect=read)):
         yield

@@ -556,7 +556,7 @@ class ProcessObservationTests(unittest.TestCase):
         with processes(included, excluded), native_references() as native:
             self.assertEqual(checks._ps_argv_table(), [(123, ['python'])])
             self.assertTrue(storage.process_inventory(Path('/private/checks-fixture'))[2])
-            _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+            _, error, available, _ = checks._open_file_pids(Path('/private/checks-fixture'))
         self.assertIsNone(error)
         self.assertTrue(available)
         excluded.cmdline.assert_not_called()
@@ -566,16 +566,18 @@ class ProcessObservationTests(unittest.TestCase):
         self.assertEqual(command[command.index('-p') + 1], '123')
         self.assertNotIn('-u', command)  # The shared effective-UID selection is final.
 
-    def test_same_effective_uid_denied_argv_and_cwd_are_unknown(self):
+    def test_same_effective_uid_denied_argv_is_unknown_but_cwd_is_recorded(self):
         included = process(123, uid=1, effective_uid=0)
         included.cmdline.side_effect = observation.psutil.AccessDenied(123)
         included.cwd.side_effect = observation.psutil.AccessDenied(123)
         with processes(included), native_references():
             self.assertIsNone(checks._ps_argv_table())
             self.assertFalse(storage.process_inventory(Path('/private/checks-fixture'))[2])
-            _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
-        self.assertIsNotNone(error)
+            _, error, available, denied = checks._open_file_pids(Path('/private/checks-fixture'))
+        self.assertIsNone(error)
         self.assertTrue(available)
+        self.assertEqual(len(denied), 1)
+        self.assertIn('pid=123', str(denied[0]))
 
     def test_failed_argv_reads_use_current_starting_or_ending_state(self):
         for failure in (observation.psutil.AccessDenied(123), SystemError('proc_cmdline failed')):
@@ -605,7 +607,7 @@ class ProcessObservationTests(unittest.TestCase):
                     target.status.return_value = state
                 with processes(target), native_references():
                     self.assertEqual(checks._ps_argv_table(), [(123, ['python', str(root / 'state')])])
-                    pids, error, available = checks._open_file_pids(root)
+                    pids, error, available, _ = checks._open_file_pids(root)
                 self.assertEqual(pids, {123})
                 self.assertIsNone(error)
                 self.assertTrue(available)
@@ -617,7 +619,7 @@ class ProcessObservationTests(unittest.TestCase):
         with processes(included), native_references() as native:
             self.assertIsNone(checks._ps_argv_table())
             self.assertFalse(storage.process_inventory(Path('/private/checks-fixture'))[2])
-            _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+            _, error, available, _ = checks._open_file_pids(Path('/private/checks-fixture'))
         self.assertIsNotNone(error)
         self.assertTrue(available)
         native.assert_not_called()
@@ -625,7 +627,7 @@ class ProcessObservationTests(unittest.TestCase):
     def test_effective_uid_is_read_once_per_pid_snapshot(self):
         included = process(123)
         with processes(included), native_references():
-            _, error, _ = checks._open_file_pids(Path('/private/checks-fixture'))
+            _, error, _, _ = checks._open_file_pids(Path('/private/checks-fixture'))
         self.assertIsNone(error)
         included.uids.assert_called_once_with()
 
@@ -674,7 +676,7 @@ class ProcessObservationTests(unittest.TestCase):
                     with (processes(target), proc_references(),
                           patch.object(observation.psutil, 'LINUX', True),
                           patch.object(observation.psutil, 'MACOS', False)):
-                        pids, error, available = checks._open_file_pids(root)
+                        pids, error, available, _ = checks._open_file_pids(root)
                     self.assertEqual(pids, set())
                     self.assertIsNone(error)
                     self.assertTrue(available)
@@ -690,7 +692,7 @@ class ProcessObservationTests(unittest.TestCase):
                 else:
                     ended.status.return_value = state
                 with processes(survivor, ended), native_references('p123\n', returncode=1):
-                    pids, error, available = checks._open_file_pids(root)
+                    pids, error, available, _ = checks._open_file_pids(root)
                 self.assertEqual(pids, set())
                 self.assertIsNone(error)
                 self.assertTrue(available)
@@ -700,7 +702,7 @@ class ProcessObservationTests(unittest.TestCase):
         for returncode in (0, 1):
             with self.subTest(returncode=returncode):
                 with processes(process(123)), native_references('', returncode=returncode):
-                    _, error, available = checks._open_file_pids(root)
+                    _, error, available, _ = checks._open_file_pids(root)
                 self.assertIsNotNone(error)
                 self.assertTrue(available)
 
@@ -712,7 +714,7 @@ class ProcessObservationTests(unittest.TestCase):
             return str(root)
         target.cwd.side_effect = cwd_before_exit
         with processes(target), native_references('', returncode=1) as native:
-            pids, error, available = checks._open_file_pids(root)
+            pids, error, available, _ = checks._open_file_pids(root)
         self.assertEqual(pids, set())
         self.assertIsNone(error)
         self.assertTrue(available)
@@ -726,7 +728,7 @@ class ProcessObservationTests(unittest.TestCase):
                 ended.status.side_effect = observation.psutil.NoSuchProcess(123)
                 with (processes(ended),
                       native_references('', returncode=returncode, stderr=stderr)):
-                    _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+                    _, error, available, _ = checks._open_file_pids(Path('/private/checks-fixture'))
                 self.assertIsNotNone(error)
                 self.assertTrue(available)
 
@@ -738,7 +740,7 @@ class ProcessObservationTests(unittest.TestCase):
                       patch.object(observation.psutil, 'LINUX', True),
                       patch.object(observation.psutil, 'MACOS', False),
                       patch.object(Path, 'iterdir', side_effect=failure)):
-                    pids, error, available = checks._open_file_pids(root)
+                    pids, error, available, _ = checks._open_file_pids(root)
                 self.assertEqual(error is None, isinstance(failure, FileNotFoundError))
                 if error is None:
                     self.assertEqual(pids, set())
@@ -752,7 +754,7 @@ class ProcessObservationTests(unittest.TestCase):
         with (processes(cwd, mapped, bystander), proc_references(),
               patch.object(observation.psutil, 'LINUX', True),
               patch.object(observation.psutil, 'MACOS', False)):
-            pids, error, available = checks._open_file_pids(root)
+            pids, error, available, _ = checks._open_file_pids(root)
         self.assertEqual(pids, {123, 456})
         self.assertIsNone(error)
         self.assertTrue(available)
@@ -763,7 +765,7 @@ class ProcessObservationTests(unittest.TestCase):
         target = process(123)
         target.memory_maps.side_effect = AssertionError('macOS mappings are not in psutil')
         with processes(target), native_references(f'p123\nn{root / "library.dylib"}\n') as command:
-            pids, error, available = checks._open_file_pids(root)
+            pids, error, available, _ = checks._open_file_pids(root)
         self.assertEqual(pids, {123})
         self.assertIsNone(error)
         self.assertTrue(available)
@@ -776,7 +778,7 @@ class ProcessObservationTests(unittest.TestCase):
         output = (f'p123\nn{root / "state" / "control-daemon.lock"} (deleted)\n'
                   f'p456\nn{self.root / "other" / "state" / "board-owner.lock"}\n')
         with processes(process(123), process(456)), native_references(output):
-            pids, error, available = checks._open_file_pids(root)
+            pids, error, available, _ = checks._open_file_pids(root)
         self.assertEqual(pids, {123})
         self.assertIsNone(error)
         self.assertTrue(available)
@@ -790,7 +792,7 @@ class ProcessObservationTests(unittest.TestCase):
                       patch.object(observation.psutil, 'MACOS', False),
                       patch.object(observation.shutil, 'which', side_effect=AssertionError('Linux called lsof')),
                       proc_references(failure or f'{root / "unlinked"} (deleted)')):
-                    pids, error, available = checks._open_file_pids(root)
+                    pids, error, available, _ = checks._open_file_pids(root)
                 self.assertTrue(available)
                 if failure:
                     self.assertIsNotNone(error)
@@ -805,22 +807,24 @@ class ProcessObservationTests(unittest.TestCase):
               patch.object(observation.psutil, 'MACOS', False),
               patch.object(observation.shutil, 'which', side_effect=AssertionError('Linux called lsof')),
               proc_references(FileNotFoundError('descriptor closed'), str(root / 'open-file'))):
-            pids, error, available = checks._open_file_pids(root)
+            pids, error, available, _ = checks._open_file_pids(root)
         self.assertEqual(pids, {123})
         self.assertIsNone(error)
         self.assertTrue(available)
 
     def test_incomplete_paths_cannot_report_a_clear_root(self):
-        for attribute in ('cwd', 'memory_maps', 'uids', 'status'):
+        for attribute in ('uids', 'status', 'create_time', 'name'):
             with self.subTest(attribute=attribute):
                 target = process(123)
                 getattr(target, attribute).side_effect = observation.psutil.AccessDenied(123)
+                if attribute == 'name':
+                    target.cwd.side_effect = observation.psutil.AccessDenied(123)
                 linux = attribute != 'status'
                 with (processes(target),
                       patch.object(observation.psutil, 'LINUX', linux),
                       patch.object(observation.psutil, 'MACOS', not linux),
                       proc_references() if linux else native_references('')):
-                    _, error, available = checks._open_file_pids(Path('/private/checks-fixture'))
+                    _, error, available, _ = checks._open_file_pids(Path('/private/checks-fixture'))
                 self.assertIsNotNone(error)
                 self.assertTrue(available)
 
@@ -839,7 +843,7 @@ class ProcessObservationTests(unittest.TestCase):
                     with (processes(target), patch.object(observation.psutil, 'LINUX', True),
                           patch.object(observation.psutil, 'MACOS', False),
                           proc_references(PermissionError('fd denied')) if channel == 'proc-fd' else proc_references()):
-                        pids, error, available = checks._open_file_pids(root)
+                        pids, error, available, _ = checks._open_file_pids(root)
                     self.assertEqual(pids, set())
                     self.assertTrue(available)
                     self.assertIsNone(error)
@@ -873,7 +877,7 @@ class ProcessObservationTests(unittest.TestCase):
                 with (processes(target), patch.object(observation.psutil, 'WINDOWS', True),
                       patch.object(observation.psutil, 'MACOS', False),
                       patch.object(observation.subprocess, 'run', side_effect=AssertionError('native POSIX channel called'))):
-                    pids, error, available = checks._open_file_pids(root)
+                    pids, error, available, _ = checks._open_file_pids(root)
                 self.assertEqual(pids, {123} if cwd == str(root) else set())
                 self.assertIn('Windows open-file observation is incomplete', error)
                 self.assertTrue(available)
@@ -890,7 +894,7 @@ class ProcessObservationTests(unittest.TestCase):
               patch.object(observation.psutil, 'MACOS', False)):
             self.assertEqual(checks._ps_argv_table(), [(123, ['python'])])
             _, commands, known = storage.process_inventory(self.root)
-            pids, error, available = checks._open_file_pids(self.root)
+            pids, error, available, _ = checks._open_file_pids(self.root)
         self.assertTrue(known)
         self.assertEqual(commands, ['python'])
         self.assertEqual(pids, {123})
@@ -909,7 +913,7 @@ class ProcessObservationTests(unittest.TestCase):
               patch.object(observation.psutil, 'MACOS', False)):
             self.assertIsNone(checks._ps_argv_table())
             self.assertFalse(storage.process_inventory(self.root)[2])
-            _, error, available = checks._open_file_pids(self.root)
+            _, error, available, _ = checks._open_file_pids(self.root)
         self.assertIn('psutil process enumeration incomplete', error)
         self.assertIn('Windows open-file observation is incomplete', error)
         self.assertTrue(available)
@@ -922,7 +926,7 @@ class ProcessObservationTests(unittest.TestCase):
               patch.object(observation.psutil, 'MACOS', False)):
             current.username.side_effect = observation.psutil.AccessDenied(0)
             self.assertIsNone(checks._ps_argv_table())
-            _, error, _ = checks._open_file_pids(self.root)
+            _, error, _, _ = checks._open_file_pids(self.root)
         self.assertIn('psutil process enumeration incomplete', error)
         target.cmdline.assert_not_called()
         target.cwd.assert_not_called()
