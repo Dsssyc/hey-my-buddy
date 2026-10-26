@@ -1,4 +1,4 @@
-"""The installed upgrade base upgrades explicitly to the current schema."""
+"""The installed upgrade base opens directly with the current schema."""
 from __future__ import annotations
 
 import hashlib
@@ -14,7 +14,6 @@ from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, _git, _sha, 
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router, router_sequence
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
-from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA, upgrade_state
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
@@ -27,10 +26,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp(prefix='upgrade-base-fixture-'))
 
 
-    def restored(self, name='state', *, migrate=True):
+    def restored(self, name='state'):
         fixture = load_fixture(self.root / name)
-        if migrate:
-            upgrade_state(fixture['state'])
         connection = sqlite3.connect(fixture['state'] / 'board.sqlite3')
         connection.row_factory = sqlite3.Row
         self.addCleanup(connection.close)
@@ -117,14 +114,14 @@ class UpgradeFixtureTests(unittest.TestCase):
 
 
     def test_public_operation_stock_retains_source_schema_and_history_hashes(self):
-        fixture, connection = self.restored(migrate=False)
-        self.assertEqual(fixture['sourceCommit'], '8ad462b2d58491eabac6f7c14ac5617dfbd1dbdf')
-        self.assertEqual(fixture['sourceVersion'], '0.53.0')
-        self.assertEqual(fixture['schemaVersion'], UPGRADE_BASE_SCHEMA)
+        fixture, connection = self.restored()
+        self.assertEqual(fixture['sourceCommit'], '4a9fce3e11c48c55975f9b1251c0a8f03a31f707')
+        self.assertEqual(fixture['sourceVersion'], '0.54.0')
+        self.assertEqual(fixture['schemaVersion'], SCHEMA_VERSION)
         self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
         self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
         self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0],
-                         str(UPGRADE_BASE_SCHEMA))
+                         str(SCHEMA_VERSION))
         self.assertEqual({row[0] for row in connection.execute('SELECT key FROM meta')},
                          {'schema_version', 'capability_secret'})
         self.assertEqual(tuple(connection.execute(
@@ -210,7 +207,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             load_fixture(first['state'])
 
 
-    def test_upgraded_base_opens_and_matches_fresh_structure(self):
+    def test_base_opens_directly_and_matches_fresh_structure(self):
         fixture, connection = self.restored()
         state = fixture['state']
         before = upgrade.idle_snapshot(state)
@@ -514,7 +511,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_every_other_schema_is_refused_without_writes(self):
         fixture, connection = self.restored()
-        for version in ('24', '25', '26', '27', '28', '0', '999', '028', '28.0', '029', '29.0', 'unrecognized'):
+        for version in ('24', '25', '26', '27', '28', '29', '0', '999', '028', '28.0', '029', '29.0', '030', '30.0', 'unrecognized'):
             with self.subTest(schema=version):
                 connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))
                 connection.commit()
