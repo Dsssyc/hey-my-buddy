@@ -142,7 +142,7 @@ What one execution showed while it ran, as the harness gave it: messages, the re
 _Avoid_: transcript, 会话日志 (for the product's record; a harness's own session store is its native session)
 
 **改派 / reroute**:
-A new routing decision for the same micro task, without starting another micro task: at a Host's request, or by the blackboard when the chosen buddy's provider rejected the turn for quota before its model started.
+A new routing decision for the same micro task, without starting another micro task: at a Host's request, or by the blackboard when the chosen buddy's provider rejected the turn, for quota or because the model service was overloaded, before its model started.
 _Avoid_: 重派, 换 buddy (for the routing step itself)
 
 **模型目录 / model catalog**:

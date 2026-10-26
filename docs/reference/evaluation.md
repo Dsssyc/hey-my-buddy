@@ -76,7 +76,7 @@ Availability alone never makes a Router eligible: health, enablement and the cap
 
 The execution details display native `tokenUsage` per attempt: input tokens (including cached input), cached input and output tokens. Missing counters stay unknown; native cumulative session records are not charged to every continuation. These are native observations, not billing estimates or served-model attestations.
 
-A quota refusal leaves provider cooling, not a reading ([harnesses](harnesses.md#quota-refusals-and-cooling)): the cooling provider's buddies drop out of automatic candidates until the cooldown ends or the user clears it, and user enablement and preferences never change. A buddy the Host names explicitly stays as chosen and shows `providerCooling`.
+A quota rejection leaves provider cooling, not a reading ([harnesses](harnesses.md#provider-rejections-and-cooling)): the cooling provider's buddies drop out of automatic candidates until the cooldown ends or the user clears it, and user enablement and preferences never change. A buddy the Host names explicitly stays as chosen and shows `providerCooling`.
 
 ## Edit and publish
 

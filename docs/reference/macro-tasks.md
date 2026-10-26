@@ -39,7 +39,7 @@ Timeline rows arrive in tree order (roots by creation, each followed depth-first
 | Kind | Interval | State |
 | --- | --- | --- |
 | `queue` | submission or continuation to the attempt's admission; a still-queued task not parked on its Host has an open span | `admitted`, or `queued` while open |
-| `execution` | attempt start (or admission) to finish; unfinished attempts have no end | the attempt execution state: `starting`, `executing`, `finalizing`, `uncertain` or `finished`; `uncertain` is set for uncertain ownership or a finish without confirmed stop; `rejected` marks an attempt refused for quota before its model started, whose micro task was rerouted |
+| `execution` | attempt start (or admission) to finish; unfinished attempts have no end | the attempt execution state: `starting`, `executing`, `finalizing`, `uncertain` or `finished`; `uncertain` is set for uncertain ownership or a finish without confirmed stop; `rejected` marks an attempt whose provider rejected it, for quota or because the model service was overloaded, before its model started, and whose micro task was rerouted |
 | `routing` | a routing attempt's spans, shown on the routed run's row | as for execution |
 | `host` | a recorded request from creation to decision; an open request has no end, and a cancelled request's wait ends at its recorded cancellation | `open`, `approved`, `declined`, `superseded` or `cancelled` |
 
