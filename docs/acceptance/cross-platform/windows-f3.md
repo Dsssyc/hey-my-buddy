@@ -60,3 +60,13 @@
 - **持续集成查出的回归：** 第二回合把 Claude 联接的目标也换成了扩展写法，Windows 上所有联接都建不成（`CLAUDE_LINK_FAILED`）；第三回合改为联接存普通绝对路径、只在建链一侧用扩展写法。
 - **核对：** 各回合的差异读过，受影响的文件在 macOS 上通过。持续集成运行 `40246449575`：Windows ARM64 上 `test_skill_install`、`test_first_install`、`test_upgrade` 与新的删除准入测试通过，x64 的这些文件也通过（x64 第 3 片碰上 25 分钟的步骤上限，与本批无关）；Windows 余下 20 个失败文件是停止路径与未归因的那一组。测试机上实现方第一回合之后 326 个文件过 300 个。
 - **留下的：** 停止路径的那一组等开发者定软停的做法；Windows 的分片要按现在的用时重排，否则一片超出 25 分钟。
+
+## 残余（三）：与停法无关的失败（2026-10-26）
+
+微任务“Windows 残余（三）”（run `633fd54d`，Codex CLI 的 `gpt-6.1-sol / max`），基点 `51194753`，产物 `26024d8c`，合入整合分支 `46d2d07b`。范围是持续集成第十、十一轮 Windows 上与停法无关的 13 个文件；与停法有关的 9 个归“子进程只用一种停法”。
+
+产品改动只有一处：`locking.py` 在 Windows 上改用 portalocker 自带的 `Win32Locker`（LockFileEx）。portalocker 3.2 默认的 `msvcrt.LK_LOCK` 在独占阻塞锁上重试约 9 秒就以 errno 36（Resource deadlock avoided）放弃，产品里任何要等过 9 秒的锁在 Windows 上都会失败；Worker 在测试机上先用真实的锁竞争复现、再让新测试在修复前失败。其余是测试与夹具：假的 ZCode、Codex app-server 按 GBK 读产品发的 UTF-8（ZCode、Codex 的“检出不一致”都出在这里，产品的归属比较是对的）；夹具的长路径文件调用、Windows 不允许的目录名、升级夹具的路径模板与 `core.autocrlf`；Claude 夹具的状态发布与问询记录的共享读取；按 POSIX 权限位、POSIX 原生日志、POSIX IPC 根写的断言改为按各平台的契约核对。
+
+核对：读完差异；本机跑锁、升级夹具、Router 探针、Claude、私有适配器不变量 5 个文件，92 项通过；持续集成第 13 轮（`29a5a475`）Ubuntu 全过，Windows 失败从 21 个文件降到 15 个，剩下的都在停法那一批与基线上就失败的几类里。同一轮 macOS 有一处 `dsh.test_native_run` 的假 DSH 进程以 -11 退出，这一批没有改 DSH 也没有改它走的锁路径，本机在候选上连跑 3 次通过，记为偶发，再出现再查。
+
+Worker 第一次在测试机上跑 `npm ci` 时没把 npm 缓存指进工作目录，在测试账户默认的 npm 缓存里留下一份 97 KB 的日志；Host 决定不动它（缓存里的日志无害，删工作目录之外的东西反而越界），并在共用的 Windows 任务书段落里补上 `NPM_CONFIG_CACHE`。
