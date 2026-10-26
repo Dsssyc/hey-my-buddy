@@ -69,7 +69,7 @@ class CommandAdapter(Adapter):
         finally:
             os.close(stdout)
             os.close(stderr)
-        handle = ProcessHandle(process, own_group=True, log_paths=log_paths)
+        handle = ProcessHandle(process, stop_channel="signal", own_group=True, log_paths=log_paths)
         handle.deadline = (math.inf if context.timeout_seconds is None
                            else time.monotonic() + context.timeout_seconds)
         return handle

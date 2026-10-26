@@ -63,6 +63,7 @@ class Connection:
         self.messages: queue.Queue = queue.Queue(maxsize=128)
         self.pending: dict[str, dict | None] = {}
         self.next_id = 1
+        self.stream_closed = False
         self.unknown_events = 0
         self.unread_responses = 0
         self.shape_observations: list[dict] = []
@@ -143,7 +144,7 @@ class Connection:
         proof rejects the turn instead of publishing it.
         """
         deadline = time.monotonic() + seconds
-        while True:
+        while not self.stream_closed:
             self._remaining()
             timeout = min(0.2, max(0.0, deadline - time.monotonic()))
             if timeout <= 0:
@@ -153,11 +154,13 @@ class Connection:
             except queue.Empty:
                 continue
             if message is None:
+                self.stream_closed = True
                 return
             self._deliver(message, close_is_error=True)
 
     def _deliver(self, message, *, close_is_error: bool):
         if message is None:
+            self.stream_closed = True
             if close_is_error:
                 raise ClaudeProtocolError("transport-error", "Claude closed before the request settled")
             return

@@ -126,7 +126,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
     def test_controller_native_false_after_outer_stop_keeps_native_child_alive(self):
         native = owned_popen([sys.executable, '-c', 'import time; time.sleep(60)'],
                              cwd=str(self.directory), env=dict(os.environ), start_new_session=True)
-        handle = ProcessHandle(native, own_group=True, log_paths={})
+        handle = ProcessHandle(native, own_group=True, log_paths={}, stop_channel="signal")
         try:
             with controller_log_close_failure(receipt=NATIVE_UNKNOWN) as state:
                 with self.assertRaises(OSError) as caught:
@@ -177,7 +177,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
             result = self.controller_discovery()
             self.assertEqual(result['source'], self.payload['source'])
             self.assertEqual(state['process'].poll(), 0)
-            self.assertEqual(state['observations'], 1)
+            self.assertEqual(state['observations'], 2)
 
     def test_controller_created_fd_failure_with_unknown_cleanup_preserves_unconfirmed_stop(self):
         with controller_log_close_failure(receipt=NATIVE_STOPPED, observation_blocked=True) as state:
@@ -187,7 +187,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
             self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
             self.assertTrue(caught.exception.owned_popen_evidence.created)
             self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, False)
-            self.assertEqual(state['observations'], 1)
+            self.assertEqual(state['observations'], 0)
 
     def native_discovery(self):
         return native_run.run_discovery(cwd=str(self.directory), invocation_root=self.directory / 'discovery',
@@ -234,10 +234,10 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
 
     def test_codex_version_unknown_stop_preserves_unconfirmed_stop(self):
         self.private_version_command()
-        reader = discovery._probe_posix
+        reader = discovery._probe_windows if os.name == "nt" else discovery._probe_posix
 
-        def observed(process, stop_at, deadline):
-            reason, output, stopped = reader(process, stop_at, deadline)
+        def observed(process, stop_at, *arguments):
+            reason, output, stopped = reader(process, stop_at, *arguments)
             self.assertTrue(stopped, 'the private version process must actually be reaped')
             self.assertEqual(reason, 'probe-failed')
             self.assertEqual(process.returncode, 7)
@@ -246,7 +246,7 @@ class CatalogNativeStopTests(NativeDiscoveryFixture, BoardTestCase):
         with patch.dict(os.environ, {'HOME': str(self.directory), 'USERPROFILE': str(self.directory),
                                     'CODEX_HOME': str(self.directory / '.codex'),
                                      'HMB_CODEX_CLI': ''}), \
-             patch.object(discovery, '_probe_posix', side_effect=observed) as observation, \
+             patch.object(discovery, reader.__name__, side_effect=observed) as observation, \
              patch.object(native_run, 'probe_version', wraps=version.probe_version) as shared, \
              patch.object(native_run, 'owned_popen', wraps=native_run.owned_popen) as main:
             with self.assertRaises(version.VersionShutdownError) as caught:

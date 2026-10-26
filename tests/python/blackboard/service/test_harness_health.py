@@ -1050,7 +1050,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         from hey_my_buddy.buddy.harnesses.codex import account_probe
         with patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
              patch.object(account_probe, 'Connection') as connection:
-            handle.return_value.shutdown_confirmed.return_value = True
+            handle.return_value.terminate.return_value = (True, False)
             connection.return_value.call.side_effect = [{}, {'account': {'type': 'chatgpt', 'planType': 'pro'}},
                                                        {'config': {'model_provider': 'openai'}}]
             result = self.health.refresh('codex', force=True)
@@ -1075,7 +1075,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
             db.execute("DELETE FROM harness_account_reads WHERE harness='codex'")
         with patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
              patch.object(account_probe, 'Connection') as connection:
-            handle.return_value.shutdown_confirmed.return_value = True
+            handle.return_value.terminate.return_value = (True, False)
             connection.return_value.call.side_effect = [{}, CodexProtocolError('native-rpc-error', 'account RPC denied')]
             result = self.health.refresh('codex', force=True)
         self.assertEqual(result['status'], 'ready')
@@ -1087,7 +1087,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
         from hey_my_buddy.buddy.harnesses.codex import account_probe
         with patch.object(account_probe, 'owned_popen'), patch.object(account_probe, 'ProcessHandle') as handle, \
              patch.object(account_probe, 'Connection') as connection:
-            handle.return_value.shutdown_confirmed.return_value = True
+            handle.return_value.terminate.return_value = (True, False)
             connection.return_value.call.side_effect = [
                 {}, {'account': {'type': 'apiKey'}},
                 {'config': {'model_provider': 'configured-provider'}},
@@ -1110,7 +1110,7 @@ class NativeAccountReadFailureTests(BoardTestCase):
                  patch.object(account_probe, 'Connection') as connection:
                 with self.board.db.write() as db:
                     db.execute("DELETE FROM harness_account_reads WHERE harness='codex'")
-                handle.return_value.shutdown_confirmed.return_value = True
+                handle.return_value.terminate.return_value = (True, False)
                 connection.return_value.call.side_effect = [
                     {}, {'account': {'type': 'chatgpt', 'planType': 'plus'}}, {'config': configured},
                 ]

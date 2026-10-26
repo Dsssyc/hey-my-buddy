@@ -179,5 +179,5 @@ class DecisionAdapter(Adapter):
         return outcome
 
     def cancel(self, handle: ProcessHandle, *, grace_seconds: float = ROUTER_STOP_GRACE_SECONDS) -> None:
-        # Controllers translate SIGTERM into native interrupt, then reap their own groups.
+        # The inline run requests its native interrupt and reaps its owned group.
         handle.terminate(grace_seconds=grace_seconds)

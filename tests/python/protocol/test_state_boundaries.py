@@ -66,12 +66,13 @@ class StateBoundaryTests(unittest.TestCase):
         from hey_my_buddy.buddy.harnesses import discovery
         from hey_my_buddy.buddy.harnesses.dsh.acp.launch import LaunchRejected
 
-        def controller(*, prepare, log_paths):
+        def controller(*, prepare, log_paths, stop_channel):
+            self.assertEqual(stop_channel, "stdin")
             command, cwd, environment = prepare()
             control = Path(command[-1])
             self.assertEqual(control.parent.parent, self.state / "tmp")
             self.assertEqual(environment["HMB_STATE_DIR"], str(self.state))
-            return SimpleNamespace(wait=lambda timeout: 0)
+            return SimpleNamespace(wait=lambda timeout: 0, terminate=lambda **kwargs: None)
 
         def rejected(command, *, private_root, **kwargs):
             self.assertEqual(private_root.parent, self.state / "tmp")

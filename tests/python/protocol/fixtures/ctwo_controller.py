@@ -158,7 +158,7 @@ def simulated_run(module, request, *, services, **options):
     bridge.activate("simulated-native")
     process = owned_popen([sys.executable, str(SELF), "native", "--root", str(root)],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8", start_new_session=True)
-    owned = ProcessHandle(process, own_group=True, log_paths={})
+    owned = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
     try:
         endpoint.publish_observation(LiveObservation(ready=True, session_id="simulated-native",
             agent_status="active", supported=True, delivery_mode="cooperative-checkpoint"))

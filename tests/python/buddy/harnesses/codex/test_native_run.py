@@ -1687,8 +1687,11 @@ class WorkerSeamTests(CodexSeamCase):
 
     def test_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
         observed = []
+        observe = ProcessHandle.shutdown_confirmed
 
         def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
+            if "--version" in handle.process.args:
+                return observe(handle, settle_seconds=settle_seconds)
             observed.append(handle)
             return False
 
@@ -1812,7 +1815,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
             if before is not None:
                 before(kwargs)
             child = create(*args, **kwargs)
-            handle = ProcessHandle(child, own_group=True, log_paths={})
+            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
 
             def reap():
                 native_run._halt_owned_group(child, handle, time.monotonic() + 5)

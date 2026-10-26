@@ -53,6 +53,9 @@ class AcpClient:
         self.process = process
         self.handle = handle
         self.connection = connection
+        # The ACP writer can still own stdin after a timed-out write. Its
+        # bounded close is the same input channel without blocking behind it.
+        handle.close_input = connection.close_stdin
 
     @classmethod
     def start(cls, argv: list[str], *, private_root: Path, extra_env: dict | None = None,
@@ -123,11 +126,11 @@ class AcpClient:
     # -- shutdown ---------------------------------------------------------------
 
     def shutdown(self, *, drain_seconds: float = 20.0, settle_seconds: float = 5.0) -> dict:
-        """Close stdin, drain to EOF, wait for the leader, then observe leader and
-        group separately. Returns the stop evidence; unknown stays conservative."""
-        self.connection.shutdown(drain_seconds=drain_seconds)
-        if self.handle.process.poll() is None:
-            self.handle.wait(settle_seconds)
+        """Stop through the owned input channel, drain and retain actual evidence."""
+        self.connection.shutdown(drain_seconds=drain_seconds,
+            # Both existing waits followed EOF. The reader keeps draining in
+            # parallel; keep its budget before force as well as the leader's.
+            stop=lambda: self.handle.terminate(grace_seconds=drain_seconds + settle_seconds))
         evidence = stop_evidence(self.handle)
         return evidence
 

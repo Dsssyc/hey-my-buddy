@@ -583,7 +583,7 @@ class AcpConnection:
         finally:
             self._stdin_lock.release()
 
-    def shutdown(self, *, drain_seconds: float = 20.0) -> None:
+    def shutdown(self, *, drain_seconds: float = 20.0, stop=None) -> None:
         """Stop the writer (failing whatever it never wrote), close stdin, drain
         stdout to EOF, and join the threads.
 
@@ -592,18 +592,23 @@ class AcpConnection:
         buffer lock. Each reader closes its own stream at EOF; shutdown closes
         one only when its reader has already finished.
         """
-        self.shutdown_started.set()
-        self._write_stopped.set()
-        self._write_wake.set()
-        self._writer_thread.join(timeout=_WRITER_JOIN_SECONDS)
-        with self._write_queue_lock:
-            leftover = list(self._write_queue)
-            self._write_queue.clear()
-            for job in leftover:
-                job.outcome = ("failed", AcpConnectionClosed(
-                    "connection shutdown before the frame was written"))
-                job.done.set()
-        self.close_stdin()
+        try:
+            self.shutdown_started.set()
+            self._write_stopped.set()
+            self._write_wake.set()
+            self._writer_thread.join(timeout=_WRITER_JOIN_SECONDS)
+            with self._write_queue_lock:
+                leftover = list(self._write_queue)
+                self._write_queue.clear()
+                for job in leftover:
+                    job.outcome = ("failed", AcpConnectionClosed(
+                        "connection shutdown before the frame was written"))
+                    job.done.set()
+        finally:
+            if stop is None:
+                self.close_stdin()
+            else:
+                stop()
         self._reader.join(timeout=drain_seconds)
         self._stderr.join(timeout=1.0)
         for stream, thread_done in ((self.process.stdout, not self._reader.is_alive()),

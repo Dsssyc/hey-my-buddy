@@ -502,7 +502,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
                     raise CodexProtocolError("harness-unavailable",
                                              "The selected Codex executable could not start") from None
                 raise
-            handle = ProcessHandle(process, own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
             owned[:] = [handle]
         finally:
             os.close(fd)

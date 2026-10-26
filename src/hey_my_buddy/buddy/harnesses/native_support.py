@@ -114,24 +114,8 @@ def shape_guard(shape: Any) -> Callable[[Any], Any]:
 
 
 def halt_owned_group(process: subprocess.Popen, handle: ProcessHandle, deadline: float) -> tuple[bool, bool]:
-    """The one actual stop of an owned group: close, wait, terminate, confirm.
-
-    Returns ``(shutdown, signalled)`` — the group's confirmed disappearance and
-    whether a signal was actually sent. Every owner (a run's stop collection
-    and a spawn helper's failure path) stops its child through this primitive
-    alone.
-    """
-    try:
-        process.stdin.close()
-    except OSError:
-        pass
-    handle.wait(min(3.0, max(0.0, deadline - time.monotonic())))
-    signalled = False
-    if not handle.shutdown_confirmed(settle_seconds=0.2):
-        handle.terminate(grace_seconds=1.0)
-        signalled = True
-    shutdown = handle.shutdown_confirmed(settle_seconds=0.5)
-    return shutdown, signalled
+    """Apply the owned handle's stop sequence after the native interrupt."""
+    return handle.terminate(grace_seconds=min(3.0, max(0.0, deadline - time.monotonic())))
 
 
 # Native facts retain the existing byte/character budgets at their input boundary.

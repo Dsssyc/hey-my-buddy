@@ -66,7 +66,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             return run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"]))
 
     def test_native_metadata_wait_is_unknown_and_the_next_read_can_complete(self):
-        handle = SimpleNamespace(wait=lambda seconds: 0)
+        handle = SimpleNamespace(wait=lambda seconds: 0, terminate=lambda **kwargs: None)
         unknown = SimpleNamespace(payload={'status': 'unknown', 'code': 'deadline'}, exit_code=0, stop_confirmed=True)
         catalog = {'source': 'fixture', 'providers': [], 'discoveries': [
             {'harness': 'codex', 'status': 'complete', 'accountStatus': 'confirmed'}]}
@@ -90,7 +90,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
         handle.terminate.assert_called_once_with(grace_seconds=8)
 
     def test_real_metadata_refusal_remains_a_failure(self):
-        handle = SimpleNamespace(wait=lambda seconds: 1)
+        handle = SimpleNamespace(wait=lambda seconds: 1, terminate=lambda **kwargs: None)
         collection = SimpleNamespace(payload={'status': 'error', 'error': 'native refused'}, exit_code=1, stop_confirmed=True)
         with patch.object(run_execution, 'launch_controller', return_value=handle), \
              patch.object(run_execution, 'collect_controller', return_value=collection), \
@@ -200,7 +200,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             self.assertTrue(caught.exception.owned_popen_evidence.created)
             self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, False)
             self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
-            self.assertEqual(state['observations'], 1)
+            self.assertEqual(state['observations'], 0)
             self.assertEqual(len(list((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*'))), 1)
 
     def test_unregistered_controller_with_native_true_and_outer_unknown_keeps_role_unknown(self):
@@ -214,7 +214,7 @@ class PrivateControllerDiscoveryTests(unittest.TestCase):
             self.assertIs(caught.exception.owned_popen_evidence.shutdown_confirmed, False)
             self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
             self.assertIsNotNone(state['process'].poll())
-            self.assertEqual(state['observations'], 1)
+            self.assertEqual(state['observations'], 0)
             self.assertEqual(len(list((self.root / 'state' / 'tmp').glob('hey-my-buddy-codex-catalog-*'))), 1)
 
     def test_simulated_windows_creation_receipt_alone_never_confirms_native_stop(self):
