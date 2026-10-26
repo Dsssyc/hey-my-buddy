@@ -1,7 +1,17 @@
-import { expect } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 import { screenshots as shots, expectNoSidewaysScroll, open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
+
+async function hoverExecutionBody(slice: Locator) {
+  // Inquiries own their marks above the execution. Aim inside the bar's upper
+  // body so its hover checks the execution instead of the group's shared centre.
+  const bar = slice.locator('[data-slot=execution-bar]');
+  await expect(bar).toBeVisible();
+  const box = (await bar.boundingBox())!;
+  await bar.hover({ position: { x: box.width / 2, y: box.height / 8 } });
+}
+
 for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.describe(`trial polish ${theme} ${width}`, () => {
   test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 1000 }, reducedMotion: "reduce" });
   test("opens a micro task with one click, frames spans on hover, and switches details", async ({ page }) => {
@@ -19,7 +29,7 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await expect(page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-slot=selected-item]')).toHaveCount(0);
     if (width === 390) await page.locator('[data-slot=zoom-ruler]:visible').press("+");
     const slice = page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-key="span:execution:att-a1-1"]');
-    await slice.hover();
+    await hoverExecutionBody(slice);
     await expect(slice.locator('[data-slot=selected-item]')).toBeAttached();
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
     await expect(page).toHaveURL(new RegExp(`#tasks/${macro}$`));
@@ -49,6 +59,29 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await page.keyboard.press("Escape");
     await expect(page.locator('[data-slot=task-work]')).toHaveAttribute("data-mode", "timeline");
     await expectNoSidewaysScroll(page);
+  });
+
+  test("keeps execution and inquiry hover reachable after the preview clock advances", async ({ page }) => {
+    // The preview's Date advances with server uptime. At this age the narrow
+    // fitted scale puts the execution group's centre on the inquiry's hit area.
+    await page.route(`**/api/macro-tasks/${macro}/timeline*`, async route => {
+      const response = await route.fetch();
+      const timeline = await response.json();
+      await route.fulfill({ response, headers: { ...response.headers(), date: new Date(Date.parse(timeline.observedAt) + 140_000).toUTCString() } });
+    });
+    await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    await open(page, `#tasks/${macro}`);
+    await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]:visible').click();
+    await expect(page.locator('[data-slot=detail-strip]')).toBeVisible();
+    await page.locator('[data-slot=detail-header]').getByRole("button", { name: "收起详情" }).click();
+    if (width === 390) await page.locator('[data-slot=zoom-ruler]:visible').press("+");
+    const slice = page.locator('[data-slot=timeline-row][data-run-id="preview-run-a1"] [data-key="span:execution:att-a1-1"]');
+    await hoverExecutionBody(slice);
+    await expect(slice.locator('[data-slot=selected-item]')).toBeAttached();
+    const inquiry = page.locator('[data-key="inquiry:inq-a1-1"]');
+    await inquiry.hover();
+    await expect(inquiry.locator('[data-slot=selected-item]')).toBeAttached();
+    await expect(slice.locator('[data-slot=selected-item]')).toHaveCount(0);
   });
 
   test("reads idle intervals and clock minutes or seconds at the pointer, and highlights the exact inquiry", async ({ page }) => {
