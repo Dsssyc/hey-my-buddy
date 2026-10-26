@@ -24,10 +24,11 @@ import { useTimelineGestures } from "./useTimelineGestures";
 import { buddyColorsFor } from "./buddyColors";
 import { groupLanes, laneLevel, laneSummary, ownedWaits } from "./lanes";
 import type { LaneGroup } from "./lanes";
-import { markerAt, markerKey } from "./MarkerCluster";
+import { markerAt, markerHasKey, markerKey } from "./MarkerCluster";
+import { eventActions } from "./events";
 import type { TimelineMarker } from "./MarkerCluster";
 import { Axis, Track, spanReadout, markerReadout } from "./Tracks";
-import { CONCLUSION_OUTSET_PX as SLACK_PX } from "./ConclusionMark";
+import { TIMELINE_OUTSET_PX as SLACK_PX } from "./trackMarks";
 
 export type TaskWorkProps = {
   summary: MacroTaskSummary | null; timeline: MacroTaskTimeline | null; displayObservedAt: string | null;
@@ -79,11 +80,12 @@ export function TaskWork(props: TaskWorkProps) {
   const nowMs = instant(displayObservedAt ?? timeline?.observedAt) ?? 0;
   const displayed = useMemo(() => timeline ? { ...timeline, observedAt: displayObservedAt ?? timeline.observedAt } : null, [timeline, displayObservedAt]);
   const input = useMemo(() => displayed ? timelineScaleInput(displayed) : null, [displayed]);
-  const selectedEvent = timeline?.events.find(event => event.runId === selectedRunId && `event:${event.seq}` === selectedKey);
+  const selectedEvent = eventActions(timeline?.events ?? []).map(action => ({ ...action, kind: "event" as const, x: 0 }))
+    .find(marker => marker.event.runId === selectedRunId && markerHasKey(marker, selectedKey));
   const inquirySpan = timeline?.spans.find(span => span.runId === selectedRunId && span.inquiries?.some(inquiry => `inquiry:${inquiry.inquiryId}` === selectedKey));
   const selectedInquiry = inquirySpan?.inquiries?.find(inquiry => `inquiry:${inquiry.inquiryId}` === selectedKey);
-  const selectedMarker: TimelineMarker | null = selectedEvent ? { kind: "event", event: selectedEvent, x: 0 }
-    : selectedInquiry && inquirySpan ? { kind: "inquiry", inquiry: selectedInquiry, span: inquirySpan, x: 0 } : null;
+  const selectedMarker: TimelineMarker | null = selectedEvent ??
+    (selectedInquiry && inquirySpan ? { kind: "inquiry", inquiry: selectedInquiry, span: inquirySpan, x: 0 } : null);
   const selectedSpan = inquirySpan ?? timeline?.spans.find(span => `span:${span.spanId}` === selectedKey);
   const selectedAt = selectedMarker ? instant(markerAt(selectedMarker)) : selectedSpan ? instant(selectedSpan.startAt) : selectedRunId ? Math.min(...(timeline?.spans.filter(span => span.runId === selectedRunId).map(span => instant(span.startAt)).filter((at): at is number => at !== null) ?? []), ...(timeline?.events.filter(event => event.runId === selectedRunId).map(event => instant(event.at)).filter((at): at is number => at !== null) ?? [])) : null;
   const pointingSpan = hoveredSpan ?? (hoveredRow ? null : focusedSpan);

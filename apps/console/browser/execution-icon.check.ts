@@ -7,10 +7,11 @@ const spanId = "execution:att-a3-1";
 
 test.use({ viewport: { width: 1440, height: 1000 }, reducedMotion: "no-preference" });
 
-test("a running bar narrower than its buddy icon never paints over the icon", async ({ page }) => {
+test("a running narrow bar omits its repeated identity and places a changed identity wholly beside it", async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-09-27T10:00:00.000Z"));
   await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.theme", "dark"));
   await open(page, `#tasks/${macro}`);
+  await expect(page.locator(`[data-key="span:${spanId}"] [data-slot=execution-buddy]`)).toHaveCount(0);
 
   let durationMs: number | null = null;
   let frozenTimeline: MacroTaskTimeline | null = null;
@@ -26,6 +27,7 @@ test("a running bar narrower than its buddy icon never paints over the icon", as
     live.reminders = null;
     live.expectedSeconds = null;
     live.inquiries = [];
+    timeline.rows.find(row => row.runId === live.runId)!.buddy = { ...live.buddy!, provider: "another-provider" };
     timeline.events = timeline.events.filter(event => event.runId !== live.runId);
     // Keep the fitted scale independent of this span's length.
     timeline.scopeComplete = false;
@@ -42,8 +44,7 @@ test("a running bar narrower than its buddy icon never paints over the icon", as
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const ppm = Number(await canvas.getAttribute("data-ppm"));
   expect(ppm).toBeGreaterThan(0);
-  // A 12px fill plus its 1px stroke stays narrower than the 14px icon while
-  // covering the icon's centre, where the breathing layers used to obscure it.
+  // The real bar remains narrower than the mark; the mark must move as a whole.
   durationMs = 12 / ppm * 60_000;
   await page.reload();
   await expect(bar).toBeVisible();
@@ -57,34 +58,34 @@ test("a running bar narrower than its buddy icon never paints over the icon", as
   expect(barBox!.width).toBeGreaterThan(11.5);
   expect(barBox!.width).toBeLessThan(13.5);
   expect(barBox!.width).toBeLessThan(iconBox!.width);
-  expect(barBox!.x + barBox!.width).toBeGreaterThan(iconBox!.x + iconBox!.width / 2);
+  expect(iconBox!.x + iconBox!.width <= barBox!.x || iconBox!.x >= barBox!.x + barBox!.width).toBe(true);
 
   await edge.evaluate(node => { const motion = node.getAnimations()[0]!; motion.pause(); motion.currentTime = 0; });
   const first = await icon.boundingBox();
-  const iconIsOnTop = () => segment.evaluate(group => {
-    const edge = group.querySelector<SVGRectElement>("[data-slot=execution-breath]")!;
-    const backing = edge.previousElementSibling as SVGRectElement;
+  const iconIsClear = () => segment.evaluate(group => {
+    const bar = group.querySelector<SVGRectElement>("[data-slot=execution-bar]")!.getBoundingClientRect();
     const paper = group.querySelector<SVGRectElement>("[data-slot=execution-buddy-paper]")!;
     const icon = group.querySelector<SVGForeignObjectElement>("[data-slot=execution-buddy]")!;
-    const center = icon.getBoundingClientRect();
-    const x = center.left + center.width / 2;
-    const y = center.top + center.height / 2;
-    const edgeBox = edge.getBoundingClientRect();
-    if (x <= edgeBox.left || x >= edgeBox.right || y <= edgeBox.top || y >= edgeBox.bottom) return false;
-    // These SVG layers ignore pointer events in product use. Enable hit testing
-    // only for this probe, so elementFromPoint reports their visual stack.
-    const layers = [edge, backing, paper, icon];
-    const previous = layers.map(layer => layer.style.pointerEvents);
-    try {
-      for (const layer of layers) layer.style.pointerEvents = "auto";
-      return icon.contains(document.elementFromPoint(x, y));
-    } finally {
-      layers.forEach((layer, index) => { layer.style.pointerEvents = previous[index]!; });
-    }
+    const box = paper.getBoundingClientRect(), glyph = icon.getBoundingClientRect();
+    return (box.right <= bar.left - 4 || box.left >= bar.right + 4)
+      && glyph.left >= box.left && glyph.right <= box.right;
   });
-  expect(await iconIsOnTop(), "the icon paints above both breathing edge layers at its centre").toBe(true);
+  expect(await iconIsClear(), "the complete mark stays clear of the real bar").toBe(true);
   await edge.evaluate(node => { node.getAnimations()[0]!.currentTime = 1000; });
   expect(await icon.boundingBox(), "the icon never moves with the edge").toEqual(first);
-  expect(await iconIsOnTop(), "the icon remains on top at the brightest animation frame").toBe(true);
+  expect(await iconIsClear(), "the complete mark stays clear at the brightest animation frame").toBe(true);
   await expect(icon.locator("img")).toBeVisible();
+
+  // Even the breathing layers of a subpixel execution keep its recorded length.
+  durationMs = 0.5 / ppm * 60_000;
+  await page.reload();
+  await expect(bar).toBeVisible();
+  const shortWidth = await bar.evaluate(node => (node as SVGRectElement).getBBox().width);
+  const edgeWidth = await edge.evaluate(node => (node as SVGRectElement).getBBox().width);
+  expect(shortWidth).toBeGreaterThan(0);
+  expect(shortWidth).toBeLessThan(1);
+  expect(edgeWidth).toBeLessThanOrEqual(shortWidth + 0.01);
+  const external = (await icon.boundingBox())!;
+  await page.mouse.move(external.x + external.width / 2, external.y + external.height / 2);
+  await expect(page.locator('[data-slot=timeline-status]')).toContainText("claude / anthropic / claude-opus-5-5 / high");
 });

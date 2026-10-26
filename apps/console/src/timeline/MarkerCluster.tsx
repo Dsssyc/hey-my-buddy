@@ -2,16 +2,19 @@ import { Hint } from "../components/hint";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { clockTime } from "../macro-task-display";
-import type { TimelineEvent, TimelineSpan } from "../macro-task-types";
+import type { TimelineSpan } from "../macro-task-types";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
 import { ClusterMark } from "./ClusterMark";
+import type { EventAction } from "./events";
 
-export type TimelineMarker = { kind: "event"; event: TimelineEvent; x: number } | {
+export type TimelineMarker = EventAction & { kind: "event"; x: number } | {
   kind: "inquiry"; inquiry: NonNullable<TimelineSpan["inquiries"]>[number]; span: TimelineSpan; x: number;
 };
 
 export const markerKey = (marker: TimelineMarker) => marker.kind === "event" ? `event:${marker.event.seq}` : `inquiry:${marker.inquiry.inquiryId}`;
 export const markerAt = (marker: TimelineMarker) => marker.kind === "event" ? marker.event.at : marker.inquiry.createdAt;
+export const markerHasKey = (marker: TimelineMarker, key: string | null | undefined) => markerKey(marker) === key
+  || marker.kind === "event" && !!marker.relatedEvents?.some(event => `event:${event.seq}` === key);
 
 export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey, boundary, onOpen, onSelect, onFocusMarker, markerName, markerReadout, selectedKey, highlightedKey }: {
   markers: TimelineMarker[]; x: number; y: number; hitPath: string; runId: string; taskTitle: string; tabKey?: string | null; boundary?: HTMLElement | null;
@@ -28,7 +31,7 @@ export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey
   const first = markers[0]!;
   const key = `cluster:${markerKey(first)}`;
   const label = t("drawing.eventCluster", { count: markers.length });
-  const selected = markers.some(marker => markerKey(marker) === selectedKey);
+  const selected = markers.some(marker => markerHasKey(marker, selectedKey));
   const openMarker = (marker: TimelineMarker) => {
     setOpen(false);
     onSelect(runId, markerKey(marker));
@@ -41,7 +44,7 @@ export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey
       onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); onSelect(runId, markerKey(first)); setOpen(true); } }}
       className="group/fragment outline-none">
       <path data-slot="marker-hit" d={hitPath} fill="transparent"/>
-      <ClusterMark count={markers.length} x={x} y={y} selected={selected || markers.some(marker => markerKey(marker) === highlightedKey)} focusFrame/>
+      <ClusterMark count={markers.length} x={x} y={y} selected={selected || markers.some(marker => markerHasKey(marker, highlightedKey))} focusFrame/>
     </g></PopoverTrigger></Hint>
     <PopoverContent collisionBoundary={boundary ?? undefined} avoidCollisions sideOffset={8} aria-label={label} className="w-72 max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) overflow-y-auto rounded-none p-1"
       onOpenAutoFocus={event => { event.preventDefault(); items.current[0]?.focus(); }}
@@ -60,6 +63,7 @@ export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey
         onClick={() => openMarker(marker)}>
         <span className="font-medium">{markerName(marker)}</span><span className="mx-1 text-ink3">·</span><span className="text-ink2">{clockTime(markerAt(marker))}</span>
         <span className="block truncate text-ink3">{taskTitle}</span>
+        {marker.kind === "event" && marker.relatedEvents?.length && <span data-slot="paired-event-details" className="block text-ink2">{markerReadout(marker)}</span>}
       </button>)}
     </PopoverContent>
   </Popover>;

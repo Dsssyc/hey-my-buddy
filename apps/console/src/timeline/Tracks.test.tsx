@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buddyColorKey } from "../macro-task-display";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
-import type { TimelineEvent, TimelineSpan } from "../macro-task-types";
+import type { TimelineBuddy, TimelineEvent, TimelineSpan } from "../macro-task-types";
 import { createTimelineScale } from "./scale";
 import { fitLabel } from "./labels";
 import { Axis, Track, spanReadout } from "./Tracks";
@@ -15,8 +15,8 @@ const at = (minutes: number) => new Date(Date.UTC(2026, 9, 17, 8, minutes)).toIS
 const scale = createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, 800);
 const base = macroTaskTimelineFixture();
 const execution = (extra: Partial<TimelineSpan> = {}): TimelineSpan => ({ ...base.spans.find(span => span.kind === "execution")!, spanId: "e", startAt: at(5), endAt: at(15), resultStatus: "ok", state: "finished", uncertain: false, shutdownConfirmed: true, expectedSeconds: 600, reminders: null, inquiries: [], ...extra });
-function track(spans: TimelineSpan[], extra: { state?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; highlightedKey?: string; buddyColors?: ReadonlyMap<string, string>; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
-  return render(<Track row={{ ...base.rows[0]!, state: extra.state ?? "accepted", acceptedAt: null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} buddyColors={extra.buddyColors ?? new Map([[buddyColorKey(execution().buddy), "#6d7ec0"]])} selected={false} tabKey={extra.tabKey} highlightedKey={extra.highlightedKey}/>);
+function track(spans: TimelineSpan[], extra: { state?: string; rowBuddy?: TimelineBuddy | null; acceptedAt?: string; events?: TimelineEvent[]; width?: number; tabKey?: string; highlightedKey?: string; buddyColors?: ReadonlyMap<string, string>; onOpen?: (runId: string, key: string) => void; onSelect?: (runId: string, key?: string) => void } = {}) {
+  return render(<Track row={{ ...base.rows[0]!, buddy: extra.rowBuddy === undefined ? base.rows[0]!.buddy : extra.rowBuddy, state: extra.state ?? "accepted", acceptedAt: extra.acceptedAt ?? null, reviewRejectedAt: null }} spans={spans} events={extra.events ?? []} scale={extra.width ? createTimelineScale({ domain: { startMs: Date.parse(at(0)), endMs: Date.parse(at(40)) }, busy: [], instants: [], canFold: false, nowAtEnd: true }, extra.width, extra.width / 40) : scale} nowMs={Date.parse(at(40))} ongoing buddies={[]} onOpen={extra.onOpen ?? vi.fn()} onSelect={extra.onSelect ?? vi.fn()} onHover={vi.fn()} onFocusSpan={vi.fn()} onMarker={vi.fn()} buddyColors={extra.buddyColors ?? new Map([[buddyColorKey(execution().buddy), "#6d7ec0"]])} selected={false} tabKey={extra.tabKey} highlightedKey={extra.highlightedKey}/>);
 }
 const slot = (name: string) => document.querySelector(`[data-slot=${name}]`);
 
@@ -63,11 +63,11 @@ describe("timeline drawings follow recorded facts", () => {
   });
   it("renders full, abbreviated or no bar text using the measured available room", () => {
     const live = execution({ startAt: at(0), endAt: null, state: "executing", shutdownConfirmed: false, expectedSeconds: null, resultStatus: undefined });
-    track([live], { width: 200 });
+    track([live], { width: 200, rowBuddy: null });
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("Claude Opus 5.5 · 40 分");
-    cleanup(); track([live], { width: 70 });
+    cleanup(); track([live], { width: 70, rowBuddy: null });
     expect(document.querySelector('[data-slot=track-label]')?.textContent).toBe("40 分");
-    cleanup(); track([live], { width: 25 });
+    cleanup(); track([live], { width: 25, rowBuddy: null });
     expect(document.querySelector('[data-slot=track-label]')).toBeNull();
     expect(document.querySelector('[data-key="span:e"]')?.getAttribute("aria-label")).toContain("40 分");
     expect(document.querySelector('[data-key="span:e"]')?.getAttribute("aria-label")).toContain("执行中");
@@ -137,8 +137,8 @@ describe("timeline drawings follow recorded facts", () => {
     track([], { events: [{ ...base.events[0]!, seq: 4, kind: "takeover", at: at(20) }], width: 800 });
     expect(document.querySelector('[data-slot="track-label"]')?.textContent).toBe("接管");
   });
-  it("merges coincident events into one selectable mark and omits integration", async () => {
-    const events = ["reject", "continue", "integrate", "accept"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(20), note: "Explanation" }));
+  it("counts Host actions in a cluster and retains both source facts in each entry", async () => {
+    const events = ["reject", "continue", "integrate", "accept"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(20), note: `Explanation ${kind}`, integrationId: seq >= 2 ? "integration-1" : null }));
     const onOpen = vi.fn();
     track([], { events, onOpen, tabKey: "cluster:event:0" });
     expect(document.querySelector('[data-key="event:2"]')).toBeNull();
@@ -149,14 +149,48 @@ describe("timeline drawings follow recorded facts", () => {
     expect(cluster.getAttribute("data-key")).toBe("cluster:event:0");
     expect(cluster.getAttribute("tabindex")).toBe("0");
     expect(cluster.querySelector('[data-slot="cluster-mark"] circle')?.getAttribute("r")).toBe("8");
-    expect(cluster.querySelector('[data-slot="cluster-mark"] text')?.textContent).toBe("3");
+    expect(cluster.querySelector('[data-slot="cluster-mark"] text')?.textContent).toBe("2");
     await userEvent.setup().click(cluster);
     const content = document.querySelector<HTMLElement>('[data-slot=popover-content]')!;
-    expect(within(content).getAllByRole("button")).toHaveLength(3);
+    expect(within(content).getAllByRole("button")).toHaveLength(2);
     expect(content.textContent).toContain(base.rows[0]!.title);
     expect(within(content).getAllByRole("button")[0]?.getAttribute("aria-label")).toContain("Explanation");
-    await userEvent.setup().click(within(content).getAllByRole("button")[2]!);
+    expect(content.textContent).toContain("Explanation reject");
+    expect(content.textContent).toContain("Explanation continue");
+    expect(content.textContent).toContain("Explanation integrate");
+    expect(content.textContent).toContain("Explanation accept");
+    await userEvent.setup().click(within(content).getAllByRole("button")[1]!);
     expect(onOpen).toHaveBeenCalledWith(base.rows[0]!.runId, "event:3");
+  });
+  it("draws one mark for a send-back and one acceptance with its integration facts", () => {
+    const events = ["reject", "continue", "integrate", "accept"].map((kind, seq) => ({ ...base.events[0]!, seq, kind, at: at(seq < 2 ? 10 : 30), note: `Fact ${kind}`, integrationId: seq >= 2 ? "integration-1" : null }));
+    track([], { events });
+    expect(document.querySelectorAll('[data-slot=event-mark]')).toHaveLength(1);
+    expect(document.querySelectorAll('[data-slot=accept-mark]')).toHaveLength(1);
+    expect(slot("event-cluster")).toBeNull();
+    expect(document.querySelector('[data-key="event:0"]')?.getAttribute("aria-label")).toContain("Fact continue");
+    expect(document.querySelector('[data-key="event:3"]')?.getAttribute("aria-label")).toContain("Fact integrate");
+  });
+  it("compares the complete row identity before drawing a harness mark and model", () => {
+    const live = execution({ startAt: at(0), endAt: at(40) });
+    track([live], { rowBuddy: { ...live.buddy! }, width: 800 });
+    expect(slot("execution-buddy")).toBeNull();
+    expect(slot("track-label")?.textContent).toBe("40 分");
+    for (const field of ["harness", "provider", "model", "effort"] as const) {
+      cleanup(); track([live], { rowBuddy: { ...live.buddy!, [field]: "different" }, width: 800 });
+      expect(slot("execution-buddy")).toBeTruthy();
+      expect(slot("track-label")?.textContent).toContain("Claude Opus 5.5");
+      const readout = spanReadout(live, Date.parse(at(40)));
+      for (const value of Object.values(live.buddy!)) expect(readout).toContain(value);
+    }
+  });
+  it("retains orange diamonds after human waits and acceptance waits settle", () => {
+    track([execution({ spanId: "h", kind: "host", state: "approved", expectedSeconds: null, inquiries: null })]);
+    expect(slot("host-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
+    expect(slot("waiting-diamond")?.getAttribute("class")).toBe("fill-hand-mark");
+    cleanup(); track([execution()], { acceptedAt: at(25) });
+    expect(slot("acceptance-wait")?.hasAttribute("stroke-dasharray")).toBe(false);
+    expect(slot("waiting-diamond")?.getAttribute("class")).toBe("fill-hand-mark");
   });
   it("moves through mixed event and inquiry entries, then restores cluster focus on Escape", async () => {
     const user = userEvent.setup();
