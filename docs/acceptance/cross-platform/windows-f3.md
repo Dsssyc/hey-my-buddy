@@ -70,3 +70,20 @@
 核对：读完差异；本机跑锁、升级夹具、Router 探针、Claude、私有适配器不变量 5 个文件，92 项通过；持续集成第 13 轮（`29a5a475`）Ubuntu 全过，Windows 失败从 21 个文件降到 15 个，剩下的都在停法那一批与基线上就失败的几类里。同一轮 macOS 有一处 `dsh.test_native_run` 的假 DSH 进程以 -11 退出，这一批没有改 DSH 也没有改它走的锁路径，本机在候选上连跑 3 次通过，记为偶发，再出现再查。
 
 Worker 第一次在测试机上跑 `npm ci` 时没把 npm 缓存指进工作目录，在测试账户默认的 npm 缓存里留下一份 97 KB 的日志；Host 决定不动它（缓存里的日志无害，删工作目录之外的东西反而越界），并在共用的 Windows 任务书段落里补上 `NPM_CONFIG_CACHE`。
+
+## 残余（四）：基线上就失败的几类（2026-10-26）
+
+微任务“Windows 残余（四）”（run `9330fdbf`，Codex CLI 的 `gpt-6.1-sol / max`），基点 `b4647f65`，三次接续（第二轮中途因 Codex 的 `serverOverloaded` 中断一次，原样续上），最终产物 `ae04dc55`（`f266fb90`），合入整合分支 `9b01e75f`。范围是持续集成第 14 轮 Windows 上、在各自基线就失败的五类 7 个文件。
+
+改动全在测试与夹具，没有产品改动：冻结辅助函数挂起执行的 Job 里的每个成员（venv 的启动根只是等另一个 Python 的启动器，只挂它冻结不住）；读执行日志、预算与回执改经长路径形式；调度器替身加了 Windows 的 Job 版本，不再拿 POSIX 的形状去数发信号的次数；冷启动测试经共用的 `stop_private_service` 停它的私有服务，以拿到停止回复；Lead 启动器测试在服务清场之前，先归还它自己准入、却从没创建进程的那次执行；版本读取的夹具在本进程里运行，不再 execv（Windows 上 execv 另起进程，会丢掉协议继承的那对管道）；假 ACP 代理的日志写入加锁，并缩短 DSH 测试的临时目录名。
+
+核对：读完差异。合入时 `test_execution_scheduler.py` 与 `test_runtime_version.py` 和已在整合分支上的“子进程只用一种停法”第二轮自动合并，看板报 `INTEGRATION_UNVERIFIED`；Host 核对合入后两文件带进来的改动行与交付的逐行相同，以 `adjusted` 验收。持续集成第 17 轮（`40dd4b9b`，整合分支加本批）：Ubuntu、macOS、前端与浏览器全部通过；Windows x64 与 ARM64 上范围内的文件全部通过。实现方自己在测试机上的结果（49 个文件中 48 个通过）不算验收。
+
+## 交给残余（五）
+
+第 17 轮里 Windows 上还没过的都不在残余（四）的范围里：
+
+- `buddy/harnesses/dsh/acp/test_acp_session.py` 的 `test_leader_exits_while_its_group_survives`：停止确认、整组已空之后，清理临时目录时 `native-root` 报 WinError 32。第 17 轮 x64 与 ARM64 同时出现，已不像偶发。
+- 分片 3 清场不完整（退出 3）：所有测试都过了，但 `protocol/test_public_state.py` 与 `protocol/test_path_state.py` 留下 20 个私有服务状态目录，停止回复没有确认；第 15、16 轮同样有。
+- `buddy/runtime/test_run.py`：私有服务在测试写死的 25 秒里没有就绪，日志为空，只在 x64 上出现一次；本批没有碰这条路径。
+- 实现方报告的两处长路径：工作树生命周期清理的测试里，一处写日志、一处读日志没有经长路径形式，在测试机较深的目录下失败；“工作树以 Git 为准”改了同一文件，等它合入之后再修。
