@@ -129,16 +129,20 @@ _Avoid_: 订阅登录 / subscription sign-in (the sign-in method does not decide
 A way of paying for model use: each request billed by usage to the owner of the key, under the terms of the provider that issued it.
 _Avoid_: BYOK, API 密钥 / API key (as a way of paying: a key can belong to a subscription)
 
+**提供方拒绝 / provider rejection**:
+A provider declining to serve a turn, as the harness reports it in a structured code. It is one of three kinds: 额度耗尽 / quota used up, which puts the provider into cooling; 限流 / rate limited; and 满载 / overloaded, when the provider has no room for that model service at the moment. An authentication failure is not a provider rejection, and neither is an error the harness reports only as text.
+_Avoid_: quota failure (for the whole: quota is one kind), refusal (for a provider's; the blackboard and the Router refuse requests)
+
 **冷却 / cooling**:
-The time a provider of one harness sits out automatic routing after it refused work for quota. It grows with consecutive refusals, ends by itself or when the user clears it, and a later success ends the sequence. It belongs to the provider in that harness, not to a model or a buddy, and never changes the user's enablement or preferences.
-_Avoid_: 额度耗尽 / exhausted (for the provider's state; a refusal that interrupts a turn is still reported as quota used up), quota window
+The time a provider of one harness sits out automatic routing after a provider rejection for quota. It grows with consecutive rejections, ends by itself or when the user clears it, and a later success ends the sequence. It belongs to the provider in that harness, not to a model or a buddy, and never changes the user's enablement or preferences.
+_Avoid_: 额度耗尽 / exhausted (for the provider's state; a rejection that interrupts a turn is still reported as quota used up), quota window
 
 **会话记录 / session record**:
 What one execution showed while it ran, as the harness gave it: messages, the reasoning it supplied, tool calls and plans, kept for the console to display. It is not evidence of what happened: settlement, acceptance and stop decisions never read it. It is deleted with its macro task.
 _Avoid_: transcript, 会话日志 (for the product's record; a harness's own session store is its native session)
 
 **改派 / reroute**:
-A new routing decision for the same micro task, without starting another micro task: at a Host's request, or by the blackboard when the chosen buddy's provider refused the turn for quota before its model started.
+A new routing decision for the same micro task, without starting another micro task: at a Host's request, or by the blackboard when the chosen buddy's provider rejected the turn for quota before its model started.
 _Avoid_: 重派, 换 buddy (for the routing step itself)
 
 **模型目录 / model catalog**:
