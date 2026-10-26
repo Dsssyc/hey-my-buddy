@@ -44,7 +44,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
             connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
         native = private_dirs.micro_task_root(board.directory, 'zcode', run_id)
         session = private_dirs.ensure_private_dir(native / 'native') / 'sessions.sqlite'
-        session.write_bytes(b'private session fixture')
+        native_path(session).write_bytes(b'private session fixture')
         with mock.patch.dict(os.environ, {'HMB_RUNTIME_ROOT':str(self.directory / 'runtime')}), mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([],[],True)):
             planned = board.call('storage_plan', {})
             request = {'planId':planned['planId'], 'commandId':'native-interrupted', 'confirm':True}
@@ -57,11 +57,11 @@ class CleanupLifecycleTests(LifecycleTestCase):
                 with self.assertRaises(BoardError) as caught:
                     board.call('storage_apply', request)
             self.assertEqual(caught.exception.code, 'STORAGE_INCOMPLETE')
-            self.assertFalse(native.exists())
+            self.assertFalse(native_path(native).exists())
             result = board.call('storage_apply', request)
             self.assertTrue(result['complete'])
             self.assertTrue(any(r['path'] == str(native.resolve()) for r in result['removed']))
-            self.assertFalse(list(native.parent.glob('.reclaim-*')))
+            self.assertFalse(list(native_path(native.parent).glob('.reclaim-*')))
 
     def test_storage_apply_keeps_unsealed_change_reasons_after_planning(self):
         for preserve_stat in (False, True):
@@ -99,12 +99,12 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         run_id = submitted["runId"]
         private_micro_task = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'codex', run_id))
-        (private_micro_task / 'session.json').write_text('private native binding', encoding="utf-8", newline="\n")
+        native_path(private_micro_task / 'session.json').write_text('private native binding', encoding="utf-8", newline="\n")
         applied = self.reclaim(board, view)
         self.assertTrue(applied["removed"])
         self.assertEqual(applied["path"], manifest["checkoutRoot"])
         self.assertFalse(checkout.exists())
-        self.assertFalse(private_micro_task.exists())
+        self.assertFalse(native_path(private_micro_task).exists())
         # Only the checkout was removed: manifests, patches and Git refs stay readable.
         workspace_dir = Path(self.directory) / "workspaces" / manifest["workspaceId"]
         self.assertTrue((workspace_dir / "manifest.json").exists())
@@ -136,7 +136,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertEqual(concluded['state'], 'concluded')
         self.assertTrue(concluded['reclaim']['removed'], concluded['reclaim'])
         self.assertFalse(checkout.exists())
-        self.assertFalse(native.exists())
+        self.assertFalse(native_path(native).exists())
         self.assertEqual([native_path(Path(ref)).read_text(encoding="utf-8") for ref in refs], ['failure evidence'] * 2)
         root = failed_root.parent.parent
         with board.store.db.write() as connection:
@@ -172,7 +172,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertEqual(helper_manifest['checkoutRoot'], str(checkout))
         evidence = private_dirs.ensure_private_dir(private_dirs.attempt_root(
             board.directory, 'dsh', helper_id, attempt['attemptId'])) / 'unknown-events.json'
-        evidence.write_text('helper failure evidence', encoding="utf-8", newline="\n")
+        native_path(evidence).write_text('helper failure evidence', encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, helper_manifest, helper_id, attempt['attemptId'])
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': {'status': 'invalid-result', 'workspaceSeal': seal}})
         concluded = board.call('workflow_conclude', {
@@ -181,7 +181,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         })
         self.assertEqual(concluded['state'], 'concluded')
         self.assertTrue(checkout.exists())
-        self.assertEqual(evidence.read_text(encoding="utf-8"), 'helper failure evidence')
+        self.assertEqual(native_path(evidence).read_text(encoding="utf-8"), 'helper failure evidence')
         with board.store.db.write() as connection:
             connection.execute("UPDATE workflow_host_conclusions SET created_at='2000-01-01T00:00:00Z' WHERE run_id=?",
                                (helper_id,))
@@ -318,7 +318,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-dirty")
         native = private_dirs.ensure_private_dir(private_dirs.native_root(board.directory, 'dsh', submitted['runId']))
         session = native / 'session.json'
-        session.write_text('retain until reclaim is authorized', encoding="utf-8", newline="\n")
+        native_path(session).write_text('retain until reclaim is authorized', encoding="utf-8", newline="\n")
         (checkout / "tracked.txt").write_text("edited after the seal\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError) as raised:
             self.reclaim(board, view)
@@ -328,13 +328,13 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertEqual(blocked_view["cleanup"]["state"], "blocked")
         self.assertEqual(blocked_view["cleanup"]["evidence"]["workspace"]["unsealedPaths"], ["tracked.txt"])
         self.assertTrue(checkout.exists())
-        self.assertEqual(session.read_text(encoding="utf-8"), 'retain until reclaim is authorized')
+        self.assertEqual(native_path(session).read_text(encoding="utf-8"), 'retain until reclaim is authorized')
         # Returning the site to the sealed state makes the same workspace eligible.
         (checkout / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         recovered = self.reclaim(board, blocked_view)
         self.assertTrue(recovered["removed"])
         self.assertFalse(checkout.exists())
-        self.assertFalse(native.exists())
+        self.assertFalse(native_path(native).exists())
 
     def test_matching_seal_fingerprint_needs_no_tree_construction_for_cleanup_proof(self):
         board = self.board()

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import hashlib
 import os
 import plistlib
 import signal
@@ -93,7 +94,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                                                         environment={"PATH": str(bin_dir), "OPENAI_API_KEY": "secret"})
             self.assertEqual(snapshot["candidates"][0]["source"], "manual")
             self.assertEqual(snapshot["candidates"][0]["fingerprint"], discovery.file_fingerprint(cli))
-            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], discovery.file_fingerprint(record))
+            self.assertEqual(snapshot["managerRecords"][0]["fingerprint"], discovery.file_fingerprint(record, record=True))
             self.assertNotIn("secret", str(snapshot))
             self.assertNotIn("OPENAI_API_KEY", str(snapshot))
 
@@ -249,14 +250,51 @@ class HarnessDiscoveryTests(unittest.TestCase):
             record = home / ".nvm/alias/default"
             record.parent.mkdir(parents=True)
             record.write_text("v22.0.0", encoding="utf-8", newline="\n")
+            initial = record.stat()
             with patch.object(discovery, "_home", return_value=home), patch.object(
                 discovery, "_common_dirs", return_value=[]
             ), patch.object(discovery, "_app_paths", return_value=[]):
                 first = discovery.candidate_snapshot("node", environment={"PATH": ""})
                 record.write_text("v24.0.0", encoding="utf-8", newline="\n")
+                os.utime(record, ns=(initial.st_atime_ns, initial.st_mtime_ns))
+                self.assertEqual((record.stat().st_size, record.stat().st_mtime_ns),
+                                 (initial.st_size, initial.st_mtime_ns))
                 second = discovery.candidate_snapshot("node", environment={"PATH": ""})
             self.assertNotEqual(discovery._scan_hash(first), discovery._scan_hash(second))
             self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
+
+    def test_large_manager_record_uses_one_read_for_version_and_full_content_fingerprint(self):
+        with TemporaryDirectory() as directory:
+            home = Path(directory)
+            record = home / '.nvm/alias/default'
+            record.parent.mkdir(parents=True)
+            content = b'v24.0.0\n' + b' ' * 5000 + b'one\n'
+            record.write_bytes(content)
+            installed = home / '.nvm/versions/node/v24.0.0/bin'
+            installed.mkdir(parents=True)
+            read_bytes = Path.read_bytes
+            reads = []
+
+            def read(path):
+                reads.append(path)
+                return read_bytes(path)
+
+            with patch.object(Path, 'read_bytes', read):
+                records, roots = discovery._manager_records(home)
+            self.assertEqual(reads, [record])
+            self.assertIn(('nvm', installed), roots)
+            fingerprint = next(item['fingerprint'] for item in records if item['path'] == str(record))
+            self.assertEqual(fingerprint['sha256'], hashlib.sha256(content).hexdigest())
+
+            before = record.stat()
+            changed = content[:-4] + b'two\n'
+            record.write_bytes(changed)
+            os.utime(record, ns=(before.st_atime_ns, before.st_mtime_ns))
+            current = discovery.file_fingerprint(record, record=True)
+            self.assertEqual((current['size'], current['mtimeNs']),
+                             (fingerprint['size'], fingerprint['mtimeNs']))
+            self.assertEqual(current['sha256'], hashlib.sha256(changed).hexdigest())
+            self.assertNotEqual(current['sha256'], fingerprint['sha256'])
 
     def test_location_fingerprint_ignores_empty_paths_but_tracks_present_order_and_file_changes(self):
         with TemporaryDirectory() as directory:
@@ -729,7 +767,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                  patch.object(discovery, '_common_dirs', return_value=[]), \
                  patch.object(discovery, '_app_paths', return_value=[]), \
                  patch.object(discovery, '_registry_paths', return_value=[]), \
-                 patch.object(discovery, '_record_text', side_effect=AssertionError('snapshot must only stat')):
+                 patch.object(discovery, '_read_record', side_effect=AssertionError('snapshot must only stat')):
                 first = discovery.candidate_snapshot('codex', manual_path=str(shim), environment={'PATH': ''})
                 shim.write_text('changed shim with a different size', encoding="utf-8", newline="\n")
                 second = discovery.candidate_snapshot('codex', manual_path=str(shim), environment={'PATH': ''})

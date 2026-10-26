@@ -8,5 +8,6 @@ class TemporaryDirectory(tempfile.TemporaryDirectory):
         from hey_my_buddy.cli.checks import remove_private_test_root
 
         # Keep ordinary paths as fixture evidence; extend them only at deletion.
-        # Deletion failures always propagate, including sharing violations.
+        # Windows sharing violations retry within the boundary's time limit;
+        # final failures still propagate and preserve the remaining tree.
         remove_private_test_root(Path(name))

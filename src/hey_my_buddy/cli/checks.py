@@ -809,7 +809,11 @@ def remove_private_test_root(directory: Path) -> None:
     """Remove a stopped fixture without changing attributes shared by hardlinks.
 
     The caller must first close its resources and confirm its work has stopped.
-    A sharing violation or any other deletion failure preserves the remaining tree.
+    On Windows an exited process's handles, such as its working directory, may
+    still be closing after shutdown is confirmed. Retry sharing violations for
+    up to 60 seconds to allow that cleanup; a process that leaked will keep its
+    handles open and still fail at the deadline. Other deletion failures raise
+    immediately, and any final failure preserves the remaining tree.
     """
     directory = native_path(directory)
 
@@ -832,7 +836,18 @@ def remove_private_test_root(directory: Path) -> None:
             raise error
         _delete_readonly_test_leaf(path)
 
-    shutil.rmtree(directory, onexc=readonly_file)
+    deadline = time.monotonic() + 60
+    while True:
+        try:
+            shutil.rmtree(directory, onexc=readonly_file)
+            return
+        except OSError as error:
+            if os.name != "nt" or getattr(error, "winerror", None) != 32:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(0.1, remaining))
 
 
 def _delete_readonly_test_leaf(path: Path) -> None:
