@@ -138,7 +138,7 @@ The time a provider of one harness sits out automatic routing after a provider r
 _Avoid_: 额度耗尽 / exhausted (for the provider's state; a rejection that interrupts a turn is still reported as quota used up), quota window
 
 **会话记录 / session record**:
-What one execution showed while it ran, as the harness gave it: messages, the reasoning it supplied, tool calls and plans, kept for the console to display. It is not evidence of what happened: settlement, acceptance and stop decisions never read it. It is deleted with its macro task.
+What one execution showed while it ran, as the harness gave it: messages, the reasoning it supplied, tool calls and plans, kept for the console to display. It is not evidence of what happened: settlement, acceptance and stop decisions never read it. It is deleted with its macro task, or with its micro task when that belongs to no macro task.
 _Avoid_: transcript, 会话日志 (for the product's record; a harness's own session store is its native session)
 
 **改派 / reroute**:
@@ -160,7 +160,7 @@ The code repository that a macro task belongs to. Every worktree and checkout of
 _Avoid_: 工作区, workspace (an execution workspace is a checkout, not a project)
 
 **宏任务 / macro task**:
-A user's overall piece of work, holding one or more micro tasks and used to group them for browsing. It is the unit by which the user deletes records. It does not schedule work or grant control authority.
+A user's overall piece of work, holding one or more micro tasks and used to group them for browsing. It is the unit by which the user deletes records; a micro task that belongs to no macro task is deleted on its own. It does not schedule work or grant control authority.
 _Avoid_: 工作目标, objective
 
 **微任务 / micro task**:

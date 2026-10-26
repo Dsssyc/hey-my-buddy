@@ -17,7 +17,7 @@ Read `health` for the Router list, mode and capacity; report failures with decis
 
 ## Delegate through acceptance
 
-1. One micro task, one independently reviewable outcome: about a module or concern, with its own checks; mechanical apart from diagnosis. Define inputs, outcome and checks in the user's language; new files need `includeUntracked`. Use `executionWorkspace`: `existing` for sequential ownership, separate `worktree` checkouts for parallel writers; neither is an OS sandbox. `access`: `read`, `write` (default) or `full` with `accessNote`.
+1. One micro task, one independently reviewable outcome: about a module or concern, with its own checks; mechanical apart from diagnosis. Define inputs, outcome and checks in the user's language; untracked inputs need `includeUntracked`. Use `executionWorkspace`: `existing` for sequential ownership, separate `worktree` checkouts for parallel writers; neither is an OS sandbox. `access`: `read`, `write` (default) or `full` with `accessNote`.
 2. Omit `harness`/`provider`/`model`/`effort` for routing; a complete buddy is only for an explicit user choice or boundary recovery. One agenda, one macro task: its first micro task carries `macroTask: {title}` and an intent `title` (≤30 chars), later ones its `macroTaskId` or `macroTaskOf: "<runId>"`. Submit once with a stable `requestId`; keep `runId`/`macroTaskId`/`controlFile`.
 3. Before waiting, submit micro tasks independent of the running ones (no shared files, no needed result); the board queues them. Wait through your Host guide ([codex](../../docs/reference/host-codex.md), [claude](../../docs/reference/host-claude-code.md)); read only yours. One `await` per running micro task; a timeout never cancels it; unknown never means stopped: on `EXECUTION_UNKNOWN` tell the user.
 4. At a boundary `decide` on helpers or `continue` with input; a routing one takes `reroute:true` (first choice when `routing-changed`) or a legal `buddy` with a `note`. To hand off, `continue` with an enabled `buddy` and a `note`, after `cancel` if a turn runs; partial work is unverified. [Recovery](../../docs/reference/workflow.md).
@@ -29,9 +29,9 @@ Install on the user's word; a new middle version needs idle work ([operations](.
 
 ## Capabilities and authority
 
-[Harnesses](../../docs/reference/harnesses.md) own capabilities. Shared login is read-only.
+[Harnesses](../../docs/reference/harnesses.md) own capabilities. Sign-in stays the user's.
 
-`worker-sessions` lists the private Worker sessions ([details](../../docs/reference/operations.md)).
+`worker-sessions` lists proven Codex Worker sessions ([details](../../docs/reference/operations.md)).
 
 A Lead (`delegationAuthority`) only at the user's explicit request, confirmed first ([usage](../../docs/reference/usage.md#a-lead-for-a-large-macro-task)).
 

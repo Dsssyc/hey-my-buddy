@@ -24,9 +24,9 @@
 
 ## Why hey-my-buddy
 
-- **The agent you trust stays in charge.** The coding agent you work with, such as Codex or Claude Code, is your Host buddy: it splits the work, delegates the bounded parts and accepts every result itself.
-- **The right buddy for each part.** Workers run in DeepSeek Harness, ZCode, Codex or Claude Code, with the models and efforts you enabled. Routing picks one, or the Host names it.
-- **Nothing lands unchecked.** Each micro task works in its own checkout with a fixed input and a sealed output; the Host reads the diff and runs the checks before it accepts.
+- **The agent you trust stays in charge.** The coding agent you work with, such as Codex or Claude Code (CLI or app), is your Host buddy: it splits the work, delegates the bounded parts and accepts every result itself.
+- **The right buddy for each part.** Workers run in the CLI of DeepSeek Harness, ZCode, Codex or Claude Code, with the models and efforts you enabled. Routing picks one, or the Host names it.
+- **Nothing lands unchecked.** Each micro task starts from a fixed input in the checkout it is given and ends with a sealed output; parallel writers never share a checkout. The Host reads the diff and runs the checks before it accepts.
 - **Work outlives your session.** A closed terminal, a lost connection or a service restart never cancels work; pick it up again by its id.
 - **See who is doing what.** A private local console shows each macro task as a timeline, every buddy's load and your settings.
 - **Your accounts, your plans.** Workers sign in with your own harness accounts; hey-my-buddy never keeps or forwards your credentials. See [accounts and terms](docs/terms.md).
@@ -35,30 +35,28 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-en-dark.svg">
-  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, a Router buddy picks a Worker buddy, which runs a turn in its own checkout; the Host can ask that running turn a question through the blackboard; the blackboard seals the checkout when the turn ends; the Host checks the Worker's report against the seal and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="docs/assets/architecture-en-light.svg" width="100%">
+  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, the blackboard takes the only eligible buddy or a Router buddy chooses among several; the Worker buddy runs a turn in the checkout the micro task was given; the Host can ask that running turn a question through the blackboard; the blackboard seals the checkout when the turn ends; the Host checks the Worker's report against the seal and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="docs/assets/architecture-en-light.svg" width="100%">
 </picture>
 
-1. **Delegate.** The Host writes a micro task: what to do, which files it may change, and how to check it. Unless the Host names a buddy, a Router buddy picks one.
-2. **Work.** The Worker runs in its own harness and checkout. The Host can ask the running turn a question through the blackboard without stopping it; when the Worker needs a decision or help, it stops and asks, and the Host answers or continues it.
+1. **Delegate.** The Host writes a micro task: what to do, which files it may change, and how to check it. Unless the Host names a buddy, routing picks one: the only eligible buddy directly, or a Router buddy's choice among several.
+2. **Work.** The Worker runs in its harness, in the checkout the micro task was given. The Host can ask the running turn a question through the blackboard without stopping it; when the Worker needs a decision or help, it stops and asks, and the Host answers or continues it.
 3. **Accept.** The Host reviews the sealed result. It either integrates and accepts it, which verifies the integration and reclaims the checkout, or sends it back to the same micro task for another turn; work it gives up on is concluded.
 
 Micro tasks, decisions and results live on a local blackboard, a SQLite database owned by one private service. More in [workflow](docs/reference/workflow.md) and [architecture](docs/reference/architecture.md).
 
 ## Install
 
-hey-my-buddy is one shared agent skill at `~/.agents/skills/hey-my-buddy` that carries its own launcher, plus a private service and runtime under `~/.local/share/hey-my-buddy`. Claude Code finds the skill through a link at `~/.claude/skills/hey-my-buddy`. The install never changes your `PATH`, shell or agent settings. It needs [uv](https://docs.astral.sh/uv/).
+hey-my-buddy is one shared agent skill at `~/.agents/skills/hey-my-buddy` that carries its own launcher, plus a private service and runtime under `~/.local/share/hey-my-buddy` (`%LOCALAPPDATA%\hey-my-buddy` on Windows). Claude Code finds the skill through a link at `~/.claude/skills/hey-my-buddy` (a junction on Windows). The install never changes your `PATH`, shell or agent settings. It needs [uv](https://docs.astral.sh/uv/).
 
-It is not published yet. Build the wheel from this repository and install it:
+```sh
+uvx hey-my-buddy@0.54.0 install
+```
+
+To install from a checkout of this repository instead, build the wheel and install it:
 
 ```sh
 uv build --wheel --out-dir dist
 uvx --from "$PWD/dist/hey_my_buddy-0.54.0-py3-none-any.whl" hey-my-buddy install
-```
-
-Once a release is published, the same install is one command:
-
-```sh
-uvx hey-my-buddy@0.54.0 install
 ```
 
 <details>
@@ -67,7 +65,7 @@ uvx hey-my-buddy@0.54.0 install
 ```text
 Install hey-my-buddy on this machine for me.
 
-1. Use the release version or the wheel I give you; do not assume it is on PyPI.
+1. Use the version I name, or the wheel I give you.
 2. Run the install outside your sandbox through your own permission mechanism, without sudo.
 3. Before it writes anything, list every path it will create or replace.
 4. Report the skill version and place, the Claude Code link, the service action and whether a backup was taken.
@@ -96,10 +94,10 @@ In the console, enable the buddies you want to work with and set how many may ru
 
 ## Status and limits
 
-- **Pre-release.** Nothing is published yet, and while the version is 0.x the contract can change between middle versions.
-- **Platforms.** Used every day on macOS; the full test suite passes on Linux in CI. Windows 11 support (x64 and ARM64) is being finished for the first release.
+- **0.x.** While the version is 0.x the contract can change between middle versions; such an upgrade converts your board in one explicit, backed-up step.
+- **Platforms.** Used every day on macOS. The full check suite passes on Linux and on Windows 11 (x64 and ARM64) in CI; real harness runs on Linux and Windows have not been verified yet.
 - **Harnesses.** Codex runs through its experimental App Server. What each harness supports and how far it is verified is in [harnesses](docs/reference/harnesses.md).
-- **Routing sees your task.** When routing chooses the buddy, the task text goes to the Router's model provider, even if another model does the work.
+- **Routing sees your task.** When a Router buddy chooses among several buddies, the task text goes to that Router's model provider, even if another model does the work.
 - **Not a sandbox.** Checkouts and private directories keep work apart; they are not an operating-system sandbox. A Worker acts with the permissions its harness grants.
 - **No spending limits.** Usage counts against your own plans and keys; hey-my-buddy does not track money.
 

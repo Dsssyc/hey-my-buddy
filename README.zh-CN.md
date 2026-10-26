@@ -24,9 +24,9 @@
 
 ## 为什么用 hey-my-buddy
 
-- **你信任的 agent 始终做主。** 你平常用的编码 agent（例如 Codex 或 Claude Code）就是你的 Host buddy：它拆分工作、把边界明确的部分委派出去，每一份结果都由它自己验收。
-- **每一部分交给合适的 buddy。** Worker 在 DeepSeek Harness、ZCode、Codex 或 Claude Code 里运行，用的是你启用的模型与推理强度；由路由来选，或者由 Host 指定。
-- **没有核对过的东西不会落地。** 每个微任务在自己的检出里工作，输入固定、产物封存；Host 读过差异、跑过检查之后才验收。
+- **你信任的 agent 始终做主。** 你平常用的编码 agent（例如 Codex 或 Claude Code，CLI 或 app 都可以）就是你的 Host buddy：它拆分工作、把边界明确的部分委派出去，每一份结果都由它自己验收。
+- **每一部分交给合适的 buddy。** Worker 在 DeepSeek Harness、ZCode、Codex 或 Claude Code 的 CLI 里运行，用的是你启用的模型与推理强度；由路由来选，或者由 Host 指定。
+- **没有核对过的东西不会落地。** 每个微任务在分给它的检出里从固定的输入开始，以封存的产物结束；并行的写者从不共用一个检出。Host 读过差异、跑过检查之后才验收。
 - **工作比你的会话活得久。** 终端关掉、连接断开、服务重启都不会取消工作；凭它的标识接着处理。
 - **看得见谁在做什么。** 本机私有的控制台把每个宏任务画成一条时间线，显示每个 buddy 的负载与你的设置。
 - **用你自己的账户与套餐。** Worker 用你自己的 harness 账户登录，hey-my-buddy 从不保存也不转交你的凭据。见[账户与条款](docs/terms.zh-CN.md)。
@@ -35,30 +35,28 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-zh-dark.svg">
-  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，由 Router buddy 选出一个 Worker buddy，它在自己的检出里跑一个回合；Host 可以经黑板向这个运行中的回合问询；回合结束时黑板封存检出；Host 对照封存核对 Worker 的报告，要么整合并验收进你的仓库，要么打回给同一个 Worker，不再经过路由。Lead buddy 为它委派的微任务按同一个循环担任 Host。" src="docs/assets/architecture-zh-light.svg" width="100%">
+  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，合格的 buddy 只有一个时黑板直接选它，有几个时由 Router buddy 从中选；Worker buddy 在分给这个微任务的检出里跑一个回合；Host 可以经黑板向这个运行中的回合问询；回合结束时黑板封存检出；Host 对照封存核对 Worker 的报告，要么整合并验收进你的仓库，要么打回给同一个 Worker，不再经过路由。Lead buddy 为它委派的微任务按同一个循环担任 Host。" src="docs/assets/architecture-zh-light.svg" width="100%">
 </picture>
 
-1. **委派。** Host 写一个微任务：做什么、可以改哪些文件、怎样检查。除非 Host 点名，由 Router buddy 选出一个 buddy。
-2. **执行。** Worker 在自己的 harness 与检出里工作。Host 可以经黑板向运行中的回合问询，回合不必停下；Worker 需要决定或帮助时，它停下来提问，Host 回答，或者让它接着做。
+1. **委派。** Host 写一个微任务：做什么、可以改哪些文件、怎样检查。除非 Host 点名，由路由来选：合格的只有一个就直接选它，有几个就由 Router buddy 从中选一个。
+2. **执行。** Worker 在它的 harness 里、在分给这个微任务的检出里工作。Host 可以经黑板向运行中的回合问询，回合不必停下；Worker 需要决定或帮助时，它停下来提问，Host 回答，或者让它接着做。
 3. **验收。** Host 审查封存的结果：要么整合并验收，验收会核对这次整合并回收检出；要么打回给同一个微任务再跑一个回合；放弃的工作以结论结束。
 
 微任务、决定与结果都记在本地的黑板上，黑板是一个由私有服务独占的 SQLite 数据库。详见[工作流](docs/reference/workflow.md)与[架构](docs/reference/architecture.md)。
 
 ## 安装
 
-hey-my-buddy 是一个共享的 agent skill，装在 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务与运行时在 `~/.local/share/hey-my-buddy` 之下。Claude Code 通过 `~/.claude/skills/hey-my-buddy` 这个链接找到它。安装不改你的 `PATH`、shell 与 agent 设置。需要 [uv](https://docs.astral.sh/uv/)。
+hey-my-buddy 是一个共享的 agent skill，装在 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务与运行时在 `~/.local/share/hey-my-buddy` 之下（Windows 上是 `%LOCALAPPDATA%\hey-my-buddy`）。Claude Code 通过 `~/.claude/skills/hey-my-buddy` 这个链接找到它（Windows 上是一个 junction）。安装不改你的 `PATH`、shell 与 agent 设置。需要 [uv](https://docs.astral.sh/uv/)。
 
-现在还没有发布。从这个仓库构建 wheel 再安装：
+```sh
+uvx hey-my-buddy@0.54.0 install
+```
+
+也可以从这个仓库的检出构建 wheel 再安装：
 
 ```sh
 uv build --wheel --out-dir dist
 uvx --from "$PWD/dist/hey_my_buddy-0.54.0-py3-none-any.whl" hey-my-buddy install
-```
-
-发布之后，同样的安装只要一条命令：
-
-```sh
-uvx hey-my-buddy@0.54.0 install
 ```
 
 <details>
@@ -67,7 +65,7 @@ uvx hey-my-buddy@0.54.0 install
 ```text
 请在这台机器上为我安装 hey-my-buddy。
 
-1. 用我给的发布版本或 wheel；不要假定它已经在 PyPI 上。
+1. 用我指定的版本，或者我给的 wheel。
 2. 在你的沙盒之外、经你自己的权限机制运行安装，不用 sudo。
 3. 写入任何东西之前，列出它将创建或替换的每一个路径。
 4. 报告 skill 的版本与位置、Claude Code 的链接、服务的动作，以及有没有做备份。
@@ -96,10 +94,10 @@ uvx hey-my-buddy@0.54.0 install
 
 ## 现状与限制
 
-- **尚未发布。** 还没有任何发布版本；版本号是 0.x 期间，契约可以在中间那位数字变动时改变。
-- **平台。** 每天在 macOS 上使用；完整的测试套件在 Linux 的持续集成上通过。Windows 11（x64 与 ARM64）的支持正在为首次发布做最后的准备。
+- **0.x。** 版本号是 0.x 期间，契约可以在中间那位数字变动时改变；这样的升级会在一次明确的、先做备份的步骤里转换你的黑板。
+- **平台。** 每天在 macOS 上使用。完整的检查套件在持续集成里于 Linux 与 Windows 11（x64 与 ARM64）上通过；在 Linux 与 Windows 上实际运行各个 harness，还没有验证过。
 - **Harness。** Codex 经它的实验性 App Server 运行。各个 harness 支持什么、验证到哪一步，见[harness](docs/reference/harnesses.md)。
-- **路由会看到任务。** 由路由来选 buddy 时，任务的文字会发给 Router 所在的模型供应方，即使最后做事的是别的模型。
+- **路由会看到任务。** 由 Router buddy 从几个 buddy 中选择时，任务的文字会发给那个 Router 的模型提供方，即使最后做事的是别的模型。
 - **不是沙盒。** 检出与私有目录把工作隔开，但它们不是操作系统的沙盒；Worker 拥有它的 harness 给它的权限。
 - **不管花费。** 用量计入你自己的套餐与密钥；hey-my-buddy 不记录金额。
 
