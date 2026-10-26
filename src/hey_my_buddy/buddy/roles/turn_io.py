@@ -55,7 +55,8 @@ def verify_workspace(context: ExecutionContext) -> None:
     manifest = context.turn_input["executionWorkspace"]
     from ...blackboard.tasks.workflow import workspace_module
     routing = (context.turn_input.get("context") or {}).get("routing") or {}
-    workspace_module().verify(manifest, require_unchanged=bool(routing.get("decisionId")))
+    workspace_module().verify(manifest, state_dir=Path(context.environment["HMB_STATE_DIR"]),
+                              require_unchanged=bool(routing.get("decisionId")))
     context.effective_workspace = manifest
 
 

@@ -17,15 +17,15 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
-import stat
+import shutil
 import subprocess
-import tempfile
+import stat
+import struct
 
 from ...private_dirs import directory_mode
 from ...errors import BoardError
 from ...protocol.schemas import normalize_access
 from ...protocol.service_process import service_creation_flags
-from . import windows_paths
 from . import workspace_identity
 
 _WINDOWS = os.name == "nt"
@@ -56,15 +56,18 @@ def _errors():
         raise BoardError("INVALID_WORKSPACE", "Malformed workspace argument or recovery record") from error
 
 
-def _git_command(root, *args, repository_only=False):
+def _git_command(root, *args, repository_only=False, git_dir=None):
     # Do not inherit a caller's private index, repository, worktree or config
     # override. Read operations must not refresh the source index or run hooks.
     git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     git_env.update(GIT_OPTIONAL_LOCKS="0", GIT_LITERAL_PATHSPECS="1", GIT_NO_REPLACE_OBJECTS="1",
                    GIT_NO_LAZY_FETCH="1", GIT_TERMINAL_PROMPT="0", LC_ALL="C")
     command = ["git", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
-               "-c", "core.untrackedCache=false", "-c", "core.splitIndex=false",
-               "-c", "core.longpaths=true", "--git-dir" if repository_only else "-C", str(root), *args]
+               "-c", "core.untrackedCache=false", "-c", "core.ignoreStat=false", "-c", "core.splitIndex=false",
+               "-c", "core.longpaths=true", "--git-dir" if repository_only else "-C", str(root)]
+    if git_dir is not None:
+        command.extend(["--git-dir=" + str(git_dir), "--work-tree=" + str(root)])
+    command.extend(args)
     return command, git_env
 
 
@@ -73,20 +76,10 @@ _GIT_DIAGNOSTIC_LIMIT = 2000
 
 def _git_diagnostic(value):
     """Keep the diagnostic tail, including whether its prefix was omitted."""
-    skipped = False
-    if hasattr(value, "read"):
-        # Fast-import already captures into files. Do not load an unbounded
-        # file to return a bounded error; four bytes cover one UTF-8 character.
-        value.seek(0, os.SEEK_END)
-        size = value.tell()
-        start = max(0, size - 4 * _GIT_DIAGNOSTIC_LIMIT)
-        value.seek(start)
-        value = value.read()
-        skipped = start > 0
     if isinstance(value, bytes):
         value = value.decode(errors="replace")
     text = str(value) if value is not None else ""
-    return text[-_GIT_DIAGNOSTIC_LIMIT:], skipped or len(text) > _GIT_DIAGNOSTIC_LIMIT
+    return text[-_GIT_DIAGNOSTIC_LIMIT:], len(text) > _GIT_DIAGNOSTIC_LIMIT
 
 
 def _git_failure(command, operation, *, stdout=None, stderr=None, returncode=None,
@@ -107,12 +100,20 @@ def _git_unknown(command, operation, error, *, stdout=None, stderr=None, returnc
                       **failure.details)
 
 
-def _git(root, *args, data=None, env=None, allowed=(0,)):
-    command, git_env = _git_command(root, *args)
+def _git_timeout(args):
+    # Content, index and directory operations scale with the input. Small
+    # metadata/control calls retain the bounded wait.
+    unbounded = {"add", "reset", "checkout-index", "restore", "read-tree", "write-tree",
+                 "update-index", "ls-files", "ls-tree", "diff", "cat-file"}
+    return None if (args[0] in unbounded or args[:2] == ("worktree", "remove")) else _GIT_TIMEOUT_SECONDS
+
+
+def _git(root, *args, data=None, env=None, allowed=(0,), git_dir=None):
+    command, git_env = _git_command(root, *args, git_dir=git_dir)
     git_env.update(env or {})
     try:
         result = subprocess.run(command, input=data, capture_output=True, env=git_env,
-                                timeout=_GIT_TIMEOUT_SECONDS, creationflags=service_creation_flags())
+                                timeout=_git_timeout(args), creationflags=service_creation_flags())
     except subprocess.TimeoutExpired as error:
         raise _git_unknown(command, args[0], error, stdout=error.stdout, stderr=error.stderr) from error
     except OSError as error:
@@ -139,7 +140,7 @@ def _git_in(git_dir, *args, allowed=(0,)):
     command, git_env = _git_command(git_dir, *args, repository_only=True)
     try:
         result = subprocess.run(command, input=None, capture_output=True, env=git_env,
-                                timeout=_GIT_TIMEOUT_SECONDS, creationflags=service_creation_flags())
+                                timeout=_git_timeout(args), creationflags=service_creation_flags())
     except subprocess.TimeoutExpired as error:
         raise _git_unknown(command, args[0], error, stdout=error.stdout, stderr=error.stderr) from error
     except OSError as error:
@@ -200,13 +201,11 @@ def _relative(value, *, allow_root=False):
     if not isinstance(value, str) or not value or "\0" in value:
         raise BoardError("INVALID_WORKSPACE", "Workspace paths must be relative strings")
     parts = PurePosixPath(value).parts
-    if PurePosixPath(value).is_absolute() or any(part in ("..", ".git") or part.lower() == ".git" for part in parts):
+    if (PurePosixPath(value).is_absolute()
+            or (_WINDOWS and ("\\" in value or ":" in value))
+            or any(part in ("..", ".git") or part.lower() == ".git" for part in parts)):
         raise BoardError("INVALID_WORKSPACE", "Workspace paths cannot escape the checkout or address Git metadata", path=value)
     normalized = str(PurePosixPath(value))
-    if _WINDOWS:
-        if normalized != value:
-            raise BoardError("WORKSPACE_UNSUPPORTED", "A Git path has a Windows alias", path=value)
-        windows_paths.validate_git_path(value)
     if normalized == "." and not allow_root:
         raise BoardError("INVALID_WORKSPACE", "An explicit file or directory path is required", path=value)
     return normalized
@@ -217,199 +216,61 @@ def _in_scope(path, scope):
 
 
 @contextmanager
-def _parent(root, relative, *, create=False):
-    """Open each parent by directory descriptor, never following symlinks."""
-    if _WINDOWS:
-        _relative(relative)
-        with windows_paths.parent(Path(root) / relative, create=create, repository=root) as (api, path):
-            yield api, path
-        return
-    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        parts = PurePosixPath(relative).parts
-        for part in parts[:-1]:
-            if create:
-                try:
-                    os.mkdir(part, dir_fd=descriptor)
-                except FileExistsError:
-                    pass
-            next_descriptor = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = next_descriptor
-        yield descriptor, parts[-1]
-    finally:
-        os.close(descriptor)
-
-
-def _file(root, relative, *, mode_hint=None):
-    # dir_fd and O_NOFOLLOW also cover races in intermediate path components.
-    # https://docs.python.org/3/library/os.html#files-and-directories
-    try:
-        if _WINDOWS:
-            _relative(relative)
-            item = windows_paths.read(Path(root) / relative, allow_symlink=True, repository=root)
-            # Windows cannot represent Git's executable bit in chmod. The index
-            # remains authoritative for a tracked regular file's Git mode.
-            if item is not None and item[0] != "120000" and mode_hint in ("100644", "100755"):
-                return mode_hint, item[1]
-            return item
-        with _parent(root, relative) as (parent, name):
-            before = os.stat(name, dir_fd=parent, follow_symlinks=False)
-            if stat.S_ISLNK(before.st_mode):
-                return "120000", os.fsencode(os.readlink(name, dir_fd=parent))
-            if not stat.S_ISREG(before.st_mode):
-                raise BoardError("WORKSPACE_UNSUPPORTED", "Only regular files and symlinks can be snapshotted", path=relative)
-            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
-            with os.fdopen(descriptor, "rb") as stream:
-                data = stream.read()
-                after = os.fstat(stream.fileno())
-            attributes = ("st_ino", "st_dev", "st_size", "st_mtime_ns", "st_ctime_ns", "st_mode")
-            if any(getattr(before, key) != getattr(after, key) for key in attributes):
-                raise BoardError("WORKSPACE_CHANGED", "A file changed during snapshot capture", path=relative)
-            return "100755" if before.st_mode & 0o111 else "100644", data
-    except FileNotFoundError:
-        return None
-
-
-def _file_with_git_mode(root, relative, mode):
-    return _file(root, relative, mode_hint=mode) if _WINDOWS else _file(root, relative)
-
-
-def _blob_oid(data, fmt):
-    # The object number of already-read bytes: exactly what
-    # ``git hash-object --no-filters --stdin`` computes over the payload in the
-    # repository's own object format. No path is involved, so clean filters,
-    # CRLF conversion and autocrlf cannot change the result. An object format
-    # hashlib does not implement fails closed instead of guessing a length.
-    if fmt not in ("sha1", "sha256"):
-        raise BoardError("WORKSPACE_UNSUPPORTED", "The repository object format is not supported", format=fmt)
-    return hashlib.new(fmt, b"blob %d\0" % len(data) + data).hexdigest()
-
-
-def _known_objects(root, oids):
-    query = b"".join(oid.encode() + b"\n" for oid in oids)
-    present = set()
-    for line in _git(root, "cat-file", "--batch-check", data=query).splitlines():
-        name, _, description = line.partition(b" ")
-        if description.startswith(b"blob "):
-            present.add(name.decode())
-    return present
-
-
-def _write_objects(root, objects, *, state_dir):
-    # One fast-import stream stores every missing payload as a blob in the same
-    # repository, carrying the exact bytes that were already read. The exported
-    # marks must reproduce the computed object numbers, so the write semantics
-    # stay hash-object's. Blob commands create no ref, branch, tag or stash.
-    # https://git-scm.com/docs/git-fast-import
+def _index(root, *, state_dir, copy=False, git_dir=None):
+    """Keep Git's temporary index outside the Worker-writable checkout."""
     with ExitStack() as cleanup:
-        directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-objects-",
+        directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-index-",
             directory=private_dirs.ensure_private_dir(Path(state_dir) / "tmp"))
         cleanup.callback(private_dirs.remove_tree, directory)
-        marks = Path(directory) / "marks"
-        with tempfile.TemporaryFile(dir=directory) as diagnostics, tempfile.TemporaryFile(dir=directory) as output:
-            command, git_env = _git_command(root, "fast-import", "--quiet", "--done",
-                                            "--export-marks=" + os.fspath(marks))
+        index = Path(directory) / "index"
+        if copy:
+            # The index timestamp is Git's racy-clean watermark. A plain byte
+            # copy with a newer timestamp could hide a same-size recent edit.
+            source = Path(_line(root, "rev-parse", "--path-format=absolute", "--git-path", "index", git_dir=git_dir))
+            if source.exists():
+                with native_path(source).open("rb") as original, native_path(index).open("wb") as copied:
+                    info = os.fstat(original.fileno())
+                    shutil.copyfileobj(original, copied)
+                os.utime(native_path(index), ns=(info.st_atime_ns, info.st_mtime_ns))
+        yield {"GIT_INDEX_FILE": str(index)}
+
+
+def _raw_entry(root, path):
+    """The original-byte evidence for a regular file or link, without objects."""
+    target = native_path(Path(root) / path)
+    try:
+        info = target.lstat()
+    except FileNotFoundError:
+        return None
+    if stat.S_ISLNK(info.st_mode):
+        if _WINDOWS:
+            # The print name is the link text. os.readlink on Windows returns
+            # the substitute name, which can introduce a device-path prefix.
+            import win32file
+            handle = win32file.CreateFile(str(target), 0, 7, None, 3, 0x02200000, None)
             try:
-                process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=output,
-                                           stderr=diagnostics, env=git_env, creationflags=service_creation_flags())
-            except OSError as error:
-                raise _git_failure(command, "fast-import", error=error) from error
-            code, recorded = 1, {}
-            try:
-                parts = [b"feature done\n"]
-                for number, (oid, data) in enumerate(objects.items(), start=1):
-                    parts.extend((b"blob\nmark :%d\ndata %d\n" % (number, len(data)), data, b"\n"))
-                parts.append(b"done\n")
-                process.communicate(input=b"".join(parts), timeout=_GIT_TIMEOUT_SECONDS)
-                code = process.returncode
-            except (OSError, subprocess.TimeoutExpired) as error:
-                # communicate bounds both pipe writes and the final wait. Reap
-                # our child before reading captured diagnostics.
-                try:
-                    if process.poll() is None:
-                        process.kill()
-                    process.communicate()
-                except OSError:
-                    pass
-                if isinstance(error, subprocess.TimeoutExpired):
-                    raise _git_unknown(command, "fast-import", error, stdout=output, stderr=diagnostics,
-                                       returncode=process.returncode) from error
-                raise _git_failure(command, "fast-import", stdout=output, stderr=diagnostics,
-                                   returncode=process.returncode, error=error) from error
-            if code != 0:
-                raise _git_failure(command, "fast-import", stdout=output, stderr=diagnostics, returncode=code)
-            try:
-                for line in marks.read_bytes().splitlines():
-                    name, _, oid = line.partition(b" ")
-                    recorded[name.decode()] = oid.decode()
-            except OSError as error:
-                raise _git_failure(command, "fast-import", stdout=output, stderr=diagnostics,
-                                   returncode=code, error=error) from error
-            for number, (oid, _data) in enumerate(objects.items(), start=1):
-                if recorded.get(f":{number}") != oid:
-                    raise _git_failure(command, "fast-import", stdout=output, stderr=diagnostics, returncode=code,
-                                       message="Git numbered workspace bytes differently than the computed object identity",
-                                       expected=oid)
+                raw = win32file.DeviceIoControl(handle, 0x000900A8, None, 16 * 1024)
+            finally:
+                handle.Close()
+            offset, size = struct.unpack_from("<HH", raw, 12)
+            text = raw[20 + offset:20 + offset + size].decode("utf-16-le")
+        else:
+            text = os.readlink(target)
+        return ["120000", _sha(os.fsencode(text))]
+    if (not stat.S_ISREG(info.st_mode)
+            or (_WINDOWS and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)):
+        raise BoardError("WORKSPACE_UNSUPPORTED", "Only regular files and symlinks can be observed", path=path)
+    digest = hashlib.sha256()
+    with target.open("rb") as stream:
+        for block in iter(lambda: stream.read(65536), b""):
+            digest.update(block)
+    return ["100755" if info.st_mode & 0o111 else "100644", digest.hexdigest()]
 
 
-def _batch_blobs(root, payloads, *, write, state_dir=None):
-    """Object numbers for already-read payloads, in input order.
-
-    One Git process names the repository's object format; write=True adds one
-    existence pass and one fast-import stream for the payloads the repository
-    does not have yet, so the process count no longer grows with the file
-    count. Identities and stored bytes both come from the payloads themselves,
-    never from a second read of any path.
-    """
-    if not payloads:
-        return []
-    fmt = _line(root, "rev-parse", "--show-object-format")
-    oids = [_blob_oid(payload, fmt) for payload in payloads]
-    if write:
-        present = _known_objects(root, oids)
-        missing = {}
-        for oid, payload in zip(oids, payloads):
-            if oid not in present:
-                missing.setdefault(oid, payload)
-        if missing:
-            _write_objects(root, missing, state_dir=state_dir)
-    return oids
-
-
-def _blob(root, data, *, write=False, state_dir=None):
-    return _batch_blobs(root, [data], write=write, state_dir=state_dir)[0]
-
-
-def _batch_objects(root, oids):
-    """Read many committed objects' exact bytes from one Git process."""
-    if not oids:
-        return []
-    query = b"".join(oid.encode() + b"\n" for oid in oids)
-    payload = _git(root, "cat-file", "--batch", data=query)
-    command, _env = _git_command(root, "cat-file", "--batch")
-    results = []
-    position = 0
-    for oid in oids:
-        end = payload.find(b"\n", position)
-        name, _, description = payload[position:end].partition(b" ")
-        fields = description.split()
-        if name.decode() != oid or len(fields) != 2 or fields[0] != b"blob":
-            raise _git_failure(command, "cat-file", stdout=payload, returncode=0,
-                               message="Git did not return a workspace object", oid=oid)
-        start = end + 1
-        results.append(payload[start:start + int(fields[1])])
-        position = start + int(fields[1]) + 1
-    if position != len(payload):
-        raise _git_failure(command, "cat-file", stdout=payload, returncode=0,
-                           message="Git returned more workspace objects than requested")
-    return results
-
-
-def _entries(root, revision=None):
+def _entries(root, revision=None, *, env=None, git_dir=None):
     args = ("ls-tree", "-rz", revision) if revision else ("ls-files", "--stage", "-z")
     entries = {}
-    for entry in _git(root, *args).split(b"\0"):
+    for entry in _git(root, *args, env=env, git_dir=git_dir).split(b"\0"):
         if not entry:
             continue
         metadata, path = entry.split(b"\t", 1)
@@ -424,76 +285,59 @@ def _entries(root, revision=None):
             if last != "0":
                 raise BoardError("WORKSPACE_UNMERGED", "Resolve the source index conflicts before preparing a workspace", path=name)
         entries[name] = [mode, oid]
-    if not revision and any(entry.startswith(b"S ") for entry in _git(root, "ls-files", "-t", "-z").split(b"\0")):
+    if not revision and any(entry.startswith(b"S ") for entry in _git(root, "ls-files", "-t", "-z", env=env, git_dir=git_dir).split(b"\0")):
         raise BoardError("WORKSPACE_UNSUPPORTED", "Sparse checkouts require an explicit full checkout")
-    if _WINDOWS:
-        windows_paths.validate_unique(entries)
     return entries
 
 
-def _untracked(root, selected):
+def _untracked(root, selected, *, env=None, git_dir=None):
     # Git prunes ignored dependency/cache directories before listing files.
     # Explicit selections may include ignored input, but only within their
     # literal pathspecs. https://git-scm.com/docs/git-ls-files#_options
-    paths = set(_git(root, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0"))
+    paths = set(_git(root, "ls-files", "--others", "--exclude-standard", "-z", env=env, git_dir=git_dir).split(b"\0"))
     if selected:
-        paths.update(_git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *selected).split(b"\0"))
+        paths.update(_git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *selected, env=env, git_dir=git_dir).split(b"\0"))
     result = sorted(_relative(os.fsdecode(path)) for path in paths if path)
-    if _WINDOWS:
-        windows_paths.validate_unique(result)
     return result
 
 
-def _observe(root, selected, *, write=False, require_selected=False, state_dir=None):
-    head = _commit(root, "HEAD")
-    index = _entries(root)
-    tracked, untracked, included = {}, {}, {}
-    blobs = []
-    for path in index:
-        item = _file_with_git_mode(root, path, index[path][0])
-        if item is not None:
-            mode, data = item
-            entry = [mode, None]
-            blobs.append((entry, data))
-            tracked[path] = entry
-    for path in _untracked(root, selected):
-        item = _file(root, path)
-        if item is None:
-            raise BoardError("WORKSPACE_CHANGED", "An untracked file disappeared during capture", path=path)
-        mode, data = item
-        untracked[path] = [mode, _sha(data)]
-        if _in_scope(path, selected):
-            entry = [mode, None]
-            blobs.append((entry, data))
-            included[path] = entry
-    for (entry, _data), oid in zip(blobs, _batch_blobs(root, [data for _entry, data in blobs], write=write, state_dir=state_dir)):
-        entry[1] = oid
-    if _WINDOWS:
-        windows_paths.validate_unique([*index, *untracked])
+def _observe(root, selected, *, require_selected=False, state_dir, git_dir=None, capture=()):
+    # One copy supplies both the recorded index and Git's worktree observation.
+    # capture selects content for an output tree without changing the frozen
+    # input selectors or the original-byte evidence in its fingerprint.
+    head = _line(root, "rev-parse", "--verify", "HEAD^{commit}", git_dir=git_dir)
+    with _index(root, state_dir=state_dir, copy=True, git_dir=git_dir) as environment:
+        index = _entries(root, env=environment, git_dir=git_dir)
+        paths = _untracked(root, selected, env=environment, git_dir=git_dir)
+        if index:
+            _git(root, "update-index", "--no-assume-unchanged", "-z", "--stdin",
+                 data=b"".join(os.fsencode(path) + b"\0" for path in index), env=environment, git_dir=git_dir)
+        _git(root, "add", "-u", env=environment, git_dir=git_dir)
+        admitted = [path for path in paths if _in_scope(path, [*selected, *capture])]
+        if admitted:
+            _git(root, "add", "--force", "--pathspec-from-file=-", "--pathspec-file-nul",
+                 data=b"".join(os.fsencode(path) + b"\0" for path in admitted), env=environment, git_dir=git_dir)
+        entries = _entries(root, env=environment, git_dir=git_dir)
+    untracked = {path: _raw_entry(root, path) for path in paths}
+    if any(value is None for value in untracked.values()):
+        raise BoardError("WORKSPACE_CHANGED", "An untracked file disappeared during observation")
+    untracked_entries = {path: entries[path] for path in admitted if path in entries}
+    included = {path: entry for path, entry in untracked_entries.items() if _in_scope(path, selected)}
     if require_selected:
         for path in selected:
             if not any(_in_scope(candidate, [path]) for candidate in included):
                 raise BoardError("INVALID_WORKSPACE", "includeUntracked does not select an untracked file", path=path)
-    observation = {"head": head, "index": index, "tracked": tracked, "untracked": untracked, "included": included}
+    observation = {"head": head, "index": index,
+                   "tracked": {path: entry for path, entry in entries.items() if path in index},
+                   "untracked": untracked, "included": included}
     observation["fingerprint"] = _sha(_json(observation))
-    return observation
-
-
-def _stable_observation(root, selected, *, write=False, require_selected=False, state_dir=None):
-    observation = _observe(root, selected, write=write, require_selected=require_selected, state_dir=state_dir)
-    if observation != _observe(root, selected, state_dir=state_dir):
-        raise BoardError("WORKSPACE_CHANGED", "The checkout changed during snapshot capture")
+    observation["untrackedEntries"] = untracked_entries
     return observation
 
 
 def _tree(root, entries, *, state_dir):
-    # A private index builds raw blob trees without filters or changes to the
-    # source index. https://git-scm.com/docs/git-update-index#_using_index_info
-    with ExitStack() as cleanup:
-        directory = private_dirs.make_temporary_dir(prefix="hey-my-buddy-index-",
-            directory=private_dirs.ensure_private_dir(Path(state_dir) / "tmp"))
-        cleanup.callback(private_dirs.remove_tree, directory)
-        environment = {"GIT_INDEX_FILE": str(Path(directory) / "index")}
+    # Trees already contain Git-normalized objects; no worktree is read here.
+    with _index(root, state_dir=state_dir) as environment:
         _git(root, "read-tree", "--empty", env=environment)
         records = b"".join(mode.encode() + b" " + oid.encode() + b"\t" + os.fsencode(path) + b"\0"
                            for path, (mode, oid) in sorted(entries.items()))
@@ -517,10 +361,8 @@ def _diff(root, before, after):
                 "--no-color", "--src-prefix=a/", "--dst-prefix=b/", before, after, "--")
 
 
-def _read(path, *, repository=None):
+def _read(path):
     try:
-        if _WINDOWS and repository is not None:
-            return windows_paths.read(path, repository=repository)
         with os.fdopen(private_dirs.open_regular_fd(path, os.O_RDONLY), "rb") as stream:
             return stream.read()
     except FileNotFoundError:
@@ -537,12 +379,12 @@ def _record(path):
         raise BoardError("WORKSPACE_CONFLICT", "A workspace recovery record is malformed", path=str(path)) from error
 
 
-def _write_once(path, data, *, repository=None):
-    if _WINDOWS and repository is not None:
-        windows_paths.write_once(path, data, repository=repository)
-        return
-    with windows_paths.artifact_publication(path):
+def _write_once(path, data):
+    try:
         private_files.publish_bytes(path, data, immutable=True)
+    except FileExistsError as error:
+        raise BoardError("WORKSPACE_CONFLICT", "An immutable workspace artifact already has different contents",
+                         path=str(path)) from error
 
 
 @contextmanager
@@ -637,7 +479,7 @@ def _snapshot(source, intent, workspace_id, *, state_dir):
                 "inputRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/input",
                 "stagedRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/staged"}
     if intent["base"]["kind"] == "working-tree":
-        observed = _stable_observation(root, intent["includeUntracked"], write=True, require_selected=True, state_dir=state_dir)
+        observed = _observe(root, intent["includeUntracked"], require_selected=True, state_dir=state_dir)
         if observed["head"] != source["headCommit"]:
             raise BoardError("WORKSPACE_CHANGED", "The source HEAD changed during preparation")
         staged_tree = _tree(root, observed["index"], state_dir=state_dir)
@@ -655,7 +497,7 @@ def _snapshot(source, intent, workspace_id, *, state_dir):
         staged_tree = input_tree = base_tree
         snapshot.update(includedUntracked=[], excludedUntracked=_untracked(root, []), excludedEntries={})
         if intent["kind"] == "existing":
-            observed = _stable_observation(root, [], state_dir=state_dir)
+            observed = _observe(root, [], state_dir=state_dir)
             if observed["head"] != base or observed["index"] != base_entries or observed["tracked"] != base_entries or observed["untracked"]:
                 raise BoardError("WORKSPACE_BASE_MISMATCH", "The existing checkout does not exactly match the selected commit")
             snapshot["sourceFingerprint"] = observed["fingerprint"]
@@ -676,42 +518,62 @@ def _worktree_record(root, target):
     return None
 
 
-def _windows_links(root, entries):
-    names = [path for path, (mode, _oid) in entries.items() if mode == "120000"]
-    targets = dict(zip(names, map(os.fsdecode, _batch_objects(root, [entries[path][1] for path in names]))))
-    types = windows_paths.symlink_types(root, entries, targets)
-    return {path: (target, types[path]) for path, target in targets.items()}
+def _require_checkout(root, observation, expected, *, state_dir, paths=None):
+    actual = observation["tracked"] | observation["untrackedEntries"]
+    selected = set(actual) | set(expected) if paths is None else paths
+    mismatched = {path for path in selected if actual.get(path) != expected.get(path)}
+    mismatched.update(path for path in observation["untracked"]
+                      if (paths is None or path in paths) and path not in observation["untrackedEntries"])
+    # add can retain cached aliases even though checkout wrote only one name.
+    # For a new checkout, Git also lists every physical name from an empty
+    # index; no content is reread. A selected restore needs this only when the
+    # retained tree contains case aliases.
+    prefixes = {prefix for path in expected for prefix in
+                ("/".join(path.split("/")[:count]) for count in range(1, len(path.split("/")) + 1))}
+    if paths is None or len({path.casefold() for path in prefixes}) != len(prefixes):
+        with _index(root, state_dir=state_dir) as environment:
+            names = {os.fsdecode(path) for path in _git(root, "ls-files", "--others", "-z", env=environment).split(b"\0") if path}
+        mismatched.update(path for path in selected if path in expected and path not in names)
+    if mismatched:
+        raise BoardError("WORKSPACE_UNSUPPORTED", "Git cannot reproduce the requested tree on this filesystem",
+                         paths=sorted(mismatched), reason="The Git observation after checkout differs from the input tree")
 
 
-def _materialize(root, entries, *, tree=None):
-    if _WINDOWS:
-        windows_paths.validate_unique(entries)
-        links = _windows_links(root, entries if tree is None else tree)
-        files = [path for path, (mode, _oid) in entries.items() if mode != "120000"]
-        contents = iter(_batch_objects(root, [entries[path][1] for path in files]))
-        for path, (mode, _oid) in entries.items():
-            _relative(path)
-            target = Path(root) / path
-            if mode == "120000":
-                text, directory = links[path]
-                windows_paths.symlink(target, text, directory=directory, repository=root)
-            else:
-                windows_paths.write_new(target, next(contents), create_parents=True, repository=root)
-        return
-    contents = iter(_batch_objects(root, [oid for _mode, oid in entries.values()]))
-    for (path, (mode, _oid)), data in zip(entries.items(), contents):
-        with _parent(root, path, create=True) as (parent, name):
-            if mode == "120000":
-                os.symlink(os.fsdecode(data), name, dir_fd=parent)
-            else:
-                descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-                                     0o755 if mode == "100755" else 0o644, dir_fd=parent)
-                with os.fdopen(descriptor, "wb") as stream:
-                    stream.write(data)
-                    os.fchmod(stream.fileno(), 0o755 if mode == "100755" else 0o644)
+def _checkout_observation(root, expected, *, state_dir, selectors=(), capture=(), paths=None, git_error=None):
+    observed = _observe(root, selectors, state_dir=state_dir,
+                        capture=[*capture, *expected] if git_error is not None else capture)
+    try:
+        _require_checkout(root, observed, expected, state_dir=state_dir, paths=paths)
+    except BoardError as error:
+        if git_error is not None:
+            error.details["reason"] = git_error.details["reason"]
+            raise error from git_error
+        raise
+    if git_error is not None:
+        raise git_error
+    return observed
 
 
-def _prepare_worktree(source, target, pinned, reason):
+def _checkout_cwd(target, relative):
+    """Create the cwd through ordinary directories of this new checkout only."""
+    current = target
+    for count, part in enumerate(relative.parts, start=1):
+        current = current / part
+        location = native_path(current)
+        try:
+            info = location.lstat()
+        except FileNotFoundError:
+            location.mkdir()
+            continue
+        if (not stat.S_ISDIR(info.st_mode)
+                or (_WINDOWS and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)):
+            raise BoardError("WORKSPACE_UNSUPPORTED", "The working directory traverses a link or a non-directory",
+                             paths=["/".join(relative.parts[:count])],
+                             reason="Every cwd component must be an ordinary directory in the allocated checkout")
+    return current
+
+
+def _prepare_worktree(source, target, pinned, reason, *, state_dir):
     root = Path(source["repositoryPath"])
     entries = _entries(root, pinned["inputCommit"])
     if target.exists() or target.is_symlink():
@@ -719,20 +581,26 @@ def _prepare_worktree(source, target, pinned, reason):
         if target.is_symlink() or not record or record.get("locked") != reason or "detached" not in record:
             raise BoardError("WORKSPACE_CONFLICT", "The worktree target is not owned by this preparation", path=str(target))
         identity = inspect(str(target))
-        observed = _observe(target, [])
+        observed = _observe(target, [], state_dir=state_dir)
         if (source["repositoryId"] != identity["repositoryId"]
                 or observed["head"] != pinned["inputCommit"] or observed["index"] != entries or observed["tracked"] != entries or observed["untracked"]):
             raise BoardError("WORKSPACE_CONFLICT", "The interrupted worktree is incomplete or changed; it was preserved", path=str(target))
-        return
-    # The allocation lock excludes another prepare/admission while these bytes
-    # are materialized. Capture physical ownership before writing any content.
+        _require_checkout(target, observed, entries, state_dir=state_dir)
+        return None, observed, identity["checkoutId"]
+    # Capture physical ownership before Git writes the checkout.
     identity = None
     try:
         _git(root, "worktree", "add", "--detach", "--no-checkout", "--lock", "--reason", reason,
              str(target), pinned["inputCommit"])
         identity = _new_worktree_identity(target, source)
-        _materialize(target, entries)
-        _git(target, "read-tree", pinned["inputTree"])
+        write_error = None
+        try:
+            _git(target, "reset", "--hard", pinned["inputCommit"])
+        except BoardError as error:
+            if error.code != "WORKSPACE_GIT_ERROR":
+                raise
+            write_error = error
+        observed = _checkout_observation(target, entries, state_dir=state_dir, git_error=write_error)
     except Exception as error:
         if identity is None and _path_present(target) and not target.is_symlink():
             try:
@@ -746,13 +614,13 @@ def _prepare_worktree(source, target, pinned, reason):
                 "inputCommit": pinned["inputCommit"], "repositoryPath": str(root),
                 "lock": reason, "reasons": ["allocation-identity-unproven"]})
         raise
-    return identity
+    return identity, observed, identity["checkoutId"]
 
 
 def _new_worktree_identity(target, source):
     # Git wrote this regular pointer as part of worktree add. Capture the B1
     # git-dir identity and the physical directory before materialization.
-    pointer = _read(target / ".git", repository=target).decode().strip()
+    pointer = _read(target / ".git").decode().strip()
     if not pointer.startswith("gitdir: "):
         raise BoardError("WORKSPACE_UNSAFE", "The new checkout has no Git directory pointer")
     git_dir = Path(pointer[len("gitdir: "):])
@@ -853,7 +721,7 @@ def _validate_manifest(manifest):
             raise BoardError("INVALID_WORKSPACE", "Manifest paths must be normalized")
 
 
-def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
+def verify(manifest: dict, *, state_dir, require_unchanged: bool = True) -> dict:
     """Validate fixed input objects and actual execution checkout identity.
 
     Read workspaces always require unchanged managed input, as defined by the
@@ -863,10 +731,11 @@ def verify(manifest: dict, *, require_unchanged: bool = True) -> dict:
     """
     with _errors():
         _validate_manifest(manifest)
-        return _verify(manifest, require_unchanged=require_unchanged)
+        result, _observation = _verify(manifest, state_dir=state_dir, require_unchanged=require_unchanged)
+        return result
 
 
-def _verify(manifest, *, require_unchanged):
+def _verify(manifest, *, state_dir, require_unchanged, observation=None):
     """Observe a manifest already validated at the operation's input boundary."""
     with _errors():
         actual = inspect(manifest["path"])
@@ -884,12 +753,13 @@ def _verify(manifest, *, require_unchanged):
                 raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The pinned staged tree is inconsistent")
         unchanged = None
         if require_unchanged or manifest["access"] == "read":
-            observation = _observe(root, snapshot["executionSelectors"])
+            if observation is None:
+                observation = _observe(root, snapshot["executionSelectors"], state_dir=state_dir)
             if observation["fingerprint"] != snapshot["executionFingerprint"]:
                 raise BoardError("WORKSPACE_CHANGED", "The execution workspace no longer matches its prepared input")
             unchanged = True
-        return {"valid": True, "workspaceId": manifest["workspaceId"], "checkoutId": actual["checkoutId"],
-                "repositoryId": actual["repositoryId"], "unchanged": unchanged}
+        return ({"valid": True, "workspaceId": manifest["workspaceId"], "checkoutId": actual["checkoutId"],
+                 "repositoryId": actual["repositoryId"], "unchanged": unchanged}, observation)
 
 
 def recovery_inputs(manifest: dict) -> list[str]:
@@ -1062,7 +932,7 @@ def _borrowed_submission_allocation(state_dir, intent):
     if (allocation is None or allocation["workspaceId"] != parts[0]
             or allocation["path"] != str(directory / "checkout")):
         raise BoardError("WORKSPACE_UNSAFE", "The borrowed checkout has no proven original allocation")
-    _verify(original, require_unchanged=False)
+    _verify(original, state_dir=state_dir, require_unchanged=False)
     if original["checkoutRoot"] != allocation["path"]:
         raise BoardError("WORKSPACE_CHANGED", "The borrowed execution checkout identity changed")
     registration = _worktree_record(Path(original["snapshot"]["repositoryPath"]), directory / "checkout")
@@ -1087,7 +957,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
     if preparation is not None:
         preparation["replayed"] = manifest is not None
     if manifest is not None:
-        verify(manifest, require_unchanged=False)
+        verify(manifest, state_dir=state_dir, require_unchanged=False)
         return manifest
     pinned = _record(directory / "input.json")
     fresh_input = pinned is None
@@ -1108,13 +978,14 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
         path = Path(intent["cwd"])
         if intent["kind"] == "worktree":
             target = directory / "checkout"
-            identity = _prepare_worktree(source, target, pinned, "hey-my-buddy:" + workspace_id)
+            identity, prepared, checkout_id = _prepare_worktree(source, target, pinned, "hey-my-buddy:" + workspace_id, state_dir=state_dir)
             relative = path.relative_to(source["checkoutRoot"])
-            path = target / relative
-            if relative.parts:
-                with _parent(target, (relative / ".cwd-placeholder").as_posix(), create=True):
-                    pass
+            path = _checkout_cwd(target, relative)
         actual = inspect(str(path))
+        if intent["kind"] == "worktree" and (actual["checkoutRoot"] != str(target)
+                                                or actual["checkoutId"] != checkout_id):
+            raise BoardError("WORKSPACE_CHANGED", "The cwd does not belong to the allocated checkout",
+                             path=str(path), expectedCheckoutRoot=str(target), expectedCheckoutId=checkout_id)
         if source["repositoryId"] != actual["repositoryId"]:
             raise BoardError("WORKSPACE_CHANGED", "The execution repository changed during preparation")
         selectors = intent["includeUntracked"] if intent["kind"] == "existing" else []
@@ -1125,7 +996,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
             if replay["fingerprint"] != pinned["snapshot"]["sourceFingerprint"]:
                 raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
         fingerprint = (pinned["snapshot"]["sourceFingerprint"] if intent["kind"] == "existing" else
-                       _observe(Path(actual["checkoutRoot"]), selectors, state_dir=state_dir)["fingerprint"])
+                       prepared["fingerprint"])
         snapshot = dict(pinned["snapshot"], executionSelectors=selectors, executionFingerprint=fingerprint)
         manifest = {"version": 3, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
                     "checkoutRoot": actual["checkoutRoot"], "checkoutId": actual["checkoutId"],
@@ -1150,29 +1021,34 @@ def _entry_state(entries, path):
     return None if item is None else {"mode": item[0], "oid": item[1]}
 
 
-def _observed_file(root, path, *, mode_hint=None):
-    """The current managed state of one path as mode plus content digest.
-
-    The digest is the raw sha256 of the file bytes, so a later compare-and-swap
-    never depends on Git objects that a failed worker could have moved.
-    """
-    item = _file_with_git_mode(root, path, mode_hint)
-    if item is None:
-        return None
-    mode, data = item
-    return {"mode": mode, "sha256": _sha(data)}
+def _observed_states(root, observation, paths):
+    states = {}
+    for path in paths:
+        item = observation["untracked"].get(path) if path in observation["untracked"] else _raw_entry(root, path)
+        if item is None:
+            states[path] = None
+            continue
+        mode = item[0]
+        indexed = observation["index"].get(path)
+        if _WINDOWS and mode != "120000" and indexed is not None and indexed[0] in ("100644", "100755"):
+            # Preserve the mode of this existing evidence format: Windows has
+            # no chmod execute bit for a tracked ordinary file.
+            mode = indexed[0]
+        states[path] = {"mode": mode, "sha256": item[1]}
+    return states
 
 
 def _scope_evidence(root, manifest, observation, violations, changed, index_changes, excluded_changes, initial, initial_index):
     """Complete, content-addressed evidence for one out-of-scope failure site."""
     ordered = sorted(violations)
     entries = []
+    states = _observed_states(root, observation, ordered)
     for path in ordered:
         entries.append({
             "path": path,
             "authorized": _entry_state(initial, path),
             "authorizedIndex": _entry_state(initial_index, path),
-            "observed": _observed_file(root, path, mode_hint=(observation["index"].get(path) or [None])[0]),
+            "observed": states[path],
             "observedIndex": _entry_state(observation["index"], path),
             "changed": path in changed,
             "indexChanged": path in index_changes,
@@ -1190,7 +1066,7 @@ def _scope_evidence(root, manifest, observation, violations, changed, index_chan
     }
 
 
-def _output_entries(root, manifest, observation, *, allow_outside_scope=False, allowed_paths=None, write=True, state_dir=None):
+def _output_entries(root, manifest, observation, *, allow_outside_scope=False, allowed_paths=None, state_dir=None):
     initial = _entries(root, manifest["inputCommit"])
     staged_tree = manifest["snapshot"]["stagedTree"]
     initial_index = (_entries(root, staged_tree)
@@ -1205,18 +1081,15 @@ def _output_entries(root, manifest, observation, *, allow_outside_scope=False, a
     violations = set()
     adopted = set()
     excluded_changes = set()
-    pending = []
     for path, fingerprint in observation["untracked"].items():
         if path in excluded and excluded[path] == fingerprint:
             continue
         if path in excluded:
             excluded_changes.add(path)
-        item = _file(root, path)
-        if item is None or [item[0], _sha(item[1])] != fingerprint:
-            raise BoardError("WORKSPACE_CHANGED", "An output changed during sealing", path=path)
-        pending.append((path, item))
-    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=write, state_dir=state_dir)):
-        entry = [item[0], oid]
+        entry = observation["untrackedEntries"].get(path)
+        if entry is None:
+            violations.add(path)
+            continue
         if _in_scope(path, scope) or path in allowed or initial.get(path) == entry:
             entries[path] = entry
         elif allow_outside_scope:
@@ -1316,12 +1189,12 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                 if output.get("taskId") != task_id or output.get("attemptId") != attempt_id or output.get("manifestSha256") != manifest["manifestSha256"]:
                     raise BoardError("WORKSPACE_CONFLICT", "This output identity belongs to a different attempt or input")
                 return _finish_output(repository, output, directory)
-            _verify(manifest, require_unchanged=False)
+            _valid, observation = _verify(manifest, state_dir=state_dir, require_unchanged=False)
             root = Path(manifest["checkoutRoot"])
-            observation = _observe(root, manifest["snapshot"]["executionSelectors"], write=True, state_dir=state_dir)
+            if observation is None:
+                observation = _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir,
+                                       capture=[*manifest["writeScope"], *allowed_paths])
             if manifest["access"] == "read":
-                if observation["fingerprint"] != manifest["snapshot"]["executionFingerprint"]:
-                    raise BoardError("WORKSPACE_CHANGED", "Read-only input changed before it could be sealed")
                 entries, changed, excluded_changes = _entries(root, manifest["inputTree"]), [], []
             else:
                 try:
@@ -1336,8 +1209,6 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
                     raise
             tree = _tree(root, entries, state_dir=state_dir)
             changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
-            if observation != _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir):
-                raise BoardError("WORKSPACE_CHANGED", "The workspace changed during output sealing")
             commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " output " + directory.name)
             patch_data = _diff(repository, manifest["inputCommit"], commit)
             snapshot = {"version": 1, "headCommit": observation["head"], "indexSha256": _sha(_json(observation["index"])),
@@ -1569,81 +1440,54 @@ def _conflict_index(records):
     return entries
 
 
-def _entry_state_matches(current, expected):
-    return current == expected
-
-
-def _site_conflicts(root, recorded, selected, index):
-    """Selected paths matching neither the recorded site nor its authorized state.
-
-    Each path keeps the recorded compare-and-swap — the observed state read, the
-    authorized content read, then the observed/authorized index check — while
-    one batch numbers the authorized bytes, so the Git process count stays
-    independent of the selected path count.
-    """
-    observed = {path: _observed_file(root, path, mode_hint=(index.get(path) or [None])[0]) for path in selected}
-    matches, pending = {}, []
-    for path in selected:
-        entry = recorded[path]
-        if _entry_state_matches(observed[path], entry.get("observed")):
-            matches[path] = True
-            continue
-        authorized = entry.get("authorized")
-        if authorized is None:
-            matches[path] = observed[path] is None
-        elif not isinstance(observed[path], dict) or observed[path].get("mode") != authorized.get("mode"):
-            matches[path] = False
-        else:
-            pending.append(path)
-    items = {path: _file_with_git_mode(root, path, recorded[path]["authorized"].get("mode")) for path in pending}
-    identities = iter(_batch_blobs(root, [items[path][1] for path in pending if items[path] is not None],
-                                   write=False))
-    for path in pending:
-        item = items[path]
-        matches[path] = item is not None and next(identities) == recorded[path]["authorized"].get("oid")
+def _site_conflicts(root, recorded, selected, observation):
+    """Compare the Git observation with the recorded or authorized site."""
+    states = _observed_states(root, observation, selected)
+    current = observation["tracked"] | observation["untrackedEntries"]
     return [path for path in selected
-            if not matches[path] or _entry_state(index, path) not in (recorded[path].get("observedIndex"),
-                                                                      recorded[path].get("authorizedIndex"))]
+            if (states[path] != recorded[path].get("observed")
+                and _entry_state(current, path) != recorded[path].get("authorized"))
+            or _entry_state(observation["index"], path) not in
+               (recorded[path].get("observedIndex"), recorded[path].get("authorizedIndex"))]
 
 
-def _write_path(root, path, entry, data=None, *, links=None):
-    if _WINDOWS:
-        _relative(path)
-        target = Path(root) / path
-        if data is None and entry is not None and entry["mode"] != "120000":
-            data = _git(root, "cat-file", "blob", entry["oid"])
-        windows_paths.restore(target, None if entry is None or entry["mode"] == "120000" else data,
-                              link=links[path] if entry is not None and entry["mode"] == "120000" else None,
-                              repository=root)
-        return
-    with _parent(root, path, create=True) as (parent, name):
-        try:
-            os.unlink(name, dir_fd=parent)
-        except FileNotFoundError:
-            pass
-        except IsADirectoryError as error:
-            raise BoardError("WORKSPACE_UNSUPPORTED", "A managed path is now a directory", path=path) from error
+def _update_index(root, before, entries):
+    """Update selected entries without replacing other staging flags or stats."""
+    changed = {path: entry for path, entry in entries.items() if _entry_state(before, path) != entry}
+    if changed:
+        records = b"".join(
+            (b"0 " + b"0" * len(before[path][1]) if entry is None else
+             entry["mode"].encode() + b" " + entry["oid"].encode()) + b"\t" + os.fsencode(path) + b"\0"
+            for path, entry in sorted(changed.items()))
+        _git(root, "update-index", "-z", "--index-info", data=records)
+
+
+def _restore_paths(root, observation, worktree, index, *, state_dir, selectors, capture=()):
+    """Git writes the selected worktree paths and the authorized staging state."""
+    current = observation["tracked"] | observation["untrackedEntries"]
+    desired = dict(current)
+    for path, entry in worktree.items():
         if entry is None:
-            return
-        if data is None:
-            data = _git(root, "cat-file", "blob", entry["oid"])
-        if entry["mode"] == "120000":
-            os.symlink(os.fsdecode(data), name, dir_fd=parent)
+            desired.pop(path, None)
         else:
-            mode = 0o755 if entry["mode"] == "100755" else 0o644
-            descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode, dir_fd=parent)
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(data)
-                os.fchmod(stream.fileno(), mode)
-
-
-def _restore_index(root, entries):
-    """Set exact index entries in one plumbing call; never refresh the worktree."""
-    payload = b''.join(
-        (b"0 " + b"0" * 40 if entry is None else entry["mode"].encode() + b" " + entry["oid"].encode())
-        + b"\t" + os.fsencode(path) + b"\0" for path, entry in sorted(entries.items()))
-    if payload:
-        _git(root, "update-index", "-z", "--index-info", data=payload)
+            desired[path] = [entry["mode"], entry["oid"]]
+    tree = _tree(root, desired, state_dir=state_dir)
+    selected = sorted(path for path in worktree if path in current or path in desired)
+    if selected:
+        current_tree = _tree(root, current, state_dir=state_dir)
+        with _index(root, state_dir=state_dir) as environment:
+            _git(root, "read-tree", current_tree, env=environment)
+            try:
+                _git(root, "restore", "--source=" + tree, "--worktree", "--pathspec-from-file=-", "--pathspec-file-nul",
+                     data=b"".join(os.fsencode(path) + b"\0" for path in selected), env=environment)
+            except BoardError as error:
+                if error.code != "WORKSPACE_GIT_ERROR":
+                    raise
+                return _checkout_observation(root, desired, state_dir=state_dir, selectors=selectors,
+                                             capture=[*capture, *worktree], paths=worktree, git_error=error)
+    _update_index(root, observation["index"], index)
+    return _checkout_observation(root, desired, state_dir=state_dir, selectors=selectors,
+                                 capture=[*capture, *worktree], paths=worktree)
 
 
 def _blocking_paths(root, manifest, observation, *, state_dir):
@@ -1656,12 +1500,12 @@ def _blocking_paths(root, manifest, observation, *, state_dir):
     return []
 
 
-def _reset_site(root, manifest, observation):
+def _reset_site(root, manifest, observation, *, state_dir):
     """Return every managed path to the authorized input content and index state."""
     initial = _entries(root, manifest["inputCommit"])
     initial_index = _entries(root, manifest["snapshot"]["stagedTree"] if manifest["kind"] == "existing" else manifest["inputTree"])
     excluded = manifest["snapshot"]["excludedEntries"] if manifest["kind"] == "existing" else {}
-    current_index = _entries(root)
+    current_index = observation["index"]
     selected = set(observation["tracked"]) | set(initial) | set(current_index) | set(initial_index)
     for path, fingerprint in observation["untracked"].items():
         if path in excluded and excluded[path] == fingerprint:
@@ -1669,19 +1513,14 @@ def _reset_site(root, manifest, observation):
         selected.add(path)
     ordered = sorted(selected)
     states = {path: _entry_state(initial, path) for path in ordered}
-    needed = [path for path in ordered if states[path] is not None]
-    contents = iter(_batch_objects(root, [states[path]["oid"] for path in needed]))
-    payloads = dict(zip(needed, contents))
-    links = _windows_links(root, initial) if _WINDOWS else None
-    for path in ordered:
-        _write_path(root, path, states[path], data=payloads.get(path), links=links)
-    _restore_index(root, {path: _entry_state(initial_index, path) for path in sorted(selected)
-                          if _entry_state(current_index, path) != _entry_state(initial_index, path)})
+    after = _restore_paths(root, observation, states,
+                           {path: _entry_state(initial_index, path) for path in ordered},
+                           state_dir=state_dir, selectors=manifest["snapshot"]["executionSelectors"], capture=manifest["writeScope"])
     # An excluded cache was never captured by content, so a modified one cannot be
     # returned mechanically; it is reported instead of being silently accepted.
     remaining = sorted(path for path, fingerprint in excluded.items()
                        if observation["untracked"].get(path) != fingerprint)
-    return sorted(selected), remaining
+    return sorted(selected), remaining, after
 
 
 def _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data):
@@ -1765,8 +1604,6 @@ def _resolution_record(root, manifest, repository, directory, observation, *, st
                                                                   allow_outside_scope=(action == "adopt"), state_dir=state_dir)
     tree = _tree(root, entries, state_dir=state_dir)
     changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
-    if observation != _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir):
-        raise BoardError("WORKSPACE_CHANGED", "The workspace changed during resolution sealing")
     commit = manifest["inputCommit"] if tree == manifest["inputTree"] else _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " resolution " + output_id)
     patch_data = _diff(repository, manifest["inputCommit"], commit)
     snapshot = _snapshot_record(manifest, observation, tree, entries, changed, excluded_changes, task_id, attempt_id, commit, patch_data)
@@ -1797,15 +1634,7 @@ def _abandoned_record(root, manifest, repository, directory, observation, *, sta
     if existing is not None:
         return _finish_record(repository, existing, directory, ref_name=output_id, ref_kind="abandoned",
                               record_name="abandoned.json", patch_name="abandoned.patch", bindings=_RECORD_BINDINGS)
-    entries = dict(observation["tracked"])
-    pending = []
-    for path in observation["untracked"]:
-        item = _file(root, path)
-        if item is None:
-            raise BoardError("WORKSPACE_CHANGED", "A managed path disappeared during evidence capture", path=path)
-        pending.append((path, item))
-    for (path, item), oid in zip(pending, _batch_blobs(root, [item[1] for _path, item in pending], write=True, state_dir=state_dir)):
-        entries[path] = [item[0], oid]
+    entries = observation["tracked"] | observation["untrackedEntries"]
     tree = _tree(root, entries, state_dir=state_dir)
     changed = sorted(_tree_changes(root, manifest["inputTree"], tree))
     commit = _commit_tree(root, tree, manifest["inputCommit"], workspace_id + " abandoned " + output_id)
@@ -1886,8 +1715,10 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             repository = Path(manifest["snapshot"]["repositoryPath"])
             if manifest["repositoryId"] != _identity(repository):
                 raise BoardError("WORKSPACE_CHANGED", "The output repository identity changed")
-            _verify(manifest, require_unchanged=False)
-            observation = _stable_observation(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir)
+            _verify(manifest, state_dir=state_dir, require_unchanged=False)
+            capture = (["."] if action in ("adopt", "abandon") else
+                       [*manifest["writeScope"], *(selected_paths or blocking)])
+            observation = _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir, capture=capture)
             if observation["fingerprint"] != observed_fingerprint:
                 raise BoardError("WORKSPACE_CHANGED", "The workspace does not match the fingerprint the Host observed",
                                  observedFingerprint=observed_fingerprint, currentFingerprint=observation["fingerprint"])
@@ -1908,8 +1739,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                 evidence = _abandoned_record(root, manifest, repository, directory, observation,
                                              task_id=task_id, attempt_id=attempt_id, actor=actor,
                                              note=note, conflict_fingerprint=records[0]["observedFingerprint"], state_dir=state_dir)
-                reset, remaining = _reset_site(root, manifest, observation)
-                after = _stable_observation(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir)
+                reset, remaining, after = _reset_site(root, manifest, observation, state_dir=state_dir)
                 remaining = sorted(set(remaining) | set(_blocking_paths(root, manifest, after, state_dir=state_dir)))
                 return _resolution_result("abandon", "abandoned" if not remaining else "open", evidence,
                                           reset, [], remaining, observation["fingerprint"], after["fingerprint"])
@@ -1919,21 +1749,14 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
                 raise BoardError("INVALID_WORKSPACE", "Selected paths have no recorded failure evidence", paths=unknown[:32])
             if not selected:
                 raise BoardError("WORKSPACE_CONFLICT", "The recorded failure site has no blocking path to restore")
-            index = _entries(root)
-            conflicting = _site_conflicts(root, entries, selected, index)
+            conflicting = _site_conflicts(root, entries, selected, observation)
             if conflicting:
                 raise BoardError("WORKSPACE_CONFLICT", "Selected paths changed after the recorded failure; the site is preserved",
                                  conflictingPaths=sorted(conflicting)[:32])
             authorized = {path: entries[path].get("authorized") for path in selected}
-            needed = [path for path in selected if authorized[path] is not None]
-            contents = iter(_batch_objects(root, [authorized[path]["oid"] for path in needed]))
-            payloads = dict(zip(needed, contents))
-            links = _windows_links(root, _entries(root, manifest["inputCommit"])) if _WINDOWS else None
-            for path in selected:
-                _write_path(root, path, authorized[path], data=payloads.get(path), links=links)
-            _restore_index(root, {path: entries[path].get("authorizedIndex") for path in selected
-                                  if _entry_state(index, path) != entries[path].get("authorizedIndex")})
-            after = _stable_observation(root, manifest["snapshot"]["executionSelectors"], write=True, state_dir=state_dir)
+            after = _restore_paths(root, observation, authorized,
+                                   {path: entries[path].get("authorizedIndex") for path in selected}, state_dir=state_dir,
+                                   selectors=manifest["snapshot"]["executionSelectors"], capture=manifest["writeScope"])
             remaining = _blocking_paths(root, manifest, after, state_dir=state_dir)
             preserved = sorted(set(entries) - set(selected))
             if remaining:
@@ -2331,26 +2154,29 @@ def _cleanup_resume_registration(repository, checkout_root, allocation, manifest
     return record, git_dir
 
 
-def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed):
+def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed, *, state_dir, allowed):
     """Restore only missing retained files, then use the ordinary cleanup proof."""
     if not _path_present(checkout_root / ".git"):
-        _write_once(checkout_root / ".git", os.fsencode(f"gitdir: {git_dir}\n"), repository=checkout_root)
+        _write_once(checkout_root / ".git", os.fsencode(f"gitdir: {git_dir}\n"))
     tree = sealed["tree"] if sealed is not None else manifest["inputTree"]
     entries = _entries(repository, tree)
-    missing = {}
-    for path, entry in entries.items():
-        try:
-            with _parent(checkout_root, path) as (parent, name):
-                if _WINDOWS:
-                    handle = parent.open_leaf(name, action="inspect")
-                    parent.close(handle)
-                else:
-                    os.stat(name, dir_fd=parent, follow_symlinks=False)
-        except FileNotFoundError:
-            missing[path] = entry
-    # _materialize pins parents without following links and creates each leaf
-    # exclusively. A file that appears meanwhile is preserved and stops recovery.
-    _materialize(checkout_root, missing, tree=entries)
+    missing = [path for path in entries if not _path_present(native_path(checkout_root / path))]
+    if missing:
+        # checkout-index without --force preserves a file that is already there.
+        with _index(checkout_root, state_dir=state_dir) as environment:
+            _git(checkout_root, "read-tree", tree, env=environment)
+            write_error = None
+            try:
+                _git(checkout_root, "checkout-index", "--stdin", "-z",
+                     data=b"".join(os.fsencode(path) + b"\0" for path in missing), env=environment)
+            except BoardError as error:
+                if error.code != "WORKSPACE_GIT_ERROR":
+                    raise
+                write_error = error
+        return _checkout_observation(checkout_root, entries, state_dir=state_dir,
+                                     selectors=manifest["snapshot"]["executionSelectors"], paths=missing,
+                                     capture=[*manifest["writeScope"], *allowed, *missing], git_error=write_error)
+    return None
 
 
 def cleanup_inspect(state_dir, manifest: dict, sealed: dict | None = None, retained=None,
@@ -2399,6 +2225,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         checkout_root = Path(allocation["path"])
         if not _inside(manifest["path"], checkout_root):
             result["reasons"].append("unsafe-path")
+        restored = None
         if resume:
             repository = Path(manifest["snapshot"]["repositoryPath"])
             try:
@@ -2411,7 +2238,8 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
             if record is None:
                 result["eligible"] = not result["reasons"]
                 return result
-            _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed)
+            restored = _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed,
+                                        state_dir=state_dir, allowed=tuple(allowed or ()))
         try:
             actual = inspect(str(checkout_root))
         except BoardError as error:
@@ -2426,7 +2254,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
                 result["reasons"].append("identity-changed")
         try:
             _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed,
-                           result, allowed=tuple(allowed or ()))
+                           result, state_dir=state_dir, allowed=tuple(allowed or ()), observation=restored)
         except BoardError:
             # The registered owner of this exact path may complete the same removal
             # while its eligibility is still being proven. The checkout then holds no
@@ -2441,7 +2269,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         return result
 
 
-def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, allowed=()) -> None:
+def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, state_dir, allowed=(), observation=None) -> None:
     """Fill one cleanup view with the worktree, seal and unsealed-change proof.
 
     ``allowed`` carries the exact paths earlier Host decisions already promoted on
@@ -2482,7 +2310,7 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
 
     if not isinstance(sealed, dict) or not isinstance(sealed.get("snapshot"), dict):
         try:
-            _verify(manifest, require_unchanged=True)
+            _verify(manifest, state_dir=state_dir, require_unchanged=True, observation=observation)
         except BoardError as error:
             if error.code == "WORKSPACE_GIT_UNKNOWN":
                 raise
@@ -2509,13 +2337,15 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
     if not fixed_refs_match(True):
         result["reasons"].append("sealed-output-invalid")
         return
-    observation = _observe(checkout_root, manifest["snapshot"]["executionSelectors"])
+    if observation is None:
+        observation = _observe(checkout_root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir,
+                               capture=[*manifest["writeScope"], *allowed])
     if observation["fingerprint"] == snapshot.get("observationSha256"):
         return
     unsealed = []
     try:
         entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation,
-                                                                           allowed_paths=allowed, write=False)
+                                                                           allowed_paths=allowed)
         sealed_entries = _entries(repository, sealed["tree"])
         unsealed = sorted(path for path in entries_now.keys() | sealed_entries.keys()
                           if entries_now.get(path) != sealed_entries.get(path))
@@ -2537,10 +2367,10 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
     """Prove deletion of one checkout without restoring an interrupted removal.
 
     A missing gitfile can be the result of ``git worktree remove`` stopping
-    halfway through. In that state only surviving files are compared with
-    retained Git trees; missing files are allowed, but an added or changed file
-    keeps the checkout in place. The original registration and lock still have
-    to prove the exact physical allocation.
+    halfway through. Compare surviving tracked and nonignored untracked paths
+    with retained Git trees; ignored caches stay outside this observation.
+    Missing files are allowed, but an added or changed managed file keeps the
+    checkout in place. Registration and lock still prove the physical allocation.
     """
     with _errors():
         _validate_manifest(manifest)
@@ -2595,29 +2425,17 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
 
         # The registration is still bound to this allocation, but Git removed
         # its gitfile. Never write it back merely to complete deletion.
-        fmt = _line(repository, "rev-parse", "--show-object-format")
-        surviving = {}
-        def collect(directory):
-            for entry in os.scandir(directory):
-                path = Path(entry.path)
-                relative = path.relative_to(checkout).as_posix()
-                if relative == ".git":
-                    continue
-                if entry.is_dir(follow_symlinks=False):
-                    collect(path)
-                else:
-                    value = _file(checkout, relative)
-                    if value is None:
-                        raise BoardError("WORKSPACE_CHANGED", "A checkout file vanished during deletion proof")
-                    surviving[relative] = [value[0], _blob_oid(value[1], fmt)]
-        collect(checkout)
         trees = [item["tree"] for item in candidates if
                  _line(repository, "rev-parse", item["commit"] + "^{tree}") == item["tree"]]
         trees.append(manifest["inputTree"])
+        expected_trees = [_entries(repository, tree) for tree in dict.fromkeys(trees)]
+        capture = sorted({path for expected in expected_trees for path in expected})
+        observed = _observe(checkout, [], state_dir=state_dir, git_dir=_git_dir, capture=capture)
+        surviving = observed["tracked"] | observed["untrackedEntries"]
+        unknown = observed["untracked"].keys() - observed["untrackedEntries"].keys()
         differences = []
-        for tree in dict.fromkeys(trees):
-            expected = _entries(repository, tree)
-            differences = [path for path, value in surviving.items() if expected.get(path) != value]
+        for expected in expected_trees:
+            differences = sorted(unknown | {path for path, value in surviving.items() if expected.get(path) != value})
             if not differences:
                 return {"reasons": [], "resume": True}
         return {"reasons": ["unsealed-changes"], "unsealedPaths": sorted(differences), "resume": True}
@@ -2654,6 +2472,7 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) ->
                    "checkoutId": manifest["checkoutId"], "alreadyRemoved": True}
         if not _path_present(checkout_root):
             return removal
+        restored = None
         if resume:
             repository = Path(manifest["snapshot"]["repositoryPath"])
             record, git_dir = _cleanup_resume_registration(repository, checkout_root, allocation, manifest)

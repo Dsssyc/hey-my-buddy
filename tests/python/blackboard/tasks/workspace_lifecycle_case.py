@@ -198,6 +198,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         checkout = Path(manifest["path"])
         for number in range(file_count):
             native_path(checkout / name("old", number)).rename(native_path(checkout / name("new", number)))
+        renamed_bytes = {number: native_path(checkout / name("new", number)).read_bytes()
+                         for number in range(file_count)}
         sealed = workspace_module.seal(self.directory, manifest, run_id,
                                        claimed["claim"]["attempt"]["attemptId"])
         expected = sorted(str(name(kind, number)).replace(os.sep, "/")
@@ -278,7 +280,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(cleanup["unsealedPaths"], sorted(str(name("new", number)).replace(os.sep, "/")
                                                        for number in range(file_count)))
         for number in range(file_count):
-            native_path(checkout / name("new", number)).write_text(f"file {number}\n", encoding="utf-8", newline="\n")
+            native_path(checkout / name("new", number)).write_bytes(renamed_bytes[number])
         self.assertTrue(self.reclaim(board, self.view(board, run_id))["removed"])
         self.assertFalse(checkout.exists())
         for path, original_bytes in historical_bytes.items():
@@ -397,7 +399,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         second_manifest = second['claim']['turn']['input']['executionWorkspace']
         successful_root = private_dirs.ensure_private_dir(
             private_dirs.attempt_root(board.directory, 'dsh', run_id, second_id))
-        (successful_root / 'thread-notifications.json').write_text('successful evidence', encoding="utf-8", newline="\n")
+        native_path(successful_root / 'thread-notifications.json').write_text('successful evidence', encoding="utf-8", newline="\n")
         (checkout / 'tracked.txt').write_text('completed after retry\n', encoding="utf-8", newline="\n")
         second_seal = workspace_module.seal(self.directory, second_manifest, run_id, second_id)
         self.finish_turn(board, second, second_seal, nonce='q' * 16)

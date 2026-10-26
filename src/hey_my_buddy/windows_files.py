@@ -1,4 +1,4 @@
-"""Windows handle operations shared by workspace and private path policies.
+"""Windows handle operations for private paths and junctions.
 
 Security dependencies load only when a Windows boundary is used.
 """
@@ -6,9 +6,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
-import ntpath
 import os
-from pathlib import Path
 import struct
 
 from .errors import BoardError
@@ -28,32 +26,9 @@ FILE_ATTRIBUTE_NORMAL = 0x80
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
 FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
-IO_REPARSE_TAG_SYMLINK = 0xA000000C
 IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003
 FILE_TYPE_DISK = 1
-FSCTL_GET_REPARSE_POINT = 0x000900A8
 FSCTL_SET_REPARSE_POINT = 0x000900A4
-
-
-def _link_with_print_name(raw, name):
-    """Keep the OS's native substitute path and the Git tree's original text."""
-    tag, _, _, offset, size, _, _, flags = struct.unpack_from("<IHHHHHHI", raw)
-    substitute = raw[20 + offset:20 + offset + size]
-    display = name.encode("utf-16-le")
-    body = substitute + b"\0\0" + display + b"\0\0"
-    return struct.pack("<IHHHHHHI", tag, 12 + len(body), 0, 0, len(substitute),
-                       len(substitute) + 2, len(display), flags) + body
-
-
-def _link_print_name(raw):
-    if len(raw) < 20:
-        raise OSError("invalid symbolic-link reparse data")
-    tag, length, _, _, _, offset, size, _ = struct.unpack_from("<IHHHHHHI", raw)
-    start = 20 + offset
-    if (tag != IO_REPARSE_TAG_SYMLINK or length < 12 or length + 8 > len(raw) or
-            not size or offset % 2 or size % 2 or start + size > length + 8):
-        raise OSError("invalid symbolic-link print name")
-    return raw[start:start + size].decode("utf-16-le")
 
 
 class _RenameInfo(ctypes.Structure):
@@ -98,33 +73,10 @@ class WindowsFileAPI:
                           FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS |
                           FILE_ATTRIBUTE_NORMAL, None)
 
-    def open_dir(self, path):
-        return self._open(path, GENERIC_READ | 0x00020000, OPEN_EXISTING)
-
-    def open_leaf(self, path, *, action="read"):
-        access, disposition = {
-            "read": (GENERIC_READ, OPEN_EXISTING),
-            "inspect": (FILE_READ_ATTRIBUTES, OPEN_EXISTING),
-            "create": (GENERIC_WRITE, CREATE_NEW),
-            "lock": (GENERIC_READ | GENERIC_WRITE, OPEN_ALWAYS),
-            "lock-existing": (GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING),
-            "delete": (DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING),
-        }[action]
-        return self._open(path, access, disposition)
-
     def info(self, handle):
         tag = self._call(self.win32file.GetFileInformationByHandleEx,
                          handle, self.win32file.FileAttributeTagInfo)
         return tag["FileAttributes"], tag["ReparseTag"]
-
-    def final_path(self, handle):
-        return self._call(self.win32file.GetFinalPathNameByHandle, handle, 0)
-
-    def name(self, handle):
-        return ntpath.basename(self.final_path(handle).rstrip("\\"))
-
-    def long_path(self, path):
-        return self._call(self.win32file.GetLongPathName, windows_path(path))
 
     def file_type(self, handle):
         return self._call(self.win32file.GetFileType, handle)
@@ -159,32 +111,6 @@ class WindowsFileAPI:
 
     def mkdir(self, path):
         os.mkdir(windows_path(path))
-
-    def readlink(self, handle):
-        # Python's Windows os.readlink returns the substitute path, which can
-        # add a \\?\ prefix. Git stores the original print-name text.
-        raw = self._call(self.win32file.DeviceIoControl,
-                         handle, FSCTL_GET_REPARSE_POINT, None, 16 * 1024)
-        return _link_print_name(raw)
-
-    def symlink(self, target, path, *, directory=False):
-        native_target = target.replace("/", "\\")
-        os.symlink(native_target, windows_path(path), target_is_directory=directory)
-        if native_target == target:
-            return
-        # NTFS follows the substitute name verbatim: '/' in that name creates
-        # an unreadable link. Preserve Git's spelling in the print name instead.
-        handle = self._open(path, GENERIC_READ | GENERIC_WRITE | DELETE, OPEN_EXISTING)
-        try:
-            raw = self._call(self.win32file.DeviceIoControl,
-                             handle, FSCTL_GET_REPARSE_POINT, None, 16 * 1024)
-            self._call(self.win32file.DeviceIoControl, handle, FSCTL_SET_REPARSE_POINT,
-                       _link_with_print_name(raw, target), None)
-        except BaseException:
-            self.delete(handle)
-            raise
-        finally:
-            self.close(handle)
 
     def junction(self, target, path):
         """Store an ordinary absolute target, extending only file API paths."""

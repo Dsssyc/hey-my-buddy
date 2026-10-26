@@ -367,7 +367,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 self.rejected(board)
         self.assertEqual(caught.exception.code, 'ADMISSION_FAILED')
         self.assertTrue(Path(manifest['checkoutRoot']).exists())
-        workspace.verify(manifest)
+        workspace.verify(manifest, state_dir=self.directory)
 
     def test_existing_source_is_preserved_on_rejection(self):
         board = self.board()
@@ -436,22 +436,24 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertTrue((self.allocation() / 'checkout').exists())
         self.assertTrue(self.rejected(board)['duplicate'])
 
-    def test_partial_materialization_failure_revokes_new_checkout(self):
+    def test_failed_git_checkout_revokes_new_checkout(self):
         board = self.board()
-        original = workspace._materialize
-        def incomplete(target, entries):
-            original(target, entries)
-            raise BoardError('MATERIALIZATION_FAILED', 'controlled failure after writing')
-        with patch.object(workspace, '_materialize', side_effect=incomplete):
+        original = workspace._git
+        def incomplete(root, *args, **kwargs):
+            result = original(root, *args, **kwargs)
+            if args[:2] == ('reset', '--hard'):
+                raise BoardError('CHECKOUT_FAILED', 'controlled failure after Git wrote the checkout')
+            return result
+        with patch.object(workspace, '_git', side_effect=incomplete):
             with self.assertRaises(BoardError) as caught:
                 self.rejected(board)
-        self.assertEqual(caught.exception.code, 'MATERIALIZATION_FAILED')
+        self.assertEqual(caught.exception.code, 'CHECKOUT_FAILED')
         self.assertTrue(caught.exception.details['preparationCleanup']['removed'])
         self.assertFalse((self.allocation() / 'checkout').exists())
         self.assertTrue((self.allocation() / 'input.json').exists())
         self.assert_no_registration(board)
 
-    def test_failure_after_materialization_revokes_new_checkout(self):
+    def test_failure_after_checkout_revokes_new_checkout(self):
         board = self.board()
         original = workspace._write_once
         def failed_manifest(path, data):
@@ -523,19 +525,22 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertIn('unsealed-changes', error.details['submissionCleanup']['reasons'])
         self.assert_no_registration(board)
 
-    def test_read_tree_failure_revokes_materialized_checkout(self):
+    def test_reset_failure_revokes_new_checkout(self):
         board = self.board()
         original_git = workspace._git
-        error = BoardError('WORKSPACE_GIT_ERROR', 'controlled read-tree failure', argv=['git', 'read-tree'])
+        error = workspace._git_failure(['git', 'reset'], 'reset', returncode=128,
+                                       stderr=b'controlled checkout failure')
         def read_tree_failure(root, *args, **kwargs):
-            if args[0] == 'read-tree' and Path(root).name == 'checkout':
+            if args[0] == 'reset' and Path(root).name == 'checkout':
                 raise error
             return original_git(root, *args, **kwargs)
         with patch.object(workspace, '_git', side_effect=read_tree_failure):
             with self.assertRaises(BoardError) as caught:
                 self.rejected(board)
-        self.assertIs(caught.exception, error)
-        self.assertTrue(error.details['preparationCleanup']['removed'])
+        self.assertEqual(caught.exception.code, 'WORKSPACE_UNSUPPORTED')
+        self.assertIs(caught.exception.__cause__, error)
+        self.assertTrue(caught.exception.details['paths'])
+        self.assertTrue(caught.exception.details['preparationCleanup']['removed'])
         self.assertFalse((self.allocation() / 'checkout').exists())
         self.assert_no_registration(board)
 

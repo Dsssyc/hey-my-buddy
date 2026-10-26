@@ -14,7 +14,7 @@ from hey_my_buddy.buddy.roles.router_input import verify as verify_frozen_input
 from hey_my_buddy.paths import native_path
 
 
-def prepare_input(manifest, directory, *, deadline):
+def prepare_input(manifest, directory, *, state_dir, deadline):
     from hey_my_buddy.buddy.roles.router_input import digest
     root = directory / "mock-frozen-input"
     native_path(root).mkdir(mode=0o700, parents=True)
@@ -22,8 +22,8 @@ def prepare_input(manifest, directory, *, deadline):
     return root, digest(root, deadline=deadline)
 
 
-def verify_input(manifest, root, expected, *, deadline):
-    result = verify_frozen_input(None, root, expected, deadline=deadline)
+def verify_input(manifest, root, expected, *, state_dir, deadline):
+    result = verify_frozen_input(None, root, expected, state_dir=state_dir, deadline=deadline)
     result["manifestSha256"] = (manifest or {}).get("manifestSha256")
     return result
 

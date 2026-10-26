@@ -137,7 +137,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         for _, run_id in fixture['stableIds'].items():
             row = connection.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
             manifest = json.loads(row[0])
-            workspace.verify(manifest)
+            workspace.verify(manifest, state_dir=fixture['state'])
             for artifact in connection.execute('SELECT * FROM workflow_artifacts WHERE run_id=?', (run_id,)):
                 if artifact['kind'] == 'output':
                     output = json.loads(artifact['manifest_json'])
@@ -197,8 +197,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertNotEqual(m1['repositoryId'], m2['repositoryId'])
         self.assertNotEqual(m1['checkoutId'], m2['checkoutId'])
         self.assertNotEqual(m1['manifestSha256'], m2['manifestSha256'])
-        workspace.verify(m1)
-        workspace.verify(m2)
+        workspace.verify(m1, state_dir=first['state'])
+        workspace.verify(m2, state_dir=second['state'])
         for field in ('outcome', 'provenance', 'promptSha256'):
             query = f"SELECT json_extract(result_json,'$.result.turn.{field}') FROM attempts ORDER BY attempt_id"
             self.assertEqual([tuple(row) for row in c1.execute(query)], [tuple(row) for row in c2.execute(query)])

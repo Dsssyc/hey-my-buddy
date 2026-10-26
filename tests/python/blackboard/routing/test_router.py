@@ -248,19 +248,19 @@ class RouterInputTests(unittest.TestCase):
         manifest = self.prepare(kind='existing')
         attempt = self.root / 'attempt'
         attempt.mkdir()
-        mirror, fingerprint = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120)
+        mirror, fingerprint = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
         self.assertNotEqual(mirror, self.repo)
         self.assertEqual((mirror / 'src/file.txt').read_text(encoding="utf-8"), 'dirty frozen input')
         self.assertFalse((mirror / 'secret-cache').exists())
         self.assertFalse((mirror / '.git').exists())
-        self.assertTrue(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120)['unchanged'])
+        self.assertTrue(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120, state_dir=self.state)['unchanged'])
         (self.repo / 'src/file.txt').write_text('Host changed after Router start', encoding="utf-8", newline="\n")
         self.assertEqual((mirror / 'src/file.txt').read_text(encoding="utf-8"), 'dirty frozen input')
-        self.assertEqual(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120)['code'], 'router-input-changed')
+        self.assertEqual(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120, state_dir=self.state)['code'], 'router-input-changed')
         next_attempt = self.root / 'next-attempt'
         next_attempt.mkdir()
         with self.assertRaises(BoardError) as changed:
-            router_input.prepare(manifest, next_attempt, deadline=time.monotonic() + 120)
+            router_input.prepare(manifest, next_attempt, deadline=time.monotonic() + 120, state_dir=self.state)
         self.assertEqual(changed.exception.code, 'router-input-changed')
         self.assertFalse((next_attempt / 'frozen-input').exists())
 
@@ -276,7 +276,7 @@ class RouterInputTests(unittest.TestCase):
         real_popen, real_run = router_input.subprocess.Popen, router_input.subprocess.run
         with mock.patch.object(router_input.subprocess, 'Popen', wraps=real_popen) as popen, \
                 mock.patch.object(router_input.subprocess, 'run', wraps=real_run) as run:
-            mirror, _ = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120)
+            mirror, _ = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
         # subprocess.run is built on Popen, so count only the blob readers.
         readers = [call for call in popen.call_args_list if 'cat-file' in call.args[0]]
         self.assertEqual(len(readers), 1)
@@ -288,7 +288,7 @@ class RouterInputTests(unittest.TestCase):
         attempt = self.root / 'broken-attempt'
         attempt.mkdir()
         with mock.patch.object(router_input.workspace, 'verify'), self.assertRaises(BoardError):
-            router_input.prepare(broken, attempt, deadline=time.monotonic() + 120)
+            router_input.prepare(broken, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
         self.assertFalse((attempt / 'frozen-input').exists())
 
     def test_git_replace_cannot_substitute_frozen_blob_contents(self):
@@ -299,7 +299,7 @@ class RouterInputTests(unittest.TestCase):
         manifest = self.prepare(kind='existing')
         attempt = self.root / 'replace-attempt'
         attempt.mkdir()
-        mirror, _ = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120)
+        mirror, _ = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
         self.assertEqual((mirror / 'src/file.txt').read_bytes(), b'base\n')
 
     def test_frozen_symlink_cycle_has_a_bounded_input_error(self):
@@ -311,7 +311,7 @@ class RouterInputTests(unittest.TestCase):
         attempt = self.root / 'loop-attempt'
         attempt.mkdir()
         with self.assertRaises(BoardError) as caught:
-            router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120)
+            router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
         self.assertEqual(caught.exception.code, 'router-input-unavailable')
 
     def test_changed_router_copy_and_escaping_link_are_rejected(self):
@@ -319,17 +319,17 @@ class RouterInputTests(unittest.TestCase):
         manifest = self.prepare(kind='existing')
         attempt = self.root / 'attempt'
         attempt.mkdir()
-        mirror, fingerprint = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120)
+        mirror, fingerprint = router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
         (mirror / 'src/file.txt').chmod(0o644)
         (mirror / 'src/file.txt').write_text('unexpected native write', encoding="utf-8", newline="\n")
-        self.assertFalse(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120)['unchanged'])
+        self.assertFalse(router_input.verify(manifest, mirror, fingerprint, deadline=time.monotonic() + 120, state_dir=self.state)['unchanged'])
         (self.repo / 'src/escape').symlink_to(self.root / 'outside')
         self.git('add', 'src/escape')
         manifest = self.prepare(request='escape', kind='existing')
         attempt = self.root / 'escape-attempt'
         attempt.mkdir()
         with self.assertRaises(BoardError):
-            router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120)
+            router_input.prepare(manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
 
 
 if __name__ == '__main__':

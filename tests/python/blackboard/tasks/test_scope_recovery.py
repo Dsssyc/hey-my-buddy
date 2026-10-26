@@ -364,7 +364,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         before = self.state()
         # The Host re-observes the changed site; the compare-and-swap then refuses
         # only the path that moved and preserves everything else.
-        current_fingerprint = workspace_module._stable_observation(checkout, [])["fingerprint"]
+        current_fingerprint = workspace_module._observe(checkout, [], state_dir=self.directory)["fingerprint"]
         with self.assertRaises(BoardError) as raised:
             self.resolve(board, view, conflict, "restore", paths=["outside.txt", "tracked.txt"],
                          fingerprint=current_fingerprint)

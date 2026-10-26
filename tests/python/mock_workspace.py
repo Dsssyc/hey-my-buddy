@@ -157,7 +157,7 @@ class MockWorkspace:
         self.manifests[request_id] = manifest
         return dict(manifest)
 
-    def verify(self, manifest: dict, *, require_unchanged: bool = True) -> dict:
+    def verify(self, manifest: dict, *, state_dir: Path, require_unchanged: bool = True) -> dict:
         self.verify_calls.append(dict(manifest))
         self._validate_manifest(manifest)
         if require_unchanged and self.dirty:

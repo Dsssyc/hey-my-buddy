@@ -1,5 +1,4 @@
 """Bounded diagnostics for every workspace Git subprocess failure path."""
-import io
 from pathlib import Path
 import subprocess
 import tempfile
@@ -19,7 +18,6 @@ class GitErrorTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.stdout = b"o" * 3000 + b"stdout-tail\xff"
         self.stderr = b"e" * 3000 + b"stderr-tail\xfe"
-        self.oid = workspace._blob_oid(b"payload", "sha1")
 
     def failure(self, callback):
         with self.assertRaises(BoardError) as caught:
@@ -54,10 +52,6 @@ class GitErrorTests(unittest.TestCase):
                     run.return_value = subprocess.CompletedProcess([], 0, b"ok", b"")
                     self.assertEqual(entry(self.root, "status"), b"ok")
                     self.assertEqual(run.call_args.kwargs["creationflags"], 0x08000000)
-            state, start = self.importer(code=0, marks=f":1 {self.oid}\n".encode())
-            with patch.object(workspace.subprocess, "Popen", side_effect=start) as popen:
-                workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state")
-            self.assertEqual(popen.call_args.kwargs["creationflags"], 0x08000000)
 
     def test_nonzero_entries_return_actual_argv_and_both_bounded_outputs(self):
         for entry in self.run_entries():
@@ -123,128 +117,6 @@ class GitErrorTests(unittest.TestCase):
             self.assertNotIn("private-input", str(error.payload()))
             self.assertNotIn("private-environment", str(error.payload()))
 
-    def importer(self, *, code=128, broken=False, timed_out=False, marks=None):
-        """Drive the real stream/capture code with a controlled child handle."""
-        state = {}
-
-        class Child:
-            returncode = None
-            killed = False
-
-            def __init__(self):
-                self.wait_calls = 0
-
-            def poll(self):
-                return self.returncode
-
-            def kill(self):
-                self.killed = True
-
-            def communicate(self, input=None, timeout=None):
-                self.wait_calls += 1
-                if broken and input is not None:
-                    raise BrokenPipeError("controlled broken pipe")
-                if timed_out and timeout is not None:
-                    failure = subprocess.TimeoutExpired(state["command"], timeout)
-                    state["failure"] = failure
-                    raise failure
-                self.returncode = -9 if self.killed else code
-                return None, None
-
-        child = Child()
-        state["child"] = child
-
-        def start(command, *, stdout, stderr, **kwargs):
-            state["command"] = command
-            state["environment"] = kwargs["env"]
-            stdout.write(self.stdout)
-            stderr.write(self.stderr)
-            if marks is not None:
-                marks_path = next(item.split("=", 1)[1] for item in command if item.startswith("--export-marks="))
-                Path(marks_path).write_bytes(marks)
-            return child
-
-        return state, start
-
-    def test_fast_import_nonzero_precedes_missing_marks_and_reports_separate_outputs(self):
-        state, start = self.importer()
-        with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
-        self.diagnostics(error, state["command"], "fast-import")
-        self.assertEqual(error.details["returncode"], 128)
-        self.assertIsNone(error.__cause__)
-
-    def test_fast_import_launch_oserror_reports_argv_and_preserves_cause(self):
-        failure = OSError("controlled spawn failure")
-        with patch.object(workspace.subprocess, "Popen", side_effect=failure) as start:
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
-        self.diagnostics(error, start.call_args.args[0], "fast-import", output=False)
-        self.assertIs(error.__cause__, failure)
-        self.assertIn("controlled spawn failure", error.details["reason"])
-
-    def test_fast_import_broken_pipe_reaps_child_and_keeps_diagnostics_and_cause(self):
-        state, start = self.importer(broken=True)
-        with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
-        self.diagnostics(error, state["command"], "fast-import")
-        self.assertIsInstance(error.__cause__, BrokenPipeError)
-        self.assertTrue(state["child"].killed)
-        self.assertEqual(state["child"].wait_calls, 2)
-        self.assertEqual(error.details["returncode"], -9)
-
-    def test_fast_import_timeout_reaps_child_and_keeps_diagnostics_and_cause(self):
-        state, start = self.importer(timed_out=True)
-        with patch.object(workspace.subprocess, "Popen", side_effect=start), self.assertRaises(BoardError) as caught:
-            workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state")
-        error = caught.exception
-        self.assertEqual(error.code, 'WORKSPACE_GIT_UNKNOWN')
-        self.diagnostics(error, state["command"], "fast-import")
-        self.assertIs(error.__cause__, state["failure"])
-        self.assertTrue(state["child"].killed)
-        self.assertEqual(state["child"].wait_calls, 2)
-        self.assertEqual(state["failure"].timeout, workspace._GIT_TIMEOUT_SECONDS)
-        self.assertEqual(state["environment"]["GIT_NO_LAZY_FETCH"], "1")
-
-    def test_fast_import_missing_marks_after_success_still_names_the_command(self):
-        state, start = self.importer(code=0)
-        with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
-        self.diagnostics(error, state["command"], "fast-import")
-        self.assertIsInstance(error.__cause__, FileNotFoundError)
-
-    def test_fast_import_incorrect_marks_still_names_the_command(self):
-        state, start = self.importer(code=0, marks=b":1 wrong-object-id\n")
-        with patch.object(workspace.subprocess, "Popen", side_effect=start):
-            error = self.failure(lambda: workspace._write_objects(self.root, {self.oid: b"payload"}, state_dir=self.root / "state"))
-        self.diagnostics(error, state["command"], "fast-import")
-        self.assertEqual(error.details["expected"], self.oid)
-
-    def test_batch_object_response_failures_report_argv_and_bounded_stdout(self):
-        payloads = (self.oid.encode() + b" missing\n" + b"x" * 3000,
-                    self.oid.encode() + b" blob 1\nx\n" + b"x" * 3000)
-        for payload in payloads:
-            with self.subTest(payload=payload[:70]), patch.object(workspace, "_git", return_value=payload):
-                error = self.failure(lambda: workspace._batch_objects(self.root, [self.oid]))
-                command, _env = workspace._git_command(self.root, "cat-file", "--batch")
-                self.diagnostics(error, command, "cat-file", output=False)
-                self.assertEqual(error.details["stdout"], payload.decode(errors="replace")[-2000:])
-                self.assertTrue(error.details["stdoutTruncated"])
-                self.assertEqual(error.details["returncode"], 0)
-
-    def test_stream_diagnostics_read_only_a_bounded_tail(self):
-        class RecordingStream(io.BytesIO):
-            read_size = None
-
-            def read(self, *args):
-                value = super().read(*args)
-                self.read_size = len(value)
-                return value
-
-        stream = RecordingStream(b"a" * 100000 + "尾".encode() * 2000)
-        text, truncated = workspace._git_diagnostic(stream)
-        self.assertEqual(text, "尾" * 2000)
-        self.assertTrue(truncated)
-        self.assertLessEqual(stream.read_size, 8000)
 
 
 if __name__ == "__main__":
