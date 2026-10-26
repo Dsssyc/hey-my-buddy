@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -188,7 +189,9 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_portable_roots_rebind_stable_identities_without_changing_native_history(self):
         first, c1 = self.restored('first state')
-        second, c2 = self.restored('第二个 "私有" <fixture-root> state')
+        name = ('第二个 “私有” fixture-root state' if os.name == 'nt'
+                else '第二个 "私有" <fixture-root> state')
+        second, c2 = self.restored(name)
         _, m1, _ = self.sample(first, c1)
         _, m2, _ = self.sample(second, c2)
         self.assertNotEqual(m1['repositoryId'], m2['repositoryId'])

@@ -18,6 +18,7 @@ gone with its backend; the two old withdrawal flows are mapped in
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -39,6 +40,15 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
             return
         super().setUp()
 
+    def assert_private_ipc(self, first, second):
+        if os.name == 'nt':
+            self.assertIsNone(first['ipcRoot'])
+            self.assertIsNone(second['ipcRoot'])
+            self.assertTrue(first['ipcNamespace'])
+            self.assertEqual(first['ipcNamespace'], second['ipcNamespace'])
+        else:
+            self.assertNotEqual(first['ipcRoot'], second['ipcRoot'])
+
     def test_private_fixture_states_keep_concurrent_inquiry_bridges_separate(self):
         from buddy.harnesses.zcode.fixtures.checkpoint_domain import CheckpointDomain
 
@@ -48,8 +58,9 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         for domain in (own, peer):
             self.assertTrue(domain.command({'op': 'live'})['live'])
         self.assertNotEqual(own.live['ownerPid'], peer.live['ownerPid'])
-        for key in ('state', 'runtime', 'home', 'ipcRoot'):
+        for key in ('state', 'runtime', 'home'):
             self.assertNotEqual(own.live[key], peer.live[key], key)
+        self.assert_private_ipc(own.live, peer.live)
         self.assertNotEqual(own.live['attemptId'], peer.live['attemptId'])
         self.assertNotEqual(own.live['controllerPid'], peer.live['controllerPid'])
         own_receipt = own.command({'op': 'ask', 'id': 'own-question', 'question': 'Answer this private fixture.'})
@@ -232,8 +243,9 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         # its own authenticated channel and journal even with another suite live.
         for domain in attempts:
             self.assertTrue(domain.command({'op': 'live'})['live'])
-        for key in ('ownerPid', 'attemptId', 'controllerPid', 'ipcRoot', 'state', 'runtime', 'home'):
+        for key in ('ownerPid', 'attemptId', 'controllerPid', 'state', 'runtime', 'home'):
             self.assertNotEqual(attempts[0].live[key], attempts[1].live[key], key)
+        self.assert_private_ipc(attempts[0].live, attempts[1].live)
         for domain in attempts:
             domain.command({'op': 'release'})
         for domain in attempts:

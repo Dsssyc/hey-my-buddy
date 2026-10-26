@@ -8,6 +8,8 @@ import time
 import tomllib
 from pathlib import Path
 
+sys.stdin.reconfigure(encoding="utf-8")
+
 from protocol_items import item_frames, session_frames
 
 

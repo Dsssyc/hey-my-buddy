@@ -37,6 +37,7 @@ ROOT = {"sessionId": "s-1", "turnId": "t-1"}
 FAKE = '''#!/usr/bin/env python3
 import json, os, sys, time
 from pathlib import Path
+sys.stdin.reconfigure(encoding='utf-8')
 if '--version' in sys.argv:
     print('fixture-0.16.9'); sys.exit(0)
 case = os.environ.get('HMB_ZCODE_TEST_CASE', 'ok')

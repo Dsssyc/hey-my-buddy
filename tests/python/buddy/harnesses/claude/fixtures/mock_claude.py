@@ -9,7 +9,6 @@ foreign sessions, replays, conflicts and the 128-event overflow.
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 DEFAULT_MODELS = [
@@ -43,11 +42,8 @@ def write_state(update):
     path.parent.mkdir(parents=True, exist_ok=True)
     # Tests poll while the mock is running. Publish a complete old/new snapshot
     # instead of exposing the empty interval created by write_text truncation.
-    with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, prefix=path.name+".", delete=False,
-                                     encoding="utf-8", newline="\n") as stream:
-        json.dump(state, stream)
-        temporary = stream.name
-    os.replace(temporary, path)
+    from hey_my_buddy.private_files import publish_bytes
+    publish_bytes(path, json.dumps(state).encode("utf-8"))
 
 
 def argv_value(flag):

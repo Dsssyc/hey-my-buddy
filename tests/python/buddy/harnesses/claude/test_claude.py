@@ -25,6 +25,7 @@ from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixtur
 from private_acl import assert_private_path
 
 from hey_my_buddy.paths import native_path
+from hey_my_buddy.private_files import read_text
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.roles import controller, run_execution, turn_io
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
@@ -138,7 +139,7 @@ class ClaudeAvailabilityTests(ClaudeFixtureCase):
 
 
     def fixture_state(self):
-        return json.loads((self.root / "fixture.json").read_text(encoding="utf-8"))
+        return json.loads(read_text(self.root / "fixture.json"))
 
     def fixture_runs(self):
         return self.fixture_state()["runs"]
@@ -169,7 +170,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         return self.executor.collect(handle, context)
 
     def fixture_state(self):
-        return json.loads((self.root / "fixture.json").read_text(encoding="utf-8"))
+        return json.loads(read_text(self.root / "fixture.json"))
 
     def control(self, context):
         """The role's private control binding of one attempt."""
@@ -178,8 +179,8 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
     def stored_request(self, context):
         return self.last_handle.request.to_payload()
 
-    def wait_for_native_user_turn(self, timeout=10):
-        """Block until the fixture has consumed the turn's user frame, bounded.
+    def wait_for_native_user_turn(self, handle):
+        """Wait for the fixture's user frame or the controller's actual exit.
 
         Cancelling before the controller installed its termination handler kills
         the controller instead of interrupting the native child, so a
@@ -187,13 +188,13 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         fixture records ``userTurns`` when it reads the user frame and only then
         parks for the ``hang`` case.
         """
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        while True:
             if (self.root / "fixture.json").exists() and self.fixture_state().get("userTurns") == 1:
                 return
-            time.sleep(.05)
-        self.fail(f"the claude fixture never recorded one user turn within {timeout}s "
-                  f"(fixture state: {self.fixture_state() if (self.root / 'fixture.json').exists() else 'no fixture.json'})")
+            if handle.wait(.05) is not None:
+                self.fail(f"the claude controller ended before its fixture recorded a user turn: "
+                          f"result={handle.result}; fixture state="
+                          f"{self.fixture_state() if (self.root / 'fixture.json').exists() else 'no fixture.json'}")
 
     def test_completed_turn_uses_the_preallocated_session_and_never_resumes(self):
         context = self.context()
@@ -309,7 +310,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.wait_for_native_user_turn()
+        self.wait_for_native_user_turn(handle)
         self.executor.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(15))
         outcome = self.executor.collect(handle, context)
@@ -326,7 +327,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.wait_for_native_user_turn()
+        self.wait_for_native_user_turn(handle)
         controller.worker_stop(self.executor, handle, stop_initiator=initiator,
                                grace_deadline=time.monotonic() + 300 if initiator == "host" else None)
         self.assertIsNotNone(handle.wait(15), "Claude fixture controller did not exit after force stop")
@@ -362,7 +363,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.executor.prepare(context)
         handle = self.executor.start(context)
         self.addCleanup(lambda: (handle.terminate(grace_seconds=.2), handle.wait(15)) if not handle.finished else None)
-        self.wait_for_native_user_turn()
+        self.wait_for_native_user_turn(handle)
         self.executor.cancel(handle, grace_seconds=8)
         self.assertIsNotNone(handle.wait(15))
         outcome = self.executor.collect(handle, context)
