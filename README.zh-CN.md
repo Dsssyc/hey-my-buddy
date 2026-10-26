@@ -49,14 +49,14 @@
 hey-my-buddy 是一个共享的 agent skill，装在 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务与运行时在 `~/.local/share/hey-my-buddy` 之下（Windows 上是 `%LOCALAPPDATA%\hey-my-buddy`）。Claude Code 通过 `~/.claude/skills/hey-my-buddy` 这个链接找到它（Windows 上是一个 junction）。安装不改你的 `PATH`、shell 与 agent 设置。需要 [uv](https://docs.astral.sh/uv/)。
 
 ```sh
-uvx hey-my-buddy@0.54.0 install
+uvx hey-my-buddy@0.54.1 install
 ```
 
 也可以从这个仓库的检出构建 wheel 再安装：
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.54.0-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.54.1-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>

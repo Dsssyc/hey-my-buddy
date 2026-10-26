@@ -49,14 +49,14 @@ Micro tasks, decisions and results live on a local blackboard, a SQLite database
 hey-my-buddy is one shared agent skill at `~/.agents/skills/hey-my-buddy` that carries its own launcher, plus a private service and runtime under `~/.local/share/hey-my-buddy` (`%LOCALAPPDATA%\hey-my-buddy` on Windows). Claude Code finds the skill through a link at `~/.claude/skills/hey-my-buddy` (a junction on Windows). The install never changes your `PATH`, shell or agent settings. It needs [uv](https://docs.astral.sh/uv/).
 
 ```sh
-uvx hey-my-buddy@0.54.0 install
+uvx hey-my-buddy@0.54.1 install
 ```
 
 To install from a checkout of this repository instead, build the wheel and install it:
 
 ```sh
 uv build --wheel --out-dir dist
-uvx --from "$PWD/dist/hey_my_buddy-0.54.0-py3-none-any.whl" hey-my-buddy install
+uvx --from "$PWD/dist/hey_my_buddy-0.54.1-py3-none-any.whl" hey-my-buddy install
 ```
 
 <details>
