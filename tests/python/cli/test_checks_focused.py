@@ -111,7 +111,7 @@ class FocusedChecksTests(unittest.TestCase):
             patch.object(checks, "_windows_owned_processes",
                          return_value=([], ["fixture process observation incomplete"], []))
             if os.name == "nt" and process_table is None else contextlib.nullcontext(),
-            patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
+            patch.object(checks, "_open_file_pids", return_value=(set(), None, True, [])),
             contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors),
         ):
             try:
@@ -402,7 +402,7 @@ class SweepTests(unittest.TestCase):
                     if table is None else processes(*(process(pid, argv) for pid, argv in table)))
         output = io.StringIO()
         with (observer,
-              patch.object(checks, "_open_file_pids", return_value=(set(), None, True)),
+              patch.object(checks, "_open_file_pids", return_value=(set(), None, True, [])),
               patch.dict(os.environ, {"HMB_CHECKS_TMPDIR": str(self.directory)}),
               contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO())):
             with self.assertRaises(SystemExit) as result:

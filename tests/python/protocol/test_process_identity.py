@@ -105,6 +105,16 @@ class ProcessIdentityTests(unittest.TestCase):
             self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
         self.assertEqual(source.signals, [])
 
+    def test_denied_process_group_and_job_observations_remain_unknown(self):
+        for record, method in ((RECORD, 'group_id'), (RECORD, 'group_alive'), (WINDOWS_RECORD, 'open_job')):
+            for failure in (PermissionError('kernel denied'), OSError('query failed')):
+                with self.subTest(method=method, error=type(failure).__name__):
+                    source = Source(started_at=record['startedAt'])
+                    with mock.patch.object(source, method, side_effect=failure):
+                        self.assertEqual(identity.inspect_process_identity(record, source=source), 'unknown')
+                        self.assertEqual(identity.stop_orphan_process(record, source=source, settle_seconds=0), 'unknown')
+                    self.assertEqual(source.signals, [])
+
     def test_hard_stop_reverifies_identity_including_reuse_and_observation_failure(self):
         for failure in ("reused", "group-unreadable", "boot-changed", "absent"):
             source = Source()

@@ -30,6 +30,13 @@ def assert_released(test: unittest.TestCase, handles: list[int]) -> None:
             locking.unlock(fd)
 
 
+def write_service_endpoint(root: Path, *, pid=123, started='fixture-start', service_id='fixture-service') -> None:
+    path = root / 'control.json'
+    path.write_text(json.dumps({'address': 'ipc://fixture', 'token': 'fixture',
+                               'pid': pid, 'startedAt': started, 'serviceId': service_id}), encoding='utf-8')
+    path.chmod(0o600)
+
+
 class FixtureCleanupTests(unittest.TestCase):
     def test_daemon_fixture_cooperates_on_windows_and_keeps_posix_sigterm(self):
         for platform, fail_stop in (("nt", False), ("nt", True), ("posix", False)):
@@ -50,11 +57,11 @@ class FixtureCleanupTests(unittest.TestCase):
                 process.terminate.side_effect = lambda: events.append("terminate")
                 process.wait.side_effect = lambda **kwargs: events.append("wait")
                 try:
-                    support._confirmed_private_stops.add(fixture.directory.resolve())
+                    support._confirmed_private_stops[fixture.directory.resolve()] = (123, 'fixture-start', 'fixture-service')
                     with (patch.object(support, "os", wraps=os) as native,
                           patch.object(support.subprocess, "Popen", return_value=process),
                           patch("hey_my_buddy.protocol.rpc_config.configure_client"),
-                          patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture"}),
+                          patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture", "pid": 123, "startedAt": "fixture-start", "serviceId": "fixture-service"}),
                           patch("hey_my_buddy.protocol.transport._request", return_value={}),
                           patch.object(support, "stop_private_service", side_effect=cooperate)):
                         native.name = platform
@@ -139,7 +146,7 @@ class FixtureCleanupTests(unittest.TestCase):
         with private_state_dir() as root:
             with (patch.object(support, "os", wraps=os) as windows,
                   patch.object(support, "_lock_held", side_effect=[False, True, False, False, False]),
-                  patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture"}),
+                  patch("hey_my_buddy.protocol.transport._read_endpoint", return_value={"token": "fixture", "pid": 123, "startedAt": "fixture-start", "serviceId": "fixture-service"}),
                   patch("hey_my_buddy.protocol.transport._request", side_effect=ServiceError("UNAVAILABLE", "fixture lost reply"))):
                 windows.name = "nt"
                 with self.assertRaisesRegex(AssertionError, "stop reply unconfirmed"):
@@ -147,6 +154,7 @@ class FixtureCleanupTests(unittest.TestCase):
 
     def test_test_stop_confirmation_is_reused_while_windows_locks_are_releasing(self):
         with private_state_dir() as root:
+            write_service_endpoint(root)
             reply = {"stopped": True, "unresolvedAttempts": []}
             call = Mock(return_value=reply)
             self.assertIs(request_private_service_stop(root, call, drainSeconds=0), reply)
@@ -162,6 +170,7 @@ class FixtureCleanupTests(unittest.TestCase):
 
     def test_unconfirmed_test_stop_cannot_be_reused_as_a_confirmation(self):
         with private_state_dir() as root:
+            write_service_endpoint(root)
             for reply in ({"stopped": False}, {"stopped": True, "unresolvedAttempts": ["attempt"]}):
                 with self.subTest(reply=reply):
                     request_private_service_stop(root, Mock(return_value={"stopped": True}))
@@ -171,6 +180,7 @@ class FixtureCleanupTests(unittest.TestCase):
 
     def test_confirmed_stop_still_requires_windows_locks_to_release(self):
         with private_state_dir() as root:
+            write_service_endpoint(root)
             request_private_service_stop(root, Mock(return_value={"stopped": True}))
             with (patch.object(support, "os", wraps=os) as windows,
                   patch.object(support, "_lock_held", side_effect=lambda path: path.name == "board-owner.lock"),
@@ -178,6 +188,44 @@ class FixtureCleanupTests(unittest.TestCase):
                 windows.name = "nt"
                 with self.assertRaisesRegex(AssertionError, "still owns state"):
                     stop_private_service(root, timeout=0)
+
+    def test_confirmed_stop_does_not_cover_a_replacement_even_when_its_pid_is_reused(self):
+        for pid in (123, 456):
+            with self.subTest(pid=pid), private_state_dir() as root:
+                write_service_endpoint(root)
+                request_private_service_stop(root, Mock(return_value={'stopped': True}))
+                write_service_endpoint(root, pid=pid, started='next-start', service_id='next-service')
+                with (patch.object(support, '_lock_held', side_effect=[False, True, False, False, False]),
+                      patch('hey_my_buddy.protocol.transport._request', return_value={'stopped': True}) as stop,
+                      patch.object(support.time, 'sleep')):
+                    stop_private_service(root)
+                stop.assert_called_once()
+                self.assertEqual(stop.call_args.args[1], 'service_control')
+                self.assertEqual(stop.call_args.args[0]['serviceId'], 'next-service')
+                self.assertNotIn(root.resolve(), support._confirmed_private_stops)
+
+    def test_cleanup_stops_detached_service_restarted_after_a_confirmed_stop(self):
+        from hey_my_buddy.protocol.client import BoardClient
+
+        fixture = BoardTestCase('runTest')
+        fixture.setUp()
+        try:
+            with patch.dict(os.environ):
+                fixture.catalog_fixture()
+            code, health = fixture.cli('health', env={'HMB_MAX_CONCURRENT': '1'})
+            self.assertEqual(code, 0, health)
+            original = _read_endpoint(fixture.directory)
+            client = BoardClient(fixture.directory, autostart=False)
+            request_private_service_stop(fixture.directory, client.call, drainSeconds=0)
+            self.assertTrue(wait_for(lambda: not _lock_held(fixture.directory / 'control-daemon.lock')))
+            code, health = fixture.cli('health', env={'HMB_MAX_CONCURRENT': '1'})
+            self.assertEqual(code, 0, health)
+            self.assertNotEqual(_read_endpoint(fixture.directory)['serviceId'], original['serviceId'])
+            stop_private_service(fixture.directory, timeout=15)
+            self.assertFalse(_lock_held(fixture.directory / 'control-daemon.lock'))
+            self.assertFalse(_lock_held(fixture.directory / 'board-owner.lock'))
+        finally:
+            fixture.doCleanups()
 
     def test_unconfirmed_shutdown_preserves_private_state(self):
         directory = None

@@ -64,7 +64,7 @@ from ..text import configure_utf8_output
 from .. import locking, private_dirs, state_root
 from ..errors import BoardError
 from ..paths import native_path
-from ..process_observation import observe_open_paths, observe_process_argv
+from ..process_observation import DeniedPathObservation, observe_open_paths, observe_process_argv
 from ..protocol.owned_process import owned_popen
 from ..protocol.process_handle import ProcessHandle
 from ..protocol.windows_process import WindowsAPI
@@ -644,33 +644,34 @@ def _argv_tied(argv: list[str], prefixes: tuple[str, ...]) -> bool:
 
 def _ps_argv_table() -> list[tuple[int, list[str]]] | None:
     """Every process as ``(pid, argv tokens)``, or None if any read failed."""
-    rows, known = observe_process_argv()
-    return [(process.pid, argv) for process, argv in rows] if known else None
+    rows, problems = observe_process_argv()
+    return [(process.pid, argv) for process, argv in rows] if not problems else None
 
 
-def _open_file_pids(root: Path) -> tuple[set[int], str | None, bool]:
+def _open_file_pids(root: Path) -> tuple[set[int], str | None, bool, list[DeniedPathObservation]]:
     """PIDs referencing this root, including deleted-but-open file names.
 
     The shared observation layer distinguishes incomplete and unavailable
     channels. Neither can prove a private root clear; the teardown decides how
     to record that uncertainty alongside its own argv and lifetime-lock checks.
     """
-    opened, error, available = observe_open_paths()
+    opened, error, available, denied = observe_open_paths()
     prefixes = _root_prefixes(root)
     pids = {pid for pid, paths in opened.items()
             if any(filename == prefix or filename.startswith(prefix + os.sep)
                    for filename in paths for prefix in prefixes)}
-    return pids, error, available
+    return pids, error, available, denied
 
 
 def _observation_snapshot(root: Path) -> tuple[dict[int, dict], list[str], list[str]]:
     """One read-only observation pass: findings by pid, fatal problems, notes."""
     problems: list[str] = []
     notes: list[str] = []
-    rows, known = observe_process_argv()
+    rows, argv_problems = observe_process_argv()
     table = [(process.pid, argv) for process, argv in rows]
-    if not known:
+    if argv_problems:
         problems.append("psutil process enumeration incomplete; residue status is unknown")
+        problems.extend(argv_problems)
     prefixes = _root_prefixes(root)
     own = os.getpid()
     findings: dict[int, dict] = {}
@@ -678,7 +679,8 @@ def _observation_snapshot(root: Path) -> tuple[dict[int, dict], list[str], list[
     for pid, argv in table:
         if pid != own and _argv_tied(argv, prefixes):
             findings[pid] = {"pid": pid, "source": "argv", "executable": Path(argv[0]).name if argv else "unknown"}
-    open_pids, open_error, open_available = _open_file_pids(root)
+    open_pids, open_error, open_available, denied = _open_file_pids(root)
+    notes.extend(map(str, denied))
     if not open_available:
         problems.append("open-file observation unavailable (native file-reference channel missing)")
     elif open_error:
@@ -902,6 +904,8 @@ def teardown_private_root(root: Path, drain_seconds: float = 30.0) -> dict | Non
             "files": _directory_names(state),
             "controlLogTail": _log_tail(state / "control.log"),
         }
+    for note in dict.fromkeys(notes):
+        print(f"hey_my_buddy.cli.checks: {note}", file=sys.stderr)
     clean = not problems and not processes and not residue["daemon"]
     if clean:
         try:
