@@ -30,7 +30,7 @@ Windows 上的私有目录与文件照常创建，继承上层的 ACL，不传 0
 
 安装发布路径不属私有：skill 目录与它的运行时提示、运行时根及其清单与 READY，两个系统同一政策，允许上层目录是链接，不按私有 ACL 校验（`tests/python/install/test_publication_paths.py`）。
 
-工作树不同：Worker 在工作树里有写权限，可能放下联接，把服务骗到工作树之外读写。工作树的文件操作因此仍以 `GENERIC_READ`、不共享删除固定每一级上层目录，拒绝重解析点并核对名称（`blackboard/tasks/windows_paths.py`，句柄层在根包的 `windows_files.py`）；POSIX 用 dir_fd 与 O_NOFOLLOW 做同一件事。补充实验证实，只请求 `FILE_READ_ATTRIBUTES` 的句柄挡不住改名，以 `GENERIC_READ` 固定后改名以错误 32 失败（[a3 记录](windows-experiments-a3.md)）。
+工作树不同：Worker 在工作树里有写权限，可能放下联接或符号链接。2026-10-26 起工作树的读写都交给 Git（[ADR-002](../../decisions/002-host-directed-assistance-and-workspaces.md) 2026-10-26 一段）：建检出、观察、封存、恢复与回收都经 Git 在私有索引里完成，Git 把链接当作链接处理，不跟随它读写；产品自己只在建检出时从新检出的根逐级走到工作目录，经过链接、重解析点或非目录就拒绝。原来逐级以 `GENERIC_READ` 固定上层目录的句柄层（`blackboard/tasks/windows_paths.py`）与 POSIX 的 dir_fd/O_NOFOLLOW 竞态守卫随之删除：开发者认为进程内的防竞态层没有对手，一个 Worker 进程里只有一个 buddy。补充实验的结论（只请求 `FILE_READ_ATTRIBUTES` 的句柄挡不住改名，以 `GENERIC_READ` 固定后改名以错误 32 失败）仍记在 [a3 记录](windows-experiments-a3.md)。
 
 事实的发布与读者由第 3 节规定：FileRenameInfoEx 按句柄换代，产品自己的读者允许删除共享。这是让有人读着的文件也能换代的功能要求，不是安全层。
 
