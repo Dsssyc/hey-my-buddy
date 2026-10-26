@@ -23,7 +23,7 @@
 
 `OwnedJob.wait` 的文档串断言：自然退出不给 Job 置信号；`TerminateJobObject` 置信号，且在成员资源释放之后。仓库里关于 Job 的实验记录（`docs/design/cross-platform/windows-experiments-*.md`、`windows-ownership.md`）只观察过 `ActiveProcesses=0` 与按名打开失败，没有一处观察过 Job 的等待语义。`TerminateJobObject` 的终止与 `TerminateProcess` 一样是发起即返回；信号是在发起终止时、计数归零时，还是在每个成员的句柄表关闭之后才置，从代码里读不出来。
 
-可能的事件顺序：`TerminateJobObject` → 内核在成员还在收尾（句柄表尚未关闭、当前目录句柄仍在）时就置了 Job 信号 → `wait_job` 返回真、计数为零 → `terminate` 判已停 → 调用方删除工作目录 → WinError 32。后果落在安全一侧（删除失败，不会删错东西），但这样修复就只是把时序窗口挪小，CI 的通过是概率性的。
+可能的事件顺序：`TerminateJobObject` → 内核在成员还在退出（句柄表尚未关闭、当前目录句柄仍在）时就置了 Job 信号 → `wait_job` 返回真、计数为零 → `terminate` 判已停 → 调用方删除工作目录 → WinError 32。后果落在安全一侧（删除失败，不会删错东西），但这样修复就只是把时序窗口挪小，CI 的通过是概率性的。
 
 复现做法（委派 Worker 在测试机上做）：一个 Job，根进程已退出，一个后代以目录 D 为当前目录在睡；`TerminateJobObject` → `WaitForSingleObject(job, 2000)` → 立即 `rmdir D`，循环 500 次计 WinError 32；对照组把等待换成轮询 `ActiveProcesses==0`。或者把新增的 `test_exited_leader_and_forced_descendant_release_their_working_directory` 在 Windows 上连跑 200 次。两种都为零才算证实；同时记录 Windows 版本。
 
