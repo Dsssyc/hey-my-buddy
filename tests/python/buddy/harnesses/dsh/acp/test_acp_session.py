@@ -203,17 +203,19 @@ class StopStateTest(AcpTestCase):
         client.initialize(timeout=15.0)
         with self.assertRaises(AcpConnectionClosed):
             client.connection.request("session/list", {}, 15.0)
+        from hey_my_buddy.buddy.harnesses.dsh.acp.connection import stop_evidence
+        before = stop_evidence(client.handle)
+        self.assertEqual("alive", before["groupObserved"])
+        self.assertFalse(before["shutdownConfirmed"])
+        started = time.monotonic()
         evidence = client.shutdown(drain_seconds=10.0, settle_seconds=2.0)
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 5.0, "a reaped root must not consume the 12 second EOF grace")
         self.assertTrue(evidence["leaderExited"])
         self.assertEqual(0, evidence["leaderExitCode"])
-        self.assertEqual("alive", evidence["groupObserved"],
-                         "a surviving group member keeps the group alive")
-        self.assertFalse(evidence["shutdownConfirmed"])
-        client.handle.terminate(grace_seconds=3.0)
-        self.wait_for(lambda: not client.handle.group_alive())
-        final = client.shutdown(drain_seconds=1.0, settle_seconds=2.0)
-        self.assertEqual("gone", final["groupObserved"])
-        self.assertTrue(final["shutdownConfirmed"])
+        self.assertEqual("gone", evidence["groupObserved"],
+                         "shutdown must stop surviving members of its owned group")
+        self.assertTrue(evidence["shutdownConfirmed"])
 
     def test_slow_eof_drain_waits_for_the_leader(self):
         client = self.start_client("--survive-eof", "1.0")
@@ -224,6 +226,14 @@ class StopStateTest(AcpTestCase):
         self.assertTrue(client.connection.eof.is_set())
         self.assertTrue(evidence["leaderExited"])
         self.assertTrue(evidence["shutdownConfirmed"])
+
+    def test_eof_drain_budget_is_kept_before_forcing_native_cleanup(self):
+        client = self.start_client("--survive-eof", "0.4")
+        client.initialize(timeout=15.0)
+        evidence = client.shutdown(drain_seconds=1.0, settle_seconds=0.05)
+        self.assertTrue(evidence["shutdownConfirmed"])
+        self.assertEqual(0, evidence["leaderExitCode"],
+                         "native cleanup within the existing drain budget must finish before force")
 
     def test_shutdown_without_any_session_still_reports_facts(self):
         client = self.start_client()

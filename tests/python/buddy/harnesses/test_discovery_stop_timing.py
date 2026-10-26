@@ -229,7 +229,8 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                 return killpg(pgid, sig)
 
             with patch.object(discovery.os, 'killpg', side_effect=observe):
-                self.assertTrue(discovery._terminate_group(process))
+                self.assertTrue(ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal").terminate(
+                    grace_seconds=0.25, settle_seconds=0.75)[0])
             self.assertGreaterEqual(observations, 3)
             self.assertTrue(self.group_gone(process.pid))
 
@@ -257,7 +258,8 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                 return result
 
             with patch.object(discovery.os, 'killpg', side_effect=signal_at_gate):
-                self.assertTrue(discovery._terminate_group(process))
+                self.assertTrue(ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal").terminate(
+                    grace_seconds=0.25, settle_seconds=0.75)[0])
             self.assertGreaterEqual(kills, 2)
             self.assertTrue(self.group_gone(process.pid))
             newborn = int((root / 'newborn.pid').read_text(encoding="utf-8"))
@@ -282,15 +284,21 @@ class DiscoveryStopTimingTests(unittest.TestCase):
         with self.controlled_group('pipe') as (root, command, processes):
             selector = discovery.selectors.DefaultSelector()
             select = selector.select
-            terminate = discovery._terminate_group
+            terminate = ProcessHandle.terminate
+            confirm = ProcessHandle.shutdown_confirmed
             stop_results = []
             first = True
             clock_offset = [0.0]
             probe_clock = SimpleNamespace(monotonic=lambda: time.monotonic() + clock_offset[0],
                                           sleep=time.sleep)
 
-            def stop(process):
-                result = terminate(process)
+            def stop(handle, **kwargs):
+                result = terminate(handle, **kwargs)
+                stop_results.append(result[0])
+                return result
+
+            def observe(handle, **kwargs):
+                result = confirm(handle, **kwargs)
                 stop_results.append(result)
                 return result
 
@@ -313,7 +321,8 @@ class DiscoveryStopTimingTests(unittest.TestCase):
 
             with patch.object(discovery.selectors, 'DefaultSelector', return_value=selector), \
                  patch.object(selector, 'select', side_effect=drain_then_reap), \
-                 patch.object(discovery, '_terminate_group', side_effect=stop), \
+                 patch.object(ProcessHandle, 'terminate', stop), \
+                 patch.object(ProcessHandle, 'shutdown_confirmed', observe), \
                  patch.object(discovery, 'time', probe_clock):
                 if read_error is None:
                     result = discovery.probe(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
@@ -379,7 +388,8 @@ class DiscoveryStopTimingTests(unittest.TestCase):
                  patch.object(discovery, 'time', probe_clock):
                 result = discovery._probe_dsh_version(command, {'PATH': '/usr/bin:/bin', 'HOME': str(root)},
                                                       time.monotonic() + 5, state_dir=Path(os.environ["HMB_STATE_DIR"]))
-            self.assertEqual(final_facts, [True])
+            self.assertTrue(final_facts)
+            self.assertTrue(all(final_facts))
             self.assertFalse(private.exists())
             self.assertTrue(self.group_gone(processes[0].pid))
             return result

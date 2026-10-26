@@ -494,7 +494,6 @@ class _RunState:
     permission_mode: str | None = None
     interrupt_requested: bool = False
     interrupt_basis: str | None = None
-    signalled: bool = False
     deadline_hit: bool = False
     observer_stopped: bool = False
     prompt_stop_reason: str | None = None
@@ -1365,9 +1364,8 @@ def _collect(*, client: AcpClient | None, pump: _Pump | None, state: _RunState,
 
     The EOF drain keeps every stopped-stream frame: each late fact reaches the
     role observer, and only the observer's stop — never the driver's scope
-    reading — marks the stream incomplete. An unconfirmed stop escalates once to
-    a group termination and reports what was actually observed; it never reads
-    as gone.
+    reading — marks the stream incomplete. The owned handle supplies the stop
+    sequence; an unconfirmed stop retains the actual group observation.
     """
     if client is None:
         return None
@@ -1376,11 +1374,6 @@ def _collect(*, client: AcpClient | None, pump: _Pump | None, state: _RunState,
     except BaseException:
         shutdown = stop_evidence(client.handle)
     drained_complete = _drain_late(pump, state, fold, notify)
-    if not shutdown.get("shutdownConfirmed"):
-        client.handle.terminate(grace_seconds=3.0)
-        state.signalled = True
-        shutdown = stop_evidence(client.handle)
-        drained_complete = _drain_late(pump, state, fold, notify) and drained_complete
     if cancel.is_set() and state.status == "ok":
         state.status = "cancelled"
         state.reason = "cancelled"
@@ -1731,11 +1724,8 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
 
 
 def _stop(client: AcpClient) -> dict:
-    """The discovery stop: escalate once on an unconfirmed group, never claim gone."""
+    """Use the owned stop sequence and retain the observed discovery stop facts."""
     shutdown = client.shutdown(drain_seconds=_DRAIN_SECONDS, settle_seconds=_SETTLE_SECONDS)
-    if not shutdown.get("shutdownConfirmed"):
-        client.handle.terminate(grace_seconds=3.0)
-        shutdown = stop_evidence(client.handle)
     try:
         client.process.stdout.close()
     except OSError:

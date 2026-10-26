@@ -256,13 +256,14 @@ class WriterTest(AcpTestCase):
             {"jsonrpc": "2.0", "method": "session/list", "params": {}},
             deadline=time.monotonic() + 30)
         try:
-            connection.shutdown(drain_seconds=0.1)
+            connection.shutdown(drain_seconds=0.1,
+                                stop=lambda: client.handle.terminate(grace_seconds=0.1))
             self.assertTrue(queued.done.is_set())
             self.assertEqual("failed", queued.outcome[0])
             self.assertIsInstance(queued.outcome[1], AcpConnectionClosed)
         finally:
-            client.handle.terminate(grace_seconds=3)
-            client.handle.wait(10)
+            self.assertTrue(client.handle.shutdown_confirmed(),
+                            "the connection must invoke its required owned stop")
 
     def test_shutdown_evidence_excludes_writer_state(self):
         client = self.start_client()
@@ -272,6 +273,17 @@ class WriterTest(AcpTestCase):
         self.assertEqual("gone", evidence["groupObserved"])
         self.assertNotIn("writerStopped", evidence)
         self.assertNotIn("stdinCloseSkippedWriterBusy", evidence)
+
+    def test_owned_stop_still_runs_when_writer_shutdown_raises(self):
+        from unittest import mock
+        client = self.start_client()
+        client.initialize(timeout=15)
+        with mock.patch.object(client.connection._writer_thread, "join",
+                               side_effect=RuntimeError("fixture writer shutdown failed")):
+            with self.assertRaisesRegex(RuntimeError, "fixture writer shutdown failed"):
+                client.shutdown(drain_seconds=0.1, settle_seconds=0.1)
+        self.assertTrue(client.handle.shutdown_confirmed(),
+                        "a connection cleanup error must still stop its owned group")
 
 
 class EofTest(AcpTestCase):

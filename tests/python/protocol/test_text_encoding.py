@@ -49,7 +49,9 @@ class TextEncodingTests(unittest.TestCase):
                           mock.patch.object(sys, "stdin", source),
                           mock.patch.object(sys, "stdout", output),
                           mock.patch.object(run_controller, "execute", return_value=(frame, 0)),
-                          mock.patch.object(run_controller.signal, "signal")):
+                          # This test owns in-memory streams; the real EOF
+                          # listener is covered by the controller process tests.
+                          mock.patch.object(run_controller, "_read_stop")):
                         self.assertEqual(module.main(), 0)
                     output.flush()
                     self.assertEqual(captured.getvalue(), (frame + "\n").encode("utf-8"))

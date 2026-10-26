@@ -391,14 +391,13 @@ class PrivateDaemonDispatchTests(BoardTestCase):
             finally:
                 release.touch()
 
-    def test_frozen_command_is_forced_after_the_stop_grace(self):
+    def test_frozen_command_is_forced_by_its_owned_stop_sequence(self):
         with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
             client = BoardClient(self.directory, autostart=False)
             started = self.directory / "frozen.started"
             pid_path = self.directory / "frozen.pid"
             script = ("import os,pathlib,signal,time\n"
                       "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-                      "if hasattr(signal, 'SIGBREAK'): signal.signal(signal.SIGBREAK, signal.SIG_IGN)\n"
                       f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='utf-8', newline='\\n')\n"
                       f"pathlib.Path({str(started)!r}).touch()\n"
                       "while True: time.sleep(1)\n")

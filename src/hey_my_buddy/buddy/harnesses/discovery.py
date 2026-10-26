@@ -15,7 +15,6 @@ import os
 import plistlib
 from pathlib import Path
 import re
-import signal
 import shutil
 import subprocess
 import sys
@@ -382,35 +381,8 @@ def native_environment(environment: dict, *, command: tuple[str, ...] | list[str
     return result
 
 
-def _terminate_group(process: subprocess.Popen) -> bool:
-    """Stop and reap a POSIX probe group, including children holding its pipe."""
-    started = time.monotonic()
-    stop_at = started + 1.0
-    while True:
-        now = time.monotonic()
-        sig = signal.SIGTERM if now - started < 0.25 else signal.SIGKILL
-        try:
-            os.killpg(process.pid, sig)
-        except OSError:
-            # A signal failure is not stop evidence. Observe the group below;
-            # a group with only unreaped members may reject signals until reaped.
-            pass
-        process.poll()
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            return process.returncode is not None
-        except OSError:
-            # Unavailable observation stays unknown throughout the bounded wait.
-            pass
-        remaining = stop_at - time.monotonic()
-        if remaining <= 0:
-            return False
-        time.sleep(min(0.01, remaining))
-
-
 def _probe_posix(process: subprocess.Popen, stop_at: float,
-                 deadline: float | None) -> tuple[str | None, bytes, bool]:
+                 deadline: float | None, handle) -> tuple[str | None, bytes, bool]:
     """Keep the read outcome separate from the final group/pipe stop evidence."""
     assert process.stdout is not None
     chunks: list[bytes] = []
@@ -441,7 +413,7 @@ def _probe_posix(process: subprocess.Popen, stop_at: float,
                 break
             chunks.append(chunk)
         if reason is not None:
-            _terminate_group(process)
+            handle.terminate(grace_seconds=0.25, settle_seconds=0.75)
             # A detached descendant still holding the pipe means containment is
             # unproven. Never report the original timeout as a clean shutdown.
             drain_until = time.monotonic() + 0.5
@@ -452,16 +424,17 @@ def _probe_posix(process: subprocess.Popen, stop_at: float,
                     eof = not os.read(process.stdout.fileno(), 4096)
                 except OSError:
                     break
-            contained = _terminate_group(process)
+            contained = handle.shutdown_confirmed(settle_seconds=0)
             return reason, b"", contained and eof
         try:
             process.wait(timeout=max(0.01, stop_at - time.monotonic()))
         except subprocess.TimeoutExpired:
-            return "timeout", b"", _terminate_group(process)
-        contained = _terminate_group(process)
+            contained, _ = handle.terminate(grace_seconds=0.25, settle_seconds=0.75)
+            return "timeout", b"", contained
+        contained, _ = handle.terminate(grace_seconds=0.25, settle_seconds=0.75)
         return ("probe-failed" if process.returncode else None), b"".join(chunks), contained
     except Exception as error:
-        _terminate_group(process)
+        handle.terminate(grace_seconds=0.25, settle_seconds=0.75)
         drain_until = time.monotonic() + 0.5
         while not eof and time.monotonic() < drain_until:
             try:
@@ -470,7 +443,7 @@ def _probe_posix(process: subprocess.Popen, stop_at: float,
                 eof = not os.read(process.stdout.fileno(), 4096)
             except OSError:
                 break
-        contained = _terminate_group(process)
+        contained = handle.shutdown_confirmed(settle_seconds=0)
         error.discovery_shutdown_confirmed = contained and eof
         raise
     finally:
@@ -522,8 +495,7 @@ def _probe_windows(process: subprocess.Popen, stop_at: float, handle,
         raise
     finally:
         try:
-            handle.terminate(grace_seconds=0)
-            stopped = handle.shutdown_confirmed(settle_seconds=0.2)
+            stopped, _ = handle.terminate(grace_seconds=0)
         finally:
             process.stdout.close()
             if failure is not None:
@@ -562,15 +534,14 @@ def probe(command: list[str], environment: dict, *, deadline: float | None = Non
     receipt.update(created=True, shutdown=False)
     stop_at = min(start + _TIMEOUT, deadline) if deadline is not None else start + _TIMEOUT
     try:
-        if journalled or os.name == "nt":
-            from .base import ProcessHandle
-            try:
-                handle = ProcessHandle(process, own_group=True, log_paths={})
-            except Exception:
-                process.stdout.close()
-                raise
+        from .base import ProcessHandle
+        try:
+            handle = ProcessHandle(process, stop_channel="signal", own_group=True, log_paths={})
+        except Exception:
+            process.stdout.close()
+            raise
         code, output, stopped = (_probe_windows(process, stop_at, handle, deadline) if os.name == "nt" else
-                                 _probe_posix(process, stop_at, deadline))
+                                 _probe_posix(process, stop_at, deadline, handle))
     except Exception as error:
         creation = getattr(error, "owned_popen_evidence", None)
         receipt.update(shutdown=(creation.shutdown_confirmed if creation is not None else
@@ -621,16 +592,13 @@ def _probe_dsh_version(command: list[str], environment: dict, deadline: float, *
             process.stdin.close()
             stop_at = min(start + _TIMEOUT, deadline)
             code, output, _ = (_probe_windows(process, stop_at, handle, deadline) if os.name == "nt" else
-                               _probe_posix(process, stop_at, deadline))
+                               _probe_posix(process, stop_at, deadline, handle))
     except Exception as error:
         failure = error
         raise
     finally:
         if handle is not None:
             stopped = handle.shutdown_confirmed(settle_seconds=0.2)
-            if not stopped:
-                handle.terminate(grace_seconds=1)
-                stopped = handle.shutdown_confirmed(settle_seconds=0.2)
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
                     stream.close()

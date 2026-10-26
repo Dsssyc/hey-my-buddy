@@ -195,18 +195,24 @@ def _catalog(initialize: dict | None, version: str) -> dict:
     return catalog
 
 
-def _interrupt(connection: Connection | None) -> bool:
+def _interrupt(connection: Connection | None, *, strict: bool = False) -> bool:
     if connection is None:
         return False
+    deadline, cancelled = connection.deadline, connection.cancelled
     try:
         # A fresh short control budget permits a native interrupt after the main deadline.
         connection.cancelled = threading.Event()
         connection.deadline = time.monotonic() + 2
         return connection.call({"subtype": "interrupt"}) is not None
-    except (ClaudeProtocolError, QuotaRejected, OSError, ValueError):
+    except (ClaudeProtocolError, QuotaRejected, OSError, ValueError) as error:
+        if strict and (isinstance(error, QuotaRejected)
+                       or isinstance(error, ClaudeProtocolError) and error.code == "invalid-protocol"):
+            raise
         # A late quota frame while awaiting interrupt acknowledgement must not
         # escape the cleanup path and suppress the controller's stop receipt.
         return False
+    finally:
+        connection.deadline, connection.cancelled = deadline, cancelled
 
 
 @dataclasses.dataclass
@@ -331,7 +337,7 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
                     raise ClaudeProtocolError("harness-unavailable",
                                               "The selected Claude executable could not start") from None
                 raise
-            handle = ProcessHandle(process, own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
             if owned is not None:
                 owned[:] = [handle]
         finally:
@@ -342,7 +348,7 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
         # only its actual stop can replace the earlier diagnostic receipt.
         if process is not None:
             try:
-                shutdown, _signalled = _halt_owned_group(process, handle, time.monotonic() + 5.0)
+                shutdown, _signalled = _halt_owned_group(handle, time.monotonic() + 5.0)
                 if owned is not None:
                     owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
             finally:
@@ -442,9 +448,11 @@ class _TurnCollector:
         self._native_handle: ProcessHandle | None = None
         self.session = session
 
-    def install(self, connection: Connection, handle: ProcessHandle | None = None) -> None:
+    def install(self, connection: Connection, handle: ProcessHandle | None = None,
+                request_interrupt: Callable[[], None] | None = None) -> None:
         self._connection = connection
         self._native_handle = handle
+        self._request_interrupt = request_interrupt
         connection.on_message = self.buffer
         connection.on_request = self.on_request
 
@@ -549,10 +557,7 @@ class _TurnCollector:
                         # processing any buffered frame from that next query.
                         self.root_stop_requested = True
                         self.root_unanswered_input = self.bridge.report()["unansweredDelivered"] > 0
-                        try:
-                            self._connection.process.stdin.close()
-                        except OSError:
-                            pass
+                        self._request_interrupt()
                         self._native_handle.terminate(grace_seconds=1.0)
                 self._observe_inquiry_tool(frame)
                 self.bridge.note_event({"kind": frame.get("type") or "event"},
@@ -765,7 +770,7 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, int | None]:
     """Close, wait, then terminate; report only what the owned group confirmed."""
-    shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, deadline)
+    shutdown, _signalled = _halt_owned_group(spawn.handle, deadline)
     try:
         spawn.process.stdout.close()
     except OSError:
@@ -1088,16 +1093,18 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
         session = (session_record.project(ClaudeSessionProjector, session_record)
                    if session_record is not None else None)
 
-        def request_interrupt() -> None:
+        def request_interrupt(*, strict: bool = False) -> None:
             # A fresh short control budget permits a native interrupt after the
             # failure; the peer's own acknowledgement reply is kept as the fact —
             # whether the CLI answered never changes the stop facts.
             if collector is not None:
                 collector._quiet = True
+            if state.interrupt_requested:
+                return
+            state.interrupt_requested = True
             acknowledged = False
             if spawn is not None:
-                acknowledged = _interrupt(spawn.connection)
-            state.interrupt_requested = True
+                acknowledged = _interrupt(spawn.connection, strict=strict)
             state.interrupt_acknowledged = acknowledged
 
         try:
@@ -1128,7 +1135,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                                   environment=preparation.environment,
                                   invocation_root=preparation.invocation_root, deadline=preparation.deadline,
                                   cancel=cancel, owned=owned_spawn)
-            collector.install(spawn.connection, spawn.handle)
+            collector.install(spawn.connection, spawn.handle, lambda: request_interrupt(strict=True))
             catalog = _initialize(spawn)
             state.catalog = catalog
             state.provider = catalog["providers"][0]["provider"]

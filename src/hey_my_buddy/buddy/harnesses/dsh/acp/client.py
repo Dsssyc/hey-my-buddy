@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 from .connection import AcpConnection, stop_evidence
 from .launch import launch, stop_after_spawn_failure
@@ -60,11 +61,13 @@ class AcpClient:
               permission_policy: PermissionPolicy | None = None) -> "AcpClient":
         """Launch the process and start its connection; a fake agent under test
         launches through the same wrapper with inherited native configuration."""
+        stdin_lock = threading.Lock()
         process, handle = launch(argv, private_root=private_root, extra_env=extra_env, cwd=cwd,
-                                 launch_environment=launch_environment)
+                                 launch_environment=launch_environment, stdin_lock=stdin_lock)
         try:
             policy = permission_policy if permission_policy is not None else PermissionPolicy()
-            connection = AcpConnection(process, handle, facts_path=Path(private_root) / "logs" / "acp-facts.jsonl",
+            connection = AcpConnection(process, stdin_lock=stdin_lock,
+                                       facts_path=Path(private_root) / "logs" / "acp-facts.jsonl",
                                        permission_handler=policy.decide)
             connection.start()
             return cls(process, handle, connection)
@@ -123,11 +126,11 @@ class AcpClient:
     # -- shutdown ---------------------------------------------------------------
 
     def shutdown(self, *, drain_seconds: float = 20.0, settle_seconds: float = 5.0) -> dict:
-        """Close stdin, drain to EOF, wait for the leader, then observe leader and
-        group separately. Returns the stop evidence; unknown stays conservative."""
-        self.connection.shutdown(drain_seconds=drain_seconds)
-        if self.handle.process.poll() is None:
-            self.handle.wait(settle_seconds)
+        """Stop through the owned input channel, drain and retain actual evidence."""
+        self.connection.shutdown(drain_seconds=drain_seconds,
+            # Both existing waits followed EOF. The reader keeps draining in
+            # parallel; keep its budget before force as well as the leader's.
+            stop=lambda: self.handle.terminate(grace_seconds=drain_seconds + settle_seconds))
         evidence = stop_evidence(self.handle)
         return evidence
 

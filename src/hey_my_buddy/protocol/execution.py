@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import hashlib
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -85,6 +84,7 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
         for key in ("HMB_AGENT_CREDENTIAL_FILE", "HMB_AGENT_CREDENTIAL_FD"):
             environment.pop(key, None)
         handle = launch_controller(
+            stop_channel="protocol",
             prepare=lambda: ([sys.executable, "-m", "hey_my_buddy.buddy.runtime.execution",
                               "--startup", str(startup)], str(evidence), environment),
             log_paths={"stdout": str(evidence / "execution.stdout.log"),
@@ -110,15 +110,8 @@ def launch_execution(claim: dict, state_dir: Path, nonce: str, *,
             # of those steps tears the root down on the root Job this service
             # still holds, exactly like owned_popen's own failure path, and a
             # half-created root is never handed to the scheduler.
-            stopped = True
             try:
-                handle.job.terminate()
-                handle.process.wait(timeout=2)
-                stopped = handle.job.active() == 0
-            except (OSError, subprocess.TimeoutExpired):
-                stopped = False
-            try:
-                handle.job.close()
+                stopped, _ = handle.terminate(grace_seconds=0)
             except OSError:
                 stopped = False
             evidence = ProcessCreationEvidence(created=True, shutdown_confirmed=stopped,

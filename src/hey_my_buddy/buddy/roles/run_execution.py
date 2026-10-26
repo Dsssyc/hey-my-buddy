@@ -803,6 +803,7 @@ def _native_operation(name: str, operation: str, *, state_dir: Path, **arguments
             stopped = False  # Ownership passes to the launch boundary.
             try:
                 handle = launch_controller(
+                    stop_channel="stdin",
                     prepare=lambda: (
                         [sys.executable, "-m", "hey_my_buddy.buddy.roles.run_controller", "--control", str(control)],
                         None, environment),
@@ -816,8 +817,9 @@ def _native_operation(name: str, operation: str, *, state_dir: Path, **arguments
                     stopped = creation.shutdown_confirmed
                 raise
             wait_expired = handle.wait(30) is None
-            if wait_expired:
-                handle.terminate(grace_seconds=8)
+            # A completed root may still leave members in its owned group/Job.
+            # Stop that boundary as well before consuming the native receipt.
+            handle.terminate(grace_seconds=8 if wait_expired else 0)
             collection = collect_controller(handle, read=read_strict_result,
                                             stop=lambda payload, owned: stop_confirmed(payload, owned.shutdown_confirmed))
             stopped = collection.stop_confirmed

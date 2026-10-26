@@ -9,7 +9,8 @@ from .owned_process import ProcessCreationEvidence, owned_popen
 from .process_handle import ProcessHandle, open_logs
 
 def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None = None,
-                      grace_seconds: float = 0, job_name: str | None = None) -> ProcessHandle:
+                      grace_seconds: float = 0, job_name: str | None = None,
+                      stop_channel: str) -> ProcessHandle:
     """Open logs, prepare and spawn one owned child, closing both log FDs.
 
     Every failure carries the creating boundary's ``owned_popen_evidence``.
@@ -32,7 +33,8 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
         try:
             command, cwd, environment = prepare()
             try:
-                process = owned_popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
+                process = owned_popen(command, cwd=cwd, env=environment,
+                                      stdin=subprocess.PIPE if stop_channel == "stdin" else subprocess.DEVNULL,
                                       stdout=stdout, stderr=stderr, start_new_session=True,
                                       close_fds=True,
                                       **({"job_name": job_name, "defer_resume": True}
@@ -42,7 +44,7 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
                 raise
             evidence = ProcessCreationEvidence(created=True, shutdown_confirmed=False,
                                                exit_code=process.returncode)
-            handle = ProcessHandle(process, own_group=True, log_paths=log_paths)
+            handle = ProcessHandle(process, own_group=True, log_paths=log_paths, stop_channel=stop_channel)
         finally:
             try:
                 os.close(stdout)
@@ -55,8 +57,7 @@ def launch_controller(*, prepare, log_paths: dict, timeout_seconds: int | None =
         if handle is not None:
             error.execution_handle = handle
             try:
-                handle.terminate(grace_seconds=0)
-                stopped = handle.shutdown_confirmed()
+                stopped, _ = handle.terminate(grace_seconds=0)
             except BaseException as cleanup_error:
                 cleanup_error.owned_popen_evidence = ProcessCreationEvidence(
                     created=True, shutdown_confirmed=False, exit_code=process.returncode)

@@ -91,66 +91,15 @@ class IdentityOrNoneTests(unittest.TestCase):
         self.assertIsNone(identity_or_none({}))
 
 
-class _FakeStdin:
-    def __init__(self, calls: list):
-        self._calls = calls
-
-    def close(self):
-        self._calls.append("stdin.close")
-
-
-class _FakeProcess:
-    def __init__(self, calls: list):
-        self.stdin = _FakeStdin(calls)
-
-
-class _FakeHandle:
-    def __init__(self, calls: list, confirmed_after_wait: bool, confirmed_after_terminate: bool):
-        self._calls = calls
-        self._after_wait = confirmed_after_wait
-        self._after_terminate = confirmed_after_terminate
-        self.terminated = 0
-
-    def wait(self, timeout):
-        self._calls.append(f"handle.wait({timeout:.1f})")
-
-    def shutdown_confirmed(self, settle_seconds):
-        return self._after_wait if self.terminated == 0 else self._after_terminate
-
-    def terminate(self, grace_seconds):
-        self.terminated += 1
-        self._calls.append(f"handle.terminate({grace_seconds:.1f})")
-
-
 class HaltOwnedGroupTests(unittest.TestCase):
-    def halt(self, handle: _FakeHandle, calls: list):
-        return halt_owned_group(_FakeProcess(calls), handle, time.monotonic() + 30.0)
-
-    def test_a_confirmed_group_stops_without_a_signal(self):
-        calls: list = []
-        handle = _FakeHandle(calls, confirmed_after_wait=True, confirmed_after_terminate=True)
-        self.assertEqual(self.halt(handle, calls), (True, False))
-        self.assertEqual(handle.terminated, 0)
-        self.assertEqual(calls, ["stdin.close", "handle.wait(3.0)"])
-
-    def test_an_unconfirmed_group_is_terminated_once_and_reported(self):
-        calls: list = []
-        handle = _FakeHandle(calls, confirmed_after_wait=False, confirmed_after_terminate=True)
-        self.assertEqual(self.halt(handle, calls), (True, True))
-        self.assertEqual(handle.terminated, 1)
-        self.assertEqual(calls, ["stdin.close", "handle.wait(3.0)", "handle.terminate(1.0)"])
-
-    def test_a_never_confirmed_group_stays_unconfirmed_and_signalled(self):
-        calls: list = []
-        handle = _FakeHandle(calls, confirmed_after_wait=False, confirmed_after_terminate=False)
-        self.assertEqual(self.halt(handle, calls), (False, True))
-        self.assertEqual(handle.terminated, 1)
-
-    def test_the_input_closes_before_the_wait(self):
-        calls: list = []
-        handle = _FakeHandle(calls, confirmed_after_wait=True, confirmed_after_terminate=True)
-        self.halt(handle, calls)
-        self.assertLess(calls.index("stdin.close"), calls.index("handle.wait(3.0)"))
+    def test_native_grace_is_capped_by_its_deadline_and_uses_the_owned_stop(self):
+        from unittest.mock import Mock, patch
+        handle = Mock()
+        handle.terminate.return_value = (False, True)
+        with patch("hey_my_buddy.buddy.harnesses.native_support.time.monotonic", return_value=10):
+            for deadline, grace in ((40, 3.0), (11.5, 1.5), (9, 0.0)):
+                self.assertEqual(halt_owned_group(handle, deadline), (False, True))
+                handle.terminate.assert_called_with(grace_seconds=grace)
 
 
 if __name__ == "__main__":

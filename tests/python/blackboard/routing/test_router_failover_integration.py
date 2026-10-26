@@ -6,7 +6,6 @@ queues a distinct frozen dispatch while the micro task remains pending.
 """
 import copy
 import json
-import signal
 import unittest
 import sys
 import time
@@ -131,15 +130,14 @@ class FailoverTests(RouterDispatchTestCase):
 
             def argv(self):
                 return [sys.executable, "-c", (
-                    "import os, signal, threading, time\n"
+                    "import os, sys, threading, time\n"
                     "from pathlib import Path\n"
-                    f"def stop(*_): Path({str(stopped)!r}).touch(); time.sleep({stop_delay}); raise SystemExit(0)\n"
-                    "signal.signal(signal.SIGBREAK if os.name == 'nt' else signal.SIGTERM, stop)\n"
-                    # Bound a failed stop delivery so the file reports the
-                    # missing signal instead of holding the entire check run.
+                    # Bound a failed EOF delivery so this fixture cannot hold
+                    # the entire check run.
                     "def watchdog(): time.sleep(18); os._exit(99)\n"
                     "threading.Thread(target=watchdog, daemon=True).start()\n"
-                    "while True: time.sleep(.05)\n")]
+                    "sys.stdin.buffer.read()\n"
+                    f"Path({str(stopped)!r}).touch(); time.sleep({stop_delay})\n")]
 
             def prepare(self, context):
                 from pathlib import Path
@@ -147,13 +145,17 @@ class FailoverTests(RouterDispatchTestCase):
                 super().prepare(replace(context, spec={**context.spec, "argv": self.argv()}))
 
             def start(self, context):
-                return super().start(replace(context, spec={**context.spec, "argv": self.argv()}))
+                from hey_my_buddy.protocol.process_controller import launch_controller
+                self.prepare(context)
+                return launch_controller(
+                    prepare=lambda: (self.argv(), context.cwd, context.environment),
+                    log_paths=context.log_paths(), timeout_seconds=context.timeout_seconds,
+                    stop_channel="stdin")
 
             def cancel(self, handle):
                 # This fixture's native driver needs eleven seconds to finish its
                 # own stop protocol. Execution must collect only after it finishes.
-                handle.cancel_requested = True
-                handle.signal_group(signal.SIGTERM)
+                handle.terminate(grace_seconds=12)
 
             def collect(self, handle, context):
                 outcome = super().collect(handle, context)
@@ -179,7 +181,7 @@ class FailoverTests(RouterDispatchTestCase):
             with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()):
                 receipt = execution._execute_selected(first, first["task"], spec, first["attempt"], directory, holder)
             elapsed = time.monotonic() - started
-            self.assertTrue(stopped.exists(), "the native stop signal was not delivered")
+            self.assertTrue(stopped.exists(), "the native input stop was not delivered")
             self.assertLess(elapsed, 20)
             if stop_delay:
                 self.assertGreater(elapsed, 11)

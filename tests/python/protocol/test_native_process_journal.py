@@ -42,7 +42,7 @@ class NativeProcessJournalTests(unittest.TestCase):
                              "sys.stdout.buffer.flush(); sys.stdin.buffer.read(1)"],
                             start_new_session=True, stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                        handles.append(ProcessHandle(process, own_group=True, log_paths={}))
+                        handles.append(ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal"))
                         ready: queue.Queue[bytes] = queue.Queue()
                         threading.Thread(target=lambda: ready.put(process.stdout.read(1)), daemon=True).start()
                         self.assertEqual(ready.get(timeout=10), b"R")

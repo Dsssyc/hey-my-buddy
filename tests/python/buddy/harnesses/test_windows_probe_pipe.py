@@ -62,7 +62,7 @@ class WindowsProbePipeTests(unittest.TestCase):
              mock.patch.object(discovery, 'time', fake_time), \
              mock.patch.object(process_handle, 'time', fake_time), \
              mock.patch.object(process_identity, '_creation_time', return_value=100):
-            handle = ProcessHandle(process, own_group=True, log_paths={})
+            handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
             try:
                 yield SimpleNamespace(process=process, api=api, handle=handle, peek=peek, read=read)
             finally:
@@ -152,7 +152,9 @@ class WindowsProbePipeTests(unittest.TestCase):
                 self.assertFalse(popen.call_args.kwargs['start_new_session'])
                 begin.assert_called_once_with()
                 calls = [call[0] for call in events.mock_calls]
-                self.assertEqual(calls[:5], ['create', 'popen', 'assign', 'resume', 'terminate'])
+                self.assertEqual(calls[:4], ['create', 'popen', 'assign', 'resume'])
+                self.assertIn('terminate', calls[4:])
+                self.assertIn('active', calls[calls.index('terminate') + 1:])
                 if not active_unknown:
                     self.assertEqual(calls[-1], 'close')
 
@@ -194,7 +196,7 @@ class WindowsProbePipeTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError if active_unknown else OSError) as caught:
                         discovery.probe(['fixture'], {}, owned=receipt)
                 self.assertEqual(caught.exception.owned_popen_evidence.created, True)
-                self.assertEqual(receipt, [{'created': True, 'shutdown': not active_unknown, 'exit_code': 0}])
+                self.assertEqual(receipt, [{'created': True, 'shutdown': not active_unknown, 'exit_code': 1}])
                 fixture.process.stdout.close.assert_called_once_with()
 
     @unittest.skipUnless(os.name == 'nt', 'actual PeekNamedPipe requires Windows')
@@ -203,7 +205,7 @@ class WindowsProbePipeTests(unittest.TestCase):
                    'import os,time; os.write(1,b"fixture 1.2.3\\n"); os.close(1); time.sleep(0.3); os._exit(0)']
         process = owned_popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL)
-        handle = ProcessHandle(process, own_group=True, log_paths={})
+        handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
         try:
             result = discovery._probe_windows(process, time.monotonic() + 3, handle, None)
             self.assertEqual(result, (None, b'fixture 1.2.3\n', True))

@@ -111,7 +111,7 @@ class DiscoveryReceiptTests(unittest.TestCase):
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_an_unknown_collection_failure_never_implies_stop(self):
-        handle = SimpleNamespace(wait=lambda timeout: 0)
+        handle = SimpleNamespace(wait=lambda timeout: 0, terminate=lambda **kwargs: None)
         with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
              mock.patch.object(run_execution, "collect_controller", side_effect=ValueError("fixture read failed")):
             with self.assertRaises(ValueError) as caught:

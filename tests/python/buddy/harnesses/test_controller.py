@@ -7,7 +7,7 @@ import json
 import math
 import os
 from pathlib import Path
-from subprocess import DEVNULL
+from subprocess import PIPE
 from types import SimpleNamespace
 import sys
 import tempfile
@@ -151,7 +151,7 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
                 yield state
     finally:
         if state["process"] is not None:
-            handle = ProcessHandle(state["process"], own_group=True, log_paths=state["paths"])
+            handle = ProcessHandle(state["process"], own_group=True, log_paths=state["paths"], stop_channel="signal")
             handle.terminate(grace_seconds=0.2)
             handle.shutdown_confirmed()
         for descriptor in state["descriptors"]:
@@ -165,6 +165,7 @@ class FakeProcess:
     def __init__(self, returncode=None):
         self.returncode = returncode
         self.pid = None
+        self.stdin = mock.Mock()
 
     def poll(self):
         return self.returncode
@@ -233,7 +234,7 @@ class PartialLogOpenTests(unittest.TestCase):
              mock.patch.object(process_controller, "owned_popen", wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(OSError) as caught:
                 launch_controller(prepare=lambda: ([sys.executable, "-c", "pass"], str(self.root), {}),
-                                  log_paths=self.paths)
+                                  log_paths=self.paths, stop_channel="stdin")
             spawn.assert_not_called()
             self.assertIs(caught.exception, state["error"])
             self.assertEqual(caught.exception.owned_popen_evidence, ProcessCreationEvidence(False, True, None))
@@ -264,7 +265,7 @@ class LaunchControllerTests(unittest.TestCase):
     def test_real_child_writes_through_the_opened_logs_and_stamps_its_deadline(self):
         handle = launch_controller(prepare=lambda: ([sys.executable, "-c", CHILD_SOURCE],
                                                     str(self.root), dict(os.environ)),
-                                   log_paths=self.log_paths, timeout_seconds=30)
+                                   log_paths=self.log_paths, timeout_seconds=30, stop_channel="stdin")
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(10))
         self.assertEqual(Path(self.log_paths["stdout"]).read_text(encoding="utf-8").strip(), "controller-out")
@@ -290,13 +291,13 @@ class LaunchControllerTests(unittest.TestCase):
 
         with mock.patch.object(process_controller, "open_logs", traced_open_logs), \
                 mock.patch.object(process_controller, "owned_popen", return_value=process) as spawn:
-            handle = launch_controller(prepare=prepare, log_paths=self.log_paths)
+            handle = launch_controller(prepare=prepare, log_paths=self.log_paths, stop_channel="stdin")
         self.assertEqual(trace, ["logs", "prepare"])
         arguments, keyword = spawn.call_args
         self.assertEqual(arguments[0], ["fixture"])
         self.assertEqual(keyword["cwd"], str(self.root))
         self.assertEqual(keyword["env"], {"FIXTURE": "1"})
-        self.assertIs(keyword["stdin"], DEVNULL)
+        self.assertIs(keyword["stdin"], PIPE)
         self.assertTrue(keyword["start_new_session"])
         self.assertTrue(keyword["close_fds"])
         for role in ("stdout", "stderr"):
@@ -309,12 +310,12 @@ class LaunchControllerTests(unittest.TestCase):
     def test_positive_timeout_stamps_now_plus_timeout_and_grace(self):
         with mock.patch.object(process_controller, "owned_popen", return_value=FakeProcess()):
             handle = launch_controller(prepare=lambda: (["fixture"], None, {}),
-                                       log_paths=self.log_paths, timeout_seconds=5, grace_seconds=10)
+                                       log_paths=self.log_paths, timeout_seconds=5, grace_seconds=10, stop_channel="stdin")
         self.assertAlmostEqual(handle.deadline, time.monotonic() + 15, delta=1.0)
 
     def test_discovery_launch_without_timeout_stamps_no_deadline(self):
         with mock.patch.object(process_controller, "owned_popen", return_value=FakeProcess()) as spawn:
-            handle = launch_controller(prepare=lambda: (["fixture"], None, {}), log_paths=self.log_paths)
+            handle = launch_controller(prepare=lambda: (["fixture"], None, {}), log_paths=self.log_paths, stop_channel="stdin")
         self.assertFalse(hasattr(handle, "deadline"))
         self.assertIsNone(spawn.call_args.kwargs["cwd"])
 
@@ -331,7 +332,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
 
     def launch(self):
         return launch_controller(prepare=lambda: ([sys.executable, "-c", "import time; time.sleep(60)"],
-                                                 str(self.root), dict(os.environ)), log_paths=self.paths)
+                                                 str(self.root), dict(os.environ)), log_paths=self.paths, stop_channel="stdin")
 
     def test_log_open_emfile_proves_spawn_was_never_called(self):
         error = OSError(errno.EMFILE, "fixture logs exhausted")
@@ -356,7 +357,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
         with mock.patch.object(process_controller, "open_logs", open_logs), \
              mock.patch.object(process_controller, "owned_popen", wraps=process_controller.owned_popen) as spawn:
             with self.assertRaises(ValueError) as caught:
-                launch_controller(prepare=mock.Mock(side_effect=error), log_paths=self.paths)
+                launch_controller(prepare=mock.Mock(side_effect=error), log_paths=self.paths, stop_channel="stdin")
         spawn.assert_not_called()
         self.assertIs(caught.exception, error)
         self.assertEqual(error.owned_popen_evidence, ProcessCreationEvidence(False, True, None))
@@ -370,7 +371,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
     def test_posix_spawn_failure_consumes_owned_no_child_receipt(self):
         with self.assertRaises(OSError) as caught:
             launch_controller(prepare=lambda: ([str(self.root / "missing-executable")], None, {}),
-                              log_paths=self.paths)
+                              log_paths=self.paths, stop_channel="stdin")
         self.assertEqual(caught.exception.owned_popen_evidence, ProcessCreationEvidence(False, True, None))
 
     def windows_failure(self, *, stopped, close_log=False):
@@ -596,7 +597,7 @@ class RealStopTests(unittest.TestCase):
                      "stderr": str(Path(temporary.name) / "stderr")}
         handle = launch_controller(prepare=lambda: ([sys.executable, "-c", "import time; time.sleep(30)"],
                                                     str(temporary.name), dict(os.environ)),
-                                   log_paths=log_paths)
+                                   log_paths=log_paths, stop_channel="stdin")
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertTrue(handle.group_alive())
         self.assertFalse(stop_confirmed({"processState": {"shutdownConfirmed": True}}, handle.shutdown_confirmed),
@@ -624,7 +625,7 @@ class ObservationErrorStopTests(unittest.TestCase):
             log_paths = {"stdout": str(Path(name) / "stdout"), "stderr": str(Path(name) / "stderr")}
             handle = launch_controller(prepare=lambda: ([sys.executable, "-c", "pass"],
                                                     name, dict(os.environ)),
-                                       log_paths=log_paths)
+                                       log_paths=log_paths, stop_channel="stdin")
             self.assertIsNotNone(handle.wait(5))
             receipt = {"processState": {"shutdownConfirmed": True}}
             self.assertIs(stop_confirmed(receipt, handle.shutdown_confirmed), True,

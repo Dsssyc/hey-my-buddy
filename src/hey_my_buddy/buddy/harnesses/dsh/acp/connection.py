@@ -124,21 +124,19 @@ def _wait_seconds(remaining: float) -> float | None:
 class AcpConnection:
     """Owns one launched process's stdio and correlates every JSON-RPC message.
 
-    ``handle`` is the ``ProcessHandle`` of the launched group; the connection
-    never signals the child and never derives a stop fact from the protocol:
+    The connection never signals the child and never derives a stop fact from the protocol:
     EOF, close acknowledgements and cancel acknowledgements are transport facts.
     """
 
-    def __init__(self, process, handle, *, facts_path: Path,
+    def __init__(self, process, *, stdin_lock, facts_path: Path,
                  permission_handler=None):
         self.process = process
-        self.handle = handle
         self.facts_path = Path(facts_path)
         self.permission_handler = permission_handler
         self._fact_lock = threading.Lock()
         self._pending: dict = {}
         self._pending_lock = threading.Lock()
-        self._stdin_lock = threading.Lock()
+        self._stdin_lock = stdin_lock
         self._next_id = 0
         self.eof = threading.Event()
         self.shutdown_started = threading.Event()
@@ -567,23 +565,7 @@ class AcpConnection:
 
     # -- shutdown --------------------------------------------------------------
 
-    def close_stdin(self) -> None:
-        """Close the child's stdin unless a writer is still inside it; the reader
-        keeps draining stdout to EOF either way."""
-        acquired = self._stdin_lock.acquire(timeout=5.0)
-        if not acquired:
-            return
-        try:
-            stdin = self.process.stdin
-            if stdin is not None and not stdin.closed:
-                try:
-                    stdin.close()
-                except OSError:
-                    pass
-        finally:
-            self._stdin_lock.release()
-
-    def shutdown(self, *, drain_seconds: float = 20.0) -> None:
+    def shutdown(self, *, stop, drain_seconds: float = 20.0) -> None:
         """Stop the writer (failing whatever it never wrote), close stdin, drain
         stdout to EOF, and join the threads.
 
@@ -592,18 +574,20 @@ class AcpConnection:
         buffer lock. Each reader closes its own stream at EOF; shutdown closes
         one only when its reader has already finished.
         """
-        self.shutdown_started.set()
-        self._write_stopped.set()
-        self._write_wake.set()
-        self._writer_thread.join(timeout=_WRITER_JOIN_SECONDS)
-        with self._write_queue_lock:
-            leftover = list(self._write_queue)
-            self._write_queue.clear()
-            for job in leftover:
-                job.outcome = ("failed", AcpConnectionClosed(
-                    "connection shutdown before the frame was written"))
-                job.done.set()
-        self.close_stdin()
+        try:
+            self.shutdown_started.set()
+            self._write_stopped.set()
+            self._write_wake.set()
+            self._writer_thread.join(timeout=_WRITER_JOIN_SECONDS)
+            with self._write_queue_lock:
+                leftover = list(self._write_queue)
+                self._write_queue.clear()
+                for job in leftover:
+                    job.outcome = ("failed", AcpConnectionClosed(
+                        "connection shutdown before the frame was written"))
+                    job.done.set()
+        finally:
+            stop()
         self._reader.join(timeout=drain_seconds)
         self._stderr.join(timeout=1.0)
         for stream, thread_done in ((self.process.stdout, not self._reader.is_alive()),

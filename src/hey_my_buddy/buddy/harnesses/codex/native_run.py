@@ -502,7 +502,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
                     raise CodexProtocolError("harness-unavailable",
                                              "The selected Codex executable could not start") from None
                 raise
-            handle = ProcessHandle(process, own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
             owned[:] = [handle]
         finally:
             os.close(fd)
@@ -510,7 +510,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
     except BaseException:
         if process is not None:
             try:
-                shutdown, _signalled = _halt_owned_group(process, handle, time.monotonic() + 5.0)
+                shutdown, _signalled = _halt_owned_group(handle, time.monotonic() + 5.0)
                 owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
             finally:
                 process.stdout.close()
@@ -1553,7 +1553,7 @@ def _stop_collection(request: RunRequest, prep: _Preparation,
         state.shutdown = isinstance(receipt, dict) and receipt["shutdown"] is True
         state.exit_code = receipt["exit_code"] if isinstance(receipt, dict) else receipt.process.returncode
         return
-    shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, prep.deadline)
+    shutdown, _signalled = _halt_owned_group(spawn.handle, prep.deadline)
     state.shutdown = shutdown
     state.exit_code = spawn.process.returncode
     try:
@@ -1943,7 +1943,7 @@ def _control_connection(*, cwd: str, invocation_root: Path, native_root: Path,
             yield connection, version, facts
         finally:
             try:
-                shutdown, _signalled = _halt_owned_group(spawn.process, spawn.handle, deadline)
+                shutdown, _signalled = _halt_owned_group(spawn.handle, deadline)
             finally:
                 spawn.process.stdout.close()
         if not shutdown or spawn.process.returncode != 0:

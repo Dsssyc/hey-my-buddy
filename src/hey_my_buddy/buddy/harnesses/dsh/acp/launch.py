@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -45,7 +46,7 @@ def child_environment(extra_env: dict | None = None, *, source: dict | None = No
 def stop_after_spawn_failure(process, handle, error: BaseException) -> LaunchOwnershipError:
     """Use the shared owned-group stop, then record the actual observation."""
     try:
-        halt_owned_group(process, handle, time.monotonic() + 5.0)
+        halt_owned_group(handle, time.monotonic() + 5.0)
     except BaseException as stop_error:
         error.add_note(f"owned-group stop raised {type(stop_error).__name__}: {stop_error}")
     try:
@@ -62,6 +63,7 @@ def stop_after_spawn_failure(process, handle, error: BaseException) -> LaunchOwn
 def launch(argv: list[str], *, private_root: Path, extra_env: dict | None = None,
            cwd: Path | None = None, source_environment: dict | None = None,
            launch_environment: dict | None = None,
+           stdin_lock=None,
            merge_stderr: bool = False) -> tuple[subprocess.Popen, ProcessHandle]:
     """Spawn in the caller's private directory and retain ownership on failure."""
     if not argv:
@@ -76,8 +78,21 @@ def launch(argv: list[str], *, private_root: Path, extra_env: dict | None = None
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
                           start_new_session=True, close_fds=True)
+    input_lock = threading.Lock() if stdin_lock is None else stdin_lock
+
+    def close_input():
+        # A timed-out ACP write may still own the buffered stdin lock. Use the
+        # writer's lock to bound the EOF request before the shared stop proceeds.
+        if not input_lock.acquire(timeout=5.0):
+            return
+        try:
+            process.stdin.close()
+        finally:
+            input_lock.release()
+
     try:
-        handle = ProcessHandle(process, own_group=True, log_paths={})
+        handle = ProcessHandle(process, stop_channel="stdin", close_input=close_input,
+                               own_group=True, log_paths={})
     except BaseException as error:
         receipt = error.owned_popen_evidence
         evidence = {"leaderExited": receipt.exit_code is not None,

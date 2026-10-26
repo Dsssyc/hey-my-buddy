@@ -651,7 +651,7 @@ class _RunState:
     configured: bool = False
     create_params: dict | None = None
     completion_ordinal: int | None = None
-    signalled: bool = False
+    escalated: bool = False
     inquiry: dict | None = None
     attention: dict | None = None
     token_usage: dict | None = None
@@ -725,7 +725,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
                 raise
             # Take the actual process/group handle before releasing the stderr
             # descriptor: descriptor cleanup can fail after successful creation.
-            handle = ProcessHandle(process, own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
             if owned is not None:
                 owned[:] = [handle]
         finally:
@@ -737,7 +737,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
         # actual handle registered, never the initial no-child receipt.
         if process is not None:
             try:
-                shutdown, _signalled = halt_owned_group(process, handle, time.monotonic() + 5.0)
+                shutdown, _escalated = halt_owned_group(handle, time.monotonic() + 5.0)
                 if owned is not None:
                     owned[:] = [{"created": True, "shutdown": shutdown,
                                  "exit_code": process.returncode}]
@@ -749,7 +749,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
     """Stop the run's owned app-server through the shared halt primitive."""
-    return halt_owned_group(spawn.process, spawn.handle, deadline)
+    return halt_owned_group(spawn.handle, deadline)
 
 
 def _project_session(session: ZcodeSessionProjector | None, state: _RunState, message: dict) -> None:
@@ -1456,11 +1456,11 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
     drained: bool | None = None
     if spawn is not None:
         state.runtime_preferences = spawn.connection.runtime_preferences_facts
-        shutdown, signalled = _stop_native(spawn, deadline)
+        shutdown, escalated = _stop_native(spawn, deadline)
         state.shutdown = shutdown
         state.exit_code = spawn.process.returncode
-        state.signalled = signalled
-        state.interrupted = signalled or state.observer_stopped
+        state.escalated = escalated
+        state.interrupted = escalated or state.observer_stopped
         if state.status == "ok" and (not shutdown or spawn.process.returncode != 0):
             state.status = "error"
             state.reason = "native-shutdown-failed"
@@ -1619,12 +1619,12 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
             stop_native = StopLayer(group_state="gone")
     else:
         stop_native = StopLayer(group_state="gone" if state.shutdown else "unknown")
-    # This harness has no native interrupt acknowledgement: a signal sent or a
-    # group observed gone proves the process side only, never an SDK answer, so
+    # This harness has no native interrupt acknowledgement: an owned group
+    # stop proves the process side only, never an SDK answer, so
     # no acknowledgement is carried at all instead of a constant.
     interrupt = InterruptEvidence(
         requested=True if state.interrupted else None,
-        basis="owned-group-signal" if state.signalled else
+        basis="owned-group-stop" if state.escalated else
         ("observer-request" if state.observer_stopped else None))
     checked = CheckedBuddy()
     if resolved is not None:

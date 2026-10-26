@@ -406,8 +406,11 @@ class FastSeamTests(NativeRunCase):
         from unittest import mock as _mock
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
         observed: list[ProcessHandle] = []
+        observe = ProcessHandle.shutdown_confirmed
 
         def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
+            if "--version" in handle.process.args:
+                return observe(handle, settle_seconds=settle_seconds)
             observed.append(handle)
             return False
 
@@ -422,11 +425,9 @@ class FastSeamTests(NativeRunCase):
         self.assertIsNotNone(result.end.native_exit_code)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-shutdown-failed")
-        # The halt really signalled: the pre-terminate check and the final
-        # confirmation were both denied for this run's own one handle.
-        self.assertEqual(len(observed), 2)
-        self.assertTrue(result.stop_evidence.interrupt.requested)
-        self.assertEqual(result.stop_evidence.interrupt.basis, "owned-group-signal")
+        # Denied confirmation applies to this run's owned handle. An EOF exit
+        # needs no signal; withholding evidence still refuses settlement.
+        self.assertGreaterEqual(len(observed), 1)
         # No orphan: with the patch gone, the run's own captured handle shows
         # the leader reaped and the whole group confirmed gone by the real
         # observation the halt performed.
@@ -452,10 +453,14 @@ class FastSeamTests(NativeRunCase):
         marker = json.loads((self.cwd / "refusal-reply.json").read_text(encoding="utf-8"))
         self.assertEqual(marker, {"id": "srv-1", "refused": True},
                          "the native peer never received the same-id refusal")
-        # The stop requested an interrupt, no signal was actually sent, and no
-        # native acknowledgement exists — the basis names the requester.
+        # A Windows root can exit before its conhost: the remaining Job then
+        # reaches force immediately. Either path still needs the whole group gone.
         self.assertTrue(result.stop_evidence.interrupt.requested)
-        self.assertEqual(result.stop_evidence.interrupt.basis, "observer-request")
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+        if os.name == "nt":
+            self.assertIn(result.stop_evidence.interrupt.basis, ("observer-request", "owned-group-stop"))
+        else:
+            self.assertEqual(result.stop_evidence.interrupt.basis, "observer-request")
 
     def test_a_reverse_request_before_the_rpc_reply_stops_after_the_refusal(self):
         os.environ["HMB_ZCODE_TEST_CASE"] = "reverse-before-send-reply"
@@ -481,7 +486,7 @@ class FastSeamTests(NativeRunCase):
                          {"id": "srv-before-reply", "refused": True})
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertTrue(result.stop_evidence.interrupt.requested)
-        self.assertEqual(result.stop_evidence.interrupt.basis, "owned-group-signal")
+        self.assertEqual(result.stop_evidence.interrupt.basis, "owned-group-stop")
 
     def test_a_late_foreign_tool_frame_reaches_the_role_before_the_protocol_check(self):
         # A late tool frame from a child session keeps its projected fact and
@@ -1668,11 +1673,11 @@ class DiscoveryStopTests(NativeRunCase):
             creation_time = (mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10)
                              if windows_api is not None else nullcontext())
             with creation_time:
-                owner = native_run.ProcessHandle(child, own_group=True, log_paths={})
+                owner = native_run.ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
 
             def reap():
                 try:
-                    native_run.halt_owned_group(child, owner, time.monotonic() + 5)
+                    native_run.halt_owned_group(owner, time.monotonic() + 5)
                 finally:
                     child.stdout.close()
             self.addCleanup(reap)
@@ -1762,7 +1767,7 @@ class DiscoveryStopTests(NativeRunCase):
         api = FakeAPI(process)
         close_error = OSError("fixture stderr close failed")
         stop_error = OSError("fixture wait observation failed")
-        with mock.patch.object(process, "wait", side_effect=stop_error):
+        with mock.patch.object(process, "poll", side_effect=stop_error):
             with self.assertRaises(Exception) as caught:
                 self.discover_with_fd_close_failure(close_error, windows_api=api, process=process)
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
@@ -1924,8 +1929,8 @@ class DiscoveryStopTests(NativeRunCase):
 
     def test_connection_construction_failure_keeps_unconfirmed_stop(self):
         halt = native_run.halt_owned_group
-        def unobserved(process, handle, deadline):
-            halt(process, handle, deadline)
+        def unobserved(handle, deadline):
+            halt(handle, deadline)
             return False, True
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
              mock.patch.object(native_run, 'halt_owned_group', side_effect=unobserved):
@@ -1954,8 +1959,8 @@ class DiscoveryStopTests(NativeRunCase):
 
     def test_unknown_connection_stop_keeps_owned_child_uncertain(self):
         halt = native_run.halt_owned_group
-        def stopped_without_receipt(process, handle, deadline):
-            halt(process, handle, deadline)
+        def stopped_without_receipt(handle, deadline):
+            halt(handle, deadline)
             raise ValueError('fixture stop observation failed')
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
              mock.patch.object(native_run, 'halt_owned_group', side_effect=stopped_without_receipt):

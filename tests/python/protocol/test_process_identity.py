@@ -245,7 +245,7 @@ class ProcessIdentityTests(unittest.TestCase):
     def test_real_owned_process_identity_and_orphan_stop(self):
         process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
                                    start_new_session=True)
-        handle = ProcessHandle(process, own_group=True, log_paths={})
+        handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
         try:
             record = handle.identity()
             self.assertEqual(set(record), set(RECORD))
@@ -264,7 +264,7 @@ class ProcessIdentityTests(unittest.TestCase):
         process = subprocess.Popen([sys.executable, "-c", "pass"], start_new_session=True)
         try:
             wait_for_unreaped_child(process.pid)
-            handle = ProcessHandle(process, own_group=True, log_paths={})
+            handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
             record = identity.capture_process_identity(handle)
             self.assertIs(identity.validate_process_identity(record), record)
             self.assertEqual(record["bootId"], identity.boot_id())

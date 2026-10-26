@@ -132,7 +132,7 @@ class WindowsProcessTests(unittest.TestCase):
                         side_effect=OSError("identity unavailable")), \
              mock.patch.object(ProcessHandle, "terminate", side_effect=OSError("stop unknown")):
             with self.assertRaises(RuntimeError) as caught:
-                ProcessHandle(process, own_group=True, log_paths={})
+                ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
         self.assertTrue(caught.exception.owned_popen_evidence.created)
         self.assertFalse(caught.exception.owned_popen_evidence.shutdown_confirmed)
         self.assertIs(caught.exception.execution_handle.process, process)
@@ -156,7 +156,7 @@ class WindowsProcessTests(unittest.TestCase):
                 with self.assertRaises(OSError) as caught:
                     process_controller.launch_controller(
                         prepare=lambda: ([sys.executable, "-c", "import time; time.sleep(30)"],
-                                         directory, dict(os.environ)), log_paths=logs)
+                                         directory, dict(os.environ)), log_paths=logs, stop_channel="stdin")
         self.assertEqual(len(children), 1)
         self.assertTrue(caught.exception.owned_popen_evidence.created)
         self.assertTrue(caught.exception.owned_popen_evidence.shutdown_confirmed)
@@ -302,7 +302,7 @@ class WindowsProcessTests(unittest.TestCase):
         api = FakeAPI(process)
         child = self.launch(api, process)
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(child, own_group=True, log_paths={})
+            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
         process.returncode = 0  # The leader exited; a child is still active.
         self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
         api.fail_at = "active"
@@ -317,13 +317,12 @@ class WindowsProcessTests(unittest.TestCase):
         api = FakeAPI(process)
         child = self.launch(api, process)
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(child, own_group=True, log_paths={})
-        with mock.patch.object(signal, "CTRL_BREAK_EVENT", 1, create=True), \
-             mock.patch("hey_my_buddy.protocol.process_handle.os.killpg",
+            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
+        with mock.patch("hey_my_buddy.protocol.process_handle.os.killpg",
                         side_effect=AssertionError("PID signaling"), create=True) as kill_group:
             handle.terminate(grace_seconds=0)
         kill_group.assert_not_called()
-        self.assertEqual(process.signals, [1])
+        self.assertEqual(process.signals, [])
         self.assertIn(("terminate", 77), api.events)
         self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
 
@@ -331,7 +330,7 @@ class WindowsProcessTests(unittest.TestCase):
         if os.name == "nt":
             self.skipTest("POSIX only")
         process = owned_popen([sys.executable, "-c", "pass"], start_new_session=True)
-        handle = ProcessHandle(process, own_group=True, log_paths={})
+        handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
         self.assertEqual(handle.wait(timeout=5), 0)
         self.assertTrue(handle.shutdown_confirmed(settle_seconds=1))
 
@@ -358,7 +357,7 @@ class WindowsProcessTests(unittest.TestCase):
         api, process, child, job = self.suspended_root()
         transfer_job_to_child(child, job)
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(child, own_group=True, log_paths={})
+            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
         api.events.clear()
         process.returncode = 0  # The created root exited; its descendants remain.
         self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
@@ -367,8 +366,7 @@ class WindowsProcessTests(unittest.TestCase):
         api.fail_at = "open"
         self.assertTrue(handle.group_alive())  # An unobservable Job is not proven gone.
         api.fail_at = None
-        with mock.patch.object(signal, "CTRL_BREAK_EVENT", 1, create=True), \
-             mock.patch.object(child, "kill", side_effect=AssertionError("PID kill")):
+        with mock.patch.object(child, "kill", side_effect=AssertionError("PID kill")):
             handle.terminate(grace_seconds=0)
         self.assertIn(("terminate", 88), api.events)
         api.events.clear()

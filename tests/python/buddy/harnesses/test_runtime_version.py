@@ -133,16 +133,16 @@ class RuntimeVersionTests(unittest.TestCase):
             with mock.patch.object(discovery.subprocess, "Popen", side_effect=refused):
                 yield
             return
-        reader = discovery._probe_posix
+        reader = discovery._probe_windows if os.name == "nt" else discovery._probe_posix
 
-        def observed(process, stop_at, deadline):
-            _reason, _output, stopped = reader(process, stop_at, deadline)
+        def observed(process, stop_at, *arguments):
+            _reason, _output, stopped = reader(process, stop_at, *arguments)
             self.assertTrue(stopped, "the synthetic fixture itself must be reaped")
             if error is not None:
                 raise error
             return reason, output, reason != "shutdown-unverified"
 
-        with mock.patch.object(discovery, "_probe_posix", side_effect=observed):
+        with mock.patch.object(discovery, reader.__name__, side_effect=observed):
             yield
 
     def assert_continued(self, result, expected_version):
@@ -324,7 +324,7 @@ class RuntimeVersionTests(unittest.TestCase):
                     nonlocal pending_fd
                     child = create(*args, **kwargs)
                     pending_fd = kwargs["stderr"]
-                    children.append((child, module.ProcessHandle(child, own_group=True, log_paths={})))
+                    children.append((child, module.ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")))
                     return child
 
                 def close_failed(fd):
@@ -340,9 +340,9 @@ class RuntimeVersionTests(unittest.TestCase):
                         raise fault
                     return close(fd)
 
-                def halt_observed(process, handle, deadline):
+                def halt_observed(handle, deadline):
                     self.assertIs(shared.call_args.kwargs["owned"][0], handle)
-                    actual, signalled = halt(process, handle, deadline)
+                    actual, signalled = halt(handle, deadline)
                     self.assertTrue(actual, "the real private fixture must be reaped first")
                     if stop_error:
                         raise halt_fault
@@ -384,7 +384,7 @@ class RuntimeVersionTests(unittest.TestCase):
                     # drops registration or skips the production stop entirely.
                     for child, handle in children:
                         try:
-                            confirmed, _signalled = halt(child, handle, time.monotonic() + 5)
+                            confirmed, _signalled = halt(handle, time.monotonic() + 5)
                             self.assertTrue(confirmed)
                         finally:
                             for stream in (child.stdin, child.stdout):
@@ -467,10 +467,14 @@ class RuntimeVersionTests(unittest.TestCase):
                                          [{"created": created, "shutdown": stopped, "exit_code": expected.exit_code}])
 
     def test_claude_connection_failure_replaces_the_stopped_version_receipt(self):
+        from hey_my_buddy.protocol.process_handle import ProcessHandle
+        observe = ProcessHandle.shutdown_confirmed
+        def unknown_native(handle, settle_seconds=2.0):
+            return observe(handle, settle_seconds=settle_seconds) if "--version" in handle.process.args else False
         for operation in (self.execute, self.discover):
             with self.subTest(seam=operation.__name__), self.harness("claude") as (case, module), \
                     mock.patch.object(module, "Connection", side_effect=ValueError("synthetic connection failure")), \
-                    mock.patch.object(module.ProcessHandle, "shutdown_confirmed", return_value=False):
+                    mock.patch.object(module.ProcessHandle, "shutdown_confirmed", unknown_native):
                 if operation == self.execute:
                     result = operation("claude", case, module)
                     self.assertEqual(result.end.reason_code, "invalid-native-result")

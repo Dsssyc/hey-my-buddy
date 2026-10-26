@@ -23,7 +23,7 @@ def read(command: list[str], environment: dict, *, entry: str | None = None) -> 
                         env=native_environment(environment, command=command, entry=entry),
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                         start_new_session=True, close_fds=True)
-    handle = ProcessHandle(child, own_group=True, log_paths={})
+    handle = ProcessHandle(child, stop_channel="stdin", own_group=True, log_paths={})
     try:
         connection = Connection(child, time.monotonic() + 8, threading.Event())
         connection.on_request = lambda message: connection.send({"id": message["id"], "error": {
@@ -40,9 +40,9 @@ def read(command: list[str], environment: dict, *, entry: str | None = None) -> 
         billing["provider"] = provider
         return billing
     finally:
-        handle.terminate(grace_seconds=0.25)
+        stopped, _ = handle.terminate(grace_seconds=0.25)
         for stream in (child.stdin, child.stdout):
             if stream is not None:
                 stream.close()
-        if not handle.shutdown_confirmed():
+        if not stopped:
             raise BoardError('HARNESS_ACCOUNT_STOP_UNCONFIRMED', 'The account read process stop could not be confirmed')
