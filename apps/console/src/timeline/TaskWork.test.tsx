@@ -501,7 +501,7 @@ it("keeps the current buddy's display name in the row and only duration on its b
   const source = timeline.spans.find(span => span.kind === "execution")!;
   const buddy = { harness: "codex", provider: "openai", model: "gpt-6.1-sol", effort: "high" };
   timeline.rows = [{ ...timeline.rows.find(row => row.runId === source.runId)!, buddy, acceptedAt: null, createdAt: source.startAt! }];
-  timeline.spans = [{ ...source, buddy }];
+  timeline.spans = [{ ...source, buddy: { ...buddy, effort: null } }];
   timeline.events = [];
   timeline.observedAt = source.endAt!;
   setup({ timeline, buddies: [{ ...buddy, label: "GPT-6.1-Sol · high" }] });

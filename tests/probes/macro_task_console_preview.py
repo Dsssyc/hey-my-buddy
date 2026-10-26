@@ -2033,6 +2033,8 @@ def span_views(entry: dict) -> list[dict]:
                               if record["attemptId"] == item["attemptId"]) if item["kind"] == "routing" else attempt)
         views.append({
             **item, "runId": entry["runId"],
+            # Match execution reads from attempts, which do not record effort.
+            "buddy": {**item["buddy"], "effort": None} if execution and item["buddy"] else item["buddy"],
             "expectedSeconds": attempt["expectedSeconds"]
             if attempt is not None else None,
             "reminders": attempt_view(entry, attempt)["reminders"] if current else None,
@@ -3037,6 +3039,8 @@ def validate_fixtures() -> list[str]:
                     problems.append(f"{span['spanId']}: non-execution span carries turn facts")
             elif span["expectedSeconds"] is None or span["expectedSeconds"] <= 0 or span["inquiries"] is None:
                 problems.append(f"{span['spanId']}: execution span lacks turn facts")
+            if span["kind"] == "execution" and span["buddy"] is not None and span["buddy"]["effort"] is not None:
+                problems.append(f"{span['spanId']}: execution buddy must not invent an unrecorded effort")
     live = next(span for span in timeline["spans"] if span["spanId"] == "execution:att-a3-1")
     if (live["expectedSeconds"] != 600 or live["reminders"] is None
             or not live["reminders"]["overdue"] or not live["reminders"]["possiblyStuck"]

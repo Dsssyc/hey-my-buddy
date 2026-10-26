@@ -26,7 +26,7 @@ async function refineFixture(page: import("@playwright/test").Page, clustered = 
     waiting!.title = "仍在等 Host：橙色虚线延伸到现在"; waiting!.state = "delivered";
     const seed = timeline.spans.find(span => span.spanId === "execution:att-a1-2")!;
     const span = (runId: string, spanId: string, start: number, end: number, buddy = timeline.rows.find(row => row.runId === runId)!.buddy) => ({
-      ...seed, runId, spanId, startAt: at(start), endAt: at(end), buddy, expectedSeconds: null,
+      ...seed, runId, spanId, startAt: at(start), endAt: at(end), buddy: buddy ? { ...buddy, effort: null } : null, expectedSeconds: null,
       inquiries: [], reminders: null, error: undefined, resultStatus: "ok" as const,
     });
     timeline.spans = [
@@ -59,7 +59,13 @@ for (const theme of ["dark", "light"] as const) test.describe(`timeline refineme
   test("keeps identities, paired actions, narrow failures and wait origins readable", async ({ page }) => {
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await refineFixture(page);
+    const read = page.waitForResponse(response => new URL(response.url()).pathname === `/api/macro-tasks/${macro}/timeline`);
     await open(page, `#tasks/${macro}`);
+    const timeline = await (await read).json() as MacroTaskTimeline;
+    for (const span of timeline.spans.filter(span => span.kind === "execution")) {
+      expect(span.buddy!.effort).toBeNull();
+      expect(timeline.rows.find(row => row.runId === span.runId)!.buddy!.effort).toBeTruthy();
+    }
     await expect(page.locator('[data-key="span:failed-narrow"]')).toBeVisible();
     await settle(page);
     await page.mouse.move(0, 0);

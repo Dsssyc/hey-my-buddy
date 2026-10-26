@@ -27,7 +27,8 @@ test("a running narrow bar omits its repeated identity and places a changed iden
     live.reminders = null;
     live.expectedSeconds = null;
     live.inquiries = [];
-    timeline.rows.find(row => row.runId === live.runId)!.buddy = { ...live.buddy!, provider: "another-provider" };
+    const row = timeline.rows.find(row => row.runId === live.runId)!;
+    row.buddy = { ...row.buddy!, provider: "another-provider" };
     timeline.events = timeline.events.filter(event => event.runId !== live.runId);
     // Keep the fitted scale independent of this span's length.
     timeline.scopeComplete = false;
@@ -87,5 +88,5 @@ test("a running narrow bar omits its repeated identity and places a changed iden
   expect(edgeWidth).toBeLessThanOrEqual(shortWidth + 0.01);
   const external = (await icon.boundingBox())!;
   await page.mouse.move(external.x + external.width / 2, external.y + external.height / 2);
-  await expect(page.locator('[data-slot=timeline-status]')).toContainText("claude / anthropic / claude-opus-5-5 / high");
+  await expect(page.locator('[data-slot=timeline-status]')).toContainText("claude / anthropic / claude-opus-5-5 /");
 });
