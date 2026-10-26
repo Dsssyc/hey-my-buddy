@@ -48,7 +48,7 @@ function turn(index: number, overrides: Partial<Turn> = {}): Turn {
 
 export const result = (index: number, summary: string, remaining: string[] = []): ResultTurn => ({ ...turn(index), summary, remaining });
 
-export const NO_BASIS: Basis = { constraints: {}, requiredCapabilities: [], candidateCount: null, excluded: [], coolingCount: null, cooling: [], preferences: [] };
+export const NO_BASIS: Basis = { constraints: {}, requiredCapabilities: [], candidateCount: null, excluded: [], overloadedModelServices: [], cooling: [], preferences: [] };
 
 export function workflow(overrides: Partial<Workflow> = {}): Workflow {
   const turns = [turn(2), turn(1)];

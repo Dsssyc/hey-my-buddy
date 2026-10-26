@@ -750,6 +750,8 @@ def _run_spans(store, connection, row) -> list[dict]:
     }
     queued_from = row["created_at"]
     for attempt in attempts:
+        receipt = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
+        error = receipt.get("error")
         continuation = continuations.get(attempt["attempt_id"])
         queue_start = continuation["created_at"] if continuation is not None else queued_from
         admitted = attempt["created_at"]
@@ -776,8 +778,8 @@ def _run_spans(store, connection, row) -> list[dict]:
             inquiries=inquiries_by_attempt.get(attempt["attempt_id"], []),
             generation=attempt["generation"], disposition=attempt["disposition"],
             resultStatus=attempt["result_status"],
-            tokenUsage=json.loads(attempt["token_usage_json"]) if attempt["token_usage_json"] else None,
-            error=(str(attempt["error"])[:SUMMARY_LIMIT] if attempt["error"] else None),
+            tokenUsage=(receipt.get("result") or {}).get("tokenUsage"),
+            error=(str(error)[:SUMMARY_LIMIT] if error else None),
         ))
         queued_from = attempt["finished_at"] or attempt["created_at"]
     if row["state"] == "queued" and row["run_state"] != "awaiting-host":
@@ -847,11 +849,13 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     spans = []
     for attempt in connection.execute(
         "SELECT attempt_id, execution_state, shutdown_confirmed, ownership, started_at, finished_at, created_at,"
-        " json_extract(result_json,'$.status') AS result_status, result_json, error, token_usage_json"
+        " json_extract(result_json,'$.status') AS result_status, result_json"
         " FROM attempts WHERE task_id=? ORDER BY generation", (decision_task_id,)
     ).fetchall():
         state, confirmed, uncertain = _attempt_state(attempt)
-        attempt_output = (json.loads(attempt['result_json']) if attempt['result_json'] else {}).get('result') or {}
+        receipt = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
+        attempt_output = receipt.get("result") or {}
+        error = receipt.get("error")
         span_routing = routing
         if isinstance(attempt_output, dict) and 'routingMode' in attempt_output:
             span_routing = {**routing, **router.routing_facts(attempt_output)}
@@ -864,11 +868,11 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
             state, attempt_id=attempt["attempt_id"], shutdown_confirmed=confirmed, uncertain=uncertain,
             decisionTaskId=decision_task_id, resultStatus=attempt["result_status"],
             routing=span_routing,
-            tokenUsage=json.loads(attempt["token_usage_json"]) if attempt["token_usage_json"] else None,
+            tokenUsage=attempt_output.get("tokenUsage"),
             disposition=("abstention" if abstention and attempt["result_status"] != "cancelled"
                          else "routing-failed" if record and record["status"] in ("failed", "needs-host") and output.get("code")
                          else None),
-            error=(str(attempt["error"])[:SUMMARY_LIMIT] if attempt["error"] else None),
+            error=(str(error)[:SUMMARY_LIMIT] if error else None),
         ))
         spans[-1]["decisionId"] = record["decision_id"] if record else None
     return spans

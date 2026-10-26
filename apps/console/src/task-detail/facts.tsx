@@ -16,11 +16,11 @@ export function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
     : ending.cause === "console-stop" ? stopActorText("console")
     : ending.cause ? t(`termination.${ending.cause}`, { defaultValue: ending.cause }) : null;
   return [
-    cause ? t("ending.cause", { cause }) : ending.stoppedBy || ending.quota ? null : t("ending.unrecorded"),
+    cause ? t("ending.cause", { cause }) : ending.stoppedBy || ending.rejectionCode ? null : t("ending.unrecorded"),
     ending.stoppedBy ? stopActorText(ending.stoppedBy) : null,
     ending.actor ? `${actorRoleText(ending.actor.role)} · ${ending.actor.id}` : null,
     ending.note,
-    ending.quota ? t(`quota.${ending.quota}`) : null,
+    ending.rejectionCode ? t(`providerRejection.${ending.rejectionCode}`) : null,
   ].filter(Boolean).join(" · ");
 }
 
@@ -47,8 +47,11 @@ function basisLines(basis: Basis, t: TFunction<"taskDetail">): string[] {
     ...(basis.excluded.length > 0
       ? [t("basis.excluded", { n: basis.excluded.length, list: basis.excluded.map(item => item.note ? `${named(item.buddy)} (${item.note})` : named(item.buddy)).join("; ") })]
       : []),
-    ...((basis.coolingCount ?? basis.cooling.length) > 0
-      ? [t("basis.cooling", { n: basis.coolingCount ?? basis.cooling.length,
+    ...(basis.overloadedModelServices.length > 0
+      ? [t("basis.overloaded", { n: basis.overloadedModelServices.length,
+        list: basis.overloadedModelServices.map(item => [item.harness, item.provider, item.model].join(" / ")).join("; ") })] : []),
+    ...(basis.cooling.length > 0
+      ? [t("basis.cooling", { n: basis.cooling.length,
         list: basis.cooling.map(item => t("basis.coolingBuddy", { buddy: named(item.buddy),
           time: item.coolingUntil ? formatCoolingTime(Date.parse(item.coolingUntil)) : t("unrecorded") })).join("; ") })]
       : []),

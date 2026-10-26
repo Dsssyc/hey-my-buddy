@@ -28,7 +28,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         self.assertEqual(code, 0, reply)
         return reply
 
-    def quota_failure(self, *, locked=False):
+    def provider_rejection(self, *, locked=False):
         submitted = self.call("submit", {**BUDDY, "requestId": "quota-recovery", "hostId": "host-1",
             "task": "Implement the fixture change", "cwd": str(self.repo), "buddyLocked": locked,
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}})
@@ -48,7 +48,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         # private session record's turn-end code is the only native failure
         # source, and only a recognized quota code surfaces as one.
         receipt = self.call("result", {"runId": submitted["runId"]})
-        failure = (receipt.get("result") or {}).get("quotaFailure")
+        failure = (receipt.get("result") or {}).get("providerRejection")
         self.assertIsNotNone(failure, "the offline quota death lost its machine code")
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["nativeCode"], "QUOTA")
@@ -56,9 +56,9 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
         self.assertIsNotNone(current["currentTurn"]["tokenUsage"])
         return submitted, current, partial
 
-    def test_quota_failure_seals_then_continues_a_new_buddy_in_the_same_checkout(self):
+    def test_provider_rejection_seals_then_continues_a_new_buddy_in_the_same_checkout(self):
         with self.daemon(env=self.env()):
-            submitted, failed, partial = self.quota_failure()
+            submitted, failed, partial = self.provider_rejection()
             path = failed["workspace"]["path"]
             continued = self.call("continue", {"runId": failed["runId"], "commandId": "change-after-quota",
                 "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
@@ -90,9 +90,9 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             self.assertEqual((target / "tracked.txt").read_text(encoding="utf-8"), "partial work preserved after quota failure\n")
             self.assertTrue((target / "mock-output.txt").is_file())
 
-    def test_quota_failure_cannot_override_a_user_locked_buddy(self):
+    def test_provider_rejection_cannot_override_a_user_locked_buddy(self):
         with self.daemon(env=self.env()):
-            submitted, failed, _partial = self.quota_failure(locked=True)
+            submitted, failed, _partial = self.provider_rejection(locked=True)
             code, refused = self.cli("continue", json.dumps({"runId": failed["runId"], "commandId": "refused-override",
                 "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
                 "buddy": {**BUDDY, "effort": "high"}, "note": "Attempt a locked replacement",
@@ -103,7 +103,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
 
     def test_failed_micro_task_conclusion_reclaims_checkout_but_retains_partial_artifacts(self):
         with self.daemon(env=self.env()):
-            submitted, failed, partial = self.quota_failure()
+            submitted, failed, partial = self.provider_rejection()
             common = {"runId": failed["runId"], "controlFile": submitted["controlFile"]}
             # The Host edits the failed checkout inside the authorized scope before
             # concluding: the conclusion must seal these changes as its own
@@ -140,7 +140,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             self.assertTrue(Path(host_artifact["diffPath"]).is_file())
 
 
-class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
+class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
     def setUp(self):
         super().setUp()
         from support import FIXTURE_CATALOG
@@ -155,10 +155,38 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
     def env(self):
         environment = {**super().env(), "CODEX_HOME": str(self.directory / "codex-home"),
                        "HMB_CODEX_FIXTURE_STATE": str(self.directory / "codex-native.json"),
-                       "HMB_CODEX_FIXTURE_CASE": "quota-failure"}
+                       "HMB_CODEX_FIXTURE_CASE": getattr(self, "codex_case", "quota-failure")}
         select_fixture(environment, self.directory, "codex",
                        Path(__file__).resolve().parents[2] / "buddy/harnesses/codex/fixtures/mock_quota_codex.py")
         return environment
+
+    def test_codex_overload_is_visible_directly_in_get_await_and_list(self):
+        self.codex_case = "overload-activity-text"
+        with self.daemon(env=self.env()):
+            submitted = self.call("submit", {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low",
+                "requestId": "codex-overload", "hostId": "host-1", "task": "Offline model overload",
+                "cwd": str(self.repo), "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]}})
+            awaited = self.call("await", {"runId": submitted["runId"], "waitSeconds": 90})
+            current = self.call("get", {"runId": submitted["runId"]})
+            self.assertEqual(current["state"], "failed", current)
+            self.assertEqual(awaited["status"], "failed", awaited)
+            for failure in (current["providerRejection"], awaited["result"]["providerRejection"]):
+                self.assertEqual(failure["code"], "overloaded")
+                self.assertEqual(failure["nativeCode"], "serverOverloaded")
+                self.assertEqual(failure["rejectionPhase"], "during-model")
+            for method in ("get", "await"):
+                code, brief = self.cli(method, json.dumps({"runId": submitted["runId"]}), env=self.env())
+                self.assertEqual(code, 0, brief)
+                failure = brief["providerRejection"] if method == "get" else brief["result"]["providerRejection"]
+                self.assertEqual((failure["code"], failure["nativeCode"]), ("overloaded", "serverOverloaded"))
+            full_list = self.call("list", {"limit": 100})
+            code, brief_list = self.cli("list", json.dumps({"limit": 100}), env=self.env())
+            self.assertEqual(code, 0, brief_list)
+            for reply in (full_list, brief_list):
+                row = next(item for item in reply["runs"] if item["runId"] == submitted["runId"])
+                self.assertNotIn("quotaFailure", row)
+                self.assertEqual((row["providerRejection"]["code"], row["providerRejection"]["nativeCode"]),
+                                 ("overloaded", "serverOverloaded"))
 
     def test_failed_codex_reconstructs_in_dsh_with_bound_partial_output_and_message(self):
         with self.daemon(env=self.env()):
@@ -170,7 +198,7 @@ class CrossHarnessQuotaRecoveryTests(HostQuotaRecoveryTests):
             self.assertEqual(failed["state"], "failed", failed)
             partial = next(item for item in failed["artifacts"] if item["kind"] == "partial-output")
             receipt = self.call("result", {"runId": submitted["runId"]})
-            self.assertEqual(receipt["result"]["quotaFailure"]["code"], "quota-exceeded")
+            self.assertEqual(receipt["result"]["providerRejection"]["code"], "quota-exceeded")
             self.assertIsNotNone(failed["currentTurn"]["tokenUsage"])
             continued = self.call("continue", {"runId": submitted["runId"], "commandId": "change-harness",
                 "expectedRevision": failed["revision"], "controlFile": submitted["controlFile"],
@@ -288,6 +316,6 @@ class NativeContextFailureTests(MicroTaskWorkerTestCase):
 def load_tests(loader, _tests, _pattern):
     import unittest
     suite = unittest.TestSuite()
-    for cls in (HostQuotaRecoveryTests, CrossHarnessQuotaRecoveryTests, NativeContextFailureTests):
+    for cls in (HostQuotaRecoveryTests, CrossHarnessProviderRejectionRecoveryTests, NativeContextFailureTests):
         suite.addTests(cls(name) for name in cls.__dict__ if name.startswith("test_"))
     return suite

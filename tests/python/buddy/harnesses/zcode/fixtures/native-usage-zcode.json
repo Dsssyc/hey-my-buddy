@@ -162,7 +162,7 @@
     "completeness": "complete",
     "lastAssistantText": "Fixture final answer: bounded work done."
   },
-  "quotaFailureTurn": {
+  "providerRejectionTurn": {
     "comment": "The exported turn.failed shape: error.type plus error.code and the strict attribution object. The raw message is deliberately secret-shaped so a test can prove the controller never surfaces provider text.",
     "error": {"type": "AiSdkModelAdapterError", "code": "model_rate_limited",
               "message": "stream failed for https://models.example.com/v1 key sk-fixture-never-public",

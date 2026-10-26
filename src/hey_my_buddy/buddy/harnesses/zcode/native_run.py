@@ -11,7 +11,7 @@ observer's feedback, never by a second native path.
 
 The driver owns protocol integrity only: root/session/input/call identity and
 order, signatures, the native configuration readback, tool/activity/usage/
-quota/failure facts and the two-layer stop evidence. Unknown legal events and
+provider rejection facts and the two-layer stop evidence. Unknown legal events and
 tool facts are normalized and retained first, then handed to the role
 observer, which answers continue, stop or one correction; the driver executes
 that feedback on the same app-server process and the same total deadline and
@@ -72,7 +72,7 @@ from ..run_contract import (
     EvidenceRef,
     InterruptEvidence,
     NativeEvidence,
-    NativeFailurePackage,
+    ProviderRejectionPackage,
     UnknownEvents,
     UsagePackage,
     ToolEvidencePackage,
@@ -107,7 +107,7 @@ from .protocol import (
     RootTurnEvidence,
     ZcodeAttemptUsage,
     combined_usage,
-    quota_failure,
+    provider_rejection,
     native_turn_failure,
 )
 from .tool_evidence import ZcodeToolFacts
@@ -639,8 +639,8 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
-    native_failure: dict | None = None
-    quota_failure: dict | None = None
+    native_error: dict | None = None
+    provider_rejection: dict | None = None
     root_model_activity: bool = False
     model_started: bool = False
     shutdown: bool = False
@@ -1135,10 +1135,10 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             # error distinct from a deadline, a user cancel or a transport break.
             failure = getattr(error, "failure", None)
             if isinstance(failure, dict):
-                state.native_failure = failure
-                classified = quota_failure(failure)
+                state.native_error = failure
+                classified = provider_rejection(failure)
                 if classified is not None:
-                    state.quota_failure = {**classified, "source": "zcode/session-turn-failed",
+                    state.provider_rejection = {**classified, "source": "zcode/session-turn-failed",
                                            "observedAt": utc_now()}
             outcome.record = None
         except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
@@ -1152,7 +1152,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                                        completion_carrier=completion_carrier, outcome=outcome, session=session)
         if session is not None:
             session.record.project(session.close)
-        if state.quota_failure is not None:
+        if state.provider_rejection is not None:
             usage = outcome.attempt_usage.raw_usage() if outcome.attempt_usage is not None else None
             has_output = bool(usage and any(type(usage.get(key)) is int and usage[key] > 0
                                             for key in ("outputTokens", "reasoningOutputTokens")))
@@ -1161,7 +1161,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                           or state.reason in ("invalid-native-result", "invalid-protocol", "transport-error")
                           or bool(outcome.attempt_usage and (outcome.attempt_usage.read_incomplete
                                                             or outcome.attempt_usage.delta_conflict)))
-            state.quota_failure.update(
+            state.provider_rejection.update(
                 resetsAt=None,
                 rejectionPhase="unknown" if incomplete else
                 "during-model" if state.root_model_activity or has_output or has_text else "before-model")
@@ -1584,7 +1584,7 @@ def _finish_result(*, request: RunRequest, spawn: _Spawn | None, state: _RunStat
 
 _tool_package = shape_guard(ToolEvidencePackage)
 _usage_package = shape_guard(UsagePackage)
-_quota_package = shape_guard(NativeFailurePackage)
+_provider_rejection_package = shape_guard(ProviderRejectionPackage)
 _native_error_package = shape_guard(NativeErrorRecord)
 _message_package = shape_guard(LastAssistantMessagePackage)
 _activity_package_fn = shape_guard(ActivityPackage)
@@ -1682,8 +1682,8 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
         effective_policy=effective,
         activity=_activity_package(projection),
         usage=_usage_package(state.token_usage),
-        native_error=_native_error_package(state.native_failure),
-        native_failure=_quota_package(state.quota_failure),
+        native_error=_native_error_package(state.native_error),
+        provider_rejection=_provider_rejection_package(state.provider_rejection),
         last_assistant_message=_message_package(state.last_assistant_message),
         continuation=continuation,
         stop_evidence=StopEvidence(native=stop_native, interrupt=interrupt),

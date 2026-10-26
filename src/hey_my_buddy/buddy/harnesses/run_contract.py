@@ -406,10 +406,10 @@ def _normalized_package(kind: str, value: Any) -> Optional[FrozenJson]:
                        reason=str(error.message)[:200]) from None
     elif kind == "usage":
         normalized = usage_protocol.normalize_token_usage(unpacked)
-    elif kind == "nativeFailure":
-        # Every harness reports its rejection phase in this quota package;
+    elif kind == "providerRejection":
+        # Every harness reports its rejection phase in this provider rejection package;
         # the common codec refuses a missing phase rather than inferring one.
-        normalized = usage_protocol.normalize_quota_failure(unpacked)
+        normalized = usage_protocol.normalize_provider_rejection(unpacked)
     elif kind == "lastAssistantMessage":
         normalized = usage_protocol.normalize_last_assistant_message(unpacked)
     else:  # pragma: no cover - the kind set is closed above
@@ -437,7 +437,7 @@ def _validated_tool_evidence(value: Any) -> Optional[FrozenJson]:
 def _native_error_record(value: Any) -> Optional[FrozenJson]:
     """One harness's own whitelisted native failure attribution, as JSON.
 
-    This is a second, separate existing fact beside the quota attribution: the
+    This is a second, separate existing fact beside the provider rejection attribution: the
     harness already projects the native failure attribution through its own
     whitelist before it reaches this field, and the real shapes are structured
     (nested attribution objects, nullable codes and text summaries), so the
@@ -456,8 +456,8 @@ def _native_error_record(value: Any) -> Optional[FrozenJson]:
 #: One canonical fact package, validated by its own projection on every path.
 ActivityPackage = Annotated[Optional[FrozenJson], BeforeValidator(partial(_normalized_package, "activity"))]
 UsagePackage = Annotated[Optional[FrozenJson], BeforeValidator(partial(_normalized_package, "usage"))]
-NativeFailurePackage = Annotated[Optional[FrozenJson],
-                                 BeforeValidator(partial(_normalized_package, "nativeFailure"))]
+ProviderRejectionPackage = Annotated[Optional[FrozenJson],
+                                 BeforeValidator(partial(_normalized_package, "providerRejection"))]
 LastAssistantMessagePackage = Annotated[Optional[FrozenJson],
                                         BeforeValidator(partial(_normalized_package, "lastAssistantMessage"))]
 ToolEvidencePackage = Annotated[Optional[FrozenJson], BeforeValidator(_validated_tool_evidence)]
@@ -559,7 +559,7 @@ class RunResult(InternalModel):
     effective_policy: EffectivePolicy = Field(default_factory=EffectivePolicy)
     activity: ActivityPackage = None
     usage: UsagePackage = None
-    native_failure: NativeFailurePackage = None
+    provider_rejection: ProviderRejectionPackage = None
     native_error: NativeErrorRecord = None
     last_assistant_message: LastAssistantMessagePackage = None
     session_record_failure: Optional[SessionRecordFailure] = None

@@ -379,7 +379,7 @@ class ResumeUsageBoundaryTests(NativeResumeCase):
         self.assertIsNone(result.usage, "an unprovable boundary is unknown, never cumulative")
         self.assertIsNone(result.last_assistant_message,
                           "the previous turn's assistant text is not this turn's fact")
-        self.assertIsNone(result.native_failure)
+        self.assertIsNone(result.provider_rejection)
         boundary = _record_facts(result)["resumeBoundary"]
         self.assertFalse(boundary["proven"])
         self.assertEqual(boundary["reason"], reason)

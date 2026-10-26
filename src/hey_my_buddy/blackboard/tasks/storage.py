@@ -281,7 +281,7 @@ def _allocation_reference_sets(rows, allocations, *, directories=None):
         unproven = False
         for field in row.keys():
             value = row[field]
-            if isinstance(value, str) and (field.endswith('_json') or field in ('exclusive_resources', 'required_capabilities', 'log_paths')):
+            if isinstance(value, str) and (field.endswith('_json') or field in ('exclusive_resources', 'required_capabilities')):
                 try:
                     value = json.loads(value)
                 except ValueError:

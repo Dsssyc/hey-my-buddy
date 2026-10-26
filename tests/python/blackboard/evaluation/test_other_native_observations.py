@@ -20,13 +20,13 @@ from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixtur
 from hey_my_buddy.protocol import usage
 from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ProcessHandle
-from hey_my_buddy.buddy.harnesses.claude.protocol import QuotaRejected, TurnEvidence
+from hey_my_buddy.buddy.harnesses.claude.protocol import ProviderRejected, TurnEvidence
 from hey_my_buddy.buddy.roles.controller import worker_executor
 from hey_my_buddy.buddy.harnesses.zcode.protocol import (
     NativeRpcError,
     ZcodeAttemptUsage,
     optional_native_call,
-    quota_failure,
+    provider_rejection,
 )
 
 FIXTURES = Path(__file__).resolve().parents[2] / "buddy" / "harnesses"
@@ -142,10 +142,10 @@ class ClaudeNativeRecordTests(unittest.TestCase):
 
     def test_a_rejection_keeps_its_native_limit_and_reset(self):
         evidence = self.evidence()
-        with self.assertRaises(QuotaRejected) as caught:
+        with self.assertRaises(ProviderRejected) as caught:
             evidence.observe({"type": "rate_limit_event",
                               "rate_limit_info": CLAUDE_NATIVE["rateLimitRejected"]["rate_limit_info"]})
-        self.assertEqual(caught.exception.rate_limit_type, "five_hour")
+        self.assertEqual(caught.exception.native_code, "five_hour")
         self.assertEqual(caught.exception.resets_at, 1790467200)
 
 
@@ -207,7 +207,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(message["text"], expected["lastAssistantText"])
         self.assertEqual(message["source"], "claude/stream-json-root-assistant-message")
         self.assertFalse(message["truncated"])
-        self.assertNotIn("quotaFailure", outcome.result)
+        self.assertNotIn("providerRejection", outcome.result)
 
     def test_a_missing_result_usage_falls_back_to_the_bound_assistant_records(self):
         outcome = self.execute("usage-partial")
@@ -235,7 +235,7 @@ class ClaudeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(token_usage["completeness"], "partial")
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], "Read the fixture file first.")
-        failure = outcome.result["quotaFailure"]
+        failure = outcome.result["providerRejection"]
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["nativeCode"], "five_hour")
         self.assertEqual(failure["rejectionPhase"], "during-model")
@@ -409,14 +409,14 @@ class ZcodeNativeRecordTests(unittest.TestCase):
         self.assertEqual(passing.deadline, original)
 
     def test_quota_attribution_uses_only_structured_native_codes(self):
-        failure = ZCODE_NATIVE["quotaFailureTurn"]
-        self.assertEqual(quota_failure(failure["error"]),
+        failure = ZCODE_NATIVE["providerRejectionTurn"]
+        self.assertEqual(provider_rejection(failure["error"]),
                          {"nativeCode": failure["expectedCode"], "code": failure["expectedClass"]})
-        self.assertEqual(usage.classify_quota_code(failure["expectedCode"]), "unknown")
+        self.assertEqual(usage.classify_provider_rejection_code(failure["expectedCode"]), "unknown")
         unrelated = {"errorType": "AiSdkModelAdapterError", "code": "model_context_exceeded",
                      "attribution": {"reason": "context_window", "providerErrorCode": "1308"}}
-        self.assertIsNone(quota_failure(unrelated))
-        self.assertIsNone(quota_failure({}))
+        self.assertIsNone(provider_rejection(unrelated))
+        self.assertIsNone(provider_rejection({}))
 
 
 class ZcodeAdapterObservationTests(unittest.TestCase):
@@ -477,7 +477,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(token_usage["nativeRecords"], expected["records"])
         self.assertEqual(token_usage["completeness"], "complete")
         self.assertNotIn("quota", outcome.result)
-        self.assertNotIn("quotaFailure", outcome.result)
+        self.assertNotIn("providerRejection", outcome.result)
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], expected["lastAssistantText"])
         self.assertEqual(message["source"], "zcode/session-root-assistant-message")
@@ -518,9 +518,9 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
     def test_a_failed_quota_turn_keeps_its_native_code_and_observed_delta(self):
         _, outcome = self.execute("usage-quota")
         self.assertEqual(outcome.status, "failed", outcome.to_report())
-        failure = outcome.result["quotaFailure"]
-        self.assertEqual(failure["nativeCode"], ZCODE_NATIVE["quotaFailureTurn"]["expectedCode"])
-        self.assertEqual(failure["code"], ZCODE_NATIVE["quotaFailureTurn"]["expectedClass"])
+        failure = outcome.result["providerRejection"]
+        self.assertEqual(failure["nativeCode"], ZCODE_NATIVE["providerRejectionTurn"]["expectedCode"])
+        self.assertEqual(failure["code"], ZCODE_NATIVE["providerRejectionTurn"]["expectedClass"])
         self.assertEqual(failure["source"], "zcode/session-turn-failed")
         self.assertEqual(failure["rejectionPhase"], "during-model")
         self.assertEqual(outcome.result["tokenUsage"]["source"], ZCODE_NATIVE["expectedDelta"]["source"])
@@ -541,7 +541,7 @@ class ZcodeAdapterObservationTests(unittest.TestCase):
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertIsNone(outcome.result["tokenUsage"])
         self.assertNotIn("quota", outcome.result)
-        self.assertNotIn("quotaFailure", outcome.result)
+        self.assertNotIn("providerRejection", outcome.result)
         self.assertIsNone(outcome.result["lastAssistantMessage"])
 
 

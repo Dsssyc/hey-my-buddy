@@ -217,7 +217,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "ownedMicroTasks",
                 "hostConclusion",
                 "providerCooling",
-                "quotaFailure",
+                "providerRejection",
                 "macroTaskId",
                 "title",
                 "fixes",
@@ -442,8 +442,8 @@ def task_brief(view: dict) -> dict:
     if "workflowShutdown" in view:
         brief["workflowShutdown"] = _shutdown(view["workflowShutdown"])
     brief["tokenUsage"] = view.get("tokenUsage")
-    if view.get("quotaFailure") is not None:
-        brief["quotaFailure"] = view["quotaFailure"]
+    if view.get("providerRejection") is not None:
+        brief["providerRejection"] = view["providerRejection"]
     activity = view.get("activity")
     if activity:
         brief["activity"] = activity
@@ -461,7 +461,7 @@ def list_brief(response: dict) -> dict:
     rows = response["runs"]
     brief_rows = []
     for row in rows:
-        entry = _pick(row, ("runId", "requestId", "adapter", "state", "workflowState", "awaitingHost", "createdAt"))
+        entry = _pick(row, ("runId", "requestId", "adapter", "state", "workflowState", "awaitingHost", "createdAt", "providerRejection"))
         lineage = row.get("lineage")
         if lineage is not None:
             buddy = lineage.get("buddy")

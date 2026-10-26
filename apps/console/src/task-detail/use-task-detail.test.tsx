@@ -179,7 +179,7 @@ describe("what moves the reads", () => {
   });
 
   it("reads the bounds of each decision the program made, once, and none of a Router's", async () => {
-    const bases = { "decision-1": { constraints: {}, requiredCapabilities: [], candidateCount: 1, excluded: [], coolingCount: null, cooling: [], preferences: [] } };
+    const bases = { "decision-1": { constraints: {}, requiredCapabilities: [], candidateCount: 1, excluded: [], overloadedModelServices: [], cooling: [], preferences: [] } };
     const reads = client({ routing: [routing({ source: "single-candidate" }), routing({ decisionId: "d2", source: "model-selection" })], bases });
     render(<Probe reads={reads} />);
     await settle();

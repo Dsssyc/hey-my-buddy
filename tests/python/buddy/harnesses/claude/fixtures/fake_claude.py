@@ -257,6 +257,14 @@ def run_turn(case):
     if case == "permission-mode-missing":
         del init["permissionMode"]
     send(init)
+    if case in ("overload-before", "overload-during"):
+        if case == "overload-during":
+            send({"type": "assistant", "session_id": session_id, "message": {
+                "id": "work-1", "content": [{"type": "text", "text": "partial work"}]}})
+        send({"type": "assistant", "session_id": session_id, "error": "overloaded", "message": {
+            "id": "error-1", "content": [{"type": "text", "text": "API Error: 529"}]}})
+        wait_for_interrupt()
+        return
     if case in ("bg-running", "bg-settled", "bg-not-completed"):
         send({"type": "system", "subtype": "task_started", "task_id": "task-bg-1", "task_type": "local_agent"})
         if case == "bg-settled":

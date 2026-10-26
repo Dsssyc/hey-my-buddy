@@ -267,7 +267,7 @@ class ProjectionUnitTests(unittest.TestCase):
             "status": "completed", "source": "single-candidate", "reason": "唯一合法候选，未调用 Router",
             "decisionId": "dec-1", "constraints": {"harness": "dsh"},
             "requiredCapabilities": ["execution:dsh"],
-            "routingBasis": {"candidateCount": 1, "excludedCount": 1, "excludedBuddies": [
+            "routingBasis": {"candidateCount": 1, "excludedBuddies": [
                 {"buddyId": "dsh:p:m:off", "harness": "dsh", "provider": "p", "model": "m",
                  "effort": "off", "reason": "user excluded"}]},
         }

@@ -13,7 +13,7 @@ from hey_my_buddy.buddy.harnesses.claude import protocol
 from hey_my_buddy.buddy.harnesses.claude.protocol import (
     ClaudeProtocolError,
     Connection,
-    QuotaRejected,
+    ProviderRejected,
     TurnEvidence,
     model_usage_keys,
     result_quota_denial,
@@ -70,6 +70,30 @@ class QuotaParsingTests(unittest.TestCase):
 
 
 class TurnEvidenceTests(unittest.TestCase):
+    def test_structured_root_overload_excludes_error_text_from_model_activity(self):
+        for active in (False, True):
+            evidence = TurnEvidence("session-1", "/tmp/checkout-a")
+            if active:
+                evidence.observe({"type": "assistant", "session_id": "session-1",
+                                  "message": {"content": [{"type": "text", "text": "work"}]}})
+            with self.assertRaises(ProviderRejected) as caught:
+                evidence.observe({"type": "assistant", "session_id": "session-1", "error": "overloaded",
+                                  "message": {"content": [{"type": "text", "text": "provider failure"}]}})
+            self.assertEqual(caught.exception.classification, "overloaded")
+            self.assertEqual(caught.exception.native_code, "overloaded")
+            self.assertEqual(evidence.rejection_phase(), "during-model" if active else "before-model")
+            if not active:
+                self.assertIsNone(evidence.assistant_text)
+
+    def test_overload_requires_root_structured_code_not_prose_or_status(self):
+        for extra in ({"parent_tool_use_id": "child"}, {"session_id": "other"}):
+            evidence = TurnEvidence("session-1", "/tmp/checkout-a")
+            evidence.observe({"type": "assistant", "session_id": "session-1", "error": "overloaded", **extra})
+        for frame in ({"type": "assistant", "message": {"content": [{"type": "text", "text": "overloaded"}]}},
+                      {"type": "assistant", "error": "server_error", "api_error_status": 529},
+                      {"type": "result", "subtype": "error_during_execution", "api_error_status": 529}):
+            TurnEvidence("session-1", "/tmp/checkout-a").observe(frame)
+
     def test_init_binds_session_and_cwd_and_records_model_readback(self):
         evidence = TurnEvidence("session-1", "/tmp/checkout-a")
         evidence.observe({"type": "system", "subtype": "init", "session_id": "session-1",
@@ -109,23 +133,23 @@ class TurnEvidenceTests(unittest.TestCase):
 
     def test_rejected_rate_limit_raises_quota_with_bounded_facts(self):
         evidence = TurnEvidence("session-1", "/tmp/checkout-a")
-        with self.assertRaises(QuotaRejected) as caught:
+        with self.assertRaises(ProviderRejected) as caught:
             evidence.observe({"type": "rate_limit_event", "rate_limit_info": {
                 "status": "rejected", "rateLimitType": "five_hour", "resetsAt": "2026-09-26T12:00:00Z"}})
-        self.assertEqual(caught.exception.rate_limit_type, "five_hour")
+        self.assertEqual(caught.exception.native_code, "five_hour")
         self.assertEqual(caught.exception.resets_at, "2026-09-26T12:00:00Z")
 
     def test_rejected_rate_limit_fails_even_with_a_malformed_identity(self):
-        with self.assertRaises(QuotaRejected) as caught:
+        with self.assertRaises(ProviderRejected) as caught:
             TurnEvidence("session-1", "/tmp/checkout-a").observe(
                 {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected"}})
-        self.assertEqual(caught.exception.rate_limit_type, "unknown")
+        self.assertEqual(caught.exception.native_code, "unknown")
         self.assertIsNone(caught.exception.resets_at)
-        with self.assertRaises(QuotaRejected) as malformed:
+        with self.assertRaises(ProviderRejected) as malformed:
             TurnEvidence("session-1", "/tmp/checkout-a").observe(
                 {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected",
                                                                  "rateLimitType": {"bad": "type"}}})
-        self.assertEqual(malformed.exception.rate_limit_type, "unknown")
+        self.assertEqual(malformed.exception.native_code, "unknown")
 
     def test_a_free_text_rate_limit_identity_is_never_kept_as_a_fact(self):
         # A rate-limit identity is an identifier, never free text: whitespace,
@@ -133,11 +157,11 @@ class TurnEvidenceTests(unittest.TestCase):
         # replaced with "unknown" instead of being published.
         for bad in ("five hour", "Bearer sk-ant-api03-fragment\n", "primary?x=1", "x" * 65):
             with self.subTest(bad=bad):
-                with self.assertRaises(QuotaRejected) as caught:
+                with self.assertRaises(ProviderRejected) as caught:
                     TurnEvidence("session-1", "/tmp/checkout-a").observe(
                         {"type": "rate_limit_event",
                          "rate_limit_info": {"status": "rejected", "rateLimitType": bad}})
-                self.assertEqual(caught.exception.rate_limit_type, "unknown")
+                self.assertEqual(caught.exception.native_code, "unknown")
 
     def test_quota_rejection_phase_uses_root_model_activity_only(self):
         init = {"type": "system", "subtype": "init", "session_id": "session-1", "cwd": "/tmp/checkout-a"}

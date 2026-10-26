@@ -130,7 +130,7 @@ class FreshFoldTests(SessionRecordCase):
             stream.write(''.join(json.dumps(event) + '\n' for event in turn_two_append()).encode())
         self.assertEqual(resumed_session_record_facts(self.sessions, baseline)['usage']['inputTokens'], 40)
 
-    def test_a_later_turn_clears_the_previous_quota_failure_and_activity(self):
+    def test_a_later_turn_clears_the_previous_provider_rejection_and_activity(self):
         first = turn_one()
         first[-1] = {"type": "turn/end", "seq": 3, "data": {
             "turn": 1, "reason": {"kind": "error", "error": {"code": "QUOTA"}}}}

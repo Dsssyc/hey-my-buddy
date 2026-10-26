@@ -479,8 +479,7 @@ ROUTING_A4.update(taskId=None, attemptId=None, generation=None, routerBuddyId=No
                   routerIndex=None, routerIdentities=[], routingMode=None, usage=None, budget=None,
                   source="no-candidate")
 ROUTING_A4["routingBasis"] = {
-    "candidateCount": 0, "excludedCount": 0, "excludedBuddies": [], "coolingCount": 2,
-    "coolingBuddies": [
+    "candidateCount": 0, "excludedBuddies": [], "overloadedModelServices": [], "coolingBuddies": [
         {"buddyId": f"dsh:deepseek-official:{model}:max", "harness": "dsh",
          "provider": "deepseek-official", "model": model, "effort": "max", "note": None,
          "coolingUntil": COOLING_UNTIL}
@@ -915,7 +914,7 @@ def build_runs() -> dict[str, dict]:
             ],
             attempts=[attempt("att-b2-1", 1, "finished", True, instant(6, 7), instant(6, 26), CFG_GLM,
                               error=QUOTA_ERROR, result={"finalText": QUOTA_ERROR,
-                                                        "quotaFailure": {"code": "quota-exceeded", "rejectionPhase": "during-model"}},
+                                                        "providerRejection": {"code": "quota-exceeded", "rejectionPhase": "during-model"}},
                               usage=usage("zcode-native", None, None, 4200))],
             markers=[marker(instant(6, 5), "dispatch", actor={"role": "lead", "id": "preview-run-b1"}),
                      marker(instant(6, 26), "conclude", actor={"role": "lead", "id": "preview-run-b1"}, state="failed")],
@@ -1017,7 +1016,7 @@ def build_runs() -> dict[str, dict]:
                         attempt_id="att-b9-2", buddy=CFG_FLASH, confirmed=True, generation=2, turn_index=2)],
             attempts=[attempt("att-b9-1", 1, "finished", True, instant(7, 15), instant(7, 15, 10), CFG_GLM,
                               error=QUOTA_ERROR, result={"finalText": QUOTA_ERROR,
-                                                        "quotaFailure": {"code": "quota-exceeded", "rejectionPhase": "before-model"}},
+                                                        "providerRejection": {"code": "quota-exceeded", "rejectionPhase": "before-model"}},
                               usage=None, turn_state="rejected"),
                       attempt("att-b9-2", 2, "finished", True, instant(7, 16), instant(7, 18), CFG_FLASH,
                               result="合成预览：编码样例一致。", usage=usage("dsh-native", 1700, 500, 200))],
@@ -1734,6 +1733,8 @@ def attempt_view(entry: dict, item: dict) -> dict:
         "startedAt": item["startedAt"], "finishedAt": item["finishedAt"], "createdAt": item["startedAt"],
         "updatedAt": item["finishedAt"] or item["startedAt"], "revision": 1,
         "tokenUsage": item["usage"],
+        **({"providerRejection": item["result"]["result"]["providerRejection"]}
+           if item["result"] is not None and "providerRejection" in item["result"]["result"] else {}),
         "releaseReason": item["releaseReason"],
         "reminders": ({"overdue": True, "possiblyStuck": True, "lastNativeEventAt": instant(9, 40), "toolInProgress": False}
                       if entry["runId"] == "preview-run-a3"
@@ -1797,8 +1798,8 @@ def task_view(entry: dict) -> dict:
         view.update({"result": receipt["result"],
                      "resultMeta": {key: value for key, value in receipt.items() if key != "result"},
                      "attemptId": selected["attemptId"], "resultDelivered": True})
-        if "quotaFailure" in receipt["result"]:
-            view["quotaFailure"] = receipt["result"]["quotaFailure"]
+        if "providerRejection" in receipt["result"]:
+            view["providerRejection"] = receipt["result"]["providerRejection"]
     return view
 
 
@@ -3336,15 +3337,14 @@ def validate_fixtures() -> list[str]:
         problems.append("preview-run-b2 must stay failed and record the synthetic quota exhaustion")
     if not any(item["kind"] == "partial-output" for item in quota_failed["artifacts"]):
         problems.append("preview-run-b2 must carry its sealed partial output")
-    if quota_failed["task"].get("quotaFailure", {}).get("rejectionPhase") != "during-model":
+    if quota_failed["task"].get("providerRejection", {}).get("rejectionPhase") != "during-model":
         problems.append("preview-run-b2 must retain the midturn quota failure phase")
     rerouted = workflow_get({"runId": "preview-run-b9"})
     if ([turn["state"] for turn in rerouted["turns"]] != ["returned", "rejected"]
-            or rerouted["state"] != "accepted" or rerouted["task"].get("quotaFailure") is not None):
+            or rerouted["state"] != "accepted" or rerouted["task"].get("providerRejection") is not None):
         problems.append("preview-run-b9 must preserve a rejected turn before its accepted success")
     cooled = workflow_get({"runId": "preview-run-a4"})["routing"]
     if (cooled["reason"] != reason("all-candidates-cooling", retryAt=COOLING_UNTIL)
-            or cooled["routingBasis"]["coolingCount"] != 2
             or len(cooled["routingBasis"]["coolingBuddies"]) != 2):
         problems.append("preview-run-a4 must freeze every cooling candidate and the earliest retry")
     multi_turn = workflow_get({"runId": "preview-run-a1"})

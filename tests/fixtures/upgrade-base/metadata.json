@@ -1,13 +1,24 @@
 {
-  "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or historical-form patches. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+  "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All rows originate from the base writers. The only exceptions are forms written by earlier versions, retained at the base and converted by the pending upgrade; each is derived from a base-written row with its derivation recorded. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
   "catalogSha256": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
-  "dependencyMode": "base-frozen-uv-environment",
+  "dependencyMode": "prepared-read-only-interpreter",
   "dependencyVersions": {
     "c-two": "0.9.0",
     "portalocker": "3.2.0",
     "pydantic": "2.13.5",
     "zstandard": "0.25.0"
   },
+  "derivedForms": [
+    {
+      "derivation": "Remove requested_json.routingBasis.coolingCount and coolingBuddies; simulate a pre-caadf88d row retained unchanged by the 24→25 and later conversions.",
+      "name": "pre-provider-cooling-routing-basis",
+      "row": {
+        "decisionId": "dec-00000000-0000-0000-0000-000000000002"
+      },
+      "sourceRequestId": "fixture-routing-answered",
+      "table": "decision_requests"
+    }
+  ],
   "edgeStock": {
     "partial-failed": {
       "attemptId": "00000000-0000-0000-0000-000000000137",
@@ -32,8 +43,8 @@
   },
   "fixedTimestamp": "2026-01-01T00:00:00.000Z",
   "format": 2,
-  "generationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir tests/fixtures/upgrade-base",
-  "generatorSha256": "59ff9cf213982e49b4e649f434691670c3abffef08478a9207ea061b0fe2acbe",
+  "generationCommand": "python packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir <new-private-tmp-dir> --output-dir tests/fixtures/upgrade-base",
+  "generatorSha256": "31b3c0c980707e96aecc6fbf90101b5b974f95af1d0177acd2d8073737c9eeee",
   "inquiryStock": {
     "dbDeliveredNoEntry": {
       "attemptId": "00000000-0000-0000-0000-0000000000c1",
@@ -271,10 +282,10 @@
     "src/hey_my_buddy/timestamps.py",
     "src/hey_my_buddy/windows_files.py"
   ],
-  "operationsSha256": "ba528140c3aece233a000f5c384232a9d5d1a43e9357618aac9fbe0dd2349046",
-  "pythonInterpreter": "<fixture-root>/base/.venv/bin/python",
-  "pythonVersion": "3.12.12",
-  "resourcesSha256": "7c20e4ef47138ae67475c39888b784c00af0732f4ac96f8f207e2a8107b84498",
+  "operationsSha256": "304624d88421338412b9079c2a9270f04f801f1c4aef22195014c0587ec72218",
+  "pythonInterpreter": "<prepared-python>",
+  "pythonVersion": "3.12.10",
+  "resourcesSha256": "4ab99d18a2f950956a904501fc96d218a55820e9d22507b3785ebba948ba6799",
   "restoreInterface": "load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays 29; baseline only after return",
   "routerBuddyIds": [
     "codex:openai:fixture-alpha:high",
@@ -483,7 +494,7 @@
   },
   "sourceTree": "7132abb947d24ed0ebacf6e2a8864a4b059ab7c4",
   "sourceVersion": "0.53.0",
-  "sqlSha256": "e48b0f467c29b34dfbda6c6e12e4a48fe404ac3d7fb46d2dadab59acbd469040",
+  "sqlSha256": "ccb4ded0d1566d926dfa39602f713094c95e1a16b1738ab606bd4a9d8c7bc0f2",
   "stableIds": {
     "accepted": "00000000-0000-0000-0000-000000000044",
     "cancelled": "00000000-0000-0000-0000-000000000072",

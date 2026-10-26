@@ -113,7 +113,7 @@
     "completeness": "complete",
     "lastAssistantText": "Fixture final answer: the bounded work is done.\n"
   },
-  "quotaFailure": {
+  "providerRejection": {
     "comment": "The same event vocabulary on a provider quota failure; the native code stays structured.",
     "event": {
       "type": "turn/end",

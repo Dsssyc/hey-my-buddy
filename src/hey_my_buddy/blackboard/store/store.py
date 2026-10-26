@@ -500,6 +500,7 @@ class BoardStore:
     @staticmethod
     def _attempt_view(row: sqlite3.Row, *, include_result: bool = True) -> dict:
         """Public attempt record. The claim capability and nonce verifier never appear."""
+        recorded = json.loads(row["result_json"]) if row["result_json"] else {}
         view = {
             "attemptId": row["attempt_id"],
             "taskId": row["task_id"],
@@ -508,9 +509,9 @@ class BoardStore:
             "executionState": row["execution_state"],
             "ownership": row["ownership"],
             "runtimeIdentity": row["runtime_identity"],
-            "logPaths": json.loads(row["log_paths"]),
+            "logPaths": recorded.get("logPaths") or {},
             "resultAvailable": row["result_json"] is not None,
-            "tokenUsage": json.loads(row["token_usage_json"]) if row["token_usage_json"] else None,
+            "tokenUsage": (recorded.get("result") or {}).get("tokenUsage"),
             "shutdownConfirmed": bool(row["shutdown_confirmed"]),
             "cancelRequested": row["cancel_requested_at"] is not None,
             "cancelRequestedAt": row["cancel_requested_at"],
@@ -518,9 +519,9 @@ class BoardStore:
             "graceDeadline": row["grace_deadline"],
             "forceReason": row["force_reason"],
             "forceRequestedAt": row["force_requested_at"],
-            "exitCode": row["exit_code"],
-            "signal": row["signal"],
-            "error": row["error"],
+            "exitCode": recorded.get("exitCode"),
+            "signal": recorded.get("signal"),
+            "error": recorded.get("error"),
             "startedAt": row["started_at"],
             "finishedAt": row["finished_at"],
             "createdAt": row["created_at"],
@@ -528,7 +529,7 @@ class BoardStore:
             "revision": row["revision"],
         }
         if include_result and row["result_json"] is not None:
-            view["result"] = _public_result_payload(json.loads(row["result_json"]))
+            view["result"] = _public_result_payload(recorded)
         return view
 
     @staticmethod
@@ -603,11 +604,12 @@ class BoardStore:
             from ..tasks.cancellation import for_run
             view["cancellation"] = for_run(connection, task["task_id"])
         attempt = self._selected_attempt(connection, task)
-        view["tokenUsage"] = json.loads(attempt["token_usage_json"]) if attempt is not None and attempt["token_usage_json"] else None
+        view["tokenUsage"] = None
         if attempt is not None:
-            from ..evaluation.native_observations import failure_view
+            from ..evaluation.native_observations import provider_rejection_view
             recorded = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
-            view["quotaFailure"] = failure_view(recorded.get("result"))
+            view["tokenUsage"] = (recorded.get("result") or {}).get("tokenUsage")
+            view["providerRejection"] = provider_rejection_view(recorded.get("result"))
             release = connection.execute(
                 "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='attempt.released'",
                 (task["task_id"], attempt["attempt_id"]),
@@ -633,7 +635,7 @@ class BoardStore:
                                               (attempt["attempt_id"],))]
             view["attemptGeneration"] = attempt["generation"]
             view["attemptState"] = attempt["execution_state"]
-            view["logPaths"] = json.loads(attempt["log_paths"])
+            view["logPaths"] = recorded.get("logPaths") or {}
             view["cancelRequested"] = attempt["cancel_requested_at"] is not None
             view["stopInitiator"] = attempt["stop_initiator"]
             view["graceDeadline"] = attempt["grace_deadline"]
@@ -2253,6 +2255,12 @@ class BoardStore:
 
     def _commit_execution_result(self, request: dict, *, seal_stash, shutdown_evidence: dict | None = None,
                                  completion_evidence: dict | None = None) -> dict:
+        # Normalize the imported projection once for every entry path and replay.
+        from ...protocol.usage import normalize_token_usage
+        imported = request["result"]
+        if isinstance(imported, dict) and "tokenUsage" in imported:
+            request = {**request, "result": {**imported,
+                "tokenUsage": normalize_token_usage(imported["tokenUsage"])}}
         status, result = request["status"], request["result"]
         verified_artifacts = request["artifacts"]
         shutdown_confirmed = request["shutdownConfirmed"]
@@ -2366,17 +2374,13 @@ class BoardStore:
             else:
                 task_state = "failed"
             connection.execute(
-                "UPDATE attempts SET result_json=?, error=?, exit_code=?, signal=?,"
-                " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity), log_paths=COALESCE(?, log_paths),"
+                "UPDATE attempts SET result_json=?,"
+                " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity),"
                 " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
                 (
                     canonical_json(payload),
-                    error_text,
-                    exit_code,
-                    signal_name,
                     1 if shutdown_confirmed else 0,
                     request["runtimeIdentity"],
-                    canonical_json(log_paths) if log_paths else None,
                     "unknown" if (termination_reason == "unknown-stop"
                                   or (shutdown_evidence or {}).get("terminationReason") == "unknown-stop") else None,
                     now,

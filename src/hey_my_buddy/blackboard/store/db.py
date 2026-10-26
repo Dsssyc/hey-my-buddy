@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -175,9 +175,7 @@ CREATE TABLE IF NOT EXISTS attempts (
     model_harness       TEXT,
     model_provider      TEXT,
     model_model         TEXT,
-    log_paths           TEXT NOT NULL DEFAULT '{}',
     result_json         TEXT,
-    error               TEXT,
     shutdown_confirmed  INTEGER NOT NULL DEFAULT 0,
     cancel_requested_at TEXT,
     stop_initiator      TEXT CHECK (stop_initiator IN ('host','lead','console','service','unknown')),
@@ -186,14 +184,11 @@ CREATE TABLE IF NOT EXISTS attempts (
     force_requested_at  TEXT,
     identity_confirmed_at TEXT,
     cleanup_pending     INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0,1)),
-    exit_code           INTEGER,
-    signal              TEXT,
     started_at          TEXT,
     finished_at         TEXT,
     created_at          TEXT NOT NULL,
     updated_at          TEXT NOT NULL,
     revision            INTEGER NOT NULL DEFAULT 1,
-    token_usage_json    TEXT,
     UNIQUE(task_id, generation)
 );
 -- Relational guarantee of the documented invariant: at most one effective active

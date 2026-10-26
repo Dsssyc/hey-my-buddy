@@ -295,14 +295,15 @@ class FastSeamTests(SeamCase):
         self.assertEqual(result.native_error.value["error"]["message"], "Native request failed: invalid_json_schema")
         self.assertEqual(native_run.native_evidence(result)["nativeFailure"], result.native_error.value)
 
-    def test_fast_quota_failure_uses_common_root_activity(self):
+    def test_fast_provider_rejection_uses_common_root_activity(self):
         for case, phase in (("quota-before", "before-model"), ("quota-text", "during-model"),
-                            ("quota-error", "before-model")):
+                            ("quota-error", "before-model"), ("overload-before", "before-model"),
+                            ("overload-text", "during-model"), ("overload-error", "before-model")):
             with self.subTest(case=case):
                 result = self.fast_run(case, FastCorrection(FAST_SCHEMA, "Pick a buddy"))
                 self.assertEqual(result.end.status, "error")
-                self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
-                self.assertEqual(result.native_failure.value["rejectionPhase"], phase)
+                self.assertEqual(result.provider_rejection.value["code"], "overloaded" if case.startswith("overload-") else "quota-exceeded")
+                self.assertEqual(result.provider_rejection.value["rejectionPhase"], phase)
 
     def test_foreign_turn_refusal_bounds_multibyte_method_name(self):
         from hey_my_buddy.buddy.harnesses.codex.protocol import TurnEvidence
@@ -675,13 +676,13 @@ class ReviewCorrection:
 
 
 class ReviewSeamTests(CodexSeamCase):
-    def test_review_quota_failure_uses_common_root_activity(self):
+    def test_review_provider_rejection_uses_common_root_activity(self):
         for case, phase in (("quota-before", "before-model"), ("quota-activity-text", "during-model"),
                             ("quota-before-truncated", "unknown")):
             with self.subTest(case=case):
                 result = self.review_run(case)
                 self.assertEqual(result.end.status, "error")
-                self.assertEqual(result.native_failure.value["rejectionPhase"], phase)
+                self.assertEqual(result.provider_rejection.value["rejectionPhase"], phase)
 
 
     def test_default_and_configured_provider_reach_review_thread_start(self):
@@ -1201,7 +1202,7 @@ class WorkerSeamTests(CodexSeamCase):
         from hey_my_buddy.buddy.roles.run_execution import _worker_facts
         result = self.worker_run("schema-failure")
         self.assertEqual(result.end.reason_code, "native-turn-failed")
-        self.assertIsNone(result.native_failure)
+        self.assertIsNone(result.provider_rejection)
         failure = result.native_error.value
         self.assertEqual(failure["nativeThreadId"], result.native_identity.session_id)
         self.assertEqual(failure["nativeTurnId"], result.native_identity.turn_id)
@@ -1354,26 +1355,33 @@ class WorkerSeamTests(CodexSeamCase):
         self.assertIsNotNone(result.usage.value)
         self.assertEqual(result.usage.value["scope"], "attempt")
         self.assertNotIn("quota-snapshot", {ref.kind for ref in result.evidence_refs})
-        self.assertIsNone(result.native_failure)
+        self.assertIsNone(result.provider_rejection)
 
-    def test_worker_quota_failure_attribution_is_reported(self):
+    def test_worker_provider_rejection_attribution_is_reported(self):
         result = self.worker_run("quota-failure")
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-turn-failed")
-        self.assertIsNotNone(result.native_failure.value)
-        self.assertEqual(result.native_failure.value["nativeCode"], "usageLimitExceeded")
-        self.assertEqual(result.native_failure.value["code"], "quota-exceeded")
+        self.assertIsNotNone(result.provider_rejection.value)
+        self.assertEqual(result.provider_rejection.value["nativeCode"], "usageLimitExceeded")
+        self.assertEqual(result.provider_rejection.value["code"], "quota-exceeded")
 
-    def test_worker_quota_rejection_phase_uses_only_root_model_activity(self):
+    def test_worker_provider_rejection_phase_uses_only_root_model_activity(self):
         cases = (("quota-before", "before-model"), ("quota-before-truncated", "unknown"),
                  ("quota-before-overflow", "unknown"),
                  ("quota-activity-text", "during-model"), ("quota-activity-reasoning", "during-model"),
-                 ("quota-activity-tool", "during-model"), ("quota-activity-tokens", "during-model"))
+                 ("quota-activity-tool", "during-model"), ("quota-activity-tokens", "during-model"),
+                 ("overload-before", "before-model"), ("overload-before-truncated", "unknown"),
+                 ("overload-activity-text", "during-model"), ("overload-activity-reasoning", "during-model"),
+                 ("overload-activity-tool", "during-model"), ("overload-activity-tokens", "during-model"))
         for case, phase in cases:
             with self.subTest(case=case):
                 result = self.worker_run(case)
                 self.assertEqual(result.end.status, "error")
-                self.assertEqual(result.native_failure.value["rejectionPhase"], phase)
+                self.assertEqual(result.provider_rejection.value["rejectionPhase"], phase)
+                if case.startswith("overload-"):
+                    from hey_my_buddy.buddy.roles.run_execution import _worker_facts
+                    self.assertEqual(_worker_facts(result)["providerRejection"]["code"], "overloaded")
+                    self.assertEqual(result.provider_rejection.value["nativeCode"], "serverOverloaded")
 
     def test_denied_native_requests_are_facts_on_a_completed_worker_turn(self):
         result = self.worker_run("approval")

@@ -20,7 +20,7 @@ export default {
   },
   fold: { more: "展开", less: "收起" },
   result: { name: "结果" },
-  turn: { expected: "预期 {{time}}", rejected: "模型开始前额度被拒绝", quotaRefused: "额度被拒", rerouted: "已改派" },
+  turn: { expected: "预期 {{time}}", rejected: "模型开始前被拒绝", rerouted: "已改派" },
   origin: { host: "Host 指定", locked: "用户锁定", single: "唯一候选", unrecorded: "未记录路由" },
   usage: {
     inputShort: "输入", outputShort: "输出", cacheShort: "缓存",
@@ -79,7 +79,7 @@ export default {
     "service-stop": "服务停止", "unknown-stop": "停止（发起者未知）", deadline: "Router 预算用完", "harness-error": "Harness 错误",
     "transport-error": "传输故障", "workspace-error": "工作区错误", completed: "正常完成", wrapUpLead: "Lead 有序收尾完成",
   },
-  quota: { "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },
+  providerRejection: { "overloaded": "模型服务满载", "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },
   seal: {
     name: "封存", commit: "提交", files: "文件 {{n}}", id: "产物 ID", sha: "SHA-256", diff: "差异", note: "标注",
     partial: "部分产物", resolved: "Host 重新封存", partialNote: "部分、未验证、非最终；可以查看、整合或用于续做，不能当作已验收的成果。",
@@ -88,7 +88,7 @@ export default {
   },
   basis: {
     name: "提交时的约束", constraints: "硬约束：{{buddy}}", capabilities: "所需能力：{{list}}", candidates: "提交时冻结候选 {{n}} 个",
-    excluded: "用户排除 {{n}} 个：{{list}}", cooling: "冷却中的候选 {{n}} 个：{{list}}", coolingBuddy: "{{buddy}}（至 {{time}}）", prefer: "优先考虑 {{buddy}}：{{note}}", pin: "固定选择 {{buddy}}：{{note}}", exclude: "排除 {{buddy}}：{{note}}",
+    overloaded: "因模型服务满载排除 {{n}} 个：{{list}}", excluded: "用户排除 {{n}} 个：{{list}}", cooling: "冷却中的候选 {{n}} 个：{{list}}", coolingBuddy: "{{buddy}}（至 {{time}}）", prefer: "优先考虑 {{buddy}}：{{note}}", pin: "固定选择 {{buddy}}：{{note}}", exclude: "排除 {{buddy}}：{{note}}",
   },
   routing: {
     chosen: "选择", abstained: "放弃选择", notCalled: "未调用 Router", elapsed: "耗时 {{time}}", toolCalls: "工具调用 {{n}}", source: "来源",

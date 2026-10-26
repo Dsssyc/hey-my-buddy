@@ -12,6 +12,7 @@ from support import BoardTestCase
 from blackboard.store.upgrade_fixture import FIXTURE, load_fixture
 from hey_my_buddy.blackboard.store import backup
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION
+from hey_my_buddy.blackboard.store.upgrade import upgrade_state
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade
@@ -22,6 +23,7 @@ class UpgradeCutoverTests(BoardTestCase):
         super().setUp()
         self.state = self.directory / "state"
         load_fixture(self.state)
+        upgrade_state(self.state)
         resources = json.loads((FIXTURE / 'workspace-resources.json').read_text(encoding='utf-8'))
         self.private_files = {relative: (self.state / relative).read_bytes() for relative in resources['files']}
         (self.state / "console-settings.json").write_text('{"theme":"dark"}', encoding="utf-8", newline="\n")

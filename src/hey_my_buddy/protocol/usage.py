@@ -1,4 +1,4 @@
-"""Native token usage, quota failures and last-assistant-message normalization.
+"""Native token usage, provider rejections and last-assistant-message normalization.
 
 Adapters observe native harness records; they never invent numbers. This module
 turns one observed record into the bounded, canonical shape the board persists,
@@ -16,7 +16,7 @@ explicit ``completeness``. Unknown fields stay unknown; a missing cache counter 
 never turned into zero, and a session-cumulative record is refused instead of being
 counted as this attempt.
 
-A quota failure keeps its native structured code, observation time, reset time
+A provider rejection keeps its native structured code, observation time, reset time
 and rejection phase. Native codes and sources accept only identifier characters:
 free text is refused or replaced with ``unknown`` instead of being persisted.
 
@@ -83,6 +83,7 @@ _QUOTA_NATIVE_CODES = frozenset({
 })
 #: Native codes that mean "transiently rate limited" rather than exhausted quota.
 _RATE_NATIVE_CODES = frozenset({"RATE_LIMIT", "rate_limit_reached", "ratelimitexceeded", "model_rate_limited"})
+_OVERLOAD_NATIVE_CODES = frozenset({"serverOverloaded", "overloaded"})
 
 
 def _is_count(value: Any) -> bool:
@@ -249,8 +250,10 @@ def normalize_token_usage(value: Any) -> dict | None:
     return normalized
 
 
-def classify_quota_code(native_code: str) -> str:
-    """Map one native structured code onto the bounded quota classification."""
+def classify_provider_rejection_code(native_code: str) -> str:
+    """Map one native structured code onto the bounded provider rejection classification."""
+    if native_code in _OVERLOAD_NATIVE_CODES:
+        return "overloaded"
     if native_code in _QUOTA_NATIVE_CODES:
         return "quota-exceeded"
     if native_code in _RATE_NATIVE_CODES:
@@ -265,8 +268,8 @@ def classify_quota_code(native_code: str) -> str:
     return "unknown"
 
 
-def normalize_quota_failure(value: Any) -> dict | None:
-    """One native quota/rate-limit failure, keeping its structured native code.
+def normalize_provider_rejection(value: Any) -> dict | None:
+    """One native provider rejection, keeping its structured native code.
 
     The harness supplies the bounded ``code`` classification; ``nativeCode``
     is its own machine code and is never translated or classified here.
@@ -276,7 +279,7 @@ def normalize_quota_failure(value: Any) -> dict | None:
     if not isinstance(value, dict):
         return None
     code = value.get("code")
-    if code not in ("quota-exceeded", "rate-limited"):
+    if code not in ("quota-exceeded", "rate-limited", "overloaded"):
         return None
     native_code = identifier(value.get("nativeCode"))
     phase = value.get("rejectionPhase")
@@ -375,9 +378,9 @@ __all__ = [
     "LAST_ASSISTANT_MESSAGE_VERSION",
     "MAX_ASSISTANT_MESSAGE_BYTES",
     "TOKEN_USAGE_VERSION",
-    "classify_quota_code",
+    "classify_provider_rejection_code",
     "identifier",
     "normalize_last_assistant_message",
-    "normalize_quota_failure",
+    "normalize_provider_rejection",
     "normalize_token_usage",
 ]

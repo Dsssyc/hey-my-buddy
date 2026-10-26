@@ -36,6 +36,9 @@ def candidate_bound(connection, candidate, request, now, *, frozen=None,
         health = connection.execute("SELECT status FROM harness_health WHERE harness=?", (candidate["harness"],)).fetchone()
         if health is None or health[0] != "ready":
             return "harness-unavailable"
+    if any(all(candidate[key] == excluded[key] for key in ("harness", "provider", "model"))
+           for excluded in request.get("routingBasis", {}).get("overloadedModelServices", [])):
+        return "overloaded"
     if check_cooling and cooling(connection, candidate, now=now) is not None:
         return "quota-exhausted"
     return None

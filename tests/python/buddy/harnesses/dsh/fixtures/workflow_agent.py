@@ -4,7 +4,7 @@ A thin extension of the shared fake ACP agent (``../acp/fake_agent.py``): the
 wire behavior, the micro task carrier and the private-home tripwire are the shared
 agent's own; this module adds only the test-specific facts the two blackboard
 workflow modules need from a native harness - the workspace edits, one offline
-quota death, and the continuation-context capture. The final value still comes
+provider rejection, and the continuation-context capture. The final value still comes
 from the real role rules: the finish receipt is minted by
 ``hey_my_buddy.buddy.roles.worker_services.call_session_tool`` against this
 run's own bridge, exactly as the mounted MCP carrier would answer.
@@ -17,13 +17,13 @@ It never reads the controller's control files and never hardcodes a tool name.
 Modes: the micro task carrier is always the shared agent's; the workflow behavior
 follows the turn itself. Every turn of index 2 or later captures the rebuilt
 continuation context and completes through the micro task finish. Turn 1 dies the
-offline quota death (real edit, one message chunk, no finish call, ``refusal``
+offline provider rejection (real edit, one message chunk, no finish call, ``refusal``
 stop, machine ``QUOTA`` turn end in this run's private session record) exactly
-when the task is the quota fixture's; any other turn 1 completes.
+when the task is the provider rejection fixture's; any other turn 1 completes.
 ``--workflow-mode`` pins the behavior for a direct launch when needed
-(``auto`` resolves by task), and ``--native-error-code`` swaps the quota
-record's machine code (fault injection: a code the quota classification does
-not recognize must surface as no quota failure at all, never as a
+(``auto`` resolves by task), and ``--native-error-code`` swaps the provider rejection
+record's machine code (fault injection: a code the provider rejection classification does
+not recognize must surface as no provider rejection at all, never as a
 misattributed one).
 
 The launch the daemon chain composes passes only the public launch face
@@ -45,7 +45,7 @@ _SPEC = importlib.util.spec_from_file_location(
 fake_agent = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(fake_agent)
 
-#: The quota scenario's task; the quota tests submit exactly this task.
+#: The provider rejection scenario's task; its workflow tests submit exactly this task.
 QUOTA_TASK = "Implement the fixture change"
 QUOTA_EDIT = "partial work preserved after quota failure\n"
 QUOTA_MESSAGE = "The first change is saved; verification remains."
@@ -143,7 +143,7 @@ class WorkflowAgent(fake_agent.FakeAgent):
 
     def run_quota_turn(self, message: dict, turn_input: dict, *, code: str | None = None,
                        edit: str = QUOTA_EDIT, message_text: str = QUOTA_MESSAGE) -> None:
-        """The offline quota death: real edits, one message, no finish call.
+        """The offline provider rejection: real edits, one message, no finish call.
 
         The native failure lives only in this run's private session record - the
         machine turn-end code the driver's bounded record reader folds into the

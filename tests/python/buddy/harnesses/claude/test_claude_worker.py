@@ -78,7 +78,7 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
             self.assertEqual(receipt["result"]["turn"]["provenance"]["harness"], "claude")
             self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "base\n")
 
-    def test_quota_failure_is_persisted_as_harness_error_without_retry(self):
+    def test_provider_rejection_is_persisted_as_harness_error_without_retry(self):
         self.case = "quota-rejected"
         with self.daemon(env=self.env()):
             view, receipt = self.execute_fixture()
@@ -89,7 +89,7 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
             self.assertEqual(result["code"], "harness-error")
             self.assertNotIn("turn", result)
             self.assertNotIn("workspaceSeal", result)
-            self.assertEqual(set(result["quotaFailure"]),
+            self.assertEqual(set(result["providerRejection"]),
                              {"code", "nativeCode", "source", "observedAt", "resetsAt", "rejectionPhase"})
 
 

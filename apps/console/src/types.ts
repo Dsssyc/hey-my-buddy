@@ -149,11 +149,11 @@ export type Lineage = {
   rootLeadRunId: string | null;
   leadOwnership?: { leadRunId: string; leadTurnId: string; createdAt: string } | null;
 };
-type QuotaFailure = { code: "quota-exceeded" | "rate-limited"; nativeCode?: string; source?: string; observedAt?: string; resetsAt?: string | null; rejectionPhase?: "before-model" | "during-model" | "unknown" };
+export type ProviderRejection = { code: "quota-exceeded" | "rate-limited" | "overloaded"; nativeCode?: string; source?: string; observedAt?: string; resetsAt?: string | null; rejectionPhase?: "before-model" | "during-model" | "unknown" };
 
 export type Task = {
   providerCooling?: ProviderCooling | null;
-  quotaFailure?: QuotaFailure | null;
+  providerRejection?: ProviderRejection | null;
   runId: string;
   /** Whether the assigned buddy may delegate work from this micro task. */
   delegationAuthority?: boolean;

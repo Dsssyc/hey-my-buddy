@@ -679,7 +679,7 @@ def _review_handle(root, outer=True):
 
     request = full_request(root)
     result = rc.RunResult.from_payload(full_result().to_payload() | {
-        "nativeFailure": None,
+        "providerRejection": None,
         "value": {"schemaStatus": "valid", "parsed": {"answer": "ok"}},
     })
     return SimpleNamespace(exit_code=0, error=None, result=result, request=request,

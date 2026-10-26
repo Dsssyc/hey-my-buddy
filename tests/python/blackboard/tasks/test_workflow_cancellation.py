@@ -370,8 +370,8 @@ class WorkflowCancellationTests(WorkflowTestCase):
             self.assertEqual(json.loads(released[0]["payload_json"])["reason"],
                              {"code": "execution-process-not-created", "params": {}})
             self.assertIsNone(connection.execute(
-                "SELECT error FROM attempts WHERE attempt_id=?", (attempt["attemptId"],),
-            ).fetchone()["error"])
+                "SELECT result_json FROM attempts WHERE attempt_id=?", (attempt["attemptId"],),
+            ).fetchone()["result_json"])
 
     def test_shutdown_summary_counts_all_descendants_but_bounds_ids(self):
         board, _, parent, _ = self.parent_and_child(kind="worktree")

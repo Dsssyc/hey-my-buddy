@@ -240,16 +240,20 @@ def populate(args):
                                "response": {"reason": response.get("reason")}})
             return response["claim"]
 
-        def report(claim, nonce, *, status, result, error=None):
+        def report(claim, nonce, *, status, result, error=None, signal=None, log_paths=None):
             attempt = claim["attempt"]
             if claim.get("turn") is not None:
                 result = {"workspaceManifest": claim["turn"]["input"]["executionWorkspace"], **result}
             directory = execution_directory(claim, work / "state")
             ensure_private_dir(directory)
+            for path in (log_paths or {}).values():
+                Path(path).write_text("Synthetic execution log; no native execution.\n", encoding="utf-8")
             fsync_json(directory / RECEIPT, {"taskId": claim["task"]["taskId"],
                 "attemptId": attempt["attemptId"], "generation": attempt["generation"], "createdAt": AT,
                 "report": {"status": status, "shutdownConfirmed": True,
                            "exitCode": 0 if status == "ok" else 1, "result": result,
+                           **({"signal": signal} if signal is not None else {}),
+                           **({"logPaths": log_paths} if log_paths is not None else {}),
                            **({"error": error} if error is not None else {})}})
             if claim["sessionRecordPath"] is not None:
                 record = SessionRecord(Path(claim["sessionRecordPath"]), attempt["attemptId"])
@@ -410,7 +414,13 @@ def populate(args):
                     raise AssertionError("Expected a scope failure")
                 report(claim, nonce, status="failed", result={"status": "error", "code": "fixture-failed",
                                                               "modelStarted": True,
-                                                              "quotaFailure": {"code": "quota-exceeded", "provider": "openai"},
+                                                              "tokenUsage": {"inputTokens": 100, "cachedInputTokens": 20,
+                                                                  "outputTokens": 3, "inputBasis": "includes-cached",
+                                                                  "source": "fixture/native-usage", "scope": "attempt",
+                                                                  "completeness": "complete", "nativeRecords": 1},
+                                                              "quotaFailure": {"code": "quota-exceeded", "nativeCode": "usageLimitExceeded",
+                                                                  "source": "fixture/turn-error", "observedAt": AT,
+                                                                  "resetsAt": None, "rejectionPhase": "during-model"},
                                                               "stopEvidence": {"shutdownConfirmed": True}})
                 view = call("workflow_get", {"runId": run_id})
                 assert view["state"] == "awaiting-host", view
@@ -908,10 +918,14 @@ def populate(args):
                 record = completed_record(claim, label)
                 record["inputSha256"] = "b" * 64
                 report(claim, nonce, status="ok", result={"status": "ok", "turn": record,
+                    "quotaFailure": {"code": "rate-limited", "nativeCode": "rateLimitExceeded",
+                        "source": "fixture/turn-error", "observedAt": AT, "resetsAt": None,
+                        "rejectionPhase": "during-model"},
                     "processState": {"shutdownConfirmed": True}})
             else:
                 record = completed_record(claim, label)
-                report(claim, nonce, status="ok", result={"status": "ok", "turn": record,
+                report(claim, nonce, status="ok", signal="SIGTERM", log_paths={"stderr": str(
+                    execution_directory(claim, work / "state") / "fixture-stderr.log")}, result={"status": "ok", "turn": record,
                     "workspaceSeal": {"manifestSha256": "not-a-hash"},
                     "processState": {"shutdownConfirmed": True}})
             with store.db.read() as connection:
@@ -928,6 +942,20 @@ def populate(args):
                 else:
                     assert turn_row["state"] == "failed"
                     assert stored_result["result"]["partialWorkspaceSeal"] == seal
+        # Derive the form written before provider cooling (caadf88d). The 24→25
+        # conversion and later upgrades left these two keys absent. Change only
+        # the mutable request projection; sealed Router inputs stay as written.
+        with store.db.write() as connection:
+            row = connection.execute("SELECT decision_id,requested_json FROM decision_requests WHERE request_id=?",
+                                     ("fixture-routing-answered",)).fetchone()
+            historical = json.loads(row["requested_json"])
+            for key in ("coolingCount", "coolingBuddies"):
+                del historical["routingBasis"][key]
+            connection.execute("UPDATE decision_requests SET requested_json=? WHERE decision_id=?",
+                               (json_text(historical), row["decision_id"]))
+            derived_forms = [{"name": "pre-provider-cooling-routing-basis", "table": "decision_requests",
+                "row": {"decisionId": row["decision_id"]}, "sourceRequestId": "fixture-routing-answered",
+                "derivation": "Remove requested_json.routingBasis.coolingCount and coolingBuddies; simulate a pre-caadf88d row retained unchanged by the 24→25 and later conversions."}]
         hashing.close()
         # Base operations created these rows. Export templates keep
         # their original digests; restoration explicitly rebinds the dependency
@@ -969,11 +997,12 @@ def populate(args):
                              source / "uv.lock", source / "packaging/runtime-assets.json"]},
             "stableIds": ids, "stockIds": stock_ids, "taskOnlyStock": task_only_stock,
             "edgeStock": edge_stock,
+            "derivedForms": derived_forms,
             "inquiryStock": inquiry_stock,
             "tableRowCounts": row_counts,
             "routerBuddyIds": PROFILES, "fixedTimestamp": AT,
             "secret": "ab" * 32, "serviceToken": "fixture-service-token",
-            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All stored rows come from base writers without SQL seeds or historical-form patches. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
+            "boundary": "Base BoardService operations, message writers and InquiryBridge journal writers in process; synthetic native discovery, execution results and absent-process evidence; no daemon/IPC/model/account read. All rows originate from the base writers. The only exceptions are forms written by earlier versions, retained at the base and converted by the pending upgrade; each is derived from a base-written row with its derivation recorded. Generation uses a canonical private path and synthetic inode; text templates retain source digests. load_fixture binds private paths, stable path/inode identities and dependent hashes before acceptance; this preparation is not migration or new native execution.",
             "pythonVersion": sys.version.split()[0],
             "pythonInterpreter": "<fixture-root>/base/.venv/bin/python" if args.python is None else "<prepared-python>",
             "restoreInterface": f"load_fixture(state: Path) -> dict; empty private state directory; returns source metadata plus state, fixtureRoot, operations and bindings; schema stays {BASE_SCHEMA}; baseline only after return",

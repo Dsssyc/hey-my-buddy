@@ -1,7 +1,7 @@
 """Adapter result contract for ADR-018 items 22/23 and the retained assistant text.
 
 Codex runs against the private App Server fixture (no model call); DSH runs against the private ACP fixture and reads its own session record. Both paths end in the same canonical result fields: ``tokenUsage``,
-``quotaFailure`` and ``lastAssistantMessage``.
+``providerRejection`` and ``lastAssistantMessage``.
 """
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ class CodexUsageContractTests(unittest.TestCase):
         self.assertEqual(token_usage["nativeRecords"], expected["records"])
         self.assertEqual(token_usage["completeness"], "complete")
 
-        self.assertNotIn("quotaFailure", outcome.result)
+        self.assertNotIn("providerRejection", outcome.result)
 
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["source"], "codex/app-server-root-assistant-message")
@@ -100,7 +100,7 @@ class CodexUsageContractTests(unittest.TestCase):
     def test_a_quota_turn_keeps_its_native_code_and_retained_message(self):
         outcome = self.execute(self.context("quota-failure"))
         self.assertEqual(outcome.status, "failed")
-        failure = outcome.result["quotaFailure"]
+        failure = outcome.result["providerRejection"]
         self.assertEqual(failure["nativeCode"], "usageLimitExceeded")
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["source"], "codex/app-server-turn-error")
@@ -114,7 +114,7 @@ class CodexUsageContractTests(unittest.TestCase):
         outcome = self.execute(self.context("ok"))
         self.assertEqual(outcome.status, "ok", outcome.to_report())
         self.assertIsNone(outcome.result["tokenUsage"])
-        self.assertNotIn("quotaFailure", outcome.result)
+        self.assertNotIn("providerRejection", outcome.result)
         self.assertIsNotNone(outcome.result["lastAssistantMessage"])
 
 
@@ -192,7 +192,7 @@ class DshUsageContractTests(DshRoleCase):
         self.assertEqual(usage["inputBasis"], "includes-cached")
         self.assertEqual(usage["scope"], "attempt")
         self.assertEqual(usage["nativeRecords"], 2)
-        self.assertNotIn("quotaFailure", outcome.result)
+        self.assertNotIn("providerRejection", outcome.result)
         message = outcome.result["lastAssistantMessage"]
         self.assertEqual(message["text"], "the final answer")
         self.assertEqual(message["source"], "dsh/session-root-assistant-message")
@@ -212,18 +212,18 @@ class DshUsageContractTests(DshRoleCase):
                 self.assertIsNone(outcome.result["tokenUsage"])
                 self.assertIsNone(outcome.result["lastAssistantMessage"])
 
-    def test_a_quota_failure_keeps_the_native_code_without_provider_wording(self):
+    def test_a_provider_rejection_keeps_the_native_code_without_provider_wording(self):
         _context, _handle, outcome = self.execute_record("quota")
-        failure = outcome.result["quotaFailure"]
+        failure = outcome.result["providerRejection"]
         self.assertEqual(failure["nativeCode"], "QUOTA")
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["source"], "dsh/session-turn-end")
         self.assertEqual(failure["rejectionPhase"], "during-model")
         self.assertNotIn("provider wording", json.dumps(outcome.result))
 
-    def test_an_unrelated_turn_failure_is_not_reported_as_a_quota_failure(self):
+    def test_an_unrelated_turn_failure_is_not_reported_as_a_provider_rejection(self):
         _context, _handle, outcome = self.execute_record("quota", variant="non-quota")
-        self.assertNotIn("quotaFailure", outcome.result)
+        self.assertNotIn("providerRejection", outcome.result)
         self.assertIsNotNone(outcome.result["tokenUsage"])
 
     def test_a_partial_observation_keeps_its_own_completeness(self):

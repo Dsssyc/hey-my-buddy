@@ -314,7 +314,7 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.usage.value["completeness"], "partial")
-        failure = result.native_failure.value
+        failure = result.provider_rejection.value
         self.assertEqual(failure["code"], "quota-exceeded")
         self.assertEqual(failure["nativeCode"], "QUOTA")
         self.assertEqual(failure["source"], "dsh/session-turn-end")
@@ -336,8 +336,8 @@ class FastSeamTests(NativeRunCase):
                 result = run(self.fast_request("prompt"),
                              observer=FastCorrection(SCHEMA, "prompt").observer,
                              services=None, cancelled=lambda: False)
-                self.assertEqual(result.native_failure.value["rejectionPhase"], expected)
-                self.assertEqual(result.native_failure.value["nativeCode"], "QUOTA")
+                self.assertEqual(result.provider_rejection.value["rejectionPhase"], expected)
+                self.assertEqual(result.provider_rejection.value["nativeCode"], "QUOTA")
 
     def test_a_foreign_session_record_is_never_attributed(self):
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
@@ -347,7 +347,7 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertIsNone(result.usage)
-        self.assertIsNone(result.native_failure)
+        self.assertIsNone(result.provider_rejection)
         self.assertEqual([ref for ref in result.evidence_refs
                           if ref.kind == "dsh-session-record"], [])
 
@@ -359,7 +359,7 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertIsNone(result.usage)
-        self.assertIsNone(result.native_failure)
+        self.assertIsNone(result.provider_rejection)
         self.assertEqual(result.value.raw, '{"choice":"a"}')
         self.assertEqual([ref for ref in result.evidence_refs
                           if ref.kind == "dsh-session-record"], [])
@@ -839,14 +839,14 @@ class WorkerSeamTests(NativeRunCase):
         self.assertFalse(result.completion_evidence.stream_end)
         self.assertNotIn("turn-provenance", {ref.kind for ref in result.evidence_refs})
 
-    def test_worker_keeps_structured_quota_failure_from_its_root_record(self):
+    def test_worker_keeps_structured_provider_rejection_from_its_root_record(self):
         request, bound, mount = self.worker_request()
         self.micro_task_agent_args(mount)
         self.extra_agent_args.extend(["--session-record", "quota"])
         result = run(request, observer=worker_observer, services=bound.services,
                      cancelled=lambda: False)
-        self.assertEqual(result.native_failure.value["nativeCode"], "QUOTA")
-        self.assertEqual(result.native_failure.value["rejectionPhase"], "during-model")
+        self.assertEqual(result.provider_rejection.value["nativeCode"], "QUOTA")
+        self.assertEqual(result.provider_rejection.value["rejectionPhase"], "during-model")
 
     """The micro task completion-tool carrier over real signed receipts."""
 

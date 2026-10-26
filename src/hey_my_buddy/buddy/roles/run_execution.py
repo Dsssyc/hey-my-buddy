@@ -147,8 +147,8 @@ def _base_result(result) -> dict:
     if result.end.status != "ok":
         payload["code"] = result.end.reason_code
         payload["error"] = result.end.message or result.end.reason_code or "the native run failed"
-    if result.native_failure is not None:
-        payload["quotaFailure"] = result.native_failure.value
+    if result.provider_rejection is not None:
+        payload["providerRejection"] = result.provider_rejection.value
     if result.session_record_failure is not None:
         payload["sessionRecordFailure"] = result.session_record_failure.to_payload()
     _merge_native_evidence(result, payload)
@@ -244,7 +244,7 @@ def _review_result(result, request: RunRequest, verdict: dict) -> dict:
     facts = _worker_facts(result)
     if _worker_reports(result, facts):
         payload.update(status="error", code="invalid-native-result")
-    for key in ("tokenUsage", "quotaFailure", "lastAssistantMessage",
+    for key in ("tokenUsage", "providerRejection", "lastAssistantMessage",
                 "nativeInterruptRequested", "nativeInterruptAcknowledged"):
         if key in facts:
             payload[key] = facts[key]

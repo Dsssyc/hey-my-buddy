@@ -118,6 +118,7 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
   const running = step.outcome === "running";
   const failed = step.outcome === "failed";
   const rejected = turn?.state === "rejected";
+  const rejectionCode = turn?.providerRejection?.code;
   const unknown = step.outcome === "unknown";
   const reminders = { overdue: attempt?.overdue === true, possiblyStuck: attempt?.possiblyStuck === true };
   const expected = turn?.expectedSeconds ?? null;
@@ -130,8 +131,10 @@ export function TurnPane({ step, ctx }: { step: Step; ctx: Context }) {
       <span>{t("activity.toolCalls", { n: attempt.activity.toolCalls ?? t("unknown") })}</span>
     </span>
     : <Usage usage={turn?.tokenUsage ?? null} />;
-  const note = rejected ? [t("turn.quotaRefused"), t("turn.rerouted")].join(" · ")
-    : [attempt?.releaseReason ? reasonText(attempt.releaseReason) : null, attempt?.ending ? endingText(attempt.ending, t) : null, failed && span.error ? span.error : null].filter(Boolean).join(" · ");
+  const note = rejected ? [t(`providerRejection.${rejectionCode!}`), t("turn.rerouted")].join(" · ")
+    : [attempt?.releaseReason ? reasonText(attempt.releaseReason) : null,
+      attempt?.ending ? endingText(attempt.ending, t) : rejectionCode ? t(`providerRejection.${rejectionCode}`) : null,
+      failed && span.error ? span.error : null].filter(Boolean).join(" · ");
   return <Pane footer={running ? <Live activity={attempt?.activity ?? null} stuck={reminders.possiblyStuck} nowMs={ctx.nowMs} /> : undefined}>
     <PaneTitle title={t("step.turn", { n: index })}
       state={rejected ? t("turn.rejected") : running ? t("state.running") : failed ? t("state.failed") : unknown ? t("state.unknown") : t("state.ended")}

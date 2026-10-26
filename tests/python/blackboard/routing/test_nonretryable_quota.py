@@ -40,7 +40,7 @@ class ProviderDenialRoutingTests(BoardTestCase):
             persist(db, {"attempt_id": "synthetic-denial", "adapter": "zcode",
                          "model_harness": "zcode", "model_provider": PROVIDER,
                          "started_at": self.clock()},
-                    {"quotaFailure": failure}, status="failed", shutdown_confirmed=True,
+                    {"providerRejection": failure}, status="failed", shutdown_confirmed=True,
                     now=self.clock())
 
     def candidate_ids(self):
@@ -90,7 +90,7 @@ class ProviderDenialRoutingTests(BoardTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(provider_state(db, "zcode", PROVIDER)["consecutiveRejections"], 2)
 
-    def test_non_quota_failure_does_not_cool_provider(self):
+    def test_non_provider_rejection_does_not_cool_provider(self):
         self.record_failure(code="rate-limited")
         self.assertEqual(self.candidate_ids(), [*BUDDY_IDS, OTHER_PROVIDER_ID])
         with self.board_.store.db.read() as db:

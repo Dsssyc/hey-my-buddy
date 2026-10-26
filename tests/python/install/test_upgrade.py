@@ -180,11 +180,11 @@ class UpgradeTests(BoardTestCase):
         target = self.directory / 'runtimes' / ('a' * 32)
         health = {'runtimeContentId': target.name, 'runtimeStable': True, 'schemaVersion': SCHEMA_VERSION}
         with mock.patch.object(upgrade, 'command', side_effect=AssertionError('extra runtime request')):
-            self.assertEqual(upgrade.verify_started(self.directory, target, health, {}, contract_changed=False),
+            self.assertEqual(upgrade.verify_started(self.directory, target, health, {"schema": SCHEMA_VERSION}, contract_changed=False),
                              {'runtimeContentId': target.name, 'schemaVersion': SCHEMA_VERSION})
             health['runtimeStable'] = False
             with self.assertRaises(BoardError) as failure:
-                upgrade.verify_started(self.directory, target, health, {}, contract_changed=False)
+                upgrade.verify_started(self.directory, target, health, {"schema": SCHEMA_VERSION}, contract_changed=False)
         self.assertEqual(failure.exception.code, 'UPGRADE_VERIFY_FAILED')
 
     def test_verified_upgrade_reports_skill_cleanup_failure_without_rollback(self):
@@ -709,7 +709,7 @@ class UpgradeTests(BoardTestCase):
 
     def test_upgrade_refuses_older_or_unknown_schema(self):
         board=self.board()
-        for version in ('19', '20', '21', '22', '23', '24', '25', '26', '27', '30', '028', '029', '999'):
+        for version in ('19', '20', '21', '22', '23', '24', '25', '26', '27', '28', '31', '028', '029', '999'):
             with self.subTest(schema=version):
                 with board.store.db.write() as connection:
                     connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (version,))

@@ -115,6 +115,7 @@ export function parseTokenUsage(value: unknown): TokenUsage | null {
 function parseTurn(value: unknown): Turn {
   const turn = rec(value, "turn");
   const routing = recOrNull(turn.routing, "turn.routing");
+  const failure = recOrNull(turn.providerRejection, "turn.providerRejection");
   return {
     turnId: str(turn.turnId, "turn.turnId"), turnIndex: int(turn.turnIndex, "turn.turnIndex"),
     attemptId: str(turn.attemptId, "turn.attemptId"), expectedSeconds: intOrNull(turn.expectedSeconds, "turn.expectedSeconds"),
@@ -124,6 +125,7 @@ function parseTurn(value: unknown): Turn {
     buddy: parseBuddy(turn.buddy, "turn.buddy"),
     routing: routing && { decisionId: strOrNull(routing.decisionId, "turn.routing"), buddyRevision: int(routing.buddyRevision, "turn.routing") },
     tokenUsage: parseTokenUsage(turn.tokenUsage),
+    ...(failure ? { providerRejection: { code: oneOf(failure.code, ["quota-exceeded", "rate-limited", "overloaded"] as const, "turn.providerRejection") } } : {}),
   };
 }
 
@@ -230,12 +232,16 @@ function parseBounds(source: Rec, what: string): Omit<Basis, "preferences"> {
     constraints: partialBuddy(source.constraints ?? {}, what),
     requiredCapabilities: strings(source.requiredCapabilities, what),
     candidateCount: basis ? intOrNull(basis.candidateCount, what) : null,
-    excluded: basis ? list(basis.excludedBuddies ?? [], what).map(item => {
+    excluded: basis ? list(basis.excludedBuddies, what).map(item => {
       const excluded = rec(item, what);
       return { buddy: partialBuddy(excluded, what), note: strOrNull(excluded.note, what)?.trim() || null };
     }) : [],
-    coolingCount: basis ? intOrNull(basis.coolingCount, what) : null,
-    cooling: basis ? list(basis.coolingBuddies ?? [], what).map(item => {
+    overloadedModelServices: basis ? list(basis.overloadedModelServices, what).map(item => {
+      const service = rec(item, what);
+      return { harness: str(service.harness, what), provider: str(service.provider, what), model: str(service.model, what),
+        nativeCode: str(service.nativeCode, what), turnId: str(service.turnId, what) };
+    }) : [],
+    cooling: basis ? list(basis.coolingBuddies, what).map(item => {
       const cooled = rec(item, what);
       return { buddy: partialBuddy(cooled, what), coolingUntil: strOrNull(cooled.coolingUntil, what) };
     }) : [],
@@ -438,8 +444,8 @@ function parseAttempt(task: Rec): Attempt | null {
   const active = task.activeAttemptId === attemptId;
   const reminders = rec(attempt.reminders, "task.selectedAttempt.reminders");
   const receipt = recOrNull(attempt.result, "task.selectedAttempt.result");
-  const quotaFailure = recOrNull(task.quotaFailure, "task.quotaFailure");
-  const quota = quotaFailure ? oneOf(quotaFailure.code, ["quota-exceeded", "rate-limited"] as const, "task.quotaFailure") : null;
+  const providerRejection = recOrNull(task.providerRejection, "task.providerRejection");
+  const rejectionCode = providerRejection ? oneOf(providerRejection.code, ["quota-exceeded", "rate-limited", "overloaded"] as const, "task.providerRejection") : null;
   const initiator = attempt.stopInitiator ?? task.stopInitiator;
   const cancellation = recOrNull(task.cancellation, "task.cancellation");
   const cancelled = task.state === "cancelled" || task.state === "cancelling" || recOrNull(task.workflow, "task.workflow")?.state === "cancelled";
@@ -450,10 +456,10 @@ function parseAttempt(task: Rec): Attempt | null {
   // Only a person who stopped it is named; the console and the service are the stopper, not a name.
   const named = who && (stoppedBy === "host" || stoppedBy === "lead") && who.role === stoppedBy ? who : null;
   // A run that is over and says no cause is not a normal end: its cause is unknown.
-  const normal = raw === "completed" || (raw === null && !cancelled && !quota && !["completed", "failed"].includes(task.state as string));
+  const normal = raw === "completed" || (raw === null && !cancelled && !rejectionCode && !["completed", "failed"].includes(task.state as string));
   const ending: Ending | null = normal ? null : {
     cause: raw, stoppedBy: cancelled ? stoppedBy : null, actor: cancelled ? named : null,
-    note: cancelled && cancellation ? strOrNull(cancellation.note, "task.cancellation.note") : null, quota,
+    note: cancelled && cancellation ? strOrNull(cancellation.note, "task.cancellation.note") : null, rejectionCode,
   };
   return {
     attemptId, active,
