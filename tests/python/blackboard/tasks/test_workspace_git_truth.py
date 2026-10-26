@@ -9,6 +9,7 @@ from temporary import TemporaryDirectory
 
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 class WorkspaceGitTruthTests(unittest.TestCase):
@@ -184,7 +185,7 @@ class WorkspaceGitTruthTests(unittest.TestCase):
         hook.chmod(0o755)
         (self.repo / "src/text.txt").write_bytes(b"source edit\n")
         manifest = workspace.prepare(self.state, "hooks", self.intent())
-        (Path(manifest["path"]) / "src/text.txt").write_bytes(b"worker edit\n")
+        native_path(Path(manifest["path"]) / "src/text.txt").write_bytes(b"worker edit\n")
         workspace.seal(self.state, manifest, "task", "hooks")
         self.assertFalse(marker.exists())
 

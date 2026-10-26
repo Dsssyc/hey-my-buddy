@@ -32,6 +32,7 @@ from hey_my_buddy.private_dirs import context_root, native_root
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from support import BoardTestCase
+from hey_my_buddy.paths import native_path
 
 READY_SELECTION = {"status": "ready", "command": ["/fixture/dsh"]}
 DUMMY_CREDENTIAL = "fixture-dummy-credential"
@@ -194,12 +195,12 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         run_id = submitted["runId"]
         micro_task_dir = native_root(state, "dsh", run_id).parent
         rollout = native_root(state, "dsh", run_id) / "sessions" / "session.v3.jsonl.zstd"
-        rollout.parent.mkdir(parents=True)
-        rollout.write_bytes(ROLLOUT_BYTES)
+        native_path(rollout.parent).mkdir(parents=True)
+        native_path(rollout).write_bytes(ROLLOUT_BYTES)
         foreign_native = native_root(state, "dsh", "foreign-task")
-        foreign_native.mkdir(parents=True)
+        native_path(foreign_native).mkdir(parents=True)
         foreign_binding = foreign_native / "binding.json"
-        foreign_binding.write_bytes(b"fixture foreign binding")
+        native_path(foreign_binding).write_bytes(b"fixture foreign binding")
 
         # Awaiting the Host on an open attention request: the micro task is retained,
         # and the unknown-owner micro task beside it is never a reclaim candidate.
@@ -217,8 +218,8 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         self.assertFalse(foreign_row["eligible"])
         self.assertIn("owner-unproven", foreign_row["reasons"])
         board.call("storage_apply", {"planId": planned["planId"], "commandId": "keep-awaiting", "confirm": True})
-        self.assertEqual(rollout.read_bytes(), ROLLOUT_BYTES)
-        self.assertEqual(foreign_binding.read_bytes(), b"fixture foreign binding")
+        self.assertEqual(native_path(rollout).read_bytes(), ROLLOUT_BYTES)
+        self.assertEqual(native_path(foreign_binding).read_bytes(), b"fixture foreign binding")
 
         # Delivered but not yet accepted: still retained.
         self.continue_run(board, view, command_id="continue-to-completion")
@@ -238,8 +239,8 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         self.assertFalse(row["eligible"])
         self.assertIn("grace-period", row["reasons"])
         board.call("storage_apply", {"planId": planned["planId"], "commandId": "keep-grace", "confirm": True})
-        self.assertEqual(rollout.read_bytes(), ROLLOUT_BYTES)
-        self.assertEqual(foreign_binding.read_bytes(), b"fixture foreign binding")
+        self.assertEqual(native_path(rollout).read_bytes(), ROLLOUT_BYTES)
+        self.assertEqual(native_path(foreign_binding).read_bytes(), b"fixture foreign binding")
 
         # Past grace with proven stop: exactly this run's own micro task reclaims, and
         # the unknown-owner micro task beside it stays untouched.
@@ -257,8 +258,8 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
         result = board.call("storage_apply",
                             {"planId": planned["planId"], "commandId": "reclaim-own-micro-task", "confirm": True})
         self.assertEqual([entry["path"] for entry in result["removed"]], [str(micro_task_dir)])
-        self.assertFalse(micro_task_dir.exists())
-        self.assertEqual(foreign_binding.read_bytes(), b"fixture foreign binding")
+        self.assertFalse(native_path(micro_task_dir).exists())
+        self.assertEqual(native_path(foreign_binding).read_bytes(), b"fixture foreign binding")
 
 
 if __name__ == "__main__":

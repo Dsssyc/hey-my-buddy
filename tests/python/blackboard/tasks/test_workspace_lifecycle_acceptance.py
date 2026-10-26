@@ -17,6 +17,7 @@ from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.errors import BoardError
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
+from hey_my_buddy.paths import native_path
 
 
 class AcceptanceLifecycleTests(LifecycleTestCase):
@@ -381,7 +382,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         reclaimed = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(reclaimed["removed"], reclaimed)
         self.assertFalse(checkout.exists())
-        self.assertTrue(Path(resolved["diffPath"]).is_file())
+        self.assertTrue(native_path(Path(resolved["diffPath"])).is_file())
 
     def test_a_forged_adopt_record_authorizes_nothing_for_conclude(self):
         """Only board-bound, Git-verified adoption records authorize out-of-scope paths."""

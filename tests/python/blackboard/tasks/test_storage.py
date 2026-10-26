@@ -16,6 +16,7 @@ from hey_my_buddy.blackboard.tasks import storage
 from hey_my_buddy.private_files import publish_bytes, read_bytes
 from support import BoardTestCase
 from process_observation_fakes import native_references, proc_references, process, processes
+from hey_my_buddy.paths import native_path
 
 class StorageTests(BoardTestCase):
     def test_deep_inventory_and_pending_tomb_keep_ordinary_paths(self):
@@ -51,7 +52,7 @@ class StorageTests(BoardTestCase):
             record.write_bytes(data)
         other = private_dirs.attempt_root(board.directory, 'codex', 'orphan', 'first') / 'receipt.json'
         private_dirs.ensure_private_dir(other.parent)
-        other.write_bytes(b'receipt')
+        native_path(other).write_bytes(b'receipt')
         outside = self.directory / 'outside-session'
         outside.write_bytes(b'private outside content')
         linked = private_dirs.session_record_path(board.directory, 'run:linked', 'linked')
@@ -60,7 +61,7 @@ class StorageTests(BoardTestCase):
         original = storage.tree_info
         def growing(path, **kwargs):
             if path == first.parent:
-                with first.open('ab') as stream:
+                with native_path(first).open('ab') as stream:
                     stream.write(b' appended while inspecting')
             return original(path, **kwargs)
         with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
@@ -70,8 +71,8 @@ class StorageTests(BoardTestCase):
         parent = next(row for row in report['candidates'] if row['category'] == 'harnesses')
         category = next(row for row in report['categories'] if row['id'] == 'session-records')
         self.assertEqual({row['groupId'] for row in records}, {'run:orphan', 'run:linked'})
-        self.assertEqual(category['bytes'], first.stat().st_size + second.stat().st_size)
-        self.assertEqual(parent['bytes'], other.stat().st_size)
+        self.assertEqual(category['bytes'], native_path(first).stat().st_size + native_path(second).stat().st_size)
+        self.assertEqual(parent['bytes'], native_path(other).stat().st_size)
         self.assertEqual(category['reclaimableBytes'], 0)
         self.assertTrue(all(row['reasons'] == ['macro-task-deletion'] and not row['eligible'] for row in records))
         self.assertEqual(outside.read_bytes(), b'private outside content')
@@ -83,16 +84,16 @@ class StorageTests(BoardTestCase):
     def _age_runtime_entry(self, path):
         expired = storage.time.time() - storage.GRACE_SECONDS - 60
         if path.is_dir() and not path.is_symlink():
-            for child in path.rglob('*'):
+            for child in native_path(path).rglob('*'):
                 if os.name == 'nt':
                     if not private_dirs.linked(child):
                         os.utime(child, (expired, expired))
                 else:
                     os.utime(child, (expired, expired), follow_symlinks=False)
         if os.name == 'nt':
-            os.utime(path, (expired, expired))
+            os.utime(native_path(path), (expired, expired))
         else:
-            os.utime(path, (expired, expired), follow_symlinks=False)
+            os.utime(native_path(path), (expired, expired), follow_symlinks=False)
 
     @skipIf(os.name == 'nt', 'POSIX runtime absence proof; Windows remains unknown')
     def test_storage_plan_logs_each_denied_identity_once_without_adding_reasons(self):

@@ -30,6 +30,7 @@ from hey_my_buddy.buddy.harnesses.controller import (
     stop_confirmed,
 )
 from hey_my_buddy.buddy.roles import structured_call
+from hey_my_buddy.paths import native_path
 
 
 CHILD_SOURCE = "print('controller-out')"
@@ -104,7 +105,7 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
                   + ("" if exit_after_receipt else "time.sleep(60)\n"))
         state["process"] = original_spawn([sys.executable, "-c", source], *args[1:], **kwargs)
         deadline = time.monotonic() + 5
-        while not ready.exists():
+        while not native_path(ready).exists():
             if state["process"].poll() is not None or time.monotonic() > deadline:
                 raise AssertionError("private controller did not publish its fixture receipt")
             time.sleep(0.01)
@@ -210,7 +211,7 @@ class PartialLogOpenTests(unittest.TestCase):
                 base.open_logs({'stdout': str(path), 'stderr': self.paths['stderr']})
             self.assertEqual(sentinel.read_bytes(), b'existing log')
             self.assertEqual(path.read_bytes(), b'existing log')
-        self.assertFalse(Path(self.paths['stderr']).exists())
+        self.assertFalse(native_path(Path(self.paths['stderr'])).exists())
 
     def test_stderr_open_failure_closes_the_real_stdout_fd(self):
         with partial_log_open_failure() as state:
@@ -218,8 +219,8 @@ class PartialLogOpenTests(unittest.TestCase):
                 base.open_logs(self.paths)
             self.assertIs(caught.exception, state["error"])
             self.assert_closed(state["stdout"])
-            self.assertTrue(Path(self.paths["stdout"]).exists())
-            self.assertFalse(Path(self.paths["stderr"]).exists())
+            self.assertTrue(native_path(Path(self.paths["stdout"])).exists())
+            self.assertFalse(native_path(Path(self.paths["stderr"])).exists())
 
     def test_stdout_close_error_preserves_the_original_stderr_open_error(self):
         with partial_log_open_failure(close_error=True) as state:
@@ -268,8 +269,8 @@ class LaunchControllerTests(unittest.TestCase):
                                    log_paths=self.log_paths, timeout_seconds=30, stop_channel="stdin")
         self.addCleanup(lambda: handle.terminate(grace_seconds=0.2) if handle.group_alive() else None)
         self.assertIsNotNone(handle.wait(10))
-        self.assertEqual(Path(self.log_paths["stdout"]).read_text(encoding="utf-8").strip(), "controller-out")
-        self.assertEqual(Path(self.log_paths["stderr"]).read_text(encoding="utf-8"), "")
+        self.assertEqual(native_path(Path(self.log_paths["stdout"])).read_text(encoding="utf-8").strip(), "controller-out")
+        self.assertEqual(native_path(Path(self.log_paths["stderr"])).read_text(encoding="utf-8"), "")
         self.assertGreater(handle.deadline, time.monotonic())
         self.assertFalse(math.isinf(handle.deadline))
         self.assertTrue(handle.shutdown_confirmed())
@@ -365,8 +366,8 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
         for descriptor in opened:
             with self.assertRaises(OSError):
                 os.fstat(descriptor)
-        self.assertTrue(Path(self.paths["stdout"]).exists())
-        self.assertTrue(Path(self.paths["stderr"]).exists())
+        self.assertTrue(native_path(Path(self.paths["stdout"])).exists())
+        self.assertTrue(native_path(Path(self.paths["stderr"])).exists())
 
     def test_posix_spawn_failure_consumes_owned_no_child_receipt(self):
         with self.assertRaises(OSError) as caught:

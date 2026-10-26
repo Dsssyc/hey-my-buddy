@@ -17,6 +17,7 @@ from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.errors import BoardError
 from support import BoardTestCase
 from private_acl import assert_private_path
+from hey_my_buddy.paths import native_path
 
 
 STATE_FILES = ('console-settings.json',)
@@ -114,12 +115,12 @@ class BackupTests(BoardTestCase):
         manifest['files']['board.sqlite3.gz'] = {'bytes': payload.stat().st_size,
                                                 'sha256': hashlib.sha256(payload.read_bytes()).hexdigest()}
         path.write_text(json.dumps(manifest), encoding="utf-8", newline="\n")
-        before = {file: file.read_bytes() for file in current.rglob('*') if file.is_file()}
+        before = {file: file.read_bytes() for file in native_path(current).rglob('*') if file.is_file()}
         with self.assertRaises(BoardError) as caught:
             backup.verify(current)
         self.assertEqual(caught.exception.code, 'BACKUP_INVALID')
         self.assertEqual(caught.exception.message, 'Backup schema does not match its manifest')
-        self.assertEqual({file: file.read_bytes() for file in current.rglob('*') if file.is_file()}, before)
+        self.assertEqual({file: file.read_bytes() for file in native_path(current).rglob('*') if file.is_file()}, before)
 
     def test_verify_reports_incomplete_manifest_and_invalid_sqlite_as_backup_invalid(self):
         board = self.board()

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy.blackboard.tasks import worker_sessions
+from hey_my_buddy.paths import native_path
 
 
 class FakeDB:
@@ -87,7 +88,7 @@ class WorkerSessionTests(unittest.TestCase):
             claim = {'task': {'taskId': 'micro-task-1', 'spec': {'adapter': 'codex'}},
                      'attempt': {'taskId': 'micro-task-1', 'attemptId': 'attempt-1', 'generation': 1}}
             execution = Execution(claim, self.state, 'n' * 32, client=mock.Mock())
-            execution.directory.mkdir(parents=True, mode=0o700)
+            native_path(execution.directory).mkdir(parents=True, mode=0o700)
             receipt = execution.receipt(claim, outcome.to_report(), execution.directory)['report']
             self.assertNotIn('workerId', json.dumps(receipt))
             self.assertNotIn('nonce', json.dumps(receipt))

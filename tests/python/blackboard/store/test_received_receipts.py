@@ -16,6 +16,7 @@ from hey_my_buddy.protocol.execution import RECEIPT, read_execution_receipt, fsy
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from hey_my_buddy import private_dirs
 from hey_my_buddy.private_files import publish_bytes, read_bytes
+from hey_my_buddy.paths import native_path
 
 
 class ReceivedReceiptTests(BoardTestCase):
@@ -191,7 +192,7 @@ class ReceivedReceiptTests(BoardTestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(result["result"]["microTaskError"]["code"], "ARTIFACT_MISSING")
         self.assertNotIn("receiptRejection", result["result"])
-        self.assertFalse((self.receipt_path.parent / "receipt-rejection.json").exists())
+        self.assertFalse(native_path(self.receipt_path.parent / "receipt-rejection.json").exists())
         self.assert_final(board)
 
     def test_received_attempt_has_no_new_or_pending_reminders(self):

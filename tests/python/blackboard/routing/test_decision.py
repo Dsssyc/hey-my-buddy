@@ -25,6 +25,7 @@ from protocol.fixtures import mock_readonly
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from admission import run_next, admit_execution
 from hey_my_buddy.buddy.runtime.execution import Execution
+from hey_my_buddy.paths import native_path
 
 BUDDY_ID = "dsh:deepseek-official:deepseek-flash:off"
 CATALOG_BUDDY = {
@@ -716,8 +717,8 @@ class DecisionFailureTests(DecisionTestCase):
         request = self.request(board, request_id="pick-cancel")
         claim = admit_execution(board.client(), 'n' * 32)['claim']
         execution = Execution(claim, self.directory, 'n' * 32, client=board.client())
-        execution.directory.mkdir(parents=True, mode=0o700)
-        execution.evidence_directory.mkdir(parents=True, mode=0o700)
+        native_path(execution.directory).mkdir(parents=True, mode=0o700)
+        native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700)
         thread = threading.Thread(target=execution.run, daemon=True)
         thread.start()
         self.assertTrue(wait_for(lambda: self.readonly_start.called, timeout=20))

@@ -561,7 +561,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
                    "generation": attempt["generation"]}
         directory = attempt_root(self.directory, claim["decisionInput"]["buddy"]["harness"],
                                  binding["taskId"], binding["attemptId"])
-        directory.mkdir(parents=True, exist_ok=True)
+        native_path(directory).mkdir(parents=True, exist_ok=True)
         identity = RunIdentity(task_id=binding["taskId"], attempt_id=binding["attemptId"],
                                generation=binding["generation"], invocation_id="execution",
                                turn_id=(claim.get("turn") or {}).get("turnId"))
@@ -627,7 +627,7 @@ class ReconnectedWrapUpTests(WorkflowTestCase):
         binding = {"taskId": claim["task"]["taskId"], "attemptId": attempt["attemptId"],
                    "generation": attempt["generation"]}
         location = attempt_root(self.directory, "dsh", binding["taskId"], binding["attemptId"])
-        location.mkdir(parents=True, exist_ok=True)
+        native_path(location).mkdir(parents=True, exist_ok=True)
         handle = _RecoveredExecution(location, binding, RunIdentity(
             task_id=binding["taskId"], attempt_id=binding["attemptId"],
             generation=binding["generation"], invocation_id="execution",

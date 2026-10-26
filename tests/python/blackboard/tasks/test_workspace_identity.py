@@ -88,7 +88,7 @@ class WorkspaceIdentityTests(WorkspaceIdentityFixture):
         self.assertEqual(restarted["repositoryId"], first["repositoryId"])
         retained = self.directory / "retained-git"
         directory.rename(retained)
-        shutil.copytree(retained, directory)
+        shutil.copytree(native_path(retained), native_path(directory))
         self.assertNotEqual(directory.stat().st_ino, retained.stat().st_ino)
         replaced = workspace.inspect(str(self.repo))
         self.assertNotEqual(replaced["checkoutId"], first["checkoutId"])

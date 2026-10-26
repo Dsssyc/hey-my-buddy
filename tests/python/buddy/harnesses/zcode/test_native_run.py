@@ -55,6 +55,7 @@ from buddy.harnesses.fixture_selection import select_fixture
 from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
 from buddy.runtime.test_windows_process import FakeAPI, FakeProcess
 from hey_my_buddy.protocol import owned_process as windows_process
+from hey_my_buddy.paths import native_path
 
 
 _FIXTURE_BRIDGES = weakref.WeakValueDictionary()
@@ -476,7 +477,7 @@ class FastSeamTests(NativeRunCase):
         # The refused interaction's own full record travels in the retained
         # evidence reference, read back through its size and digest.
         ref = next(ref for ref in result.evidence_refs if ref.kind == "denied-interactions")
-        raw = Path(ref.location).read_bytes()
+        raw = native_path(Path(ref.location)).read_bytes()
         self.assertEqual(len(raw), ref.size_bytes)
         self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
         records = json.loads(raw)["records"]
@@ -539,7 +540,7 @@ class FastSeamTests(NativeRunCase):
                 self.assertEqual(result.end.reason_code, "observer-interrupt")
                 self.assertEqual(correction.stop_reason, "no-tool-violation")
                 ref = next(ref for ref in result.evidence_refs if ref.kind == "denied-interactions")
-                raw = Path(ref.location).read_bytes()
+                raw = native_path(Path(ref.location)).read_bytes()
                 self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
                 records = json.loads(raw)["records"]
                 self.assertEqual(len(records), 1)
@@ -596,8 +597,8 @@ class FastSeamTests(NativeRunCase):
 
 def evidence_call(result):
     """The verified delivery call's own identity, from the retained provenance."""
-    provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                      if ref.kind == "turn-provenance")).read_bytes())
+    provenance = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                      if ref.kind == "turn-provenance"))).read_bytes())
     return provenance["toolCallId"]
 
 
@@ -788,7 +789,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(result.tool_evidence.value["toolCalls"], 1,
                          "native activity still counts the verified delivery call")
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
-        self.assertFalse(any(self.base.rglob("activity.json")))
+        self.assertFalse(any(native_path(self.base).rglob("activity.json")))
 
     def test_no_live_endpoint_keeps_the_native_activity_final_fact(self):
         os.environ.update(self.environment)
@@ -799,7 +800,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.activity.value["counts"], {"modelTurns": 1, "toolCalls": 2})
         self.assertEqual(result.activity.value["phase"], "finishing")
-        self.assertFalse(any(self.base.rglob("activity.json")))
+        self.assertFalse(any(native_path(self.base).rglob("activity.json")))
 
     def test_a_refused_activity_callback_keeps_transport_unknown_and_native_facts(self):
         from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
@@ -834,8 +835,8 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(result.value.parsed.value["disposition"], "completed")
         # The verified finish receipt is the provenance's own fact, read back
         # through the retained reference.
-        provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                          if ref.kind == "turn-provenance")).read_bytes())
+        provenance = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance"))).read_bytes())
         self.assertTrue(provenance["receiptVerified"])
         self.assertEqual(result.buddy.checked.model.value, "fixture-model")
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
@@ -890,7 +891,7 @@ class WorkerSeamTests(MockNativeCase):
         kinds = {ref.kind for ref in result.evidence_refs}
         self.assertIn("turn-provenance", kinds)
         ref = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
-        raw = Path(ref.location).read_bytes()
+        raw = native_path(Path(ref.location)).read_bytes()
         self.assertEqual(len(raw), ref.size_bytes)
         self.assertEqual(hashlib.sha256(raw).hexdigest(), ref.sha256)
         provenance = json.loads(raw)
@@ -900,7 +901,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertIsNotNone(provenance["toolCallId"])
         self.assertEqual(result.value.parsed.value["summary"], "fixture work completed")
         # The mechanical binding published the bridge configuration the MCP read.
-        bridge = json.loads(Path(services.mount.bridge_config_path).read_bytes())
+        bridge = json.loads(native_path(Path(services.mount.bridge_config_path)).read_bytes())
         self.assertEqual(bridge["identity"]["attemptId"], turn_input["attemptId"])
 
     def test_native_resume_reuses_the_bound_session_through_the_request_continuation(self):
@@ -913,7 +914,7 @@ class WorkerSeamTests(MockNativeCase):
         session = first.native_identity.session_id
         binding = Path(request.private_state.native_root) / (
             hashlib.sha256(session.encode()).hexdigest() + ".json")
-        original = binding.read_bytes()
+        original = native_path(binding).read_bytes()
         second_input = self.turn_input(previous=session)
         request, services = self.worker_request(
             second_input,
@@ -922,7 +923,7 @@ class WorkerSeamTests(MockNativeCase):
         self.assertEqual(second.end.status, "ok")
         self.assertEqual(second.native_identity.session_id, session)
         self.assertTrue(second.continuation.resumable)
-        self.assertEqual(binding.read_bytes(), original)
+        self.assertEqual(native_path(binding).read_bytes(), original)
 
     def test_failed_resumed_turn_retains_its_previous_binding(self):
         os.environ.update(self.environment)
@@ -933,15 +934,15 @@ class WorkerSeamTests(MockNativeCase):
         session = first.native_identity.session_id
         binding = request.private_state.native_root
         binding = Path(binding) / (hashlib.sha256(session.encode()).hexdigest() + ".json")
-        self.assertTrue(binding.is_file())
-        original = binding.read_bytes()
+        self.assertTrue(native_path(binding).is_file())
+        original = native_path(binding).read_bytes()
         request, services = self.worker_request(
             self.turn_input(previous=session),
             continuation=RunContinuation(mode="native-session", previous_session_id=session))
         os.environ["HMB_ZCODE_TEST_CASE"] = "wrong-input"
         failed = run(request, observer=worker_observer, services=services, cancelled=lambda: False)
         self.assertEqual(failed.end.reason_code, "wrong-native-turn")
-        self.assertEqual(binding.read_bytes(), original)
+        self.assertEqual(native_path(binding).read_bytes(), original)
         self.assertFalse(failed.continuation.resumable)
 
     def test_binding_write_failure_keeps_delivered_turn_and_disables_resume(self):
@@ -1010,8 +1011,8 @@ class WorkerSeamTests(MockNativeCase):
         # The completion facts remain their own evidence beside the package: the
         # signed receipt the root's final call actually received is read back
         # from the retained provenance.
-        provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                          if ref.kind == "turn-provenance")).read_bytes())
+        provenance = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance"))).read_bytes())
         self.assertTrue(provenance["receiptVerified"])
         self.assertEqual(provenance["toolCallId"], "call-finish-final")
 
@@ -1039,8 +1040,8 @@ class WorkerSeamTests(MockNativeCase):
         # The delivery call is evidenced by the receipt, never by the package;
         # the verified receipt is the provenance's own fact.
         self.assertNotIn(evidence_call(result), [call["callId"] for call in calls])
-        provenance = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                          if ref.kind == "turn-provenance")).read_bytes())
+        provenance = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "turn-provenance"))).read_bytes())
         self.assertTrue(provenance["receiptVerified"])
         self.assertEqual(provenance["toolCallId"], evidence_call(result))
 

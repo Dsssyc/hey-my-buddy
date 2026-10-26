@@ -12,6 +12,7 @@ from buddy.harnesses.session_record_support import notifications, updates
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
 from hey_my_buddy.buddy.roles.run_observers import worker_observer
 from buddy.harnesses.dsh.test_native_run import NativeRunCase
+from hey_my_buddy.paths import native_path
 
 
 class MemoryRecord:
@@ -268,7 +269,7 @@ class SessionRunTests(NativeRunCase):
         result = native_run.run(request, observer=lambda _f: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, 'error')
         self.assertFalse(result.model_started)
-        self.assertFalse(self.record(request).path.exists())
+        self.assertFalse(native_path(self.record(request).path).exists())
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
 
     def test_invalid_receipt_is_still_present_in_the_display_record(self):

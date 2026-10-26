@@ -6,6 +6,7 @@ from unittest.mock import patch
 from blackboard.tasks import test_workflow as workflow_fixtures, test_workspace as workspace_fixtures
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import macro_task_deletion as deletion, macro_tasks, worker_sessions, workflow, workspace
+from hey_my_buddy.paths import native_path
 
 
 class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
@@ -33,15 +34,15 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         self.assertGreater(len(scope.manifests), 1)
         before = self.dump(board)
         allocation = board.directory / 'workspaces' / scope.manifests[0]['workspaceId']
-        files = {str(path.relative_to(allocation)): path.read_bytes()
-                 for path in allocation.rglob('*') if path.is_file()}
+        files = {str(path.relative_to(native_path(allocation))): path.read_bytes()
+                 for path in native_path(allocation).rglob('*') if path.is_file()}
         refs = self.git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/')
         preview = deletion.preview(board.store, run['macroTaskId'])
         self.assertEqual(preview['scope'], {'artifacts': {'count': 1, 'bytes': None},
                                            'sessions': {'count': 0, 'bytes': 0}, 'checkouts': 1, 'gitRefs': 4})
         self.assertEqual(self.dump(board), before)
-        self.assertEqual({str(path.relative_to(allocation)): path.read_bytes()
-                          for path in allocation.rglob('*') if path.is_file()}, files)
+        self.assertEqual({str(path.relative_to(native_path(allocation))): path.read_bytes()
+                          for path in native_path(allocation).rglob('*') if path.is_file()}, files)
         self.assertEqual(self.git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/'), refs)
 
     def test_distinct_artifact_records_with_the_same_path_count_separately(self):
@@ -71,7 +72,7 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         run = self.create(board)
         with board.store.db.read() as connection:
             manifest = deletion._collect(connection, 'run:' + run['runId']).manifests[0]
-        (Path(manifest['path']) / 'src/file.txt').write_text('sealed output\n', encoding="utf-8", newline="\n")
+        native_path(Path(manifest['path']) / 'src/file.txt').write_text('sealed output\n', encoding="utf-8", newline="\n")
         artifact = workspace.seal(board.directory, manifest, run['runId'], 'sealed-attempt')
         with board.store.db.write() as connection:
             for identifier in ('sealed-first-record', 'sealed-second-record'):

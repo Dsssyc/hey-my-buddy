@@ -339,7 +339,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
                                               stop_initiator=initiator),
                          "forced-stop" if initiator == "host" else "console-stop")
         self.assertNotIn("turn", outcome.result)
-        self.assertFalse((Path(handle.role_run_control["privateRoot"]) /
+        self.assertFalse(native_path(Path(handle.role_run_control["privateRoot"]) /
                           "stop-summary").exists(), "force stop must not launch a summary turn")
         state = self.fixture_state()
         self.assertEqual(state["userTurns"], 1, "force stop must not send a second user turn")
@@ -423,7 +423,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(failure["rejectionPhase"], "before-model")
         self.assertNotIn("turn", outcome.result)
         self.assertNotIn("workspaceSeal", outcome.result)
-        self.assertFalse(context.turn_output_file().exists())
+        self.assertFalse(native_path(context.turn_output_file()).exists())
         self.assertTrue(outcome.shutdown_confirmed)
         self.assertTrue(self.fixture_state()["interrupted"], "quota rejection interrupts the native child")
 
@@ -589,7 +589,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(flag_value(argv, "--json-schema"), turn_io.canonical_json(worker_format("claude").schema))
         control = self.control(context)
         settings_path = Path(control["nativeRoot"], "settings.json")
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        settings = json.loads(native_path(settings_path).read_text(encoding="utf-8"))
         self.assertEqual(set(settings), {"sandbox", "permissions"})
         self.assertEqual(settings["permissions"], {"allow": ["Bash"]})
         self.assertTrue(settings["sandbox"]["enabled"])
@@ -673,7 +673,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         self.assertEqual(answer["buddyId"], "legal")
         self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertEqual(result.result["correctionCount"], 0)
-        self.assertFalse(context.turn_output_file().exists())
+        self.assertFalse(native_path(context.turn_output_file()).exists())
         # The unified receipt: a quiet tool-free stream still binds the frozen
         # attempt identity to a complete zero-tool evidence package.
         evidence = result.result["toolEvidence"]

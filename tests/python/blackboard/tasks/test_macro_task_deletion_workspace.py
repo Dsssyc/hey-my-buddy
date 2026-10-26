@@ -11,6 +11,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks import macro_task_deletion_workspace as deletion_workspace
 from hey_my_buddy.blackboard.tasks.macro_task_deletion_workspace import delete_workspaces
+from hey_my_buddy.paths import native_path
 
 
 class DeletionWorkspaceTests(unittest.TestCase):
@@ -197,7 +198,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                     self.assertEqual(directory.exists(), layout == "checkout")
                     self.assertFalse(deletion_workspace._tombstone(self.state, manifest["workspaceId"]).exists())
                     if layout == "checkout":
-                        self.assertTrue(Path(manifest["checkoutRoot"]).exists())
+                        self.assertTrue(native_path(Path(manifest["checkoutRoot"])).exists())
                     self.assertEqual(self.git("for-each-ref", "--format=%(refname)%00%(objectname)", prefix,
                                               cwd=retained), refs)
                 finally:
@@ -312,7 +313,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                         skipped = delete_workspaces(SimpleNamespace(directory=self.state), [later, allocation], [])
                     delete_refs.assert_not_called()
                     self.assertEqual(directory.exists(), not missing)
-                    self.assertTrue(Path(allocation["checkoutRoot"]).exists())
+                    self.assertTrue(native_path(Path(allocation["checkoutRoot"])).exists())
                     self.assertEqual({item["reason"]["code"] for item in skipped}, {
                         "macro-task-deletion.repository-missing" if missing else "macro-task-deletion.repository-changed",
                     })

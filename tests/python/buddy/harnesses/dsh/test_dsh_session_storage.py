@@ -58,7 +58,7 @@ class StorageSplitTests(NativeRunCase):
         session = result.native_identity.session_id
         # The rollout is in the task's shared native root; the marker the next
         # attempt's agent resumes from sits beside it.
-        self.assertTrue(list((self.root / "sessions").glob(f"{session}.v3.jsonl*")),
+        self.assertTrue(list(native_path(self.root / "sessions").glob(f"{session}.v3.jsonl*")),
                         "the Worker rollout lives under the task's native-root sessions dir")
         self.assertTrue((self.root / "sessions" / f"{session}.fake-session.json").is_file())
         self.assertFalse(native_path(invocation / "dsh-home").exists())

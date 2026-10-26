@@ -24,6 +24,7 @@ from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_too
 from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
 from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B, C, T0, NONCE
 import blackboard.routing.test_router_dispatch as dispatch_fixtures
+from hey_my_buddy.paths import native_path
 
 
 class FailoverTests(RouterDispatchTestCase):
@@ -172,7 +173,7 @@ class FailoverTests(RouterDispatchTestCase):
             self.assertNotIn("expectedSeconds", spec)
             execution = Execution(first, self.directory, first["nonce"], client=self.client)
             directory = execution.directory
-            directory.mkdir(parents=True)
+            native_path(directory).mkdir(parents=True)
             holder = {'preflightControl': execution.control}
             execution.control.start()
             self.addCleanup(execution.control.join, 5)
@@ -214,7 +215,7 @@ class FailoverTests(RouterDispatchTestCase):
                 return CommandAdapter().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
         request, first = self.start(review=True)
         execution = Execution(first, self.directory, first['nonce'], client=self.client)
-        execution.directory.mkdir(parents=True)
+        native_path(execution.directory).mkdir(parents=True)
         execution.control.start()
         self.addCleanup(execution.control.join, 5)
         self.addCleanup(execution.control.stop)
@@ -487,7 +488,7 @@ class FailoverTests(RouterDispatchTestCase):
                 claim = self.claim(f"native-{ordinal}", task_id=self.current_task(request["decisionId"]))["claim"]
                 self.assertIsNotNone(claim)
                 execution = Execution(claim, self.directory, claim["nonce"], client=self.client)
-                execution.directory.mkdir(parents=True)
+                native_path(execution.directory).mkdir(parents=True)
                 execution.control.start()
                 try:
                     receipt = execution._execute_selected(claim, claim["task"], claim["task"]["spec"],

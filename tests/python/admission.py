@@ -1,4 +1,5 @@
 """In-process tests call the same internal service admission as the daemon."""
+from hey_my_buddy.paths import native_path
 
 
 def admit_execution(client, nonce, *, task_id=None):
@@ -29,7 +30,7 @@ def run_next(client, nonce='test-execution-nonce-000000000000'):
     with patch.object(process_identity, '_active_native_journal', None):
         execution = Execution(claim, client.state_dir, nonce, client=client,
                               session_record_path=claim["sessionRecordPath"])
-        execution.directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-        execution.evidence_directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+        native_path(execution.directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+        native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700, exist_ok=True)
         execution.run()
     return 'ran'

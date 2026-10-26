@@ -15,6 +15,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 class PreparationTests(WorkflowTestCase):
@@ -124,7 +125,7 @@ class PreparationTests(WorkflowTestCase):
         cleanup = caught.exception.details["helperPreparationCleanup"]
         self.assertEqual(len(cleanup), 1)
         self.assertTrue(cleanup[0]["removed"])
-        self.assertFalse(Path(cleanup[0]["path"]).exists())
+        self.assertFalse(native_path(Path(cleanup[0]["path"])).exists())
         self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "base\n")
         with board.store.db.read() as connection:
             self.assertIsNone(connection.execute("SELECT task_id FROM tasks WHERE request_id='failed-new-helper'").fetchone())
@@ -392,7 +393,7 @@ class PreparationTests(WorkflowTestCase):
                                      (continuation_id,)).fetchone()
             intent = board.store.workflow._continuation_intent(connection, run, row)
         prepared = workspace.prepare(self.directory, f"{run_id}:{continuation_id}", intent)
-        (Path(prepared["path"]) / "tracked.txt").write_text("changed after the prepared input\n", encoding="utf-8", newline="\n")
+        native_path(Path(prepared["path"]) / "tracked.txt").write_text("changed after the prepared input\n", encoding="utf-8", newline="\n")
         board.store.workflow.prepare_continuation_workspace({"runId": run_id})
         view = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(view["state"], "awaiting-host")
@@ -432,7 +433,7 @@ class PreparationTests(WorkflowTestCase):
             self.assertEqual(current[field], previous[field])
         self.assertEqual(resumed["claim"]["task"]["cwd"], previous["path"])
         self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "base\n")
-        self.assertEqual((Path(current["path"]) / "tracked.txt").read_text(encoding="utf-8"), "sealed first output\n")
+        self.assertEqual(native_path(Path(current["path"]) / "tracked.txt").read_text(encoding="utf-8"), "sealed first output\n")
 
     def test_admission_prepares_the_current_continuation_manifest(self):
         board, run_id, first, _ = self.pending()
@@ -444,7 +445,7 @@ class PreparationTests(WorkflowTestCase):
         output = next(item for item in board.call("workflow_get", {"runId": run_id})["artifacts"]
                       if item["kind"] == "output")
         self.assertEqual(workspace["baseCommit"], output["outputCommit"])
-        self.assertEqual((Path(workspace["path"]) / "tracked.txt").read_text(encoding="utf-8"), "sealed first output\n")
+        self.assertEqual(native_path(Path(workspace["path"]) / "tracked.txt").read_text(encoding="utf-8"), "sealed first output\n")
 
     def test_cancel_during_git_cannot_activate_prepared_files(self):
         self.preparation_race("cancel")

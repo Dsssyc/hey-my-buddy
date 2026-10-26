@@ -32,6 +32,7 @@ from hey_my_buddy.buddy.harnesses.live import (
 )
 from hey_my_buddy.buddy.roles.turn_io import input_hash
 from hey_my_buddy.protocol.run_identity import RunIdentity
+from hey_my_buddy.paths import native_path
 
 
 class ExecutionChannel:
@@ -129,7 +130,7 @@ class JournalOwner:
 
     def append(self, record):
         with self.lock:
-            with open(self.journal_path, "a", encoding="utf-8", newline="\n") as stream:
+            with native_path(Path(self.journal_path)).open("a", encoding="utf-8", newline="\n") as stream:
                 source = {"questionSha256": self.entries.get(record["inquiryId"], {}).get("questionSha256", hashlib.sha256(b"status?").hexdigest()), **record}
                 stream.write(json.dumps({**self.bound, **source}) + "\n")
                 stream.flush()
@@ -517,7 +518,7 @@ class TestInquiry(BoardTestCase):
         try:
             # A directory at the journal path produces a real read/open failure;
             # the owner cannot commit, so it must never acknowledge queued.
-            Path(bridge.journal_path).mkdir()
+            native_path(Path(bridge.journal_path)).mkdir()
             result = board.call("inquiry_observe", {
                 "runId": task["runId"], "inquiryId": "q-journal-failed", "question": "Status?",
             })
@@ -577,14 +578,14 @@ class TestInquiry(BoardTestCase):
         task, _attempt, owner = self._attempt_directory(board, client)
         params = {"runId": task["runId"], "inquiryId": "q-replay", "question": "status?"}
         board.call("inquiry_observe", params)
-        first = Path(owner.journal_path).read_bytes()
+        first = native_path(Path(owner.journal_path)).read_bytes()
         second = board.call("inquiry_observe", params)
         self.assertTrue(second["inquiry"]["duplicate"])
-        self.assertEqual(Path(owner.journal_path).read_bytes(), first)
+        self.assertEqual(native_path(Path(owner.journal_path)).read_bytes(), first)
         with self.assertRaises(BoardError) as error:
             board.call("inquiry_observe", {**params, "question": "changed question"})
         self.assertEqual(error.exception.code, "CONFLICT")
-        self.assertEqual(Path(owner.journal_path).read_bytes(), first)
+        self.assertEqual(native_path(Path(owner.journal_path)).read_bytes(), first)
         self.assertEqual(client.get_message("q-replay", runId=task["runId"])["state"], "queued")
         self.assertEqual(board.call("inquiry_observe", {"runId": task["runId"]})["execution"]["attemptId"],
                          owner.identity.attempt_id)
@@ -788,13 +789,13 @@ class TestInquiry(BoardTestCase):
         board = self.board()
         task, _attempt, owner = self._attempt_directory(board, board.client())
         journal = Path(owner.journal_path)
-        journal.mkdir()
+        native_path(journal).mkdir()
         unreadable = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertEqual(unreadable["journal"], {"available": False, "reason": "journal-unreadable", "entries": 0})
         # Keep the original failure material; select a new source path instead
         # of deleting or overwriting the previous experiment object.
-        journal.rename(owner.directory / "unreadable.source")
-        Path(owner.journal_path).write_bytes(b"x" * (MAX_JOURNAL_BYTES + 1))
+        native_path(journal).rename(native_path(owner.directory / "unreadable.source"))
+        native_path(Path(owner.journal_path)).write_bytes(b"x" * (MAX_JOURNAL_BYTES + 1))
         oversized = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertEqual(oversized["journal"], {"available": False, "reason": "journal-exceeds-limit", "entries": 0})
         self.assertEqual(oversized["status"], "running")
@@ -941,7 +942,7 @@ class TestInquiry(BoardTestCase):
             legal = {**owner.bound, "inquiryId": f"q-source-{index}", "state": "answered",
                      "answer": {"text": "earlier legal answer"}}
             rows.extend((legal, {**legal, key: value, "answer": {"text": "foreign answer"}}))
-        Path(owner.journal_path).write_text("".join(json.dumps(row) + "\n" for row in rows) + "{torn line\n", encoding="utf-8", newline="\n")
+        native_path(Path(owner.journal_path)).write_text("".join(json.dumps(row) + "\n" for row in rows) + "{torn line\n", encoding="utf-8", newline="\n")
         for index, (_key, _value, reason) in enumerate(changed):
             with self.subTest(source=_key):
                 question_id = f"q-source-{index}"
@@ -1055,8 +1056,8 @@ class TestInquiry(BoardTestCase):
             {**bound, "inquiryId": "q-valid", "state": "answered", "questionSha256": hashlib.sha256(b"status?").hexdigest(), "answer": {"text": "valid answer"}},
         ]
         journal = Path(owner.journal_path)
-        journal.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8", newline="\n")
-        evidence = journal.read_bytes()
+        native_path(journal).write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8", newline="\n")
+        evidence = native_path(journal).read_bytes()
         before = len(owner.requests)
         for selector in ({}, {"inquiryId": "q-state", "question": "status?"}, {}):
             observed = board.call("inquiry_observe", {"runId": task["runId"], **selector})
@@ -1068,7 +1069,7 @@ class TestInquiry(BoardTestCase):
             self.assertEqual(client.get_message("q-valid", runId=task["runId"])["answer"]["text"], "valid answer")
             for question_id in ("q-state", "q-size"):
                 self.assertIsNone(client.get_message(question_id, runId=task["runId"])["answer"])
-        self.assertEqual(journal.read_bytes(), evidence)
+        self.assertEqual(native_path(journal).read_bytes(), evidence)
         self.assertEqual(len(owner.requests), before)
 
     def test_observe_preserves_delivery_mode_and_separates_live_diagnostics(self):
@@ -1200,7 +1201,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         # A published journal state without usable answer text must degrade
         # to delivered with a reason, never become a half-answered question.
         journal = Path(bridge.journal_path)
-        journal.write_text(json.dumps({
+        native_path(journal).write_text(json.dumps({
             "version": 1, "taskId": task["runId"], "attemptId": attempt["attemptId"],
             "generation": attempt["generation"], "turnId": bridge.identity.turn_id,
             "inquiryId": "q-empty", "state": "answered", "via": "tool:hey_my_buddy_answer_inquiry",
@@ -1249,7 +1250,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         # The source record is foreign; the public rejection must survive
         # typed projection and never import the foreign answer.
         journal = Path(bridge.journal_path)
-        journal.write_text(json.dumps({
+        native_path(journal).write_text(json.dumps({
             "version": 1, "taskId": "another-task", "attemptId": "another-attempt", "generation": 0,
             "turnId": "other", "inquiryId": "q-live", "state": "answered",
             "answer": {"text": "answer that belongs to a different run"},
@@ -1272,7 +1273,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         client = board.client()
         task, _attempt, bridge = self._live_attempt(board, client)
         bridge.activate("sess-live")
-        self.assertFalse(Path(bridge.journal_path).exists())
+        self.assertFalse(native_path(Path(bridge.journal_path)).exists())
         result = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertTrue(result["bridge"]["observed"])
         self.assertEqual(result["journal"], {"available": False, "reason": "journal-not-written", "entries": 0})
@@ -1295,7 +1296,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
                                     "via": "tool:hey_my_buddy_answer_inquiry", "toolCallId": f"call-{index}",
                                     "at": "2026-10-06T00:00:00Z", "truncated": False}})
         journal = Path(bridge.journal_path)
-        journal.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8", newline="\n")
+        native_path(journal).write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8", newline="\n")
         board.store._message_post(task["runId"], "q0", "first")
         board.store._message_post(task["runId"], "q31", "last")
         result = board.call("inquiry_observe", {"runId": task["runId"]})
@@ -1350,7 +1351,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
         client = board.client()
         task, _attempt, bridge = self._live_attempt(board, client)
         bridge.activate("sess-live")
-        Path(bridge.journal_path).write_bytes(b"")
+        native_path(Path(bridge.journal_path)).write_bytes(b"")
         result = board.call("inquiry_observe", {"runId": task["runId"]})
         self.assertTrue(result["bridge"]["observed"])
         self.assertEqual(result["journal"], {"available": True, "reason": None, "entries": 0},
@@ -1373,7 +1374,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
                  "inquiryId": "q-last", "state": "answered", "questionSha256": hashlib.sha256(b"probe").hexdigest(),
                  "answer": {"text": "owned answer", "bytes": 12,
                             "via": "tool:hey_my_buddy_answer_inquiry"}}
-        journal.write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n", encoding="utf-8", newline="\n")
+        native_path(journal).write_text(json.dumps(foreign) + "\n" + json.dumps(valid) + "\n", encoding="utf-8", newline="\n")
         result = board.call("inquiry_observe", {
             "runId": task["runId"], "inquiryId": "q-last", "question": "probe",
         })

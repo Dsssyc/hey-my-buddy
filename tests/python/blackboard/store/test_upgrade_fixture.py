@@ -306,10 +306,10 @@ class UpgradeFixtureTests(unittest.TestCase):
                 continue
             with self.subTest(case=case):
                 if case == 'missingJournal':
-                    self.assertFalse((fixture['state'] / item['journal']).exists())
+                    self.assertFalse(native_path(fixture['state'] / item['journal']).exists())
                     self.assertNotIn(item['journal'], resources)
                 else:
-                    self.assertTrue((fixture['state'] / item['journal']).is_file())
+                    self.assertTrue(native_path(fixture['state'] / item['journal']).is_file())
                     self.assertIn(item['journal'], resources)
 
     def test_in_progress_deletion_removes_its_commands_events_and_fence(self):
@@ -479,7 +479,7 @@ class UpgradeFixtureTests(unittest.TestCase):
             attempt = connection.execute('SELECT task_id,generation FROM attempts WHERE attempt_id=?',
                                          (receipt['attemptId'],)).fetchone()
             self.assertEqual(tuple(attempt), (receipt['taskId'], receipt['generation']))
-        sessions = list((fixture['state'] / 'sessions').rglob('*.jsonl'))
+        sessions = list(native_path(fixture['state'] / 'sessions').rglob('*.jsonl'))
         self.assertEqual(len(sessions), 14)
         for path in sessions:
             lines = path.read_text(encoding="utf-8").splitlines()

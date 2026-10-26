@@ -19,6 +19,7 @@ from hey_my_buddy.buddy.harnesses.registry import worker_format
 from hey_my_buddy.buddy.roles import controller, inline_run, run_execution
 from hey_my_buddy.buddy.roles.turn_io import input_hash, private_json
 from hey_my_buddy.private_dirs import ensure_private_dir
+from hey_my_buddy.paths import native_path
 
 
 def request_for(control):
@@ -527,7 +528,7 @@ class RoleStopTests(unittest.TestCase):
         executor = run_execution.WorkerRunExecutor(SimpleNamespace(name="codex"), codex_native_run)
         for initiator in ("host", "console"):
             with self.subTest(initiator=initiator):
-                context.turn_output_file().unlink(missing_ok=True)
+                native_path(context.turn_output_file()).unlink(missing_ok=True)
                 record = run_execution._worker_result(result, control, turn_input, request.input_text)
                 handle = run_execution.InlineRunHandle(control, identity, grace_seconds=0)
                 handle.turn_record = record

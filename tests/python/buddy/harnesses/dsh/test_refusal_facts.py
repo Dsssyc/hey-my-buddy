@@ -23,6 +23,7 @@ from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.activity import MAX_SESSION_ID
 
 from .test_native_run import NativeRunCase
+from hey_my_buddy.paths import native_path
 
 
 def options():
@@ -92,7 +93,7 @@ class RefusalFactsTests(NativeRunCase):
 
     def native_facts(self, result):
         ref = next(ref for ref in result.evidence_refs if ref.kind == "dsh-native-facts")
-        raw = Path(ref.location).read_bytes()
+        raw = native_path(Path(ref.location)).read_bytes()
         self.assertEqual(ref.size_bytes, len(raw))
         self.assertEqual(ref.sha256, hashlib.sha256(raw).hexdigest())
         return json.loads(raw)

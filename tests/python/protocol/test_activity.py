@@ -25,6 +25,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.registry import ExecutionContext, adapter as get_adapter
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.buddy.runtime.execution import Execution
+from hey_my_buddy.paths import native_path
 
 #: Inherited variables that would otherwise point a test subprocess at a production
 #: runtime, a Worker identity or an agent credential instead of this private root.
@@ -397,7 +398,7 @@ class ExecutionActivityForwarding(BoardTestCase):
         attempt = claim["attempt"]
         execution = Execution(claim, self.directory, nonce, client=client)
         directory = execution.directory
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
         context = ExecutionContext(
             task_id=task["runId"],
             attempt_id=attempt["attemptId"],

@@ -226,8 +226,9 @@ def serve():
                     raise ValueError(f"unknown fixture command: {operation}")
                 print(json.dumps({"ok": True, **facts}), flush=True)
             except Exception:
-                logs = {name: Path(path).read_text(encoding="utf-8")[-12000:]
-                        for name, path in context.log_paths().items() if Path(path).is_file()} if context else {}
+                from hey_my_buddy.paths import native_path
+                logs = {name: native_path(Path(path)).read_text(encoding="utf-8")[-12000:]
+                        for name, path in context.log_paths().items() if native_path(Path(path)).is_file()} if context else {}
                 print(json.dumps({"ok": False, "error": traceback.format_exc(),
                                   "controllerLogs": logs}), flush=True)
     finally:

@@ -79,7 +79,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         (board.directory / 'controls' / 'secret.json').write_text('private credential')
         unrelated = private_dirs.session_record_path(board.directory, 'run:' + running['runId'], 'unrelated')
         private_dirs.ensure_private_dir(unrelated.parent)
-        unrelated.write_text('unselected session')
+        native_path(unrelated).write_text('unselected session')
         inquiry = board.directory / 'attempts' / first['runId'] / attempt / 'inquiry.results.jsonl'
         private_dirs.ensure_private_dir(inquiry.parent)
         inquiry.write_bytes(b'{"first":"accepted"}\n')
@@ -90,9 +90,9 @@ class ExportBoardSampleTests(WorkflowTestCase):
         assert_private_path(self, output, 0o700)
         self.assertFalse((output / 'controls').exists())
         self.assertFalse((output / 'harnesses').exists())
-        self.assertEqual([p.name for p in (output / 'sessions').rglob('*.jsonl')], [attempt + '.jsonl'])
-        self.assertEqual(private_dirs.session_record_path(output, first['macroTaskId'], attempt).read_bytes(), path.read_bytes())
-        self.assertEqual((output / inquiry.relative_to(board.directory)).read_bytes(), inquiry.read_bytes())
+        self.assertEqual([p.name for p in native_path(output / 'sessions').rglob('*.jsonl')], [attempt + '.jsonl'])
+        self.assertEqual(native_path(private_dirs.session_record_path(output, first['macroTaskId'], attempt)).read_bytes(), native_path(path).read_bytes())
+        self.assertEqual(native_path(output / inquiry.relative_to(board.directory)).read_bytes(), native_path(inquiry).read_bytes())
         with closing(sqlite3.connect(output / DB_FILE)) as connection:
             self.assertEqual(set(row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')),
                              {first['runId'], second['runId']})
@@ -283,12 +283,12 @@ class ExportBoardSampleTests(WorkflowTestCase):
                 'SELECT COUNT(*) FROM attempts a JOIN router_dispatches d ON d.task_id=a.task_id'
             ).fetchone()[0], 0)
         self.assertLess(len(selected_attempts), len(attempts))
-        self.assertEqual({path.relative_to(output).as_posix() for path in output.rglob('inquiry.results.jsonl')},
+        self.assertEqual({path.relative_to(native_path(output)).as_posix() for path in native_path(output).rglob('inquiry.results.jsonl')},
                          {f'attempts/{task}/{attempt}/inquiry.results.jsonl'
                           for task, attempt in selected_attempts})
         for task, attempt in selected_attempts:
             relative = Path('attempts') / task / attempt / 'inquiry.results.jsonl'
-            self.assertEqual((output / relative).read_bytes(), (source / relative).read_bytes())
+            self.assertEqual(native_path(output / relative).read_bytes(), native_path(source / relative).read_bytes())
         self.assert_source_unchanged(before, files(source))
 
     def test_source_service_can_commit_during_snapshot_and_destination_creation(self):

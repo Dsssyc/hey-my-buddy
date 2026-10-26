@@ -18,6 +18,7 @@ from hey_my_buddy.blackboard.tasks import workspace as workspace_module
 from hey_my_buddy.errors import BoardError
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
+from hey_my_buddy.paths import native_path
 
 
 class ReclaimResumeLifecycleTests(LifecycleTestCase):
@@ -74,7 +75,7 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         replay = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(replay["removed"])
         self.assertTrue(replay["alreadyRemoved"])
-        self.assertTrue(Path(artifact["diffPath"]).is_file())
+        self.assertTrue(native_path(Path(artifact["diffPath"])).is_file())
 
     def test_started_reclaim_resumes_after_unlock_before_removal(self):
         board, submitted, manifest, checkout, artifact = self.interrupted_reclaim()
@@ -105,7 +106,7 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             self.assertEqual(after[column], before[column], column)
         self.assertEqual(after["revision"], before["revision"] + 1)
         self.assertEqual([json.loads(row["payload_json"])["alreadyRemoved"] for row in events], [False])
-        self.assertTrue(Path(artifact["diffPath"]).is_file())
+        self.assertTrue(native_path(Path(artifact["diffPath"])).is_file())
 
     def test_started_reclaim_resumes_with_only_missing_sealed_files(self):
         board, submitted, manifest, checkout, artifact = self.interrupted_reclaim(missing=("tracked.txt",))
@@ -138,8 +139,8 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             ).fetchone())
         self.assertEqual(before["state"], "applying")
         (checkout / "kept.txt").write_bytes(b"unsealed edit\x00\xff")
-        retained = {path.relative_to(checkout): path.read_bytes()
-                    for path in checkout.rglob("*") if path.is_file()}
+        retained = {path.relative_to(native_path(checkout)): path.read_bytes()
+                    for path in native_path(checkout).rglob("*") if path.is_file()}
         refs = git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/")
         with self.assertRaises(BoardError) as refused:
             self.reclaim(board, self.view(board, run_id))
@@ -157,8 +158,8 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         self.assertEqual(fenced.exception.details["planId"], before["plan_id"])
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "sealed output\n")
         retained[Path("tracked.txt")] = (checkout / "tracked.txt").read_bytes()
-        self.assertEqual({path.relative_to(checkout): path.read_bytes()
-                          for path in checkout.rglob("*") if path.is_file()}, retained)
+        self.assertEqual({path.relative_to(native_path(checkout)): path.read_bytes()
+                          for path in native_path(checkout).rglob("*") if path.is_file()}, retained)
         self.assertEqual(workspace_module._worktree_record(self.repo, checkout)["locked"],
                          "hey-my-buddy:" + manifest["workspaceId"])
         self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"), refs)
@@ -397,8 +398,8 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         git(checkout, "switch", "-q", "-c", "socu/late-branch")
         branch_commit = self.branch_ref("socu/late-branch")
         refs_before = git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/")
-        checkout_files_before = {path.relative_to(checkout): path.read_bytes()
-                                 for path in checkout.rglob("*") if path.is_file() and ".git" not in path.parts}
+        checkout_files_before = {path.relative_to(native_path(checkout)): path.read_bytes()
+                                 for path in native_path(checkout).rglob("*") if path.is_file() and ".git" not in path.parts}
         with self.assertRaises(BoardError) as raised:
             board.store.workflow.cleanup_apply({
                 "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "apply-attached",
@@ -419,8 +420,8 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         self.assertEqual(git(checkout, "rev-parse", "--abbrev-ref", "HEAD").strip(), "socu/late-branch")
         self.assertEqual(git(self.repo, "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"),
                          refs_before)
-        self.assertEqual({path.relative_to(checkout): path.read_bytes()
-                          for path in checkout.rglob("*") if path.is_file() and ".git" not in path.parts},
+        self.assertEqual({path.relative_to(native_path(checkout)): path.read_bytes()
+                          for path in native_path(checkout).rglob("*") if path.is_file() and ".git" not in path.parts},
                          checkout_files_before)
 
     def test_a_missing_registration_and_a_foreign_lock_keep_their_own_reasons(self):

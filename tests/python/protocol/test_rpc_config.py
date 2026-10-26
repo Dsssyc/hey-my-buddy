@@ -27,6 +27,7 @@ from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.service.service import WAIT_CAPACITY_DEFAULT
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.protocol.transport import MAX_MESSAGE_BYTES, ServiceError, _read_endpoint, _request, call_board, encode_message
+from hey_my_buddy.paths import native_path
 
 ROOT = Path(__file__).resolve().parents[3]
 PYTHON = ROOT / "src"
@@ -348,11 +349,11 @@ class ProfileTests(unittest.TestCase):
         alias.symlink_to(target, target_is_directory=True)
         marker = self.state / "untouched"
         marker.write_text("private sibling", encoding="utf-8", newline="\n")
-        before = sorted(self.state.rglob("*"))
+        before = sorted(native_path(self.state).rglob("*"))
         with self.assertRaises(BoardError) as refused:
             rpc_config.configure_local_endpoint(alias)
         self.assertEqual(target.stat().st_mode & 0o777, 0o755)
-        self.assertEqual(sorted(self.state.rglob("*")), before)
+        self.assertEqual(sorted(native_path(self.state).rglob("*")), before)
         self.assertEqual(marker.read_text(encoding="utf-8"), "private sibling")
         self.assertTrue(alias.is_symlink())
         self.assertFalse((target / "ipc").exists())

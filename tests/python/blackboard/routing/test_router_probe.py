@@ -159,7 +159,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     )
     verdict = {"stopReason": None, "elapsedMs": elapsed_ms}
     projected = run_execution._review_result(result, built_request, verdict)
-    Path(context.log_paths()["stdout"]).write_text(canonical_json(projected) + "\n", encoding="utf-8", newline="\n")
+    native_path(Path(context.log_paths()["stdout"])).write_text(canonical_json(projected) + "\n", encoding="utf-8", newline="\n")
     handle = run_execution.InlineRunHandle(control, identity, grace_seconds=10)
     handle.result = result
     handle.request = built_request
@@ -188,7 +188,7 @@ class RouterProbeTests(unittest.TestCase):
             guard.start()
 
     def cleanup_private_root(self):
-        for directory in Path(self.temporary.name).rglob("*"):
+        for directory in native_path(Path(self.temporary.name)).rglob("*"):
             if directory.is_dir() and not directory.is_symlink():
                 directory.chmod(0o700)
         self.temporary.cleanup()

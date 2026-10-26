@@ -11,6 +11,7 @@ from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from buddy.harnesses.session_record_support import notifications, updates
 from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
 from buddy.harnesses.zcode.test_native_run import NativeRunCase, MockNativeCase
+from hey_my_buddy.paths import native_path
 
 
 class MemoryRecord:
@@ -233,7 +234,7 @@ class RouterSessionTests(NativeRunCase):
             result = native_run.run(request, observer=lambda _: FEEDBACK_CONTINUE, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.reason_code, 'fixture-startup')
         self.assertFalse(result.model_started)
-        self.assertFalse(self.record(request).path.exists())
+        self.assertFalse(native_path(self.record(request).path).exists())
         self.assertEqual(result.stop_evidence.native.group_state, 'gone')
 
     def test_write_failure_preserves_native_identity_stop_and_result(self):

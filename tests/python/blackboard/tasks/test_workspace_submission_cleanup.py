@@ -91,7 +91,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             record = SessionRecord(path, attempt_id)
             record.append(MessageChunk(session_update='agent_message_chunk', content=TextContent(text=attempt_id)))
             record.close()
-            records[attempt_id] = path.read_bytes()
+            records[attempt_id] = native_path(path).read_bytes()
         for adapter in ('codex', 'dsh', 'zcode', 'claude'):
             for attempt_id in (failed_id, success_id):
                 root = private_dirs.ensure_private_dir(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id))
@@ -118,7 +118,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             self.assertFalse(native_path(private_dirs.native_root(board.directory, adapter, run_id)).exists())
             self.assertFalse(native_path(private_dirs.attempt_root(board.directory, adapter, run_id, 'unknown')).exists())
         for attempt_id in (failed_id, success_id):
-            self.assertEqual(private_dirs.session_record_path(board.directory, group_id, attempt_id).read_bytes(),
+            self.assertEqual(native_path(private_dirs.session_record_path(board.directory, group_id, attempt_id)).read_bytes(),
                              records[attempt_id])
 
     def test_reclaim_does_not_follow_an_unrelated_link_and_group_session_survives(self):
@@ -143,7 +143,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         record = SessionRecord(path, attempt_id)
         record.append(MessageChunk(session_update='agent_message_chunk', content=TextContent(text='retained')))
         record.close()
-        expected = path.read_bytes()
+        expected = native_path(path).read_bytes()
         outside = self.directory / 'retained-outside-private-root.txt'
         outside.write_text('untouched target', encoding="utf-8", newline="\n")
         for adapter in ('dsh', 'zcode', 'claude'):
@@ -157,10 +157,10 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         accepted = self.accept_run(board, delivered, keepCheckout=True)
         reclaimed = board.call('workflow_reclaim', {'runId': run_id, **self.control(accepted)})
         self.assertTrue(reclaimed['removed'])
-        self.assertEqual(path.read_bytes(), expected)
+        self.assertEqual(native_path(path).read_bytes(), expected)
         self.assertEqual(outside.read_text(encoding="utf-8"), 'untouched target')
         for adapter in ('dsh', 'zcode', 'claude'):
-            self.assertFalse(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id).exists())
+            self.assertFalse(native_path(private_dirs.attempt_root(board.directory, adapter, run_id, attempt_id)).exists())
 
     def test_public_integration_during_failed_admission_retains_new_target(self):
         board = self.board()
@@ -366,7 +366,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             with self.assertRaises(BoardError) as caught:
                 self.rejected(board)
         self.assertEqual(caught.exception.code, 'ADMISSION_FAILED')
-        self.assertTrue(Path(manifest['checkoutRoot']).exists())
+        self.assertTrue(native_path(Path(manifest['checkoutRoot'])).exists())
         workspace.verify(manifest, state_dir=self.directory)
 
     def test_existing_source_is_preserved_on_rejection(self):

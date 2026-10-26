@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 class WorkspaceReviewTests(unittest.TestCase):
@@ -117,7 +118,7 @@ class WorkspaceReviewTests(unittest.TestCase):
                 self.assertEqual(error.details["paths"], ["cwd"])
                 self.assertFalse((target / "newdir").exists())
                 self.assertEqual((self.repo / ".git/index").read_bytes(), before_index)
-                self.assertFalse(list((self.state / "workspaces").rglob("manifest.json")))
+                self.assertFalse(list(native_path(self.state / "workspaces").rglob("manifest.json")))
 
     def test_checkout_path_cannot_follow_a_link_into_the_source_repository(self):
         request = "checkout-points-at-source"

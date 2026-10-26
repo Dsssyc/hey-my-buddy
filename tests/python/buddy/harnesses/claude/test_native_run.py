@@ -43,6 +43,7 @@ from hey_my_buddy.protocol import tool_evidence
 from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
 from hey_my_buddy.buddy.harnesses.live import EXISTING_CAPABILITIES
 from hey_my_buddy.protocol.activity import is_newer, normalize_activity
+from hey_my_buddy.paths import native_path
 
 FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
 STREAM_FIXTURE = Path(__file__).parent / "fixtures/mock_claude.py"
@@ -157,8 +158,8 @@ class NativeInquiryTests(NativeRunCase):
         if result.end.status != expected_status:
             stderr = next((ref for ref in result.evidence_refs if ref.kind == "native-stderr"), None)
             self.fail(f"{result.end.reason_code}: {result.end.message}\n"
-                      + (Path(stderr.location).read_text(encoding="utf-8") if stderr else ""))
-        return result, json.loads(Path(report_ref.location).read_text(encoding="utf-8"))
+                      + (native_path(Path(stderr.location)).read_text(encoding="utf-8") if stderr else ""))
+        return result, json.loads(native_path(Path(report_ref.location)).read_text(encoding="utf-8"))
 
     def test_root_signed_answer_binds_to_running_turn(self):
         result, report = self.execute_inquiry("inquiry-answer")
@@ -203,7 +204,7 @@ class NativeInquiryTests(NativeRunCase):
                 self.assertEqual(report["answered"], answered)
                 self.assertEqual(report["unansweredDelivered"], 1 - answered)
                 reference = next(ref for ref in result.evidence_refs if ref.kind == "inquiry-tool-failures")
-                failures = json.loads(Path(reference.location).read_text(encoding="utf-8"))
+                failures = json.loads(native_path(Path(reference.location)).read_text(encoding="utf-8"))
                 self.assertEqual(failures["records"][0]["error"], "fixture inquiry transport error: retry permitted")
                 self.assertEqual(failures["records"][0]["toolCallId"], "toolu_inquiry_1")
                 self.assertEqual(failures["dropped"], 0)
@@ -229,7 +230,7 @@ class NativeInquiryTests(NativeRunCase):
         self.assertTrue(self.fixture_state()["interrupted"])
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         reference = next(ref for ref in result.evidence_refs if ref.kind == "native-observations")
-        observations = json.loads(Path(reference.location).read_text(encoding="utf-8"))
+        observations = json.loads(native_path(Path(reference.location)).read_text(encoding="utf-8"))
         self.assertTrue(observations["stoppedAtRootResult"])
         self.assertTrue(observations["unadmittedFollowupInit"])
         self.assertEqual(observations["unadmittedFollowupMessages"], 2)
@@ -262,7 +263,7 @@ class NativeInquiryTests(NativeRunCase):
 class Batch4FactsTests(NativeRunCase):
     def observations(self, result):
         ref = next(ref for ref in result.evidence_refs if ref.kind == "native-observations")
-        return json.loads(Path(ref.location).read_bytes())
+        return json.loads(native_path(Path(ref.location)).read_bytes())
 
     def test_unread_catalog_continues_discovery_as_unknown(self):
         from hey_my_buddy.blackboard.catalog.catalog import canonical_payload
@@ -509,7 +510,7 @@ class Batch4FactsTests(NativeRunCase):
     def test_imported_turn_provenance_still_requires_explicit_success(self):
         result = self.execute(self.request())
         ref = next(ref for ref in result.evidence_refs if ref.kind == "native-turn-facts")
-        facts = json.loads(Path(ref.location).read_bytes())
+        facts = json.loads(native_path(Path(ref.location)).read_bytes())
         provenance = {**facts, "turnEnd": "completed", "structuredOutputValidated": True}
         record = {"sessionId": result.native_identity.session_id, "provenance": provenance,
                   "resumeMode": "initial", "previousSessionId": None}
@@ -607,15 +608,15 @@ class WorkerCarrierTests(NativeRunCase):
         activity = result.activity.value
         self.assertEqual(activity["phase"], "finishing")
         self.assertEqual(activity["counts"]["modelTurns"], 1)
-        observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                            if ref.kind == "native-observations")).read_bytes())
+        observations = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                            if ref.kind == "native-observations"))).read_bytes())
         # The observed model set is a bounded observation, never an identity.
         self.assertEqual(observations["observedModels"],
                          ["claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"])
         self.assertEqual(observations["totalCostUsd"], 0.01)
         self.assertEqual(observations["sessionModel"], BUDDY["model"])
-        turn_facts = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                          if ref.kind == "native-turn-facts")).read_bytes())
+        turn_facts = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                          if ref.kind == "native-turn-facts"))).read_bytes())
         self.assertEqual(turn_facts["structuredOutputSource"], "json-schema")
         self.assertTrue(turn_facts["initObserved"])
         self.assertTrue(turn_facts["backgroundSettled"])
@@ -638,8 +639,8 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(usage["outputTokens"], 350)
         self.assertEqual(usage["reasoningOutputTokens"], 25)
         self.assertEqual(result.last_assistant_message.value["sourceId"], "msg-fixture-0002")
-        observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                            if ref.kind == "native-observations")).read_bytes())
+        observations = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                            if ref.kind == "native-observations"))).read_bytes())
         self.assertEqual(observations["observedModels"], ["claude-fixture-5"])
         self.assertNotIn("quota", observations)
         self.assertNotIn("rateLimitObservations", observations)
@@ -650,8 +651,8 @@ class WorkerCarrierTests(NativeRunCase):
         self.assertEqual(result.end.status, "ok", result.end.message)
         # The refused interaction's own full record — native request and tool
         # identities included — travels in the retained evidence reference.
-        records = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                       if ref.kind == "denied-interactions")).read_bytes())["records"]
+        records = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                       if ref.kind == "denied-interactions"))).read_bytes())["records"]
         self.assertEqual(len(records), 1)
         self.assertEqual((records[0]["toolName"], records[0]["requestId"]),
                          ("WebFetch", "perm-1"))
@@ -683,7 +684,7 @@ class WorkerCarrierTests(NativeRunCase):
 class ReadCarrierTests(NativeRunCase):
     def argv_and_settings(self, result):
         argv = self.fixture_state()["argv"]
-        settings = json.loads(Path(flag_value(argv, "--settings")).read_bytes())
+        settings = json.loads(native_path(Path(flag_value(argv, "--settings"))).read_bytes())
         return argv, settings
 
     def test_one_review_read_takes_the_shared_read_posture_and_reports_it(self):
@@ -898,15 +899,15 @@ class SettlementGuardTests(NativeRunCase):
         self.assertTrue(self.fixture_state()["interrupted"])
         # The observations package retains only the interrupt pair; the failure
         # travels in the common native-failure package.
-        observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                            if ref.kind == "native-observations")).read_bytes())
+        observations = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                            if ref.kind == "native-observations"))).read_bytes())
         self.assertNotIn("providerRejection", observations)
         self.assertIs(observations["nativeInterruptRequested"], True)
         self.assertIs(observations["nativeInterruptAcknowledged"], True)
         self.fixture_case("ok")
         clean = self.execute(self.request())
-        observations = json.loads(Path(next(ref.location for ref in clean.evidence_refs
-                                            if ref.kind == "native-observations")).read_bytes())
+        observations = json.loads(native_path(Path(next(ref.location for ref in clean.evidence_refs
+                                            if ref.kind == "native-observations"))).read_bytes())
         self.assertNotIn("providerRejection", observations)
         self.assertNotIn("nativeInterruptRequested", observations)
         self.assertNotIn("nativeInterruptAcknowledged", observations)
@@ -950,8 +951,8 @@ class SettlementGuardTests(NativeRunCase):
         self.assertTrue(result.stop_evidence.interrupt.requested)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         self.assertTrue(self.fixture_state()["interrupted"])
-        observations = json.loads(Path(next(ref.location for ref in result.evidence_refs
-                                            if ref.kind == "native-observations")).read_bytes())
+        observations = json.loads(native_path(Path(next(ref.location for ref in result.evidence_refs
+                                            if ref.kind == "native-observations"))).read_bytes())
         # The real reply of the interrupted peer, not the later group stop.
         self.assertIs(observations["nativeInterruptAcknowledged"], True)
 
@@ -1112,7 +1113,7 @@ class DiscoveryTests(NativeRunCase):
         state = self.fixture_state()
         self.assertIn("--no-session-persistence", state["argv"])
         self.assertEqual(state["seenAnthropicEnv"], [])
-        settings = json.loads(Path(flag_value(state["argv"], "--settings")).read_text(encoding="utf-8"))
+        settings = json.loads(native_path(Path(flag_value(state["argv"], "--settings"))).read_text(encoding="utf-8"))
         self.assertEqual(settings, native_run.permission_sandbox_settings("write"))
 
     def test_unknown_account_does_not_require_a_login_proof_process(self):
@@ -1259,7 +1260,7 @@ class RoleSurfaceTests(NativeRunCase):
         self.assertTrue(all(is_newer(new, old) for old, new in zip(payloads, payloads[1:])))
         snapshot = json.loads(endpoint.observe_local(fields=("activity",), limit=10))
         self.assertEqual(snapshot["activity"], result.activity.value)
-        self.assertFalse(Path(request.private_state.invocation_root, "activity.json").exists())
+        self.assertFalse(native_path(Path(request.private_state.invocation_root, "activity.json")).exists())
 
     def test_refused_activity_publication_keeps_native_final_activity(self):
         endpoint = mock.Mock(spec=CTwoLiveEndpoint)
