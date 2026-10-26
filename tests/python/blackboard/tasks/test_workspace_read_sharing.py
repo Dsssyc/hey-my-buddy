@@ -6,6 +6,7 @@ from blackboard.tasks import test_workflow_preparation as preparation_tests
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
 
 
 class ReadSharingTests(WorkflowTestCase):
@@ -31,8 +32,8 @@ class ReadSharingTests(WorkflowTestCase):
 
     def assert_rejected_without_allocation(self, board, request_id, *, access="read", selectors=(), code="SNAPSHOT_CHANGED", holders=1):
         before_refs = self.git(self.repo, "for-each-ref")
-        before_state = sorted(str(path.relative_to(self.directory / "workspaces"))
-                              for path in (self.directory / "workspaces").rglob("*"))
+        before_state = sorted(str(path.relative_to(native_path(self.directory / "workspaces")))
+                              for path in native_path(self.directory / "workspaces").rglob("*"))
         with patch.object(workspace, "_pin", wraps=workspace._pin) as pin, \
                 patch.object(workspace, "_workspace_directory", wraps=workspace._workspace_directory) as allocate:
             with self.assertRaises(BoardError) as caught:
@@ -43,8 +44,8 @@ class ReadSharingTests(WorkflowTestCase):
         pin.assert_not_called()
         allocate.assert_not_called()
         self.assertEqual(self.git(self.repo, "for-each-ref"), before_refs)
-        self.assertEqual(sorted(str(path.relative_to(self.directory / "workspaces"))
-                                for path in (self.directory / "workspaces").rglob("*")), before_state)
+        self.assertEqual(sorted(str(path.relative_to(native_path(self.directory / "workspaces")))
+                                for path in native_path(self.directory / "workspaces").rglob("*")), before_state)
         with board.store.db.read() as connection:
             self.assertIsNone(connection.execute("SELECT task_id FROM tasks WHERE request_id=?", (request_id,)).fetchone())
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workspace_reservations WHERE state='held'").fetchone()[0], holders)
@@ -186,8 +187,8 @@ class ReadSharingTests(WorkflowTestCase):
         self.finish_turn(board, self.claim(board, run_id=parent["runId"]), disposition="assistance")
         view = board.call("workflow_get", {"runId": parent["runId"]})
         before_refs = self.git(self.repo, "for-each-ref")
-        before_state = sorted(str(path.relative_to(self.directory / "workspaces"))
-                              for path in (self.directory / "workspaces").rglob("*"))
+        before_state = sorted(str(path.relative_to(native_path(self.directory / "workspaces")))
+                              for path in native_path(self.directory / "workspaces").rglob("*"))
         with self.assertRaises(BoardError) as caught:
             self.decide(board, view, view["activeRequest"]["requestId"], helpers=[
                 {"requestId": "helper-reader", "task": "read source", "cwd": str(self.repo),
@@ -197,8 +198,8 @@ class ReadSharingTests(WorkflowTestCase):
             ])
         self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")
         self.assertEqual(self.git(self.repo, "for-each-ref"), before_refs)
-        self.assertEqual(sorted(str(path.relative_to(self.directory / "workspaces"))
-                                for path in (self.directory / "workspaces").rglob("*")), before_state)
+        self.assertEqual(sorted(str(path.relative_to(native_path(self.directory / "workspaces")))
+                                for path in native_path(self.directory / "workspaces").rglob("*")), before_state)
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_children").fetchone()[0], 0)
 

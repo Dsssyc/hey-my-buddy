@@ -19,6 +19,7 @@ from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.install import upgrade
+from hey_my_buddy.paths import native_path
 
 
 class UpgradeFixtureTests(unittest.TestCase):
@@ -147,7 +148,7 @@ class UpgradeFixtureTests(unittest.TestCase):
                     self.assertTrue(output['ref'].startswith('refs/hey-my-buddy/workspaces/'))
                     self.assertEqual(_git(Path(manifest['snapshot']['repositoryPath']), 'rev-parse', output['ref']), output['commit'])
                     self.assertEqual(_git(Path(manifest['snapshot']['repositoryPath']), 'rev-parse', output['commit'] + '^{tree}'), output['tree'])
-                    self.assertEqual(_sha(Path(output['diffPath']).read_bytes()), output['diffSha256'])
+                    self.assertEqual(_sha(native_path(Path(output['diffPath'])).read_bytes()), output['diffSha256'])
                     self.assertEqual(_sha(_json(output['snapshot']).encode()), output['snapshotSha256'])
                 elif artifact['kind'] == 'shared-refs':
                     record = json.loads(artifact['manifest_json'])
@@ -182,12 +183,12 @@ class UpgradeFixtureTests(unittest.TestCase):
         run_id, manifest, attempt = self.sample(fixture, connection)
         output = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='output'", (run_id,)).fetchone()[0])
         worker_file = Path(output['diffPath']).with_name('output.json')
-        before = worker_file.read_bytes()
+        before = native_path(worker_file).read_bytes()
         sealed = workspace.host_seal(fixture['state'], manifest, run_id, attempt)
         self.assertEqual(sealed['kind'], 'host-output')
         self.assertNotEqual(Path(sealed['diffPath']).parent, worker_file.parent)
         self.assertEqual(workspace.host_seal(fixture['state'], manifest, run_id, attempt), sealed)
-        self.assertEqual(worker_file.read_bytes(), before)
+        self.assertEqual(native_path(worker_file).read_bytes(), before)
 
 
     def test_portable_roots_rebind_stable_identities_without_changing_native_history(self):
@@ -213,7 +214,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         fixture, connection = self.restored()
         state = fixture['state']
         before = upgrade.idle_snapshot(state)
-        files = {p.relative_to(state): p.read_bytes() for p in state.rglob('*')
+        files = {p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
                  if p.is_file() and not p.name.startswith('board.sqlite3')}
         rowids = {name: [row[0] for row in connection.execute(f'SELECT rowid FROM "{name}" ORDER BY rowid')]
                   for name in before['tables']}
@@ -235,7 +236,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         for name, original in rowids.items():
             self.assertEqual([row[0] for row in connection.execute(f'SELECT rowid FROM "{name}" ORDER BY rowid')],
                              original, name)
-        self.assertEqual({p.relative_to(state): p.read_bytes() for p in state.rglob('*')
+        self.assertEqual({p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
 
     def test_started_verification_checks_retained_workflow_columns(self):

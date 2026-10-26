@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
+from hey_my_buddy.paths import native_path
 
 
 class WorkspaceIdentityFixture(WorkflowTestCase):
@@ -59,8 +60,8 @@ class WorkspaceIdentityFixture(WorkflowTestCase):
         return path
 
     def fixed_files(self):
-        return {str(path.relative_to(self.directory)): path.read_bytes()
-                for path in (self.directory / "workspaces").rglob("*")
+        return {str(path.relative_to(native_path(self.directory))): path.read_bytes()
+                for path in native_path(self.directory / "workspaces").rglob("*")
                 if path.is_file() and path.suffix in {".json", ".patch"}}
 
 
