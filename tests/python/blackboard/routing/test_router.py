@@ -101,14 +101,25 @@ class RouterContractTests(unittest.TestCase):
                           "wait": {"seconds": 300, "atLeast": True, "overdue": 1}},
                  "statistics": {"samples": 4, "successes": 3, "failures": 1,
                                 "firstPasses": 2, "firstPassRate": 0.5, "failureRate": 0.25,
-                                "reworkRounds": 1, "medianDeliverySeconds": 120},
+                                "reworkRounds": 1, "medianDeliverySeconds": 120,
+                                "usage": {"samples": 2, "medianInputTokens": 100,
+                                          "medianCachedInputTokens": 40, "medianOutputTokens": 10}},
                  "infrastructureFailures": {"count": 1, "lastAt": "now"}}
         prompt = router.render_prompt({"routingMode": "fast", "task": "fix parser",
                                        "expectedSeconds": 600, "buddies": [{"buddyId": "legal", **facts}]})
         self.assertIn('"expectedSeconds":600', prompt)
         for key in facts:
             self.assertIn('"' + key + '":', prompt)
+        self.assertIn('"usage":', prompt)
         self.assertIn("Router protocol version 14", prompt)
+
+    def test_both_instruction_modes_name_usage_cost_and_effort_cost(self):
+        for mode in ("fast", "review"):
+            with self.subTest(mode=mode):
+                prompt = router.render_prompt({"routingMode": mode, "task": "fix parser", "buddies": []})
+                text = " ".join(prompt.split())
+                self.assertIn("Token usage statistics are cost evidence.", text)
+                self.assertIn("Higher reasoning effort spends more quota and is slower;", text)
 
 
 from unittest.mock import patch
