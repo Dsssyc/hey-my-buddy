@@ -1,0 +1,177 @@
+"""Failed native observations preserve context without importing an outcome."""
+import hashlib
+import json
+import os
+from pathlib import Path
+from unittest import mock
+from buddy.harnesses.fixture_selection import select_fixture
+
+from hey_my_buddy.buddy.harnesses.codex.adapter import CodexAdapter
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.roles.controller import worker_executor
+from hey_my_buddy.buddy.roles.turn_io import input_hash
+from blackboard.tasks.test_workflow import WorkflowTestCase
+
+
+class CodexContinuationTests(WorkflowTestCase):
+    def test_controller_failure_to_workflow_continue_keeps_the_native_thread(self):
+        # The board's continuation checks read the description; the run itself
+        # goes through the registered role executor.
+        self.executors["codex"] = CodexAdapter()
+        adapter = worker_executor("codex")
+        board = self.board()
+        submitted = self.submit(board, harness="codex", provider="openai", model="fixture-model", effort="low")
+
+        def execute(claim_response, case):
+            claim = claim_response["claim"]
+            attempt = claim["attempt"]
+            environment = {key: value for key, value in os.environ.items() if not key.startswith("HMB_")}
+            environment.update(HMB_DEV_SOURCE="1", HMB_STATE_DIR=str(self.directory),
+                               CODEX_HOME=str(self.directory / 'native-account'), HOME=str(self.directory),
+                               USERPROFILE=str(self.directory),
+                               HMB_RUNTIME_ROOT=str(self.directory / "runtime"),
+                               HMB_CODEX_FIXTURE_STATE=str(self.directory / "native-state.json"),
+                               HMB_CODEX_FIXTURE_CASE=case,
+                               PYTHONPATH=str(Path(__file__).parents[5] / "src") + os.pathsep + environment.get("PYTHONPATH", ""))
+            select_fixture(environment, self.directory, "codex", Path(__file__).parent / "fixtures/mock_codex.py")
+            # The check runner sets this for every test subprocess; a standalone
+            # run of this module needs the same developer-source selection.
+            patch_env = mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"})
+            patch_env.start()
+            self.addCleanup(patch_env.stop)
+            context = ExecutionContext(task_id=attempt["taskId"], attempt_id=attempt["attemptId"],
+                                       session_record_path=str(self.directory / f"session-{attempt['attemptId']}.jsonl"),
+                                       generation=attempt["generation"], spec=claim["task"]["spec"],
+                                       directory=self.directory / attempt["attemptId"], runtime={},
+                                       environment=environment, turn=claim["turn"])
+            adapter.prepare(context)
+            handle = adapter.start(context)
+            self.addCleanup(lambda: (handle.terminate(grace_seconds=.2), handle.wait(15)) if not handle.finished else None)
+            self.assertIsNotNone(handle.wait(15))
+            return adapter.collect(handle, context)
+
+        first = self.claim(board)
+        failed_result = execute(first, "invalid-json")
+        self.assertEqual(failed_result.status, "failed")
+        self.finish_turn(board, first, runner_status="failed", exit_code=1, seal=False,
+                         result_mutator=lambda payload: (payload.clear(), payload.update(failed_result.result)))
+        failed = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.continue_run(board, failed)
+        second = self.claim(board, claim_request_id="c2")
+        self.assertEqual(second["claim"]["turn"]["resumeMode"], "native-session")
+        resumed_result = execute(second, "ok")
+        self.assertEqual(resumed_result.status, "ok", resumed_result.to_report())
+        self.assertEqual(resumed_result.result["sessionId"], failed_result.result["sessionId"])
+        self.assertEqual(resumed_result.result["nativeTurnId"], "native-turn-2")
+        self.finish_turn(board, second, seal=False,
+                         result_mutator=lambda payload: (payload.clear(), payload.update(resumed_result.result)))
+        delivered = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(delivered["state"], "delivered")
+        self.assertEqual(delivered["currentTurn"]["state"], "returned")
+        self.continue_run(board, delivered, command_id="continue-returned")
+        document = self.claim(board, claim_request_id="c3")["claim"]["turn"]["input"]
+        self.assertTrue(document["context"]["lastAssistantMessage"]["validatedOutcome"])
+
+    def failed_run(self, *, native_status="completed", corrupt=False):
+        self.executors["codex"] = CodexAdapter()
+        board = self.board()
+        submitted = self.submit(board, harness="codex", provider="openai", model="fixture-model", effort="low")
+        first = self.claim(board)
+        document = first["claim"]["turn"]["input"]
+        text = "上一轮已经完成的调研内容。"
+        message = {"itemId": "final-1", "text": text, "phase": "final_answer",
+                   "sourceBytes": len(text.encode()),
+                   "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                   "truncated": False}
+        checkpoint = {"version": 1, **{key: document[key] for key in ("taskId", "attemptId", "generation", "turnId")},
+                      "inputSha256": input_hash(document), "sessionId": "native-session-1",
+                      "nativeTurnId": "native-turn-1", "nativeTurnStarted": True,
+                      "nativeTurnStatus": native_status, "eventSeq": 3,
+                      "bindingSaved": native_status == "completed", "lastAssistantMessage": message}
+        if corrupt:
+            checkpoint["attemptId"] = "foreign-attempt"
+
+        def payload(result):
+            result.pop("turn")
+            result.update(sessionId=checkpoint["sessionId"], nativeTurnId=checkpoint["nativeTurnId"],
+                          nativeCheckpoint=checkpoint,
+                          processState={"shutdownConfirmed": True, "nativeExitCode": 0},
+                          nativeSession={'harness': 'codex', 'storageOwner': 'harness-user-store'},
+                          harnessAttempts=[{"harness": {"version": "previous-version"}}])
+
+        self.finish_turn(board, first, runner_status="failed", exit_code=1, seal=False, result_mutator=payload)
+        failed = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(failed["state"], "failed")
+        self.assertIsNone(failed["turns"][0]["sessionId"])
+        self.assertIsNone(failed["turns"][0]["disposition"])
+        return board, failed
+
+    def continued_input(self, board, failed, **kwargs):
+        self.continue_run(board, failed, **kwargs)
+        return self.claim(board, claim_request_id="c2")["claim"]["turn"]["input"]
+
+    def test_invalid_outcome_can_resume_exact_completed_native_history(self):
+        board, failed = self.failed_run()
+        document = self.continued_input(board, failed)
+        self.assertEqual(document["resumeMode"], "native-session")
+        self.assertEqual(document["previousSessionId"], "native-session-1")
+        self.assertEqual(document["context"]["nativeResume"]["nativeTurnId"], "native-turn-1")
+        self.assertFalse(document["context"]["lastAssistantMessage"]["validatedOutcome"])
+
+    def test_native_failure_reconstructs_with_previous_assistant_message(self):
+        board, failed = self.failed_run(native_status="failed")
+        document = self.continued_input(board, failed)
+        self.assertEqual(document["resumeMode"], "reconstructed-new-session")
+        self.assertNotIn("nativeResume", document["context"])
+        self.assertEqual(document["context"]["lastAssistantMessage"]["text"], "上一轮已经完成的调研内容。")
+
+    def test_historical_private_thread_reconstructs_without_touching_native_history(self):
+        board, failed = self.failed_run()
+        with board.store.db.write() as connection:
+            row = connection.execute('SELECT attempt_id,result_json FROM attempts WHERE task_id=?', (failed['runId'],)).fetchone()
+            receipt = json.loads(row['result_json'])
+            receipt['result']['nativeSession']['storageOwner'] = 'hey-my-buddy-micro-task'
+            connection.execute('UPDATE attempts SET result_json=? WHERE attempt_id=?', (json.dumps(receipt), row['attempt_id']))
+        document = self.continued_input(board, failed)
+        self.assertEqual(document['resumeMode'], 'reconstructed-new-session')
+        self.assertEqual(document['context']['resumeReason'], 'native-storage-changed')
+        self.assertEqual(document['previousSessionId'], 'native-session-1')
+        self.assertNotIn('nativeResume', document['context'])
+        self.assertEqual(document['context']['lastAssistantMessage']['text'], '上一轮已经完成的调研内容。')
+
+    def test_harness_version_change_reconstructs_with_the_same_message(self):
+        board, failed = self.failed_run()
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE harness_health SET record_json=? WHERE harness='codex'", (
+                json.dumps({"harness": "codex", "status": "ready", "version": "new-version"}),))
+        document = self.continued_input(board, failed)
+        self.assertEqual(document["resumeMode"], "reconstructed-new-session")
+        self.assertEqual(document["context"]["resumeReason"], "harness-version-changed")
+        self.assertEqual(document["context"]["lastAssistantMessage"]["text"], "上一轮已经完成的调研内容。")
+
+    def test_foreign_attempt_cannot_supply_resume_or_reconstructed_context(self):
+        board, failed = self.failed_run(corrupt=True)
+        document = self.continued_input(board, failed)
+        self.assertEqual(document["resumeMode"], "reconstructed-new-session")
+        self.assertIsNone(document["previousSessionId"])
+        self.assertNotIn("lastAssistantMessage", document["context"])
+
+    def test_refused_resume_does_not_erase_the_last_message_before_reconstruction(self):
+        board, failed = self.failed_run()
+        self.continue_run(board, failed)
+        second = self.claim(board, claim_request_id="c2")
+        previous_message = second["claim"]["turn"]["input"]["context"]["lastAssistantMessage"]
+
+        def refusal(result):
+            result.pop("turn")
+            result.update(code="native-resume-unavailable", modelStarted=False)
+
+        self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False, result_mutator=refusal)
+        failed = board.call("workflow_get", {"runId": failed["runId"]})
+        self.assertEqual(failed["state"], "executing")
+        self.assertEqual(failed["resumeRecovery"]["reason"], "native-resume-refused")
+        third = self.claim(board, claim_request_id="c3")["claim"]["turn"]["input"]
+        self.assertEqual(third["resumeMode"], "reconstructed-new-session")
+        self.assertEqual(third["context"]["resumeReason"], "native-resume-refused")
+        self.assertNotIn("nativeResume", third["context"])
+        self.assertEqual(third["context"]["lastAssistantMessage"], previous_message)

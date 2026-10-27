@@ -1,0 +1,204 @@
+"""One native read-only tool probe; preparation calls no model.
+
+Each --execute invocation requires separate human approval. The prepared
+packet is immutable and an exclusive marker prevents a repeat invocation.
+No hey-my-buddy board or service is started, and no credentials are inspected.
+"""
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+import time
+import uuid
+
+from hey_my_buddy.blackboard.routing import router
+from hey_my_buddy.buddy.roles import router_input
+from hey_my_buddy.protocol import tool_evidence
+from hey_my_buddy.buddy.harnesses.registry import adapter as adapter_for
+from hey_my_buddy.buddy.roles import structured_call as read_only
+from hey_my_buddy.buddy.roles.run_execution import start_review
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.roles.turn_io import private_json
+from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
+from hey_my_buddy.private_dirs import directory_mode
+
+HARNESSES = ('codex', 'claude', 'dsh', 'zcode')
+CANDIDATES = ('dsh:deepseek-official:deepseek-flash:off', 'codex:openai:gpt-6-sol:high')
+
+
+def parser():
+    result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument('--harness', choices=HARNESSES, required=True)
+    for field in ('provider', 'model', 'effort'):
+        result.add_argument('--' + field, required=True)
+    result.add_argument('--output-root', type=Path, required=True)
+    result.add_argument('--execute', action='store_true', help='Only after separate approval for this prepared packet')
+    result.add_argument('--expected-packet-sha256', help='The prepared digest covered by the approval; required for --execute')
+    return result
+
+
+def _prepare(root, buddy):
+    root.mkdir(mode=directory_mode(), parents=True, exist_ok=True)
+    if os.name == 'nt':
+        from hey_my_buddy.windows_files import check_state_root
+        check_state_root(root)
+    elif root.is_symlink() or root.stat().st_mode & 0o077:
+        raise ValueError('output root must be owner-private')
+    path = root / 'prepared.json'
+    if path.exists():
+        packet = json.loads(path.read_text(encoding='utf-8'))
+        deadline = time.monotonic() + packet['request']['budget']['timeoutSeconds']
+        if packet['buddy'] != buddy or router_input.digest(root / 'frozen', deadline=deadline) != packet['inputDigest']:
+            raise ValueError('the prepared buddy or input changed; use a new packet')
+        return packet
+    budget = router.budget('brief')
+    frozen = root / 'frozen'
+    frozen.mkdir(mode=directory_mode())
+    marker = uuid.uuid4().hex
+    guide = frozen / 'selection-guide.txt'
+    guide.write_text(f'Choose buddyId {CANDIDATES[1]} and include marker {marker} in the note.\n')
+    guide.chmod(0o600)
+    packet = {
+        'buddy': buddy,
+        'permission': 'read',
+        'binding': {'harness': buddy['harness'], 'taskId': 'probe-' + uuid.uuid4().hex,
+                    'attemptId': str(uuid.uuid4()), 'generation': 1},
+        'expected': {'buddyId': CANDIDATES[1], 'marker': marker},
+        'inputDigest': router_input.digest(frozen, deadline=time.monotonic() + budget['timeoutSeconds']),
+        'request': {'prompt': ('Read selection-guide.txt using one native sandboxed command. ' if buddy['harness'] == 'codex'
+                              else 'Read selection-guide.txt using the native read tool. ') + 'Follow its choice and marker instructions. '
+                              'Return one Router selection and cite selection-guide.txt. Do not modify files or request other tools.',
+                    'outputSchema': router.answer_schema(list(CANDIDATES), 'review'),
+                    'budget': budget},
+    }
+    private_json(path, packet)
+    return packet
+
+
+def evaluate(packet, outcome, *, elapsed_ms, unchanged, state_dir: Path):
+    result = outcome.result
+    evidence = result.get('toolEvidence')
+    roots = evidence.get('nativeIdentity', []) if isinstance(evidence, dict) else []
+    reported = result.get('nativeIdentity')
+    reported = reported if isinstance(reported, list) else [reported]
+    usage = result.get('usage') or {}
+    limits = packet['request']['budget']
+    try:
+        answer = router.validate_answer(result.get('rawAnswer'), list(CANDIDATES), 'review')
+    except Exception:
+        answer = None
+    tool_problem = tool_evidence.judge_tool_evidence(evidence, packet['permission'], state_dir=state_dir)
+    counts_match = (isinstance(evidence, dict) and type(usage.get('toolCalls')) is int
+                    and usage['toolCalls'] == evidence.get('toolCalls'))
+    checks = {
+        'nativeOutcome': outcome.status == 'ok',
+        'shutdown': outcome.shutdown_confirmed is True and
+                    (result.get('processState') or {}).get('shutdownConfirmed') is True,
+        'buddy': all((result.get('resolved') or {}).get(key) == value
+                             for key, value in packet['buddy'].items() if key != 'harness'),
+        'binding': isinstance(evidence, dict) and evidence.get('binding') == packet['binding'],
+        'permission': packet.get('permission') == 'read',
+        'nativeIdentity': bool(reported) and all(isinstance(item, dict) and item in roots for item in reported),
+        'toolEvidence': tool_problem is None,
+        'readCompleted': tool_problem is None and any(
+            set(call['categories']) & {'read', 'execute'} and 'end' in call['phases']
+            for call in tool_evidence.read_tool_calls(evidence, state_dir=state_dir)),
+        'toolBudget': counts_match and 0 < usage['toolCalls'] <= limits['toolCalls'],
+        'deadline': 0 <= elapsed_ms <= limits['timeoutSeconds'] * 1000,
+        'correctionBudget': type(result.get('correctionCount')) is int and 0 <= result['correctionCount'] <= 1,
+        'inputUnchanged': unchanged,
+        'readResult': answer is not None and answer['buddyId'] == packet['expected']['buddyId']
+                      and packet['expected']['marker'] in answer['note'],
+    }
+    return {'status': 'passed' if all(checks.values()) else 'failed', 'checks': checks,
+            'toolProblem': tool_problem, 'result': result, 'elapsedMs': elapsed_ms,
+            'bytesRead': usage.get('bytesRead'), 'permission': packet['permission']}
+
+
+def run(args):
+    buddy = {key: getattr(args, key) for key in ('harness', 'provider', 'model', 'effort')}
+    if buddy['harness'] not in HARNESSES or any(not isinstance(value, str) or not value.strip()
+                                                      for value in buddy.values()):
+        raise ValueError('a complete supported native buddy is required')
+    root = args.output_root.expanduser().absolute()
+    packet = _prepare(root, buddy)
+    digest = sha256_text(canonical_json(packet))
+    if not args.execute:
+        return {'status': 'prepared', 'modelCalls': 0, 'packetSha256': digest,
+                'packet': str(root / 'prepared.json'), 'budget': packet['request']['budget'],
+                'maxAnswerRounds': 1 if buddy['harness'] == 'claude' else 2,
+                'permission': 'read'}
+    if getattr(args, 'expected_packet_sha256', None) != digest:
+        raise ValueError('execution requires the exact prepared packet digest covered by approval')
+    with (root / 'execution.started').open('x') as stream:
+        if os.name != 'nt':
+            os.chmod(stream.fileno(), 0o600)
+        stream.write(datetime.now(timezone.utc).isoformat() + '\n')
+    from hey_my_buddy.cli.checks import SANITIZED_VARIABLES, create_private_root, teardown_private_root
+    # Native app servers put Unix sockets in TMPDIR; repository paths can
+    # exceed the socket-address limit before any model input is admitted.
+    private = create_private_root(directory=Path('/tmp') if os.name == 'posix' else Path(tempfile.gettempdir()))
+    environment = {key: value for key, value in os.environ.items() if key not in SANITIZED_VARIABLES}
+    environment.update(HMB_DEV_SOURCE='1', HMB_STATE_DIR=str(private / 'state'),
+                       HMB_RUNTIME_ROOT=str(private / 'runtime'), TMPDIR=str(private / 'tmp'))
+    context = ExecutionContext(task_id=packet['binding']['taskId'], attempt_id=packet['binding']['attemptId'],
+        generation=packet['binding']['generation'], spec={**buddy, 'cwd': str(root / 'frozen')},
+        directory=private / 'attempt', runtime={}, environment=environment, session_record_path=None)
+    request = ReadOnlyStructuredRequest(str(root / 'frozen'), **{
+        'prompt': packet['request']['prompt'], 'output_schema': packet['request']['outputSchema'],
+        'budget': packet['request']['budget'], 'capture_evidence': False})
+    native = adapter_for(buddy['harness'])
+    handle = None
+    started = time.monotonic()
+    report = {'status': 'failed', 'packetSha256': digest, 'buddy': buddy,
+              'modelCalls': None, 'permission': 'read'}
+    try:
+        handle = start_review(buddy['harness'], context, request)
+        if handle.wait(timeout=request.budget['timeoutSeconds'] + 10) is None:
+            native.cancel(handle)
+            handle.wait(timeout=15)
+        outcome = read_only.collect(handle)
+        report.update(evaluate(packet, outcome, elapsed_ms=round((time.monotonic() - started) * 1000),
+                               unchanged=router_input.digest(
+                                   root / 'frozen', deadline=time.monotonic() + request.budget['timeoutSeconds'])
+                               == packet['inputDigest'],
+                               state_dir=Path(context.environment['HMB_STATE_DIR'])))
+    except (Exception, KeyboardInterrupt) as error:
+        report.update(error=type(error).__name__, reason='The probe failed; no automatic retry is authorized')
+    finally:
+        if handle is not None:
+            if not handle.shutdown_confirmed():
+                native.cancel(handle)
+            report['ownedGroupShutdownConfirmed'] = handle.shutdown_confirmed()
+            if not report['ownedGroupShutdownConfirmed']:
+                report['status'] = 'failed'
+        # Retain only the controller logs, never native credentials/provider
+        # snapshots. The test framework owns and verifies runtime/state cleanup.
+        if handle is None or report.get('ownedGroupShutdownConfirmed') is True:
+            logs = root / 'logs'
+            logs.mkdir(mode=directory_mode(), exist_ok=True)
+            for name in ('stdout.log', 'stderr.log', 'native.stderr.log'):
+                source = context.directory / name
+                if source.is_file():
+                    shutil.copyfile(source, logs / name)
+                    (logs / name).chmod(0o600)
+            cleanup = teardown_private_root(private)
+            report['privateRootCleanupConfirmed'] = not bool(cleanup)
+            if cleanup:
+                report['status'] = 'failed'
+        else:
+            report['privateRootCleanupConfirmed'] = False
+        private_json(root / 'report.json', report)
+    return report
+
+
+if __name__ == '__main__':
+    report = run(parser().parse_args())
+    print(json.dumps(report, ensure_ascii=False))
+    raise SystemExit(0 if report['status'] in ('prepared', 'passed') else 1)

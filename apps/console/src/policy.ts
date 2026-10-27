@@ -1,0 +1,229 @@
+import { reasonText } from "./i18n/reason";
+import i18n from "i18next";
+import type { Draft, Buddy } from "./types";
+import {
+  routerFieldChanged,
+  preferenceChanges,
+  buddySettings,
+} from "./draft";
+import { concurrencyLimit, modelServiceKey, retryIntervalSeconds } from "./console-data";
+import { buddyName, buddyTitle } from "./buddy-name";
+
+/** The two capabilities have distinct authority and cannot stand in for each other. */
+export function hasFastRoutingCapability(buddy: Buddy | undefined): boolean {
+  return !!buddy && (buddy.capabilities ?? []).some(entry => entry.trim().toLowerCase() === "routing:fast");
+}
+
+export function hasDecisionCapability(buddy: Buddy | undefined): boolean {
+  if (!buddy) return false;
+  return (buddy.capabilities ?? []).some(
+    (entry) => entry.trim().toLowerCase() === "decision",
+  );
+}
+
+/** Enabled, currently available and actually able to compute a selection. */
+export function isDecisionCandidate(buddy: Buddy | undefined): boolean {
+  return !!buddy && buddy.enabled && buddy.available && hasDecisionCapability(buddy);
+}
+
+export function decisionCandidates(buddies: Buddy[]): Buddy[] {
+  // Deterministic, locale-independent order: harness, then the stable identity.
+  return buddies
+    .filter(isDecisionCandidate)
+    .sort((a, b) => a.harness.localeCompare(b.harness) || a.buddyId.localeCompare(b.buddyId));
+}
+
+export function isFastRouterCandidate(buddy: Buddy | undefined): boolean {
+  return !!buddy && buddy.enabled && buddy.available && hasFastRoutingCapability(buddy);
+}
+
+export function fastRouterCandidates(buddies: Buddy[]): Buddy[] {
+  return buddies.filter(isFastRouterCandidate)
+    .sort((a, b) => a.harness.localeCompare(b.harness) || a.buddyId.localeCompare(b.buddyId));
+}
+
+/**
+ * The published directory capability for a harness that can actually execute a
+ * delegated helper in a workspace. `catalog.proposed_buddies` records exactly
+ * `execution:<harness>` for every executable harness, so a newly registered
+ * harness (such as Codex) is admitted without a console-side harness list, and
+ * a decision-only or mismatched row is never offered as an executor.
+ */
+export function hasExecutionCapability(buddy: Buddy | undefined): boolean {
+  if (!buddy) return false;
+  const token = `execution:${buddy.harness.trim().toLowerCase()}`;
+  return (buddy.capabilities ?? []).some(
+    (entry) => entry.trim().toLowerCase() === token,
+  );
+}
+
+/** Enabled, currently available and able to execute a delegated helper task. */
+function isExecutionCandidate(buddy: Buddy | undefined): boolean {
+  return !!buddy && buddy.enabled && buddy.available && hasExecutionCapability(buddy);
+}
+
+export function executionCandidates(buddies: Buddy[]): Buddy[] {
+  return buddies
+    .filter(isExecutionCandidate)
+    .sort((a, b) => a.harness.localeCompare(b.harness) || a.buddyId.localeCompare(b.buddyId));
+}
+
+/**
+ * Why this effort cannot be made the Router from its tag menu; null when it
+ * can. The capability list is checked first because it is the one reason the
+ * user cannot fix here.
+ */
+export function routerRefusal(buddy: Buddy, mode: "fast" | "review" = "review"): string | null {
+  if (mode === "fast" && !hasFastRoutingCapability(buddy)) return i18n.t("console:thisHarnessDoesNotSupportRoutingWithout");
+  if (mode === "review" && !hasDecisionCapability(buddy)) return i18n.t("console:thisHarnessDoesNotSupportLocalRead");
+  if (!buddy.available) return i18n.t("console:thisReasoningEffortIsCurrentlyUnavailable");
+  if (!buddy.enabled) return i18n.t("console:thisReasoningEffortIsDisabledEnableIt");
+  return null;
+}
+
+/** One actionable message about a user-owned setting. */
+type PolicyIssue = {
+  buddyId: string;
+  label: string;
+  message: string;
+  /** Model service key for a model service issue; buddy-level issues leave it unset. */
+  modelService?: string;
+  /** The Router itself needs attention; the page's routing status shows it. */
+  router?: boolean;
+};
+
+function labelOf(buddy: Buddy | undefined, buddyId: string): string {
+  return buddy ? buddyTitle(buddy) : buddyId;
+}
+
+function availabilityReason(buddy: Buddy | undefined): string {
+  if (!buddy) return i18n.t("console:noLongerInTheCurrentCatalog");
+  return buddy.unavailableReason
+    ? i18n.t("console:currentlyUnavailable", { v0: reasonText(buddy.unavailableReason) })
+    : i18n.t("console:notInTheCurrentCatalog");
+}
+
+/**
+ * Why a pin is not legal right now, matching the board: a new pin requires an
+ * available *and* enabled buddy. Null means it is legal.
+ */
+function pinRefusal(buddy: Buddy | undefined): string | null {
+  if (!buddy || !buddy.available) return availabilityReason(buddy);
+  if (!buddy.enabled) return i18n.t("console:disabled");
+  return null;
+}
+
+/**
+ * Changes that cannot be published at all. Only a *new* enable, a mode that
+ * *transitions into* pin or a changed
+ * Router needs a currently legal model; changing the note of an existing pin,
+ * a disable and every other edit stay independent of current availability. A
+ * model service's concurrency limit is equally independent of availability — it only
+ * has to be a positive safe integer.
+ */
+export function blockingIssues(baseline: Draft, draft: Draft): PolicyIssue[] {
+  const buddies = new Map(draft.buddies.map((p) => [p.buddyId, p]));
+  const baselinePreferenceModes = new Map(
+    baseline.preferences.map((p) => [p.buddyId, p.mode]),
+  );
+  const issues: PolicyIssue[] = [];
+  for (const entry of draft.modelServiceConcurrency) {
+    if (concurrencyLimit(entry.limit) !== null) continue;
+    const member = draft.buddies.find((buddy) => modelServiceKey(buddy) === modelServiceKey(entry));
+    const subject = member ? buddyName(member) : `${entry.harness}/${entry.provider}/${entry.model}`;
+    issues.push({
+      buddyId: member?.buddyId ?? `${entry.harness}/${entry.provider}/${entry.model}`,
+      modelService: modelServiceKey(entry),
+      label: subject,
+      message: i18n.t("console:concurrencyLimitMustBePositiveInteger", { v0: subject }),
+    });
+  }
+  for (const setting of buddySettings(baseline, draft)) {
+    if (!setting.enabled) continue;
+    const buddy = buddies.get(setting.buddyId);
+    if (!buddy?.available) {
+      issues.push({
+        buddyId: setting.buddyId,
+        label: labelOf(buddy, setting.buddyId),
+        message: i18n.t("console:cannotEnableItRevertThisChange", { v0: labelOf(buddy, setting.buddyId), v1: availabilityReason(buddy) }),
+      });
+    }
+  }
+  for (const change of preferenceChanges(baseline, draft)) {
+    if (change.mode !== "pin") continue;
+    // The board requires current legality only when the mode transitions into
+    // pin; a note-only edit of an existing pin stays a legal patch.
+    if (baselinePreferenceModes.get(change.buddyId) === "pin") continue;
+    const buddy = buddies.get(change.buddyId);
+    const refusal = pinRefusal(buddy);
+    if (refusal) {
+      issues.push({
+        buddyId: change.buddyId,
+        label: labelOf(buddy, change.buddyId),
+        message: i18n.t("console:cannotPinItChooseAnAvailableReasoning", { v0: labelOf(buddy, change.buddyId), v1: refusal }),
+      });
+    }
+  }
+  // The interval is checked like the concurrency field: an invalid draft value
+  // blocks saving so a save can never publish an earlier valid prefix.
+  if (draft.configuration && retryIntervalSeconds(draft.configuration.routerRetryIntervalSeconds) === null) {
+    issues.push({
+      buddyId: "", label: i18n.t("console:retryInterval"),
+      message: i18n.t("console:retryIntervalMustBeAnIntegerFrom"),
+    });
+  }
+  if (draft.configuration && routerFieldChanged(baseline, draft, "routerBuddyIds")) {
+    // Settings name published complete identities. Runtime eligibility and
+    // temporary availability belong to the shared current Router resolver.
+    for (const target of draft.configuration.routerBuddyIds) {
+      const buddy = buddies.get(target);
+      const refusal = !buddy ? i18n.t("console:noLongerInTheCurrentCatalog")
+        : [buddy.harness, buddy.provider, buddy.model, buddy.effort].some(value => !value?.trim())
+          ? i18n.t("console:incompleteBuddyIdentity") : null;
+      if (refusal) issues.push({ buddyId: target, label: labelOf(buddy, target),
+        message: i18n.t("console:cannotSaveTheRouterList", { v0: labelOf(buddy, target), v1: refusal }) });
+    }
+  }
+  return issues;
+}
+
+/** The Router is checked again by the service before each routing run. */
+export function routerAttention(source: Pick<Draft, "configuration" | "buddies">, mode = source.configuration?.defaultRoutingMode): PolicyIssue | null {
+  const id = source.configuration?.routerBuddyIds[0] ?? null;
+  if (!id || !mode) return null;
+  const buddy = source.buddies.find(p => p.buddyId === id);
+  const refusal = buddy ? routerRefusal(buddy, mode) : i18n.t("console:noLongerInTheCatalog");
+  return refusal ? { buddyId: id, router: true, label: labelOf(buddy, id),
+    message: i18n.t("console:currentRouterChooseSetAsRouterFrom", { v0: labelOf(buddy, id), v1: refusal }) } : null;
+}
+
+export function decisionAttention(source: Pick<Draft, "configuration" | "buddies">): PolicyIssue | null {
+  return routerAttention(source);
+}
+
+/**
+ * Settings that stay stale after this draft is published. They are shown as
+ * needing attention and never block an unrelated patch: a saved disable, a
+ * preference change or a note still commits while these remain. A pin is checked per buddy.
+ */
+export function attentionIssues(
+  source: Pick<Draft, "configuration" | "buddies" | "preferences">,
+): PolicyIssue[] {
+  const buddies = new Map(source.buddies.map((p) => [p.buddyId, p]));
+  const issues: PolicyIssue[] = [];
+  const attention = routerAttention(source);
+  if (attention) issues.push(attention);
+  for (const preference of source.preferences) {
+    if (preference.mode !== "pin") continue;
+    const buddy = buddies.get(preference.buddyId);
+    const refusal = pinRefusal(buddy);
+    if (refusal) {
+      issues.push({
+        buddyId: preference.buddyId,
+        label: labelOf(buddy, preference.buddyId),
+        message: i18n.t("console:thePinnedChoicePointsToEnableIt", { v0: labelOf(buddy, preference.buddyId), v1: refusal }),
+      });
+    }
+  }
+  return issues;
+}

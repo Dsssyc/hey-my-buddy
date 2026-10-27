@@ -1,0 +1,74 @@
+{
+  "comment": "Synthetic ACP notifications for fake_agent.py agentInfo version 0.0.1. Reasoning text reuses native-usage-dsh.json session.v3 desensitized storage sample; ACP completeness and a real DSH CLI version are not established by this fixture. No product history reader is used.",
+  "updates": [
+    {
+      "sessionUpdate": "user_message_chunk",
+      "content": {
+        "type": "text",
+        "text": "fixture prompt"
+      }
+    },
+    {
+      "sessionUpdate": "agent_thought_chunk",
+      "content": {
+        "type": "text",
+        "text": "Fixture reasoning."
+      }
+    },
+    {
+      "sessionUpdate": "agent_thought_chunk",
+      "content": {
+        "type": "text",
+        "text": "Fixture reasoning two."
+      }
+    },
+    {
+      "sessionUpdate": "tool_call",
+      "toolCallId": "fixture-read",
+      "title": "read",
+      "kind": "other",
+      "status": "in_progress",
+      "rawInput": {
+        "file_path": "/workspace/a.txt"
+      }
+    },
+    {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "fixture-read",
+      "status": "completed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "file text 中文"
+          }
+        }
+      ]
+    },
+    {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "fixture-read",
+      "status": "completed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "file text 中文"
+          }
+        }
+      ]
+    },
+    {
+      "sessionUpdate": "plan",
+      "entries": [
+        {
+          "content": "Review the file",
+          "status": "completed",
+          "priority": "medium"
+        }
+      ]
+    }
+  ]
+}

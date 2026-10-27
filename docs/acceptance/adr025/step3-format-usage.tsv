@@ -1,0 +1,19 @@
+model	fields_from_step2	current_state	actual_reader	remaining_without_business_reader
+RunEnd (RunResult.end)	signal	no-business-reader	仅构造与整帧留存；不算业务消费	signal
+ModelStartEvidence (RunResult.model_start_evidence)	basis/native_identity	no-business-reader	仅构造与整帧留存；不算业务消费	basis/native_identity
+ResultConfiguration (RunResult.configuration)	checks	no-business-reader	仅构造与整帧留存；不算业务消费	checks
+CheckedValue (configuration.checked.*)	basis/source	no-business-reader	仅构造与整帧留存；不算业务消费	basis/source
+RunValue (RunResult.value)	validation_basis	no-business-reader	仅构造与整帧留存；不算业务消费	validation_basis
+RunValue (RunResult.value)	mechanism	no-business-reader	仅构造与整帧留存；不算业务消费	mechanism
+CompletionEvidence (RunResult.completion_evidence)	native_identity	partly-consumed	roles.run_execution._worker_result 读取 turn_id；session_id 的结果本体另有读取	completion_evidence.native_identity 中其余组成部分
+CompletionEvidence (RunResult.completion_evidence)	mechanism	no-business-reader	仅构造与整帧留存；不算业务消费	mechanism
+CompletionEvidence (RunResult.completion_evidence)	call_id/event_order/receipt_ref/receipt_verified/native_outcome	no-business-reader	仅构造与整帧留存；不算业务消费	call_id/event_order/receipt_ref/receipt_verified/native_outcome
+DeniedInteraction (RunResult.denied_interactions)	method/action/reason	no-business-reader	仅构造与整帧留存；不算业务消费	method/action/reason
+UnknownEvents (RunResult.unknown_events)	counts/total	no-business-reader	仅构造与整帧留存；不算业务消费	counts/total
+EffectivePolicy (RunResult.effective_policy)	filesystem	no-business-reader	仅构造与整帧留存；不算业务消费	filesystem
+PolicyFact (effective_policy.tools/filesystem)	enforcement/requested/basis	partly-consumed	codex/zcode.native_run.native_evidence 读取 tools.requested 并投旧策略事实	enforcement/basis；filesystem 的 requested
+NativeIdentity (同上四处)	thread_id/input_id/call_id	partly-projected	result.native_identity 的完整负载在快速结果投影，NativeSchemaWorker 按旧键选择；其余身份副本无业务读取	thread_id/input_id/call_id 的独立规则读取及未消费副本
+RunResult	root_identities	no-business-reader	仅构造与整帧留存；不算业务消费	root_identities
+ContinuationFacts (RunResult.continuation)	native_session_ref/binding_ref/basis	no-business-reader	仅构造与整帧留存；不算业务消费	native_session_ref/binding_ref/basis
+StopLayer (RunResult.stop_evidence.native)	started/leader_exited/exit_code/observation_basis	no-business-reader	仅构造与整帧留存；不算业务消费	started/leader_exited/exit_code/observation_basis
+InterruptEvidence (stop_evidence.interrupt)	requested/basis	consumed	codex.native_run.native_evidence 读取 requested/basis，投影旧 nativeInterruptRequested/Acknowledged	

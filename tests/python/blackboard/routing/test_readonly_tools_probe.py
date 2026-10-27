@@ -1,0 +1,145 @@
+"""One-shot native probes are inert before approval and judge real tool facts."""
+import copy
+import importlib.util
+import json
+from pathlib import Path
+from temporary import TemporaryDirectory
+from types import SimpleNamespace
+import unittest
+from unittest.mock import Mock, patch
+from hey_my_buddy.protocol.tool_evidence import read_tool_calls, write_tool_calls
+
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
+from blackboard.routing.fixtures.router_tool_receipt import tool_receipt
+
+path = Path(__file__).resolve().parents[3] / 'probes' / 'router_readonly_tools.py'
+spec = importlib.util.spec_from_file_location('readonly_tools_probe', path)
+probe = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(probe)
+
+
+class ReadonlyToolsProbeTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = TemporaryDirectory(prefix='private-readonly-probe-')
+        self.addCleanup(self.temp.cleanup)
+        self.args = SimpleNamespace(harness='codex', provider='openai', model='gpt-6.1-sol',
+                                    effort='high', output_root=Path(self.temp.name) / 'probe', execute=False)
+        self.state_dir = Path(self.temp.name) / 'state'
+
+    def prepared(self):
+        report = probe.run(self.args)
+        self.args.expected_packet_sha256 = report['packetSha256']
+        return json.loads(Path(report['packet']).read_text(encoding="utf-8"))
+
+    def outcome(self, packet, *, state_dir):
+        result = {**tool_receipt(packet['binding'], 1, state_dir=state_dir), 'resolved': packet['buddy'],
+                  'usage': {'toolCalls': 1, 'bytesRead': None}, 'correctionCount': 0,
+                  'processState': {'shutdownConfirmed': True},
+                  'rawAnswer': {'buddyId': packet['expected']['buddyId'],
+                                'note': packet['expected']['marker'], 'evidence': []}}
+        return AdapterOutcome(status='ok', result=result, shutdown_confirmed=True)
+
+    def test_preparation_never_selects_or_starts_a_native_adapter(self):
+        with patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')), \
+             patch('subprocess.Popen', side_effect=AssertionError('no process')):
+            report = probe.run(self.args)
+            self.assertEqual(report['modelCalls'], 0)
+            self.assertEqual(probe.run(self.args)['packetSha256'], report['packetSha256'])
+        packet = json.loads(Path(report['packet']).read_text(encoding="utf-8"))
+        self.assertNotIn(packet['expected']['marker'], packet['request']['prompt'])
+        self.assertEqual(packet['request']['budget']['toolCalls'], 8)
+
+    def test_only_one_execution_is_possible_for_the_prepared_packet(self):
+        packet = self.prepared()
+        native, handle = Mock(), Mock()
+        native.registered_start.return_value = handle
+        handle.wait.return_value = 0
+        handle.shutdown_confirmed.return_value = True
+        self.args.execute = True
+        with patch.object(probe, 'adapter_for', return_value=native), \
+             patch.object(probe, 'start_review', native.registered_start), \
+             patch.object(probe.read_only, 'collect', side_effect=lambda _handle: self.outcome(
+                 packet, state_dir=Path(native.registered_start.call_args.args[1].environment['HMB_STATE_DIR']))):
+            self.assertEqual(probe.run(self.args)['status'], 'passed')
+            with self.assertRaises(FileExistsError):
+                probe.run(self.args)
+        native.registered_start.assert_called_once()
+        _harness, context, request = native.registered_start.call_args.args
+        self.assertIsNone(context.agent_credential)
+        self.assertIsNone(context.turn)
+        self.assertEqual(request.budget['timeoutSeconds'], 60)
+        self.assertTrue(Path(context.environment['HMB_STATE_DIR']).parent.name.startswith('hey-my-buddy-checks-'))
+        self.assertEqual(Path(context.environment['HMB_RUNTIME_ROOT']).parent,
+                         Path(context.environment['HMB_STATE_DIR']).parent)
+        self.assertFalse(Path(context.environment['HMB_STATE_DIR']).parent.exists())
+
+    def test_changed_input_or_buddy_cannot_reuse_approval(self):
+        self.prepared()
+        (self.args.output_root / 'frozen' / 'selection-guide.txt').write_text('changed', encoding="utf-8", newline="\n")
+        self.args.execute = True
+        with patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')):
+            with self.assertRaises(ValueError):
+                probe.run(self.args)
+
+    def test_changed_request_cannot_reuse_the_prepared_approval_digest(self):
+        self.prepared()
+        path = self.args.output_root / 'prepared.json'
+        changed = json.loads(path.read_text(encoding="utf-8"))
+        changed['request']['prompt'] = 'a different request'
+        path.write_text(json.dumps(changed), encoding="utf-8", newline="\n")
+        self.args.execute = True
+        with patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')):
+            with self.assertRaisesRegex(ValueError, 'exact prepared packet digest'):
+                probe.run(self.args)
+
+    def test_a_final_answer_cannot_replace_tool_identity_budget_or_stop_proof(self):
+        packet = self.prepared()
+        good = self.outcome(packet, state_dir=self.state_dir)
+        self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=True,
+                                        state_dir=self.state_dir)['status'], 'passed')
+        mutations = (
+            lambda out: out.result.pop('toolEvidence'),
+            lambda out: out.result['toolEvidence']['binding'].update(attemptId='foreign'),
+            lambda out: out.result['toolEvidence'].update(streamComplete=False),
+            lambda out: out.result['usage'].update(toolCalls=0),
+            lambda out: out.result.update(correctionCount=2),
+            lambda out: out.result['rawAnswer'].update(reason='guessed'),
+            lambda out: out.result['processState'].update(shutdownConfirmed=False),
+        )
+        for mutate in mutations:
+            bad = copy.deepcopy(good)
+            mutate(bad)
+            self.assertEqual(probe.evaluate(packet, bad, elapsed_ms=100, unchanged=True,
+                                            state_dir=self.state_dir)['status'], 'failed')
+        self.assertEqual(probe.evaluate(packet, good, elapsed_ms=60001, unchanged=True,
+                                        state_dir=self.state_dir)['status'], 'failed')
+        self.assertEqual(probe.evaluate(packet, good, elapsed_ms=100, unchanged=False,
+                                        state_dir=self.state_dir)['status'], 'failed')
+
+    def test_all_harness_packets_freeze_policy_without_selecting_a_native_adapter(self):
+        for harness in probe.HARNESSES:
+            with self.subTest(harness=harness), patch.object(probe, 'adapter_for', side_effect=AssertionError('no native call')), \
+                 patch('subprocess.Popen', side_effect=AssertionError('no process')):
+                self.args.harness = harness
+                self.args.output_root = Path(self.temp.name) / harness
+                packet = self.prepared()
+                self.assertEqual(packet['permission'], 'read')
+
+    def test_commands_are_allowed_by_the_frozen_read_level_for_all_harnesses(self):
+        for harness in probe.HARNESSES:
+            with self.subTest(harness=harness):
+                self.args.harness = harness
+                self.args.output_root = Path(self.temp.name) / harness
+                packet = self.prepared()
+                outcome = self.outcome(packet, state_dir=self.state_dir)
+                evidence = outcome.result['toolEvidence']
+                calls = list(read_tool_calls(evidence, state_dir=self.state_dir))
+                for call in calls:
+                    call['categories'] = ['execute']
+                    call['facts'] = [{'toolName': 'native-command', 'category': 'execute'}]
+                evidence['calls'] = write_tool_calls(evidence['binding'], calls, state_dir=self.state_dir)
+                self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True,
+                                                state_dir=self.state_dir)['status'], 'passed')
+                packet['permission'] = 'none'
+                self.assertEqual(probe.evaluate(packet, outcome, elapsed_ms=100, unchanged=True,
+                                                state_dir=self.state_dir)['status'], 'failed')

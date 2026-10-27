@@ -1,0 +1,221 @@
+{
+  "format": 1,
+  "method": "静态 AST 显式 test_* 定义；顶层 added/removed 相对 fcb4639d 的当前内容，各回合字段保留各自输入的增量。未执行 discovery 或继承展开；Host 机械退休后收集最终运行编号。",
+  "added": [
+    "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_failed_pending_insert_rolls_back_the_whole_catalog_publication",
+    "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_pending_identity_and_current_directory_foreign_key_are_enforced",
+    "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_pending_owned_table_persists_the_first_absence_and_efforts_without_meta",
+    "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_pending_replacement_rolls_back_with_the_publisher_transaction",
+    "blackboard.routing.test_router_sequence.FreezeRequestTests.test_complete_snapshot_body_survives_reopen_and_read_copy_mutation",
+    "blackboard.routing.test_router_sequence.FreezeRequestTests.test_replay_compares_every_snapshot_field_and_keeps_the_first_clock",
+    "blackboard.routing.test_router_sequence.RelationalBindingTests.test_deferred_claim_accepts_only_the_exact_attempt_task_and_generation_at_commit",
+    "blackboard.routing.test_router_sequence.RelationalBindingTests.test_one_request_position_cannot_dispatch_to_two_tasks",
+    "blackboard.routing.test_router_sequence.RelationalBindingTests.test_outcome_attempt_cannot_name_a_different_task_or_omit_its_task",
+    "blackboard.routing.test_router_sequence.RelationalBindingTests.test_receipt_is_persistent_idempotent_and_atomic_with_its_event",
+    "blackboard.routing.test_router_sequence.RelationalBindingTests.test_request_and_dispatch_foreign_keys_require_their_actual_parents",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_a_trigger_cannot_change_an_unrelated_retained_table",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_catalog_current_is_unknown_without_invented_read_times_or_pending_windows",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_current_opener_performs_no_ddl_or_implicit_schema_repair",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_fixed_fixture_migrates_to_the_complete_fresh_schema_before_any_opener",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_intermediate_and_current_router_forms_fail_with_meta_context_and_preserve_settings",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_invalid_source_router_settings_fail_without_any_conversion",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_meta_failure_rolls_back_router_catalog_sql_and_version_together",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_missing_router_marker_is_rejected_without_projecting_the_legacy_pointer",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_new_and_rebuilt_event_indexes_have_the_current_predicates",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_only_schema_15_is_an_upgrade_input_and_15_cannot_open_implicitly",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_router_conversion_keeps_unavailable_ids_deduplicates_empties_and_maps_quick",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_router_identical_slots_deduplicate_and_two_empty_slots_make_an_empty_list",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_router_slots_follow_default_order_remove_old_keys_and_keep_settings_history",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_rows_raw_json_and_historical_hashes_are_preserved_except_the_exact_plan",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_schema_guard_detects_a_new_current_form_missing_from_the_migration",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_sql_failure_rolls_back_every_form_value_and_marker",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_trigger_cannot_change_retained_values_inside_an_allowed_table",
+    "blackboard.store.test_migrations.Schema15UpgradeTests.test_version_one_router_cannot_mix_forms_or_invent_missing_settings",
+    "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f01_restores_manifests_seals_and_frozen_hash_bindings",
+    "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f02_delivered_sample_gets_real_independent_host_seal",
+    "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f03_private_roots_rebind_legacy_identity_without_changing_native_history",
+    "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f04_raw_template_and_unproved_or_drifted_identity_are_refused",
+    "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f05_drifted_patch_and_fixed_git_ref_cannot_prove_a_seal",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_a_stale_verified_backup_is_refused_before_migration",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_active_old_router_is_refused_by_idle_without_cancelling_or_rewriting",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_backup_records_15_and_trials_the_same_migration_without_touching_the_source",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_failed_upgrade_response_and_journal_share_the_structured_cause_and_tables",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_migration_and_identity_path_preserve_history_and_bind_the_updated_snapshot",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_old_terminal_router_history_is_kept_without_new_execution_facts",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_public_reads_and_delivered_host_conclusion_are_successful_and_idempotent_after_identity_migration",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_router_source_form_failure_reaches_upgrade_error_and_journal_without_changing_settings",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_schema_15_restore_is_exact_after_a_successful_migration",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_shutdown_unknown_old_router_attempt_is_not_idle",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_unproven_recovery_keeps_the_same_structured_reason_in_both_journals_and_error",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_verification_reports_exact_inventory_and_retained_value_failures",
+    "install.test_upgrade_service.UpgradeServiceTests.test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions"
+  ],
+  "removedFromReplacedContents": [
+    "blackboard.store.test_migrations.MigrationTests.test_failure_rolls_back_every_change",
+    "blackboard.store.test_migrations.MigrationTests.test_identical_preferences_merge_into_the_family_default",
+    "blackboard.store.test_migrations.MigrationTests.test_none_override_hides_a_family_default",
+    "blackboard.store.test_migrations.MigrationTests.test_notes_merge_per_family_without_truncation",
+    "blackboard.store.test_migrations.MigrationTests.test_partial_or_differing_preferences_stay_per_effort",
+    "blackboard.store.test_migrations.MigrationTests.test_refuses_any_other_schema",
+    "blackboard.store.test_migrations.MigrationTests.test_shape_matches_a_fresh_schema_13_board",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_a_migration_that_changes_other_tables_is_refused",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_backup_records_schema_14_and_proves_it_migrates_without_touching_the_source",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_migration_moves_only_declared_tables_and_the_board_opens_as_current",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_restore_returns_a_migrated_board_to_its_schema_14_backup",
+    "install.test_upgrade_migration.UpgradeMigrationTests.test_verification_expects_the_schema_of_the_runtime_being_verified"
+  ],
+  "pendingRemovalWithRetiredFiles": [
+    "blackboard.store.test_board_prepare.BoardPrepareTests.test_prepared_copy_opens_as_schema_13_and_preserves_every_row",
+    "blackboard.store.test_board_prepare.BoardPrepareTests.test_refuses_a_board_with_open_work",
+    "blackboard.store.test_board_prepare.BoardPrepareTests.test_refuses_existing_destination_wrong_schema_and_active_sources",
+    "install.test_harness_migration.HarnessMigrationTests.test_failure_rolls_back_new_table_and_version",
+    "install.test_harness_migration.HarnessMigrationTests.test_matches_fresh_schema_and_keeps_existing_values",
+    "install.test_harness_migration.HarnessMigrationTests.test_refuses_repeated_migration",
+    "install.test_host_migration.HostMigrationTests.test_failed_migration_rolls_back_all_added_storage",
+    "install.test_host_migration.HostMigrationTests.test_fresh_shape_preserves_original_columns_and_defaults_to_unknown",
+    "install.test_host_migration.HostMigrationTests.test_migration_cannot_reinterpret_an_already_migrated_board"
+  ],
+  "previousDelivery": {
+    "artifactCommit": "3eeace68ce910d527693e090129bd06f8e5a0ce8",
+    "format": 1,
+    "method": "静态 AST 只读取本次改动/退休文件中的显式 test_* 定义；未运行 discovery，未含继承展开。Host 删除后收集最终运行编号。",
+    "added": [
+      "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_failed_pending_insert_rolls_back_the_whole_catalog_publication",
+      "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_pending_identity_and_current_directory_foreign_key_are_enforced",
+      "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_pending_owned_table_persists_the_first_absence_and_efforts_without_meta",
+      "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_pending_replacement_rolls_back_with_the_publisher_transaction",
+      "blackboard.routing.test_router_sequence.RelationalBindingTests.test_deferred_claim_accepts_only_the_exact_attempt_task_and_generation_at_commit",
+      "blackboard.routing.test_router_sequence.RelationalBindingTests.test_one_request_position_cannot_dispatch_to_two_tasks",
+      "blackboard.routing.test_router_sequence.RelationalBindingTests.test_outcome_attempt_cannot_name_a_different_task_or_omit_its_task",
+      "blackboard.routing.test_router_sequence.RelationalBindingTests.test_receipt_is_persistent_idempotent_and_atomic_with_its_event",
+      "blackboard.routing.test_router_sequence.RelationalBindingTests.test_request_and_dispatch_foreign_keys_require_their_actual_parents",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_a_trigger_cannot_change_an_unrelated_retained_table",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_catalog_current_is_unknown_without_invented_read_times_or_pending_windows",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_current_opener_performs_no_ddl_or_implicit_schema_repair",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_fixed_fixture_migrates_to_the_complete_fresh_schema_before_any_opener",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_invalid_source_router_settings_fail_without_any_conversion",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_meta_failure_rolls_back_router_catalog_sql_and_version_together",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_new_and_rebuilt_event_indexes_have_the_current_predicates",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_only_schema_15_is_an_upgrade_input_and_15_cannot_open_implicitly",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_router_conversion_keeps_unavailable_ids_deduplicates_empties_and_maps_quick",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_router_identical_slots_deduplicate_and_two_empty_slots_make_an_empty_list",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_router_slots_follow_default_order_remove_old_keys_and_keep_settings_history",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_rows_raw_json_and_historical_hashes_are_preserved_except_the_exact_plan",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_schema_guard_detects_a_new_current_form_missing_from_the_migration",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_sql_failure_rolls_back_every_form_value_and_marker",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_trigger_cannot_change_retained_values_inside_an_allowed_table",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_a_stale_verified_backup_is_refused_before_migration",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_active_old_router_is_refused_by_idle_without_cancelling_or_rewriting",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_backup_records_15_and_trials_the_same_migration_without_touching_the_source",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_failed_upgrade_response_and_journal_share_the_structured_cause_and_tables",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_migration_and_identity_path_preserve_history_and_bind_the_updated_snapshot",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_old_terminal_router_history_is_kept_without_new_execution_facts",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_public_reads_and_host_conclusion_keep_the_redacted_delivered_boundary_explicit",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_schema_15_restore_is_exact_after_a_successful_migration",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_shutdown_unknown_old_router_attempt_is_not_idle",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_unproven_recovery_keeps_the_same_structured_reason_in_both_journals_and_error",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_verification_reports_exact_inventory_and_retained_value_failures",
+      "install.test_upgrade_service.UpgradeServiceTests.test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions"
+    ],
+    "removedFromReplacedContents": [
+      "blackboard.store.test_migrations.MigrationTests.test_failure_rolls_back_every_change",
+      "blackboard.store.test_migrations.MigrationTests.test_identical_preferences_merge_into_the_family_default",
+      "blackboard.store.test_migrations.MigrationTests.test_none_override_hides_a_family_default",
+      "blackboard.store.test_migrations.MigrationTests.test_notes_merge_per_family_without_truncation",
+      "blackboard.store.test_migrations.MigrationTests.test_partial_or_differing_preferences_stay_per_effort",
+      "blackboard.store.test_migrations.MigrationTests.test_refuses_any_other_schema",
+      "blackboard.store.test_migrations.MigrationTests.test_shape_matches_a_fresh_schema_13_board",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_a_migration_that_changes_other_tables_is_refused",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_backup_records_schema_14_and_proves_it_migrates_without_touching_the_source",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_migration_moves_only_declared_tables_and_the_board_opens_as_current",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_restore_returns_a_migrated_board_to_its_schema_14_backup",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_verification_expects_the_schema_of_the_runtime_being_verified"
+    ],
+    "pendingRemovalWithRetiredFiles": [
+      "blackboard.store.test_board_prepare.BoardPrepareTests.test_prepared_copy_opens_as_schema_13_and_preserves_every_row",
+      "blackboard.store.test_board_prepare.BoardPrepareTests.test_refuses_a_board_with_open_work",
+      "blackboard.store.test_board_prepare.BoardPrepareTests.test_refuses_existing_destination_wrong_schema_and_active_sources",
+      "install.test_harness_migration.HarnessMigrationTests.test_failure_rolls_back_new_table_and_version",
+      "install.test_harness_migration.HarnessMigrationTests.test_matches_fresh_schema_and_keeps_existing_values",
+      "install.test_harness_migration.HarnessMigrationTests.test_refuses_repeated_migration",
+      "install.test_host_migration.HostMigrationTests.test_failed_migration_rolls_back_all_added_storage",
+      "install.test_host_migration.HostMigrationTests.test_fresh_shape_preserves_original_columns_and_defaults_to_unknown",
+      "install.test_host_migration.HostMigrationTests.test_migration_cannot_reinterpret_an_already_migrated_board"
+    ]
+  },
+  "continuation": {
+    "inputArtifactCommit": "3eeace68ce910d527693e090129bd06f8e5a0ce8",
+    "attemptId": "23d0e7a6-caea-43c7-a66b-2f359a0559be",
+    "added": [
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_intermediate_and_current_router_forms_fail_with_meta_context_and_preserve_settings",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_missing_router_marker_is_rejected_without_projecting_the_legacy_pointer",
+      "blackboard.store.test_migrations.Schema15UpgradeTests.test_version_one_router_cannot_mix_forms_or_invent_missing_settings",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_router_source_form_failure_reaches_upgrade_error_and_journal_without_changing_settings"
+    ],
+    "removedFromReplacedContents": [],
+    "counts": {
+      "added": 4,
+      "removed": 0
+    }
+  },
+  "counts": {
+    "added": 47,
+    "removedFromReplacedContents": 12,
+    "pendingRemovalWithRetiredFiles": 9
+  },
+  "requestBodyContinuation": {
+    "inputArtifactCommit": "d8c55d94b275b2fe0d9a5b366f297d40b68fb80a",
+    "attemptId": "33178872-8452-452d-8677-9eac5b2d6f4b",
+    "added": [
+      "blackboard.routing.test_router_sequence.FreezeRequestTests.test_complete_snapshot_body_survives_reopen_and_read_copy_mutation",
+      "blackboard.routing.test_router_sequence.FreezeRequestTests.test_replay_compares_every_snapshot_field_and_keeps_the_first_clock"
+    ],
+    "removedFromReplacedContents": [],
+    "retainedModifiedTests": [
+      "blackboard.routing.test_router_boundary_integration.BoundaryReadingTests.test_freeze_retains_additional_host_packet_without_rewriting_other_snapshot_fields"
+    ],
+    "counts": {
+      "added": 2,
+      "removed": 0
+    }
+  },
+  "fixtureIntegrationContinuation": {
+    "inputArtifactCommit": "cccf3714bd2631ea7b09a1f9343379dfc3492361",
+    "attemptId": "849c6fb7-12da-4baf-8859-7085fd8382e9",
+    "acceptedFixtureCommit": "513e97da90477bc9e8dd12bda5efaa89b5db8924",
+    "added": [
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f01_restores_manifests_seals_and_frozen_hash_bindings",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f02_delivered_sample_gets_real_independent_host_seal",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f03_private_roots_rebind_legacy_identity_without_changing_native_history",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f04_raw_template_and_unproved_or_drifted_identity_are_refused",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f05_drifted_patch_and_fixed_git_ref_cannot_prove_a_seal",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_public_reads_and_delivered_host_conclusion_are_successful_and_idempotent_after_identity_migration"
+    ],
+    "copiedAcceptedDependencyTests": [
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f01_restores_manifests_seals_and_frozen_hash_bindings",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f02_delivered_sample_gets_real_independent_host_seal",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f03_private_roots_rebind_legacy_identity_without_changing_native_history",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f04_raw_template_and_unproved_or_drifted_identity_are_refused",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f05_drifted_patch_and_fixed_git_ref_cannot_prove_a_seal"
+    ],
+    "workerAuthoredAddedTests": [
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_public_reads_and_delivered_host_conclusion_are_successful_and_idempotent_after_identity_migration"
+    ],
+    "removedFromReplacedContents": [
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_public_reads_and_host_conclusion_keep_the_redacted_delivered_boundary_explicit"
+    ],
+    "removedAfterIntroductionInThisMicrotask": [
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_public_reads_and_host_conclusion_keep_the_redacted_delivered_boundary_explicit"
+    ],
+    "retainedModifiedTests": [
+      "install.test_upgrade_service.UpgradeServiceTests.test_real_private_service_reads_the_fixed_upgrade_and_uses_public_host_conclusions",
+      "install.test_upgrade_migration.UpgradeMigrationTests.test_migration_and_identity_path_preserve_history_and_bind_the_updated_snapshot"
+    ],
+    "counts": {
+      "added": 6,
+      "copiedFromAcceptedDependency": 5,
+      "workerAuthoredAdded": 1,
+      "removed": 1
+    }
+  }
+}

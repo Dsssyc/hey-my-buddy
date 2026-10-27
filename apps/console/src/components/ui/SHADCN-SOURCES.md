@@ -1,0 +1,7 @@
+# Session display sources
+
+Copied through the shadcn registry's documented manual source distribution on 2026-10-20, from `https://ui.shadcn.com/r/styles/radix-nova/{name}.json`: message, message-scroller, marker, trace, code-block and use-highlighted-code (including lib/highlighter). Upstream snapshot: shadcn-ui/ui `ba1503c64472b82256d9de95e2e62c5901a38e8b`; registry items have no independent semantic versions. The AI Elements Radix documentation composes Chat from Message Scroller and Message, and Tool, Reasoning, Task and Plan from Trace; terminal output uses Code Block with the ANSI highlighter. No AI SDK runtime is used.
+
+All copied source is MIT, Copyright (c) 2023 shadcn; the full notice is retained in LICENSE.shadcn. The headless scrolling dependency is @shadcn/react 0.3.1 (MIT). Existing Radix 1.7.0, Streamdown 2.7.0 and Shiki 3.22.0 remain the interaction, Markdown and highlighting dependencies.
+
+Adaptations: local import paths and Lucide icons; localized controls with visible copy failure; square, borderless output surfaces using existing palette tokens; no built-in trailing chevron on every Trace trigger (group headers provide their own disclosure); existing Radix animation; explicit transcript-end history anchoring because call-group IDs change when earlier history arrives; the session layer decides row grouping and the 14-line output preview. Markdown links and images retain the console's trust boundary. Unsupported syntax stays plain. Highlighter loading failures remain visible.

@@ -1,0 +1,44 @@
+"""Review carriers use declarations and reject incomplete native requests."""
+import os
+import importlib.util
+from pathlib import Path
+import tempfile
+import threading
+import unittest
+from unittest.mock import patch
+
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext, ReadOnlyStructuredRequest
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.buddy.harnesses.zcode.adapter import ZcodeAdapter
+from hey_my_buddy.buddy.roles import run_controller, run_execution, router as router_role
+from hey_my_buddy.errors import BoardError
+
+
+class DeferredReviewTests(unittest.TestCase):
+    def test_removed_modules_and_bridge_do_not_ship(self):
+        for module in ('dsh_read_only', 'zcode_read_only', 'zcode_static_contract'):
+            self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.' + module))
+        root = Path(__file__).resolve().parents[4]
+        self.assertFalse((root / 'harnesses/dsh/plugins/read-only-structured.mjs').exists())
+
+    def test_dsh_and_zcode_declare_review_without_native_calls(self):
+        from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
+        with patch('subprocess.Popen', side_effect=AssertionError('native process')), patch('subprocess.run', side_effect=AssertionError('native process')):
+            for name in ('dsh', 'zcode'):
+                self.assertEqual(PERMISSION_LEVELS[name]['read'], 'enforced')
+
+    def test_manually_supplied_controller_review_request_is_refused_before_launch(self):
+        with patch('subprocess.Popen', side_effect=AssertionError('native process')), \
+             patch('subprocess.run', side_effect=AssertionError('native process')):
+            with self.assertRaises(BoardError) as caught:
+                run_controller.execute({'operation': 'review', 'harness': 'zcode'}, threading.Event())
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+            self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.zcode.runner'))
+            self.assertIsNone(importlib.util.find_spec('hey_my_buddy.buddy.harnesses.dsh.runner'))
+            with self.assertRaises(BoardError) as caught:
+                run_controller.execute({'operation': 'review', 'harness': 'dsh'}, threading.Event())
+            self.assertEqual(caught.exception.code, 'INVALID_ARGUMENT')
+
+
+if __name__ == '__main__':
+    unittest.main()

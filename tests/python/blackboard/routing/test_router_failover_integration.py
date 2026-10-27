@@ -1,0 +1,783 @@
+"""Private publication/failover matrix; native event fixtures, no model or CLI.
+
+The real worker_result/release transactions retain immutable receipts and own
+capacity. The coordinator checks program evidence, then either settles once or
+queues a distinct frozen dispatch while the micro task remains pending.
+"""
+import copy
+import json
+import unittest
+import sys
+import time
+from dataclasses import replace
+from unittest.mock import patch
+
+from hey_my_buddy.blackboard.routing import router, router_history, router_sequence, decision
+from hey_my_buddy.buddy.runtime.command import CommandAdapter
+from hey_my_buddy.buddy.runtime.execution import Execution
+from hey_my_buddy.buddy.runtime.receipts import deliver_receipt
+from hey_my_buddy.buddy.roles.router import DecisionAdapter
+from hey_my_buddy.buddy.harnesses.run_contract import RunResult, RunEnd, ResultBuddy, StopEvidence, StopLayer
+from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
+from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
+from blackboard.routing.test_router_dispatch import RouterDispatchTestCase, A, B, C, T0, NONCE
+import blackboard.routing.test_router_dispatch as dispatch_fixtures
+from hey_my_buddy.paths import native_path
+
+
+class FailoverTests(RouterDispatchTestCase):
+    def claim(self, suffix="1", *, task_id=None):
+        result = super().claim(suffix, task_id=task_id)
+        if result["claim"]:
+            result["claim"]["nonce"] = NONCE + suffix
+        return result
+
+    def start(self, *, three=False, review=False, micro_task=False, required_capabilities=()):
+        if three:
+            self.add_buddy(C, model="charlie")
+            self.set_settings(ids=[A, B, C])
+        if review:
+            self.set_settings(mode="review")
+            # Review failover tests provide their own private capability for
+            # every dispatch; the real DSH review carrier is deferred.
+            self.enterContext(patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}))
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
+            if required_capabilities:
+                with self.board_.store.db.write() as db:
+                    db.execute("UPDATE buddies SET capabilities_json=?", (json.dumps(list(required_capabilities)),))
+            request = (dispatch_fixtures.WorkflowWiringTests.route_micro_task(self, required_capabilities=required_capabilities) if micro_task else self.request())
+            if micro_task:
+                dispatch_fixtures.WorkflowWiringTests.attach_pending_link(self, request["decisionId"])
+            claimed = self.claim("first", task_id=request["runId"])["claim"]
+        self.assertIsNotNone(claimed)
+        return request, claimed
+
+    def answer(self, claim, *, buddy_id=B, tools=0, **receipt_options):
+        doc = claim["decisionInput"]
+        return {**claim_tool_receipt(claim, tools, state_dir=self.board_.directory, **receipt_options), "status": "ok", "operation": "select",
+                "usage": {"elapsedMs": 100, "toolCalls": tools, "bytesRead": None},
+                "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
+                "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
+                                      "manifestSha256": (doc.get("executionWorkspace") or {}).get("manifestSha256")},
+                "decision": {"buddyId": buddy_id, "note": "The frozen legal choice", "evidence": []}}
+
+    def failure(self, claim, code="timeout"):
+        return {**self.answer(claim), "status": "error", "code": code, "decision": None}
+
+    def report(self, claim, output, *, status="ok", shutdown=True, command=None):
+        params = {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': claim['nonce'], 'status': status, 'shutdownConfirmed': shutdown, 'result': output}
+        if command:
+            params["commandId"] = command
+        return self.board_.call('execution_result', params)
+
+    def current_task(self, decision_id):
+        with self.board_.store.db.read() as db:
+            return self.board_.store.decisions._row(db, decision_id)["decision_task_id"]
+
+    def next_claim(self, request, suffix="next"):
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
+            result = self.claim(suffix, task_id=self.current_task(request["decisionId"]))
+        self.assertIsNotNone(result["claim"], result)
+        return result["claim"]
+
+    def outcomes(self):
+        return self.router_events("router.no_answer", "router.answered")
+
+    def assert_switch(self, request, claim, output, *, status="ok", code=None):
+        old_dispatch = self.dispatch_of(claim["task"]["taskId"])
+        response = self.report(claim, output, status=status)
+        self.assertEqual(response["decision"]["outcome"], "no-answer", response)
+        self.assertEqual(response["decision"]["status"], "queued")
+        self.assertNotEqual(self.current_task(request["decisionId"]), claim["task"]["taskId"])
+        self.assertEqual(self.dispatch_of(self.current_task(request["decisionId"]))["buddyId"], B)
+        self.assertEqual(self.dispatch_of(claim["task"]["taskId"]), old_dispatch)
+        events = self.outcomes()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][0], "router.no_answer")
+        self.assertEqual(events[0][1]["taskId"], claim["task"]["taskId"])
+        self.assertEqual(events[0][1]["attemptId"], claim["attempt"]["attemptId"])
+        self.assertEqual(events[0][1]["routerIndex"], 0)
+        if code:
+            self.assertEqual(events[0][1]["code"], code)
+        with self.board_.store.db.read() as db:
+            terminal = db.execute("SELECT COUNT(*) FROM events WHERE kind IN ('decision.needs_host','decision.failed','decision.completed')").fetchone()[0]
+            receipt = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                           (claim["attempt"]["attemptId"],)).fetchone()[0])
+        self.assertEqual(terminal, 0)
+        self.assertEqual(receipt["result"], output)
+        return response
+
+    def assert_boundary(self, request, claim, output, *, outcome="changed", shutdown=True, status="ok"):
+        response = self.report(claim, output, shutdown=shutdown, status=status)
+        self.assertEqual(response["decision"]["outcome"], outcome, response)
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertEqual(self.current_task(request["decisionId"]), claim["task"]["taskId"])
+        self.assertEqual(self.outcomes(), [])
+        return response
+
+    def test_worker_stops_router_at_its_budget_and_dispatches_the_next_router(self):
+        self._router_budget_stop(stop_delay=0)
+
+    def test_execution_waits_for_native_cleanup_beyond_ten_seconds(self):
+        self._router_budget_stop(stop_delay=11)
+
+    def _router_budget_stop(self, *, stop_delay):
+        stopped = self.directory / f"native-stop-{stop_delay}"
+
+        class SleepingRouter(CommandAdapter):
+            name = "decision"
+
+            def argv(self):
+                return [sys.executable, "-c", (
+                    "import os, sys, threading, time\n"
+                    "from pathlib import Path\n"
+                    # Bound a failed EOF delivery so this fixture cannot hold
+                    # the entire check run.
+                    "def watchdog(): time.sleep(18); os._exit(99)\n"
+                    "threading.Thread(target=watchdog, daemon=True).start()\n"
+                    "sys.stdin.buffer.read()\n"
+                    f"Path({str(stopped)!r}).touch(); time.sleep({stop_delay})\n")]
+
+            def prepare(self, context):
+                from pathlib import Path
+                Path(context.cwd).mkdir(parents=True, exist_ok=True)
+                super().prepare(replace(context, spec={**context.spec, "argv": self.argv()}))
+
+            def start(self, context):
+                from hey_my_buddy.protocol.process_controller import launch_controller
+                self.prepare(context)
+                return launch_controller(
+                    prepare=lambda: (self.argv(), context.cwd, context.environment),
+                    log_paths=context.log_paths(), timeout_seconds=context.timeout_seconds,
+                    stop_channel="stdin")
+
+            def cancel(self, handle):
+                # This fixture's native driver needs eleven seconds to finish its
+                # own stop protocol. Execution must collect only after it finishes.
+                handle.terminate(grace_seconds=12)
+
+            def collect(self, handle, context):
+                outcome = super().collect(handle, context)
+                outcome.result = {"status": "error", "operation": "select", "code": "router-budget-exhausted",
+                                  "stopEvidence": {"shutdownConfirmed": outcome.shutdown_confirmed,
+                                                   "native": {"shutdownConfirmed": outcome.shutdown_confirmed}}}
+                return outcome
+
+        with patch.dict(router.BUDGETS["standard"], {"timeoutSeconds": 1}), \
+             patch.object(decision, "TIMEOUT_GRACE_SECONDS", 0):
+            request, first = self.start(review=True)
+            spec = first["task"]["spec"]
+            self.assertEqual(spec["routerBudgetSeconds"], 1)
+            self.assertNotIn("expectedSeconds", spec)
+            execution = Execution(first, self.directory, first["nonce"], client=self.client)
+            directory = execution.directory
+            native_path(directory).mkdir(parents=True)
+            holder = {'preflightControl': execution.control}
+            execution.control.start()
+            self.addCleanup(execution.control.join, 5)
+            self.addCleanup(execution.control.stop)
+            started = time.monotonic()
+            with patch("hey_my_buddy.buddy.roles.controller.worker_executor", return_value=SleepingRouter()):
+                receipt = execution._execute_selected(first, first["task"], spec, first["attempt"], directory, holder)
+            elapsed = time.monotonic() - started
+            self.assertTrue(stopped.exists(), "the native input stop was not delivered")
+            self.assertLess(elapsed, 20)
+            if stop_delay:
+                self.assertGreater(elapsed, 11)
+            self.assertEqual(receipt["report"]["terminationReason"], "deadline")
+            self.assertTrue(receipt["report"]["shutdownConfirmed"])
+            self.assertFalse(holder["handle"].group_alive())
+            self.assertTrue(deliver_receipt(self.client, receipt, directory, nonce=execution.nonce))
+            next_task = self.current_task(request["decisionId"])
+            self.assertNotEqual(next_task, request["runId"])
+            self.assertEqual(self.dispatch_of(next_task)["buddyId"], B)
+            second = self.next_claim(request)
+            self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
+            self.assertEqual(self.outcomes()[0][1]["code"], "router-budget-exhausted")
+
+    def test_unknown_input_preparation_retries_the_same_router_before_its_budget_starts(self):
+        class PreparingRouter(CommandAdapter):
+            def __init__(self):
+                self.calls = 0
+                self.budgets = []
+            def available(self):
+                return True, None
+            def prepare(self, context):
+                self.calls += 1
+                self.budgets.append(context.timeout_seconds)
+                if self.calls == 1:
+                    raise BoardError('router-input-unknown', 'frozen input is still being observed')
+                from pathlib import Path
+                Path(context.cwd).mkdir(parents=True, exist_ok=True)
+            def start(self, context):
+                return CommandAdapter().start(replace(context, spec={**context.spec, 'argv': [sys.executable, '-c', 'print("done")']}))
+        request, first = self.start(review=True)
+        execution = Execution(first, self.directory, first['nonce'], client=self.client)
+        native_path(execution.directory).mkdir(parents=True)
+        execution.control.start()
+        self.addCleanup(execution.control.join, 5)
+        self.addCleanup(execution.control.stop)
+        executor = PreparingRouter()
+        with patch('hey_my_buddy.buddy.roles.controller.worker_executor', return_value=executor), \
+             patch.object(execution.control, 'wait') as wait:
+            receipt = execution._execute_selected(first, first['task'], first['task']['spec'], first['attempt'],
+                                                  execution.directory, {'preflightControl': execution.control})
+        wait.assert_called_once_with(15)
+        self.assertEqual(executor.budgets, [first['task']['spec']['routerBudgetSeconds']] * 2)
+        self.assertEqual(receipt['report']['status'], 'ok')
+        self.assertTrue(receipt['report']['shutdownConfirmed'])
+        self.assertEqual(self.current_task(request['decisionId']), request['runId'])
+
+    def test_two_no_answers_keep_request_and_dispatch_receipts_without_loop(self):
+        request, first = self.start()
+        frozen = self.snapshot_of(request["decisionId"])
+        before = self.dispatch_of(request["runId"])
+        output = self.failure(first)
+        self.assert_switch(request, first, output)
+        second = self.next_claim(request)
+        self.assertEqual(second["decisionInput"]["routerBuddyId"], B)
+        result = self.report(second, self.failure(second, "provider-error"), status="failed")
+        self.assertEqual(result["decision"]["status"], "needs-host")
+        self.assertEqual(len(self.tasks()), 2)
+
+        self.assertEqual([e[1]["buddyId"] for e in self.outcomes()], [A, B])
+        self.assertEqual(self.snapshot_of(request["decisionId"]), frozen)
+        self.assertEqual(self.dispatch_of(request["runId"]), before)
+        with self.board_.store.db.read() as db:
+            trials = router_sequence.dispatches(db, request["decisionId"])
+            self.assertEqual([trial["routerIndex"] for trial in trials], [0, 1])
+            trials[0]["document"]["task"] = "mutated projection"
+            self.assertEqual(router_sequence.dispatches(db, request["decisionId"])[0], before)
+            for item, expected in ((first, output), (second, self.failure(second, "provider-error"))):
+                payload = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                               (item["attempt"]["attemptId"],)).fetchone()[0])
+                self.assertEqual(payload["result"], expected)
+        self.assertIsNone(self.claim("after-final")["claim"])
+        self.assertEqual(len(self.tasks()), 2)
+
+    def test_del_in_native_error_code_is_normalized_without_losing_failover(self):
+        request, first = self.start()
+        self.assert_switch(request, first, self.failure(first, "provider-error\u007f"), status="failed")
+        self.assertEqual(self.outcomes()[0][1]["code"], "router-no-answer")
+
+    def test_blank_native_error_code_is_normalized_without_losing_failover(self):
+        request, first = self.start()
+        self.assert_switch(request, first, self.failure(first, "   "), status="failed")
+        self.assertEqual(self.outcomes()[0][1]["code"], "router-no-answer")
+
+    def test_three_items_stop_at_first_valid_answer_and_keep_parent_pending_between(self):
+        request, first = self.start(three=True, micro_task=True)
+        self.assert_switch(request, first, self.failure(first))
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT state FROM workflow_routes").fetchone()[0], "pending")
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_requests").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_turns").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT adapter,queue_reason FROM tasks WHERE task_id='run-1'").fetchone()[0], "unresolved")
+        second = self.next_claim(request)
+        output = self.answer(second, buddy_id=C)
+        output["decision"]["evidence"] = [{"kind": "annotation", "ref": "unknown-model-note"}]
+        output["policyCheck"] = {"modelEcho": "ignored"}
+        done = self.report(second, output)
+        self.assertEqual(done["decision"]["status"], "completed")
+        self.assertEqual(len(self.tasks()), 2)
+        self.assertEqual([kind for kind, _ in self.outcomes()], ["router.no_answer", "router.answered"])
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT state FROM workflow_routes").fetchone()[0], "resolved")
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_turns").fetchone()[0], 0)
+
+    def test_three_items_stop_at_valid_abstention_with_original_reason(self):
+        request, first = self.start(three=True)
+        self.assert_switch(request, first, self.failure(first))
+        second = self.next_claim(request)
+        output = self.answer(second, buddy_id=None)
+        output["decision"]["note"] = "I cannot choose within these bounds"
+        done = self.report(second, output)
+        self.assertEqual(done["decision"]["outcome"], "abstained")
+        self.assertEqual(done["decision"]["status"], "needs-host")
+        self.assertEqual(done["decision"]["note"], output["decision"]["note"])
+        self.assertEqual(done["decision"]["reason"], {"code": "router-abstained", "params": {}})
+        self.assertEqual(len(self.tasks()), 2)
+        self.assertEqual([kind for kind, _ in self.outcomes()], ["router.no_answer", "router.answered"])
+        with self.board_.store.db.read() as db:
+            self.assertEqual(router_history.router_state(db, buddy_id=B, interval_seconds=600, now=T0)["consecutiveNoAnswers"], 0)
+
+    def test_cached_router_health_loss_does_not_veto_valid_other_candidate(self):
+        request, first = self.start()
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+        result = self.report(first, self.answer(first, buddy_id=B))
+        self.assertEqual(result["decision"]["status"], "completed")
+        self.assertEqual(self.outcomes()[0][0], "router.answered")
+        self.assertEqual(len(self.tasks()), 1)
+
+    def test_invalid_null_buddy_does_not_count_as_abstention(self):
+        request, first = self.start()
+        output = self.answer(first, buddy_id=None)
+        output["usage"]["toolCalls"] = None
+        self.assert_switch(request, first, output, code="router-tool-evidence-unverified")
+
+    def test_review_changed_verification_takes_priority_over_helper_failure(self):
+        request, first = self.start(review=True)
+        output = self.failure(first, "provider-error")
+        output["inputVerification"]["unchanged"] = False
+        self.assert_boundary(request, first, output, status="failed")
+
+    def test_current_dispatch_identity_survives_a_later_snapshot(self):
+        request, first = self.start()
+        with self.board_.store.db.write() as db:
+            doc = copy.deepcopy(first["decisionInput"])
+            doc["task"] = "changed"
+            snapshot = router_sequence.request_snapshot(db, request["decisionId"])
+            snapshot["baseInput"]["task"] = doc["task"]
+            snapshot.pop("frozenAt")
+            router_sequence.freeze_request(db, request["decisionId"], snapshot=snapshot,
+                                           now=T0, round=2)
+        self.assert_switch(request, first, self.failure(first))
+
+    def test_result_request_and_outcome_replay_do_not_repeat_tasks_or_history(self):
+        request, first = self.start()
+        output = self.failure(first)
+        self.assert_switch(request, first, output)
+        with self.assertRaises(BoardError) as caught:
+            self.report(first, output)
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
+        duplicate_request = self.request()
+        self.assertTrue(duplicate_request["duplicate"])
+        with self.board_.store.db.write() as db:
+            event = self.outcomes()[0][1]
+            replay = router_history.record_outcome(db, buddy_id=A, request_id="pick-1",
+                task_id=event["taskId"], attempt_id=event["attemptId"], outcome="no_answer", code=event["code"],
+                phase=event["phase"], facts={"routerIndex": 0}, now=T0)
+            self.assertFalse(replay["recorded"])
+        self.assertEqual(len(self.tasks()), 2)
+        self.assertEqual(len(self.outcomes()), 1)
+
+    def test_preflight_outcomes_on_the_selection_retry_have_distinct_receipts(self):
+        with self.board_.store.db.write() as db:
+            arguments = dict(buddy_id=A, request_id="selection-retry-fixture",
+                             task_id=None, attempt_id=None, outcome="no_answer", code="router-disabled",
+                             phase="preflight", now=T0)
+            original = router_history.record_outcome(db, **arguments, facts={"routerIndex": 0})
+            retry = router_history.record_outcome(
+                db, **arguments, facts={"routerIndex": 0, "selectionRetry": True})
+            repeated = router_history.record_outcome(
+                db, **arguments, facts={"routerIndex": 0, "selectionRetry": True})
+        self.assertTrue(original["recorded"])
+        self.assertTrue(retry["recorded"])
+        self.assertFalse(repeated["recorded"])
+        self.assertNotEqual(original["seq"], retry["seq"])
+
+    def test_late_old_task_attempt_and_generation_do_not_mutate_current(self):
+        request, first = self.start()
+        self.assert_switch(request, first, self.failure(first))
+        second = self.next_claim(request)
+        with self.board_.store.db.write() as db:
+            coordinator = self.board_.store.decisions
+            row = coordinator._row(db, request["decisionId"])
+            task = db.execute("SELECT * FROM tasks WHERE task_id=?", (first["task"]["taskId"],)).fetchone()
+            attempt = db.execute("SELECT * FROM attempts WHERE attempt_id=?", (first["attempt"]["attemptId"],)).fetchone()
+            late = coordinator.complete(db, task=task, attempt=attempt, status="ok", result=self.answer(first), shutdown_confirmed=True, error=None, now=T0)
+            self.assertTrue(late["late"])
+            coordinator.cancelled(db, task=task, reason={"code":"decision-cancelled", "params":{}}, now=T0)
+            coordinator.fence_attempt(db, attempt=attempt, reason={"code":"interrupted-before-delivery", "params":{}}, now=T0)
+            coordinator.released(db, task=task, reason={"code":"execution-process-not-created", "params":{}}, now=T0)
+            task = db.execute("SELECT * FROM tasks WHERE task_id=?", (second["task"]["taskId"],)).fetchone()
+            attempt = dict(db.execute("SELECT * FROM attempts WHERE attempt_id=?", (second["attempt"]["attemptId"],)).fetchone())
+            for key, value in (("attempt_id", first["attempt"]["attemptId"]), ("generation", 0)):
+                late = coordinator.complete(db, task=task, attempt={**attempt, key: value}, status="ok",
+                    result=self.answer(second), shutdown_confirmed=True, error=None, now=T0)
+                self.assertTrue(late["late"])
+            self.assertEqual(dict(coordinator._row(db, request["decisionId"])), dict(row))
+        self.assertEqual(len(self.outcomes()), 1)
+        done = self.report(second, self.answer(second))
+        self.assertEqual(done["decision"]["status"], "completed")
+        final = self.decision_row(request["decisionId"])
+        with self.board_.store.db.write() as db:
+            task = db.execute("SELECT * FROM tasks WHERE task_id=?", (second["task"]["taskId"],)).fetchone()
+            attempt = db.execute("SELECT * FROM attempts WHERE attempt_id=?", (second["attempt"]["attemptId"],)).fetchone()
+            self.board_.store.decisions.complete(db, task=task, attempt=attempt, status="failed", result={"late": True}, shutdown_confirmed=True, error=None, now=T0)
+        self.assertEqual(self.decision_row(request["decisionId"]), final)
+
+    def test_native_false_or_unknown_never_accepts_or_switches(self):
+        # Separate dynamically installed cases below also cover every stop layer.
+        request, first = self.start()
+        output = self.answer(first)
+        output["stopEvidence"]["native"]["shutdownConfirmed"] = False
+        self.assert_boundary(request, first, output, outcome="stop-unconfirmed")
+
+    def test_outer_unknown_stop_preserves_generic_capacity(self):
+        request, first = self.start()
+        response = self.report(first, self.failure(first), shutdown=False)
+        self.assertFalse(response["committed"])
+        self.assertEqual(self.decision_row(request["decisionId"])["status"], "running")
+        with self.board_.store.db.read() as db:
+            attempt = db.execute("SELECT execution_state,shutdown_confirmed FROM attempts WHERE attempt_id=?", (first["attempt"]["attemptId"],)).fetchone()
+            self.assertEqual(tuple(attempt), ("finalizing", 0))
+            self.assertEqual(len(router_history.active_executions(db, buddy_id=A)), 1)
+        self.assertEqual(len(self.tasks()), 1)
+
+    def test_release_real_never_spawned_proof_advances(self):
+        request, first = self.start(review=True)
+        response = self.board_.store.release_execution(({'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': first['nonce'], 'reason': 'local preflight refused', 'evidence': {'spawnIntentWritten': False}})["attemptId"], reason="execution-process-not-created")
+        self.assertNotEqual(self.current_task(request["decisionId"]), first["task"]["taskId"])
+        self.assertEqual(self.outcomes()[0][1]["phase"], "preflight")
+        self.assertEqual(self.outcomes()[0][1]["buddyId"], A)
+        self.assertEqual(len(self.tasks()), 2)
+
+    def test_release_without_never_spawned_proof_cannot_advance(self):
+        request, first = self.start()
+        # Identity acknowledgement is beyond the service's no-process-created
+        # release boundary; only actual process evidence may settle it now.
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE attempts SET identity_confirmed_at=? WHERE attempt_id=?",
+                       (self.board_.store.now(), first['attempt']['attemptId']))
+        with self.assertRaises(BoardError):
+            self.board_.store.release_execution(first['attempt']['attemptId'], reason='execution-process-not-created')
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertEqual(self.outcomes(), [])
+
+    def test_next_dispatch_has_no_whole_input_ceiling(self):
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE buddies SET model=? WHERE buddy_id=?", ("b" * 80, B))
+        request, first = self.start(three=True)
+        result = self.report(first, self.failure(first))
+        self.assertEqual(result["decision"]["status"], "queued")
+        self.assertGreater(len(self.tasks()), 1)
+        self.assertEqual([event[1]["buddyId"] for event in self.outcomes()], [A])
+
+    def test_mock_native_prompt_rejection_reaches_host_after_stopped_failover(self):
+        task = "Inspect the complete request. " * 6000
+        self.assertGreater(len(task.encode()), 128 * 1024)
+        request = self.request(request_id="native-prompt-rejection", task=task)
+
+        class RefusingRun:
+            supported_request_controls = frozenset()
+            prepare_run_services = None
+            native_evidence = None
+
+            def __init__(self):
+                self.prompts = []
+
+            def check_preparation(self, spec, environment):
+                return None
+
+            def run(self, native_request, *, observer, services, cancelled):
+                self.prompts.append(native_request.input_text)
+                self.assert_full_prompt(native_request.input_text)
+                return RunResult(identity=native_request.identity, harness=native_request.harness,
+                                 end=RunEnd(status="error", reason_code="native-prompt-too-large",
+                                            message="native prompt limit"), model_started=False,
+                                 buddy=ResultBuddy(requested=native_request.buddy),
+                                 stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
+
+            @staticmethod
+            def assert_full_prompt(prompt):
+                if task not in prompt:
+                    raise AssertionError("native harness did not receive the full task")
+
+        native = RefusingRun()
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS',
+                        {'dsh': {'none': 'enforced', 'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}), \
+             patch.object(DecisionAdapter, 'available', return_value=(True, None)), \
+             patch('hey_my_buddy.buddy.harnesses.registry.run_seam', return_value=native), \
+             patch('hey_my_buddy.buddy.roles.inline_run.run_seam', return_value=native), \
+             patch('hey_my_buddy.buddy.roles.controller.worker_executor', side_effect=lambda _: DecisionAdapter()):
+            for ordinal in (1, 2):
+                claim = self.claim(f"native-{ordinal}", task_id=self.current_task(request["decisionId"]))["claim"]
+                self.assertIsNotNone(claim)
+                execution = Execution(claim, self.directory, claim["nonce"], client=self.client)
+                native_path(execution.directory).mkdir(parents=True)
+                execution.control.start()
+                try:
+                    receipt = execution._execute_selected(claim, claim["task"], claim["task"]["spec"],
+                                                          claim["attempt"], execution.directory,
+                                                          {'preflightControl': execution.control})
+                finally:
+                    execution.control.stop()
+                    execution.control.join()
+                self.assertEqual(receipt["report"]["status"], "failed")
+                self.assertTrue(receipt["report"]["shutdownConfirmed"])
+                self.assertTrue(deliver_receipt(self.client, receipt, execution.directory, nonce=execution.nonce))
+        self.assertEqual(len(native.prompts), 2)
+        decision_view = self.decision_row(request["decisionId"])
+        self.assertEqual(decision_view["status"], "needs-host")
+        self.assertEqual(decision_view["reason"]["code"], "native-prompt-too-large")
+        self.assertEqual([trial["code"] for trial in decision_view["routerTrials"]],
+                         ["native-prompt-too-large", "native-prompt-too-large"])
+        audit = self.board_.call("selection_get", {"decisionId": request["decisionId"],
+                                                    "includeAudit": True})["decision"]
+        self.assertEqual(audit["output"]["nativeError"], "native prompt limit")
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts WHERE execution_state!='finished'").fetchone()[0], 0)
+        self.assertEqual([event[0] for event in self.outcomes()], ["router.no_answer", "router.no_answer"])
+
+    def test_publication_savepoint_rolls_back_partial_dispatch_but_commits_worker_receipt(self):
+        request, first = self.start()
+        original = self.board_.store.decisions._queue_router_dispatch
+        old = self.dispatch_of(request["runId"])
+        output = self.failure(first)
+
+        def fail_after_queue(db, row, **kwargs):
+            original(db, row, **kwargs)
+            raise BoardError("INTERNAL_ERROR", "private fixture publication failure")
+
+        with patch.object(self.board_.store.decisions, "_queue_router_dispatch", side_effect=fail_after_queue):
+            response = self.report(first, output)
+        self.assertTrue(response["committed"])
+        self.assertEqual(response["decision"]["status"], "needs-host")
+        self.assertEqual(len(self.tasks()), 1)
+        self.assertEqual(self.current_task(request["decisionId"]), request["runId"])
+        self.assertEqual(self.dispatch_of(request["runId"]), old)
+        self.assertEqual(self.outcomes(), [])
+        with self.board_.store.db.read() as db:
+            self.assertEqual(len(router_sequence.dispatches(db, request["decisionId"])), 1)
+            receipt = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                           (first["attempt"]["attemptId"],)).fetchone()[0])
+            self.assertEqual(receipt["result"], output)
+        with self.assertRaises(BoardError) as caught:
+            self.report(first, output)
+        self.assertEqual(caught.exception.code, "ATTEMPT_FINISHED")
+        self.assertEqual(len(self.tasks()), 1)
+
+    def test_publish_select_is_dto_only(self):
+        request, first = self.start()
+        with self.board_.store.db.write() as db:
+            row = self.board_.store.decisions._row(db, request["decisionId"])
+            before = db.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            dispatch = router_sequence.dispatch(db, first["task"]["taskId"])
+            dto = self.board_.store.decisions._publish_select(db, row, dispatch=dispatch, output=self.answer(first), now=T0)
+            self.assertEqual(set(dto), {"answer_valid", "abstained", "changed", "code", "params", "note", "output", "buddy_id", "selected", "evidence"})
+            self.assertTrue(dto["answer_valid"])
+            self.assertEqual(self.board_.store.decisions._row(db, request["decisionId"])["status"], "running")
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events").fetchone()[0], before)
+        self.assertEqual(self.report(first, self.answer(first))["decision"]["status"], "completed")
+
+
+    def bad_native_stream(self, claim, kind):
+        output = self.answer(claim, tools=1)
+        binding = output["toolEvidence"]["binding"]
+        root = output["nativeIdentity"]
+        collector = ToolEventEvidence(binding, state_dir=self.board_.directory)
+        if kind == "late":
+            collector.close_root(root)
+        identity = {"sessionId": "child-session"} if kind == "child" else root
+        phases = ("end", "start") if kind == "reversed" else ("start",) if kind == "unfinished" else ("start", "end")
+        for phase in phases:
+            collector.observe(normalize_tool_event("dsh", {"nativeIdentity": identity,
+                "callId": "private-read", "toolName": "read", "phase": phase}))
+        output["toolEvidence"] = collector.finish([root], True)
+        if kind == "unclosed":
+            output["toolEvidence"]["streamComplete"] = False
+        return output
+
+    def test_review_legal_read_and_unknown_bytes_can_publish(self):
+        request, first = self.start(review=True)
+        output = self.answer(first, tools=2)
+        result = self.report(first, output)
+        self.assertEqual(result["decision"]["outcome"], "answered")
+        with self.board_.store.db.read() as db:
+            row = self.board_.store.decisions._row(db, request["decisionId"])
+            self.assertIsNone(json.loads(row["output_json"])["usage"]["bytesRead"])
+        self.assertEqual(len(self.tasks()), 1)
+
+    def test_model_started_false_does_not_substitute_for_spawn_or_native_stop_proof(self):
+        request, first = self.start()
+        output = {"status": "error", "code": "router-no-answer", "modelStarted": False}
+        self.assert_boundary(request, first, output, outcome="stop-unconfirmed", status="failed")
+
+    def test_release_cancelled_parent_never_advances_despite_never_spawned_proof(self):
+        request, first = self.start(micro_task=True)
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE workflow_runs SET state='cancelled'")
+        self.board_.store.release_execution(({'attemptId': first['attempt']['attemptId'], 'generation': first['attempt']['generation'], 'nonce': first['nonce'], 'reason': 'cancelled parent', 'evidence': {'spawnIntentWritten': False}})["attemptId"], reason="execution-process-not-created")
+        self.assertEqual(self.decision_row(request["decisionId"])["status"], "cancelled")
+        self.assertEqual(self.outcomes(), [])
+        self.assertEqual(len(self.tasks()), 1)
+
+    def test_provider_cooling_added_after_dispatch_blocks_final_adoption(self):
+        from hey_my_buddy.blackboard.routing import quota_routing
+        request, first = self.start()
+        with self.board_.store.db.write() as db:
+            quota_routing.record_rejection(db, "dsh", "fixture", {
+                "code": "quota-exceeded", "nativeCode": "fixture-denied",
+                "source": "synthetic/final-adoption", "observedAt": T0,
+                "resetsAt": None, "rejectionPhase": "before-model"}, now=T0)
+        result = self.report(first, self.answer(first))
+        self.assertEqual(result["decision"]["outcome"], "rerouted")
+        self.assertEqual(self.decision_row(request["decisionId"])["reason"],
+                         {"code": "all-candidates-cooling", "params": {"retryAt": "2026-01-01T00:30:00.000Z"}})
+        self.assertEqual(self.outcomes(), [])
+        self.assertEqual(len(self.tasks()), 1)
+        with self.board_.store.db.read() as db:
+            self.assertIsNotNone(quota_routing.cooling(db, {"harness": "dsh", "provider": "fixture"}, now=T0))
+
+
+    def busy_attempt(self, db, number, *, provider="busy", model="busy", buddy_id=None):
+        task_id, attempt_id = f"busy-{number}", f"busy-attempt-{number}"
+        db.execute("INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
+                   "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
+                   " VALUES(?,?,'host','{}','digest',1,'dsh','/work',60,'running',1,?,?)", (task_id, task_id, T0, T0))
+        db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'verifier','executing','dsh','dsh',?,?,?,?,?)", (attempt_id, task_id, provider, model, T0, T0, T0))
+        if buddy_id:
+            db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES(?,'running',?)", (task_id, T0))
+            db.execute("INSERT INTO decision_requests(decision_id,request_id,input_fingerprint,requested_json,updated_at) VALUES(?,?,'busy','{}',?)", (task_id, task_id, T0))
+            router_sequence.freeze_request(db, task_id, snapshot={"baseInput": {"task": "busy"}}, now=T0)
+            buddy = db.execute("SELECT * FROM buddies WHERE buddy_id=?", (buddy_id,)).fetchone()
+            router_sequence.reserve_dispatch(db, decision_id=task_id, task_id=task_id, router_index=0,
+                buddy={"buddyId": buddy_id, **{key: buddy[key] for key in ("harness", "provider", "model", "effort")}},
+                now=T0)
+            router_sequence.record_claim(db, task_id=task_id, attempt_id=attempt_id, generation=1, now=T0)
+
+    def test_next_item_capacity_does_not_bypass_to_third(self):
+        request, first = self.start(three=True)
+        self.assert_switch(request, first, self.failure(first))
+        with self.board_.store.db.write() as db:
+            self.busy_attempt(db, 1)
+            self.busy_attempt(db, 2)
+        response = self.claim("capacity", task_id=self.current_task(request["decisionId"]))
+        self.assertIsNone(response["claim"])
+        self.assertEqual(response["reason"], "capacity")
+        self.assertEqual(len(self.tasks()), 2)
+        self.assertEqual(len(self.outcomes()), 1)
+
+    def test_next_item_active_retry_queues_without_bypass(self):
+        request, first = self.start(three=True)
+        self.assert_switch(request, first, self.failure(first))
+        with self.board_.store.db.write() as db:
+            router_history.record_outcome(db, buddy_id=B, request_id="elsewhere",
+                task_id=None, attempt_id=None, outcome="no_answer", code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
+            self.busy_attempt(db, 1, provider="fixture", model="bravo", buddy_id=B)
+        response = self.claim("retry", task_id=self.current_task(request["decisionId"]))
+        self.assertIsNone(response["claim"])
+        self.assertEqual(response["reason"], "router-retry-in-progress")
+        self.assertEqual(len(self.tasks()), 2)
+        self.assertEqual(len([payload for _, payload in self.outcomes() if payload["requestId"] == "pick-1"]), 1)
+
+    def test_real_preflight_failure_of_later_item_is_recorded_once_and_walks_forward(self):
+        request, first = self.start(three=True)
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id=?", (B,))
+        response = self.report(first, self.failure(first))
+        self.assertEqual(response["decision"]["status"], "queued")
+        next_task = self.current_task(request["decisionId"])
+        self.assertEqual(self.dispatch_of(next_task)["buddyId"], C)
+        events = self.outcomes()
+        self.assertEqual([(p["buddyId"], p["phase"]) for _, p in events], [(A, "runtime"), (B, "preflight")])
+        self.request()
+        self.assertEqual(self.outcomes(), events)
+        self.assertEqual(len(self.tasks()), 2)
+
+    def test_new_skip_window_is_observed_without_recording_or_extension(self):
+        request, first = self.start(three=True)
+        with self.board_.store.db.write() as db:
+            router_history.record_outcome(db, buddy_id=B, request_id="elsewhere",
+                task_id=None, attempt_id=None, outcome="no_answer", code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
+            before = router_history.router_state(db, buddy_id=B, interval_seconds=600, now=T0)
+        self.report(first, self.failure(first))
+        self.assertEqual(self.dispatch_of(self.current_task(request["decisionId"]))["buddyId"], C)
+        with self.board_.store.db.read() as db:
+            self.assertEqual(router_history.router_state(db, buddy_id=B, interval_seconds=600, now=T0), before)
+        self.assertEqual(len(self.outcomes()), 2)
+        self.assertEqual(len(self.tasks()), 2)
+
+
+def install_no_answer_case(name, mutate, code, *, review=False, outer="ok"):
+    def test(self):
+        request, first = self.start(review=review)
+        output = mutate(self, first, self.answer(first))
+        self.assert_switch(request, first, output, status=outer, code=code)
+    setattr(FailoverTests, "test_no_answer_" + name, test)
+
+
+for name, code in (("timeout", "timeout"), ("provider", "provider-error"), ("native", "native-error"),
+                   ("empty", "answer-empty"), ("bad_json", "answer-invalid-json"), ("budget_runtime", "router-budget-exhausted")):
+    install_no_answer_case(name, lambda self, claim, output, code=code: self.failure(claim, code), code, outer="failed")
+install_no_answer_case("no_choice", lambda self, claim, o: {**o, "decision": None}, "answer-shape")
+install_no_answer_case("json_string", lambda self, claim, o: {**o, "decision": "{bad"}, "answer-invalid-json")
+install_no_answer_case("extra_shape", lambda self, claim, o: {**o, "decision": {**o["decision"], "extra": True}}, "answer-shape")
+install_no_answer_case("wrong_enum", lambda self, claim, o: {**o, "decision": {**o["decision"], "evidence": [{"kind": "unknown", "ref": "x"}]}}, "answer-shape")
+install_no_answer_case("outside_id", lambda self, claim, o: {**o, "decision": {**o["decision"], "buddyId": "outside"}}, "router-out-of-bounds")
+install_no_answer_case("illegal_evidence", lambda self, claim, o: {**o, "decision": {**o["decision"], "evidence": [{"kind": "file", "ref": "../secret"}]}}, "answer-shape", review=True)
+install_no_answer_case("fast_file_evidence", lambda self, claim, o: {**o, "decision": {**o["decision"], "evidence": [{"kind": "file", "ref": "src/foo"}]}}, "router-evidence-out-of-bounds")
+install_no_answer_case("elapsed_budget", lambda self, claim, o: {**o, "usage": {"elapsedMs": 60001, "toolCalls": 0}}, "router-budget-exhausted")
+install_no_answer_case("missing_counter", lambda self, claim, o: {**o, "usage": {"elapsedMs": 100}}, "router-tool-evidence-unverified")
+install_no_answer_case("missing_evidence", lambda self, claim, o: {**o, "toolEvidence": None}, "router-tool-evidence-unverified")
+install_no_answer_case("incomplete", lambda self, claim, o: self.answer(claim, stream_complete=False), "router-tool-evidence-unverified")
+install_no_answer_case("forbidden_fast", lambda self, claim, o: self.answer(claim, tools=1), "router-tools-forbidden")
+install_no_answer_case("forbidden_review", lambda self, claim, o: self.answer(claim, tools=1, tool_name="write"), "router-tools-forbidden", review=True)
+install_no_answer_case("wrong_operation", lambda self, claim, o: {**o, "operation": "maintain"}, "answer-shape")
+install_no_answer_case("outer_failed_native_stopped", lambda self, claim, o: o, "router-no-answer", outer="failed")
+
+
+install_no_answer_case("review_failed_missing_verification", lambda self, claim, o: {**self.failure(claim, "provider-error"), "inputVerification": None},
+                      "provider-error", review=True, outer="failed")
+install_no_answer_case("review_answer_missing_verification", lambda self, claim, o: {**o, "inputVerification": None},
+                      "router-input-changed", review=True)
+
+for stream in ("child", "late", "reversed", "unfinished", "unclosed"):
+    install_no_answer_case("stream_" + stream, lambda self, claim, output, stream=stream: self.bad_native_stream(claim, stream),
+                           "router-tool-evidence-unverified", review=True)
+install_no_answer_case("foreign_binding", lambda self, claim, o: {**o, "toolEvidence": {**o["toolEvidence"],
+                      "binding": {**o["toolEvidence"]["binding"], "attemptId": "foreign-attempt"}}}, "router-tool-evidence-unverified")
+install_no_answer_case("root_mismatch", lambda self, claim, o: {**o, "nativeIdentity": {"sessionId": "foreign-root"}}, "router-tool-evidence-unverified")
+install_no_answer_case("counter_mismatch", lambda self, claim, o: {**o, "usage": {"elapsedMs": 100, "toolCalls": 1}}, "router-tool-evidence-unverified")
+install_no_answer_case("review_tool_budget", lambda self, claim, o: self.answer(claim, tools=claim["decisionInput"]["budget"]["toolCalls"] + 1),
+                      "router-budget-exhausted", review=True)
+install_no_answer_case("review_time_budget", lambda self, claim, o: {**o, "usage": {"elapsedMs": claim["decisionInput"]["budget"]["timeoutSeconds"] * 1000 + 1, "toolCalls": 0}},
+                      "router-budget-exhausted", review=True)
+
+
+def install_change_case(name, mutate, *, review=False, micro_task=False, outcome="changed"):
+    def test(self):
+        request, first = self.start(review=review, micro_task=micro_task)
+        output = self.failure(first)
+        mutate(self, request, first, output)
+        self.assert_boundary(request, first, output, outcome=outcome)
+    setattr(FailoverTests, "test_boundary_" + name, test)
+
+
+def execute_change(sql, params=()):
+    def mutate(self, request, claim, output):
+        with self.board_.store.db.write() as db:
+            db.execute(sql, params)
+    return mutate
+
+
+def install_unfenced_edit_case(name, mutate):
+    def test(self):
+        request, first = self.start()
+        mutate(self, request, first, self.failure(first))
+        self.assert_switch(request, first, self.failure(first), status="failed", code="timeout")
+    setattr(FailoverTests, "test_no_answer_after_" + name + "_edit", test)
+
+
+for name, kwargs in (("list", {"ids": [B, A]}), ("mode", {"mode": "review"}),
+                     ("preset", {"budget": "brief"}), ("interval", {"interval": 30})):
+    install_unfenced_edit_case(name, lambda self, request, claim, output, kwargs=kwargs: self.set_settings(**kwargs))
+install_unfenced_edit_case("identity", execute_change("UPDATE buddies SET model='replacement' WHERE buddy_id=?", (A,)))
+
+
+install_change_case("owner", execute_change("UPDATE workflow_runs SET owner_generation=2"), micro_task=True)
+install_change_case("route", execute_change("UPDATE workflow_routes SET state='fenced'"), micro_task=True)
+install_change_case("parent_cancel", execute_change("UPDATE workflow_runs SET state='cancelled'"), micro_task=True, outcome="cancelled")
+install_change_case("task_cancel_race", execute_change("UPDATE tasks SET state='cancelling' WHERE owner='decision'"), outcome="cancelled")
+install_change_case("attempt_cancel_race", execute_change("UPDATE attempts SET cancel_requested_at=?", (T0,)), outcome="cancelled")
+install_change_case("copy", lambda self, request, claim, output: output["inputVerification"].update(unchanged=False), review=True)
+install_change_case("manifest", lambda self, request, claim, output: output["inputVerification"].update(manifestSha256="changed"), review=True)
+
+
+for layer in ("controller", "native"):
+    for value in (False, None):
+        def stop_test(self, layer=layer, value=value):
+            request, first = self.start()
+            output = self.failure(first)
+            target = output["stopEvidence"] if layer == "controller" else output["stopEvidence"]["native"]
+            target["shutdownConfirmed"] = value
+            self.assert_boundary(request, first, output, outcome="stop-unconfirmed")
+        setattr(FailoverTests, f"test_stop_{layer}_{value}", stop_test)
+
+
+if __name__ == "__main__":
+    unittest.main()

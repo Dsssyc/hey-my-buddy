@@ -1,0 +1,523 @@
+"""The parallel check runner runs what discovery would run and never hides a failure."""
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import os
+import psutil
+import shutil
+import signal
+import subprocess
+import sys
+import sysconfig
+import tempfile
+import textwrap
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from hey_my_buddy.cli import checks
+from hey_my_buddy.protocol.process_start import process_start
+
+REPOSITORY = Path(__file__).resolve().parents[3]
+
+#: Prints every test id discovery loads and every id the per-file runner would load.
+LOADED_IDS = """
+import json, sys, unittest
+
+def ids(suite):
+    for item in suite:
+        if isinstance(item, unittest.TestSuite):
+            yield from ids(item)
+        else:
+            yield item.id()
+
+discovered = sorted(ids(unittest.TestLoader().discover(sys.argv[1])))
+per_file = sorted(
+    name for module in sys.argv[2:] for name in ids(unittest.TestLoader().loadTestsFromName(module))
+)
+print(json.dumps({"discovered": discovered, "perFile": per_file}))
+"""
+
+
+def wait_until(predicate, timeout: float = 30.0, interval: float = 0.05):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(interval)
+    return None
+
+
+def process_exists(identity: dict) -> bool:
+    return (identity["startedAt"] is not None
+            and process_start(identity["pid"], include_exited=False) == identity["startedAt"])
+
+
+def loaded_ids(tests: Path, modules: list[str], environment: dict) -> dict:
+    completed = subprocess.run(
+        [sys.executable, "-c", LOADED_IDS, str(tests), *modules],
+        cwd=str(tests),
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=300, encoding="utf-8",
+    )
+    if completed.returncode != 0:
+        raise AssertionError(completed.stderr[-4000:])
+    return json.loads(completed.stdout.splitlines()[-1])
+
+
+class ScheduledModulesTests(unittest.TestCase):
+    """Per-file scheduling covers exactly the tests ``unittest discover`` loads."""
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp(prefix="checks-modules-"))
+        self.addCleanup(shutil.rmtree, self.directory, ignore_errors=True)
+
+    def test_this_checkout_schedules_exactly_what_discovery_loads(self):
+        modules = checks.python_test_modules(REPOSITORY)
+        child_root = self.directory / "suite"
+        environment = checks.child_environment(REPOSITORY, child_root,
+                                               home_root=self.directory / "suite-home")
+        (child_root / "tmp").mkdir(parents=True)
+        loaded = loaded_ids(REPOSITORY / "tests" / "python", modules, environment)
+        self.assertEqual(loaded["perFile"], loaded["discovered"])
+        self.assertEqual(len(set(loaded["perFile"])), len(loaded["perFile"]), "a test is scheduled twice")
+        self.assertFalse([name for name in loaded["discovered"] if "_FailedTest" in name])
+        self.assertIn(f"{Path(__file__).parent.stem}.{Path(__file__).stem}.{type(self).__name__}.{self._testMethodName}", loaded["perFile"])
+
+    def test_scheduling_covers_every_test_file_on_disk(self):
+        """The raw filesystem is the independent full set, not discovery itself.
+
+        Both ``unittest discover`` and ``python_test_modules`` descend into packages
+        only, so they miss the same file together when a directory between it and
+        ``tests/python`` lacks an ``__init__.py``. This guard compares discovery with
+        a plain walk of the whole tree instead, and names every missed file.
+        """
+        top = REPOSITORY / "tests" / "python"
+        on_disk: set[str] = set()
+        for directory, _, files in os.walk(top):
+            relative = Path(directory).relative_to(top)
+            for name in files:
+                if name.startswith("test") and name.endswith(".py"):
+                    on_disk.add(".".join((*relative.parts, name.removesuffix(".py"))))
+        scheduled = set(checks.python_test_modules(REPOSITORY))
+        missing = sorted(on_disk - scheduled)
+        self.assertFalse(missing, "test files on disk are never scheduled: " + ", ".join(missing))
+        unexpected = sorted(scheduled - on_disk)
+        self.assertFalse(unexpected, "scheduled modules that are not test files on disk: " + ", ".join(unexpected))
+
+    def test_nested_packages_are_scheduled_exactly_as_discovery_descends(self):
+        tests = self.directory / "tests" / "python"
+        case = "import unittest\nclass Case(unittest.TestCase):\n    def test_runs(self):\n        pass\n"
+        for relative in (
+            "test_top.py",
+            "nested/__init__.py",
+            "nested/test_inner.py",
+            "nested/deeper/__init__.py",
+            "nested/deeper/test_deep.py",
+            "nested/helper.py",
+            "plain/test_unreachable.py",
+            "plain/inside/__init__.py",
+            "plain/inside/test_unreachable_too.py",
+        ):
+            path = tests / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("" if path.name == "__init__.py" else case, encoding="utf-8", newline="\n")
+        modules = checks.python_test_modules(self.directory)
+        self.assertEqual(modules, ["nested.deeper.test_deep", "nested.test_inner", "test_top"])
+        environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+        loaded = loaded_ids(tests, modules, environment)
+        self.assertEqual(loaded["perFile"], loaded["discovered"])
+        self.assertEqual(len(loaded["discovered"]), 3)
+
+
+class ResolveJobsTests(unittest.TestCase):
+    def test_the_flag_wins_over_the_environment_over_the_default(self):
+        with patch.dict(os.environ, {"HMB_CHECKS_JOBS": "5"}):
+            self.assertEqual(checks.resolve_jobs(None), 5)
+            self.assertEqual(checks.resolve_jobs("2"), 2)
+            self.assertEqual(checks.resolve_jobs("1"), 1)
+        environment = {key: value for key, value in os.environ.items() if key != "HMB_CHECKS_JOBS"}
+        with patch.dict(os.environ, environment, clear=True):
+            self.assertEqual(checks.resolve_jobs(None), checks.default_jobs())
+        self.assertGreaterEqual(checks.default_jobs(), 1)
+        self.assertLessEqual(checks.default_jobs(), checks.MAX_DEFAULT_JOBS)
+
+    def test_an_unusable_value_is_refused(self):
+        for value in ("0", "-1", "many"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                checks.resolve_jobs(value)
+        with patch.dict(os.environ, {"HMB_CHECKS_JOBS": "none"}), self.assertRaises(ValueError):
+            checks.resolve_jobs(None)
+
+
+class RunnerTestCase(unittest.TestCase):
+    """A private root and importable fixture modules."""
+
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp(prefix="checks-parallel-"))
+        self.addCleanup(shutil.rmtree, self.directory, ignore_errors=True)
+        self.modules = self.directory / "modules"
+        self.modules.mkdir()
+        self.markers = self.directory / "markers"
+        self.markers.mkdir()
+        self.private_root = self.directory / "root"
+        self.private_root.mkdir()
+
+    def module(self, name: str, body: str) -> str:
+        (self.modules / f"{name}.py").write_text(textwrap.dedent(body), encoding="utf-8", newline="\n")
+        return name
+
+    def environment(self) -> dict:
+        inherited = os.environ.get("PYTHONPATH")
+        return {
+            "CHECKS_FIXTURE_MARKERS": str(self.markers),
+            "PYTHONPATH": os.pathsep.join([str(self.modules)] + ([inherited] if inherited else [])),
+        }
+
+    def run_parallel(self, names: list[str], *, jobs: int = 2) -> tuple[str | None, str]:
+        # Each run owns a fresh private root, exactly as ``main`` creates one per run.
+        self.private_root = Path(tempfile.mkdtemp(prefix="root-", dir=self.directory))
+        output = io.StringIO()
+        with (
+            patch.dict(os.environ, self.environment()),
+            contextlib.redirect_stdout(output),
+        ):
+            failure = checks.run_suites_parallel(REPOSITORY, self.private_root, jobs, names)
+        return failure, output.getvalue()
+
+
+class ParallelOutcomeTests(RunnerTestCase):
+    """Every way a file can fail fails the run, and the totals stay visible."""
+
+    def passing(self) -> str:
+        return self.module(
+            "checksfixture_pass",
+            """
+            import os, unittest
+            from pathlib import Path
+
+            class Passing(unittest.TestCase):
+                def test_runs_in_its_own_private_root(self):
+                    root = Path(os.environ["HMB_STATE_DIR"]).parent
+                    self.assertEqual(Path(os.environ["TMPDIR"]), root / "tmp")
+                    self.assertEqual(Path(os.environ["HMB_RUNTIME_ROOT"]), root / "runtime")
+                    home = Path(os.environ["HOME"])
+                    self.assertEqual(home.parent, root.parent)
+                    self.assertFalse(home.is_relative_to(root))
+                    (Path(os.environ["CHECKS_FIXTURE_MARKERS"]) / "root").write_text(
+                        str(root), encoding="utf-8", newline="\\n")
+
+                @unittest.skip("fixture")
+                def test_is_skipped(self):
+                    pass
+            """,
+        )
+
+    def test_a_passing_run_reports_its_python_totals(self):
+        failure, output = self.run_parallel([self.passing()])
+        self.assertIsNone(failure, output)
+        self.assertIn("hey_my_buddy.cli.checks: python tests run: 2 (skipped 1) in 1 of 1 files", output)
+        child_root = Path((self.markers / "root").read_text(encoding="utf-8"))
+        self.assertEqual(child_root.parent, self.private_root)
+
+    def test_an_empty_python_suite_is_refused(self):
+        failure, _output = self.run_parallel([])
+        self.assertEqual(failure, "python suite has no test modules")
+
+    def test_default_encoding_is_an_error_only_inside_the_product_package(self):
+        third_party = self.module(
+            "checksfixture_encoding_external",
+            """
+            import unittest
+
+            class External(unittest.TestCase):
+                def test_implicit_encoding(self):
+                    with open(__file__) as stream:
+                        self.assertTrue(stream.read(1))
+            """,
+        )
+        product = self.module(
+            "checksfixture_encoding_product",
+            """
+            import unittest
+            from hey_my_buddy.cli import checks
+
+            exec("def _encoding_probe():\\n    with open(__file__) as stream:\\n        stream.read(1)\\n", checks.__dict__)
+
+            class Product(unittest.TestCase):
+                def test_implicit_encoding(self):
+                    checks._encoding_probe()
+            """,
+        )
+        failure, output = self.run_parallel([third_party, product])
+        self.assertIn("checksfixture_encoding_product", failure)
+        self.assertNotIn("checksfixture_encoding_external", failure)
+        self.assertIn("EncodingWarning: 'encoding' argument not specified", output)
+
+    def test_runner_relays_unicode_child_output_with_cp1252_standard_streams(self):
+        name = self.module(
+            "checksfixture_unicode_output",
+            """
+            import sys, unittest
+
+            class UnicodeOutput(unittest.TestCase):
+                def test_failure_output(self):
+                    print("子进程标准输出")
+                    print("子进程标准错误", file=sys.stderr)
+                    self.fail("与中文相关的预期失败")
+            """,
+        )
+        driver_root = self.directory / "driver"
+        (driver_root / "tmp").mkdir(parents=True)
+        environment = checks.child_environment(
+            REPOSITORY, driver_root, home_root=self.directory / "driver-home")
+        environment.update(self.environment())
+        environment["PYTHONIOENCODING"] = "cp1252"
+        driver = """
+            import sys
+            from unittest.mock import patch
+            from hey_my_buddy.cli import checks
+
+            assert sys.stdout.encoding == sys.stderr.encoding == "cp1252"
+            with patch.object(checks, "selected_test_modules", return_value=[sys.argv[1]]):
+                try:
+                    checks.main(["--jobs", "1", "tests/python/cli/test_checks_parallel.py"])
+                except SystemExit:
+                    print("运行器标准错误", file=sys.stderr)
+                    raise
+        """
+        result = subprocess.run(
+            [sys.executable, "-c", textwrap.dedent(driver), name],
+            cwd=REPOSITORY, env=environment, capture_output=True,
+            text=True, encoding="utf-8", timeout=90,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        for text in ("子进程标准输出", "子进程标准错误", "与中文相关的预期失败"):
+            self.assertIn(text, result.stdout)
+        self.assertIn("private root removed; exit 1", result.stdout)
+        self.assertIn("运行器标准错误", result.stderr)
+        self.assertNotIn("UnicodeEncodeError", result.stderr)
+
+    def test_every_kind_of_failing_file_fails_the_run(self):
+        names = [
+            self.passing(),
+            self.module(
+                "checksfixture_assertion",
+                """
+                import unittest
+
+                class Failing(unittest.TestCase):
+                    def test_breaks(self):
+                        self.assertEqual(1, 2, "fixture assertion")
+                """,
+            ),
+            self.module("checksfixture_import", "import a_module_that_does_not_exist\n"),
+            self.module("checksfixture_empty", "import unittest\n"),
+            self.module(
+                "checksfixture_killed",
+                """
+                import psutil, unittest
+
+                class Killed(unittest.TestCase):
+                    def test_dies(self):
+                        psutil.Process().kill()
+                """,
+            ),
+        ]
+        failure, output = self.run_parallel(names)
+        self.assertIsNotNone(failure)
+        failing = ["checksfixture_assertion", "checksfixture_empty", "checksfixture_import", "checksfixture_killed"]
+        self.assertIn(f"python suite failed in 4 file(s): {', '.join(failing)}", failure)
+        self.assertNotIn("checksfixture_pass", failure)
+        self.assertIn("hey_my_buddy.cli.checks: python tests run: 2 (skipped 1) in 1 of 5 files", output)
+        # The failing test, its message and the file it belongs to are all printed.
+        self.assertIn("----- checksfixture_assertion stderr -----", output)
+        self.assertIn("test_breaks (checksfixture_assertion.Failing.test_breaks)", output)
+        self.assertIn("fixture assertion", output)
+        self.assertIn("a_module_that_does_not_exist", output)
+        killed_exit = signal.SIGTERM if os.name == "nt" else -signal.SIGKILL
+        self.assertIn(f"checksfixture_killed FAILED (exit {killed_exit})", output)
+
+
+
+
+    def test_a_file_that_reports_no_test_count_fails_the_run(self):
+        def silent(root, private_root, directory_name, label, command, live, guard, stop):
+            return checks.ChildOutcome(label, 0, "", "nothing was counted here\n", 0.0)
+
+        with patch.object(checks, "run_suite_child", silent):
+            failure, _ = self.run_parallel(["checksfixture_silent"])
+        self.assertEqual(failure, "python suite reported no test count in 1 file(s): checksfixture_silent")
+
+    def test_a_scheduled_suite_without_an_outcome_fails_the_run(self):
+        def partial(root, private_root, directory_name, label, command, live, guard, stop):
+            if label == "checksfixture_lost":
+                return None
+            return checks.ChildOutcome(label, 0, "", "Ran 1 test in 0.001s\n\nOK\n", 0.0)
+
+        with patch.object(checks, "run_suite_child", partial):
+            failure, _ = self.run_parallel(["checksfixture_kept", "checksfixture_lost"])
+        self.assertEqual(failure, "1 suite(s) never ran: checksfixture_lost")
+
+    def test_a_coloured_summary_is_still_counted(self):
+        # The summary Python 3.14 prints when colour is forced.
+        summary = "Ran 4 tests in 0.002s\n\n\x1b[32mOK\x1b[0m (\x1b[33mskipped=3\x1b[0m)\n"
+
+        def coloured(root, private_root, directory_name, label, command, live, guard, stop):
+            return checks.ChildOutcome(label, 0, "", summary, 0.0)
+
+        with patch.object(checks, "run_suite_child", coloured):
+            failure, output = self.run_parallel(["checksfixture_coloured"])
+        self.assertIsNone(failure)
+        self.assertIn("hey_my_buddy.cli.checks: python tests run: 4 (skipped 3) in 1 of 1 files", output)
+
+
+class LeftoverProcessTests(RunnerTestCase):
+    """A process a suite leaves behind never holds the runner or an interrupted run."""
+
+    def reap(self, identity: dict) -> None:
+        with contextlib.suppress(psutil.NoSuchProcess, psutil.ZombieProcess):
+            process = psutil.Process(identity["pid"])
+            if process_exists(identity):
+                process.kill()
+                process.wait(timeout=5)
+
+    def test_a_leftover_process_holding_the_output_does_not_hold_the_runner(self):
+        script = (
+            "import json, os, subprocess, sys\n"
+            "from hey_my_buddy.protocol.process_start import process_start\n"
+            "leftover = subprocess.Popen([sys.executable, '-c', 'import threading; threading.Event().wait(120)'], "
+            "start_new_session=os.name != 'nt', "
+            "creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == 'nt' else 0)\n"
+            "print(json.dumps({'pid': leftover.pid, 'startedAt': process_start(leftover.pid, include_exited=False)}), flush=True)\n"
+        )
+        outcome = checks.run_suite_child(
+            REPOSITORY, self.private_root, "p000", "leftover", [[sys.executable, "-c", script]],
+            set(), threading.Lock(), threading.Event(),
+        )
+        leftover = json.loads(outcome.stdout.strip())
+        self.addCleanup(self.reap, leftover)
+        self.assertEqual(outcome.returncode, 0, outcome.stderr)
+        self.assertTrue(process_exists(leftover), "the fixture process must still hold the inherited pipes")
+
+    def test_an_interrupted_run_starts_nothing_further_and_stops_its_suite_children(self):
+        slow = """
+            import json, os, subprocess, sys, threading, unittest
+            from pathlib import Path
+            from hey_my_buddy.protocol.process_start import process_start
+
+            class Slow(unittest.TestCase):
+                def test_blocks(self):
+                    leftover = subprocess.Popen(
+                        [sys.executable, "-c", "import threading; threading.Event().wait(120)"],
+                        start_new_session=os.name != "nt",
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                    )
+                    marker = Path(os.environ["CHECKS_FIXTURE_MARKERS"]) / f"{__name__}.json"
+                    marker.write_text(json.dumps({
+                        "suite": {"pid": os.getpid(), "startedAt": process_start(os.getpid(), include_exited=False)},
+                        "leftover": {"pid": leftover.pid, "startedAt": process_start(leftover.pid, include_exited=False)},
+                    }),
+                                      encoding="utf-8", newline="\\n")
+                    threading.Event().wait(120)
+        """
+        names = [self.module(f"checksfixture_slow_{letter}", slow) for letter in "abc"]
+        driver = self.directory / "driver.py"
+        driver.write_text(textwrap.dedent(
+            """
+            import ctypes, json, os, signal, site, sys, threading, time
+            from pathlib import Path
+            if os.name == "nt":
+                site.addsitedir(os.environ["CHECKS_FIXTURE_SITE_PACKAGES"])
+            from hey_my_buddy.cli import checks
+
+            if os.name == "nt":
+                trigger = Path(sys.argv[3])
+                identities = Path(sys.argv[4])
+                def interrupt():
+                    while not trigger.exists():
+                        time.sleep(0.01)
+                    owned = checks._windows_suite_children[Path(sys.argv[2]).resolve()]
+                    identities.write_text(json.dumps([handle.identity() for handle in owned]),
+                                          encoding="utf-8", newline="\\n")
+                    # This driver alone owns its new console. Zero targets that
+                    # console's groups; its PID need not be a process-group ID.
+                    if not ctypes.windll.kernel32.GenerateConsoleCtrlEvent(signal.CTRL_BREAK_EVENT, 0):
+                        raise ctypes.WinError()
+                threading.Thread(target=interrupt, daemon=True).start()
+            checks.run_suites_parallel(Path(sys.argv[1]), Path(sys.argv[2]), 2,
+                                       sys.argv[5:] if os.name == "nt" else sys.argv[3:])
+            """
+        ), encoding="utf-8", newline="\n")
+        environment = {**os.environ, **self.environment()}
+        environment["PYTHONPATH"] = os.pathsep.join([str(REPOSITORY / "src"), environment["PYTHONPATH"]])
+        if os.name == "nt":
+            # Use one interpreter in the private console, without a venv
+            # forwarding process that can consume the console event first.
+            environment["CHECKS_FIXTURE_SITE_PACKAGES"] = sysconfig.get_path("purelib")
+        log = (self.directory / "driver.log").open("w", encoding="utf-8", newline="\n")
+        self.addCleanup(log.close)
+        trigger = self.directory / "interrupt"
+        identities = self.directory / "owned-identities.json"
+        process = subprocess.Popen(
+            [sys._base_executable if os.name == "nt" else sys.executable,
+             str(driver), str(REPOSITORY), str(self.private_root),
+             *([str(trigger), str(identities)] if os.name == "nt" else []), *names],
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=os.name != "nt",
+            creationflags=subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0,
+        )
+        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait(timeout=30)))
+
+        def started() -> list[dict] | None:
+            found = []
+            for name in names[:2]:
+                try:
+                    found.append(json.loads((self.markers / f"{name}.json").read_text(encoding="utf-8")))
+                except (OSError, ValueError):
+                    return None
+            return found
+
+        children = wait_until(started, timeout=60)
+        self.assertTrue(children, "the first two fixture files never started")
+        for child in children:
+            self.addCleanup(self.reap, child["leftover"])
+            self.addCleanup(self.reap, child["suite"])
+        self.assertFalse((self.markers / f"{names[2]}.json").exists(), "two workers must leave the third file queued")
+
+        if os.name == "nt":
+            trigger.touch()
+        else:
+            process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=90)
+        except subprocess.TimeoutExpired:
+            self.fail("the interrupted run did not stop: " + (self.directory / "driver.log").read_text(encoding="utf-8")[-2000:])
+        output = (self.directory / "driver.log").read_text(encoding="utf-8")
+        self.assertNotEqual(process.returncode, 0, output)
+        self.assertIn("KeyboardInterrupt", output)
+        if os.name == "nt":
+            owned = json.loads(identities.read_text(encoding="utf-8"))
+            self.assertEqual({identity["pid"] for identity in owned},
+                             {child["suite"]["pid"] for child in children})
+            self.assertTrue(all(identity["startedAt"] and identity["jobName"] for identity in owned))
+            self.assertEqual({(identity["pid"], identity["startedAt"]) for identity in owned},
+                             {(child["suite"]["pid"], child["suite"]["startedAt"]) for child in children})
+        for child in children:
+            self.assertFalse(process_exists(child["suite"]), "an interrupted run left a suite child running")
+            self.assertTrue(process_exists(child["leftover"]), "the fixture process must outlive its suite child")
+        self.assertFalse((self.markers / f"{names[2]}.json").exists(), "a queued file started after the interrupt")
+
+
+if __name__ == "__main__":
+    unittest.main()

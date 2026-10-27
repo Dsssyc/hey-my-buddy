@@ -1,81 +1,124 @@
-# hey-my-buddy
+<p align="right"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-[中文文档](README.zh-CN.md)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img alt="hey-my-buddy" src="docs/assets/banner-light.svg" width="100%">
+</picture>
 
-Buddy lets Codex hand **one clear, bounded task** to a local [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) run and get back real work you can inspect. Codex still frames the task, chooses the route and checks the result; dsh does the bulk execution.
+<p align="center"><b>Delegate the work. Keep the responsibility.</b></p>
 
-## Why it is useful
+<p align="center">
+  The coding agent you work with hands bounded tasks to other coding agents on your machine,<br>
+  and checks every sealed result before it lands.
+</p>
 
-- **Work you can inspect.** Give it a working directory and a task with acceptance criteria; it edits files, runs commands and leaves the result on disk.
-- **Long tasks keep going.** Closing the terminal or a wait ending does not throw the work away: Codex can pick the same task up again and report its progress or result.
-- **You stay in charge.** The run uses your own credentials and permissions, and Codex inspects the actual files and checks before calling anything done.
+<p align="center">
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#first-steps">First steps</a> ·
+  <a href="#status-and-limits">Status</a> ·
+  <a href="#documentation">Docs</a>
+</p>
 
-## What to delegate
+---
 
-Good fits: investigate a failing test or a reproducible bug; implement a scoped feature or refactor; run a batch file transformation; update documentation for a set of files; produce a calculation or report with a verifiable output.
+## Why hey-my-buddy
 
-Keep it in Codex: one-line edits, answers you already know, work whose requirements are still moving, or anything that needs your framing and final judgement.
+- **The agent you trust stays in charge.** The coding agent you work with, such as Codex or Claude Code (CLI or app), is your Host buddy: it splits the work, delegates the bounded parts and accepts every result itself.
+- **The right buddy for each part.** Workers run in the CLI of DeepSeek Harness, ZCode, Codex or Claude Code, with the models and efforts you enabled. Routing picks one, or the Host names it.
+- **Nothing lands unchecked.** Each micro task starts from a fixed input in the checkout it is given and ends with a sealed output; parallel writers never share a checkout. The Host reads the diff and runs the checks before it accepts.
+- **Work outlives your session.** A closed terminal, a lost connection or a service restart never cancels work; pick it up again by its id.
+- **See who is doing what.** A private local console shows each macro task as a timeline, every buddy's load and your settings.
+- **Your accounts, your plans.** Workers sign in with your own harness accounts; hey-my-buddy never keeps or forwards your credentials. See [accounts and terms](docs/terms.md).
 
-## Requirements
+## How it works
 
-- macOS or Linux (POSIX).
-- [uv](https://docs.astral.sh/uv/) with Python 3.12–3.14, and Node.js 20+ for the default dsh route.
-- A working local `dsh` installation with credentials you configured yourself: <https://github.com/deepseek-ai/deepseek-harness>.
-- Codex with skills support.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-en-dark.svg">
+  <img alt="The Host buddy delegates a micro task to the blackboard; unless the Host names a buddy, the blackboard takes the only eligible buddy or a Router buddy chooses among several; the Worker buddy runs a turn in the checkout the micro task was given; the Host can ask that running turn a question through the blackboard; the blackboard seals the checkout when the turn ends; the Host checks the Worker's report against the seal and either integrates and accepts it into your repository or sends it back to the same Worker without routing. A Lead buddy runs the same loop as Host for the micro tasks it delegates." src="docs/assets/architecture-en-light.svg" width="100%">
+</picture>
 
-Buddy does not install dsh, configure provider credentials or change global model settings.
+1. **Delegate.** The Host writes a micro task: what to do, which files it may change, and how to check it. Unless the Host names a buddy, routing picks one: the only eligible buddy directly, or a Router buddy's choice among several.
+2. **Work.** The Worker runs in its harness, in the checkout the micro task was given. The Host can ask the running turn a question through the blackboard without stopping it; when the Worker needs a decision or help, it stops and asks, and the Host answers or continues it.
+3. **Accept.** The Host reviews the sealed result. It either integrates and accepts it, which verifies the integration and reclaims the checkout, or sends it back to the same micro task for another turn; work it gives up on is concluded.
 
-## Get started
+Micro tasks, decisions and results live on a local blackboard, a SQLite database owned by one private service. More in [workflow](docs/reference/workflow.md) and [architecture](docs/reference/architecture.md).
+
+## Install
+
+hey-my-buddy is one shared agent skill at `~/.agents/skills/hey-my-buddy` that carries its own launcher, plus a private service and runtime under `~/.local/share/hey-my-buddy` (`%LOCALAPPDATA%\hey-my-buddy` on Windows). Claude Code finds the skill through a link at `~/.claude/skills/hey-my-buddy` (a junction on Windows). The install never changes your `PATH`, shell or agent settings. It needs [uv](https://docs.astral.sh/uv/).
 
 ```sh
-git clone https://github.com/Dsssyc/hey-my-buddy.git
-cd hey-my-buddy
-uv sync --frozen --project deepseek-delegate --python 3.12
+uvx hey-my-buddy@0.54.1 install
 ```
 
-Install the whole `deepseek-delegate/` directory as a standalone Codex skill (copy all of it, not only `SKILL.md`):
+To install from a checkout of this repository instead, build the wheel and install it:
 
 ```sh
-BUDDY_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-mkdir -p "$BUDDY_SKILLS_DIR"
-if [ -e "$BUDDY_SKILLS_DIR/deepseek-delegate" ] || [ -L "$BUDDY_SKILLS_DIR/deepseek-delegate" ]; then
-  printf '%s\n' 'A skill already exists at this path; see the upgrade guide.'
-else
-  ln -s "$PWD/deepseek-delegate" "$BUDDY_SKILLS_DIR/deepseek-delegate"
-fi
+uv build --wheel --out-dir dist
+uvx --from "$PWD/dist/hey_my_buddy-0.54.1-py3-none-any.whl" hey-my-buddy install
 ```
 
-For an existing installation, see the [upgrade guide](deepseek-delegate/references/operations.md#runtime-lifecycle-and-upgrade). The [usage guide](deepseek-delegate/references/usage.md) covers copies, plugin installation and workspace grouping.
+<details>
+<summary>Or let your agent install it</summary>
 
-In a new Codex task, ask:
+```text
+Install hey-my-buddy on this machine for me.
 
-> Use `$deepseek-delegate` to check the relative links in this repository's README and docs. Create only `buddy-doc-review.md`, listing any broken links and suggested fixes. Disable dsh workspace grouping for this run (`workspace: false`). Verify the report when the task finishes and show me the result.
+1. Use the version I name, or the wheel I give you.
+2. Run the install outside your sandbox through your own permission mechanism, without sudo.
+3. Before it writes anything, list every path it will create or replace.
+4. Report the skill version and place, the Claude Code link, the service action and whether a backup was taken.
+5. Verify with ~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy health.
+6. On LAUNCH_ACCESS_DENIED, allow that exact launcher command and retry. On UPGRADE_NOT_IDLE, report the listed work and wait; never cancel work to force an upgrade.
+```
 
-`$deepseek-delegate` is the standalone skill; `$buddy` is the same skill when the repository is installed as the Codex plugin (details in the usage guide).
+</details>
 
-## What happens
+Upgrading runs the same command with the newer version. An upgrade that changes the contract refuses while work is running and takes a verified backup before it switches. [Operations](docs/reference/operations.md#installation) has the details, error codes and recovery.
 
-Codex starts the task once and keeps it running while it waits in the same turn. You can ask what the run is doing; when it returns you get the outcome plus where the logs and artifacts are. Codex inspects the actual files, runs the relevant checks and reports what it verified.
+## First steps
 
-If the wait ends first, the task continues under its execution deadline. Codex can reconnect using the saved run ID. For work that should outlive the current turn, the [background workflow](deepseek-delegate/references/usage.md#background-work-that-outlives-the-turn) uses periodic App follow-up; immediate continuation after the turn ends is unavailable.
+Ask your Host buddy in plain words, for example:
 
-## Good to know
+> Use hey-my-buddy to have a buddy check the links in this README and report the broken ones.
 
-- Workspace grouping is on by default and needs a small one-time host bridge; the first example uses `workspace: false` so it runs without that setup. The default never changes by itself — see [operations](deepseek-delegate/references/operations.md).
-- Tasks default to a 30-minute execution deadline. Specify a longer limit in your request for long jobs; the maximum is 24 hours.
-- State which files may change. A working directory does not restrict file access; separate worktrees help keep concurrent edits apart.
-- Buddy manages only the runs it started; independent dsh sessions are untouched.
-- Task coordination and stored results are local. Model requests use the provider configured in dsh. Buddy needs no MCP registration.
-- The first run may take longer because it prepares a private runtime for the service.
+The skill tells the Host the rest. To look around yourself:
 
-## Documentation and support
+```sh
+~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy health    # routing and capacity
+~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy console   # open the private console
+```
 
-- [docs/README.md](docs/README.md) — every document and the role it plays.
-- Detailed topics: [usage](deepseek-delegate/references/usage.md), [CLI](deepseek-delegate/references/cli.md), [operations](deepseek-delegate/references/operations.md), [workers](deepseek-delegate/references/workers.md), [runner](deepseek-delegate/references/runner.md) and [architecture](deepseek-delegate/references/architecture.md).
-- Bugs and support: [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).
-- Contributions are welcome; [AGENTS.md](AGENTS.md) lists the checks to run first.
-- Design history: [ADR-001](docs/decisions/001-python-transactional-blackboard.md) and the [0.4.0 acceptance record](docs/acceptance/python-blackboard-0.4.0.md).
+In the console, enable the buddies you want to work with and set how many may run at once. [Usage](docs/reference/usage.md) walks from install to a reviewed result; the [CLI reference](docs/reference/cli.md) covers every command.
+
+## Status and limits
+
+- **0.x.** While the version is 0.x the contract can change between middle versions; such an upgrade converts your board in one explicit, backed-up step.
+- **Platforms.** Used every day on macOS. The full check suite passes on Linux and on Windows 11 (x64 and ARM64) in CI; real harness runs on Linux and Windows have not been verified yet.
+- **Harnesses.** Codex runs through its experimental App Server. What each harness supports and how far it is verified is in [harnesses](docs/reference/harnesses.md).
+- **Routing sees your task.** When a Router buddy chooses among several buddies, the task text goes to that Router's model provider, even if another model does the work.
+- **Not a sandbox.** Checkouts and private directories keep work apart; they are not an operating-system sandbox. A Worker acts with the permissions its harness grants.
+- **No spending limits.** Usage counts against your own plans and keys; hey-my-buddy does not track money.
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Operations](docs/reference/operations.md): install, upgrade, storage, error codes and recovery
+- [Usage](docs/reference/usage.md) and [CLI](docs/reference/cli.md)
+- [Console](docs/reference/console.md) and [harnesses](docs/reference/harnesses.md)
+- [Architecture](docs/reference/architecture.md) and [decisions](docs/decisions/)
+
+## Development
+
+```sh
+npm --prefix apps/console ci
+uv run --frozen python -m hey_my_buddy.cli.checks
+npm --prefix apps/console test
+```
+
+[AGENTS.md](AGENTS.md) covers the repository's invariants, layout and checks. Report problems in [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues).
 
 ## License
 
-[MIT](LICENSE). The standalone `deepseek-delegate/` directory carries its own copy.
+[MIT](LICENSE)

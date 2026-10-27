@@ -1,0 +1,76 @@
+/* The console's semantic palette (ADR-029 clause 8). Buddy fills keep a measured
+   distance from these colours; status shapes carry a track-paper separation.
+   Active facts use body ink and motion; selection and keyboard focus are neutral.
+   Hand marks waiting for a person, and fail marks failure. */
+:root {
+  color-scheme: light;
+  --paper: #f3f1ea;
+  --surface: #ffffff;
+  --ruler-ground: #e5e2d8;
+  --sunk: #f8f7f2;
+  --ink: #1f2a24;
+  --ink2: #56645c;
+  --ink3: #536057;
+  --ink4: #566159;
+  --line: #e4e2d9;
+  --line2: #cfcdc3;
+  --live: #24654d;
+  --selected-row: rgb(0 0 0 / 4%);
+  --selection: #e5e8e3;
+  --selection-hover: #d9ded7;
+  --focus: #59666d;
+  --popover-ground: #ffffff;
+  --execution-ink: #101017;
+  --execution-ink-light: #ffffff;
+  --hand: #b2461e;
+  --hand-mark: #d85a30;
+  --hand-wash: #fbede5;
+  --fail: #a81e3a;
+  --fail-wash: #fbe9ed;
+  --past: #5b6a62;
+  --past-wash: #e1e6e2;
+  --overlay: rgb(0 0 0 / 35%);
+  --bar: #1f2a24;
+  --bar-ink: #f1efe8;
+  --bar-ink2: #a9b3ac;
+  --brand-mark: #7cc79f;
+  --bar-hand: #f0997b;
+  --bar-fail: #f2899c;
+}
+
+/* Light is the explicit default; the switch writes the dark values below. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #0e0f10;
+  --surface: #16171a;
+  --ruler-ground: #292c31;
+  --sunk: #121315;
+  --ink: #eceae2;
+  --ink2: #a9aeb4;
+  --ink3: #a3a8ae;
+  --ink4: #a0a5ab;
+  --line: #26282c;
+  --line2: #363940;
+  --live: #7cc79f;
+  --selected-row: rgb(255 255 255 / 5%);
+  --selection: #292c30;
+  --selection-hover: #34383d;
+  --focus: #c4c8ce;
+  --popover-ground: #24262a;
+  --execution-ink: #101017;
+  --execution-ink-light: #ffffff;
+  --hand: #f0997b;
+  --hand-mark: #f0997b;
+  --hand-wash: #33231c;
+  --fail: #f2899c;
+  --fail-wash: #351c23;
+  --past: #9aa0a6;
+  --past-wash: #2b2e33;
+  --overlay: rgb(0 0 0 / 60%);
+  --bar: #0b0c0d;
+  --bar-ink: #f1efe8;
+  --bar-ink2: #8f9993;
+  --brand-mark: #7cc79f;
+  --bar-hand: #f0997b;
+  --bar-fail: #f2899c;
+}

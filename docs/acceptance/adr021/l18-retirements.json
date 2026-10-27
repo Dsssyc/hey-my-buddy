@@ -1,0 +1,92 @@
+{
+  "format": 1,
+  "inputCommit": "fcb4639de37d6be52cb813595e51427dd365274e",
+  "executor": "Codex Worker a42bcafb-c749-4db0-9380-3896bd7c8fc3；未委派",
+  "action": "仅 Host 在逐项校验 sha256 与引用后机械删除；Worker 保留全部文件；不得写空文件占位。",
+  "referenceCommand": "rg -n 'board_prepare|migrate_12_to_13|migrate_13_to_14|migrate_14_to_15|schema-1[124]\\.sql' src tests/python docs/reference/objectives.md",
+  "files": [
+    {
+      "path": "src/hey_my_buddy/blackboard/store/board_prepare.py",
+      "sha256": "880056d9db5a3794e7faaf67513c0247465d956d31dde088788b0c67429ff078",
+      "reason": "唯一用途是 schema 11 离线准备和 12→13→14→15 链；其旧迁移已被本次唯一 15→16 替换。",
+      "references": [
+        "tests/python/blackboard/store/test_board_prepare.py:14（退休集内调用）",
+        "docs/reference/objectives.md:71（说明已退休）",
+        "tests/probes/objective_console_preview.py:479,507（静态虚构预览文案，无调用）"
+      ]
+    },
+    {
+      "path": "tests/python/blackboard/store/test_board_prepare.py",
+      "sha256": "7872812d26494a7896035212140712f1825acc2dcd4bf0b560631b252943fcee",
+      "reason": "仅验证退休的 schema 11 board_prepare 路径。",
+      "references": [
+        "无退休集外运行时引用；历史设计、验收、固定夹具来源元数据保留。"
+      ]
+    },
+    {
+      "path": "tests/python/install/test_harness_migration.py",
+      "sha256": "d87e63923fc782831d113a5848ec833c75bf6bc1a3126ac5515fe9cc8b77cbe5",
+      "reason": "仅验证退休的 13→14 迁移。",
+      "references": [
+        "无退休集外运行时引用；历史设计、验收、固定夹具来源元数据保留。"
+      ]
+    },
+    {
+      "path": "tests/python/install/test_host_migration.py",
+      "sha256": "33d8e12467db159dd588736a09799efec5d80405f6e447b7cc45e69b27f2e29a",
+      "reason": "仅验证退休的 14→15 迁移。",
+      "references": [
+        "无退休集外运行时引用；历史设计、验收、固定夹具来源元数据保留。"
+      ]
+    },
+    {
+      "path": "tests/python/blackboard/store/fixtures/schema-11.sql",
+      "sha256": "dbbcf3154d61d4663ba029cde8954e86661ae32eff416061099ac5c8beb5185d",
+      "reason": "仅供退休的 test_board_prepare 使用。",
+      "references": [
+        "tests/python/blackboard/store/test_board_prepare.py:18（退休集内）"
+      ]
+    },
+    {
+      "path": "tests/python/blackboard/store/fixtures/schema-12.sql",
+      "sha256": "0acd0a6430d846b9c9a7d5b3c9359dd0d447884587d0182f4b60d7b2ddae8207",
+      "reason": "原 test_migrations 的 12→13 专属夹具，所有内容已换成固定 schema 15 board.sql 的测试。",
+      "references": [
+        "当前 src、tests/python 无引用；原测试内容已被替换"
+      ]
+    },
+    {
+      "path": "tests/python/blackboard/store/fixtures/schema-14.sql",
+      "sha256": "18e2ffc05c9a974832ad120ab707b655a2767030b08e3ff4fcf570691e6edbf5",
+      "reason": "仅供退休的 test_harness_migration、test_host_migration 使用。",
+      "references": [
+        "tests/python/install/test_harness_migration.py:7（退休集内）",
+        "tests/python/install/test_host_migration.py:16（退休集内）"
+      ]
+    },
+    {
+      "path": "tests/python/blackboard/store/fixtures/__init__.py",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "reason": "退休这三个 SQL 夹具后，此包无剩余使用者；这是现存空文件，Worker 未修改或写占位。",
+      "references": [
+        "无退休集外运行时引用；历史设计、验收、固定夹具来源元数据保留。"
+      ]
+    },
+    {
+      "path": "tests/python/install/adr021_l18_focused.py",
+      "sha256": "4dc9654e8ad29c7b47c9682829a72201c552764d57c805d649213681b03df86c",
+      "reason": "本回合新建的复跑辅助脚本副本；已将可执行版本放入忽略 tmp/adr021-l18-upgrade，按 Host 指令保留完整文件交回机械删除，不纳入产品/测试模块。",
+      "references": [
+        "当前 src 与 test_*.py 无引用；原执行日志可能引用它作为命令入口，保留日志作为历史证据。"
+      ]
+    },
+    {
+      "path": "tests/python/install/adr021_l18_delivered_probe.py",
+      "sha256": "d6ef5b6e6e317acad9cff0c95cb86fb01061214e03a1f99107a74abe58209ffa",
+      "reason": "本回合新建的复跑辅助脚本副本；已将可执行版本放入忽略 tmp/adr021-l18-upgrade，按 Host 指令保留完整文件交回机械删除，不纳入产品/测试模块。",
+      "references": [
+        "当前 src 与 test_*.py 无引用；原执行日志可能引用它作为命令入口，保留日志作为历史证据。"
+      ]
+    }
+  ]
+}

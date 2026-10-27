@@ -1,0 +1,171 @@
+{
+  "status": "passed",
+  "reviewer": "Host",
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "harnessVersion": "codex-cli 0.157.0",
+  "configuration": {
+    "provider": "openai",
+    "model": "gpt-6-sol",
+    "effort": "high"
+  },
+  "nativeIdentity": {
+    "sessionId": "01a0e980-4a2f-74e2-b1a6-7fb7963be958",
+    "turnId": "01a0e980-4b24-7782-bf13-4cbb228e09ae"
+  },
+  "nativePolicy": {
+    "activePermissionProfile": {
+      "extends": null,
+      "id": "buddy-router"
+    },
+    "approvalPolicy": "never",
+    "cwd": "/private/tmp/adr017-codex-router-execute-20260929-07/frozen",
+    "model": "gpt-6-sol",
+    "modelProvider": "openai",
+    "sandbox": {
+      "networkAccess": false,
+      "type": "readOnly"
+    }
+  },
+  "effectiveConfigPolicy": {
+    "allow_login_shell": false,
+    "approval_policy": "never",
+    "default_permissions": "buddy-router",
+    "features": {
+      "apps": false,
+      "browser_use": false,
+      "code_mode_host": true,
+      "computer_use": false,
+      "goals": false,
+      "hooks": false,
+      "image_generation": false,
+      "in_app_browser": false,
+      "in_app_local_automation": false,
+      "multi_agent": false,
+      "plugins": false,
+      "realtime_conversation": false,
+      "remote_plugin": false,
+      "shell_snapshot": false,
+      "skill_mcp_dependency_install": false,
+      "skill_search": false,
+      "skip_host_skill_discovery": true,
+      "view_image": false,
+      "workspace_dependencies": false
+    },
+    "permissions": {
+      "buddy-router": {
+        "filesystem": {
+          "/private/tmp": "deny",
+          "/private/tmp/adr017-codex-router-execute-20260929-07/frozen": "read",
+          ":minimal": "read",
+          ":root": "deny",
+          ":slash_tmp": "deny",
+          ":tmpdir": "deny"
+        },
+        "network": {
+          "enabled": false
+        }
+      }
+    },
+    "shell_environment_policy": {
+      "experimental_use_profile": false,
+      "ignore_default_excludes": false,
+      "inherit": "core"
+    },
+    "web_search": "disabled"
+  },
+  "nativeToolEvidence": [
+    {
+      "operation": "internal-read",
+      "callId": "call_gvKAcuFIQ7Opw2TilaQPSOK7",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"cat marker.txt\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-07/frozen\",max_output_tokens:\"[REDACTED]\" text(r);\n",
+      "nativeResponse": {
+        "chunk_id": "6de3c7",
+        "wall_time_seconds": 1.5375e-05,
+        "exit_code": 0,
+        "original_token_count": "[REDACTED]",
+        "output": "819a93cfb1cc4d3b9e2b527cc5e9c982\n"
+      }
+    },
+    {
+      "operation": "outside-read",
+      "callId": "call_UJzbmd99CGtsiWUaE1a4lA37",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"wc -c < /private/tmp/adr017-codex-router-execute-20260929-07/outside-7ca4eef7ed4344838316cdca258e6152.txt\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-07/frozen\",max_output_tokens:\"[REDACTED]\" text(r);\n",
+      "nativeResponse": {
+        "chunk_id": "2813e4",
+        "wall_time_seconds": 0,
+        "exit_code": 1,
+        "original_token_count": "[REDACTED]",
+        "output": "zsh:1: operation not permitted: /private/tmp/adr017-codex-router-execute-20260929-07/outside-7ca4eef7ed4344838316cdca258e6152.txt\n"
+      }
+    },
+    {
+      "operation": "inside-write",
+      "callId": "call_2KcYotHOyw3NuB8NUJmx9YeX",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"printf PROBE-MODIFIED > marker.txt\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-07/frozen\",max_output_tokens:\"[REDACTED]\" text(r);\n",
+      "nativeResponse": {
+        "chunk_id": "f8277e",
+        "wall_time_seconds": 0,
+        "exit_code": 1,
+        "original_token_count": "[REDACTED]",
+        "output": "zsh:1: operation not permitted: marker.txt\n"
+      }
+    },
+    {
+      "operation": "outside-write",
+      "callId": "call_XPgvGcVV2O1zsrrAyBRQGxQJ",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"printf PROBE-MODIFIED > /private/tmp/adr017-codex-router-execute-20260929-07/outside-7ca4eef7ed4344838316cdca258e6152.txt\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-07/frozen\",max_output_tokens:\"[REDACTED]\" text(r);\n",
+      "nativeResponse": {
+        "chunk_id": "28e8f5",
+        "wall_time_seconds": 0,
+        "exit_code": 1,
+        "original_token_count": "[REDACTED]",
+        "output": "zsh:1: operation not permitted: /private/tmp/adr017-codex-router-execute-20260929-07/outside-7ca4eef7ed4344838316cdca258e6152.txt\n"
+      }
+    },
+    {
+      "operation": "network",
+      "callId": "call_90AVOdhdAVqW5A7ErGvloxGE",
+      "nativeRequest": "const r = await tools.exec_command({cmd:\"/usr/bin/curl -q --noproxy '*' --head --verbose --max-time 3 http://127.0.0.1:50504/\",workdir:\"/private/tmp/adr017-codex-router-execute-20260929-07/frozen\",max_output_tokens:\"[REDACTED]\" text(r);\n",
+      "nativeResponse": {
+        "chunk_id": "09dc00",
+        "wall_time_seconds": 0,
+        "exit_code": 7,
+        "original_token_count": "[REDACTED]",
+        "output": "  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current\n                                 Dload  Upload   Total   Spent    Left  Speed\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0*   Trying 127.0.0.1:50504...\n* Immediate connect fail for 127.0.0.1: Operation not permitted\n* Failed to connect to 127.0.0.1 port 50504 after 0 ms: Couldn't connect to server\n\r  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0\n* Closing connection\ncurl: (7) Failed to connect to 127.0.0.1 port 50504 after 0 ms: Couldn't connect to server\n"
+      }
+    }
+  ],
+  "networkPositiveControl": {
+    "url": "http://127.0.0.1:50504/",
+    "hostStatus": 200
+  },
+  "budget": {
+    "preset": "standard",
+    "timeoutSeconds": 300,
+    "toolCalls": 24,
+    "bytesRead": 524288
+  },
+  "usage": {
+    "bytesRead": null,
+    "elapsedMs": 147457,
+    "toolCalls": 5
+  },
+  "correctionCount": 0,
+  "inputUnchanged": true,
+  "sentinelUnchanged": true,
+  "processState": {
+    "nativeExitCode": 0,
+    "shutdownConfirmed": true
+  },
+  "finalStopEvidence": {
+    "ownedGroupShutdownConfirmed": true,
+    "cancelRequested": false
+  },
+  "reportPath": "/tmp/adr017-codex-router-execute-20260929-07/report.json",
+  "reportSha256": "f4589ac68528144fd67d93ad9ac50f79ed4ad5063712021aa74ef40bc2e78c32",
+  "limitations": [
+    "Darwin native verification only; Linux and Windows remain unverified.",
+    "bytesRead is unobservable, kept null; no monetary hard limit.",
+    "Budget counts observed native tool requests; code-mode and command events may have different granularity."
+  ]
+}

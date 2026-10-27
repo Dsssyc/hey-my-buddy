@@ -1,0 +1,206 @@
+{
+  "recordedDate": "2026-09-29",
+  "baseCommit": "9fcea9a860368d544ab2303c9f5db5e5f3c373bf",
+  "privateRoot": "/private/tmp/buddy-monitor-probe-jn8_gplj",
+  "paidApprovals": {
+    "workerAttempts": 1,
+    "monitorSessions": 2
+  },
+  "userConfigurationChanged": false,
+  "dailyInstallationChanged": false,
+  "standaloneCli": {
+    "version": "0.157.0",
+    "multi_agent": true,
+    "multi_agent_v2": false
+  },
+  "desktopWaitSchema": {
+    "defaultMs": 30000,
+    "minMs": 10000,
+    "maxMs": 3600000,
+    "testedMs": [
+      10000,
+      60000
+    ],
+    "maxDurationActuallyTested": false
+  },
+  "worker": {
+    "runId": "c0342e2e-9210-471d-b540-2442dd72f688",
+    "adapter": "dsh",
+    "provider": "deepseek-official",
+    "model": "deepseek-flash",
+    "effort": "off",
+    "createdAt": "2026-09-29T03:04:37.718Z",
+    "completedAt": "2026-09-29T03:05:27.913Z",
+    "elapsedIncludingQueueSeconds": 50.195,
+    "nativeElapsedSeconds": 4.1,
+    "modelRequests": 2,
+    "nativePerRequestUsage": [
+      {
+        "inputTokens": 9256,
+        "outputTokens": 65,
+        "totalTokens": 10345,
+        "cacheReadTokens": 1024
+      },
+      {
+        "inputTokens": 256,
+        "outputTokens": 186,
+        "totalTokens": 10554,
+        "cacheReadTokens": 10112
+      }
+    ],
+    "aggregateUsage": {
+      "inputTokens": 9512,
+      "cacheReadTokens": 11136,
+      "outputTokens": 251,
+      "totalTokens": 20899
+    },
+    "inputTokensExcludeCache": true,
+    "changedPaths": [],
+    "outputCommit": "2aabdd2e74e08bc4da1b5c7737a5c554fa9ad7d3",
+    "finalArtifactId": "3a5b5c8d-528b-46d5-82c3-52ef4debb5ad",
+    "markerMatches": true,
+    "accepted": true,
+    "integrationId": "int-ef26572e-d546-4b0c-848a-da6b8575b5fa",
+    "markerSha256": "ca5298caff53f6265a8b58207a2ed1c1ec5f83b995868d76d621a99a8a21dd19",
+    "fixedOutputMatches": true,
+    "diffBytes": 0
+  },
+  "monitors": [
+    {
+      "runId": "c0342e2e-9210-471d-b540-2442dd72f688",
+      "nativeSessionId": "01a0eb1f-cdf0-7b93-bef3-c60cf0d0a852",
+      "nativeVersion": "0.158.0-alpha.2.1",
+      "multiAgentVersion": "v2",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "approvalPolicy": "never",
+      "sandbox": "danger-full-access",
+      "createdAt": "2026-09-29T03:05:25.516Z",
+      "completedAt": "2026-09-29T03:05:47.159Z",
+      "elapsedSeconds": 21.643,
+      "modelRequests": 2,
+      "tokenUsage": {
+        "input_tokens": 88971,
+        "cached_input_tokens": 47616,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 741,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 89712
+      },
+      "tools": [
+        {
+          "at": "2026-09-29T03:05:35.310Z",
+          "type": "custom_tool_call",
+          "name": "exec"
+        }
+      ],
+      "awaitedSeconds": 0.0,
+      "outcome": "completed",
+      "shutdownConfirmed": true,
+      "resultSha256": "a8856790112bc87744d6348f5943391da3c6b0dbc76bbb6c10347169556f1406",
+      "commandsAudited": [
+        "exec_command: buddy await"
+      ]
+    },
+    {
+      "runId": "e4d85088-df6a-4543-8cf4-4522a8d97f6e",
+      "nativeSessionId": "01a0eb23-f62b-7d90-a3d9-ed11212fd176",
+      "nativeVersion": "0.158.0-alpha.2.1",
+      "multiAgentVersion": "v2",
+      "model": "gpt-6-luna",
+      "effort": "low",
+      "approvalPolicy": "never",
+      "sandbox": "danger-full-access",
+      "createdAt": "2026-09-29T03:09:57.905Z",
+      "completedAt": "2026-09-29T03:11:35.269Z",
+      "elapsedSeconds": 97.364,
+      "modelRequests": 4,
+      "tokenUsage": {
+        "input_tokens": 178196,
+        "cached_input_tokens": 152576,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 427,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 178623
+      },
+      "tools": [
+        {
+          "at": "2026-09-29T03:10:10.134Z",
+          "type": "custom_tool_call",
+          "name": "exec"
+        },
+        {
+          "at": "2026-09-29T03:10:44.952Z",
+          "type": "custom_tool_call",
+          "name": "exec"
+        },
+        {
+          "at": "2026-09-29T03:11:18.644Z",
+          "type": "function_call",
+          "name": "wait"
+        }
+      ],
+      "awaitedSeconds": 79.2,
+      "outcome": "completed",
+      "shutdownConfirmed": true,
+      "resultSha256": "4a2aa2d165ee161060dfa3c4b5267320448e39600c014ebc4276e8d4a02aad38",
+      "commandsAudited": [
+        "exec_command: buddy await",
+        "write_stdin: same process",
+        "functions.wait: same code cell"
+      ]
+    }
+  ],
+  "parentWaits": [
+    {
+      "callId": "call_pqpqpWOzY8ZNG4VVXJ11W5MV",
+      "arguments": {
+        "timeout_ms": 10000
+      },
+      "startedAt": "2026-09-29T03:10:14.175Z",
+      "endedAt": "2026-09-29T03:10:24.192Z",
+      "elapsedSeconds": 10.017,
+      "result": {
+        "message": "Wait timed out.",
+        "timed_out": true
+      },
+      "tokenEventsDuringWait": 0,
+      "assistantResponseItemsDuringWait": 0,
+      "requestUsage": {
+        "input_tokens": 210023,
+        "cached_input_tokens": 209408,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 21,
+        "reasoning_output_tokens": 0,
+        "total_tokens": 210044
+      }
+    },
+    {
+      "callId": "call_hB9V85hiogFkDFRPtRJTRV1h",
+      "arguments": {
+        "timeout_ms": 60000
+      },
+      "startedAt": "2026-09-29T03:10:32.950Z",
+      "endedAt": "2026-09-29T03:11:32.957Z",
+      "elapsedSeconds": 60.007,
+      "result": {
+        "message": "Wait timed out.",
+        "timed_out": true
+      },
+      "tokenEventsDuringWait": 0,
+      "assistantResponseItemsDuringWait": 0,
+      "requestUsage": {
+        "input_tokens": 210069,
+        "cached_input_tokens": 209792,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 137,
+        "reasoning_output_tokens": 49,
+        "total_tokens": 210206
+      }
+    }
+  ],
+  "servedModelIndependentlyAttested": false,
+  "providerBillingVerified": false,
+  "privateServiceStopped": true,
+  "privateRootRemoved": true
+}

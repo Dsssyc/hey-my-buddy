@@ -1,0 +1,427 @@
+"""Codex transport deadline boundary checks; no model network or shared state is used."""
+import json
+import math
+import os
+import queue
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+from hey_my_buddy.buddy.harnesses.codex.native_run import _Classifier, _RunFacts, _checkpoint, execution_deadline
+from hey_my_buddy.buddy.harnesses.codex.protocol import (
+    CodexProtocolError,
+    Connection,
+    TurnEvidence,
+    attempt_token_usage,
+)
+from hey_my_buddy.buddy.harnesses.registry import worker_format
+from hey_my_buddy.buddy.harnesses.run_contract import (
+    PrivateStatePaths,
+    RunBudget,
+    RunBuddy,
+    RunIdentity,
+    RunRequest,
+    RunValue,
+)
+from hey_my_buddy.buddy.roles.turn_io import checkpoint_resumable, input_hash, validated_checkpoint
+from hey_my_buddy.errors import BoardError
+
+
+class StructuredOutcomeTests(unittest.TestCase):
+    """The native-schema outcome decoding the registered Worker format applies."""
+
+    format = worker_format("codex")
+
+    def deliver(self, raw: str):
+        result = SimpleNamespace(value=RunValue(schema_status="unknown",
+                                                raw=raw, correction_count=0))
+        return self.format.delivery(result, {})[0]
+
+    def outcome(self, summary):
+        return {"outcome": {"disposition": "completed", "summary": summary,
+                            "remaining": [], "decisions": [], "artifacts": [], "request": None}}
+
+    def test_long_utf8_report_with_memory_citation_is_preserved(self):
+        # The reported incident was valid JSON: 8,848 UTF-8 bytes in summary,
+        # with its citation inside the string, not after the JSON document.
+        citation = "\n<oai-mem-citation>\n<citation_entries>\nMEMORY.md:1-2|note=[context]\n</citation_entries>\n<rollout_ids>\n</rollout_ids>\n</oai-mem-citation>"
+        summary = "调研结论。" * 600 + citation
+        self.assertGreater(len(summary.encode()), 8000)
+        value = self.outcome(summary)
+        self.assertEqual(self.deliver(json.dumps(value, ensure_ascii=False)), value["outcome"])
+
+    def test_total_outcome_bound_still_rejects_large_reports(self):
+        with self.assertRaises(BoardError) as raised:
+            self.deliver(json.dumps(self.outcome("研" * 22000), ensure_ascii=False))
+        self.assertIn("byte bound", raised.exception.message)
+
+    def test_memory_markup_does_not_relax_the_json_contract(self):
+        value = json.dumps(self.outcome("valid summary"))
+        for raw in (value + "<oai-mem-citation>extra</oai-mem-citation>",
+                    value.replace('"summary":', '"summary":"duplicate", "summary":'),
+                    value.replace('"request": null', '"request": {}')):
+            with self.subTest(raw=raw), self.assertRaises(BoardError):
+                self.deliver(raw)
+
+
+class NativeCheckpointTests(unittest.TestCase):
+    document = {"taskId": "micro-task", "attemptId": "attempt", "generation": 1, "turnId": "turn"}
+
+    def request(self) -> RunRequest:
+        root = Path(tempfile.gettempdir()).resolve() / "fixture"
+        return RunRequest(
+            identity=RunIdentity(task_id="micro-task", attempt_id="attempt", generation=1,
+                                 invocation_id="invocation", turn_id="turn",
+                                 input_sha256=input_hash(self.document)),
+            harness="codex", buddy=RunBuddy(provider="openai", model="fixture-model", effort="low"),
+            session_record_path=str(root / "session.jsonl"),
+            cwd=str(root), private_state=PrivateStatePaths(state_dir=str(root / "state"), invocation_root=str(root / "invocation"),
+                                                            native_root=str(root / "native")),
+            input_text="prompt", permission="write", output_schema={},
+            budget=RunBudget(timeout_seconds=8))
+
+    def test_failed_turn_can_retain_only_its_own_completed_assistant_message(self):
+        evidence = TurnEvidence("root", "turn")
+        evidence.observe({"method": "turn/started", "params": {"threadId": "root", "turn": {"id": "turn"}}})
+        for thread, text in (("root", "partial research"), ("child", "unrelated child report")):
+            evidence.observe({"method": "item/completed", "params": {"threadId": thread, "turnId": "turn",
+                "item": {"id": "item-1", "type": "agentMessage", "phase": "commentary", "text": text}}})
+        evidence.observe({"method": "turn/completed", "params": {"threadId": "root", "turn": {"id": "turn", "status": "failed"}}})
+        checkpoint = _checkpoint(self.request(), evidence)
+        self.assertEqual(checkpoint["lastAssistantMessage"]["text"], "partial research")
+        self.assertIsNone(evidence.final_item)
+
+    def test_finals_stop_changing_at_completion_and_ignore_foreign_items(self):
+        evidence = TurnEvidence("root", "turn")
+
+        def finish(item_id, *, thread="root", turn="turn", phase="final_answer"):
+            evidence.observe({"method": "item/completed", "params": {
+                "threadId": thread, "turnId": turn, "item": {
+                    "id": item_id, "type": "agentMessage", "phase": phase, "text": "{}"}}})
+
+        for item_id in ("first", "second", "last"):
+            finish(item_id)
+        finish("child", thread="child")
+        finish("other-turn", turn="other-turn")
+        finish("commentary", phase="commentary")
+        evidence.observe({"method": "turn/completed", "params": {
+            "threadId": "root", "turn": {"id": "turn", "status": "completed",
+                "items": [evidence.final_item]}}})
+        finish("too-late")
+        self.assertEqual(evidence.final_item["id"], "last")
+        facts = _checkpoint(self.request(), evidence)["supersededFinalAnswers"]
+        self.assertEqual(facts["count"], 2)
+        self.assertEqual([record["itemId"] for record in facts["records"]], ["first", "second"])
+
+    def test_completion_items_supply_last_final_when_item_notifications_are_absent(self):
+        evidence = TurnEvidence("root", "turn")
+        items = [{"id": str(number), "type": "agentMessage", "phase": "final_answer", "text": "{}"}
+                 for number in range(3)]
+        evidence.observe({"method": "turn/completed", "params": {
+            "threadId": "root", "turn": {"id": "turn", "status": "completed", "items": items}}})
+        self.assertEqual(evidence.final_item, items[-1])
+        self.assertEqual(len(evidence.superseded_final_answers), 2)
+
+    def test_message_is_bounded_and_truncation_is_honest(self):
+        evidence = SimpleNamespace(thread_id="thread", turn_id="native-turn", started=True,
+                                   completed={"status": "completed"}, event_seq=3,
+                                   superseded_final_answers=[],
+                                   final_item={"id": "final", "text": "调研\n" * 15000})
+        checkpoint = _checkpoint(self.request(), evidence)
+        self.assertTrue(checkpoint["lastAssistantMessage"]["truncated"])
+        payload = {"nativeCheckpoint": checkpoint, "sessionId": "thread", "nativeTurnId": "native-turn",
+                   "processState": {"shutdownConfirmed": True, "nativeExitCode": 0}}
+        self.assertEqual(validated_checkpoint(payload, self.document), checkpoint)
+        self.assertFalse(checkpoint_resumable(payload, checkpoint))
+        checkpoint["bindingSaved"] = True
+        self.assertTrue(checkpoint_resumable(payload, checkpoint))
+        for change in ({"inputSha256": "foreign"}, {"sessionId": "foreign"}, {"nativeTurnStarted": False},
+                       {"generation": True}, {"eventSeq": 1}):
+            with self.subTest(change=change):
+                self.assertIsNone(validated_checkpoint({**payload, "nativeCheckpoint": {**checkpoint, **change}}, self.document))
+        self.assertIsNone(validated_checkpoint({**payload, "processState": None}, self.document))
+        self.assertFalse(checkpoint_resumable({**payload, "processState": {"nativeExitCode": False}}, checkpoint))
+
+
+class UnlimitedDeadlineTests(unittest.TestCase):
+    def test_absent_timeout_maps_to_an_infinite_overall_deadline_only(self):
+        self.assertEqual(execution_deadline(None), math.inf)
+        before = time.monotonic()
+        deadline = execution_deadline(45)
+        self.assertLessEqual(before + 44, deadline)
+        self.assertLessEqual(deadline, time.monotonic() + 45)
+
+    def test_infinite_deadline_keeps_each_wait_bounded_and_cancellation_honored(self):
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+        def stop():
+            process.kill()
+            process.wait(timeout=5)
+            process.stdin.close()
+            process.stdout.close()
+
+        self.addCleanup(stop)
+        connection = Connection(process, math.inf, threading.Event())
+        started = time.monotonic()
+        connection.pump()  # no message arrives: the bounded per-pump wait must still return
+        self.assertLess(time.monotonic() - started, 5.0)
+        connection.cancelled.set()
+        with self.assertRaises(CodexProtocolError) as error:
+            connection.pump()
+        self.assertEqual(error.exception.code, "user-cancel")
+
+
+class NativeUsageEvidenceTests(unittest.TestCase):
+    """Per-attempt usage comes from the delta the native turn advanced."""
+
+    def breakdown(self, input_tokens, cached, output, reasoning, total):
+        return {"inputTokens": input_tokens, "cachedInputTokens": cached, "cacheWriteInputTokens": 0,
+                "outputTokens": output, "reasoningOutputTokens": reasoning, "totalTokens": total}
+
+    def notify(self, evidence, last, total, *, turn="turn"):
+        evidence.observe({"method": "thread/tokenUsage/updated",
+                          "params": {"threadId": "root", "turnId": turn,
+                                     "tokenUsage": {"last": last, "total": total}}})
+
+    def test_a_resumed_thread_counts_only_the_delta_this_turn_advanced(self):
+        evidence = TurnEvidence("root", "turn")
+        prior = self.breakdown(250000, 249000, 1000, 0, 250000)
+        first = self.breakdown(12000, 11000, 40, 4, 12040)
+        second = self.breakdown(13000, 12000, 50, 5, 13050)
+        self.notify(evidence, first, {key: prior[key] + first[key] for key in prior})
+        self.notify(evidence, second, {key: prior[key] + first[key] + second[key] for key in prior})
+        usage = attempt_token_usage(evidence)
+        self.assertEqual(usage["inputTokens"], 25000)
+        self.assertEqual(usage["cachedInputTokens"], 23000)
+        self.assertEqual(usage["outputTokens"], 90)
+        self.assertEqual(usage["nativeRecords"], 2)
+        self.assertEqual(usage["completeness"], "partial")
+        evidence.observe({"method": "turn/completed", "params": {"threadId": "root",
+                          "turn": {"id": "turn", "status": "completed"}}})
+        usage = attempt_token_usage(evidence)
+        self.assertEqual(usage["completeness"], "complete")
+
+    def test_a_replayed_notification_never_counts_twice(self):
+        evidence = TurnEvidence("root", "turn")
+        last = self.breakdown(100, 40, 20, 5, 120)
+        total = self.breakdown(100, 40, 20, 5, 120)
+        self.notify(evidence, last, total)
+        self.notify(evidence, last, total)
+        self.notify(evidence, last, total)
+        usage = attempt_token_usage(evidence)
+        self.assertEqual(usage["inputTokens"], 100)
+        self.assertEqual(usage["nativeRecords"], 1)
+
+    def test_an_unrelated_turn_or_thread_is_ignored(self):
+        evidence = TurnEvidence("root", "turn")
+        foreign = self.breakdown(100, 40, 20, 5, 120)
+        self.notify(evidence, foreign, foreign, turn="another-turn")
+        evidence.observe({"method": "thread/tokenUsage/updated",
+                          "params": {"threadId": "other", "turnId": "turn",
+                                     "tokenUsage": {"last": foreign, "total": foreign}}})
+        self.assertIsNone(attempt_token_usage(evidence))
+
+    def test_self_contradictory_native_totals_stay_unknown_instead_of_estimated(self):
+        evidence = TurnEvidence("root", "turn")
+        # The thread total is smaller than the request it is supposed to contain:
+        # no interval is provable, so no usage may be reported at all.
+        self.notify(evidence, self.breakdown(500, 400, 100, 5, 600), self.breakdown(100, 40, 20, 5, 120))
+        self.assertTrue(evidence.usage_unprovable)
+        self.assertIsNone(attempt_token_usage(evidence))
+        # A later, internally consistent notification must not resurrect a
+        # baseline that would undercount the requests already missed.
+        self.notify(evidence, self.breakdown(100, 40, 20, 5, 120), self.breakdown(700, 440, 120, 5, 720))
+        self.assertIsNone(attempt_token_usage(evidence))
+
+    def test_a_decreasing_thread_total_marks_the_observation_partial(self):
+        evidence = TurnEvidence("root", "turn")
+        first = self.breakdown(500, 400, 100, 5, 600)
+        self.notify(evidence, first, first)
+        # The thread total advances overall while its input component shrinks:
+        # the delta is still the latest observed total, but the observation is
+        # marked partial rather than presented as complete.
+        self.notify(evidence, self.breakdown(190, 70, 35, 3, 228), self.breakdown(190, 70, 35, 3, 720))
+        usage = attempt_token_usage(evidence)
+        self.assertTrue(evidence.usage_anomaly)
+        self.assertEqual(usage["completeness"], "partial")
+        self.assertEqual(usage["inputTokens"], 190)
+
+    def test_unusable_breakdowns_are_ignored(self):
+        evidence = TurnEvidence("root", "turn")
+        for token_usage in ({"last": None, "total": None}, {"last": {"inputTokens": -1}, "total": {}},
+                            {"last": {"inputTokens": True, "cachedInputTokens": 0, "outputTokens": 0,
+                                      "reasoningOutputTokens": 0, "totalTokens": 0}, "total": {}}):
+            self.notify(evidence, token_usage.get("last"), token_usage.get("total"))
+        self.assertIsNone(attempt_token_usage(evidence))
+
+
+class NativeMessageShapeTests(unittest.TestCase):
+    def connection(self, *messages) -> Connection:
+        connection = Connection.__new__(Connection)
+        connection.deadline = time.monotonic() + 5
+        connection.cancelled = threading.Event()
+        connection.messages = queue.Queue()
+        for message in messages:
+            connection.messages.put(message)
+        connection.responses = {}
+        connection.next_id = 1
+        connection.strict_responses = False
+        connection.pending_ids = set()
+        connection.on_notification = lambda _message: None
+        connection.on_request = lambda _message: None
+        connection.after_pump = None
+        connection.send = lambda _message: None
+        return connection
+
+    def test_unknown_frame_shapes_reach_classifier_and_call_continues(self):
+        connection = self.connection(
+            {"params": {"threadId": "foreign-thread", "turnId": "foreign-turn",
+                        "credential": "private-value"}},
+            {"method": 47, "params": {"credential": "private-value"}},
+            {"method": "future/event", "params": {}},
+            {"id": 1, "result": {"capabilities": []}},
+        )
+        facts = _RunFacts()
+        received = []
+        classifier = _Classifier(facts)
+
+        def observe(message):
+            received.append(message)
+            classifier.observe(message)
+
+        connection.on_notification = observe
+        self.assertEqual(connection.call("initialize", {}), {"capabilities": []})
+        self.assertEqual(facts.unknown_counts["unknown-method"], 2)
+        self.assertEqual(facts.unknown_counts["future/event"], 1)
+        self.assertEqual(received[0]["params"]["threadId"], "foreign-thread")
+        self.assertEqual(received[0]["params"]["turnId"], "foreign-turn")
+        self.assertEqual(received[0]["params"]["credential"], "private-value")
+        self.assertEqual(received[1]["method"], 47)
+        self.assertEqual(received[2]["method"], "future/event")
+        self.assertNotIn("private-value", repr(facts.unknown_counts))
+
+    def test_unreadable_rpc_result_is_reported_and_call_continues(self):
+        connection = self.connection({"id": 1, "result": "private-value"})
+        facts = _RunFacts()
+        received = []
+        classifier = _Classifier(facts)
+
+        def observe(message):
+            received.append(message)
+            classifier.observe(message)
+
+        connection.on_notification = observe
+        self.assertEqual(connection.call("thread/start", {}), {})
+        self.assertEqual(received, [{"method": "rpc/result-unreadable/thread/start"}])
+        self.assertEqual(facts.unknown_counts, {"rpc/result-unreadable/thread/start": 1})
+        self.assertNotIn("private-value", repr(received))
+
+        unsafe = self.connection({"id": 1, "result": None})
+        unsafe.on_notification = received.append
+        self.assertEqual(unsafe.call("unsafe\nprivate-value", {}), {})
+        self.assertEqual(received[-1], {"method": "rpc/result-unreadable/unsafe\nprivate-value"})
+
+    def test_response_identity_is_checked_independently_of_backlog(self):
+        for identity in (True, "1"):
+            with self.subTest(identity=identity):
+                connection = self.connection({"id": identity, "result": {}})
+                with self.assertRaises(CodexProtocolError) as caught:
+                    connection.pump()
+                self.assertEqual(caught.exception.code, "invalid-protocol")
+                self.assertEqual(str(caught.exception), "invalid native response identity")
+
+    def test_response_backlog_still_has_a_quantity_cap(self):
+        connection = self.connection({"id": 17, "result": {}})
+        connection.responses = {identity: {} for identity in range(1, 17)}
+        with self.assertRaises(CodexProtocolError) as caught:
+            connection.pump()
+        self.assertEqual(caught.exception.code, "invalid-protocol")
+        self.assertEqual(str(caught.exception), "too many pending native responses")
+
+    def test_strict_response_association_still_rejects_foreign_and_duplicate_ids(self):
+        for pending, responses in ((set(), {}), ({1}, {1: {}})):
+            with self.subTest(pending=pending, responses=responses):
+                connection = self.connection({"id": 1, "result": {}})
+                connection.strict_responses = True
+                connection.pending_ids = pending
+                connection.responses = responses
+                with self.assertRaises(CodexProtocolError) as caught:
+                    connection.pump()
+                self.assertEqual(caught.exception.code, "invalid-protocol")
+                self.assertEqual(str(caught.exception), "uncorrelated or duplicate native sandbox reply")
+
+
+class NativeRpcErrorTests(unittest.TestCase):
+    """A settled native error keeps its bounded message beside the machine code."""
+
+    def connection_with_error(self, error: dict) -> Connection:
+        read_fd, write_fd = os.pipe()
+        self.addCleanup(os.close, read_fd)
+        self.addCleanup(os.close, write_fd)
+        process = SimpleNamespace(stdin=SimpleNamespace(fileno=lambda: write_fd),
+                                  stdout=SimpleNamespace(readline=lambda _maximum: b""))
+        connection = Connection(process, time.monotonic() + 5, threading.Event())
+        connection.responses[connection.next_id] = {"id": connection.next_id, "error": error}
+        return connection
+
+    def call_with_error(self, error: dict) -> CodexProtocolError:
+        with self.assertRaises(CodexProtocolError) as caught:
+            self.connection_with_error(error).call("turn/start", {})
+        return caught.exception
+
+    def test_a_native_error_keeps_its_message_and_expands_nothing_else(self):
+        error = self.call_with_error({"code": -32000, "message": "model not found: fixture-model",
+                                      "data": {"accountPlan": "must never appear"}})
+        self.assertEqual(error.code, "native-rpc-error")
+        self.assertEqual(error.args[0], "Codex rejected turn/start: model not found: fixture-model")
+        self.assertEqual(error.native_error, {"code": -32000, "message": "model not found: fixture-model"})
+
+    def test_a_long_multibyte_error_is_cut_byte_safely_with_its_prefix_kept(self):
+        # The Host probe's shape: a native reason of repeated three-byte CJK
+        # plus four-byte characters, far past the public UTF-8 byte budget.
+        # The refusal arrives cut but readable — prefix intact, valid text,
+        # never erased — and error.data stays unexpanded.
+        from hey_my_buddy.buddy.harnesses.native_support import NATIVE_SUMMARY_BYTES
+        error = self.call_with_error({"code": -32000,
+                                      "message": "模型不可用" * 80 + "\U0001D11E" * 10,
+                                      "data": {"accountPlan": "must never appear"}})
+        self.assertEqual(error.code, "native-rpc-error")
+        self.assertTrue(error.args[0].startswith("Codex rejected turn/start: 模型不可用"))
+        self.assertNotIn("accountPlan", error.args[0])
+        self.assertEqual(error.native_error, {"code": -32000, "message": "模型不可用" * 80 + "\U0001D11E" * 10})
+        self.assertLessEqual(len(error.args[0].encode("utf-8")), NATIVE_SUMMARY_BYTES)
+        self.assertNotIn("\N{REPLACEMENT CHARACTER}", error.args[0])
+
+    def test_a_four_byte_error_within_the_budget_arrives_complete(self):
+        from hey_my_buddy.buddy.harnesses.native_support import NATIVE_SUMMARY_BYTES
+        reason = "\U0001D11E" * 100
+        self.assertLess(len(("Codex rejected turn/start: " + reason).encode("utf-8")),
+                        NATIVE_SUMMARY_BYTES)
+        error = self.call_with_error({"code": -32000, "message": reason})
+        self.assertEqual(error.args[0], "Codex rejected turn/start: " + reason)
+
+    def test_malformed_rpc_errors_fail_at_the_generic_boundary(self):
+        for error in ({"code": -32000}, {"code": -32000, "message": None},
+                      {"code": -32000, "message": 47}, {"code": True, "message": "reason"},
+                      {"code": "-32600", "message": "reason"}, None):
+            with self.subTest(error=error):
+                failure = self.call_with_error(error)
+                self.assertEqual(failure.code, "invalid-protocol")
+                self.assertIsNone(failure.native_error)
+
+    def test_empty_or_blank_messages_remain_structured_native_errors(self):
+        for message in ("", "   "):
+            with self.subTest(message=message):
+                failure = self.call_with_error({"code": -32000, "message": message})
+                self.assertEqual(failure.native_error, {"code": -32000, "message": message})
+                self.assertEqual(failure.args[0], "Codex rejected turn/start: " + message)
+
+
+if __name__ == "__main__":
+    unittest.main()

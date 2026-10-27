@@ -1,0 +1,41 @@
+{
+  "format": 1,
+  "assets": [
+    {
+      "path": "README.md",
+      "kind": "file"
+    },
+    {
+      "path": "LICENSE",
+      "kind": "file"
+    },
+    {
+      "path": "packaging/runtime-assets.json",
+      "kind": "file"
+    },
+    {
+      "path": "packaging/hatch_build.py",
+      "kind": "file"
+    },
+    {
+      "path": "pyproject.toml",
+      "kind": "file"
+    },
+    {
+      "path": "uv.lock",
+      "kind": "file"
+    },
+    {
+      "path": "src/hey_my_buddy",
+      "kind": "directory"
+    }
+  ],
+  "resources": {
+    "console.assets": "src/hey_my_buddy/console/assets",
+    "reasons.codes": "src/hey_my_buddy/protocol/reason-codes.json",
+    "roles.worker": "src/hey_my_buddy/buddy/roles/texts/worker.txt",
+    "roles.router": "src/hey_my_buddy/buddy/roles/texts/router.txt",
+    "roles.lead": "src/hey_my_buddy/buddy/roles/texts/lead.txt",
+    "roles.wrap_up": "src/hey_my_buddy/buddy/roles/texts/wrap_up.txt"
+  }
+}

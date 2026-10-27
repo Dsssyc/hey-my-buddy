@@ -1,0 +1,198 @@
+import i18n from "i18next";
+/**
+ * Pure derived metrics for the work macro task overview (0.15 C5/C6).
+ *
+ * Everything is computed from the recorded spans, events and summary of one
+ * bounded timeline read: no extrapolation, no idle deduction, and no "≥"
+ * prefixes. Wall-clock span, the union of confirmed execution intervals and
+ * the cumulative sum are three different numbers; queue, routing and
+ * waiting-Host time never counts as execution. An unknown end is excluded
+ * from the confirmed numbers and reported as its own count; reversed or
+ * clock-skewed timestamps are corrupt and feed no number at all, not even
+ * the total span; a legitimately open span (running execution, queued task,
+ * open Host request) is live, not a missing-time error.
+ */
+
+import type { MacroTaskTimeline, TimelineSpan } from "./macro-task-types";
+import { parseTimelineInstant } from "./timeline/instant";
+import { spanOutcome } from "./macro-task-display";
+import { usageTotals } from "./usage-totals";
+import type { UsageTotals } from "./usage-totals";
+
+type MetricInterval = { startMs: number; endMs: number };
+
+/** Why the displayed numbers describe only the recorded part of the scope. */
+type MetricLimitation = {
+  /** Machine-stable key so tests and the truncation banner can share wording. */
+  key: "scope" | "rows" | "spans" | "events" | "missing-time" | "reversed" | "clock-skew" | "unconfirmed-end" | "running";
+  label: string;
+};
+
+const LIMITATION_LABEL: Record<MetricLimitation["key"], string> = {
+  get scope() { return i18n.t("console:incompleteReadScope"); },
+  get rows() { return i18n.t("console:microTaskRowsTruncated"); },
+  get spans() { return i18n.t("console:executionSpansTruncated"); },
+  get events() { return i18n.t("console:hostEventsTruncated"); },
+  get "missing-time"() { return i18n.t("console:spanTimeMissing"); },
+  get reversed() { return i18n.t("console:invalidSpanTime"); },
+  get "clock-skew"() { return i18n.t("console:clockSkewInSpan"); },
+  get "unconfirmed-end"() { return i18n.t("console:stopUnconfirmedExcluded"); },
+  get running() { return i18n.t("console:runningCountedUntilReadTime"); },
+};
+
+type MacroTaskMetrics = {
+  /** Earliest usable start (macroTask creation when no span has one) to the latest recorded instant. */
+  totalSpanMs: number | null;
+  /** Union of execution intervals that are actually confirmable. */
+  unionMs: number | null;
+  /** Sum of the same execution intervals; differs from the union under concurrency. */
+  sumMs: number | null;
+  /** Confirmed execution intervals in chronological order (already unioned). */
+  intervals: MetricInterval[];
+  /** How many execution segments contributed to the union. */
+  segmentCount: number;
+  /** Running segments counted only through observedAt ("至今"). */
+  runningCount: number;
+  /** Unconfirmed-end execution segments, excluded from union/sum and reported separately. */
+  unknownEndCount: number;
+  /** Every execution's tokens on the basis every usage level shares. */
+  usage: UsageTotals;
+  /** Recorded-part notes, shared with the truncation banner wording. */
+  limitations: MetricLimitation[];
+};
+
+function limitations(keys: MetricLimitation["key"][]): MetricLimitation[] {
+  const seen = new Set<MetricLimitation["key"]>();
+  const result: MetricLimitation[] = [];
+  for (const key of keys) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ key, label: LIMITATION_LABEL[key] });
+  }
+  return result;
+}
+
+function mergeUnion(intervals: readonly MetricInterval[]): MetricInterval[] {
+  const sorted = [...intervals].sort((left, right) => left.startMs - right.startMs || left.endMs - right.endMs);
+  const merged: MetricInterval[] = [];
+  for (const interval of sorted) {
+    const last = merged[merged.length - 1];
+    if (last !== undefined && interval.startMs <= last.endMs) {
+      if (interval.endMs > last.endMs) last.endMs = interval.endMs;
+      continue;
+    }
+    merged.push({ ...interval });
+  }
+  return merged;
+}
+
+function unionLength(intervals: readonly MetricInterval[]): number {
+  return intervals.reduce((total, interval) => total + (interval.endMs - interval.startMs), 0);
+}
+
+/**
+ * One execution span's confirmable interval, or why it has none. A running
+ * span counts through observedAt with a note; an unconfirmed end is not
+ * proven execution and is excluded entirely, reported by count only.
+ */
+function executionInterval(span: TimelineSpan, observedAtMs: number | null): {
+  interval: MetricInterval | null;
+  limitation: MetricLimitation["key"] | null;
+} {
+  if (span.kind !== "execution") return { interval: null, limitation: null };
+  if (span.clockSkew === true) return { interval: null, limitation: "clock-skew" };
+  const startMs = parseTimelineInstant(span.startAt);
+  const endMs = parseTimelineInstant(span.endAt);
+  if (startMs === null) return { interval: null, limitation: "missing-time" };
+  const outcome = spanOutcome(span);
+  // A live execution counts through the observation instant, with a note.
+  if (outcome === "running") {
+    if (observedAtMs === null || observedAtMs < startMs) return { interval: null, limitation: "missing-time" };
+    return { interval: { startMs, endMs: observedAtMs }, limitation: "running" };
+  }
+  if (endMs === null) return { interval: null, limitation: "missing-time" };
+  if (endMs < startMs) return { interval: null, limitation: "reversed" };
+  if (outcome === "unknown") return { interval: null, limitation: "unconfirmed-end" };
+  return { interval: { startMs, endMs }, limitation: null };
+}
+
+/**
+ * The three distinct duration numbers of one timeline read. Total span is
+ * wall-clock from the earliest recorded start (macroTask creation when no span
+ * has one) to the latest recorded instant — observedAt when anything is still
+ * running or unconfirmed. Execution uses only `execution` spans: queue,
+ * routing and waiting-Host never contribute. Corrupt timestamps (reversed or
+ * clock-skewed) feed no number, so they can never manufacture duration.
+ */
+export function macroTaskMetrics(timeline: MacroTaskTimeline): MacroTaskMetrics {
+  const observedAtMs = parseTimelineInstant(timeline.observedAt);
+  const starts: number[] = [];
+  const latestInstants: number[] = [];
+  const intervals: MetricInterval[] = [];
+  const limitationKeys: MetricLimitation["key"][] = [];
+  let segmentCount = 0;
+  let runningCount = 0;
+  let unknownEndCount = 0;
+  let anyOpenTail = false;
+
+  for (const span of timeline.spans) {
+    const outcome = spanOutcome(span);
+    if (span.kind === "execution" && outcome === "unknown") {
+      unknownEndCount += 1;
+      limitationKeys.push("unconfirmed-end");
+    }
+    // Corrupt endpoints never feed any number, including the total span.
+    if (span.clockSkew === true) {
+      limitationKeys.push("clock-skew");
+      continue;
+    }
+    const startMs = parseTimelineInstant(span.startAt);
+    const endMs = parseTimelineInstant(span.endAt);
+    if (startMs !== null && endMs !== null && endMs < startMs) {
+      limitationKeys.push("reversed");
+      continue;
+    }
+    if (startMs !== null) starts.push(startMs);
+    if (endMs !== null) latestInstants.push(endMs);
+    // A legitimately open span (running execution, queued task, open Host
+    // request) is live, not a timing error; only a missing start, or a
+    // missing end on a span that claims to be finished, is unusable time.
+    if (startMs === null || (endMs === null && outcome !== "running" && outcome !== "open")) {
+      limitationKeys.push("missing-time");
+    }
+    if (outcome === "running" || outcome === "open" || outcome === "unknown") anyOpenTail = true;
+
+    const reading = executionInterval(span, observedAtMs);
+    if (reading.interval !== null) {
+      intervals.push(reading.interval);
+      segmentCount += 1;
+      if (reading.limitation === "running") runningCount += 1;
+    } else if (reading.limitation !== null) {
+      limitationKeys.push(reading.limitation);
+    }
+  }
+  for (const event of timeline.events) {
+    const atMs = parseTimelineInstant(event.at);
+    if (atMs !== null) latestInstants.push(atMs);
+  }
+  if (anyOpenTail && observedAtMs !== null) latestInstants.push(observedAtMs);
+  if (timeline.scopeComplete !== true) limitationKeys.push("scope");
+  if (timeline.truncated.rows) limitationKeys.push("rows");
+  if (timeline.truncated.spans) limitationKeys.push("spans");
+  if (timeline.truncated.events) limitationKeys.push("events");
+
+  const earliest = starts.length ? Math.min(...starts) : parseTimelineInstant(timeline.macroTask.createdAt);
+  const latest = latestInstants.length ? Math.max(...latestInstants) : null;
+  const merged = mergeUnion(intervals);
+  return {
+    totalSpanMs: earliest !== null && latest !== null && latest >= earliest ? latest - earliest : null,
+    unionMs: merged.length ? unionLength(merged) : null,
+    sumMs: intervals.length ? intervals.reduce((total, interval) => total + (interval.endMs - interval.startMs), 0) : null,
+    intervals: merged,
+    segmentCount,
+    runningCount,
+    unknownEndCount,
+    usage: usageTotals(timeline.spans),
+    limitations: limitations(limitationKeys),
+  };
+}

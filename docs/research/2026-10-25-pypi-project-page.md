@@ -1,0 +1,11 @@
+# PyPI 的项目页怎样复用 README
+
+**问题。** 为[发版准备计划的 R3](../design/release/prep-plan.md#r3-pypi-的项目页)确认：保留仓库 README 原文时，怎样在构建中提供 PyPI 能读的长描述、图片和链接，以及哪些显示效果必须等发布后才能验证。
+
+**看了什么。** 2026-10-25 阅读了 [PyPI 的项目描述文档](https://docs.pypi.org/project-management/project-descriptions/)、[readme-renderer 46.0 的包说明](https://pypi.org/project/readme-renderer/46.0/)、[hatch-fancy-pypi-readme 25.1.0 的包说明](https://pypi.org/project/hatch-fancy-pypi-readme/25.1.0/)及公开配置文档的 Configuration、Substitutions、CLI Interface 三节，并核对 [Python Packaging User Guide 的许可证字段](https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#license-and-license-files)。没有读这些项目的实现源码或核对 PyPI 的线上部署；按执行计划给出的渲染基准，以本机安装的 readme-renderer 46.0、插件 25.1.0、Hatchling 1.32.4 和 Twine 7.0.0 实测构建、渲染与属性清理，并对同一个公开 SVG 做两种地址的 GET 对照。
+
+**看到的事实。** PyPI 文档说长描述来自发行包的 README 元数据，Markdown 默认按 GitHub Flavored Markdown 渲染；本地 46.0 实测保留 `picture`、`img`、`details`、`summary`，去掉 `source`，所以本仓库的两组图片只留下浅色 `img`。属性探针里 `img` 保留 `align`、`alt`、`class`、`height`、`src`、`width` 和 `id`，去掉 `srcset`、`loading`、`decoding`、`style`、`title`、`onerror` 与自定义 `data-*`；`a` 保留 `href`、`id`、`title`，清除 `class`、`target`、`style` 并补上 `rel="nofollow"`，`details` 的 `open` 也被去掉。这是所试属性的结果，不是完整允许清单。渲染器保留相对资源地址，不会替它们补上仓库地址；页内链接渲染时会加 `user-content-` 前缀。插件文档提供文件片段与按顺序执行的正则替换，本次只用这套配置机制处理现有 README 的内联 Markdown 链接和图片、带引号的 HTML `src`、`srcset`、`href`，元数据中的原始页内锚点不变；现有 `srcset` 每项只有一个资源。公开 SVG 的直接域名地址返回 `200`、`image/svg+xml`；仓库 `raw/` 地址先返回 `302`、`text/html; charset=utf-8`，再跳到同一直接地址，最终也是 `200`、`image/svg+xml`，两份正文均为 1518 字节。
+
+**取了什么，没取什么。** 按 R3 采用 MIT 许可的 hatch-fancy-pypi-readme 作为构建依赖，由一个 README 文件片段生成 `text/markdown` 长描述，用配置替换相对地址；图片选择少一次跳转的 `raw.githubusercontent.com`，文档链接指向本仓库 `main`，目录链接使用 `tree`。无需另写改写器或增加第二套构建钩子；这套配置覆盖现有 README 的写法，不宣称解析任意 Markdown 或任意多候选 `srcset`。许可证采用 SPDX 的 `MIT` 与 `license-files`，分类只写 Beta、Python 3.12、仅 Python 3、控制台、开发者受众和软件开发主题；操作系统及作者留待开发者决定。sdist 和运行时资源清单都携带构建元数据所需的 README 与 LICENSE，让从 sdist 构建及运行时的 editable 构建也能读到它们；LICENSE 由同一资源清单复制，去掉原先单独复制它的一行。预览图沿用原 SVG 的比例居中放进 1280×640 画布，把动画暂停在第 4 秒的完全显示区间，不修改 SVG 原件；未上传发行包或修改 GitHub 设置。
+
+**时效。** PyPI 更换渲染器、清理规则或图片代理，插件替换语义改变，README 采用新的链接语法或多候选 `srcset`，以及仓库分支或文件位置改变时，都要重新核对。本次本地渲染和文件存在性检查不能证明线上图片代理会显示 SVG；须等相关资源合入 `main` 且开发者发布后，再看 PyPI 上的 SVG 实际显示与远端链接。GitHub 社交分享预览图仍是本地候选，尚未设为仓库预览。

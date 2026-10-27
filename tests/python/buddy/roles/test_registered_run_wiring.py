@@ -1,0 +1,389 @@
+"""Registered role runs over real Python mock app-servers, without model calls."""
+from __future__ import annotations
+
+import importlib.util
+import hashlib
+import json
+import os
+from pathlib import Path
+import threading
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+
+from hey_my_buddy.paths import native_path
+from hey_my_buddy.buddy.harnesses.base import Adapter, ExecutionContext, NoToolStructuredRequest
+from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS, adapter, run_seam
+from hey_my_buddy.buddy.harnesses import run_contract as rc
+from hey_my_buddy.buddy.harnesses.run_contract import RunRequest, RunResult, canonical_json
+from hey_my_buddy.buddy.roles.controller import FastPreparation, start_router_preparation, worker_executor
+from hey_my_buddy.buddy.roles import run_controller, run_execution, structured_call, turn_io
+from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
+from buddy.harnesses.fixture_selection import select_fixture
+from buddy.harnesses.zcode.test_zcode_tool_evidence import FakeAppServerTests, SCHEMA
+from buddy.harnesses.test_run_contract import full_request
+
+#: One wiring run that is not the subject of a deadline test still needs a
+#: budget the machine's load cannot decide; the deadline subjects keep their
+#: own short values in the zcode suite.
+WIRING_TIMEOUT = 30
+
+
+class RegisteredDescriptionTests(unittest.TestCase):
+    def test_the_description_has_no_legacy_execution_entries(self):
+        description = adapter("zcode")
+        self.assertNotIsInstance(description, Adapter)
+        for entry in ("prepare", "start", "collect", "cancel", "start_no_tool_structured", "start_read_only_structured"):
+            self.assertFalse(hasattr(description, entry), entry)
+        self.assertIsNone(importlib.util.find_spec("hey_my_buddy.buddy.harnesses.zcode.runner"))
+        module = run_seam("zcode")
+        self.assertIs(worker_executor("zcode").module, module)
+        for operation in ("run", "run_discovery", "check_preparation", "prepare_services",
+                          "validate_turn_provenance", "session_facts", "native_evidence"):
+            self.assertTrue(callable(getattr(module, operation)))
+
+
+class NativeEvidenceProjectionTests(unittest.TestCase):
+    def test_inquiry_tool_failure_keeps_original_error_in_the_result(self):
+        failure = {"records": [{"toolCallId": "answer-call", "toolName": "answer_inquiry",
+                                "error": "MCP tool call requires approval, but approval policy is never"}],
+                   "dropped": 0}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "inquiry-tool-failures.json"
+            raw = canonical_json(failure).encode()
+            path.write_bytes(raw)
+            request = full_request(Path(directory))
+            result = RunResult(identity=request.identity, harness="codex", end=rc.RunEnd(status="ok"),
+                               evidence_refs=(rc.EvidenceRef(kind="inquiry-tool-failures", location=str(path),
+                                                            size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()),))
+            payload = {}
+            self.assertFalse(run_execution._worker_reports(result, payload))
+            self.assertEqual(payload["inquiryToolFailures"], failure)
+
+    def project(self, *, policy=None, completion=None, native_identity=None, event_count=None, capture=True):
+        fields = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
+        fields.update(permission="none", sessionServices=[], captureEvidence=capture)
+        request = RunRequest.from_payload(fields)
+        result = rc.RunResult(
+            identity=request.identity, harness="zcode", end=rc.RunEnd(status="ok"),
+            native_identity=native_identity, native_event_count=event_count,
+            value=rc.RunValue( schema_status="unknown", raw='{"answer":"value"}'),
+            completion_evidence=completion,
+            effective_policy=rc.EffectivePolicy(tools=policy))
+        with mock.patch("subprocess.Popen", side_effect=AssertionError("native projection spawned")):
+            return run_execution._fast_result(result, request, {"stopReason": None, "elapsedMs": 1})
+
+    def test_native_evidence_preserves_settings_eof_and_the_consumed_native_identity(self):
+        projected = self.project(
+            policy=rc.PolicyFact(
+                                 requested={"toolAllowlist": ["Read"]}),
+            completion=rc.CompletionEvidence( stream_end=False),
+            native_identity=rc.NativeIdentity(session_id="actual-session",
+                                              turn_id="actual-turn", ),
+            event_count=3)
+        self.assertEqual(projected["nativeEvidence"], {"eventCount": 3, "toolAllowlist": ["Read"],
+                                                     "streamEof": False})
+        self.assertEqual(projected["nativeIdentity"], {"sessionId": "actual-session", "turnId": "actual-turn"})
+
+    def test_missing_native_settings_or_completion_remain_unknown(self):
+        for policy, completion in (
+            (None, None),
+            (rc.PolicyFact(),
+             rc.CompletionEvidence()),
+            (rc.PolicyFact( requested={}), None),
+        ):
+            with self.subTest(policy=policy):
+                projected = self.project(policy=policy, completion=completion)
+                self.assertEqual(projected["nativeEvidence"], {"eventCount": None, "toolAllowlist": None,
+                                                             "streamEof": None})
+                self.assertNotIn("nativeIdentity", projected)
+
+    def test_capture_evidence_selects_whether_the_native_projection_is_published(self):
+        with mock.patch.object(run_seam("zcode"), "native_evidence", side_effect=AssertionError("not requested")):
+            projected = self.project(capture=False)
+        self.assertNotIn("nativeEvidence", projected)
+
+    def test_codex_policy_survives_without_capture_and_keeps_the_old_receipt_level(self):
+        fields = full_request(Path(tempfile.gettempdir()).resolve()).to_payload()
+        fields.update(harness="codex", permission="none", sessionServices=[], captureEvidence=False)
+        request = RunRequest.from_payload(fields)
+        policy = {"sandbox": "read-only", "approvalPolicy": "never"}
+        module = SimpleNamespace(native_evidence=lambda _result: {"nativePolicy": policy})
+        with mock.patch.dict(RUN_SEAMS, {"codex": module}):
+            for status in ("ok", "error"):
+                result = rc.RunResult(identity=request.identity, harness="codex", end=rc.RunEnd(status=status))
+                payload = run_execution._fast_result(result, request, {"stopReason": None, "elapsedMs": 1})
+                self.assertEqual(payload["nativePolicy"], policy)
+                self.assertNotIn("nativeEvidence", payload)
+            fields["permission"] = "read"
+            review = run_execution._review_result(result, RunRequest.from_payload(fields),
+                                                   {"stopReason": None, "elapsedMs": 1})
+            self.assertEqual(review["nativePolicy"], policy)
+
+    def test_codex_delivery_reports_invalid_outcome_without_reparsing_for_receipt(self):
+        request = full_request(Path(tempfile.gettempdir()).resolve())
+        result = rc.RunResult(
+            identity=request.identity, harness="codex", end=rc.RunEnd(status="ok"),
+            native_identity=rc.NativeIdentity(session_id="thread-1", turn_id="turn-1"),
+            value=rc.RunValue( schema_status="unknown", parsed={"outcome": {
+                "disposition": "completed", "summary": "done", "remaining": [], "decisions": [],
+                "artifacts": [], "request": {}}}))
+        payload = run_execution._worker_facts(result)
+        self.assertEqual(payload["nativeIdentity"], {"sessionId": "thread-1", "turnId": "turn-1"})
+        self.assertNotIn("outcomeValidationError", payload)
+        with mock.patch.object(run_execution, "_evidence", return_value={}), self.assertRaises(Exception) as caught:
+            run_execution.worker_delivery(result)
+        self.assertIn("a completed outcome requires request: null", str(caught.exception))
+
+
+class FastRegisteredRunTests(FakeAppServerTests):
+
+    def invoke(self, case="ok", *, capture_evidence=False):
+        context = ExecutionContext("task", "attempt", 1,
+            {"provider": "fixture-api", "model": "fixture-model", "effort": "low",
+             "cwd": str(self.cwd), "routerBudgetSeconds": WIRING_TIMEOUT}, self.root / "attempt", {},
+            {**self.environment, "HMB_ZCODE_TEST_CASE": case},
+            session_record_path=str(self.root / "session.jsonl"))
+        request = NoToolStructuredRequest(str(self.cwd), "Choose a buddy", SCHEMA, WIRING_TIMEOUT,
+                                          capture_evidence=capture_evidence)
+        handle = start_router_preparation(FastPreparation("zcode",  request, context, self.cwd))
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(WIRING_TIMEOUT + 10))
+        return context, handle, structured_call.collect(handle)
+
+    def test_fast_consumes_public_frames_and_corrects_on_the_registered_process(self):
+        context, handle, outcome = self.invoke("correct", capture_evidence=True)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        request = handle.request
+        result = handle.result
+        self.assertEqual(result.identity, request.identity)
+        self.assertEqual(result.identity, handle.role_run_identity)
+        self.assertEqual(request.permission, "none")
+        self.assertEqual(request.session_services, ())
+        self.assertIsNone(request.identity.turn_id)
+        self.assertEqual(result.value.correction_count, 1)
+        self.assertEqual(outcome.result["rawAnswer"], result.value.raw)
+        self.assertEqual(outcome.result["nativeEvidence"], {"eventCount": result.native_event_count,
+                                                         "toolAllowlist": [],
+                                                         "streamEof": True})
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertFalse((context.directory / "role-run-control.json").exists())
+        self.assertFalse((context.directory / "no-tool-control.json").exists())
+
+    def test_native_group_proof_is_required_for_fast_stop(self):
+        _, handle, outcome = self.invoke()
+        self.assertTrue(outcome.shutdown_confirmed)
+        fields = handle.result.to_payload()
+        fields["stopEvidence"]["native"]["groupState"] = "unknown"
+        handle.result = RunResult.from_payload(fields)
+        refused = structured_call.collect(handle)
+        self.assertFalse(refused.shutdown_confirmed)
+        self.assertEqual(refused.status, "failed")
+
+    def test_discovery_has_no_prompt_run_or_service_binding(self):
+        root = self.root / "discovery"
+        root.mkdir(mode=0o700)
+        module = run_seam("zcode")
+        with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "discovery"}, clear=True), \
+                mock.patch.object(module, "run", side_effect=AssertionError("model run")), \
+                mock.patch.object(module, "prepare_services", side_effect=AssertionError("session service")):
+            raw, code = run_controller.execute({"operation": "discover",
+                "arguments": {}, "harness": "zcode",
+                "cwd": str(root), "privateRoot": str(root), "nativeRoot": str(root / "native"),
+                "timeoutSeconds": WIRING_TIMEOUT}, threading.Event())
+        result = json.loads(raw)
+        self.assertEqual(code, 0)
+        self.assertFalse(result["modelStarted"])
+        self.assertTrue(result["processState"]["shutdownConfirmed"])
+        self.assertEqual(result["catalog"]["providers"][0]["models"][0]["id"], "fixture-model")
+        self.assertFalse((root / "role-run-request.json").exists())
+        self.assertFalse((root / "finish-bridge.json").exists())
+
+
+class WorkerRegisteredRunTests(ZcodeFixtureCase):
+    def context(self, case="ok", *, timeout=WIRING_TIMEOUT, **kwargs):
+        """These runs check worker wiring; the deadline subjects live in the zcode suite."""
+        return super().context(case, timeout=timeout, **kwargs)
+
+    def assert_failed_attention_facts(self, outcome, original, *, shutdown):
+        self.assertEqual(outcome.status, "failed")
+        self.assertIs(outcome.shutdown_confirmed, shutdown)
+        self.assertIs(outcome.result["processState"]["shutdownConfirmed"], True)
+        self.assertIn("nativeAttention", outcome.result)
+        self.assertIn("inquiry", outcome.result)
+        self.assertEqual(outcome.result["nativeAttention"]["requests"], 3)
+        self.assertEqual(outcome.result["nativeAttention"], original.result["nativeAttention"])
+        self.assertEqual(outcome.result["inquiry"], original.result["inquiry"])
+        self.assertIs(outcome.result["attentionRequired"], True)
+        self.assertNotIn("turn", outcome.result)
+        self.assertNotIn("workspaceSeal", outcome.result)
+
+    def test_worker_uses_in_process_result_without_publishing_private_service_credentials(self):
+        context = self.context()
+        context.agent_credential = "synthetic-attempt-secret"
+        handle, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        request = handle.request
+        request_bytes = canonical_json(request.to_payload()).encode()
+        result = handle.result
+        self.assertEqual(request.identity, result.identity)
+        self.assertEqual(request.permission, "write")
+        self.assertEqual(request.identity.input_sha256, turn_io.input_hash(context.turn_input))
+        self.assertEqual(outcome.result["turn"]["outcome"], result.value.parsed.value)
+        self.assertEqual(outcome.result["turn"]["provenance"]["nativeTurnId"], result.native_identity.turn_id)
+        self.assertFalse((context.directory / "role-run-control.json").exists())
+        self.assertNotIn(b"synthetic-attempt-secret", request_bytes)
+        self.assertNotIn("synthetic-attempt-secret", json.dumps(outcome.to_report()))
+        service_names = request.session_services[0].tool_names
+        self.assertEqual(len(service_names), 3)
+        for name in service_names:
+            self.assertIn(name, request.input_text)
+
+    def test_a_changed_provenance_reference_fails_without_losing_real_stop(self):
+        context = self.context("usage-ok")
+        fixture = Path(__file__).parents[1] / "harnesses/zcode/fixtures/mock_zcode_usage.py"
+        select_fixture(context.environment, self.root, "zcode", fixture)
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: handle.terminate(grace_seconds=0.1) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(context.timeout_seconds + 10))
+        result = handle.result
+        self.assertIsNotNone(result.usage)
+        self.assertIsNotNone(result.last_assistant_message)
+        ref = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
+        value = json.loads(native_path(Path(ref.location)).read_text(encoding="utf-8"))
+        value["nativeTurnId"] = "foreign-turn"
+        native_path(Path(ref.location)).write_text(json.dumps(value), encoding="utf-8", newline="\n")
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "failed")
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(outcome.result["code"], "invalid-role-result")
+        self.assertEqual(outcome.result["tokenUsage"], result.usage.value)
+        self.assertEqual(outcome.result["lastAssistantMessage"], {
+            **result.last_assistant_message.value, "source": "zcode/session-root-assistant-message"})
+        self.assertNotIn("turn", outcome.result)
+
+    def test_an_unconfirmed_controller_keeps_valid_inquiry_and_attention(self):
+        context = self.context("attention")
+        handle, original = self.execute(context)
+        self.assertEqual(original.status, "ok", original.to_report())
+        self.assertEqual(original.result["nativeAttention"]["requests"], 3)
+        with mock.patch.object(handle, "shutdown_confirmed", return_value=False), \
+                mock.patch.object(turn_io, "seal_workspace", side_effect=AssertionError("unconfirmed seal")):
+            refused = self.adapter.collect(handle, context)
+        self.assert_failed_attention_facts(refused, original, shutdown=False)
+
+    def test_a_changed_provenance_keeps_valid_inquiry_and_attention(self):
+        context = self.context("attention")
+        handle, original = self.execute(context)
+        result = handle.result
+        reference = next(ref for ref in result.evidence_refs if ref.kind == "turn-provenance")
+        path = Path(reference.location)
+        native_path(path).write_bytes(native_path(path).read_bytes() + b" ")
+        with mock.patch.object(turn_io, "seal_workspace", side_effect=AssertionError("unverified seal")):
+            refused = self.adapter.collect(handle, context)
+        self.assertEqual(refused.result["code"], "invalid-role-result")
+        self.assert_failed_attention_facts(refused, original, shutdown=True)
+
+    def test_each_bad_report_keeps_the_other_verified_report(self):
+        for index, (kind, failed_key, kept_key) in enumerate((
+            ("inquiry-report", "inquiry", "nativeAttention"),
+            ("attention-report", "nativeAttention", "inquiry"),
+        ), 1):
+            with self.subTest(kind=kind):
+                context = self.context("attention", index=index)
+                handle, original = self.execute(context)
+                result = handle.result
+                reference = next(ref for ref in result.evidence_refs if ref.kind == kind)
+                path = Path(reference.location)
+                native_path(path).write_bytes(native_path(path).read_bytes() + b" ")
+                with mock.patch.object(turn_io, "seal_workspace", side_effect=AssertionError("unverified seal")):
+                    refused = self.adapter.collect(handle, context)
+                self.assertEqual(refused.status, "failed")
+                self.assertIs(refused.shutdown_confirmed, True)
+                self.assertEqual(refused.result["code"], "invalid-role-result")
+                self.assertIn(kept_key, refused.result)
+                self.assertEqual(refused.result[kept_key], original.result[kept_key])
+                self.assertNotIn(failed_key, refused.result)
+                self.assertIs(refused.result["attentionRequired"], True if kind == "inquiry-report" else None)
+                self.assertNotIn("turn", refused.result)
+                self.assertNotIn("workspaceSeal", refused.result)
+
+    def test_a_confirmed_two_layer_stop_is_the_resumable_positive_witness(self):
+        handle, outcome = self.execute(self.context())
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        native_session = outcome.result["nativeSession"]
+        self.assertIs(native_session["bindingPresent"], True)
+        self.assertIs(native_session["resumable"], True,
+                      "a confirmed native and outer stop with a valid turn is the one resumable fact")
+
+    def test_an_unconfirmed_outer_stop_keeps_the_session_not_resumable(self):
+        context = self.context()
+        handle, original = self.execute(context)
+        self.assertIs(original.result["nativeSession"]["resumable"], True)
+        with mock.patch.object(handle, "shutdown_confirmed", return_value=False):
+            refused = self.adapter.collect(handle, context)
+        self.assertFalse(refused.shutdown_confirmed)
+        self.assertIs(refused.result["nativeSession"]["resumable"], False,
+                      "an unconfirmed outer stop is never a resumable session")
+
+    def test_an_unconfirmed_native_stop_is_never_resumable_even_when_outer_confirms(self):
+        context = self.context()
+        handle, original = self.execute(context)
+        self.assertIs(original.result["nativeSession"]["resumable"], True)
+        # The closed GroupState vocabulary has no "running": the still-existing
+        # fact a native layer actually reports is "alive", beside "unknown".
+        for state in ("unknown", "alive"):
+            with self.subTest(nativeGroupState=state):
+                fields = handle.result.to_payload()
+                fields["stopEvidence"]["native"]["groupState"] = state
+                handle.result = RunResult.from_payload(fields)
+                refused = self.adapter.collect(handle, context)
+                self.assertIs(refused.shutdown_confirmed, False,
+                              "a native group that is not gone leaves the stop unconfirmed even when the outer layer confirms")
+                self.assertIs(refused.result["processState"]["shutdownConfirmed"], False,
+                              "the native stop fact itself stays unconfirmed")
+                self.assertIs(refused.result["nativeSession"]["resumable"], False,
+                              "an unknown or still-alive native group is never counted as stopped")
+
+    def test_a_denied_or_unknown_continuation_capability_is_not_resumable(self):
+        context = self.context()
+        handle, original = self.execute(context)
+        self.assertIs(original.result["nativeSession"]["resumable"], True)
+        for value, naming in ((False, "denied"), (None, "unknown")):
+            with self.subTest(continuationCapability=naming):
+                fields = handle.result.to_payload()
+                fields["continuation"]["resumable"] = value
+                handle.result = RunResult.from_payload(fields)
+                refused = self.adapter.collect(handle, context)
+                self.assertIs(refused.shutdown_confirmed, True,
+                              "both stop layers stay confirmed; only the continuation capability went away")
+                self.assertIs(refused.result["nativeSession"]["resumable"], False,
+                              "a denied or unknown continuation capability is not a resumable session")
+
+
+
+class DshPublishedReceiptTests(unittest.TestCase):
+    def test_an_undelivered_dsh_turn_does_not_publish_a_captured_session(self):
+        from buddy.harnesses.dsh.test_dsh_role_wiring import DshRoleCase
+        fixture = DshRoleCase()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        context = fixture.context()
+        # A driver can finish its native root without delivering a valid role
+        # outcome. Raw root identity alone does not establish a captured turn.
+        with mock.patch("hey_my_buddy.buddy.roles.run_execution._worker_result", side_effect=ValueError("invalid outcome")):
+            _handle, outcome = fixture.execute(context)
+        self.assertEqual(outcome.status, "failed")
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertIsNotNone(outcome.result.get("sessionId"))
+        self.assertIsNone(outcome.result["nativeSession"]["sessionId"])
+        self.assertFalse(outcome.result["nativeSession"]["captured"])
+        self.assertEqual(outcome.result["nativeSession"]["sessionIdSource"], "none")
+        self.assertIsNotNone(outcome.result["activity"]["eventSeq"])
+        self.assertNotIn("nativeActivity", outcome.result)
+
+if __name__ == "__main__":
+    unittest.main()

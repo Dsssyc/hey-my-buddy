@@ -1,0 +1,386 @@
+"""Native token usage, provider rejections and last-assistant-message normalization.
+
+Adapters observe native harness records; they never invent numbers. This module
+turns one observed record into the bounded, canonical shape the board persists,
+and returns ``None`` whenever no usable native fact exists. It is the single
+place where the per-harness accounting rules meet:
+
+* DSH reports ``inputTokens`` **excluding** cache read/write tokens, so the
+  canonical ``inputTokens`` (a total that includes cached input) adds them once.
+* Codex reports ``input_tokens`` **already including** ``cached_input_tokens``,
+  so its cache counters are never added again.
+
+The canonical token usage therefore always means ``inputBasis == "includes-cached"``,
+``scope == "attempt"`` (one micro-task attempt, never a whole native session) and an
+explicit ``completeness``. Unknown fields stay unknown; a missing cache counter is
+never turned into zero, and a session-cumulative record is refused instead of being
+counted as this attempt.
+
+A provider rejection keeps its native structured code, observation time, reset time
+and rejection phase. Native codes and sources accept only identifier characters:
+free text is refused or replaced with ``unknown`` instead of being persisted.
+
+Every ``normalize_*`` function is idempotent: replaying the same record through it
+again returns the same canonical value and never accumulates a second time.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from datetime import datetime, timezone
+from typing import Any
+
+from ..text import truncate_utf8
+
+#: Canonical document versions. A reader accepts exactly these versions.
+TOKEN_USAGE_VERSION = 1
+LAST_ASSISTANT_MESSAGE_VERSION = 1
+
+#: The only attempt scope this module accepts. A session- or task-cumulative
+#: record must never be reported as one attempt's usage.
+ATTEMPT_SCOPE = "attempt"
+
+#: Canonical input accounting: the reported total already contains cached input.
+INPUT_BASIS_INCLUDES_CACHED = "includes-cached"
+#: Native DSH accounting: the reported total excludes cache read/write tokens.
+INPUT_BASIS_EXCLUDES_CACHED = "excludes-cached"
+INPUT_BASES = (INPUT_BASIS_INCLUDES_CACHED, INPUT_BASIS_EXCLUDES_CACHED)
+
+COMPLETENESS_VALUES = ("complete", "partial", "unknown")
+
+#: Largest counter accepted from a native record; larger values are not trusted.
+MAX_COUNT = 2**53 - 1
+MAX_SOURCE = 120
+MAX_TIMESTAMP = 64
+MAX_WINDOW_NAME = 64
+#: The retained native root assistant text, matching the Codex checkpoint bound.
+MAX_ASSISTANT_MESSAGE_BYTES = 65536
+
+TIMESTAMP = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$"
+)
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+#: Identifier-shaped native codes and source labels
+#: accept only identifier characters, never free text. ``/`` stays an identifier
+#: character because native source labels use it as the harness/origin separator.
+IDENTIFIER = re.compile(r"^[A-Za-z0-9._:/-]{1,64}$")
+
+#: Native codes that mean "the account quota or budget is exhausted".
+_QUOTA_NATIVE_CODES = frozenset({
+    "QUOTA",
+    "insufficient_quota",
+    "quota_exceeded",
+    "usage_limit_reached",
+    "usage_limit_exceeded",
+    "usagelimitexceeded",
+    "sessionbudgetexceeded",
+    "workspace_owner_usage_limit_reached",
+    "workspace_member_usage_limit_reached",
+    "workspace_owner_credits_depleted",
+    "workspace_member_credits_depleted",
+})
+#: Native codes that mean "transiently rate limited" rather than exhausted quota.
+_RATE_NATIVE_CODES = frozenset({"RATE_LIMIT", "rate_limit_reached", "ratelimitexceeded", "model_rate_limited"})
+_OVERLOAD_NATIVE_CODES = frozenset({"serverOverloaded", "overloaded"})
+
+
+def _is_count(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and 0 <= value <= MAX_COUNT
+
+
+def _is_number(value: Any) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float))
+
+
+def _bounded_string(value: Any, *, maximum: int) -> str | None:
+    if not isinstance(value, str) or not value.strip() or "\0" in value:
+        return None
+    value = value.strip()
+    try:
+        value.encode("utf-8")
+    except UnicodeError:
+        return None
+    return value if len(value) <= maximum else None
+
+
+def identifier(value: Any) -> str | None:
+    """One identifier-shaped native string, or ``None`` when it is not one.
+
+    A value carrying whitespace, control characters or other free text —
+    including anything resembling a credential fragment — is refused outright
+    rather than trimmed or truncated, so it is never persisted as an identifier.
+    """
+    if not isinstance(value, str) or not value or "\0" in value:
+        return None
+    return value if IDENTIFIER.fullmatch(value) else None
+
+
+def _timestamp(value: Any) -> str | None:
+    """Canonical UTC ISO-8601 for a native timestamp; never a fabricated one."""
+    if _is_number(value):
+        if value <= 0:
+            return None
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = _bounded_string(value, maximum=MAX_TIMESTAMP)
+    if text is None or not TIMESTAMP.fullmatch(text):
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def normalize_token_usage(value: Any) -> dict | None:
+    """Validate one observed usage record into the canonical attempt projection.
+
+    Accepted input fields (unknown keys are ignored, never stored):
+
+    ``inputTokens``
+        The native prompt-side count. Its meaning is declared by ``inputBasis``.
+    ``cachedInputTokens``
+        The native cached-input count. ``None`` or absent means unknown.
+    ``outputTokens``
+        The native output count.
+    ``reasoningOutputTokens``
+        The native reasoning-output count when the harness reports one.
+    ``cacheReadTokens`` / ``cacheWriteTokens``
+        Native DSH cache counters, used to derive ``cachedInputTokens`` when the
+        native record did not report it directly.
+    ``inputBasis``
+        ``"excludes-cached"`` (DSH: add cache once) or ``"includes-cached"``
+        (Codex and every canonical record: never add cache again). When absent,
+        a record carrying native cache counters is treated as ``excludes-cached``
+        so a raw DSH record can never be silently undercounted.
+    ``source``
+        Bounded label of the native origin; ``"unknown"`` when absent.
+    ``scope``
+        Must be ``"attempt"`` (the default). Any other scope is refused: a
+        session-cumulative record is not this attempt's usage.
+    ``completeness``
+        ``"complete"``/``"partial"``/``"unknown"`` (default ``"unknown"``).
+    ``nativeRecords``
+        How many native usage observations contributed, at least ``1``.
+
+    Returns ``None`` when the value carries no usable counter or contradicts
+    itself. It never estimates: an unknown counter stays ``None``.
+    """
+    if not isinstance(value, dict):
+        return None
+    if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
+        return None
+    scope = value.get("scope")
+    if scope is not None and scope != ATTEMPT_SCOPE:
+        return None
+    for key in ("inputTokens", "cachedInputTokens", "outputTokens", "reasoningOutputTokens",
+                "cacheReadTokens", "cacheWriteTokens"):
+        present = value.get(key)
+        if present is not None and not _is_count(present):
+            return None
+    input_tokens = value.get("inputTokens")
+    output_tokens = value.get("outputTokens")
+    if input_tokens is None and output_tokens is None:
+        return None
+    cached = value.get("cachedInputTokens")
+    if cached is None:
+        read = value.get("cacheReadTokens")
+        write = value.get("cacheWriteTokens")
+        total = value.get("totalTokens")
+        if _is_count(total) and input_tokens is not None and output_tokens is not None and total >= input_tokens + output_tokens:
+            cached = total - input_tokens - output_tokens
+        elif read is not None and write is not None:
+            cached = read + write
+    if cached is not None and not _is_count(cached):
+        return None
+    basis = value.get("inputBasis")
+    if basis is not None and basis not in INPUT_BASES:
+        return None
+    if basis is None:
+        basis = INPUT_BASIS_EXCLUDES_CACHED if "cacheReadTokens" in value or "cacheWriteTokens" in value \
+            else INPUT_BASIS_INCLUDES_CACHED
+    if basis == INPUT_BASIS_EXCLUDES_CACHED and cached is None:
+        input_tokens = None
+    if input_tokens is None and output_tokens is None:
+        return None
+    if basis == INPUT_BASIS_EXCLUDES_CACHED and cached is not None and input_tokens is not None:
+        unified = input_tokens + cached
+        if unified > MAX_COUNT:
+            return None
+        input_tokens = unified
+    if input_tokens is not None and cached is not None and cached > input_tokens:
+        # An internally inconsistent record is not a fact this module may repair.
+        return None
+    source = _bounded_string(value.get("source"), maximum=MAX_SOURCE) or "unknown"
+    completeness = value.get("completeness")
+    if completeness is None:
+        completeness = "unknown"
+    if completeness not in COMPLETENESS_VALUES:
+        return None
+    if completeness == "complete" and any(count is None for count in (input_tokens, cached, output_tokens)):
+        completeness = "partial"
+    records = value.get("nativeRecords")
+    if records is None:
+        records = 1
+    if not _is_count(records) or records < 1:
+        return None
+    normalized = {
+        "version": TOKEN_USAGE_VERSION,
+        "inputTokens": input_tokens,
+        "cachedInputTokens": cached,
+        "outputTokens": output_tokens,
+        "inputBasis": INPUT_BASIS_INCLUDES_CACHED,
+        "source": source,
+        "scope": ATTEMPT_SCOPE,
+        "completeness": completeness,
+        "nativeRecords": records,
+    }
+    coverage = value.get("coverage")
+    if coverage in ("native-root-session", "native-root-thread", "native-attempt"):
+        normalized["coverage"] = coverage
+    reasoning = value.get("reasoningOutputTokens")
+    if reasoning is not None:
+        normalized["reasoningOutputTokens"] = reasoning
+    return normalized
+
+
+def classify_provider_rejection_code(native_code: str) -> str:
+    """Map one native structured code onto the bounded provider rejection classification."""
+    if native_code in _OVERLOAD_NATIVE_CODES:
+        return "overloaded"
+    if native_code in _QUOTA_NATIVE_CODES:
+        return "quota-exceeded"
+    if native_code in _RATE_NATIVE_CODES:
+        return "rate-limited"
+    # Camel-case harness codes (``usageLimitExceeded``) fold onto the same words
+    # as snake_case ones (``usage_limit_reached``); the native code is unchanged.
+    folded = re.sub(r"[_-]", "", native_code).lower()
+    if folded in {re.sub(r"[_-]", "", code).lower() for code in _QUOTA_NATIVE_CODES}:
+        return "quota-exceeded"
+    if folded in {re.sub(r"[_-]", "", code).lower() for code in _RATE_NATIVE_CODES}:
+        return "rate-limited"
+    return "unknown"
+
+
+def normalize_provider_rejection(value: Any) -> dict | None:
+    """One native provider rejection, keeping its structured native code.
+
+    The harness supplies the bounded ``code`` classification; ``nativeCode``
+    is its own machine code and is never translated or classified here.
+    ``rejectionPhase`` is an explicit collector judgment, including ``unknown``
+    when collection failed or the stream was truncated.
+    """
+    if not isinstance(value, dict):
+        return None
+    code = value.get("code")
+    if code not in ("quota-exceeded", "rate-limited", "overloaded"):
+        return None
+    native_code = identifier(value.get("nativeCode"))
+    phase = value.get("rejectionPhase")
+    if native_code is None or phase not in ("before-model", "during-model", "unknown"):
+        return None
+    observed_at = _timestamp(value.get("observedAt"))
+    failure = {
+        "code": code,
+        "nativeCode": native_code,
+        "source": identifier(value.get("source")) or "unknown",
+        "observedAt": observed_at,
+        "resetsAt": _timestamp(value.get("resetsAt")),
+        "rejectionPhase": phase,
+    }
+    return failure
+
+
+def normalize_last_assistant_message(value: Any, *, source: str | None = None) -> dict | None:
+    """Bound one native root assistant text for cross-harness reconstruction.
+
+    The text is the harness's own root assistant output, retained as evidence for
+    a continuation that cannot resume the native session. It is never a tool
+    result and never a Host instruction. ``sourceBytes`` and ``sha256`` always
+    describe the full untruncated native text; ``text`` is head-truncated to
+    ``MAX_ASSISTANT_MESSAGE_BYTES`` on a UTF-8 boundary when needed.
+    """
+    if not isinstance(value, dict):
+        return None
+    if "version" in value and (type(value["version"]) is not int or value["version"] != 1):
+        return None
+    raw_text = value.get("text")
+    if not isinstance(raw_text, str) or not raw_text.strip() or "\0" in raw_text:
+        return None
+    try:
+        full = raw_text.encode()
+    except UnicodeError:
+        return None
+    digest = value.get("sha256")
+    declared_bytes = value.get("sourceBytes")
+    declared_truncated = value.get("truncated")
+    if digest is None and declared_bytes is None and declared_truncated is None:
+        source_bytes, sha256, truncated = len(full), hashlib.sha256(full).hexdigest(), False
+    else:
+        if not _is_count(declared_bytes) or declared_bytes < 0:
+            return None
+        if not isinstance(digest, str) or not _SHA256.match(digest):
+            return None
+        if not isinstance(declared_truncated, bool):
+            return None
+        if not declared_truncated and (declared_bytes != len(full) or digest != hashlib.sha256(full).hexdigest()):
+            return None
+        if declared_bytes < len(full):
+            return None
+        source_bytes, sha256, truncated = declared_bytes, digest, declared_truncated
+    text = truncate_utf8(raw_text, MAX_ASSISTANT_MESSAGE_BYTES)
+    kept = len(text.encode())
+    if len(json.dumps(text, ensure_ascii=False).encode()) > MAX_ASSISTANT_MESSAGE_BYTES:
+        lower, upper = 0, len(text)
+        while lower < upper:
+            middle = (lower + upper + 1) // 2
+            if len(json.dumps(text[:middle], ensure_ascii=False).encode()) <= MAX_ASSISTANT_MESSAGE_BYTES:
+                lower = middle
+            else:
+                upper = middle - 1
+        text = text[:lower]
+        truncated = True
+    if kept < len(full):
+        truncated = True
+    label = _bounded_string(value.get("source"), maximum=MAX_SOURCE) if source is None \
+        else _bounded_string(source, maximum=MAX_SOURCE)
+    source_id = value.get("sourceId")
+    if source_id is None:
+        source_id = value.get("itemId")
+    normalized = {
+        "version": LAST_ASSISTANT_MESSAGE_VERSION,
+        "text": text,
+        "source": label or "unknown",
+        "sourceId": _bounded_string(source_id, maximum=256),
+        "sourceBytes": source_bytes,
+        "sha256": sha256,
+        "truncated": truncated,
+    }
+    phase = _bounded_string(value.get("phase"), maximum=MAX_WINDOW_NAME)
+    if phase is not None:
+        normalized["phase"] = phase
+    return normalized
+
+
+__all__ = [
+    "ATTEMPT_SCOPE",
+    "COMPLETENESS_VALUES",
+    "IDENTIFIER",
+    "INPUT_BASES",
+    "INPUT_BASIS_EXCLUDES_CACHED",
+    "INPUT_BASIS_INCLUDES_CACHED",
+    "LAST_ASSISTANT_MESSAGE_VERSION",
+    "MAX_ASSISTANT_MESSAGE_BYTES",
+    "TOKEN_USAGE_VERSION",
+    "classify_provider_rejection_code",
+    "identifier",
+    "normalize_last_assistant_message",
+    "normalize_provider_rejection",
+    "normalize_token_usage",
+]

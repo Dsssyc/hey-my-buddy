@@ -1,0 +1,320 @@
+"""Owned, model-free processes for the service -> execution proof.
+
+The simulated native child commits the journal before the execution publishes
+facts. The actual execution process starts the inline role; only native
+launch and collection are injected. No framing, process discovery or PID adoption.
+All material is retained. Cooperative teardown addresses saved Popen objects.
+"""
+from __future__ import annotations
+from contextlib import nullcontext
+
+import argparse
+import json
+import os
+from pathlib import Path
+import queue
+import subprocess
+import sys
+import threading
+import time
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome, ProcessHandle
+from hey_my_buddy.buddy.harnesses.c_two_live import CTwoLiveEndpoint
+from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge
+from hey_my_buddy.buddy.harnesses.live import (
+    InquiryState, LiveCapabilities, LiveJournal, LiveObservation, LiveReply,
+)
+from hey_my_buddy.buddy.harnesses.run_contract import (
+    RunEnd, RunResult, StopEvidence, StopLayer,
+)
+from hey_my_buddy.protocol.owned_process import owned_popen
+from hey_my_buddy.protocol.process_identity import native_process_journal_active
+from hey_my_buddy.buddy.roles import controller as role_seam, inline_run
+from hey_my_buddy.buddy.roles.run_execution import WorkerRunExecutor
+from hey_my_buddy.json_codec import canonical_json
+from support import enable_fixture_buddy
+
+
+BUDDY = dict(harness="dsh", provider="deepseek-official",
+                     model="deepseek-flash", effort="off")
+SELF = Path(__file__).resolve()
+
+
+def emit(value):
+    print(canonical_json(value), flush=True)
+
+
+def exchange(process, value, *, timeout=5):
+    """One bounded fixture-pipe exchange; this is not the SDK transport.
+
+    Check the saved child while a thread performs blocking pipe I/O. The caller
+    has one deadline even when a partial reply leaves that thread waiting.
+    """
+    if process.poll() is not None:
+        raise RuntimeError(f"owned fixture exited with code {process.returncode}")
+    deadline = time.monotonic() + timeout
+    source, target = process.stdout.fileno(), process.stdin.fileno()
+    payload = (canonical_json(value) + "\n").encode()
+    result = queue.Queue(maxsize=1)
+
+    def transfer():
+        try:
+            remaining_payload = payload
+            while remaining_payload:
+                remaining_payload = remaining_payload[os.write(target, remaining_payload):]
+            reply = bytearray()
+            while b"\n" not in reply:
+                chunk = os.read(source, 4096)
+                if not chunk:
+                    raise RuntimeError("owned fixture closed its reply pipe")
+                reply.extend(chunk)
+                if len(reply) > 1024 * 1024:
+                    raise RuntimeError("owned fixture reply exceeds its bound")
+            line, _separator, extra = reply.partition(b"\n")
+            if extra.strip():
+                raise RuntimeError("owned fixture sent an unsolicited reply")
+            result.put(json.loads(line))
+        except Exception as error:
+            result.put(error)
+
+    worker = threading.Thread(target=transfer, daemon=True)
+    if not hasattr(process, "fixture_exchange_threads"):
+        process.fixture_exchange_threads = []
+    process.fixture_exchange_threads.append(worker)
+    worker.start()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("owned fixture pipe exchange deadline expired")
+        try:
+            reply = result.get(timeout=min(remaining, 0.05))
+        except queue.Empty:
+            if process.poll() is not None:
+                raise RuntimeError(f"owned fixture exited with code {process.returncode}")
+            continue
+        worker.join(1)
+        if worker.is_alive():
+            raise TimeoutError("owned fixture pipe thread did not stop")
+        process.fixture_exchange_threads.remove(worker)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+
+def join_exchanges(process):
+    """Reap transfers after the owned child and its pipe writers have stopped."""
+    for worker in getattr(process, "fixture_exchange_threads", ()):
+        worker.join(5)
+        if worker.is_alive():
+            raise TimeoutError("owned fixture pipe thread remained after child shutdown")
+
+
+def write_fact(path, value):
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+        json.dump(value, stream, sort_keys=True)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def native(root):
+    """A real subprocess, with EOF as its cooperative stop boundary."""
+    entries = 0
+    try:
+        for line in sys.stdin:
+            request = json.loads(line)
+            with (root / "native-journal.jsonl").open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(canonical_json(request) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            entries += 1
+            emit({"committed": True, "entries": entries})
+    finally:
+        write_fact(root / "native-stopped.json", {"pid": os.getpid(), "eofObserved": True})
+
+
+class OneSlowCallEndpoint(CTwoLiveEndpoint):
+    """Exercise native SDK per-call expiry without a second transport."""
+
+    def observe_local(self, **arguments):
+        if arguments.get("after_seq") == 999:
+            time.sleep(0.2)
+        return super().observe_local(**arguments)
+
+
+def simulated_run(module, request, *, services, **options):
+    """Inject only the native driver; production inline role owns the endpoint."""
+    assert native_process_journal_active(), "execution must journal native process creation"
+    root = Path(request.private_state.invocation_root)
+    write_fact(root / "fixture-request.json", request.to_payload())
+    endpoint = services.live
+    bridge = InquiryBridge(identity={key: request.identity.to_payload()[key]
+                                     for key in ("taskId", "attemptId", "generation", "turnId")},
+                           journal_path=services.inquiry["resultsPath"],
+                           error_factory=lambda _code, message: RuntimeError(message), event_metadata=lambda _message: {})
+    bridge.start()
+    bridge.activate("simulated-native")
+    process = owned_popen([sys.executable, str(SELF), "native", "--root", str(root)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, encoding="utf-8", start_new_session=True)
+    owned = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+    try:
+        endpoint.publish_observation(LiveObservation(ready=True, session_id="simulated-native",
+            agent_status="active", supported=True, delivery_mode="cooperative-checkpoint"))
+        while not (root / "finish.request").exists():
+            incoming = endpoint.consume_request(0.02)
+            if incoming is None:
+                continue
+            committed = exchange(process, incoming.to_payload())
+            if not committed["committed"]:
+                raise AssertionError("native commit missing")
+            queued = bridge._ask({"inquiryId": incoming.payload.question_id, "question": incoming.payload.question},
+                                 lambda ok, **fields: {"ok": ok, **fields})
+            assert queued["ok"], queued
+            endpoint.publish_journal(LiveJournal(available=True, entries=committed["entries"]))
+            endpoint.publish_inquiry_state(InquiryState(
+                question_id=incoming.payload.question_id, status="queued"))
+            endpoint.settle_request(incoming.request_id,
+                LiveReply(status="queued", observed=True, state="queued"))
+    finally:
+        try:
+            process.stdin.close()
+            process.wait(timeout=5)
+            join_exchanges(process)
+            stopped = owned.shutdown_confirmed()
+            write_fact(root / "native-collected.json", {
+                "exitCode": process.returncode, "shutdownConfirmed": stopped})
+        finally:
+            bridge.close()
+            process.stdout.close()
+    return RunResult(identity=request.identity, harness=request.harness,
+        end=RunEnd(status="error", reason_code="native-refused", message="model-free fixture"),
+        model_started=False, stop_evidence=StopEvidence(
+            native=StopLayer(group_state="gone" if stopped else "unknown")))
+
+
+class SimulatedExecutor(WorkerRunExecutor):
+    def __init__(self):
+        super().__init__(SimpleNamespace(name="dsh", native_resume=False,
+            available=lambda: (True, None)), SimpleNamespace(check_preparation=lambda *a: None))
+
+    def collect(self, handle, context):
+        root = Path(handle.role_run_control["privateRoot"])
+        native_stop = json.loads((root / "native-stopped.json").read_text(encoding="utf-8"))
+        stopped = native_stop["eofObserved"] is True and handle.shutdown_confirmed() is True
+        report = AdapterOutcome(status="failed", result={"modelStarted": False,
+            "simulatedNativeStop": native_stop,
+            "processState": {"shutdownConfirmed": stopped}}, error="model-free fixture",
+            exit_code=handle.exit_code, shutdown_confirmed=stopped)
+        write_fact(context.directory / "fixture-report.json", report.to_report())
+        return report
+
+
+def execution(startup: Path):
+    from hey_my_buddy.buddy.runtime import execution as runtime
+    sys.argv = [str(SELF), "--startup", str(startup)]
+    executor = SimulatedExecutor()
+    with patch.object(role_seam, "worker_executor", lambda name: executor), \
+            patch.object(inline_run, "run_harness", simulated_run), \
+            patch.object(inline_run, "CTwoLiveEndpoint", OneSlowCallEndpoint):
+        return runtime.main()
+
+
+def service(root):
+    from hey_my_buddy.blackboard.service.daemon import Daemon
+    from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
+    from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+    from hey_my_buddy.protocol import execution as launcher
+
+    daemon = Daemon(root / "state")
+    original = daemon.service
+    original_launch = launcher.launch_controller
+    handles = []
+
+    def launch_fixture(*, prepare, **options):
+        def prepared():
+            argv, cwd, environment = prepare()
+            startup = argv[argv.index("--startup") + 1]
+            return [sys.executable, str(SELF), "execution", "--startup", startup], cwd, environment
+        handle = original_launch(prepare=prepared, **options)
+        handles.append(handle)
+        return handle
+
+    def control():
+        for line in sys.stdin:
+            command = json.loads(line)
+            if command["op"] == "status":
+                handle = handles[0] if handles else None
+                materials = list((root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/execution-live.json"))
+                material = json.loads(materials[0].read_text(encoding="utf-8")) if materials else None
+                view = (daemon.store.task_get({"runId": handle.execution_binding["taskId"]})["task"]
+                        if handle else None)
+                bound = bool(view and daemon.live_registry.channel_for(view))
+                native_ready = bool(list((root / "state").glob(
+                    "harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json")))
+                emit({"ok": True, "execution": material["descriptor"] if material else None,
+                      "executionPid": handle.pid if handle else None,
+                      "running": handle is not None and handle.process.poll() is None,
+                      "bound": bound, "nativeReady": native_ready,
+                      "reports": [json.loads(path.read_text(encoding="utf-8")) for path in
+                                  (root / "state").glob("attempts/*/*/fixture-report.json")],
+                      "errors": []})
+            elif command["op"] in ("finish", "kill-execution"):
+                if command["op"] == "kill-execution":
+                    handles[0].process.kill()  # Saved Popen, never a discovered PID.
+                else:
+                    for request in (root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"):
+                        request.with_name("finish.request").touch(mode=0o600)
+                emit({"ok": True})
+            elif command["op"] == "stop":
+                emit({"ok": True})
+                return
+            else:
+                raise ValueError("unknown private fixture operation")
+
+    def private_service():
+        service = original()
+        service.automatic_discovery = False
+        enable_fixture_buddy(daemon.store, BUDDY)
+        # Discovery is synthetic; service, task and live RPCs are real.
+        record = {"harness": "dsh", "status": "ready", "revision": 0,
+                  "command": [sys.executable], "version": "model-free-fixture", "reason": None}
+        with daemon.store.db.write() as db:
+            db.execute("INSERT INTO harness_health(harness,status,record_json) VALUES('dsh','ready',?) "
+                       "ON CONFLICT(harness) DO UPDATE SET status='ready',record_json=excluded.record_json",
+                       (canonical_json(record),))
+        service.harnesses.refresh = lambda name, **kwargs: service.harnesses.get(name)
+        return service
+
+    description = DshAdapter()
+    description.available = lambda: (True, None)
+    thread = threading.Thread(target=control, daemon=True)
+    capture_failure = (patch.object(launcher, "capture_process_identity", side_effect=OSError("injected parent capture failure"))
+                       if os.environ.get("HMB_C2_PARENT_CAPTURE_FAILURE") else nullcontext())
+    with capture_failure, patch.object(daemon, "service", private_service), \
+         patch.object(launcher, "launch_controller", launch_fixture), \
+         patch.object(WorkflowCoordinator, "_execution_adapter", staticmethod(lambda name: description)):
+        thread.start()
+        try:
+            daemon.run()
+        finally:
+            for request in (root / "state").glob("harnesses/dsh/micro-tasks/*/attempts/*/run-*/fixture-request.json"):
+                request.with_name("finish.request").touch(mode=0o600, exist_ok=True)
+            for handle in handles:
+                handle.process.wait(timeout=15)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=("service", "execution", "native"))
+    parser.add_argument("--root", type=Path)
+    parser.add_argument("--startup", type=Path)
+    args = parser.parse_args()
+    if args.mode == "execution":
+        raise SystemExit(execution(args.startup))
+    globals()[args.mode](args.root)
+
+
+if __name__ == "__main__":
+    main()

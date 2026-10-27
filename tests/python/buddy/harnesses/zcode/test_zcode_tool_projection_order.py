@@ -1,0 +1,334 @@
+"""Native operation/telemetry/canonical order, using private in-memory fixtures."""
+from __future__ import annotations
+
+import unittest
+import json
+from temporary import TemporaryDirectory
+from pathlib import Path
+
+from hey_my_buddy.protocol import tool_evidence
+from hey_my_buddy.buddy.harnesses.zcode.tool_evidence import ZcodeToolFacts
+from hey_my_buddy import private_dirs
+from hey_my_buddy.private_files import publish_bytes
+
+
+BINDING = {"harness": "zcode", "taskId": "projection", "attemptId": "attempt", "generation": 1}
+ROOT = {"sessionId": "session", "turnId": "turn"}
+
+
+class NativeProjectionTests(unittest.TestCase):
+    def setUp(self):
+        self.private = TemporaryDirectory()
+        self.addCleanup(self.private.cleanup)
+        self.state_dir = Path(self.private.name) / "state"
+        self.facts = ZcodeToolFacts(BINDING, state_dir=self.state_dir)
+        self.facts.add_root("session", "turn")
+        self.seq = 0
+        self.telemetry_seq = 0
+        self.operation_seq = 0
+        self.canonical("turn.started", {"inputId": "input"})
+
+    def canonical(self, kind, payload, **identity):
+        self.seq += 1
+        self.facts.observe({"method": "session/event", "params": {
+            **ROOT, **identity, "seq": self.seq, "type": kind, "payload": payload}})
+
+    def metadata(self, phase, call="read", name="Read", *, turn="turn", **extra):
+        self.telemetry_seq += 1
+        params = {"kind": "tool.lifecycle", "sessionId": "session", "eventSeq": self.telemetry_seq,
+                  "phase": phase, "toolCallId": call, **extra}
+        if turn is not None:
+            params["turnId"] = turn
+        if name is not None:
+            params["toolName"] = name
+        self.facts.observe({"method": "v4/telemetry/event", "params": params})
+
+    def operation(self, phase, call="read", name="Read", *, turn="turn"):
+        self.operation_seq += 1
+        params = {"kind": "tool-" + phase, "sessionId": "session", "sequenceNumber": self.operation_seq,
+                  "toolCallId": call}
+        if turn is not None:
+            params["turnId"] = turn
+        if name is not None:
+            params["toolName"] = name
+        self.facts.observe({"method": "computer-use/operation-event", "params": params})
+
+    def scheduled(self, call="read", name="Read"):
+        self.operation("scheduled", call, name)
+        self.metadata("scheduled", call, name)
+        self.canonical("tool.updated", {"kind": "scheduled", "toolCallId": call, "toolName": name})
+
+    def result(self, call="read", success=True):
+        self.metadata("completed" if success else "failed", call)
+        self.canonical("tool.updated", {"kind": "result", "toolCallId": call, "result": {"success": success}})
+
+    def judge(self):
+        return tool_evidence.judge_tool_evidence(self.facts.finish(True), "read", state_dir=self.state_dir)
+
+    def test_native_order_deduplicates_starts_and_uses_only_canonical_end(self):
+        self.scheduled()
+        self.operation("started", turn=None, name=None)
+        self.metadata("started", turn=None)
+        self.canonical("tool.updated", {"kind": "started", "toolCallId": "read"})
+        self.metadata("progress")
+        self.canonical("tool.updated", {"kind": "progress", "toolCallId": "read"})
+        self.result()
+        self.canonical("tool.updated", {"kind": "batch", "toolCallIds": ["read"],
+                                        "successCount": 1, "errorCount": 0})
+        self.assertIsNone(self.judge())
+        package = self.facts.finish(True)
+        self.assertEqual(package["toolCalls"], 1)
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["phases"], ["end", "start"])
+        self.assertEqual(calls[0]["categories"], ["read"])
+        self.assertTrue(calls[0]["belongsToRoot"])
+
+    def test_metadata_terminal_cannot_replace_canonical_result(self):
+        self.scheduled()
+        self.metadata("completed")
+        self.assertIsNotNone(self.judge())
+        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir))[0]["phases"],
+                         ["start"])
+
+    def test_metadata_start_without_canonical_start_stays_incomplete(self):
+        self.operation("scheduled")
+        self.metadata("scheduled", turn=None)
+        self.canonical("tool.updated", {"kind": "result", "toolCallId": "read", "result": {"success": True}})
+        self.assertIsNotNone(self.judge())
+        self.assertFalse(self.facts.finish(True)["streamComplete"])
+
+    def test_missing_canonical_identity_cannot_borrow_the_metadata_turn(self):
+        self.operation("scheduled")
+        self.canonical("tool.updated", {"kind": "scheduled", "toolCallId": "read", "toolName": "Read"}, turnId=None)
+        self.canonical("tool.updated", {"kind": "result", "toolCallId": "read"})
+        self.assertIsNotNone(self.judge())
+        self.assertTrue(any(call["nativeIdentity"] == {"sessionId": "session"}
+                            for call in tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir)))
+
+    def test_unknown_optional_turn_is_not_invented(self):
+        self.metadata("started", turn=None)
+        self.assertIsNotNone(self.judge())
+        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir))[0]["nativeIdentity"],
+                         {"sessionId": "session"})
+
+    def test_optional_turn_requires_a_unique_known_native_call(self):
+        self.scheduled()
+        self.facts.add_root("session", "second-turn")
+        self.facts.observe({"method": "session/event", "params": {
+            "sessionId": "session", "turnId": "second-turn", "type": "tool.updated", "seq": 3,
+            "payload": {"kind": "scheduled", "toolCallId": "read", "toolName": "Read"}}})
+        self.metadata("started", turn=None)
+        self.assertFalse(self.facts.finish(True)["streamComplete"])
+        self.assertEqual(list(tool_evidence.read_tool_calls(self.facts.finish(True), state_dir=self.state_dir))[-1]["nativeIdentity"],
+                         {"sessionId": "session"})
+
+    def test_names_scope_and_foreign_metadata_remain_incomplete(self):
+        for extra in ({"toolName": "Bash"}, {"childSessionId": "child"}, {"background": True},
+                      {"parentToolCallId": "parent"}, {"phase": "future"}):
+            with self.subTest(extra=extra):
+                self.setUp()
+                self.scheduled()
+                params = {"kind": "tool.lifecycle", **ROOT, "eventSeq": 2,
+                          "phase": "started", "toolCallId": "read", "toolName": "Read", **extra}
+                self.facts.observe({"method": "v4/telemetry/event", "params": params})
+                self.canonical("tool.updated", {"kind": "result", "toolCallId": "read"})
+                self.assertIsNotNone(self.judge())
+        self.setUp()
+        self.facts.observe({"method": "v4/telemetry/event", "params": {
+            "kind": "tool.lifecycle", "sessionId": "foreign", "turnId": "foreign-turn",
+            "eventSeq": 1, "phase": "scheduled", "toolCallId": "read", "toolName": "Bash"}})
+        self.assertTrue(list(tool_evidence.read_tool_calls(self.facts.finish(False), state_dir=self.state_dir)))
+        self.assertIsNotNone(self.judge())
+
+    def test_late_metadata_and_conflicting_terminal_facts_remain_incomplete(self):
+        self.scheduled()
+        self.result()
+        self.metadata("progress")
+        self.assertIsNotNone(self.judge())
+        self.setUp()
+        self.scheduled()
+        self.metadata("completed")
+        self.canonical("tool.updated", {"kind": "error", "toolCallId": "read", "error": {"code": "failed"}})
+        self.assertIsNotNone(self.judge())
+
+    def test_batch_cannot_complete_or_hide_unknown_calls(self):
+        for ended, payload in (
+                (False, {"toolCallIds": ["read"], "successCount": 1, "errorCount": 0}),
+                (True, {"toolCallIds": ["missing"], "successCount": 1, "errorCount": 0}),
+                (True, {"toolCallIds": ["read", "read"], "successCount": 2, "errorCount": 0}),
+                (True, {"toolCallIds": ["read"], "successCount": True, "errorCount": 0}),
+                (True, {"toolCallIds": ["read"], "successCount": 0, "errorCount": 1})):
+            with self.subTest(payload=payload):
+                self.setUp()
+                self.scheduled()
+                if ended:
+                    self.result()
+                self.canonical("tool.updated", {"kind": "batch", **payload})
+                self.assertIsNotNone(self.judge())
+
+    def test_batch_counts_actual_failures_and_rejects_repeat_or_closed_root(self):
+        self.scheduled()
+        self.result(success=False)
+        payload = {"kind": "batch", "toolCallIds": ["read"], "successCount": 0, "errorCount": 1}
+        self.canonical("tool.updated", payload)
+        self.assertIsNone(self.judge())
+        self.setUp()
+        self.scheduled()
+        self.result(success=False)
+        self.canonical("tool.updated", payload)
+        self.canonical("tool.updated", payload)
+        self.assertIsNotNone(self.judge())
+
+    def test_conflicting_canonical_ends_cannot_be_hidden_by_the_last_batch_count(self):
+        for first, second in ((True, False), (False, True), (None, True), (True, True)):
+            with self.subTest(first=first, second=second):
+                self.setUp()
+                self.scheduled()
+                self.canonical("tool.updated", {"kind": "result", "toolCallId": "read",
+                                                "result": {"success": first}})
+                self.canonical("tool.updated", {"kind": "error", "toolCallId": "read"}
+                               if second is False else {"kind": "result", "toolCallId": "read",
+                                                        "result": {"success": second}})
+                self.canonical("tool.updated", {"kind": "batch", "toolCallIds": ["read"],
+                                                "successCount": int(second), "errorCount": int(not second)})
+                if first is second:
+                    self.assertIsNone(self.judge())
+                else:
+                    self.assertIsNotNone(self.judge())
+        self.setUp()
+        self.scheduled()
+        self.result()
+        self.canonical("turn.completed", {"inputId": "input", "resultType": "success", "response": "{}"})
+        self.canonical("tool.updated", {"kind": "batch", "toolCallIds": ["read"], "successCount": 1, "errorCount": 0})
+        self.assertIsNotNone(self.judge())
+
+
+class NativeDenialTests(unittest.TestCase):
+    def test_long_native_log_settles_permission_denial(self):
+        container = self.log_dir / 'long-logs'
+        self.addCleanup(private_dirs.remove_tree, container)
+        self.log_dir = container
+        while len(str(self.log_dir)) < 310:
+            self.log_dir /= 'native-log-' + 'a' * 35
+        private_dirs.ensure_private_dir(self.log_dir)
+        self.facts = ZcodeToolFacts(BINDING, native_log_dir=self.log_dir, state_dir=self.state_dir)
+        self.facts.add_root('session', 'turn')
+        self.frame('scheduled', 'write', 'Write')
+        publish_bytes(self.log_dir / 'zcode-long.jsonl', (json.dumps(self.denial('write', 'Write')) + '\n').encode())
+        package = self.complete()
+        self.assertEqual(package['unsettledToolCalls'], 0)
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertEqual(calls[0]['phases'], ['end', 'start'])
+
+    def setUp(self):
+        self.private = TemporaryDirectory()
+        self.addCleanup(self.private.cleanup)
+        self.log_dir = Path(self.private.name)
+        self.state_dir = self.log_dir / "state"
+        self.log = self.log_dir / "zcode-2026-10-20.jsonl"
+        self.facts = ZcodeToolFacts(BINDING, native_log_dir=self.log_dir, state_dir=self.state_dir)
+        self.facts.add_root("session", "turn")
+
+    def frame(self, kind, call, name=None, *, session="session", turn="turn", seq=1):
+        payload = {"kind": kind, "toolCallId": call}
+        if name is not None:
+            payload["toolName"] = name
+        self.facts.observe({"method": "session/event", "params": {
+            "sessionId": session, "turnId": turn, "seq": seq,
+            "type": "tool.updated", "payload": payload}})
+
+    def denial(self, call, name, *, session="session", turn="turn", **extra):
+        return {"timestamp": "2026-10-20T07:14:13.941Z", "level": "warn",
+                "event": "tool.permission.denied", "module": "core.tool.executor",
+                "message": "Tool permission denied", "traceId": "trace-placeholder",
+                "spanId": "span-placeholder", "status": "failed",
+                "sessionId": session, "turnId": turn, "toolCallId": call,
+                "context": {"queryId": "input-placeholder", "turnNumber": 0,
+                            "providerId": "provider-placeholder", "modelId": "model-placeholder",
+                            "iteration": 1, "querySource": "main_turn", "toolName": name,
+                            "decision": "deny", "mode": "build",
+                            "reason": "Plan mode only allows read-only, non-destructive tools",
+                            "ruleId": "mode.plan.nonReadOnly", **extra}}
+
+    def append(self, record):
+        with self.log.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps(record) + "\n")
+
+    def complete(self):
+        self.facts.observe({"method": "session/event", "params": {
+            **ROOT, "type": "turn.completed", "seq": 5}})
+        return self.facts.finish(True)
+
+    def test_native_write_denial_closes_exact_call_and_batch(self):
+        self.frame("scheduled", "write", "Write")
+        self.facts.observe({"method": "session/event", "params": {
+            **ROOT, "type": "tool.updated", "seq": 2,
+            "payload": {"kind": "batch", "toolCallIds": ["write"],
+                        "successCount": 0, "errorCount": 1}}})
+        self.append(self.denial("write", "Write"))
+        package = self.complete()
+        self.assertEqual(package["unsettledToolCalls"], 0)
+        calls = list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))
+        self.assertEqual([(call["callId"], call["categories"], call["phases"])
+                          for call in calls],
+                         [("write", ["edit"], ["end", "start"])])
+        self.assertTrue(calls[0]["belongsToRoot"])
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
+                         tool_evidence.TOOLS_FORBIDDEN)
+
+    def test_native_bash_denial_is_settled_and_allowed_under_read(self):
+        self.frame("scheduled", "bash", "Bash")
+        denial = self.denial("bash", "Bash")
+        self.append(denial)
+        self.append(denial)
+        package = self.complete()
+        self.assertEqual(package["unsettledToolCalls"], 0)
+        self.assertEqual(len(list(tool_evidence.read_tool_calls(package, state_dir=self.state_dir))), 1)
+        self.assertIsNone(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir))
+
+    def test_incomplete_log_line_waits_for_the_rest(self):
+        self.frame("scheduled", "bash", "Bash")
+        raw = json.dumps(self.denial("bash", "Bash"))
+        self.log.write_text(raw[:20], encoding="utf-8", newline="\n")
+        self.facts.read_denials()
+        self.assertEqual(self.facts.tool_calls, 1)
+        with self.log.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write(raw[20:] + "\n")
+        self.assertIsNone(tool_evidence.judge_tool_evidence(self.complete(), "read", state_dir=self.state_dir))
+
+    def test_malformed_native_log_record_remains_unverified(self):
+        for line in ("{broken\n", '"tool.permission.denied"\n'):
+            with self.subTest(line=line):
+                self.setUp()
+                self.frame("scheduled", "bash", "Bash")
+                self.log.write_text(line, encoding="utf-8", newline="\n")
+                package = self.complete()
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+    def test_missing_foreign_conflicting_and_late_denials_remain_unverified(self):
+        for record in (
+                self.denial("write", "Write", session="foreign"),
+                {k: v for k, v in self.denial("write", "Write").items() if k != "toolCallId"},
+                self.denial("write", "Bash"),
+                {**self.denial("write", "Write"), "status": "completed"}):
+            with self.subTest(record=record):
+                self.setUp()
+                self.frame("scheduled", "write", "Write")
+                self.append(record)
+                package = self.complete()
+                self.assertNotEqual(package["unsettledToolCalls"], 0)
+                self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
+                                 tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+        self.setUp()
+        self.frame("scheduled", "write", "Write")
+        self.complete()
+        self.append(self.denial("write", "Write"))
+        package = self.facts.finish(True)
+        self.assertEqual(tool_evidence.judge_tool_evidence(package, "read", state_dir=self.state_dir),
+                         tool_evidence.TOOL_EVIDENCE_UNVERIFIED)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,343 @@
+"""The Worker role's session-tool rules, independent of any harness.
+
+ADR-025 decision 7 moves the micro task prompt, the six-field finish contract and
+the attention/inquiry completion refusals into the role layer. These tests pin
+that boundary itself: the rules take the native, fully qualified tool names as
+arguments, importing the role module pulls in no harness package, and the
+finish boundary keeps its exact order — an invalid outcome is corrected before
+an outstanding attention request is named, and a pending inquiry blocks only a
+``completed`` disposition. The signed-envelope mint↔verify interplay with a
+real native verifier stays in the ZCode suites; here the signatures are checked
+by recomputing the one shared HMAC rule.
+"""
+from __future__ import annotations
+
+import hashlib
+from unittest import mock
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
+from hey_my_buddy.buddy.roles import session_mcp, turn_io, worker_services
+from hey_my_buddy.install.runtime import resource_path
+
+IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
+OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
+
+
+class WorkerServicesCase(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-worker-services-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.attention = self.root / "attention.json"
+        self.journal = self.root / "inquiry.results.jsonl"
+        self.configuration = {"identity": dict(IDENTITY), "inputSha256": "a" * 64, "key": "b" * 64,
+                              "attentionPath": str(self.attention), "inquiryJournalPath": str(self.journal)}
+
+    @staticmethod
+    def outcome(disposition: str) -> dict:
+        request = None if disposition in ("completed", "waiting") else {
+            "summary": "help", "attempted": "tried", "neededWork": "decide",
+            "expectedArtifacts": [], "acceptance": "decided"}
+        return {"disposition": disposition, "summary": "fixture", "remaining": [], "decisions": [],
+                "artifacts": [], "request": request}
+
+    def call(self, name: str, arguments: object) -> dict:
+        result = worker_services.call_session_tool(name, arguments, self.configuration)
+        self.assertIsNotNone(result, f"{name} is a session tool of this role")
+        return result
+
+    def envelope(self, result: dict, tool: str) -> dict:
+        self.assertTrue(result.get("isError"), result)
+        envelope = json.loads(result["content"][0]["text"])
+        self.assertEqual(envelope["kind"], "tool-refusal")
+        self.assertEqual(envelope["tool"], tool)
+        signature = envelope.pop("signature")
+        self.assertEqual(signature, sign_receipt(envelope, self.configuration["key"]))
+        return envelope
+
+    def receipt(self, result: dict) -> dict:
+        self.assertFalse(result.get("isError"), result)
+        receipt = json.loads(result["content"][0]["text"])
+        signature = receipt.pop("signature")
+        self.assertEqual(signature, sign_receipt(receipt, self.configuration["key"]))
+        return receipt
+
+    def queue(self, inquiry_id="q-1", question="what is the deployment word?", *, identity=IDENTITY) -> None:
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps({"version": 1, "inquiryId": inquiry_id, "state": "queued",
+                                     "question": question,
+                                     "questionSha256": hashlib.sha256(question.encode()).hexdigest(),
+                                     "askedAt": "2026-01-01T00:00:00Z",
+                                     "taskId": identity["taskId"], "attemptId": identity["attemptId"],
+                                     "generation": identity["generation"], "turnId": identity["turnId"]}) + "\n")
+
+
+class NativeAttentionTests(WorkerServicesCase):
+    def test_native_attention_blocks_completion_without_an_inquiry_bridge(self):
+        from hey_my_buddy.buddy.roles.attention import AttentionRecorder
+
+        recorder = AttentionRecorder(self.attention, identity=IDENTITY)
+        for index in range(12):
+            recorder.record({"method": "session/request_permission", "ordinal": index})
+        saved = json.loads(self.attention.read_text())
+        self.assertEqual(len(saved["requests"]), 12)
+        self.assertEqual(saved["requests"][0]["ordinal"], 0)
+        refused = self.call("hey_my_buddy_finish_turn", self.outcome("completed"))
+        self.assertEqual(self.envelope(refused, "hey_my_buddy_finish_turn")["reason"], "attention-outstanding")
+
+    def test_native_attention_write_failure_escapes(self):
+        from hey_my_buddy.buddy.roles.attention import AttentionRecorder
+        from unittest import mock
+
+        publish = mock.Mock()
+        recorder = AttentionRecorder(self.attention, identity=IDENTITY, on_record=publish)
+        with mock.patch("hey_my_buddy.buddy.roles.attention.private_json", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                recorder.record({"method": "session/request_permission"})
+        publish.assert_not_called()
+        self.assertEqual(recorder.requests, [])
+
+
+class MicroTaskPromptTests(unittest.TestCase):
+    def test_scope_reminds_shared_git_ownership_without_rewriting_turn_protocol(self):
+        for resume in ("initial", "reconstructed-new-session", "native-session"):
+            with self.subTest(resume=resume):
+                prompt = worker_services.micro_task_prompt("task", {"resumeMode": resume}, "finish")
+                scope = prompt.split("\n\n")[1]
+                self.assertIn("share Git stash, branches and tags", scope)
+                self.assertIn("owner's repository", scope)
+                self.assertIn("do not use git stash", scope)
+                self.assertIn("create, switch, move or delete branches or tags", scope)
+                self.assertIn("leave changes in the workspace", scope)
+                self.assertIn("commit on the current detached HEAD", scope)
+
+    def test_waiting_is_offered_only_to_a_lead_turn(self):
+        ordinary = worker_services.session_tools()[-1]["inputSchema"]
+        lead = worker_services.session_tools(delegation_authority=True)[-1]["inputSchema"]
+        self.assertNotIn("waiting", ordinary["properties"]["disposition"]["enum"])
+        self.assertIn("waiting", lead["properties"]["disposition"]["enum"])
+        self.assertNotIn("waiting", worker_services.OUTCOME_SCHEMA["properties"]["disposition"]["enum"])
+
+    def test_mcp_tool_listing_uses_the_bound_turn_authority(self):
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        for authorized in (False, True):
+            with self.subTest(authorized=authorized):
+                response = session_mcp.respond(message, {"delegationAuthority": authorized})
+                finish = response["result"]["tools"][-1]
+                self.assertEqual("waiting" in finish["inputSchema"]["properties"]["disposition"]["enum"],
+                                 authorized)
+
+    def test_the_prompt_assembles_role_scope_finish_contract_task_and_input_in_order(self):
+        prompt = worker_services.micro_task_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__hey_my_buddy_finish_turn")
+        sections = prompt.split("\n\n")
+        self.assertEqual(sections[0] + "\n", resource_path("roles.worker").read_text(encoding="utf-8"))
+        self.assertTrue(sections[1].startswith("This is a Buddy root turn for a micro task."))
+        self.assertIn("obtain one successful receipt from mcp__srv__hey_my_buddy_finish_turn", sections[2])
+        self.assertIn("all six fields: disposition, summary, remaining, decisions, artifacts, request", sections[2])
+        self.assertEqual(sections[-2], "task text")
+        self.assertEqual(sections[-1], turn_io.canonical_json({"resumeMode": "initial"}))
+        self.assertNotIn("Host inquiries arrive cooperatively", prompt, "no inquiry paragraph without both inquiry tools")
+        self.assertLessEqual(len(prompt.encode()), 64 * 1024)
+
+    def test_the_inquiry_paragraph_arrives_only_with_both_fully_qualified_tool_names(self):
+        finish, checkpoint, answer = ("mcp__other__hey_my_buddy_finish_turn", "mcp__other__hey_my_buddy_checkpoint",
+                                      "mcp__other__hey_my_buddy_answer_inquiry")
+        neither = worker_services.micro_task_prompt("t", {"turn": 1}, finish)
+        self.assertNotIn("Host inquiries arrive cooperatively", neither)
+        half = worker_services.micro_task_prompt("t", {"turn": 1}, finish, checkpoint_tool=checkpoint)
+        self.assertNotIn("Host inquiries arrive cooperatively", half)
+        both = worker_services.micro_task_prompt("t", {"turn": 1}, finish, checkpoint_tool=checkpoint,
+                                               answer_tool=answer)
+        self.assertIn(f"call {checkpoint} at natural work milestones", both)
+        self.assertIn(f"Answer each listed question with {answer}", both)
+        self.assertIn("never on a timer", both)
+        # The names are plain arguments: arbitrary identifiers flow through
+        # verbatim, and no harness name appears anywhere in the role's own text
+        # ("review"/"reviewer" are ordinary words of the frozen hints).
+        for harness_word in ("zcode", "ZCode", "codex", "Claude", "claude", "dsh", "DSH"):
+            self.assertNotIn(harness_word, both.split("task text")[0])
+
+
+class RoleBoundaryTests(unittest.TestCase):
+    def test_importing_the_role_module_imports_no_harness_package(self):
+        # This file lives in <checkout>/tests/python/buddy/roles/, so the
+        # package source it must exercise is the checkout's own src/, four
+        # parents up — not a path that only exists under this test runner.
+        source = Path(__file__).resolve().parents[4] / "src"
+        environment = {"PYTHONPATH": str(source)}
+        for name in ("PATH", "HOME", "USERPROFILE", "LOCALAPPDATA", "TMPDIR", "TEMP", "TMP",
+                     "SystemRoot", "HMB_CHECKS_TMPDIR"):
+            if name in os.environ:
+                environment[name] = os.environ[name]
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-role-boundary-") as outside:
+            # A cwd outside the checkout plus the module's own reported file
+            # prove the import resolved from this source, not from the cwd or
+            # an installed copy the parent interpreter happened to carry.
+            probe = subprocess.run([sys.executable, "-c",
+                                    "import sys, hey_my_buddy.buddy.roles.worker_services as w;"
+                                    "print(w.__file__);"
+                                    "print(any('harnesses.zcode' in m or 'harnesses.codex' in m"
+                                    " or 'harnesses.claude' in m or 'harnesses.dsh' in m for m in sys.modules));"
+                                    "print(callable(w.call_session_tool), callable(w.micro_task_prompt))"],
+                                   capture_output=True, text=True, env=environment, cwd=outside, encoding="utf-8")
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        module_file, harness_free, callables = probe.stdout.splitlines()
+        self.assertTrue(Path(module_file).resolve().is_relative_to(source),
+                        f"worker_services imported from {module_file}, not {source}")
+        self.assertEqual(harness_free, "False")
+        self.assertEqual(callables, "True True")
+
+    def test_the_three_session_tools_carry_the_six_field_contract(self):
+        tools = {tool["name"]: tool for tool in worker_services.session_tools()}
+        self.assertEqual(set(tools), {"hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"})
+        schema = tools["hey_my_buddy_finish_turn"]["inputSchema"]
+        self.assertEqual(schema["required"], ["disposition", "summary", "remaining", "decisions",
+                                              "artifacts", "request"])
+        self.assertEqual(schema["properties"]["disposition"]["enum"], ["completed", "assistance", "attention"])
+        self.assertIn("does not dispatch other tasks", tools["hey_my_buddy_finish_turn"]["description"])
+
+
+class FinishBoundaryTests(WorkerServicesCase):
+    def test_waiting_finish_requires_delegation_authority_and_null_request(self):
+        waiting = self.outcome("waiting")
+        refused = self.envelope(self.call("hey_my_buddy_finish_turn", waiting), "hey_my_buddy_finish_turn")
+        self.assertEqual(refused["reason"], "invalid-arguments")
+        self.configuration["delegationAuthority"] = True
+        receipt = self.receipt(self.call("hey_my_buddy_finish_turn", waiting))
+        self.assertEqual(receipt["outcome"], waiting)
+        waiting["request"] = self.outcome("attention")["request"]
+        refused = self.envelope(self.call("hey_my_buddy_finish_turn", waiting), "hey_my_buddy_finish_turn")
+        self.assertEqual(refused["reason"], "invalid-arguments")
+
+    def test_an_accepted_finish_mints_a_receipt_bound_to_this_attempt_and_input(self):
+        receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("completed")))
+        self.assertEqual(receipt["version"], 1)
+        self.assertEqual(receipt["identity"], IDENTITY)
+        self.assertEqual(receipt["inputSha256"], "a" * 64)
+        self.assertEqual(receipt["outcome"]["disposition"], "completed")
+        self.assertEqual(len(receipt["receiptId"]), 32)
+
+    def test_an_invalid_outcome_is_corrected_before_any_host_condition_is_named(self):
+        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8", newline="\n")
+        self.queue()
+        envelope = self.envelope(self.call("hey_my_buddy_finish_turn", {"disposition": "completed"}), "hey_my_buddy_finish_turn")
+        self.assertEqual(envelope["reason"], "invalid-arguments")
+        self.assertIn("the outcome must contain exactly the current outcome fields", envelope["detail"])
+        self.assertEqual(turn_io.validate_outcome(self.outcome("completed")), None)
+
+    def test_an_outstanding_native_request_blocks_completed_and_waiting(self):
+        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8", newline="\n")
+        self.configuration["delegationAuthority"] = True
+        for disposition in ("completed", "waiting"):
+            with self.subTest(disposition=disposition):
+                envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)), "hey_my_buddy_finish_turn")
+                self.assertEqual(envelope["reason"], "attention-outstanding")
+                self.assertIn("attention", envelope["detail"])
+        for disposition in ("assistance", "attention"):
+            with self.subTest(disposition=disposition):
+                receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)))
+                self.assertEqual(receipt["outcome"]["disposition"], disposition)
+
+    def test_a_pending_inquiry_blocks_completed_and_waiting_and_names_the_question(self):
+        self.queue()
+        self.configuration["delegationAuthority"] = True
+        for disposition in ("completed", "waiting"):
+            with self.subTest(disposition=disposition):
+                envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)), "hey_my_buddy_finish_turn")
+                self.assertEqual(envelope["reason"], "inquiry-pending")
+                self.assertIn("[q-1] what is the deployment word?", envelope["detail"])
+                self.assertIn("Call hey_my_buddy_checkpoint", envelope["detail"])
+        receipt = self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("assistance")))
+        self.assertEqual(receipt["outcome"]["disposition"], "assistance")
+
+    def test_attention_is_named_before_a_pending_inquiry_for_a_completed_outcome(self):
+        # Both Host conditions outstanding: the boundary order names the native
+        # attention request first, exactly as the moved contract requires.
+        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8", newline="\n")
+        self.queue()
+        envelope = self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome("completed")), "hey_my_buddy_finish_turn")
+        self.assertEqual(envelope["reason"], "attention-outstanding")
+
+    def test_questions_no_longer_answerable_stop_blocking_completion(self):
+        # The blocking set is exactly the answerable journal states: once a
+        # question is answered or discarded, a completed finish mints its
+        # receipt — there is no separate product withdrawal state.
+        for terminal in ("answered", "discarded"):
+            with self.subTest(state=terminal):
+                self.queue()
+                with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
+                    stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": terminal,
+                                             **IDENTITY}) + "\n")
+                self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome("completed")))
+
+
+class InquiryToolTests(WorkerServicesCase):
+    def test_a_checkpoint_lists_only_this_attempts_still_answerable_questions(self):
+        self.queue("q-mine", "mine?")
+        self.queue("q-foreign", "other attempt?", identity=OTHER_IDENTITY)
+        self.queue("q-answered", "done?")
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps({"version": 1, "inquiryId": "q-answered", "state": "answered",
+                                     "question": "done?", "questionSha256": "c" * 64, **IDENTITY}) + "\n")
+        receipt = self.receipt(self.call("hey_my_buddy_checkpoint", {}))
+        self.assertEqual(receipt["kind"], "inquiry-checkpoint")
+        self.assertEqual([item["inquiryId"] for item in receipt["inquiries"]], ["q-mine"])
+        self.assertEqual(receipt["morePending"], 0)
+
+    def test_answer_rules_are_bounded_and_bound_to_the_committed_question(self):
+        self.queue()
+        accepted = self.receipt(self.call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "deploy-ok"}))
+        self.assertEqual(accepted["kind"], "inquiry-answer")
+        self.assertEqual(accepted["questionSha256"],
+                         hashlib.sha256("what is the deployment word?".encode()).hexdigest())
+        for arguments, reason in (
+                ({"inquiryId": "q-1"}, "invalid-arguments"),
+                ({"inquiryId": "q-1", "answer": "  "}, "invalid-arguments"),
+                ({"inquiryId": "q-1", "answer": "x" * 4001}, "invalid-arguments"),
+                ({"inquiryId": "q-missing", "answer": "fine"}, "unknown-inquiry"),
+                ({"inquiryId": "i" * 129, "answer": "fine"}, "invalid-arguments")):
+            with self.subTest(reason=reason):
+                envelope = self.envelope(self.call("hey_my_buddy_answer_inquiry", arguments), "hey_my_buddy_answer_inquiry")
+                self.assertEqual(envelope["reason"], reason)
+        with self.journal.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write(json.dumps({"version": 1, "inquiryId": "q-1", "state": "answered",
+                                     "question": "what is the deployment word?",
+                                     "questionSha256": hashlib.sha256(
+                                         "what is the deployment word?".encode()).hexdigest(), **IDENTITY}) + "\n")
+        replaced = self.envelope(self.call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-1", "answer": "another"}),
+                                 "hey_my_buddy_answer_inquiry")
+        self.assertEqual(replaced["reason"], "inquiry-state")
+        self.assertIn("cannot be replaced", replaced["detail"])
+
+    def test_without_a_journal_the_channel_is_absent_for_every_tool(self):
+        configuration = {key: value for key, value in self.configuration.items() if key != "inquiryJournalPath"}
+        self.assertIsNone(worker_services.pending_inquiries(configuration))
+        for name, arguments in (("hey_my_buddy_checkpoint", {}), ("hey_my_buddy_answer_inquiry", {"inquiryId": "q", "answer": "x"})):
+            with self.subTest(tool=name):
+                result = worker_services.call_session_tool(name, arguments, configuration)
+                envelope = self.envelope(result, name)
+                self.assertEqual(envelope["reason"], "inquiry-channel-absent")
+
+    def test_only_a_missing_attention_record_means_no_requests(self):
+        self.assertEqual(worker_services.attention_requests(self.configuration), 0)
+        self.attention.write_text(json.dumps({"version": 1, "requests": [
+            {"kind": "unsupported-native-request", "method": "interaction/requestPermission"}]}), encoding="utf-8", newline="\n")
+        self.assertEqual(worker_services.attention_requests(self.configuration), 1)
+        self.attention.write_text("not json", encoding="utf-8", newline="\n")
+        with self.assertRaises(ValueError):
+            worker_services.attention_requests(self.configuration)
+        with mock.patch.object(worker_services, "read_text", side_effect=PermissionError("cannot read attention")):
+            with self.assertRaises(PermissionError):
+                worker_services.attention_requests(self.configuration)
+
+
+
+if __name__ == "__main__":
+    unittest.main()

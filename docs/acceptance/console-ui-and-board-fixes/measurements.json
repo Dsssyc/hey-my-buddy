@@ -1,0 +1,1875 @@
+{
+  "recipe": {
+    "macros": 60,
+    "members_per_macro": 6,
+    "helpers": 10,
+    "plain": 40,
+    "pending_roots": 130,
+    "large_results": 100,
+    "result_bytes": 1900000,
+    "evidence_files": 4000,
+    "routed_roots": 6,
+    "accepted_roots": 10
+  },
+  "seed": 613,
+  "baseline": {
+    "commit": "613faa4089c02ef1d5ef9b1d0743920de6f4a7cc",
+    "helperCommit": "1b2d399a58559f8579d061a6554faa21841fa48d",
+    "helperSha256": "0b9aef22a39af7afe3e0bf035bcac7dad0c923fbd05e3b643f77f2f06c2f62f0",
+    "sourceContentSha256": "6e53f4f7534ebd1a0c53e61ecce11602b7bd6aea93ecf64162e70eaa5062de63",
+    "initialFacts": {
+      "synthetic": true,
+      "recipeVersion": 1,
+      "seed": 613,
+      "recipe": {
+        "macros": 60,
+        "members_per_macro": 6,
+        "helpers": 10,
+        "plain": 40,
+        "pending_roots": 130,
+        "large_results": 100,
+        "result_bytes": 1900000,
+        "evidence_files": 4000,
+        "routed_roots": 6,
+        "accepted_roots": 10
+      },
+      "schemaVersion": 15,
+      "counts": {
+        "tasks": 406,
+        "workflow_runs": 360,
+        "objectives": 60,
+        "attempts": 366,
+        "workflow_turns": 360,
+        "workflow_requests": 150,
+        "workflow_children": 10,
+        "workflow_routes": 6,
+        "decision_requests": 6,
+        "events": 2038,
+        "artifacts": 0,
+        "workflow_artifacts": 1080,
+        "workflow_integrations": 10,
+        "workflow_continuations": 10
+      },
+      "workflowStates": {
+        "accepted": 10,
+        "awaiting-host": 140,
+        "delivered": 210
+      },
+      "eventKinds": {
+        "attempt.claimed": 366,
+        "decision.completed": 6,
+        "decision.requested": 6,
+        "decision.started": 6,
+        "evaluation.catalog_discovered": 1,
+        "evaluation.published": 1,
+        "evaluation.reader_admitted": 6,
+        "evaluation.reader_released": 6,
+        "evaluation.writer_granted": 1,
+        "evaluation.writer_queued": 1,
+        "router.answered": 6,
+        "router.claimed": 6,
+        "task.completed": 226,
+        "task.queued": 140,
+        "task.submitted": 396,
+        "worker.registered": 2,
+        "workflow.acknowledged": 10,
+        "workflow.boundary_updated": 10,
+        "workflow.cleanup_planned": 10,
+        "workflow.configuration_selected": 354,
+        "workflow.configuration_validated": 6,
+        "workflow.helper_admitted": 10,
+        "workflow.helper_settled": 10,
+        "workflow.integration_recorded": 10,
+        "workflow.objective_created": 60,
+        "workflow.request_approved": 10,
+        "workflow.routing_requested": 6,
+        "workflow.routing_resolved": 6,
+        "workflow.turn_concluded": 360
+      },
+      "governedRuns": 360,
+      "plainRecords": 40,
+      "pendingRoots": 130,
+      "largeResultBytes": [
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000
+      ],
+      "largeResultTotalBytes": 190000000,
+      "maxDisplaySummaryCharacters": 32,
+      "attemptFiles": 4360,
+      "attemptFileBytes": 575200,
+      "declaredEvidenceFiles": 4000,
+      "declaredEvidenceBytes": 570880,
+      "databaseBytes": 211312640,
+      "databaseSidecarBytes": {
+        "-wal": 0,
+        "-shm": 0
+      },
+      "foreignKeyViolations": [],
+      "integrityCheck": "ok",
+      "subprocessLaunchAttempts": 0,
+      "runtimeEntries": [],
+      "paths": {
+        "state": "<private-state>",
+        "runtime": "<private-runtime>",
+        "database": "<private-state>/board.sqlite3"
+      },
+      "injection": "Private fixture UPDATE attempts.result_json only; admitted turn outcome unchanged",
+      "boundaries": "Synthetic native/router receipts and MockWorkspace; no native execution or Git verification"
+    },
+    "sampleCount": 60,
+    "warmupCount": 25,
+    "aggregates": {
+      "no-write/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 0.096042,
+          "p90": 0.159333,
+          "max": 0.159333
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 0.245916,
+          "p90": 0.378458,
+          "max": 0.378458
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 0.0,
+          "p90": 0.0,
+          "max": 0.0
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 0.0,
+          "p90": 0.0,
+          "max": 0.0
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 0,
+          "p90": 0,
+          "max": 0
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "no-write/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 0.062791,
+          "p90": 0.080833,
+          "max": 0.080833
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 0.205917,
+          "p90": 0.233291,
+          "max": 0.233291
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 0.0,
+          "p90": 0.0,
+          "max": 0.0
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 0.0,
+          "p90": 0.0,
+          "max": 0.0
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 0,
+          "p90": 0,
+          "max": 0
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "unrelated-meta/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 284.544584,
+          "p90": 358.839084,
+          "max": 358.839084
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 284.940833,
+          "p90": 359.221792,
+          "max": 359.221792
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 282.916666,
+          "p90": 357.117667,
+          "max": 357.117667
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 283.236416,
+          "p90": 357.412541,
+          "max": 357.412541
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "unrelated-meta/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 276.045167,
+          "p90": 277.207917,
+          "max": 277.207917
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 276.379709,
+          "p90": 277.573042,
+          "max": 277.573042
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 274.493417,
+          "p90": 275.727917,
+          "max": 275.727917
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 274.78325,
+          "p90": 276.022958,
+          "max": 276.022958
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "unrelated-plain/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 281.670875,
+          "p90": 310.70325,
+          "max": 310.70325
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 282.093792,
+          "p90": 311.175583,
+          "max": 311.175583
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 280.091459,
+          "p90": 309.015458,
+          "max": 309.015458
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 280.411333,
+          "p90": 309.345292,
+          "max": 309.345292
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "unrelated-plain/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 278.119666,
+          "p90": 285.950833,
+          "max": 285.950833
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 278.535792,
+          "p90": 286.31725,
+          "max": 286.31725
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 276.625958,
+          "p90": 284.412791,
+          "max": 284.412791
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 276.920834,
+          "p90": 284.730792,
+          "max": 284.730792
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "other-macro/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 276.842833,
+          "p90": 304.039209,
+          "max": 304.039209
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 277.253667,
+          "p90": 304.479417,
+          "max": 304.479417
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 275.3405,
+          "p90": 302.509791,
+          "max": 302.509791
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 275.628583,
+          "p90": 302.81675,
+          "max": 302.81675
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "rawBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "other-macro/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 274.577833,
+          "p90": 284.878375,
+          "max": 284.878375
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 274.973417,
+          "p90": 285.288333,
+          "max": 285.288333
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 272.901833,
+          "p90": 283.385417,
+          "max": 283.385417
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 273.209416,
+          "p90": 283.681542,
+          "max": 283.681542
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          10342,
+          10346,
+          10346,
+          10346,
+          10348
+        ],
+        "rawBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "gzipBodyBytes": [
+          10342,
+          10346,
+          10346,
+          10346,
+          10348
+        ]
+      },
+      "single-macro/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 277.980708,
+          "p90": 279.066375,
+          "max": 279.066375
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 278.368333,
+          "p90": 279.427709,
+          "max": 279.427709
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 276.267875,
+          "p90": 277.503583,
+          "max": 277.503583
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 276.567834,
+          "p90": 277.806875,
+          "max": 277.806875
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "rawBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "single-macro/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 279.183417,
+          "p90": 295.814208,
+          "max": 295.814208
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 279.556917,
+          "p90": 296.234875,
+          "max": 296.234875
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 277.528584,
+          "p90": 294.309166,
+          "max": 294.309166
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 277.930625,
+          "p90": 294.607,
+          "max": 294.607
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          10341,
+          10341,
+          10340,
+          10342,
+          10339
+        ],
+        "rawBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "gzipBodyBytes": [
+          10341,
+          10341,
+          10340,
+          10342,
+          10339
+        ]
+      },
+      "all-macros/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 274.225791,
+          "p90": 279.614167,
+          "max": 279.614167
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 274.705916,
+          "p90": 279.967625,
+          "max": 279.967625
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 272.670416,
+          "p90": 277.948875,
+          "max": 277.948875
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 272.9745,
+          "p90": 278.272333,
+          "max": 278.272333
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          59779,
+          59779,
+          59779,
+          59779,
+          59779
+        ],
+        "rawBodyBytes": [
+          59779,
+          59779,
+          59779,
+          59779,
+          59779
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "all-macros/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 277.484875,
+          "p90": 277.914375,
+          "max": 277.914375
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 277.875333,
+          "p90": 278.425666,
+          "max": 278.425666
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 275.851417,
+          "p90": 276.367833,
+          "max": 276.367833
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 276.147292,
+          "p90": 276.668708,
+          "max": 276.668708
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          10092,
+          10091,
+          10083,
+          10092,
+          10084
+        ],
+        "rawBodyBytes": [
+          59779,
+          59779,
+          59779,
+          59779,
+          59779
+        ],
+        "gzipBodyBytes": [
+          10092,
+          10091,
+          10083,
+          10092,
+          10084
+        ]
+      }
+    },
+    "method": "Real Console HTTP do_GET, BoardService.objective_list and objectives.objective_list entry/return boundaries; perf_counter_ns. Writes/init/Condition waits/completion bookkeeping outside timers. _summary counter wrappers execute within real handler wall; overhead is not subtracted or fabricated. No per-call timing of _summary and no profiler.",
+    "dataState": "Fresh seed-generated roots; no board copy/reuse. Sequential scenarios, cumulative recorded mutationOrdinal; each write is committed before request. Conditional validators are per coding. Warmups retained separately.",
+    "rawEvidence": "tmp/console-ui-and-board-host/review-bg-bench/host-baseline-full/output/{samples.jsonl,report.json,fixture-facts.json}"
+  },
+  "final": {
+    "commit": "b3cf8ffbead2cf3ec31029cd6bf41fa2d748bf30",
+    "helperCommit": "1b2d399a58559f8579d061a6554faa21841fa48d",
+    "helperSha256": "0b9aef22a39af7afe3e0bf035bcac7dad0c923fbd05e3b643f77f2f06c2f62f0",
+    "sourceContentSha256": "a128f658f09f71b3205caf84363572ef7b42739a0242b9e35e00d763f04fe4f7",
+    "initialFacts": {
+      "synthetic": true,
+      "recipeVersion": 1,
+      "seed": 613,
+      "recipe": {
+        "macros": 60,
+        "members_per_macro": 6,
+        "helpers": 10,
+        "plain": 40,
+        "pending_roots": 130,
+        "large_results": 100,
+        "result_bytes": 1900000,
+        "evidence_files": 4000,
+        "routed_roots": 6,
+        "accepted_roots": 10
+      },
+      "schemaVersion": 15,
+      "counts": {
+        "tasks": 406,
+        "workflow_runs": 360,
+        "objectives": 60,
+        "attempts": 366,
+        "workflow_turns": 360,
+        "workflow_requests": 150,
+        "workflow_children": 10,
+        "workflow_routes": 6,
+        "decision_requests": 6,
+        "events": 2038,
+        "artifacts": 0,
+        "workflow_artifacts": 1080,
+        "workflow_integrations": 10,
+        "workflow_continuations": 10
+      },
+      "workflowStates": {
+        "accepted": 10,
+        "awaiting-host": 140,
+        "delivered": 210
+      },
+      "eventKinds": {
+        "attempt.claimed": 366,
+        "decision.completed": 6,
+        "decision.requested": 6,
+        "decision.started": 6,
+        "evaluation.catalog_discovered": 1,
+        "evaluation.published": 1,
+        "evaluation.reader_admitted": 6,
+        "evaluation.reader_released": 6,
+        "evaluation.writer_granted": 1,
+        "evaluation.writer_queued": 1,
+        "router.answered": 6,
+        "router.claimed": 6,
+        "task.completed": 226,
+        "task.queued": 140,
+        "task.submitted": 396,
+        "worker.registered": 2,
+        "workflow.acknowledged": 10,
+        "workflow.boundary_updated": 10,
+        "workflow.cleanup_planned": 10,
+        "workflow.configuration_selected": 354,
+        "workflow.configuration_validated": 6,
+        "workflow.helper_admitted": 10,
+        "workflow.helper_settled": 10,
+        "workflow.integration_recorded": 10,
+        "workflow.objective_created": 60,
+        "workflow.request_approved": 10,
+        "workflow.routing_requested": 6,
+        "workflow.routing_resolved": 6,
+        "workflow.turn_concluded": 360
+      },
+      "governedRuns": 360,
+      "plainRecords": 40,
+      "pendingRoots": 130,
+      "largeResultBytes": [
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000,
+        1900000
+      ],
+      "largeResultTotalBytes": 190000000,
+      "maxDisplaySummaryCharacters": 32,
+      "attemptFiles": 4360,
+      "attemptFileBytes": 575200,
+      "declaredEvidenceFiles": 4000,
+      "declaredEvidenceBytes": 570880,
+      "databaseBytes": 211312640,
+      "databaseSidecarBytes": {
+        "-wal": 0,
+        "-shm": 0
+      },
+      "foreignKeyViolations": [],
+      "integrityCheck": "ok",
+      "subprocessLaunchAttempts": 0,
+      "runtimeEntries": [],
+      "paths": {
+        "state": "<private-state>",
+        "runtime": "<private-runtime>",
+        "database": "<private-state>/board.sqlite3"
+      },
+      "injection": "Private fixture UPDATE attempts.result_json only; admitted turn outcome unchanged",
+      "boundaries": "Synthetic native/router receipts and MockWorkspace; no native execution or Git verification"
+    },
+    "aggregates": {
+      "no-write/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 0.082958,
+          "p90": 0.093,
+          "max": 0.093
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 0.271,
+          "p90": 0.299292,
+          "max": 0.299292
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 0.0,
+          "p90": 0.0,
+          "max": 0.0
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 0.0,
+          "p90": 0.0,
+          "max": 0.0
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 0,
+          "p90": 0,
+          "max": 0
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "no-write/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 0.077417,
+          "p90": 0.121833,
+          "max": 0.121833
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 0.224834,
+          "p90": 0.328833,
+          "max": 0.328833
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 0.0,
+          "p90": 0.0,
+          "max": 0.0
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 0.0,
+          "p90": 0.0,
+          "max": 0.0
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 0,
+          "p90": 0,
+          "max": 0
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "unrelated-meta/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 92.78175,
+          "p90": 95.62375,
+          "max": 95.62375
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 93.175333,
+          "p90": 96.081167,
+          "max": 96.081167
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 90.908708,
+          "p90": 93.023542,
+          "max": 93.023542
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 91.27225,
+          "p90": 93.548334,
+          "max": 93.548334
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 0,
+          "p90": 0,
+          "max": 0
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "unrelated-meta/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 91.649041,
+          "p90": 92.6495,
+          "max": 92.6495
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 92.004,
+          "p90": 93.082625,
+          "max": 93.082625
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 89.738917,
+          "p90": 90.759541,
+          "max": 90.759541
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 90.143125,
+          "p90": 91.133458,
+          "max": 91.133458
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 0,
+          "p90": 0,
+          "max": 0
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "unrelated-plain/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 96.514584,
+          "p90": 99.07575,
+          "max": 99.07575
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 96.899417,
+          "p90": 99.45375,
+          "max": 99.45375
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 94.627875,
+          "p90": 97.083875,
+          "max": 97.083875
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 95.003792,
+          "p90": 97.468792,
+          "max": 97.468792
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 0,
+          "p90": 0,
+          "max": 0
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "unrelated-plain/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 92.360667,
+          "p90": 97.063791,
+          "max": 97.063791
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 92.694167,
+          "p90": 97.463916,
+          "max": 97.463916
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 90.444917,
+          "p90": 95.018834,
+          "max": 95.018834
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 90.817125,
+          "p90": 95.460167,
+          "max": 95.460167
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 0,
+          "p90": 0,
+          "max": 0
+        },
+        "statuses": [
+          304,
+          304,
+          304,
+          304,
+          304
+        ],
+        "wireBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "rawBodyBytes": [
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "other-macro/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 104.212125,
+          "p90": 106.321542,
+          "max": 106.321542
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 104.525166,
+          "p90": 106.710667,
+          "max": 106.710667
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 102.340333,
+          "p90": 104.377958,
+          "max": 104.377958
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 102.701875,
+          "p90": 104.755375,
+          "max": 104.755375
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 1,
+          "p90": 1,
+          "max": 1
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "rawBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "other-macro/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 104.587375,
+          "p90": 112.40625,
+          "max": 112.40625
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 105.04025,
+          "p90": 112.788209,
+          "max": 112.788209
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 102.695667,
+          "p90": 110.447458,
+          "max": 110.447458
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 103.069542,
+          "p90": 110.817416,
+          "max": 110.817416
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 1,
+          "p90": 1,
+          "max": 1
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          10339,
+          10343,
+          10343,
+          10344,
+          10345
+        ],
+        "rawBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "gzipBodyBytes": [
+          10339,
+          10343,
+          10343,
+          10344,
+          10345
+        ]
+      },
+      "single-macro/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 104.150125,
+          "p90": 104.684875,
+          "max": 104.684875
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 104.522625,
+          "p90": 105.093917,
+          "max": 105.093917
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 102.232209,
+          "p90": 102.682291,
+          "max": 102.682291
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 102.604042,
+          "p90": 103.083459,
+          "max": 103.083459
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 1,
+          "p90": 1,
+          "max": 1
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "rawBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "single-macro/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 100.56125,
+          "p90": 101.450875,
+          "max": 101.450875
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 100.96375,
+          "p90": 101.857875,
+          "max": 101.857875
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 98.6275,
+          "p90": 99.525042,
+          "max": 99.525042
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 99.013667,
+          "p90": 99.898708,
+          "max": 99.898708
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 1,
+          "p90": 1,
+          "max": 1
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          10338,
+          10338,
+          10337,
+          10339,
+          10336
+        ],
+        "rawBodyBytes": [
+          59722,
+          59722,
+          59722,
+          59722,
+          59722
+        ],
+        "gzipBodyBytes": [
+          10338,
+          10338,
+          10337,
+          10339,
+          10336
+        ]
+      },
+      "all-macros/identity": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 442.868208,
+          "p90": 443.423917,
+          "max": 443.423917
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 443.250625,
+          "p90": 443.774333,
+          "max": 443.774333
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 440.898459,
+          "p90": 441.309125,
+          "max": 441.309125
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 441.308125,
+          "p90": 441.757625,
+          "max": 441.757625
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          59779,
+          59779,
+          59779,
+          59779,
+          59779
+        ],
+        "rawBodyBytes": [
+          59779,
+          59779,
+          59779,
+          59779,
+          59779
+        ],
+        "gzipBodyBytes": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ]
+      },
+      "all-macros/gzip": {
+        "handlerWallMs": {
+          "samples": 5,
+          "median": 442.289708,
+          "p90": 470.594375,
+          "max": 470.594375
+        },
+        "clientRoundTripMs": {
+          "samples": 5,
+          "median": 442.732583,
+          "p90": 471.284458,
+          "max": 471.284458
+        },
+        "objectiveListWallMs": {
+          "samples": 5,
+          "median": 440.386666,
+          "p90": 468.114041,
+          "max": 468.114041
+        },
+        "serviceHandlerWallMs": {
+          "samples": 5,
+          "median": 440.776625,
+          "p90": 468.545041,
+          "max": 468.545041
+        },
+        "summaryCalls": {
+          "samples": 5,
+          "median": 50,
+          "p90": 50,
+          "max": 50
+        },
+        "statuses": [
+          200,
+          200,
+          200,
+          200,
+          200
+        ],
+        "wireBodyBytes": [
+          10088,
+          10088,
+          10081,
+          10090,
+          10081
+        ],
+        "rawBodyBytes": [
+          59779,
+          59779,
+          59779,
+          59779,
+          59779
+        ],
+        "gzipBodyBytes": [
+          10088,
+          10088,
+          10081,
+          10090,
+          10081
+        ]
+      }
+    },
+    "method": "Real Console HTTP do_GET, BoardService.objective_list and objectives.objective_list entry/return boundaries; perf_counter_ns. Writes/init/Condition waits/completion bookkeeping outside timers. _summary counter wrappers execute within real handler wall; overhead is not subtracted or fabricated. No per-call timing of _summary and no profiler.",
+    "dataState": "Fresh seed-generated roots; no board copy/reuse. Sequential scenarios, cumulative recorded mutationOrdinal; each write is committed before request. Conditional validators are per coding. Warmups retained separately.",
+    "sampleCount": 60,
+    "warmupCount": 25,
+    "rawEvidence": "tmp/console-ui-and-board-host/review-bg-list/host-final-repaired/output/{samples.jsonl,report.json,fixture-facts.json}"
+  }
+}

@@ -1,0 +1,493 @@
+"""Owned-process ZCode protocol tests; no model network or shared board is used."""
+from __future__ import annotations
+
+import json
+import math
+import os
+from temporary import TemporaryDirectory
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
+
+import c_two as cc
+
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveReply, LiveRequest, LiveSnapshot
+from hey_my_buddy.buddy.roles.controller import worker_executor
+from hey_my_buddy.buddy.harnesses.registry import adapter
+from hey_my_buddy.paths import native_path
+
+FIXTURE = Path(__file__).parent / "fixtures/mock_zcode.py"
+
+
+class ZcodeFixtureCase(unittest.TestCase):
+    def setUp(self):
+        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-test-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.cwd = self.root / "checkout"
+        self.cwd.mkdir()
+        mock_role_workspace(self)
+        self.builtin = self.root / "provider/zcode-builtin.json"
+        self.builtin.parent.mkdir()
+        self.personal = self.root / "native-user-home/.zcode/v2/provider_config.json"
+        self.personal.parent.mkdir(parents=True)
+        self.builtin.write_text(json.dumps({"config": {"providerConfigRules": {"templateRules": [], "providerRules": []}}}), encoding="utf-8", newline="\n")
+        self.personal.write_text(json.dumps({"config": {"providerConfigRules": {"providerRules": [
+            {"providerId": "fixture-api", "config": {"access": {"type": "api-key", "apiKey": "fixture-secret-never-public"}}}]}}}), encoding="utf-8", newline="\n")
+        self.environment = {k: v for k, v in os.environ.items() if not k.startswith(("HMB_", "ANTHROPIC_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_")) and k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        native_home = self.root / "native-user-home"
+        native_home.mkdir(mode=0o700, exist_ok=True)
+        self.environment.update(HOME=str(native_home), USERPROFILE=str(native_home),
+                                ZCODE_DATA_BASE_DIR=str(native_home), HMB_CONSOLE_PORT="0", HMB_STATE_DIR=str(self.root / "state"),
+                                HMB_RUNTIME_ROOT=str(self.root / "runtime"), HMB_DEV_SOURCE="1",
+                                ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=str(self.builtin), ZCODE_PERSONAL_PROVIDER_CONFIG_FILE=str(self.personal))
+        select_fixture(self.environment, self.root, "zcode", FIXTURE.resolve())
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        configure_client(self.root / "state")
+        self.addCleanup(cc.shutdown)
+        self.adapter = worker_executor("zcode")
+        self.description = adapter("zcode")
+
+    def context(self, case="ok", *, index=1, previous=None, mode=None, timeout=10, effort="low"):
+        # Concurrent private suites keep an attempt stable within this fixture
+        # and distinct across roots, so journals and live endpoints never cross.
+        attempt_id = f"attempt-{self.root.name}-{index}"
+        identity = {"version": 1, "taskId": "micro-task-1", "attemptId": attempt_id, "generation": index,
+                    "turnId": f"turn-{index}", "resumeMode": mode or ("native-session" if previous else "initial"),
+                    "previousSessionId": previous, "context": {},
+                    "executionWorkspace": {"path": str(self.cwd), "access": "write"}}
+        return ExecutionContext(task_id="micro-task-1", attempt_id=attempt_id, generation=index,
+                                session_record_path=str(self.root / f"session-{attempt_id}.jsonl"),
+                                spec={"adapter": "zcode", "cwd": str(self.cwd), "task": "fixture task", "expectedSeconds": 1,
+                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
+                                      "provider": "fixture-api", "model": "fixture-model", "effort": effort},
+                                directory=self.root / f"attempt-{index}", runtime={},
+                                environment={**self.environment, "HMB_ZCODE_TEST_CASE": case},
+                                turn={"turnId": f"turn-{index}", "input": identity})
+
+    def execute(self, context):
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait((context.timeout_seconds or 10) + 10), "controller did not exit within its deadline and shutdown grace")
+        outcome = self.adapter.collect(handle, context)
+        return handle, outcome
+
+    # -- the integrated live and inquiry entry points (shared with the
+    # checkpoint and refusal flow suites) -----------------------------------
+
+    def own_handle(self, handle):
+        """Own the native run until its process has settled."""
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+
+    def live_channel(self, handle):
+        """Read this inline run's published in-process endpoint."""
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            endpoint = handle.live_endpoint
+            if endpoint is not None:
+                return endpoint
+            time.sleep(0.05)
+        self.fail("the held controller endpoint never became ready")
+
+    def ready_channel(self, handle):
+        """The bound channel once the owner admitted the root turn (ready fact)."""
+        channel = self.live_channel(handle)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            snapshot = LiveSnapshot.model_validate_json(
+                channel.observe_local(limit=1, fields=("observation",)))
+            observation = snapshot.observation if snapshot.observed else None
+            if observation is not None and observation.ready:
+                self.assertEqual(channel.identity, handle.role_run_identity,
+                                 "the live channel must carry the run's complete identity")
+                return channel
+            time.sleep(0.05)
+        self.fail("the attempt never mounted its private inquiry bridge and admitted the root turn")
+
+    def ask(self, handle, inquiry_id, question, channel=None, timeout_ms=4000):
+        """Queue one Host question through the live endpoint."""
+        channel = channel or self.ready_channel(handle)
+        reply = LiveReply.model_validate_json(channel.request_local(
+            LiveRequest(identity=channel.identity, request_id=inquiry_id, kind="inquiry",
+                        payload=InquiryPayload(question_id=inquiry_id, question=question)),
+            timeout_ms=timeout_ms, deadline_monotonic=time.monotonic() + timeout_ms / 1000))
+        self.assertTrue(reply.observed, reply.model_dump())
+        self.assertEqual(reply.status, "queued", reply.model_dump())
+        correlation = reply.native_correlation.value
+        self.assertEqual(correlation["inquiryId"], inquiry_id)
+        self.assertFalse(correlation["duplicate"])
+        return channel, reply
+
+    def inquiry_results_path(self, context):
+        """The attempt-private journal path from the role's real control record."""
+        from hey_my_buddy.private_dirs import context_root
+
+        return context.directory / "inquiry.results.jsonl"
+
+    def inquiry_records(self, context, inquiry_id):
+        """The durable journal's ordered records of one inquiry of this attempt."""
+        path = self.inquiry_results_path(context)
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and json.loads(line).get("inquiryId") == inquiry_id]
+
+    def release(self, context):
+        from hey_my_buddy.private_dirs import context_root
+
+        next(native_path(context_root(context, "zcode")).glob("run-*/native-logs")).joinpath("release-turn").touch()
+
+    def native_log(self, context, name):
+        from hey_my_buddy.private_dirs import context_root
+
+        path = next(native_path(context_root(context, "zcode")).glob("run-*/native-logs/" + name), None)
+        return path.read_text(encoding="utf-8") if path is not None and path.exists() else ""
+
+    def wait_file(self, context, name, timeout=20):
+        from hey_my_buddy.private_dirs import context_root
+
+        path = next(native_path(context_root(context, "zcode")).glob("run-*/native-logs/" + name), None)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            path = next(native_path(context_root(context, "zcode")).glob("run-*/native-logs/" + name), None)
+            if path is not None:
+                return path.read_text(encoding="utf-8")
+            time.sleep(0.05)
+        return None
+
+    def wait_native_input(self, context, timeout=20):
+        """Block until the fixture recorded this turn's input, bounded in time.
+
+        Cancelling before the controller installed its termination handler kills
+        the controller instead of stopping the owned native group, so a
+        cancellation test must wait for the turn to reach the fixture. The
+        fixture appends every handled method to ``methods.jsonl`` before it runs
+        it, and the ``hang`` case parks inside ``session/send``.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if "session/send" in self.native_log(context, "methods.jsonl").split():
+                return
+            time.sleep(0.05)
+        self.fail(f"the ZCode fixture never recorded session/send within {timeout}s "
+                  f"(methods: {self.native_log(context, 'methods.jsonl').split()})")
+
+
+class ZcodeAdapterTests(ZcodeFixtureCase):
+    def test_slow_version_metadata_does_not_block_native_catalog_discovery(self):
+        with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "slow-version"}, clear=True):
+            result = self.description.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.assertEqual(result["harnessVersion"], "unknown")
+        self.assertEqual(result["providers"][0]["models"][0]["id"], "fixture-model")
+
+    def test_success_uses_native_root_receipt_and_keeps_secrets_private(self):
+        original = self.personal.read_bytes()
+        context = self.context()
+        handle, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        turn = outcome.result["turn"]
+        self.assertEqual(turn["outcome"]["summary"], "fixture work completed")
+        self.assertEqual(turn["provenance"]["settlement"], "session-closed")
+        self.assertEqual(outcome.result["requested"], {"provider": "fixture-api", "model": "fixture-model", "effort": "low"})
+        self.assertEqual({key: getattr(handle.result.buddy.checked, key).value
+                          for key in ("provider", "model", "effort")}, outcome.result["requested"])
+        self.assertEqual(outcome.result["resolved"], outcome.result["requested"])
+        self.assertNotIn("observed", outcome.result)
+        self.assertNotIn("observedConfig", outcome.result)
+        self.assertNotIn("requestedConfig", outcome.result)
+        self.assertEqual(self.personal.read_bytes(), original)
+        self.assertNotIn("fixture-secret-never-public", json.dumps(outcome.to_report()))
+        self.assertFalse(any("provider" in x["location"] or "bridge" in x["location"] for x in outcome.artifacts))
+        # Observation and the cooperative inquiry channel are declared
+        # capabilities backed by this attempt's private bridge: questions queue
+        # for delivery at the root's own checkpoint inside the one admitted
+        # native turn, never through an injected send. The session facts stay
+        # separate from the Git workspace facts.
+        self.assertIn("observe", self.description.capabilities)
+        self.assertIn("inquiry", self.description.capabilities)
+        self.assertTrue(outcome.result["inquiry"]["mounted"], outcome.result["inquiry"])
+        self.assertFalse({"supported", "requestedDelivery", "startsNewTurn", "extendsDeadline"}
+                         & outcome.result["inquiry"].keys())
+        self.assertEqual(outcome.result["inquiry"]["deliveryMode"], "cooperative-checkpoint")
+        self.assertEqual(outcome.result["inquiry"]["answered"], 0)
+        native = outcome.result["nativeSession"]
+        self.assertEqual(native["sessionId"], turn["sessionId"])
+        self.assertEqual(native["storageScope"], "task-private")
+        self.assertEqual(native["storageOwner"], "hey-my-buddy-micro-task")
+        self.assertEqual(native["nativeAppVisibility"], "not-listed-in-native-app")
+        self.assertTrue(native["bindingPresent"])
+        self.assertTrue(native["resumable"])
+        # The role retains its durable inquiry journal without publishing a
+        # separate per-turn endpoint or token into the control record.
+        from hey_my_buddy.private_dirs import context_root
+        private_root = context_root(context, "zcode")
+        control = handle.role_run_control
+        self.assertEqual(control["inquiry"], {"resultsPath": str(context.directory / "inquiry.results.jsonl")})
+        self.assertEqual(control, handle.role_run_control)
+        self.assertFalse(native_path(private_root / "inquiry.json").exists(),
+                         "the retired per-turn inquiry.json must not be written")
+        self.assertNotIn("live", control)
+        self.assertNotIn("executionLiveFile", control)
+        self.assertFalse(native_path(private_root / "execution-live.json").exists())
+
+    def test_child_finish_does_not_replace_or_disable_root_finish(self):
+        _, outcome = self.execute(self.context("child-first"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["provenance"]["toolCallId"], "root-call")
+
+    def test_protocol_failures_never_import_a_turn(self):
+        cases = {"wrong-root": "missing-finish", "wrong-turn": "missing-finish", "tool-error": "finish-tool-failed",
+                 "truncated": "finish-tool-failed", "duplicate": "duplicate-finish", "turn-failure": "native-turn-failed",
+                 "prompt-failure": "native-turn-failed", "close-failed": "session-close-unconfirmed",
+                 "wrong-input": "wrong-native-turn", "forged-receipt": "invalid-finish"}
+        for index, (case, code) in enumerate(cases.items(), 1):
+            with self.subTest(case=case):
+                handle, outcome = self.execute(self.context(case, index=index))
+                self.assertEqual(outcome.status, "failed", outcome.to_report())
+                self.assertTrue(outcome.shutdown_confirmed)
+                self.assertEqual(outcome.result.get("code"), code, outcome.to_report())
+                self.assertNotIn("turn", outcome.result)
+                self.assertEqual({key: getattr(handle.result.buddy.checked, key).value
+                                  for key in ("provider", "model", "effort")}, outcome.result["requested"])
+                self.assertNotIn("observed", outcome.result)
+
+    def test_confirmed_model_readback_mismatch_is_rejected_before_work(self):
+        handle, outcome = self.execute(self.context("config-mismatch", effort="high"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "buddy-mismatch")
+        self.assertFalse(outcome.result["modelStarted"])
+        self.assertIsNone(handle.result.buddy.checked.model)
+        self.assertNotIn("turn", outcome.result)
+
+    def test_unrecognized_model_readback_continues_and_retains_unknown_facts(self):
+        handle, outcome = self.execute(self.context("config-unrecognized"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.result["modelStarted"])
+        self.assertIsNone(handle.result.buddy.checked.model)
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+
+    def test_native_turn_failure_attribution_is_whitelisted_and_secret_free(self):
+        from hey_my_buddy.buddy.runtime.execution import classify_termination
+
+        for index, case in enumerate(("turn-failed-quota", "turn-failed-quiet"), 1):
+            with self.subTest(case=case):
+                _, outcome = self.execute(self.context(case, index=index))
+                self.assertEqual(outcome.status, "failed", outcome.to_report())
+                self.assertTrue(outcome.shutdown_confirmed)
+                self.assertEqual(outcome.result["code"], "native-turn-failed")
+                failure = outcome.result["nativeFailure"]
+                report = json.dumps(outcome.to_report())
+                self.assertNotIn("sk-fixture-never-public", report)
+                self.assertNotIn("models.example.com", report)
+                if case == "turn-failed-quota":
+                    self.assertEqual(failure["errorType"], "AiSdkModelAdapterError")
+                    self.assertEqual(failure["code"], "model_rate_limited")
+                    self.assertEqual(failure["attribution"]["reason"], "rate_limited")
+                    self.assertEqual(failure["attribution"]["source"], "provider")
+                    self.assertEqual(failure["attribution"]["statusCode"], 429)
+                    self.assertEqual(failure["attribution"]["providerErrorCode"], "1308")
+                    self.assertIs(failure["attribution"]["retryable"], False)
+                    self.assertIn("rate_limited", outcome.result["error"])
+                    # A provider-side native failure keeps the distinct harness-error
+                    # termination; it is never relabelled deadline, user-cancel or transport.
+                    self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=False),
+                                     "harness-error")
+                else:
+                    self.assertEqual(failure["summary"], "no structured failure attribution was exported")
+                    self.assertEqual(failure["attribution"], {})
+
+    def test_a_prompt_failure_never_manufactures_attribution(self):
+        # The state.updated prompt_failed envelope exports only a reason string
+        # and an opaque patch, so no attribution is invented for it.
+        _, outcome = self.execute(self.context("prompt-failure"))
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.result.get("code"), "native-turn-failed")
+        self.assertNotIn("nativeFailure", outcome.result)
+
+    def test_duplicate_protocol_members_fail_without_work(self):
+        handle, outcome = self.execute(self.context("invalid-json"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(outcome.result.get("code"), "invalid-protocol")
+        self.assertIsNone(handle.result.buddy.checked.model)
+        self.assertNotIn("turn", outcome.result)
+
+    def test_resume_keeps_exact_session_and_reinjects_the_new_bridge(self):
+        _, first = self.execute(self.context())
+        self.assertEqual(first.status, "ok", first.to_report())
+        session = first.result["turn"]["sessionId"]
+        second_handle, second = self.execute(self.context(index=2, previous=session))
+        self.assertEqual(second.status, "ok", second.to_report())
+        self.assertEqual(second.result["turn"]["sessionId"], session)
+        self.assertEqual(second.result["turn"]["resumeMode"], "native-session")
+        self.assertEqual(second_handle.result.buddy.checked.effort.value, "low")
+        self.assertNotEqual(second.result["turn"]["inputSha256"], first.result["turn"]["inputSha256"])
+        self.assertNotEqual(second.result["turn"]["provenance"]["nativeTurnId"], first.result["turn"]["provenance"]["nativeTurnId"])
+
+    def test_failed_turn_can_reconstruct_a_new_root_without_a_verified_session(self):
+        first_context = self.context("tool-error")
+        first_handle, first = self.execute(first_context)
+        self.assertEqual(first.status, "failed", first.to_report())
+        self.assertNotIn("turn", first.result)
+        from hey_my_buddy.private_dirs import context_root
+        root = Path(first_handle.role_run_control["nativeRoot"])
+        prior_session = json.loads(native_path(root / "sessions.fixture.json").read_text(encoding="utf-8"))["sessionId"]
+        _, second = self.execute(self.context(index=2, mode="reconstructed-new-session"))
+        self.assertEqual(second.status, "ok", second.to_report())
+        turn = second.result["turn"]
+        self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
+        self.assertIsNone(turn["previousSessionId"])
+        self.assertNotEqual(turn["sessionId"], prior_session)
+
+    def test_native_resume_requires_same_buddy_and_reconstruction_uses_a_new_root(self):
+        _, first = self.execute(self.context())
+        self.assertEqual(first.status, "ok", first.to_report())
+        previous = first.result["turn"]["sessionId"]
+        _, refused = self.execute(self.context(index=2, previous=previous, effort="high"))
+        self.assertEqual(refused.status, "failed", refused.to_report())
+        self.assertEqual(refused.result.get("code"), "native-resume-unavailable")
+        self.assertIs(refused.result["modelStarted"], False)
+        self.assertNotIn("turn", refused.result)
+        reconstructed_handle, reconstructed = self.execute(self.context(index=3, previous=previous, mode="reconstructed-new-session", effort="high"))
+        self.assertEqual(reconstructed.status, "ok", reconstructed.to_report())
+        turn = reconstructed.result["turn"]
+        self.assertEqual(turn["previousSessionId"], previous)
+        self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
+        self.assertNotEqual(turn["sessionId"], previous)
+        self.assertEqual(reconstructed_handle.result.buddy.checked.effort.value, "high")
+        reused = {**turn, "sessionId": previous, "provenance": {**turn["provenance"], "nativeSessionId": previous}}
+        self.assertIsNotNone(self.description.validate_turn_provenance(reused))
+
+    def test_missing_native_resume_never_starts_fresh(self):
+        _, outcome = self.execute(self.context(previous="sess-missing"))
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.result.get("code"), "native-resume-unavailable")
+        self.assertIs(outcome.result["modelStarted"], False)
+
+    def test_bound_native_resume_rejects_missing_or_different_native_sessions(self):
+        _, first = self.execute(self.context())
+        self.assertEqual(first.status, "ok", first.to_report())
+        session = first.result["turn"]["sessionId"]
+        for index, (case, code) in enumerate((("resume-missing", "native-rpc-error"),
+                                             ("resume-wrong-root", "wrong-native-session")), 2):
+            with self.subTest(case=case):
+                _, outcome = self.execute(self.context(case, index=index, previous=session))
+                self.assertEqual(outcome.status, "failed", outcome.to_report())
+                self.assertTrue(outcome.shutdown_confirmed)
+                self.assertEqual(outcome.result.get("code"), code)
+                self.assertNotIn("turn", outcome.result)
+
+    def test_assistance_comes_from_structured_receipt(self):
+        _, outcome = self.execute(self.context("assistance"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
+
+    def test_deadline_stops_owned_native_process_group(self):
+        _, outcome = self.execute(self.context("hang", timeout=1))
+        self.assertEqual(outcome.status, "failed")
+        self.assertEqual(outcome.result.get("code"), "timeout")
+        self.assertTrue(outcome.shutdown_confirmed)
+
+    def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
+        context = self.context("ok", timeout=None)
+        handle, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(outcome.result["turn"]["outcome"]["summary"], "fixture work completed")
+        self.assertEqual(handle.deadline, math.inf)
+
+    def test_absent_budget_still_honors_explicit_cancellation(self):
+        context = self.context("hang", timeout=None)
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        self.assertEqual(handle.deadline, math.inf)
+        self.wait_native_input(context)
+        self.adapter.cancel(handle)
+        self.assertIsNotNone(handle.wait(15))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertNotIn("turn", outcome.result)
+
+    def test_positive_timeout_keeps_a_finite_stamped_deadline(self):
+        context = self.context(timeout=10)
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        self.assertGreater(handle.deadline, time.monotonic())
+        self.assertFalse(math.isinf(handle.deadline))
+
+    def test_blocked_native_stdin_does_not_disable_the_deadline(self):
+        context = self.context("blocked-input", timeout=1)
+        context.spec["task"] = "x" * 262144
+        _, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result.get("code"), "timeout")
+        self.assertTrue(outcome.shutdown_confirmed)
+
+    def test_oauth_provider_is_not_rejected_during_preparation(self):
+        value = json.loads(self.personal.read_text(encoding="utf-8"))
+        value["config"]["providerConfigRules"]["providerRules"][0]["config"]["access"] = {"type": "zhipu-account"}
+        self.personal.write_text(json.dumps(value), encoding="utf-8", newline="\n")
+        context = self.context()
+        self.adapter.prepare(context)
+        self.assertTrue(context.turn_input_file().is_file())
+
+    def test_coding_never_falls_back_to_native_defaults(self):
+        from hey_my_buddy.errors import BoardError
+        for key in ("provider", "model", "effort"):
+            for value in (None, "", " \t", False):
+                with self.subTest(key=key, value=value):
+                    context = self.context()
+                    if value is None:
+                        context.spec.pop(key)
+                    else:
+                        context.spec[key] = value
+                    with self.assertRaises(BoardError) as error:
+                        self.adapter.prepare(context)
+                    self.assertEqual(error.exception.code, "INVALID_ARGUMENT")
+                    self.assertFalse(context.directory.exists())
+
+    def test_catalog_omits_models_without_native_effort_options(self):
+        with mock.patch.dict(os.environ, {**self.environment, "HMB_ZCODE_TEST_CASE": "no-effort"}, clear=True):
+            result = self.description.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.assertEqual(result["providers"], [])
+        self.assertEqual(result["warnings"],
+                         [{"reason": {"code": "catalog.effort-directory-omitted", "params": {}}}])
+
+    def test_cancel_and_unconfirmed_stop_are_distinct(self):
+        context = self.context("hang")
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.wait_native_input(context)
+        self.adapter.cancel(handle)
+        self.assertIsNotNone(handle.wait(15))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        with mock.patch.object(handle, "shutdown_confirmed", return_value=False):
+            uncertain = self.adapter.collect(handle, context)
+        self.assertFalse(uncertain.shutdown_confirmed)
+        self.assertEqual(uncertain.status, "failed")
+        self.assertEqual(uncertain.artifacts, [])
+
+    def test_catalog_uses_native_efforts_without_a_turn_or_credentials(self):
+        with mock.patch.dict(os.environ, self.environment, clear=True):
+            result = self.description.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.assertEqual(result["providers"][0]["models"][0]["efforts"], ["low", "high"])
+        self.assertEqual(result["providers"][0]["harness"], "zcode")
+        self.assertEqual(result["providers"][0]["packageVersion"], "fixture-0.16.9")
+        self.assertEqual(result["providers"][0]["models"][0]["contextWindow"], 200000)
+        self.assertEqual(result["providers"][0]["models"][0]["inputModalities"], ["text"])
+        self.assertTrue(result["providers"][0]["models"][0]["available"])
+        self.assertNotIn("fixture-secret-never-public", json.dumps(result))
+
+
+if __name__ == "__main__":
+    unittest.main()

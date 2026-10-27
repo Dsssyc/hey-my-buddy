@@ -1,0 +1,37 @@
+old_id	new_id	disposition	reason	guard	fault_check
+	buddy.harnesses.codex.test_native_run.DiscoverySeamTests.test_discovery_reads_the_catalog_without_a_prompt_or_turn	added	无输入发现	无 prompt 无回合	发现发送回合后失败
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_a_denied_interaction_is_refused_then_stops_the_run	added	被拒交互先应答后停止	同 id 拒绝与事实	删除应答发送后失败
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_a_drained_fast_stream_keeps_its_eof_fact_without_a_confirmed_stop	added（三回合）	真实 EOF 是独立流事实	未知组不抹掉已观察 EOF	回退 status 门控后失败（o1 红）
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_a_preparation_failure_reports_known_not_started_facts	added（二回合）	准备失败已知未启动	gone/False/spawn-never-happened	恢复 prep 守卫后失败（n3 红）
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_a_settled_no_tool_answer_is_a_final_value_fact	added	运行模块真实快速路径	取值为事实非判定	改写 final 判定后失败
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_an_unrunnable_executable_reports_spawn_never_happened	added	spawn 前失败如实报（二回合：started 由 None 改已知 False）	spawn-never-happened 已知未启动	虚报进程已停后失败
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_deadline_stops_reports_interrupt_and_removes_private_auth	added	截止停止与原生 interrupt	非确认 ack 如实报	去掉 interrupt 后失败
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_eof_without_settlement_fails_the_stream	added	快速完整 EOF	未读尽即不完整	无条件 streamComplete 后失败
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_mismatched_no_tool_policy_is_refused_before_model_input	added	策略回读先于模型	配置不一致拒绝	跳过层核对后失败
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_one_format_correction_runs_a_second_turn_on_the_same_thread	added	执行角色的纠正反馈	同进程同线程第二轮	去掉反馈执行后失败
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_tool_facts_stop_the_run_through_the_observer_feedback	added	工具事实经角色停止	拒绝理由留在角色	工具事实误记为未知事件后失败
+	buddy.harnesses.codex.test_native_run.FastSeamTests.test_unknown_events_stop_as_invalid_protocol_through_the_observer	added	未知事件失败闭合	角色 invalid-protocol	未知事件计数删除后失败
+	buddy.harnesses.codex.test_native_run.ReviewSeamTests.test_a_completed_review_stream_stays_complete_without_a_confirmed_stop	added（三回合）	已完成回合的流事实与停止分离	未知组仍未知且流事实保留	回退 status 门控后失败（o1 红）
+	buddy.harnesses.codex.test_native_run.ReviewSeamTests.test_a_review_call_reports_policy_readback_roots_and_raw_answer	added	审阅策略回读与根身份	权限图与回执核对	跳过文件系统图核对后失败
+	buddy.harnesses.codex.test_native_run.ReviewSeamTests.test_a_review_stream_without_a_final_state_stays_incomplete	added（三回合）	缺终态流不完整	无完成回合即不完整	o1 下不红（口径同为 False），守护不得虚报完整
+	buddy.harnesses.codex.test_native_run.ReviewSeamTests.test_review_capture_retains_bounded_native_events_as_evidence	added	审阅可选事件留存	有界上限与证据引用	越界静默丢弃后失败
+	buddy.harnesses.codex.test_native_run.ReviewSeamTests.test_review_correction_is_once_and_never_for_enum_violations	added	审阅一次非 enum 纠正	enum 越界不重试	纠正封顶移入驱动后失败
+	buddy.harnesses.codex.test_native_run.ReviewSeamTests.test_review_policy_mismatch_is_refused_before_model_input	added	审阅策略不一致拒绝	readonly-policy-unverified	放行不一致配置后失败
+	buddy.harnesses.codex.test_native_run.ReviewSeamTests.test_review_tool_facts_stop_through_the_observer_and_interrupt_natively	added	审阅工具预算经角色停止	原生 interrupt 跟随	去掉 interrupt 后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_a_checkpoint_attempt_id_unlike_the_binding_is_refused	added（二回合）	检查点 attempt_id 逐项对比	与旧绑定不一致即拒绝	置 checkpoint=None 后失败（n4 红）
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_a_checkpoint_input_sha256_unlike_the_binding_is_refused	added（二回合）	检查点 input_sha256 逐项对比	与旧绑定不一致即拒绝	置 checkpoint=None 后失败（n4 红）
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_a_checkpoint_native_turn_id_unlike_the_binding_is_refused	added（二回合）	检查点 native_turn_id 逐项对比	与旧绑定不一致即拒绝	置 checkpoint=None 后失败（n4 红）
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_a_matching_resume_checkpoint_resumes_the_bound_thread	added（二回合）	匹配检查点照常续接	公共检查点消费不破坏旧续接	n4 不触发（无检查点续接照常），由三个不一致用例守护
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_a_worker_correction_feedback_is_refused	added	Worker 不执行纠正	INVALID_ARGUMENT	删除载体检查后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_cancelled_run_reports_cancel_and_native_interrupt	added	取消与 interrupt	信号与停止事实	取消不改状态后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_completed_worker_turn_reports_checkpoint_binding_and_activity	added	Worker 检查点与绑定	停止后保存绑定	未停即保存绑定后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_denied_native_requests_are_facts_on_a_completed_worker_turn	added	被拒请求为事实	attention 判定留角色	驱动代作 attention 后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_native_session_resume_reuses_the_bound_thread	added	原生续接绑定核对	同线程续接	删绑定比较后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_resume_without_a_binding_is_refused	added	无绑定续接拒绝	native-resume-unavailable	放行未知线程后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_unconfirmed_native_group_stop_reports_unknown_not_gone	added（三回合扩充断言）	双层停止未知口径；已完成回合流事实不被未确认停止抹掉	未知不等于已停止，未知仍不保存可续接绑定	强制 gone 后失败；o1 红（streamComplete 断言）
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_unknown_event_types_merge_at_the_public_bound	added（二回合）	未知类型按公共上限归并	总数精确、无静默丢弃	去掉上界后失败（n2 红，_BoardValueError）
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_worker_native_usage_and_quota_snapshot_are_retained	added	Worker 用量与额度事实	attempt 增量口径	累计冒充增量后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_worker_quota_failure_attribution_is_reported	added	额度失败归因	白名单原生码	误改状态改写归因后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_worker_tool_facts_are_live_public_evidence	added（二回合）	Worker 工具事实为公开证据	实时/结算/包同源累计	撤 Worker 投影后失败（n1 红，观察 [0,0,1]）
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_worker_tool_facts_count_in_activity	added	Worker 工具计数	活动计数真实来源	计数恒零后失败
+	buddy.harnesses.codex.test_native_run.WorkerSeamTests.test_worker_unknown_events_are_counted_never_failed	added	Worker 忽略未知事件	计数不失败	未知即失败后破坏口径

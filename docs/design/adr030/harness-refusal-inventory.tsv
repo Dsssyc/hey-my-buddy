@@ -1,0 +1,504 @@
+path	line	function	code	class	action	guards	after
+src/hey_my_buddy/buddy/harnesses/account_integrations.py	21	_environment	PRIVATE_PATH_UNSAFE	B	delete	防止 Worker 账户私有目录含链接而把凭据导向外部。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_integrations.py	56	inject_claude_key	ACCOUNT_LOGIN_REQUIRED	E	delete	独立 Claude 账户必须在系统凭据库里已有密钥。	
+src/hey_my_buddy/buddy/harnesses/account_integrations.py	61	inject_claude_key	ACCOUNT_BINDING_UNAVAILABLE	E	delete	独立 Claude 账户选择、私有主目录与凭据库绑定必须可用。	
+src/hey_my_buddy/buddy/harnesses/account_native.py	31	key_value	ACCOUNT_KEY_INVALID	C	delete	我方密钥输入必须可编码为有界字符串。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	34	key_value	ACCOUNT_KEY_INVALID	C	delete	我方密钥输入非空且不含 NUL 或换行，长度不超过 16384 字节。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	48	descend	PRIVATE_PATH_UNSAFE	B	delete	账户私有目录中只容许普通目录和文件，不容许链接或重解析点。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	60	descend	PRIVATE_PATH_UNSAFE	B	delete	凭据必须是没有其他硬链接的普通文件。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	110	write_codex_key	ACCOUNT_STOP_UNCONFIRMED	A	delete	写密钥的原生进程组必须已实际确认停止。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	112	write_codex_key	ACCOUNT_LOGIN_FAILED	H	delete	如实报告原生写密钥命令没有以零退出码完成。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	152	initialize	<dynamic>	I	delete	账户握手失败按实际停止与否分报登录失败或停止未确认，同一处同时承载 H 与 A。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	179	start_login	ACCOUNT_LOGIN_FAILED	I	delete	原生 OAuth 答复同时限制登录 ID、网址大小、HTTPS 与固定域名，凭据安全和供应方限制混在一起。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/account_native.py	212	logout	ACCOUNT_LOGOUT_FAILED	H	delete	如实报告独立账户登出后原生仍显示已登录。	随独立账户删除（ADR-030，批次 2）
+src/hey_my_buddy/buddy/harnesses/base.py	202	discover_models	CATALOG_UNAVAILABLE	I	undecided	基类实际没有模型发现实现，属于能力缺失而非调用参数错误或未经证实。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	186	_secret	{…} must be a lowercase hex digest of 64 characters	C	keep	我方实时端点实例 ID 和令牌参数必须为 64 位小写十六进制文本。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	194	_timeout_ms	{…} must be an integer between {…} and {…}	C	keep	我方传输超时参数必须为规定范围内的整数且不能是布尔值。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	312	_selected_fields	fields must be a selection of {…}	C	keep	我方观察字段选择必须为集合或序列，不能是字符串。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	315	_selected_fields	fields must be a selection of {…}	C	keep	我方观察字段选择只能包含实时接口定义的字段。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	324	_observe_arguments	inquiryId must be a nonempty string of at most {…} bytes	C	keep	我方点查问询 ID 必须是非空且有界的字符串。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	329	_observe_arguments	afterSeq must be null or a nonnegative integer	C	keep	我方观察游标必须为空或非负整数，不能是布尔值。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	331	_observe_arguments	limit must be an integer between 1 and {…}	C	keep	我方观察分页条数必须为规定范围内的整数。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	344	write_ready_material	descriptor must be a LiveEndpointDescriptor value	C	keep	我方发布就绪材料的参数必须是端点描述对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	347	write_ready_material	live readiness material exceeds its frame bound	C	keep	我方编码的就绪材料不能超过 16384 字节。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	365	cleanup_owned_endpoint	descriptor must be a LiveEndpointDescriptor value	C	keep	我方清理端点的描述参数必须为端点描述对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	367	cleanup_owned_endpoint	evidence must be a ConfirmedProcessGone value	C	keep	我方清理端点的证据参数必须为停止证据对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	413	__init__	identity must be a RunIdentity	C	keep	我方端点构造必须传入完整运行身份对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	415	__init__	capabilities must be a LiveCapabilities value	C	keep	我方端点构造必须传入能力对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	417	__init__	contract must be a CRM class	C	keep	我方端点构造必须传入 CRM 契约类。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	420	__init__	the live contract must declare a {…} operation	C	keep	我方端点契约必须声明三项实时操作。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	481	start	the live endpoint was already started	C	keep	我方不能对已有描述的实时端点重复启动。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	488	start	PRIVATE_PATH_UNSAFE	I	undecided	C-Two 注册抛出的 ValueError 或 RuntimeError 一律包成私有路径错误，守的是哪一项要看底层原因。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	491	start	the registered live endpoint reported no server address	H	keep	如实报告已注册的 C-Two 服务没有返回地址。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	495	start	LIVE_UNAVAILABLE	A	keep	只接受原生确认存在或无需凭据的端点，不能在端点凭据不明时建立归属。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	548	settle_request	reply must be a LiveReply value	C	keep	我方结算实时请求必须传入回复对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	595	publish_inquiry_state	state must be an InquiryState value	C	keep	我方发布问询状态必须传入问询状态对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	609	publish_observation	observation must be a LiveObservation value	C	keep	我方发布观察必须传入可解码的观察对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	628	publish_snapshot	snapshot must be a LiveSnapshot value	C	keep	我方发布快照必须传入可解码的快照对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	654	publish_journal	journal must be a LiveJournal value	C	keep	我方发布问询日志必须传入可解码的日志对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	694	capabilities	the live capabilities call was refused	A	keep	实时能力查询必须通过实例、令牌和完整执行身份的认证。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	1006	__init__	identity must be a RunIdentity	C	keep	我方通道构造必须传入完整运行身份对象。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	1008	__init__	contract must be a CRM class	C	keep	我方通道构造必须传入 CRM 契约类。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	1011	__init__	the live contract must declare a {…} operation	C	keep	我方通道契约必须声明三项实时操作。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	1029	capabilities	LIVE_UNAVAILABLE	H	keep	如实报告本地实时通道已经关闭。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	1036	capabilities	LIVE_UNAVAILABLE	H	keep	如实报告实时能力查询超过传输等待窗口。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	1040	capabilities	LIVE_UNAVAILABLE	H	keep	如实报告端点没有回答能力查询。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	1045	capabilities	LIVE_UNAVAILABLE	C	keep	我方另一进程的能力回复必须符合共用实时帧契约。	
+src/hey_my_buddy/buddy/harnesses/c_two_live.py	1126	_decode_reply	the {…} is missing	C	keep	我方另一进程的实时回复必须为字符串帧。	
+src/hey_my_buddy/buddy/harnesses/claude/config.py	146	cli_command	<dynamic>	H	keep	可执行文件定位失败，转述定位边界给出的真实不可用原因。	
+src/hey_my_buddy/buddy/harnesses/claude/config.py	149	cli_command	Claude Code CLI is missing; configure BUDDY_CLAUDE_CLI	H	keep	开发入口没有指定 Claude 可执行文件，PATH 中也找不到命令。	
+src/hey_my_buddy/buddy/harnesses/claude/config.py	152	cli_command	the configured Claude Code CLI is not executable	H	keep	开发入口指定的 Claude 路径不是可执行普通文件。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	147	_catalog	first-party-auth-required	D	delete	初始化账户必须是第一方且有 tokenSource，只有缺少 tokenSource 的第一方账户可再查登录。	第三方或未知登录交给 Claude 处理；原生账户事实与真实启动失败随目录读取或回合结果显示给 Host。
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	150	_catalog	first-party-auth-required	D	delete	缺少 tokenSource 的第一方账户还必须通过有时限的 auth status 第一方登录证明。	登录读回只记已知与未知，Claude 实际认证失败作为原生失败随目录读取或回合结果显示给 Host。
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	153	_catalog	invalid-catalog	F	fact	初始化模型字段必须是列表，缺失或不同形状立即拒绝读取。	模型目录记录本次未读到可解析列表及原生形状，控制台显示读取未知，Host 可见诊断事实。
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	155	_catalog	invalid-catalog	I	undecided	原生模型列表不得超过 200 项；这是资源上限，是否保留或截断并记不完整尚未定。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	279	_prepare	INVALID_ARGUMENT	I	undecided	无工具运行能力实际未实现；这不是未经证实，是否继续拒绝或新增原生能力不在已定处置里。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	284	_prepare	INVALID_ARGUMENT	C	merge	调用方不得请求 Claude 未实现的原生会话续接；与 `WorkerRunExecutor.prepare` 的能力检查重复，建议合并到请求边界。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	291	_prepare	wrong-native-session	A	keep	重建回合的新会话编号不得等于前一会话编号。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	299	_prepare	third-party-provider	D	delete	进入白名单前拒绝任何第三方供应方覆盖变量。	Claude 按用户配置选择供应方；运行结果记录原生供应方或未知与实际失败，Host 看到执行事实。
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	303	_prepare	settings-policy-unsupported	D	delete	执行只允许 isolated 设置策略，拒绝任何其他设置来源选择。	Claude 读取用户设置，运行结果记录实际配置来源与权限策略；Host 在角色边界看到变化和失败。
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	346	_spawn_native	adapter-unavailable	H	keep	实际启动所选 Claude 可执行文件时发生操作系统错误。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	405	_check_catalog	invalid-configuration	I	undecided	请求供应方必须为 anthropic 且模型与推理强度必须在本次目录；一处混合 D 与即时目录资格检查，需 Host 决定拆分。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	450	buffer	invalid-protocol	I	undecided	初始化前暂存帧不得超过 128 条；这是资源上限，不能仅因固定数值归为形状白名单。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	457	on_request	native-request-limit	I	undecided	保留的原生权限请求不得超过 32 条；上限兼顾资源与拒绝证据，超限怎样保留完整性需 Host 决定。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	491	replay_early	native-turn-started-early	A	keep	用户输入送入前出现的模型输出不能归为本次受管回合的结果。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	548	_notify	INVALID_ARGUMENT	C	keep	我们提供的观察器回调必须返回 RunFeedback。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	550	_notify	INVALID_ARGUMENT	C	keep	调用方观察器不得要求 Claude 未实现的回合内纠正。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	553	_notify		H	keep	如实结束角色观察器已经要求停止的运行。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	594	_check_terminal	native-init-missing	A	keep	终态结果必须有原生初始化证据，才能确认会话归属。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	596	_check_terminal	wrong-native-session	A	keep	终态结果的会话编号必须与此次分配的编号相同。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	600	_check_terminal	background-work-unsettled	A	keep	原生报告的后台工作尚未结清时不得宣称回合完整结束。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	608	_check_terminal	<dynamic>	H	keep	原生终态明确报告额度拒绝时上报真实额度失败。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	609	_check_terminal	native-turn-failed	I	undecided	非 success 或 is_error 非 false 都算失败；同一处混合真实回合失败与未知终态形状，不能一律归 H 或 F。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	910	run	INVALID_ARGUMENT	C	keep	调用方传给 Claude 模块的请求必须指明 Claude harness。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	915	run	INVALID_ARGUMENT	C	keep	调用方传入的服务绑定必须是此模块的 RunServices 或空值。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	917	run	INVALID_ARGUMENT	C	keep	调用方不得请求 Claude 未实现的回合内会话服务。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	1059	run_discovery	<dynamic>	D	delete	模型发现同样拒绝第三方供应方覆盖变量，并附未启动的停止事实。	模型发现读取 Claude 自己配置的供应方，目录记录原生供应方或未知；真实读取失败与停止事实照常显示。
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	1066	run_discovery	<dynamic>	H	keep	发现操作无法定位可执行文件时上报真实不可用，并附从未启动的事实。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	1075	run_discovery	<dynamic>	I	undecided	启动阶段任何异常都附实际停止事实后转抛；原异常可属不可用、停止证据或其他错误，包装点无法单归一类。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	1091	run_discovery	<dynamic>	I	undecided	初始化和目录读取的多种异常附实际停止事实后转抛；底层包含 D、F、A、H，需按原因拆分归类。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	1093	run_discovery	<dynamic>	A	keep	模型发现的原生进程组须确认停止且退出码为零，才能交付成功目录。	
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	1124	check_preparation	INVALID_ARGUMENT	D	delete	角色启动前只允许 anthropic 供应方。	原生配置里的供应方照常到达 Claude；执行结果报告实际供应方或未知与原生失败，Host 可见。
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	1127	check_preparation	ADAPTER_UNAVAILABLE	D	delete	角色启动前只允许 isolated 设置策略。	配置来源改由 Claude 自己读取，执行记录报告来源和生效策略，角色与 Host 据此判断。
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	1132	check_preparation	ADAPTER_UNAVAILABLE	D	delete	角色启动前拒绝第三方供应方覆盖变量。	Claude 按用户自己的配置运行，结果记录原生供应方或未知与真实认证失败，Host 可见。
+src/hey_my_buddy/buddy/harnesses/claude/native_run.py	1137	check_preparation	ADAPTER_UNAVAILABLE	H	keep	角色准备阶段无法定位可执行文件时上报实际不可用。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	108	_remaining	user-cancel	H	keep	执行已被取消时停止等待并上报取消。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	111	_remaining	deadline	H	keep	实际执行时间已经超过本次截止时刻。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	117	send	invalid-protocol	C	keep	我们发送给原生进程的控制或用户消息不得超过帧字节上限。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	130	send	transport-error	H	keep	向原生输入管道写入时管道实际已关闭。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	168	drain_until_closed	transport-error	A	keep	收到结果后必须观察到输出流结束，不能凭安静窗口声称尾随证据完整。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	180	_deliver	transport-error	H	keep	控制请求尚未结清时原生输出流实际已关闭。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	188	_deliver	invalid-protocol	A	keep	控制答复必须有响应对象才能读取请求编号并核对答复归属。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	191	_deliver	invalid-protocol	A	keep	控制答复的请求编号须为有界非空字符串，才能核对所属请求。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	193	_deliver	invalid-protocol	A	keep	控制答复必须对应当前正在等待的一个请求。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	195	_deliver	invalid-protocol	A	keep	同一控制请求不得被原生进程答复两次。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	201	_deliver	invalid-protocol	A	keep	原生控制请求须有可关联的编号与请求对象，才能绑定权限拒绝回执。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	206	_deliver	invalid-protocol	F	fact	原生事件帧必须带字符串 type，否则立即拒绝整个流。	保留有界的未识别帧与缺失类型事实，标明事件不完整；角色与 Host 在运行结果中看到。
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	210	call	invalid-protocol	I	undecided	未结清控制请求不得超过 16 个；这是并发资源上限，其处置不在已定九类的明确规则中。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	214	call	invalid-protocol	I	undecided	控制请求累计编号不得超过固定预算；这是循环与资源保护，需 Host 定上限处置。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	221	call	native-rpc-error	H	keep	原生控制答复明确返回 error 时如实上报原生拒绝。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	223	call	invalid-protocol	F	fact	控制答复必须使用 success 子类且内容为对象，其他非 error 形状一律拒绝。	关联编号照常保留，未知答复形状与未读到的字段记为事实；目录或回合结果把读取未知交给角色和 Host。
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	391	observe	<dynamic>	H	keep	原生额度事件明确报告 rejected 时上报真实供应方拒绝。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	409	observe	invalid-protocol	A	keep	同一根会话不得观察到两次原生初始化，避免混淆归属。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	412	observe	native-init-missing	A	keep	初始化必须给出会话编号才能绑定后续原生证据。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	414	observe	wrong-native-session	A	keep	原生初始化会话编号必须等于预分配的会话编号。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	418	observe	wrong-native-workspace	A	keep	原生初始化工作目录必须是分配给这次执行的工作目录。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	436	observe	invalid-protocol	A	keep	后台任务超出可追踪数量时不能丢掉未结清任务并虚报已停。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	455	observe	invalid-protocol	A	keep	新增未结清后台任务超出追踪数量时不能继续给出完整结束证据。	
+src/hey_my_buddy/buddy/harnesses/claude/protocol.py	474	observe	invalid-protocol	A	keep	根回合不得出现第二份终态结果，防止重复或冲突的完成证据。	
+src/hey_my_buddy/buddy/harnesses/codex/account_probe.py	48	read	HARNESS_ACCOUNT_STOP_UNCONFIRMED	A	keep	账户读取进程组的停止尚未确认，不能把账户读成功当作已停。	
+src/hey_my_buddy/buddy/harnesses/codex/config.py	26	cli_command	<dynamic>	H	keep	选中的原生命令定位失败，转报原来的不可用原因。	
+src/hey_my_buddy/buddy/harnesses/codex/config.py	32	cli_command	Codex CLI is missing; configure BUDDY_CODEX_CLI	H	keep	未找到可执行的 Codex 命令。	
+src/hey_my_buddy/buddy/harnesses/codex/config.py	35	cli_command	the configured Codex CLI is not executable	H	keep	配置的 Codex 路径不是可执行普通文件。	
+src/hey_my_buddy/buddy/harnesses/codex/config.py	134	prepare_no_tool_home	no-tool-policy-unverified	G	fact	本机模型缓存缺失、形状不符、模型不唯一或推理强度不匹配，无法证明无工具改写成立。	缓存与工具限制记为未证实，运行结果保留原因，Router 按工具证据判断。
+src/hey_my_buddy/buddy/harnesses/codex/home.py	25	frozen_account	INVALID_ARGUMENT	E	delete	兼容的 workerAccount 选择必须仅含独立来源与正整数代次。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	36	_pinned_home	CODEX_PRIVATE_HOME_UNSUPPORTED	B	keep	平台缺少目录描述符操作，无法固定凭据清理的目标目录。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	38	_pinned_home	PRIVATE_PATH_UNSAFE	B	delete	凭据操作的私有主目录祖先含链接，可能重定向到别处。	随私有主目录删除（ADR-030，批次 3b）
+src/hey_my_buddy/buddy/harnesses/codex/home.py	49	_pinned_home	PRIVATE_PATH_UNSAFE	B	delete	凭据清理期间私有主目录的祖先或设备与 inode 身份发生改变。	随私有主目录删除（ADR-030，批次 3b）
+src/hey_my_buddy/buddy/harnesses/codex/home.py	66	credential_source	INVALID_ARGUMENT	E	delete	服务冻结的账户选择必须带 Codex 来源与合法选择代次、凭据代次。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	71	credential_source	CODEX_ACCOUNT_UNAVAILABLE	E	delete	选中的独立账户主目录含链接或不存在，禁止回退本机账户。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	76	credential_source	INVALID_ARGUMENT	E	delete	旧独立账户选择必须只有 worker 来源与正整数代次。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	79	credential_source	CODEX_ACCOUNT_UNAVAILABLE	E	delete	旧独立账户选择指向的私有账户主目录含链接或不存在。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	96	prepare_coding_home	CODEX_ACCOUNT_UNAVAILABLE	E	delete	独立账户凭据源不能经过链接指向另一账户，本机来源没有此限制。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	103	prepare_coding_home	CODEX_ACCOUNT_UNAVAILABLE	B	delete	可供链接的原生凭据源存在但不是普通文件。	随私有主目录删除（ADR-030，批次 3b）
+src/hey_my_buddy/buddy/harnesses/codex/home.py	105	prepare_coding_home	CODEX_ACCOUNT_UNAVAILABLE	E	delete	独立账户没有文件式原生登录，禁止改用本机登录。	
+src/hey_my_buddy/buddy/harnesses/codex/home.py	113	prepare_coding_home	CODEX_CREDENTIAL_RETAINED	B	delete	微任务私有主目录留有未结清的凭据，禁止覆盖或再次挂载。	随私有主目录删除（ADR-030，批次 3b）
+src/hey_my_buddy/buddy/harnesses/codex/home.py	123	remove_coding_auth	PRIVATE_PATH_UNSAFE	B	delete	停止后清理凭据时私有主目录含链接，禁止向重定向目录操作。	随私有主目录删除（ADR-030，批次 3b）
+src/hey_my_buddy/buddy/harnesses/codex/home.py	133	remove_coding_auth	PRIVATE_PATH_UNSAFE	B	keep	待删凭据既非普通文件也非允许的凭据链接，或为重解析点。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	405	_coding_home	<dynamic>	I	delete	把 `prepare_coding_home` 的各种错误重新包装，实际检查混合凭据安全与独立账户限制。	随私有主目录删除（ADR-030，批次 3b）
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	424	_prepare	no-tool-policy-unverified	C	merge	调用方提供的无工具时限必须是 1 至 60 秒整数；与 `start_fast` 的时限校验重复，合并到该调用边界。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	432	_prepare	ADAPTER_UNAVAILABLE	H	keep	准备运行时未能定位 Codex 可执行文件。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	483	_spawn_app_server	adapter-unavailable	H	keep	原生 App Server 的创建实际失败，转报可执行文件无法启动。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	511	_catalog	invalid-catalog	F	fact	原生模型目录页的 data 必须是列表，其他目录形状被拒绝。	模型目录读取记录未知形状与不完整事实，由模型目录边界决定如何采用。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	514	_catalog	invalid-catalog	I	undecided	原生模型目录累计超过 200 项即拒绝；这是资源数量上限，不只是形状检查。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	519	_catalog	invalid-catalog	I	undecided	下一页游标必须是非空字符串且不能重现，混合形状限制与不前进的分页保护。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	604	_initialize	account-plan-required	D	delete	本机来源只接受 ChatGPT 登录；独立账户才额外接受 apiKey。	原生账户类型作为账户事实显示；真正的登录失败由 harness 原样返回运行原因。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	608	_initialize	invalid-configuration	D	delete	请求供应方必须固定为 openai，与原生是否提供其他供应方无关。	模型目录保留原生供应方，运行结果分别记请求与实际供应方，Host 看到原生选择或失败。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	615	_initialize	invalid-configuration	C	keep	原生目录已列出所选模型时，调用方选择的推理强度必须在该模型给出的范围里。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	641	_read_binding	native-resume-unavailable	A	keep	原生续接必须读到该会话的微任务私有绑定，丢失或不可读不能续接。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	659	_check_thread_receipt	wrong-native-thread	A	keep	原生会话标识必须存在，并符合续接沿用或重建更换的要求。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	661	_check_thread_receipt	wrong-native-workspace	A	keep	原生会话检出必须等于本次获配工作区。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	664	_check_thread_receipt	wrong-native-provider	D	delete	原生会话供应方仅允许缺省或 openai，其他供应方一律拒绝。	运行结果记原生供应方与请求供应方，由 Host 判断配置差异或原生失败。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	676	_configure_worker	native-resume-unavailable	C	merge	请求原生续接时调用方必须给出非空的前一会话标识；与 `RunContinuation._native_resume_names_its_session` 重复，合并到该输入边界。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	685	_configure_worker	native-resume-unavailable	A	keep	保留会话必须绑定本微任务、会话、检出、配置、私有主目录及凭据来源，并有最近回合。	去掉私有主目录与凭据来源两项（ADR-030，批次 3b）
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	692	_configure_worker	native-resume-unavailable	A	keep	会话私有绑定的最近回合、attempt 与输入摘要必须符合上次检查点。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	698	_configure_worker	native-resume-unavailable	A	keep	原生最近一次回合必须正好是绑定中已完成的回合，不能续接被外部推进的历史。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	708	_configure_worker	invalid-resume-mode	C	keep	调用方续接模式与前一会话必须符合初始、原生续接或重建新会话的组合。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	733	_configure_review	readonly-policy-unverified	G	fact	只读配置回读必须匹配私有策略、精确文件授权且没有 MCP 或继承配置。	结果保留有效配置与只读未证实事实，Router 按回读和工具事件判断是否采用审阅。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	752	_configure_review	readonly-policy-unverified	G	fact	原生必须确认指定只读权限、永不审批、只读沙箱与禁网。	结果保留实际权限回执及未证实项，Router 判断审阅边界，Host 看到风险。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	756	_configure_review	readonly-configuration-mismatch	I	undecided	同一条件同时检查实际模型、固定 openai 供应方及获配检出，混合配置事实、供应方限制与归属。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	761	_configure_review	wrong-native-workspace	A	keep	只读会话必须有字符串标识，并属于获配的冻结检出。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	789	_configure_fast	no-tool-policy-unverified	G	fact	无工具配置要求自建用户层唯一、没有外来设置层或 MCP，并符合禁网禁审批策略。	结果记录实际设置层和工具限制未证实，Router 判断证据；原生读取到的用户设置对 Host 可见。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	805	_configure_fast	no-tool-policy-unverified	I	undecided	无工具会话回执同时要求会话与检出归属、空历史、固定模型供应方、禁审批与空环境。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	847	observe	invalid-native-result	A	keep	无工具回合尚未取得回合标识时事件缓冲已满，不能保证重放完整的归属证据。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	889	__call__	invalid-native-result	A	keep	无工具事件必须有参数对象且属于本原生会话，不接收无法归属的事件。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	893	__call__	native-turn-failed	H	keep	原生 error 事件没有明确声明还会重试，真实回合失败须上报。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	899	__call__	invalid-native-result	A	keep	无工具事件回合标识必须等于本轮原生回合，不能把别轮事件混入结果。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	902	__call__	invalid-native-result	A	keep	同一原生回合不能重复提供开始证据。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	909	__call__	invalid-native-result	A	keep	同一原生回合只能有一个已完成的最终答案。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	913	__call__	invalid-native-result	A	keep	同一原生回合不能重复提供完成证据。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1001	run	INVALID_ARGUMENT	C	keep	调用方交给该运行模块的 harness 必须是 Codex。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1003	run	INVALID_ARGUMENT	C	keep	调用方传入的服务绑定必须是 Codex 的窄 RunServices 类型。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1008	run	INVALID_ARGUMENT	C	keep	受治理回合调用方必须提供已冻结的凭据来源字典。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1011	run	INVALID_ARGUMENT	C	merge	受治理回合调用方必须携带回合标识及输入摘要；回合标识已在 `WorkerRunExecutor.prepare` 校验，合并到角色准备边界并在那里核对摘要。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1122	_take_feedback	INVALID_ARGUMENT	C	keep	角色观察器必须返回一个 RunFeedback 值。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1125	_take_feedback	INVALID_ARGUMENT	C	keep	格式纠正反馈只能在原生回合已结算时提出。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1127	_take_feedback	INVALID_ARGUMENT	C	keep	受治理 Worker 回合不接受调用方的格式纠正反馈。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1130	_take_feedback		H	keep	角色观察器确实要求停止，控制流转入取消与有序收尾。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1143	_worker_turn	wrong-native-turn	A	keep	Worker 的原生 turn/start 必须给出非空回合标识才能绑定证据。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1183	_worker_turn	native-turn-failed	A	keep	Worker 回合成功必须有已观察到的开始证据及原生 completed 状态。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1226	_structured_rounds	invalid-native-result	A	keep	无工具的 turn/start 必须给出非空原生回合标识。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1231	_structured_rounds	no-tool-violation	F	fact	无工具启动回执的 items 只许固定三种对话项，未知新种类也当作工具违规。	新项种类保留为未知事件或工具事实，由 Router 判断是否越界，原始回执可供 Host 复核。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1233	_structured_rounds	wrong-native-turn	A	keep	只读的 turn/start 必须给出原生回合标识。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1290	_fast_final_checks	invalid-native-result	A	keep	无工具最终答案必须有开始、成功完成、最终消息文本及消息标识的完整证据。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1298	_review_final_checks	native-turn-failed	A	keep	只读最终答案必须有开始、成功完成及最终消息的完整证据。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1333	_drain_to_eof	invalid-native-result	A	keep	输入已关闭后的原生响应没有待关联请求，不能当成本次有效回执。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1335	_drain_to_eof	invalid-native-result	F	fact	排干阶段既无响应 id 又无字符串 method 的帧形状被直接拒绝。	帧形状记为未知原生事件，保留流是否完整事实，由 Router 决定是否采用结果。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1635	run_discovery	ADAPTER_UNAVAILABLE	H	keep	模型发现时未能定位 Codex 可执行文件。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1671	run_discovery	native-shutdown-failed	A	keep	模型发现只有原生进程正常退出且进程组确认消失，才提供完成的读取证据。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1693	check_preparation	ADAPTER_UNAVAILABLE	H	keep	运行前资格准备实际找不到可用的 Codex 命令。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1695	check_preparation	INVALID_ARGUMENT	D	delete	运行前把供应方限定为 openai，拦下所有用户配置的其他供应方。	允许原生配置选择供应方，模型目录与每次运行结果记实际来源，原生失败返回 Host。
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1728	prepare_run_services	INVALID_ARGUMENT	C	merge	服务绑定调用方的工具范围仅允许 none、read 或 write；与 `RunRequest.tool_scope` 重复，合并到该输入边界。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1734	prepare_run_services	INVALID_ARGUMENT	C	keep	受治理回合服务绑定必须带拥有其私有状态的目录。	
+src/hey_my_buddy/buddy/harnesses/codex/native_run.py	1879	_read_evidence_ref	INVALID_ARGUMENT	A	keep	原生证据引用的大小及摘要必须与受保护文件内容一致。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	69	_remaining	user-cancel	H	keep	本次执行已收到取消标记，真实取消须上报。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	72	_remaining	deadline	H	keep	本次执行已经超过真实截止时间。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	78	send	invalid-protocol	C	keep	调用方生成的原生请求不能超过单帧字节上限。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	91	send	transport-error	H	keep	向原生进程写输入实际失败，输入管道已关闭。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	107	_pump_one	transport-error	H	keep	请求尚未结算原生输出就到 EOF，连接已断开。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	114	_pump_one	invalid-protocol	I	undecided	原生响应 id 必须为整数且暂存响应少于 16 条，混合关联身份与积压预算。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	116	_pump_one	invalid-protocol	A	keep	严格模式下原生响应必须对应尚未结算的请求，不能重复回复。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	121	_pump_one	invalid-protocol	F	fact	帧既无请求或响应 id，也无字符串 method，因原生帧形状不在分派清单而拒绝。	未知帧形状与次数记录为原生事实，缺失的关联证据仍由对应回执检查保留拒绝。
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	146	call	native-rpc-error	H	keep	原生 RPC 明确返回带原因的错误，保留其有界原因文本。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	147	call	native-rpc-error	H	keep	原生 RPC 明确返回错误但没有可用原因，仍上报被拒方法。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	150	call	invalid-protocol	F	fact	原生 RPC 的 result 必须是对象，所有其他返回形状被统一拒绝。	保留方法与返回形状不可解读事实；需要身份的调用仍单独核对归属，由角色处理其余结果。
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	425	observe	invalid-result	A	keep	绑定回合不能出现多个已完成原生最终消息，避免结果来源歧义。	
+src/hey_my_buddy/buddy/harnesses/codex/protocol.py	430	observe	invalid-protocol	A	keep	绑定回合的原生完成事件不能重复，避免重复完成证据。	
+src/hey_my_buddy/buddy/harnesses/controller.py	118	read_plain_evidence	PRIVATE_PATH_UNSAFE	A	keep	保留的证据必须是有界普通文件，不能从特殊文件取得或无限读取。	
+src/hey_my_buddy/buddy/harnesses/controller.py	122	read_plain_evidence	PRIVATE_PATH_UNSAFE	A	keep	实际读到的证据字节数不能越过冻结的保留上限。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/client.py	110	start	connection start failed after spawn: {…}	H	keep	原生进程已启动但连接线程启动失败，连同实际进程句柄与停止证据上报。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/client.py	125	initialize	ACP_PROTOCOL_FAULT	F	fact	握手答复必须是字典，拒绝其他原生答复形状。	在运行结果的握手事实中记答复形状未识别，角色看到能力核对未知。
+src/hey_my_buddy/buddy/harnesses/dsh/acp/client.py	133	new_session	ACP_SESSION_CWD	C	merge	新会话工作目录必须是绝对路径，与 `RunRequest.cwd` 边界重复，建议只在该边界校验。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/client.py	141	resume_session	ACP_SESSION_CWD	C	merge	续接工作目录必须是绝对路径，与 `RunRequest.cwd` 边界重复，建议只在该边界校验。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/client.py	216	_checked_mcp_servers	ACP_MCP_SERVER	C	keep	调用方的 MCP 服务条目必须是字典。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/client.py	219	_checked_mcp_servers	ACP_MCP_SERVER	C	keep	调用方的 MCP 服务必须有非空字符串名称。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/client.py	224	_checked_mcp_servers	ACP_MCP_SERVER	C	keep	调用方的 stdio MCP 服务必须有非空字符串命令。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/client.py	231	_checked_mcp_servers	ACP_MCP_SERVER	C	keep	调用方的 stdio MCP 环境必须是名称和值均为字符串的对象数组。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	437	_write_now	ACP_OUTBOUND_FRAME_TOO_LARGE	C	keep	本侧发出的请求或回复不得超过传输帧字节上限。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	443	_write_now	the child's stdin is closed	H	keep	原生进程的输入管道已经关闭，当前帧无法交付。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	448	_write_now	writing the child's stdin failed: {…}	H	keep	向原生进程写入或刷新输入管道实际失败。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	463	_await_write	{…} could not be written within {…}s	H	keep	写入期限已到且尚未执行的帧已取消。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	466	_await_write	{…} could not be written within {…}s	H	keep	写入期限已到且已经开始的帧无法确认交付。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	470	_await_write	{…} could not be written within {…}s	H	keep	写任务已被取消或过期，当前帧未成功交付。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	514	request	{…} timed out after {…}s	H	keep	原生请求在自己的等待期限内没有答复。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	520	request	the child's stdout ended before {…} was answered	H	keep	原生输出管道在请求获得答复之前结束。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	522	request	<dynamic>	H	keep	原生进程以 JSON-RPC 错误拒绝了当前请求。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/connection.py	531	notify	{…} could not be written within {…}s	H	keep	通知无法进入有界写队列，不能在期限内交付。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	127	ensure_private_log_path	<dynamic>	B	keep	日志根不存在、不是真目录、经过链接或触及用户日常 DSH 目录。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	130	ensure_private_log_path	log path contains a linked component	B	keep	日志路径任一组件是链接，不能向链接目标写私有日志。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	136	ensure_private_log_path	log path cannot be resolved	B	keep	日志父路径无法解析，不能确认私有写入位置。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	138	ensure_private_log_path	log path is outside the private root	B	keep	日志父目录必须位于本次私有根内。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	159	child_environment	extra environment may not override the reserved private-home keys	B	keep	额外环境不得覆盖已经验证的 HOME 与 DSH_HOME 私有路径。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	268	launch	launch requires a non-empty argv	C	keep	调用方必须给出非空的原生命令参数数组。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	270	launch	launch requires an explicit private root for this run	B	keep	启动必须明确提供本次私有根，避免默认落到日常配置目录。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	275	launch	<dynamic>	B	keep	启动私有根必须存在、真实、无链接且不触及用户日常 DSH 目录。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	288	launch	<dynamic>	B	keep	DSH_HOME 与显式 HOME 必须在本次真实私有根内且不触及用户日常主目录。	
+src/hey_my_buddy/buddy/harnesses/dsh/acp/launch.py	305	launch	launch bookkeeping failed after spawn: {…}	H	keep	进程启动后的日志或句柄登记实际失败，携带持有的进程及停止证据。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	215	tool_scope_launch	scope-configuration-unconfirmed	G	fact	没有经确认的 DSH 工具行清单时拒绝无工具运行。	运行结果记工具范围未经证实与实际补丁，角色按工具事件和能力事实判断。
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	222	tool_scope_launch	invalid-tool-scope	C	merge	工具范围必须为 none、read、write，与 `RunRequest.tool_scope` 边界重复，建议合并到该边界。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	365	prepare_session_service	INVALID_ARGUMENT	C	keep	调用方指定的完成工具必须在本次挂载的服务工具中。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	477	check_preparation	ADAPTER_UNAVAILABLE	H	keep	当前没有选定且就绪的 DSH 可执行命令。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	509	_continuation_of	invalid-resume-mode	C	merge	上一会话标识必须为空或非空白字符串，与 `RunContinuation` 边界重复，建议合并到该边界。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	513	_continuation_of	native-resume-unavailable	C	merge	原生续接必须给出上一会话标识，与 `RunContinuation` 模式校验重复，建议合并到该边界。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	642	_check_service_descriptions	INVALID_ARGUMENT	C	keep	请求声明的会话工具集合必须与实际挂载集合一致。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	647	_check_service_descriptions	INVALID_ARGUMENT	C	keep	挂载的完成工具必须附带它自己的输入契约。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	650	_check_service_descriptions	INVALID_ARGUMENT	C	keep	请求的输出结构必须与实际完成工具的输入契约一致。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	747	_launch_agent	adapter-unavailable	H	keep	选定 DSH 可执行文件实际无法启动。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	755	_native_call	<dynamic>	H	keep	原生进程实际拒绝了当前有界操作。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	757	_native_call	<dynamic>	H	keep	原生操作在自己的预算内没有答复。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	759	_native_call	native-disconnected	H	keep	原生连接在当前操作获得答复之前断开。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	792	_declared_model_value	configuration-unavailable	H	keep	当前原生声明的选项中找不到所请求的供应方与模型。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	806	_declared_effort_value	invalid-configuration	C	keep	调用方选择的推理强度不在当前原生公布的选项中。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	828	_configure	configuration-unavailable	F	fact	原生会话的 configOptions 必须采用列表形状。	运行结果保留配置选项形状未识别与已核对值未知，模型目录显示读取不完整。
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	835	_configure	configuration-mismatch	I	undecided	原生回读模型与请求不同；这是配置一致性要求，是否属于必须硬拒绝的归属证据待 Host 决定。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	841	_configure	configuration-mismatch	I	undecided	原生回读推理强度与请求不同；是否必须拒绝而不能并列记录请求与实际值待 Host 决定。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	992	run	INVALID_ARGUMENT	C	keep	调用方不得把其他 harness 的请求交给 DSH 运行模块。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	994	run	INVALID_ARGUMENT	C	keep	调用方传来的会话服务必须是 DSH 的窄绑定类型。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	997	run	INVALID_ARGUMENT	C	keep	未挂载会话服务时，请求不得宣称挂载了服务。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1004	run	INVALID_ARGUMENT	C	keep	无完成服务的最终消息调用不得请求原生会话续接。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1064	notify	INVALID_ARGUMENT	C	keep	角色观察者必须返回 RunFeedback 实例。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1066	notify	INVALID_ARGUMENT	C	keep	角色观察者只能在运行已结算时要求格式纠正。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1068	notify		H	keep	角色观察者已经决定停止本次运行，控制器如实中断。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1076	fold	invalid-protocol	A	keep	原生更新队列已经溢出并丢帧，不能声称事件证据完整。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1101	run	native-resume-unavailable	A	keep	原生续接必须有可读取的本微任务私有会话绑定。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1104	run	native-resume-unavailable	A	keep	原生续接的微任务、会话、检出与配置必须匹配本次冻结绑定。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1215	_open_session	wrong-native-session	A	keep	新建会话必须给出可绑定本次执行的非空根会话标识。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1244	_resume_session	wrong-native-session	A	keep	续接答复若回报会话标识，必须等于所请求的上一会话。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1290	_prompt_and_observe	<dynamic>	H	keep	原生提示词在取消或期限中断后仍没有答复。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1303	_prompt_and_observe	native-disconnected	H	keep	原生连接在提示词执行期间实际断开。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1307	_prompt_and_observe	deadline	H	keep	提示词执行已经耗尽本次整体期限。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1309	_prompt_and_observe	cancelled	H	keep	本次持有的 DSH 执行已经被取消。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1310	_prompt_and_observe	invalid-protocol	H	keep	原生提示词操作实际超时，尽管整体期限尚未触发。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1319	_settle_stop_reason	invalid-protocol	F	fact	原生提示词答复必须有非空字符串 stopReason。	运行结果记原生结束原因缺失、结束状态未知，角色看不到已确认成功的终态。
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1337	_close_session	session-close-unconfirmed	A	keep	原生会话关闭没有被确认，不能构成完整会话结算证据。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1383	chunk_fold	answer-too-large	I	undecided	原生最终文本不得超过 65536 字节；资源上限是否继续硬拒绝而非截断留事实待 Host 决定。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1394	_final_message_rounds	<dynamic>	H	keep	原生回合已经以取消、拒绝、预算上限或其他非正常结束原因停止。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1473	_governed_round	native-cancelled	H	keep	原生根回合明确报告已取消，不要求它再提交完成回执。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1476	_governed_round	<dynamic>	H	keep	原生受管回合已经以拒绝、预算上限或其他非正常结束原因停止。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1831	run_discovery	catalog-unavailable	F	fact	发现会话必须按 configOptions 列表形状给出配置选项。	模型目录记这次读取形状未识别与目录不完整，用户看到未知而非已确认模型缺席。
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1836	run_discovery	session-close-unconfirmed	A	keep	模型发现会话的关闭必须得到原生确认。	
+src/hey_my_buddy/buddy/harnesses/dsh/native_run.py	1839	run_discovery	native-disconnected	H	keep	模型发现关闭会话期间原生连接实际断开。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	99	verify_finish_receipt	<dynamic>	A	keep	完成回执必须通过本次身份、输入摘要、签名与结果契约验证。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	113	verify_tool_refusal	<dynamic>	A	keep	工具拒绝信封必须绑定本次身份、输入、工具与签名。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	122	verify_inquiry_receipt	<dynamic>	A	keep	问询回执必须绑定本次身份、输入、回执种类与签名。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	391	settle	invalid-protocol	A	keep	完成证据的提示词结算必须有原生结束原因，不能缺失终态证据。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	394	settle	finish-tool-failed	H	keep	完成工具实际失败，根回合结束前没有成功重试。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	395	settle	missing-finish	A	keep	根回合结束时必须已接受本回合完成工具的签收回执。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	418	provenance	invalid-provenance	A	keep	完成调用、签收结果、回合结算与会话关闭必须有正确的先后证据。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	434	_schedule_finish	duplicate-finish	A	keep	完成回执接受后不得再提交另一个完成调用替换它。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	436	_schedule_finish	duplicate-finish	A	keep	前一完成调用尚未返回时不得出现第二个完成调用。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	438	_schedule_finish	invalid-provenance	A	keep	完成工具调用必须有可绑定结果的调用标识。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	443	_schedule_session_tool	invalid-provenance	A	keep	根会话问询工具调用必须有未重复的有效调用标识。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	454	_finish_result	finish-tool-failed	A	keep	同一完成调用不得产生第二份终态结果。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	465	_finish_result	invalid-finish	A	keep	完成工具的成功结果必须携带可验签的回执内容。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	477	_retry_failed_finish	finish-tool-failed	A	keep	已经接受的完成回执不得被后续工具失败替换。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	491	_inquiry_result	invalid-provenance	A	keep	同一问询调用不得重复产生终态结果并推进问询状态。	
+src/hey_my_buddy/buddy/harnesses/dsh/protocol.py	507	_inquiry_result	invalid-inquiry-receipt	A	keep	成功问询工具结果必须带有本次可验证的回执内容。	
+src/hey_my_buddy/buddy/harnesses/inquiry_bridge.py	71	__init__	INVALID_ARGUMENT	C	keep	我方问询桥只能绑定实际 C-Two 端点对象。	
+src/hey_my_buddy/buddy/harnesses/inquiry_bridge.py	76	__init__	INVALID_ARGUMENT	A	keep	问询桥的任务、尝试、代次和回合必须与端点所属执行一致。	
+src/hey_my_buddy/buddy/harnesses/inquiry_bridge.py	281	deliver_inquiries	invalid-inquiry-evidence	A	keep	检查点回执只能引用本次尝试已提交且问题摘要相同的问询。	
+src/hey_my_buddy/buddy/harnesses/inquiry_bridge.py	306	record_answer	invalid-inquiry-evidence	A	keep	答案回执只能引用本次尝试已提交且问题摘要相同的问询。	
+src/hey_my_buddy/buddy/harnesses/inquiry_bridge.py	312	record_answer	conflicting-inquiry-answer	A	keep	已签收的问询答案只能原样重放，不能用不同答案覆盖。	
+src/hey_my_buddy/buddy/harnesses/live.py	117	_observed_agrees_with_status	observed must agree with the reply status	A	keep	实时回复不能把未观察的交互声明为已排队、送达或作答。	
+src/hey_my_buddy/buddy/harnesses/live.py	119	_observed_agrees_with_status	a state projection needs an observed interaction	A	keep	只在确实观察到交互时才携带已提交状态。	
+src/hey_my_buddy/buddy/harnesses/live.py	336	_journal_states	the inquiry journal binding must return a list of records	C	keep	我方日志读取绑定必须返回记录列表。	
+src/hey_my_buddy/buddy/harnesses/live.py	341	_journal_states	an inquiry journal record must be an object	C	keep	我方日志读取绑定的每条记录必须为对象。	
+src/hey_my_buddy/buddy/harnesses/live.py	345	_journal_states	an inquiry journal record carries no bounded question id	A	keep	问询日志记录必须带可绑定且有界的问题 ID。	
+src/hey_my_buddy/buddy/harnesses/live.py	357	_journal_states	the inquiry journal carries more than {…} questions	C	keep	我方问询日志投影不能超过单次运行的 32 个问题。	
+src/hey_my_buddy/buddy/harnesses/registry.py	42	register_run_seam	INVALID_ARGUMENT	C	keep	我方只能在已定义的 harness 名下登记运行模块。	
+src/hey_my_buddy/buddy/harnesses/registry.py	44	register_run_seam	CONFLICT	C	keep	我方同一个 harness 不能重复登记运行模块。	
+src/hey_my_buddy/buddy/harnesses/registry.py	46	register_run_seam	INVALID_ARGUMENT	C	keep	我方登记的模块必须有可调用的运行和模型发现接口。	
+src/hey_my_buddy/buddy/harnesses/registry.py	163	adapter	UNSUPPORTED_ADAPTER	C	keep	我方内置 Worker 只能请求已有执行器，external 要由调用方自己的 agent 执行。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	156	_native_resume_names_its_session	a native-session continuation requires the exact previous session id	A	keep	原生续接请求必须明确指出要续做的上一会话。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	211	_carries_one_field	the native identity payload must carry at least one native identifier field	A	keep	原生身份事实不能是完全不含会话或回合标识的空对象。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	362	_normalized_package	the activity package is not the canonical projection	C	keep	我方活动事实包必须符合共用的规范化投影。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	371	_normalized_package	unknown package kind {…}	C	keep	我方只能向内部规范化函数传入它实现的事实包种类。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	373	_normalized_package	the {…} package is not a usable canonical projection	C	keep	我方用量、失败或末条消息事实包必须能规范化为可用投影。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	390	_validated_tool_evidence	the tool evidence package must carry its exact field set	C	keep	我方规范化工具证据包必须具有当前内部契约的完整字段集。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	392	_validated_tool_evidence	the tool evidence package version is not supported	C	keep	我方规范化工具证据包必须使用当前内部格式版本。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	395	_validated_tool_evidence	the tool evidence binding must carry its exact field set	A	keep	工具证据必须携带完整的任务、尝试、代次与 harness 绑定。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	397	_validated_tool_evidence	the tool evidence binding adapter is not a harness name	C	keep	我方工具证据绑定里的 adapter 必须是已定义的 harness 名。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	402	_validated_tool_evidence	the tool evidence binding generation must be a nonnegative integer	C	keep	我方工具证据绑定里的代次必须是非负整数且不能是布尔值。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	406	_validated_tool_evidence	toolEvidence.{…} must be a boolean	C	keep	我方工具证据的完整性和截断标记必须为布尔值。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	410	_validated_tool_evidence	toolEvidence.{…} must be an integer between 0 and {…}	C	keep	我方工具证据的调用和未结算计数必须是有界非负整数。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	414	_validated_tool_evidence	toolEvidence.nativeIdentity must be a list of root identities	C	keep	我方规范化工具证据中的根身份必须为列表。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	422	_validated_tool_evidence	a tool evidence root identity is malformed	A	keep	工具证据的每个根身份必须非空且只含可核对的原生标识。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	427	_validated_tool_evidence	toolEvidence.events must be a list of at most {…} events	C	keep	我方规范化工具事件必须为有界列表。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	431	_validated_tool_evidence	a tool evidence event must carry its exact field set	C	keep	我方规范化工具事件必须使用内部事件字段集。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	440	_validated_tool_evidence	a tool evidence event identity is malformed	A	keep	工具事件的身份字段必须可核对，不能混入其他含义的字段。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	447	_validated_tool_evidence	a tool evidence event category is not an ACP category	C	keep	我方已归一的工具类别必须使用公共 ACP 词汇。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	449	_validated_tool_evidence	a tool evidence event phase must be start or end	C	keep	我方已归一的工具阶段只能为空、开始或结束。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	468	_native_error_record	nativeError must be an object	C	keep	我方提交的原生失败事实包必须为对象。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	502	_correction_carries_its_input	a correction carries the complete next input text	C	keep	我方纠正反馈必须带下一轮完整输入文本。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	504	_correction_carries_its_input	only a correction carries an input text	C	keep	我方非纠正反馈不能夹带新的输入文本。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	558	encode_run_request	the run request frame exceeds its byte bound	C	keep	我方运行请求编码不能超过内部帧字节上限。	
+src/hey_my_buddy/buddy/harnesses/run_contract.py	572	encode_run_result	the run result frame exceeds its byte bound	C	keep	我方运行结果编码不能超过内部帧字节上限。	
+src/hey_my_buddy/buddy/harnesses/runtime_selection.py	37	selected	HARNESS_RECORD_INVALID	A	keep	尝试冻结的 harness 选择记录必须能被读回，不能凭空重选。	
+src/hey_my_buddy/buddy/harnesses/runtime_selection.py	48	command_for	<dynamic>	H	keep	如实报告选定或重新发现的 harness 未就绪或没有可执行命令。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	208	verify_receipt	invalid-finish	A	keep	完成工具必须提供有界的原始 JSON 回执才可验证来源。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	212	verify_receipt	invalid-finish	A	keep	完成回执必须是本项目签名格式的完整对象。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	215	verify_receipt	invalid-finish	A	keep	完成回执必须通过签名验证。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	217	verify_receipt	invalid-finish	A	keep	完成回执版本、尝试身份与输入摘要必须匹配本次运行。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	219	verify_receipt	invalid-finish	A	keep	完成回执必须有可用回执 ID 且载荷通过 Worker 结果合约校验。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	224	verify_receipt	invalid-finish	A	keep	不能把无法解码或缺少必要字段的完成回执当作完成证据。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	284	verify_tool_refusal	invalid-tool-refusal	A	keep	工具拒绝必须提供有界 JSON 信封及规则要求的原生工具名才可验证。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	288	verify_tool_refusal	invalid-tool-refusal	A	keep	工具拒绝必须是本项目签名格式的完整对象。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	291	verify_tool_refusal	invalid-tool-refusal	A	keep	工具拒绝信封必须通过签名验证。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	295	verify_tool_refusal	invalid-tool-refusal	A	keep	工具拒绝的版本、种类、尝试身份与输入摘要必须匹配。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	298	verify_tool_refusal	invalid-tool-refusal	A	keep	工具拒绝必须由本次挂载且实际返回结果的那个会话工具签发。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	306	verify_tool_refusal	invalid-tool-refusal	A	keep	工具拒绝必须有本项目的拒绝原因、回执 ID 和可用说明。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	311	verify_tool_refusal	invalid-tool-refusal	A	keep	不能把无法解码或缺少必要字段的拒绝信封当作工具证据。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	348	verify_inquiry_receipt	invalid-inquiry-receipt	A	keep	检查点或答案工具必须提供有界 JSON 回执才可验证来源。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	354	verify_inquiry_receipt	invalid-inquiry-receipt	A	keep	问询回执必须带完整签名字段，批量余数也必须有界。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	357	verify_inquiry_receipt	invalid-inquiry-receipt	A	keep	问询回执必须通过签名验证。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	359	verify_inquiry_receipt	invalid-inquiry-receipt	A	keep	问询回执版本、种类和尝试身份必须匹配本次运行。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	361	verify_inquiry_receipt	invalid-inquiry-receipt	A	keep	问询回执必须有可用的回执 ID。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	366	verify_inquiry_receipt	invalid-inquiry-receipt	A	keep	答案回执必须带有效问题 ID、问题摘要和有界非空答案。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	370	verify_inquiry_receipt	invalid-inquiry-receipt	A	keep	检查点回执里的问询列表必须有界。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	381	verify_inquiry_receipt	invalid-inquiry-receipt	A	keep	检查点里的问题、摘要、状态和时刻必须构成可验证的问询条目。	
+src/hey_my_buddy/buddy/harnesses/session_receipts.py	386	verify_inquiry_receipt	invalid-inquiry-receipt	A	keep	不能把无法解码或缺少必要字段的问询回执当作送达或作答证据。	
+src/hey_my_buddy/buddy/harnesses/version.py	35	probe_version	the native version probe shutdown is unconfirmed	A	keep	诊断版本探测异常时仍必须确认它自己持有的原生进程已停。	
+src/hey_my_buddy/buddy/harnesses/version.py	38	probe_version	the native version probe shutdown is unconfirmed	A	keep	诊断版本探测返回后必须确认它自己持有的原生进程已停。	
+src/hey_my_buddy/buddy/harnesses/zcode/config.py	23	cli_command	adapter-unavailable	H	keep	选定命令解析失败，无法取得可用 ZCode 可执行命令。	
+src/hey_my_buddy/buddy/harnesses/zcode/config.py	27	cli_command	adapter-unavailable	H	keep	开发覆盖指向的 ZCode CLI 文件实际不存在。	
+src/hey_my_buddy/buddy/harnesses/zcode/config.py	31	cli_command	adapter-unavailable	H	keep	当前 JavaScript 形态的 ZCode 安装缺少所需 Node.js。	
+src/hey_my_buddy/buddy/harnesses/zcode/config.py	34	cli_command	adapter-unavailable	H	keep	选定 ZCode 文件实际没有执行权限。	
+src/hey_my_buddy/buddy/harnesses/zcode/config.py	46	provider_paths	adapter-unavailable	D	delete	只允许从指定的内建与个人供应方配置文件取得设置，缺一份就拒绝。	设置来源交给 ZCode 自己读取；本次模型目录与原生失败显示它实际取得的供应方。
+src/hey_my_buddy/buddy/harnesses/zcode/config.py	67	provider_access_types	invalid-provider-config	I	undecided	同一处把文件读取失败与固定供应方结构解析失败合并，真实失败和形状白名单需拆开。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	108	selected	configuration-unavailable	F	fact	原生设置必须按 settings.model.current 对象形状提供非空供应方与模型标识。	运行结果保留请求值并记原生选择未识别，角色看到模型配置尚未核对。
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	116	configure_session	invalid-configuration	C	merge	供应方、模型与推理强度必须是非空字符串，与 `RunConfiguration` 字段边界重复，建议合并到该边界。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	119	configure_session	unsupported-provider	D	delete	只允许 API 密钥或智谱套餐密钥供应方，拒绝 OAuth 等原生登录方式。	原生供应方照常进入模型目录；ZCode 自己的认证失败经运行失败事实到达角色与 Host。
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	123	configure_session	configuration-unavailable	H	keep	当前原生可用目录中没有请求的供应方与模型组合。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	127	configure_session	invalid-configuration	C	keep	调用方选择的推理强度不在当前原生模型公布的选项中。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	134	configure_session	configuration-mismatch	I	undecided	模型或推理强度回读与请求不符；配置事实是否必须作为硬拒绝条件待 Host 决定。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	251	prepare_session_service	INVALID_ARGUMENT	C	keep	调用方指定的完成工具必须属于本次挂载的服务工具。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	308	check_preparation	ADAPTER_UNAVAILABLE	I	undecided	准备阶段把命令不可用与供应方文件读取或形状失败合为一处拒绝，拆分后才能定留删。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	310	check_preparation	ADAPTER_UNAVAILABLE	D	delete	准备阶段只允许受支持的两种密钥供应方访问类型。	准备不再按登录方式拦截；原生模型目录显示供应方，登录失败由运行事实返回 Host。
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	506	observe_metadata	invalid-protocol	I	undecided	一处同时检查元数据种类白名单、会话归属与单调序号，不能整体删或改事实。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	514	observe_metadata	wrong-native-turn	A	keep	生命周期元数据必须有回合标识，且与已准入回合及先前元数据一致。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	517	observe_metadata	native-turn-failed	H	keep	原生生命周期元数据明确报告回合失败。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	522	observe	invalid-protocol	F	fact	无工具原生通知的参数必须是字典，即使它只是非归属元数据。	运行结果记该通知形状未识别，角色据事件完整性事实判断是否可用。
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	531	observe	invalid-protocol	A	keep	无工具调用的会话事件必须属于当前准入的原生会话。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	534	observe	invalid-protocol	A	keep	当前会话的原生事件序号必须是递增整数，防止乱序或重放证据。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	539	observe	invalid-protocol	F	fact	无工具会话事件的 payload 必须是字典，未区分是否为完成证据事件。	未识别载荷记入运行事件事实；必需终态证据缺失仍由归属与完成校验报告。
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	546	observe	wrong-native-turn	A	keep	回合开始必须首次发生，并绑定输入标识、回合标识及元数据回合。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	553	observe	wrong-native-turn	A	keep	非会话生命周期事件必须属于已经准入的当前回合。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	555	observe	native-turn-failed	H	keep	原生会话事件明确报告无工具回合失败。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	558	observe	native-turn-failed	I	undecided	同一条件同时拒绝重复完成、输入不匹配与非成功结果，证据保护和真实失败需拆开。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	561	observe	invalid-native-result	I	undecided	最终答案须为字符串且不超过 65536 字节；形状与资源上限混合，是否改成截断事实待 Host 决定。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	565	observe	invalid-protocol	A	keep	无工具状态通知若带会话标识，必须属于当前会话。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	567	observe	native-turn-failed	H	keep	原生状态通知明确报告提示词执行失败。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	570	observe	invalid-protocol	A	keep	提示词结算只能发生在本回合完成之后且不得重复结算。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	675	_spawn_app_server	adapter-unavailable	H	keep	选定 ZCode 可执行命令实际无法启动。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	750	_drain	observer-interrupt	H	keep	角色观察者在 EOF 排干阶段已经决定停止本次运行。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	755	_drain	no-tool-violation	I	undecided	结算之后任何原生交互请求都导致排干失败；是否仅记交互事实交角色判断待 Host 决定。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	757	_drain	invalid-protocol	A	keep	结算之后出现不能归属已发请求的原生响应，不能声称结算证据完整。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	776	_continuation_of	invalid-resume-mode	C	merge	上一会话标识必须为空或非空白字符串，与 `RunContinuation` 边界重复，建议合并到该边界。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	779	_continuation_of	native-resume-unavailable	C	merge	原生续接必须给出上一会话标识，与 `RunContinuation` 模式校验重复，建议合并到该边界。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	783	_continuation_of	invalid-resume-mode	C	merge	续接模式只允许已声明三种模式，与 `RunContinuation.mode` 边界重复，建议合并到该边界。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	792	_checked_root_session	wrong-native-session	A	keep	会话必须有非空根标识、没有父会话并满足根交互会话要求，才能绑定本次结果。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	794	_checked_root_session	wrong-native-session	A	keep	原生续接必须恢复精确的上一会话标识。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	796	_checked_root_session	wrong-native-session	A	keep	要求重建会话时不得重用上一会话标识。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	799	_checked_root_session	wrong-native-workspace	A	keep	原生会话的检出路径必须匹配分配给本次执行的工作区。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	846	_admit_root_input	native-admission-failed	I	undecided	准入检查同时要求原生 accepted 为真和会话标识匹配，真实拒绝与归属证据需拆开。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	862	_close_root_session	session-close-unconfirmed	A	keep	原生会话关闭必须有明确确认，才能构成结算证据。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	883	_check_service_descriptions	INVALID_ARGUMENT	C	keep	请求声明的会话工具集合必须匹配本次实际挂载集合。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	888	_check_service_descriptions	INVALID_ARGUMENT	C	keep	实际挂载的完成工具必须携带自己的输入契约。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	891	_check_service_descriptions	INVALID_ARGUMENT	C	keep	请求输出结构必须与实际完成工具的输入契约一致。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	931	run	INVALID_ARGUMENT	C	keep	调用方不得把其他 harness 的请求交给 ZCode 运行模块。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	933	run	INVALID_ARGUMENT	C	keep	调用方的会话服务必须是 ZCode 的窄绑定类型。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	942	run	INVALID_ARGUMENT	C	keep	无工具范围不能同时要求挂载完成工具会话服务。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	945	run	INVALID_ARGUMENT	C	keep	没有完成服务的最终消息调用不得携带原生续接请求。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	985	notify	INVALID_ARGUMENT	C	keep	角色观察者必须返回 RunFeedback 实例。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	987	notify	INVALID_ARGUMENT	C	keep	角色观察者只能在运行已结算时要求格式纠正。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	989	notify		H	keep	角色观察者已经决定停止本次运行，控制器如实中断。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	1188	_governed_turn	native-resume-unavailable	A	keep	原生续接必须有可读取的本微任务私有会话绑定。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	1191	_governed_turn	native-resume-unavailable	A	keep	续接绑定中的微任务、会话、检出与配置必须等于本次冻结请求。	
+src/hey_my_buddy/buddy/harnesses/zcode/native_run.py	1618	run_discovery	native-shutdown-failed	I	undecided	目录读取同时要求原生退出码为零与进程组停止确认，真实失败与停止证据需拆开。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	187	verify_receipt	<dynamic>	A	keep	完成回执必须通过本次身份、输入摘要、签名及结果契约验证。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	201	verify_tool_refusal	<dynamic>	A	keep	工具拒绝信封必须通过本次身份、输入、工具与签名验证。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	210	verify_inquiry_receipt	<dynamic>	A	keep	问询回执必须绑定本次身份、输入、回执种类与签名。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	635	send	invalid-protocol	C	keep	本侧发送的原生请求不得超过传输帧字节上限。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	639	send	cancelled	H	keep	写入时本次持有的 ZCode 执行已经被取消。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	642	send	timeout	H	keep	写入时本次持有的 ZCode 执行已经耗尽整体期限。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	652	send	native-disconnected	H	keep	原生进程输入管道实际关闭，无法交付请求。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	668	_pump	cancelled	H	keep	等待原生消息时本次执行已经被取消。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	671	_pump	timeout	H	keep	等待原生消息时本次执行已经耗尽整体期限。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	677	_pump	native-disconnected	H	keep	原生进程输出在回合结算之前结束。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	703	_pump	unsupported-provider	D	delete	原生供应方请求运行认证头时因 OAuth 登录方式被拒绝并终止。	请求及未能满足的认证能力记入交互事实；原生登录失败如实到达角色，缺少认证宿主仍会失败。
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	728	_pump	invalid-protocol	I	undecided	未领用原生响应数达到 16 就拒绝；这是累积数量上限而非已证明串回合，是否保留待 Host 决定。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	758	call	native-rpc-error	H	keep	原生 JSON-RPC 错误实际拒绝本次操作，只公开操作名防止泄露请求内容。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	761	call	invalid-protocol	F	fact	任意原生 RPC 的 result 必须为字典，拒绝其他返回形状。	运行结果记该操作答复形状未识别，实际需要的身份字段仍须单独核对。
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	816	observe	native-turn-failed	H	keep	原生状态通知明确报告当前根提示词失败。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	819	observe	invalid-provenance	A	keep	根提示词结算必须晚于本回合的完成终态事件。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	826	observe	invalid-provenance	A	keep	根会话事件序号必须是递增整数，防止重放或乱序完成证据。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	830	observe	invalid-protocol	F	fact	所有根会话事件载荷必须是字典，未区分事件是否承载完成证据。	未识别载荷作为事件事实保留；完成与问询回执所需字段仍在各自证据边界核对。
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	833	observe	wrong-native-turn	A	keep	根回合开始必须首次发生，并与提交输入标识及原生回合标识绑定。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	843	observe	native-turn-failed	H	keep	原生根回合明确失败，公开脱敏的结构化原生失败事实。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	846	observe	native-turn-failed	I	undecided	完成事件同时拒绝重复终态、输入不匹配和非成功结果，证据保护与真实失败需拆开。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	849	observe	finish-tool-failed	H	keep	完成工具实际失败且根回合结束前没有成功重试。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	850	observe	missing-finish	A	keep	根回合完成时必须已接受本回合完成工具的签收回执。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	859	observe	duplicate-finish	A	keep	完成调用安排后不得再安排后续工具，保持唯一完成的顺序证据。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	863	observe	invalid-provenance	A	keep	完成工具调用必须有有效调用标识。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	867	observe	invalid-provenance	A	keep	检查点工具调用必须有未重复的有效调用标识。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	871	observe	invalid-provenance	A	keep	问询作答工具调用必须有未重复的有效调用标识。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	881	observe	finish-tool-failed	A	keep	完成工具结果不得重复或被截断，才能验证完整签收回执。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	898	observe	finish-tool-failed	A	keep	完成工具返回回执前必须有明确成功证据。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	949	_inquiry_result	invalid-provenance	A	keep	同一问询工具调用不得重复产生终态结果。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	956	_inquiry_result	invalid-inquiry-receipt	A	keep	问询工具结果必须明确未经截断，才能验证完整回执。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	974	_inquiry_result	invalid-inquiry-receipt	A	keep	问询工具返回回执前必须有明确成功证据。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	990	_retry_failed_finish	finish-tool-failed	A	keep	已接受的完成回执不能被后续完成工具失败替换。	
+src/hey_my_buddy/buddy/harnesses/zcode/protocol.py	997	provenance	invalid-provenance	A	keep	回合开始、完成调用、签收结果、回合完成与会话关闭必须有正确的先后证据。	
+src/hey_my_buddy/buddy/roles/controller.py	70	worker_executor	ROLE_RUN_UNREGISTERED	C	keep	我方请求的 harness 必须已经登记唯一运行模块。	
+src/hey_my_buddy/buddy/roles/controller.py	157	start_router_preparation	INVALID_ARGUMENT	C	keep	我方 Router 启动参数只能为快速或审阅准备对象。	
+src/hey_my_buddy/buddy/roles/controller.py	160	start_router_preparation	ROLE_RUN_UNREGISTERED	A	keep	启动的运行模块必须仍是准备时冻结的那个登记对象。	
+src/hey_my_buddy/buddy/roles/controller.py	166	start_router_preparation	router-review-unsupported	I	undecided	审阅入口实际没有实现，不能当成仅缺验证的 G；要先决定是否新增能力。	
+src/hey_my_buddy/buddy/roles/controller.py	194	run_harness	ROLE_RUN_UNREGISTERED	C	keep	我方调用必须经过该 harness 已登记的唯一运行模块。	
+src/hey_my_buddy/buddy/roles/controller.py	207	run_harness	ROLE_RUN_UNSUPPORTED_CONTROL	C	keep	我方请求的网络、工具或续接控制必须是运行模块实际声明支持的参数。	
+src/hey_my_buddy/buddy/roles/live.py	34	_private_regular_bytes	INVALID_ARGUMENT	B	keep	含就绪端点材料的私有路径必须是有界普通文件。	
+src/hey_my_buddy/buddy/roles/live.py	38	_private_regular_bytes	INVALID_ARGUMENT	B	keep	实际读取的私有就绪材料不能超过规定字节上限。	
+src/hey_my_buddy/buddy/roles/router.py	33	prepare_router_fast	router-no-tool-unsupported	I	undecided	harness 实际没有无工具结构化入口，是能力缺失而非未经证实。	
+src/hey_my_buddy/buddy/roles/router.py	36	prepare_router_fast	CONFLICT	A	keep	无工具调用的私有工作目录必须仍为空，避免夹带其他调用的文件。	
+src/hey_my_buddy/buddy/roles/router.py	54	prepare_router_review	router-review-unsupported	I	undecided	本地审阅资格函数同时含未实现、能力限制与本机准备失败，动态原因不能归为一种拒绝。	
+src/hey_my_buddy/buddy/roles/router.py	79	start	INVALID_ARGUMENT	C	keep	我方启动 Router 必须已有冻结输入对象。	
+src/hey_my_buddy/buddy/roles/router_input.py	46	prepare	router-input-unavailable	C	keep	我方审阅输入必须提供冻结的 Git 树清单。	
+src/hey_my_buddy/buddy/roles/router_input.py	51	prepare	<dynamic>	A	keep	冻结 Router 输入必须通过清单和检出未变化核对。	
+src/hey_my_buddy/buddy/roles/router_input.py	60	git	router-input-unavailable	H	keep	如实报告 Git 命令无法取得冻结对象。	
+src/hey_my_buddy/buddy/roles/router_input.py	75	blob	router-input-unavailable	H	keep	如实报告冻结输入的物化超过两分钟。	
+src/hey_my_buddy/buddy/roles/router_input.py	80	blob	router-input-unavailable	A	keep	Git 批量读回必须属于请求的对象且明确是 blob。	
+src/hey_my_buddy/buddy/roles/router_input.py	84	blob	router-input-unavailable	A	keep	冻结 blob 必须完整且紧随正确分隔符，不能接受截断内容。	
+src/hey_my_buddy/buddy/roles/router_input.py	95	prepare	router-input-unavailable	I	undecided	一处同时拒绝越界路径、Git 元数据和非 blob 条目，安全边界与不支持子模块混在一起。	
+src/hey_my_buddy/buddy/roles/router_input.py	111	prepare	router-input-unavailable	I	undecided	拒绝审阅副本里的链接指向副本之外，守住只读输入边界但不属于凭据或回合来源三类。	
+src/hey_my_buddy/buddy/roles/router_input.py	118	prepare	router-input-unavailable	H	keep	如实报告文件系统、解码或 Git 超时导致冻结输入无法安全物化。	
+src/hey_my_buddy/buddy/roles/router_input.py	145	verify	router-input-changed	A	keep	审阅后的冻结副本摘要必须与运行前一致。	
+src/hey_my_buddy/buddy/roles/run_controller.py	50	execute	INVALID_ARGUMENT	C	keep	我方不能把 review 操作交给没有审阅入口的执行器。	
+src/hey_my_buddy/buddy/roles/run_controller.py	53	execute	ROLE_RUN_UNREGISTERED	C	keep	我方角色控制器只能调用已经登记的运行模块。	
+src/hey_my_buddy/buddy/roles/run_controller.py	76	execute	INVALID_ARGUMENT	C	keep	我方角色控制操作必须为已实现的 Worker、快速、审阅或发现。	
+src/hey_my_buddy/buddy/roles/run_execution.py	52	_evidence	INVALID_ARGUMENT	A	keep	原生证据引用的字节大小与 SHA256 必须仍对应实际内容。	
+src/hey_my_buddy/buddy/roles/run_execution.py	55	_evidence	INVALID_ARGUMENT	A	keep	角色证据必须是可读对象才可提取完成与来源事实。	
+src/hey_my_buddy/buddy/roles/run_execution.py	116	_fast_result	ROLE_RUN_UNREGISTERED	C	keep	我方注册的快速运行必须提供其收据需要的原生证据投影接口。	
+src/hey_my_buddy/buddy/roles/run_execution.py	254	worker_delivery	invalid-result	A	keep	Worker 完成必须有属于本次运行的原生完成事实。	
+src/hey_my_buddy/buddy/roles/run_execution.py	260	worker_delivery	INVALID_ARGUMENT	I	undecided	同一处合并结果 schema、角色六字段与来源对象校验，哪些属 A 哪些属角色语义须拆开决定。	
+src/hey_my_buddy/buddy/roles/run_execution.py	269	worker_request	INVALID_ARGUMENT	C	keep	我方冻结的受管回合输入必须为对象。	
+src/hey_my_buddy/buddy/roles/run_execution.py	421	_read_request	INVALID_ARGUMENT	A	keep	读回的运行请求身份及 harness 必须等于持有句柄冻结的调用。	
+src/hey_my_buddy/buddy/roles/run_execution.py	449	_read_structured_result	INVALID_ARGUMENT	C	keep	我方角色控制器必须写出规定的 verdict 字段、非负耗时与允许的停止原因。	
+src/hey_my_buddy/buddy/roles/run_execution.py	464	start_fast	INVALID_ARGUMENT	C	keep	我方无工具请求不能携带工作流权限，提示词、schema 与最长 60 秒预算必须合法。	
+src/hey_my_buddy/buddy/roles/run_execution.py	472	start_fast	INVALID_ARGUMENT	B	keep	无工具 cwd 必须是当前用户所有的私有空目录且不能是链接。	
+src/hey_my_buddy/buddy/roles/run_execution.py	547	prepare	INVALID_ARGUMENT	C	keep	我方路由后的执行参数必须有非空供应方、模型和推理强度。	
+src/hey_my_buddy/buddy/roles/run_execution.py	550	prepare	INVALID_ARGUMENT	C	keep	我方编码执行必须带受管回合输入与回合 ID。	
+src/hey_my_buddy/buddy/roles/run_execution.py	552	prepare	INVALID_ARGUMENT	C	keep	我方执行必须明确指定 initial、原生续接或重建模式。	
+src/hey_my_buddy/buddy/roles/run_execution.py	554	prepare	INVALID_ARGUMENT	C	keep	我方不能对未声明原生续接的 harness 请求原生续接。	
+src/hey_my_buddy/buddy/roles/run_execution.py	557	prepare	CONFLICT	A	keep	已存在回合结果的同一尝试不能再执行一遍。	
+src/hey_my_buddy/buddy/roles/run_execution.py	594	collect	INVALID_ARGUMENT	A	keep	不能在原生报告未通过摘要或内容核对时交付角色结果。	
+src/hey_my_buddy/buddy/roles/run_execution.py	600	collect	INVALID_ARGUMENT	C	keep	我方 Worker 角色控制器必须提供可读 verdict 对象。	
+src/hey_my_buddy/buddy/roles/run_execution.py	606	collect	INVALID_ARGUMENT	C	keep	我方 Worker 角色错误只能按固定内部代码与有界消息封装。	
+src/hey_my_buddy/buddy/roles/run_execution.py	607	collect	<dynamic>	I	undecided	这一处转报上游 invalid-result 或 invalid-role-result，可能是角色结果语义失败或证据失败。	
+src/hey_my_buddy/buddy/roles/run_execution.py	706	discover_models	CATALOG_UNAVAILABLE	I	undecided	登记模块实际没有模型发现操作，属于缺失能力。	
+src/hey_my_buddy/buddy/roles/run_execution.py	737	discover_models	ADAPTER_UNAVAILABLE	I	undecided	同一处把未收据、非零退出、原生失败和停止未确认合成不可用，A 与 H 混在一起。	
+src/hey_my_buddy/buddy/roles/schema_worker.py	116	delivery	invalid-result	I	undecided	模型最终值不符合本项目 Worker 结果合约，与原生版本形状或执行身份并非同一问题。	
+src/hey_my_buddy/buddy/roles/structured_call.py	110	_account_environment	INVALID_ARGUMENT	E	delete	结构化调用必须绑定同一 harness 的冻结账户选择，只为账户来源切换存在。	
+src/hey_my_buddy/buddy/roles/structured_call.py	125	_retain_no_tool_evidence	PRIVATE_PATH_UNSAFE	A	keep	被冻结绑定的无工具证据来源必须确实为目录。	
+src/hey_my_buddy/buddy/roles/structured_call.py	154	collect	PRIVATE_PATH_UNSAFE	A	keep	无工具结果保留必须使用启动时冻结的证据绑定，不能事后重构来源。	
+src/hey_my_buddy/buddy/roles/turn_io.py	57	guard_private_path	PRIVATE_PATH_UNSAFE	B	keep	私有路径任一组件都不能是链接或重解析点。	
+src/hey_my_buddy/buddy/roles/turn_io.py	74	_private_bytes	PRIVATE_PATH_UNSAFE	B	keep	私有产物写入不能覆盖非普通文件。	
+src/hey_my_buddy/buddy/roles/turn_io.py	142	write_turn_files	INVALID_ARGUMENT	C	keep	我方受管回合输入编码不能超过角色输入的字节上限。	
+src/hey_my_buddy/buddy/runtime/command.py	26	prepare	INVALID_ARGUMENT	C	keep	我方普通命令执行必须给出显式 argv。	
+src/hey_my_buddy/buddy/runtime/command.py	30	prepare	ADAPTER_UNAVAILABLE	H	keep	如实报告本 Worker 找不到 argv 第一个参数所指的可执行文件。	
+src/hey_my_buddy/buddy/runtime/live.py	66	__init__	resolve_channel must be callable	C	keep	我方 Worker 实时运行时必须有可调用的通道解析器。	
+src/hey_my_buddy/buddy/runtime/live.py	88	start	the Worker live runtime is stopped	C	keep	我方不能再启动已停止的实时运行时对象。	
+src/hey_my_buddy/buddy/runtime/live.py	96	start	PRIVATE_PATH_UNSAFE	I	undecided	C-Two 注册的 ValueError 或 RuntimeError 全部转包成私有路径错误，具体原因未在这处区分。	
+src/hey_my_buddy/buddy/runtime/live.py	118	_claim	claim task and attempt disagree	A	keep	认领里的任务 ID 与尝试所属任务必须一致。	
+src/hey_my_buddy/buddy/runtime/live.py	352	capabilities	LIVE_UNAVAILABLE	A	keep	Worker 实时调用必须通过来源、句柄绑定、令牌与执行身份核对。	
+src/hey_my_buddy/buddy/runtime/live.py	357	capabilities	LIVE_UNAVAILABLE	H	keep	如实报告持有的实时来源调用失败，并隐藏可能含秘密的异常文本。	
+src/hey_my_buddy/buddy/runtime/windows_process.py	81	_error	<dynamic>	H	keep	如实抛出 Windows 原生进程持有 API 返回的系统错误。	
+src/hey_my_buddy/buddy/runtime/worker.py	821	_execute_selected	HARNESS_PREMODEL_FAILED	H	keep	如实报告模型输入前的原生协议失败，且只在实际停止已确认后交回重发现边界。	

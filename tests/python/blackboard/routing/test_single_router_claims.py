@@ -1,0 +1,357 @@
+"""L4-G2 frozen claims, publication evidence and no automatic replacement calls."""
+from __future__ import annotations
+from admission import admit_execution
+
+import json
+import os
+from unittest.mock import patch
+
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.roles.router import DecisionAdapter
+from hey_my_buddy.buddy.harnesses.dsh.adapter import DshAdapter
+from hey_my_buddy.errors import BoardError
+from support import InProcessBoard
+from blackboard.routing.test_decision import DecisionTestCase, CATALOG_BUDDY, BUDDY_ID, SECOND_BUDDY_ID
+from blackboard.routing.fixtures.router_tool_receipt import claim_tool_receipt
+
+NONCE = 'g' * 32
+
+
+def stopped_answer(claim, *, state_dir, buddy_id=BUDDY_ID):
+    """A deterministic native receipt, with each required fact explicit."""
+    document = claim['decisionInput']
+    return {**claim_tool_receipt(claim, state_dir=state_dir), 'status': 'ok', 'operation': 'select',
+            'requested': document['buddy'], 'usage': {'elapsedMs': 100, 'toolCalls': 0},
+            'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}},
+            'inputVerification': {'unchanged': True, 'snapshotSha256': 'private-fixture-digest',
+                                  'manifestSha256': (document.get('executionWorkspace') or {}).get('manifestSha256')},
+            'decision': {'buddyId': buddy_id, "note": 'Frozen legal candidate', 'evidence': []}}
+
+
+class SingleRouterClaimTests(DecisionTestCase):
+    def case_board(self):
+        self._case_number = getattr(self, '_case_number', 0) + 1
+        board = InProcessBoard(self.directory / f'case-{self._case_number}')
+        self._stack.append(board)
+        return board
+
+    def claim_route(self, board, request, *, worker='router', command='claim'):
+        pass  # Admission is owned by the service.
+        return admit_execution(board.client(), NONCE, task_id=request['runId'])
+
+    def report(self, board, claim, output, *, shutdown=True, status='ok', worker='router'):
+        return board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': output})
+
+    def assert_unclaimed(self, board, request, code, frozen):
+        response = self.claim_route(board, request)
+        self.assertIsNone(response['claim'])
+        view = self.decision(board, request['decisionId'])
+        unavailable = code in ('router-no-tool-unsupported',
+                               'router-review-unsupported', 'router-quota-exhausted', 'router-disabled',
+                               'router-catalog-unavailable', 'router-harness-unavailable')
+        expected_code = 'router-list-exhausted'
+        self.assertEqual(view['status'], 'needs-host')
+        self.assertEqual(view['output']['code'], expected_code)
+        self.assertEqual(view['input'], frozen['input'])
+        self.assertEqual(view['requested'], frozen['requested'])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 0)
+            event = json.loads(connection.execute("SELECT payload_json FROM events WHERE kind=?",
+                                                  ('decision.needs_host',)).fetchone()[0])
+            self.assertNotIn('errorCode', event)
+            self.assertNotIn('reason', event)
+            self.assertEqual(view['reason']['code'], expected_code)
+            failures = [json.loads(row[0]) for row in connection.execute("SELECT payload_json FROM events WHERE kind='router.no_answer'")]
+            if unavailable:
+                self.assertEqual([entry['code'] for entry in failures], [code])
+        self.readonly_start.assert_not_called()
+
+    def test_settings_edits_do_not_replace_the_queued_claim_input(self):
+        for settings in ({'routerBuddyIds': [SECOND_BUDDY_ID]}, {'defaultRoutingMode': 'fast'},
+                         {'routingBudget': 'brief'}):
+            with self.subTest(settings=settings):
+                board = self.case_board()
+                self.seed(board)
+                request = self.request(board)
+                frozen = self.decision(board, request['decisionId'])
+                self.publish_user_patch(board, request_id='change', command_id='change', configuration=settings)
+                claimed = self.claim_route(board, request)['claim']
+                self.assertIsNotNone(claimed)
+                self.assertEqual(claimed['decisionInput'], frozen['input'])
+                board.close()
+                self._stack.remove(board)
+
+    def test_published_router_identity_edit_keeps_the_frozen_claim(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        frozen = self.decision(board, request['decisionId'])
+        with board.store.db.write() as connection:
+            connection.execute('UPDATE buddies SET model=? WHERE buddy_id=?', ('deepseek-v4-pro', BUDDY_ID))
+        claimed = self.claim_route(board, request)['claim']
+        self.assertIsNotNone(claimed)
+        self.assertEqual(claimed['decisionInput'], frozen['input'])
+
+    def test_disabled_and_unavailable_buddies_are_specific_boundaries(self):
+        for sql, code in (("UPDATE buddies SET enabled=0 WHERE buddy_id=?", 'router-disabled'),
+                          ("UPDATE buddies SET available=0 WHERE buddy_id=?", 'router-catalog-unavailable')):
+            with self.subTest(code=code, sql=sql):
+                board = self.case_board()
+                self.seed(board)
+                request = self.request(board)
+                frozen = self.decision(board, request['decisionId'])
+                with board.store.db.write() as connection:
+                    connection.execute(sql, (BUDDY_ID,))
+                self.assert_unclaimed(board, request, code, frozen)
+                board.close()
+                self._stack.remove(board)
+
+    def test_unhealthy_router_and_cooling_router_cannot_claim(self):
+        for unavailable in ('health', 'quota'):
+            with self.subTest(unavailable=unavailable):
+                board = self.case_board()
+                self.seed(board)
+                request = self.request(board)
+                frozen = self.decision(board, request['decisionId'])
+                if unavailable == 'health':
+                    with board.store.db.write() as connection:
+                        connection.execute("UPDATE harness_health SET status='unhealthy' WHERE harness='dsh'")
+                    self.assert_unclaimed(board, request, 'router-harness-unavailable', frozen)
+                else:
+                    with patch('hey_my_buddy.blackboard.routing.quota_routing.cooling',
+                               return_value={'coolingUntil': '2026-01-01T00:30:00.000Z'}):
+                        self.assert_unclaimed(board, request, 'router-quota-exhausted', frozen)
+                board.close()
+                self._stack.remove(board)
+
+    def test_fast_entrypoint_loss_does_not_run_review(self):
+        board = self.board()
+        self.seed(board)
+        self.publish_user_patch(board, request_id='fast', command_id='fast', configuration={'defaultRoutingMode': 'fast'})
+        request = self.request(board)
+        frozen = self.decision(board, request['decisionId'])
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'read': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
+            self.assert_unclaimed(board, request, 'router-no-tool-unsupported', frozen)
+
+    def test_model_service_capacity_is_frozen_and_unknown_stop_keeps_its_slot(self):
+        board = self.board(max_concurrent=3)
+        self.seed(board)
+        with board.store.db.write() as connection:
+            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) VALUES(?,?,?,1)",
+                               (CATALOG_BUDDY['harness'], CATALOG_BUDDY['provider'], CATALOG_BUDDY['model']))
+        first = self.request(board, request_id='one')
+        second = self.request(board, request_id='two')
+        claim = self.claim_route(board, first)['claim']
+        self.assertEqual(claim['decisionInput'], self.decision(board, first['decisionId'])['input'])
+        blocked = self.claim_route(board, second, worker='other', command='blocked')
+        self.assertIsNone(blocked['claim'])
+        self.assertEqual(blocked['reason'], 'model-capacity')
+        self.assertEqual(self.decision(board, second['decisionId'])['status'], 'queued')
+        self.report(board, claim, stopped_answer(claim, state_dir=board.directory), shutdown=False)
+        blocked = self.claim_route(board, second, worker='other', command='unknown-stop')
+        self.assertIsNone(blocked['claim'])
+        self.assertEqual(blocked['reason'], 'model-capacity')
+        with board.store.db.read() as connection:
+            model_service = connection.execute('SELECT model_harness,model_provider,model_model,shutdown_confirmed FROM attempts').fetchone()
+            self.assertEqual(tuple(model_service), ('dsh', 'deepseek-official', 'deepseek-flash', 0))
+            self.assertEqual(board.store._model_active_counts(connection), {('dsh', 'deepseek-official', 'deepseek-flash'): 1})
+        self.assertIsNone(self.decision(board, first['decisionId'])['selectedBuddy'])
+
+    def test_confirmed_stop_releases_same_router_model_service_for_next_claim(self):
+        board = self.board(max_concurrent=3)
+        self.seed(board)
+        with board.store.db.write() as connection:
+            connection.execute("INSERT INTO model_service_concurrency(harness,provider,model,concurrency_limit) VALUES(?,?,?,1)",
+                               ('dsh', 'deepseek-official', 'deepseek-flash'))
+        first = self.request(board, request_id='one')
+        second = self.request(board, request_id='two')
+        claim = self.claim_route(board, first)['claim']
+        self.report(board, claim, stopped_answer(claim, state_dir=board.directory))
+        self.assertEqual(self.decision(board, first['decisionId'])['status'], 'completed')
+        next_claim = self.claim_route(board, second, worker='other', command='next')['claim']
+        self.assertIsNotNone(next_claim)
+        self.assertEqual(next_claim['decisionInput']['routerBuddy'], claim['decisionInput']['routerBuddy'])
+
+    def test_missing_stop_budget_and_snapshot_evidence_cannot_publish(self):
+        for field, replacement, code in (
+                ('stopEvidence', None, 'router-stop-unconfirmed'),
+                ('stopEvidence', {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': False}}, 'router-stop-unconfirmed'),
+                ('usage', None, 'router-tool-evidence-unverified'),
+                ('usage', {'elapsedMs': 1, 'toolCalls': False}, 'router-tool-evidence-unverified'),
+                ('usage', {'elapsedMs': 1, 'toolCalls': -1}, 'router-tool-evidence-unverified'),
+                ('usage', {'elapsedMs': 300001, 'toolCalls': 0}, 'router-budget-exhausted'),
+                ('usage', {'elapsedMs': 1, 'toolCalls': 25}, 'router-budget-exhausted'),
+                ('inputVerification', None, 'router-input-changed'),
+                ('inputVerification', {'unchanged': True, 'manifestSha256': None}, 'router-input-changed'),
+                ('inputVerification', {'unchanged': False, 'snapshotSha256': 'changed'}, 'router-input-changed')):
+            with self.subTest(field=field, replacement=replacement):
+                board = self.case_board()
+                self.seed(board)
+                request = self.request(board)
+                claim = self.claim_route(board, request)['claim']
+                answer = stopped_answer(claim, state_dir=board.directory)
+                answer[field] = replacement
+                self.report(board, claim, answer)
+                decision = self.decision(board, request['decisionId'])
+                self.assertEqual(decision['status'], 'needs-host')
+                self.assertEqual(decision['output']['code'], code)
+                self.assertIsNone(decision['selectedBuddy'])
+                self.assertIsNone(self.claim_route(board, request, command='late')['claim'])
+                board.close()
+                self._stack.remove(board)
+
+    def test_review_exact_budget_boundary_and_unknown_bytes_remain_valid(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        claim = self.claim_route(board, request)['claim']
+        answer = stopped_answer(claim, state_dir=board.directory)
+        answer['usage'] = {'elapsedMs': 300000, 'toolCalls': 24, 'bytesRead': None}
+        answer.update(claim_tool_receipt(claim, 24, state_dir=board.directory))
+        self.report(board, claim, answer)
+        self.assertEqual(self.decision(board, request['decisionId'])['status'], 'completed')
+
+    def test_preflight_failure_with_unknown_stop_does_not_open_a_stopped_boundary(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        claim = self.claim_route(board, request)['claim']
+        self.report(board, claim, {'status': 'error', 'code': 'router-review-unavailable', 'modelStarted': False},
+                    status='failed', shutdown=False)
+        decision = self.decision(board, request['decisionId'])
+        self.assertEqual(decision['status'], 'running')
+        self.assertIsNone(decision['reason'])
+        self.assertIsNone(self.claim_route(board, request, command='no-retry', worker='second-worker')['claim'])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT shutdown_confirmed FROM attempts').fetchone()[0], 0)
+
+    def test_mismatched_attempt_generation_cannot_publish_or_replace_audit(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        claim = self.claim_route(board, request)['claim']
+        output = stopped_answer(claim, state_dir=board.directory)
+        with board.store.db.write() as connection:
+            task = connection.execute('SELECT * FROM tasks WHERE task_id=?', (request['runId'],)).fetchone()
+            attempt = dict(connection.execute('SELECT * FROM attempts').fetchone())
+            attempt['generation'] += 1
+            result = board.store.decisions.complete(connection, task=task, attempt=attempt, status='ok',
+                result=output, shutdown_confirmed=True, error=None, now=board.store.now())
+            self.assertTrue(result['late'])
+        decision = self.decision(board, request['decisionId'])
+        self.assertEqual(decision['status'], 'running')
+        self.assertIsNone(decision['output'])
+        self.assertIsNone(decision['selectedBuddy'])
+
+    def test_historical_fallback_json_is_audit_only_and_is_not_rewritten(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        with board.store.db.write() as connection:
+            row = board.store.decisions._row(connection, request['decisionId'])
+            historical = json.loads(row['requested_json'])
+            historical.update(requestedRoutingMode='review', fallback={'from': 'review', 'to': 'fast'})
+            connection.execute('UPDATE decision_requests SET requested_json=? WHERE decision_id=?',
+                               (json.dumps(historical), request['decisionId']))
+        audit = self.decision(board, request['decisionId'])
+        self.assertEqual(audit['requested'], historical)
+        self.assertNotIn('fallback', audit)
+        self.assertNotIn('requestedRoutingMode', audit)
+        compact = self.decision(board, request['decisionId'], audit=False)
+        self.assertNotIn('fallback', compact)
+        self.assertNotIn('requestedRoutingMode', compact)
+
+    def test_adapter_start_and_collect_use_local_eligibility_without_certificate(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        claim = self.claim_route(board, request)['claim']
+        context = ExecutionContext(task_id=request['runId'], attempt_id=claim['attempt']['attemptId'],
+            generation=claim['attempt']['generation'], spec=claim['task']['spec'],
+            directory=board.directory / 'adapter-unit', runtime={},
+            environment={**os.environ, 'HMB_STATE_DIR': str(board.directory)}, decision_input=claim['decisionInput'], session_record_path=None)
+        native = DecisionAdapter()
+        self.assertFalse(hasattr(DshAdapter, 'read_only_structured_verified'))
+        self.assertTrue(native.available()[0])
+        native.prepare(context)
+        handle = native.start(context)
+        handle.wait(timeout=5)
+        outcome = native.collect(handle, context)
+        self.assertEqual(outcome.status, 'ok')
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertTrue(outcome.result['inputVerification']['unchanged'])
+        self.assertTrue(outcome.result['stopEvidence']['native']['shutdownConfirmed'])
+        self.assertEqual(self.readonly_start.call_count, 1)
+        self.report(board, claim, outcome.result)
+        self.assertEqual(self.decision(board, request['decisionId'])['status'], 'completed')
+
+    def test_claim_attempt_and_started_event_roll_back_together(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        original = board.store.decisions._mark_running
+        def failed_mark(*args, **kwargs):
+            original(*args, **kwargs)
+            raise BoardError('fixture-failure', 'fail after decision binding')
+        with patch.object(board.store.decisions, '_mark_running', side_effect=failed_mark):
+            with self.assertRaises(BoardError):
+                self.claim_route(board, request)
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts').fetchone()[0], 0)
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='decision.started'").fetchone()[0], 0)
+        decision = self.decision(board, request['decisionId'])
+        self.assertEqual(decision['status'], 'queued')
+        self.assertIsNone(decision['attemptId'])
+        self.assertIsNotNone(self.claim_route(board, request, command='retry-after-rollback')['claim'])
+
+    def test_publication_failure_rolls_back_choice_and_commits_worker_receipt(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        claim = self.claim_route(board, request)['claim']
+        original = board.store.decisions._finish
+        def failed_finish(*args, **kwargs):
+            original(*args, **kwargs)
+            if kwargs['status'] == 'completed':
+                raise BoardError('fixture-failure', 'fail after choice and event publication')
+        with patch.object(board.store.decisions, '_finish', side_effect=failed_finish):
+            response = self.report(board, claim, stopped_answer(claim, state_dir=board.directory))
+        self.assertTrue(response['committed'])
+        decision = self.decision(board, request['decisionId'])
+        self.assertEqual(decision['status'], 'needs-host')
+        self.assertIsNone(decision['buddyId'])
+        self.assertIsNone(decision['selectedBuddy'])
+        self.assertEqual(decision['reason'], {'code': 'decision-publication-failed',
+                                              'params': {'errorCode': 'fixture-failure'}})
+        with board.store.db.read() as connection:
+            issue = connection.execute("SELECT code,message FROM execution_issues WHERE stage='decision-publication'").fetchone()
+            self.assertEqual((issue['code'], issue['message']),
+                             ('fixture-failure', 'fail after choice and event publication'))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events WHERE kind='decision.completed'").fetchone()[0], 0)
+            self.assertIsNotNone(connection.execute('SELECT result_json FROM attempts').fetchone()[0])
+
+    def test_programming_error_in_publication_propagates_and_rolls_back_receipt(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        claim = self.claim_route(board, request)['claim']
+        with patch.object(board.store.decisions, '_publish_select', side_effect=RuntimeError('publication bug')):
+            with self.assertRaisesRegex(RuntimeError, 'publication bug'):
+                self.report(board, claim, stopped_answer(claim, state_dir=board.directory))
+        decision = self.decision(board, request['decisionId'])
+        self.assertEqual(decision['status'], 'running')
+        with board.store.db.read() as connection:
+            self.assertIsNone(connection.execute('SELECT result_json FROM attempts').fetchone()[0])
+
+    def test_cached_qualification_loss_does_not_invalidate_an_effectively_valid_answer(self):
+        board = self.board()
+        self.seed(board)
+        request = self.request(board)
+        claim = self.claim_route(board, request)['claim']
+        with patch.dict('hey_my_buddy.protocol.capabilities.PERMISSION_LEVELS', {'dsh': {'none': 'enforced', 'write': 'enforced', 'full': 'enforced'}}):
+            self.report(board, claim, stopped_answer(claim, state_dir=board.directory))
+        decision = self.decision(board, request['decisionId'])
+        self.assertEqual(decision['status'], 'completed')
+        self.assertEqual(decision['buddyId'], BUDDY_ID)
+        self.assertEqual(decision['input'], claim['decisionInput'])
+        self.assertIsNone(self.claim_route(board, request, command='no-replacement')['claim'])

@@ -1,81 +1,124 @@
-# hey-my-buddy
+<p align="right"><a href="README.md">English</a> · <strong>简体中文</strong></p>
 
-[English](README.md)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.svg">
+  <img alt="hey-my-buddy" src="docs/assets/banner-light.svg" width="100%">
+</picture>
 
-Buddy 让 Codex 把一个**边界明确的任务**交给本地 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）运行，并拿回可以独立核查的真实成果。Codex 仍然负责界定任务、选择路径和检查结果，dsh 负责主要执行。
+<p align="center"><b>工作委派出去，责任留在自己手里。</b></p>
 
-## 它有什么用
+<p align="center">
+  你正在用的编码 agent 把边界明确的任务交给本机的其他编码 agent，<br>
+  每一份封存的结果都由它核对之后才落地。
+</p>
 
-- **成果可以直接检查。** 给定工作目录和带验收标准的任务，它会修改文件、运行命令，把成果留在磁盘上。
-- **等待结束后仍可接回。** 关闭等待终端或等待超时，任务仍会继续：Codex 可以再次接上同一个任务，报告它的进度或结果。
-- **控制权仍在你手里。** 任务使用你自己的凭据和权限执行，Codex 会先检查真实文件和检查项，再判断任务是否完成。
+<p align="center">
+  <a href="#怎样工作">怎样工作</a> ·
+  <a href="#安装">安装</a> ·
+  <a href="#开始使用">开始使用</a> ·
+  <a href="#现状与限制">现状</a> ·
+  <a href="#文档">文档</a>
+</p>
 
-## 适合委派的工作
+---
 
-适合：调查失败的测试或可复现的 bug；实现范围明确的功能或重构；批量文件转换；为指定文件更新文档；产出结果可验证的计算或报告。
+## 为什么用 hey-my-buddy
 
-留在 Codex：一行两行的修改、已知答案、需求仍在变化，或需要你亲自界定和最终判断的工作。
+- **你信任的 agent 始终做主。** 你平常用的编码 agent（例如 Codex 或 Claude Code，CLI 或 app 都可以）就是你的 Host buddy：它拆分工作、把边界明确的部分委派出去，每一份结果都由它自己验收。
+- **每一部分交给合适的 buddy。** Worker 在 DeepSeek Harness、ZCode、Codex 或 Claude Code 的 CLI 里运行，用的是你启用的模型与推理强度；由路由来选，或者由 Host 指定。
+- **没有核对过的东西不会落地。** 每个微任务在分给它的检出里从固定的输入开始，以封存的产物结束；并行的写者从不共用一个检出。Host 读过差异、跑过检查之后才验收。
+- **工作比你的会话活得久。** 终端关掉、连接断开、服务重启都不会取消工作；凭它的标识接着处理。
+- **看得见谁在做什么。** 本机私有的控制台把每个宏任务画成一条时间线，显示每个 buddy 的负载与你的设置。
+- **用你自己的账户与套餐。** Worker 用你自己的 harness 账户登录，hey-my-buddy 从不保存也不转交你的凭据。见[账户与条款](docs/terms.zh-CN.md)。
 
-## 环境要求
+## 怎样工作
 
-- macOS 或 Linux（POSIX）。
-- [uv](https://docs.astral.sh/uv/) 与 Python 3.12–3.14；默认 dsh 路径需要 Node.js 20 或更高版本。
-- 已自行安装并配置好凭据的本地 `dsh`（<https://github.com/deepseek-ai/deepseek-harness>）。
-- 支持技能的 Codex。
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-zh-dark.svg">
+  <img alt="Host buddy 把微任务委派给黑板；除非 Host 点名，合格的 buddy 只有一个时黑板直接选它，有几个时由 Router buddy 从中选；Worker buddy 在分给这个微任务的检出里跑一个回合；Host 可以经黑板向这个运行中的回合问询；回合结束时黑板封存检出；Host 对照封存核对 Worker 的报告，要么整合并验收进你的仓库，要么打回给同一个 Worker，不再经过路由。Lead buddy 为它委派的微任务按同一个循环担任 Host。" src="docs/assets/architecture-zh-light.svg" width="100%">
+</picture>
 
-Buddy 不安装 dsh、不配置模型凭据，也不修改全局模型设置。
+1. **委派。** Host 写一个微任务：做什么、可以改哪些文件、怎样检查。除非 Host 点名，由路由来选：合格的只有一个就直接选它，有几个就由 Router buddy 从中选一个。
+2. **执行。** Worker 在它的 harness 里、在分给这个微任务的检出里工作。Host 可以经黑板向运行中的回合问询，回合不必停下；Worker 需要决定或帮助时，它停下来提问，Host 回答，或者让它接着做。
+3. **验收。** Host 审查封存的结果：要么整合并验收，验收会核对这次整合并回收检出；要么打回给同一个微任务再跑一个回合；放弃的工作以结论结束。
+
+微任务、决定与结果都记在本地的黑板上，黑板是一个由私有服务独占的 SQLite 数据库。详见[工作流](docs/reference/workflow.md)与[架构](docs/reference/architecture.md)。
+
+## 安装
+
+hey-my-buddy 是一个共享的 agent skill，装在 `~/.agents/skills/hey-my-buddy`，自带启动器；私有的服务与运行时在 `~/.local/share/hey-my-buddy` 之下（Windows 上是 `%LOCALAPPDATA%\hey-my-buddy`）。Claude Code 通过 `~/.claude/skills/hey-my-buddy` 这个链接找到它（Windows 上是一个 junction）。安装不改你的 `PATH`、shell 与 agent 设置。需要 [uv](https://docs.astral.sh/uv/)。
+
+```sh
+uvx hey-my-buddy@0.54.1 install
+```
+
+也可以从这个仓库的检出构建 wheel 再安装：
+
+```sh
+uv build --wheel --out-dir dist
+uvx --from "$PWD/dist/hey_my_buddy-0.54.1-py3-none-any.whl" hey-my-buddy install
+```
+
+<details>
+<summary>或者让你的 agent 来装</summary>
+
+```text
+请在这台机器上为我安装 hey-my-buddy。
+
+1. 用我指定的版本，或者我给的 wheel。
+2. 在你的沙盒之外、经你自己的权限机制运行安装，不用 sudo。
+3. 写入任何东西之前，列出它将创建或替换的每一个路径。
+4. 报告 skill 的版本与位置、Claude Code 的链接、服务的动作，以及有没有做备份。
+5. 用 ~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy health 核对。
+6. 遇到 LAUNCH_ACCESS_DENIED，只放行这一条启动器命令再试；遇到 UPGRADE_NOT_IDLE，报告列出的工作并等待，绝不为了强行升级去取消工作。
+```
+
+</details>
+
+升级用同一条命令，换成新版本。改动契约的升级在有工作运行时拒绝，切换之前先做一份核对过的备份。细节、错误码与恢复见[运维](docs/reference/operations.md#installation)。
 
 ## 开始使用
 
-```sh
-git clone https://github.com/Dsssyc/hey-my-buddy.git
-cd hey-my-buddy
-uv sync --frozen --project deepseek-delegate --python 3.12
-```
+用平常的话告诉你的 Host buddy，例如：
 
-把整个 `deepseek-delegate/` 目录安装为独立的 Codex 技能（复制整个目录，不能只复制 `SKILL.md`）：
+> 用 hey-my-buddy 让一个 buddy 检查这份 README 里的链接，报告坏掉的那些。
+
+其余的由 skill 告诉 Host。想自己看看：
 
 ```sh
-BUDDY_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-mkdir -p "$BUDDY_SKILLS_DIR"
-if [ -e "$BUDDY_SKILLS_DIR/deepseek-delegate" ] || [ -L "$BUDDY_SKILLS_DIR/deepseek-delegate" ]; then
-  printf '%s\n' '此位置已有技能，请参阅升级说明。'
-else
-  ln -s "$PWD/deepseek-delegate" "$BUDDY_SKILLS_DIR/deepseek-delegate"
-fi
+~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy health    # 路由与容量
+~/.agents/skills/hey-my-buddy/scripts/hey-my-buddy console   # 打开私有控制台
 ```
 
-已有安装请参阅[升级说明](deepseek-delegate/references/operations.md#runtime-lifecycle-and-upgrade)。 [使用说明](deepseek-delegate/references/usage.md)提供复制安装、插件安装和工作区分组配置。
+在控制台里启用你想用的 buddy，并设定同时能跑几个。[用法](docs/reference/usage.md)从安装一路讲到验收结果；[命令行参考](docs/reference/cli.md)覆盖每一条命令。
 
-在新的 Codex 任务中，用自然语言发起委派：
+## 现状与限制
 
-> 用 `$deepseek-delegate` 检查当前仓库 README 和 docs 中的相对链接，只新增 `buddy-doc-review.md`，列出失效链接和修复建议。这次关闭 dsh 工作区分组（`workspace: false`）。任务完成后请复核报告，并把结果给我看。
+- **0.x。** 版本号是 0.x 期间，契约可以在中间那位数字变动时改变；这样的升级会在一次明确的、先做备份的步骤里转换你的黑板。
+- **平台。** 每天在 macOS 上使用。完整的检查套件在持续集成里于 Linux 与 Windows 11（x64 与 ARM64）上通过；在 Linux 与 Windows 上实际运行各个 harness，还没有验证过。
+- **Harness。** Codex 经它的实验性 App Server 运行。各个 harness 支持什么、验证到哪一步，见[harness](docs/reference/harnesses.md)。
+- **路由会看到任务。** 由 Router buddy 从几个 buddy 中选择时，任务的文字会发给那个 Router 的模型提供方，即使最后做事的是别的模型。
+- **不是沙盒。** 检出与私有目录把工作隔开，但它们不是操作系统的沙盒；Worker 拥有它的 harness 给它的权限。
+- **不管花费。** 用量计入你自己的套餐与密钥；hey-my-buddy 不记录金额。
 
-`$deepseek-delegate` 是独立技能；当本仓库作为 Codex 插件安装时，同一个技能叫 `$buddy`（安装细节见使用说明）。
+## 文档
 
-## 会发生什么
+- [文档索引](docs/README.md)
+- [运维](docs/reference/operations.md)：安装、升级、存储、错误码与恢复
+- [用法](docs/reference/usage.md)与[命令行](docs/reference/cli.md)
+- [控制台](docs/reference/console.md)与[harness](docs/reference/harnesses.md)
+- [架构](docs/reference/architecture.md)与[决定](docs/decisions/)
 
-Codex 只启动一次任务，并在同一回合里等待它运行。你可以询问任务正在做什么；任务返回时会得到结果以及日志和产物的位置。随后 Codex 会检查真实文件，执行相关验证，并报告核实到的内容。
+## 开发
 
-如果等待先结束，任务仍按自己的执行期限继续运行，Codex 可以凭保存的运行 ID 接回。需要跨回合运行时，[后台流程](deepseek-delegate/references/usage.md#background-work-that-outlives-the-turn)使用 App 周期性跟进；目前不支持回合结束后的即时自动接回。
+```sh
+npm --prefix apps/console ci
+uv run --frozen python -m hey_my_buddy.cli.checks
+npm --prefix apps/console test
+```
 
-## 需要知道
+[AGENTS.md](AGENTS.md) 写明仓库的不变量、目录结构与检查。问题请提到 [GitHub issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
 
-- 工作区分组默认开启，需要一次性安装一个宿主桥接；上面的第一个示例用 `workspace: false`，因此无需该配置即可运行。不要假设默认值被改动过，详见[运维说明](deepseek-delegate/references/operations.md)。
-- 执行期限默认 30 分钟。长任务请在请求中明确更长的时限，最多 24 小时。
-- 请写清允许修改的文件。工作目录不会限制文件访问权限；独立 worktree 可避免并行修改相互干扰。
-- Buddy 只管理自己启动的任务；独立的 dsh 会话不受影响。
-- 任务协调和结果存储在本机，模型请求使用 dsh 配置的服务商；Buddy 无需注册 MCP。
-- 第一次运行可能稍慢，因为服务会准备一个私有运行时。
+## 许可
 
-## 文档与支持
-
-- [docs/README.md](docs/README.md) —— 全部文档及其职责。
-- 详细主题：[使用说明](deepseek-delegate/references/usage.md)、[CLI](deepseek-delegate/references/cli.md)、[运维](deepseek-delegate/references/operations.md)、[worker](deepseek-delegate/references/workers.md)、[runner](deepseek-delegate/references/runner.md) 与 [架构](deepseek-delegate/references/architecture.md)。
-- 问题与支持：[GitHub Issues](https://github.com/Dsssyc/hey-my-buddy/issues)。
-- 欢迎贡献；提交前请先看 [AGENTS.md](AGENTS.md) 列出的检查命令。
-- 设计历史：[ADR-001](docs/decisions/001-python-transactional-blackboard.md) 与 [0.4.0 验收记录](docs/acceptance/python-blackboard-0.4.0.md)。
-
-## 许可证
-
-[MIT](LICENSE)。可单独复制的 `deepseek-delegate/` 目录附带自己的许可证副本。
+[MIT](LICENSE)

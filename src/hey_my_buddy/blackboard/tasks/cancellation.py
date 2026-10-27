@@ -1,0 +1,23 @@
+"""Read-only attribution from the first durable cancellation of one run."""
+
+from __future__ import annotations
+
+import json
+
+
+def for_run(connection, run_id: str) -> dict | None:
+    # A helper cancelled by its owner has its own event. Never borrow a later
+    # cancellation from an ancestor or a subsequent explicit cancel command.
+    row = connection.execute(
+        "SELECT payload_json,actor_role,actor_id FROM events WHERE task_id=?"
+        " AND kind IN ('workflow.cancelled','workflow.helper_cancelled','workflow.lead_task_cancelled')"
+        " AND seq > COALESCE((SELECT MAX(seq) FROM events WHERE task_id=?"
+        " AND kind IN ('workflow.continued','workflow.helper_resumed','workflow.auto_continued')),0)"
+        " ORDER BY seq LIMIT 1", (run_id, run_id),
+    ).fetchone()
+    if row is None:
+        return None
+    payload = json.loads(row["payload_json"])
+
+    actor = {"role": row["actor_role"], "id": row["actor_id"]} if row["actor_role"] else None
+    return {"actor": actor, "note": payload.get("note")}

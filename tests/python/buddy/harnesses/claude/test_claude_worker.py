@@ -1,0 +1,104 @@
+"""Claude role wiring through the real private daemon, Worker and Git seal.
+
+Only the native CLI is simulated. No installed harness or model is contacted.
+The daemon-level cases use the fixed Claude run seam; the catalog rule is pure.
+"""
+import json
+import unittest
+from pathlib import Path
+from buddy.harnesses.fixture_selection import select_fixture
+
+from hey_my_buddy.buddy.harnesses.claude.native_run import _catalog
+from hey_my_buddy.buddy.harnesses.registry import adapter
+from hey_my_buddy.protocol import schemas
+from support import wait_for
+from blackboard.tasks.test_workflow_worker import MicroTaskWorkerTestCase
+
+
+BUDDY = {"harness": "claude", "provider": "anthropic",
+                 "model": "claude-opus-5-5[1m]", "effort": "high"}
+FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
+
+
+
+
+class ClaudeWorkerTests(MicroTaskWorkerTestCase):
+    def setUp(self):
+        super().setUp()
+        self.catalog_fixture({"source": "file:claude-worker-fixture", "providers": [{
+            "harness": "claude", "provider": "anthropic", "displayName": "Anthropic",
+            "packageName": "claude-code", "packageVersion": "fixture",
+            "models": [{"id": BUDDY["model"], "name": "Opus fixture",
+                        "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
+
+    def env(self):
+        environment = {"HMB_CLAUDE_FIXTURE_STATE": str(self.directory / "native-fixture.json"),
+                       "HMB_CLAUDE_FIXTURE_CASE": getattr(self, "case", "ok")}
+        select_fixture(environment, self.directory, "claude", FIXTURE)
+        return environment
+
+    def execute_fixture(self):
+        code, submission = self.cli("submit", json.dumps({
+            **BUDDY, "requestId": "claude-private-worker", "hostId": "host-1",
+            "task": "Exercise only the mock native protocol", "cwd": str(self.repo),
+            "expectedSeconds": 20,
+            "executionWorkspace": {"kind": "worktree", "access": "write",
+                                   "base": {"kind": "commit", "ref": self.git("rev-parse", "HEAD").strip()},
+                                   "writeScope": ["tracked.txt"]}}), env=self.env())
+        self.assertEqual(code, 0, submission)
+        run_id = submission["runId"]
+        last = {}
+
+        def settled():
+            nonlocal last
+            # These tests inspect the complete evidence, not the brief Host view.
+            code, last = self.cli("get", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
+            self.assertEqual(code, 0, last)
+            task = last.get("task") or {}
+            return last if task.get("resultAvailable") and task.get("shutdownConfirmed") else None
+
+        view = wait_for(settled, timeout=60)
+        self.assertIsNotNone(view, last)
+        code, receipt = self.cli("result", json.dumps({"runId": run_id, "output": "full"}), env=self.env())
+        self.assertEqual(code, 0, receipt)
+        return view, receipt
+
+    def test_micro_task_worker_seals_only_a_proven_claude_result(self):
+        self.assertIn("claude", schemas.CODING_HARNESSES)
+        implementation = adapter("claude")
+        self.assertFalse(implementation.native_resume)
+        self.assertIn("inquiry", implementation.capabilities)
+        with self.daemon(env=self.env()):
+            view, receipt = self.execute_fixture()
+            self.assertEqual(view["state"], "delivered", receipt)
+            self.assertIsNotNone(view["finalArtifactId"])
+            native = receipt["result"]["nativeSession"]
+            self.assertFalse(native["resumable"])
+            self.assertEqual(native["storageScope"], "none")
+            self.assertEqual(receipt["result"]["turn"]["provenance"]["harness"], "claude")
+            self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+
+    def test_provider_rejection_is_persisted_as_harness_error_without_retry(self):
+        self.case = "quota-rejected"
+        with self.daemon(env=self.env()):
+            view, receipt = self.execute_fixture()
+            self.assertNotEqual(view["state"], "delivered")
+            self.assertIsNone(view["finalArtifactId"])
+            meta, result = receipt["resultMeta"], receipt["result"]
+            self.assertEqual(meta["terminationReason"], "harness-error", receipt)
+            self.assertEqual(result["code"], "harness-error")
+            self.assertNotIn("turn", result)
+            self.assertNotIn("workspaceSeal", result)
+            self.assertEqual(set(result["providerRejection"]),
+                             {"code", "nativeCode", "source", "observedAt", "resetsAt", "rejectionPhase"})
+
+
+class ClaudeCatalogRuleTests(unittest.TestCase):
+    def test_effort_directory_never_mixes_default_with_explicit_efforts(self):
+        catalog = _catalog({"account": {"apiProvider": "firstParty", "email": "subscriber@example.invalid",
+                                      "organization": "fixture-organization", "subscriptionType": "max"},
+            "models": [{"value": "bad", "resolvedModel": "bad-model", "supportedEffortLevels": ["default", "high"]},
+                       {"value": "haiku", "resolvedModel": "haiku"}]}, "fixture")
+        self.assertEqual([m["id"] for m in catalog["providers"][0]["models"]], ["haiku"])
+        self.assertEqual(catalog["providers"][0]["models"][0]["efforts"], ["default"])
+        self.assertTrue(catalog["warnings"])

@@ -1,0 +1,442 @@
+{
+  "hostId": "codex-adr027",
+  "objectiveId": "obj-9f62bcab-3a1c-4878-ba75-38a10337ee4a",
+  "codeCommit": "1c5ec9e0389e2d1fb2d8bb9a7ee4c14cb2d0fd93",
+  "coreCommit": "55fff85fbe4ddce8a88eccd898a977a9bcd16a24",
+  "schemaVersion": 15,
+  "microtasks": {
+    "a": {
+      "runId": "543174ce-34b9-4a26-aeb1-b6537db0152b",
+      "state": "accepted",
+      "finalArtifactId": "ecb39312-4a6a-44f5-b672-e1d0a4917eb0",
+      "shutdown": {
+        "selfConfirmed": true,
+        "descendantsConfirmed": true,
+        "unconfirmedRunIds": [],
+        "unconfirmedCount": 0,
+        "truncated": false
+      },
+      "cleanup": {
+        "planId": "cln-08f4a812-aa42-4294-8dcc-bb8b0072ee73",
+        "state": "applied",
+        "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-46c8c752810e3897106ed1c6a40f1885/checkout",
+        "appliedAt": "2026-10-07T05:56:37.711Z"
+      },
+      "cleanupResult": {
+        "removed": true,
+        "alreadyRemoved": false
+      }
+    },
+    "b": {
+      "runId": "4e713942-3408-4407-ab6d-f457c5b0375f",
+      "state": "accepted",
+      "finalArtifactId": "7e599189-69b1-41b6-9c7a-0eb6e308cfb0",
+      "shutdown": {
+        "selfConfirmed": true,
+        "descendantsConfirmed": true,
+        "unconfirmedRunIds": [],
+        "unconfirmedCount": 0,
+        "truncated": false
+      },
+      "cleanup": {
+        "planId": "cln-c925e096-10c9-4fd9-9f05-b7a93dee9eca",
+        "state": "applied",
+        "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-3a14be25c4957ba5e3c5f33f4d923ea7/checkout",
+        "appliedAt": "2026-10-07T05:43:38.113Z"
+      },
+      "cleanupResult": {
+        "removed": true,
+        "alreadyRemoved": false
+      }
+    },
+    "c": {
+      "runId": "4f9dfdf2-a795-4f61-8493-2b134cb900c2",
+      "state": "accepted",
+      "finalArtifactId": "e49a1557-16b8-48fb-8f51-c9514793b841",
+      "shutdown": {
+        "selfConfirmed": true,
+        "descendantsConfirmed": true,
+        "unconfirmedRunIds": [],
+        "unconfirmedCount": 0,
+        "truncated": false
+      },
+      "cleanup": {
+        "planId": "cln-1d464707-8546-4f61-b772-37f5c7a62789",
+        "state": "applied",
+        "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-daca4f4556dcd320844e40ee0c44212f/checkout",
+        "appliedAt": "2026-10-07T05:45:01.850Z"
+      },
+      "cleanupResult": {
+        "removed": true,
+        "alreadyRemoved": false
+      }
+    }
+  },
+  "integrations": {
+    "a": "int-7bcede94-3043-456c-aa35-a37a1663343d",
+    "b": "int-1df973fd-abe4-4c88-9349-39842f06e927",
+    "c": "int-024ce269-e345-4c10-ace6-dcc11de075a2"
+  },
+  "testIds": {
+    "python": {
+      "baseline": 2785,
+      "firstSubmission": 2867,
+      "final": 2874,
+      "added": [
+        "blackboard.catalog.test_catalog_observations.CatalogObservationTests.test_a_ba_restores_identity_and_preserves_human_intent",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_account_identity_change_never_mixes_two_accounts_windows",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_c01_cold_start_never_trusts_a_reading_without_the_account_fact",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_c01_unknown_account_reading_replaces_nothing",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_c03_an_unknown_reading_does_not_advance_the_confirmation_window",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_c03_first_absence_is_pending_before_the_window_and_unavailable_after",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_c04_reappearance_recovers_and_clears_the_first_absence",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_c04_recovery_inside_the_window_keeps_the_model_usable",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_c09_transitions_are_per_model_and_never_repeated",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_effort_only_change_is_not_a_model_disappearance",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_empty_confirmed_catalog_for_one_harness_leaves_others_alone",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_out_of_order_observations_cannot_rewrite_the_pending_state",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_publication_confirmed_empty_checks_old_binding_before_adoption",
+        "blackboard.catalog.test_catalog_trust.CatalogTrustTests.test_publication_unknown_cannot_restore_a_retained_old_account_directory",
+        "blackboard.routing.test_catalog_trust.CatalogTrustRoutingTests.test_confirmed_absence_leaves_the_bounds_after_the_window",
+        "blackboard.routing.test_catalog_trust.CatalogTrustRoutingTests.test_pending_model_stays_inside_the_routing_bounds",
+        "blackboard.routing.test_catalog_trust.CatalogTrustRoutingTests.test_unknown_reading_keeps_the_candidate_and_its_bounds",
+        "blackboard.routing.test_catalog_trust.CatalogTrustRoutingTests.test_user_pin_on_a_pending_profile_still_resolves",
+        "blackboard.service.test_harness_health.CatalogHealthOwnershipTests.test_initialize_existing_profiles_preserves_catalog_reasons",
+        "blackboard.service.test_harness_health.CatalogHealthOwnershipTests.test_invalidate_updates_null_reason_and_preserves_catalog_reasons",
+        "blackboard.service.test_harness_health.CatalogHealthOwnershipTests.test_new_credential_health_refresh_cannot_restore_old_catalog_profiles",
+        "blackboard.service.test_harness_health.CatalogHealthOwnershipTests.test_same_harness_path_recheck_preserves_confirmed_absence_and_retired_effort",
+        "blackboard.service.test_harness_health.CatalogHealthOwnershipTests.test_unhealthy_refresh_updates_null_reason_and_preserves_catalog_reasons",
+        "blackboard.service.test_harness_health.CatalogShelfLifeTests.test_a_reprobed_unchanged_harness_rereads_only_past_the_shelf_life",
+        "blackboard.service.test_harness_health.CatalogShelfLifeTests.test_cold_start_unknown_reading_still_expires_by_observation_time",
+        "blackboard.service.test_harness_health.CatalogShelfLifeTests.test_cold_start_unknown_then_confirmed_publishes_the_catalog",
+        "blackboard.service.test_harness_health.CatalogShelfLifeTests.test_fresh_catalog_read_keeps_the_throttled_path_quiet",
+        "blackboard.service.test_harness_health.CatalogShelfLifeTests.test_stale_reread_failure_returns_the_post_callback_record",
+        "blackboard.service.test_harness_health.CatalogShelfLifeTests.test_throttled_scan_still_rereads_a_stale_catalog_once",
+        "blackboard.service.test_harness_health.CatalogShelfLifeTests.test_unparseable_read_time_counts_as_expired",
+        "blackboard.service.test_harness_health.StaleRereadServiceCallbackTests.test_native_failure_inside_the_service_callback_invalidates_for_the_caller",
+        "blackboard.service.test_service.CatalogRefreshServiceTests.test_confirmed_account_fact_publishes_the_catalog",
+        "blackboard.service.test_service.CatalogRefreshServiceTests.test_explicit_validation_reread_hook_uses_the_service_refresh",
+        "blackboard.service.test_service.CatalogRefreshServiceTests.test_missing_or_unknown_account_fact_replaces_nothing",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_account_switch_still_clears_the_legacy_read_time",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_c02_confirmed_unavailable_route_is_rejected_after_the_window",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_c02_pending_model_is_still_accepted_explicitly",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_c05_a_failing_reread_still_rejects_with_the_catalog_facts",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_c05_a_reread_that_breaks_health_keeps_the_rejection_context",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_c05_a_successful_reread_admits_the_route_without_rejection",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_c05_one_bounded_reread_then_a_rejection_that_names_the_facts",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_cold_start_without_any_recorded_catalog_is_catalog_unavailable",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_confirmed_empty_after_health_recovery_pends_the_known_model",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_credential_change_confirmed_empty_does_not_pend_old_account_model",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_credential_change_same_model_uses_new_metadata_and_observation_fences",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_credential_change_unknown_read_cannot_restore_old_account_model",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_first_absence_and_pending_recovery_keep_only_last_legal_efforts",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_health_mask_cannot_restore_a_retired_effort_on_unknown_read",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_legacy_board_reports_and_keeps_its_old_trusted_read_time",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_pending_survives_health_failure_and_true_unavailability_is_never_restored",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_service_refresh_populates_the_catalog_for_a_cold_board",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_snapshot_and_model_profiles_expose_catalog_status_fields",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_source_change_confirmed_empty_does_not_pend_old_account_model",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_source_change_same_model_uses_new_metadata_and_observation_fences",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_source_change_unknown_read_cannot_restore_old_account_model",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_source_round_trip_without_trusted_reading_cannot_reuse_old_directory",
+        "blackboard.tasks.test_catalog_trust.ExplicitCatalogTrustTests.test_unknown_reread_after_health_recovery_keeps_the_retained_catalog",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_catalog_absence_confirmed_before_write_fences_the_override",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_confirmed_unavailable_route_recovers_when_the_reread_lists_it_again",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_confirmed_unavailable_route_still_rejects_after_one_reread",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_disabled_and_catalog_refusals_carry_different_reasons_and_facts",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_missing_route_admits_after_one_bounded_reread_recovers",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_missing_route_without_recovery_still_rejects_with_catalog_facts",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_refresh_never_flips_the_users_enabled_choice",
+        "buddy.harnesses.codex.test_codex.CodexAdapterTests.test_a_long_multibyte_native_error_keeps_its_reason_in_the_public_receipt",
+        "buddy.harnesses.codex.test_codex.CodexAdapterTests.test_an_unlisted_model_reaches_the_native_turn_and_its_public_fact_reaches_the_receipt",
+        "buddy.harnesses.codex.test_codex_protocol.NativeRpcErrorTests.test_a_four_byte_error_within_the_budget_arrives_complete",
+        "buddy.harnesses.codex.test_codex_protocol.NativeRpcErrorTests.test_a_long_multibyte_error_is_cut_byte_safely_with_its_prefix_kept",
+        "buddy.harnesses.codex.test_codex_protocol.NativeRpcErrorTests.test_a_native_error_keeps_its_message_and_expands_nothing_else",
+        "buddy.harnesses.codex.test_codex_protocol.NativeRpcErrorTests.test_an_error_without_a_usable_message_keeps_the_method_fallback",
+        "buddy.harnesses.codex.test_native_run.CatalogTrustTests.test_a_chatgpt_account_without_a_usable_plan_stays_unknown",
+        "buddy.harnesses.codex.test_native_run.CatalogTrustTests.test_a_listed_model_with_an_unlisted_effort_is_still_refused",
+        "buddy.harnesses.codex.test_native_run.CatalogTrustTests.test_a_listed_model_without_a_legal_effort_is_refused_before_any_turn",
+        "buddy.harnesses.codex.test_native_run.CatalogTrustTests.test_a_long_multibyte_native_error_still_reaches_the_run_result",
+        "buddy.harnesses.codex.test_native_run.CatalogTrustTests.test_an_unlisted_model_still_reaches_the_native_turn",
+        "buddy.harnesses.codex.test_native_run.CatalogTrustTests.test_discovery_omits_a_row_without_a_legal_effort",
+        "buddy.harnesses.codex.test_native_run.CatalogTrustTests.test_discovery_reports_models_with_an_unknown_account_fact",
+        "buddy.harnesses.codex.test_native_run.CatalogTrustTests.test_discovery_reports_the_same_session_s_confirmed_account_fact",
+        "buddy.harnesses.codex.test_native_run.FastSeamTests.test_an_unlisted_model_still_reaches_the_no_tool_turn",
+        "buddy.harnesses.zcode.test_zcode_native.DiscoveryReceiptTests.test_the_receipt_reports_the_not_applicable_account_fact",
+        "buddy.roles.test_run_execution.CodexModelCheckProjectionTests.test_a_changed_evidence_reference_is_refused",
+        "buddy.roles.test_run_execution.CodexModelCheckProjectionTests.test_a_changed_model_check_reference_fails_the_coding_receipt",
+        "buddy.roles.test_run_execution.CodexModelCheckProjectionTests.test_a_run_without_the_absence_fact_publishes_nothing",
+        "buddy.roles.test_run_execution.CodexModelCheckProjectionTests.test_the_coding_receipt_publishes_the_absence_fact_from_its_verified_ref",
+        "buddy.roles.test_run_execution.CodexModelCheckProjectionTests.test_the_coding_receipt_without_an_absence_fact_publishes_nothing",
+        "buddy.roles.test_run_execution.CodexModelCheckProjectionTests.test_the_fast_receipt_publishes_the_absence_fact_at_its_own_level",
+        "buddy.roles.test_run_execution.CodexModelCheckProjectionTests.test_the_review_receipt_merges_the_same_projection",
+        "buddy.roles.test_run_execution.DiscoveryReceiptTests.test_a_refused_discovery_keeps_the_harness_s_own_reason",
+        "buddy.roles.test_run_execution.DiscoveryReceiptTests.test_an_unconfirmed_native_stop_never_publishes_a_reading",
+        "buddy.roles.test_run_execution.DiscoveryReceiptTests.test_the_discovery_receipt_crosses_with_its_account_fact"
+      ],
+      "removed": [
+        "blackboard.catalog.test_catalog_observations.CatalogObservationTests.test_a_b_a_restores_identity_and_preserves_human_intent"
+      ],
+      "addedSinceReview": [
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_catalog_absence_confirmed_before_write_fences_the_override",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_confirmed_unavailable_route_recovers_when_the_reread_lists_it_again",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_confirmed_unavailable_route_still_rejects_after_one_reread",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_disabled_and_catalog_refusals_carry_different_reasons_and_facts",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_missing_route_admits_after_one_bounded_reread_recovers",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_missing_route_without_recovery_still_rejects_with_catalog_facts",
+        "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_refresh_never_flips_the_users_enabled_choice"
+      ],
+      "loadingErrors": 0
+    },
+    "console": {
+      "baseline": 648,
+      "final": 656,
+      "added": [
+        "apps/console/src/catalog-status.test.tsx::catalog pending display (ADR-027 §6) > aggregates one pending mark per family at the earliest recorded first-absence time",
+        "apps/console/src/catalog-status.test.tsx::catalog pending display (ADR-027 §6) > keeps a pending effort usable and routable, and shows the time in its detail view",
+        "apps/console/src/catalog-status.test.tsx::catalog pending display (ADR-027 §6) > keeps the board's catalog-available state when harness health marks the profile unusable",
+        "apps/console/src/catalog-status.test.tsx::catalog pending display (ADR-027 §6) > marks the pending family with its recorded start time and leaves normal and unavailable rows unmarked",
+        "apps/console/src/catalog-status.test.tsx::catalog pending display (ADR-027 §6) > shows a pending family without a recorded time as plain 待确认, never an invented date",
+        "apps/console/src/profile-display.test.tsx::catalog state text > falls back to recorded availability only for fixtures without the field",
+        "apps/console/src/profile-display.test.tsx::catalog state text > keeps pending with the recorded time and stays honest when none was recorded",
+        "apps/console/src/profile-display.test.tsx::catalog state text > reads an explicit catalog state as recorded, never from availability"
+      ],
+      "removed": []
+    }
+  },
+  "fullPythonCheck": {
+    "command": "uv run --frozen python -m hey_my_buddy.cli.checks",
+    "codeCommit": "1c5ec9e0389e2d1fb2d8bb9a7ee4c14cb2d0fd93",
+    "coreCommit": "55fff85fbe4ddce8a88eccd898a977a9bcd16a24",
+    "parallelism": "default; no --jobs or BUDDY_CHECKS_JOBS",
+    "startedAt": "2026-10-07T08:17:51.525940+00:00",
+    "exitCode": 0,
+    "elapsedSeconds": 465.628,
+    "finishedAt": "2026-10-07T08:25:37.160559+00:00",
+    "state": "passed",
+    "runs": 1,
+    "jobs": 4,
+    "files": 181,
+    "passedFiles": 181,
+    "testsRun": 2874,
+    "skipped": 1,
+    "sourceIncludesTrackedAcceptanceJson": true
+  },
+  "finalAffectedPythonChecks": {
+    "catalogAccountHealthRoutingTests": 102,
+    "exitCode": 0,
+    "consumerTests": 50,
+    "consumerExitCode": 0,
+    "hostBoundaryTests": 12,
+    "hostBoundaryExitCode": 0
+  },
+  "consoleCheck": {
+    "files": 55,
+    "expandedTests": 667,
+    "exitCode": 0,
+    "buildExitCode": 0,
+    "browserObservation": {
+      "url": "http://127.0.0.1:62233/#buddy",
+      "source": "private synthetic preview using catalog_store.record and EvaluationStore.snapshot from the integrated source",
+      "model": "ADR027-pending",
+      "catalogStatus": "pending",
+      "pendingSince": "2026-10-07T03:00:00.000Z",
+      "listText": "ADR027-pending，已启用 1/1，待确认 · 自 10/07 11:00",
+      "detailText": "可用 待确认 · 自 10/07 11:00 已启用 1/1",
+      "enabledHighSwitch": true,
+      "consoleWarningsAndErrors": [],
+      "observation": "Codex in-app browser AX state and DOM snapshot; no screenshot needed",
+      "stopped": true
+    }
+  },
+  "dailyRuntimeUpgraded": false,
+  "claudeHostAcceptance": "pending resubmission; previous verdict at 277eadd8 remains rejected",
+  "initialHostFullPythonCheck": {
+    "command": "uv run --frozen python -m hey_my_buddy.cli.checks",
+    "runs": 1,
+    "jobs": 4,
+    "files": 180,
+    "exitCode": 1,
+    "elapsedSeconds": 461.52,
+    "reportedSuccessfulFileTests": 2811,
+    "reportedSuccessfulFiles": 179,
+    "skipped": 1,
+    "failedFile": "buddy.harnesses.zcode.test_zcode_inquiry",
+    "failedFileTests": 46,
+    "failedAssertions": 1,
+    "isolatedCorrectionTests": 46,
+    "isolatedCorrectionExitCode": 0
+  },
+  "firstSubmissionCodeCommit": "713425ad58a6d3707b0255d501d1f4062cfa7280",
+  "reviewedSubmission": {
+    "commit": "277eadd81606152f3ec4c774f5b08d54d108d6a6",
+    "claudeHostVerdict": "rejected",
+    "fullCheckExitCode": 1,
+    "failedFile": "cli.test_repository_hygiene",
+    "privateHomePathOccurrences": 3,
+    "source": "Claude Code Host review reported by the user"
+  },
+  "rework": {
+    "authorization": "User explicitly authorized new routed microtasks linked to accepted/cleaned original A and B, after original A continue returned CONFLICT.",
+    "historyPrivacy": {
+      "reachableBranchCommitsChecked": 19,
+      "offenders": [],
+      "rejectedPrivatePathCommitReachable": false,
+      "redactedCommit": "c8336e6a61d7bde7d1072adfdd24b40104541d79",
+      "branchPushed": false,
+      "checkedCodeCommit": "1c5ec9e0389e2d1fb2d8bb9a7ee4c14cb2d0fd93"
+    },
+    "a": {
+      "originalRunId": "543174ce-34b9-4a26-aeb1-b6537db0152b",
+      "runId": "108d43ea-44c6-4f9e-a8c6-eceeb3f43e60",
+      "rejectedArtifactId": "6ce03385-852a-40d5-a18e-8dd0d542bdf7",
+      "rejectedOutputCommit": "3213b6f5026e06cd4010e51f1752ed287ec7e71e",
+      "finalArtifactId": "cd8c93e1-d004-420b-a655-6538770e21a9",
+      "outputCommit": "713e87647b58417e202186f8464fd668e3a6b0f6",
+      "state": "accepted",
+      "focusedTests": 43,
+      "focusedExitCode": 0,
+      "hostBoundaryTests": 3,
+      "hostBoundaryExitCode": 0,
+      "workerFirstRoutingBatch": {
+        "tests": 211,
+        "exitCode": 1,
+        "failureId": "blackboard.tasks.test_workflow_routing.TestWorkflowRouting.test_real_decision_worker_selects_once_and_persists_owned_shutdown_evidence",
+        "baselineAttribution": "withdrawn by Worker; Host and second-turn isolated checks passed; exact environment cause unverified"
+      },
+      "configurationOverride": {
+        "adapter": "codex",
+        "provider": "openai",
+        "model": "gpt-6.1-sol",
+        "effort": "high",
+        "reason": "First routed artifact failed Host acceptance; bounded write-fence repair and accurate evidence correction on the same run."
+      },
+      "revision": 13,
+      "shutdown": {
+        "selfConfirmed": true,
+        "descendantsConfirmed": true,
+        "unconfirmedRunIds": [],
+        "unconfirmedCount": 0,
+        "truncated": false
+      },
+      "cleanup": {
+        "planId": "cln-2a2026d6-ed1c-472f-a9d1-64188776bab8",
+        "state": "applied",
+        "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-b43554517fe8356e0da2d59446cca502/checkout",
+        "appliedAt": "2026-10-07T08:30:06.349Z"
+      },
+      "cleanupApplyDuplicate": true,
+      "physicalPathExists": false,
+      "integrationId": "int-09752cb8-f6cf-41f2-bf39-61ad1a4ba9ae",
+      "integrationState": "verified",
+      "matchingPaths": [
+        "src/hey_my_buddy/blackboard/tasks/workflow.py",
+        "tests/python/blackboard/tasks/test_continue_catalog_trust.py"
+      ],
+      "differingPaths": [],
+      "missingPaths": []
+    },
+    "b": {
+      "originalRunId": "4e713942-3408-4407-ab6d-f457c5b0375f",
+      "runId": "fed49e93-922d-4e00-834f-076857393cda",
+      "finalArtifactId": "ec14f5c7-9ff3-4519-88f5-5f7aaaf2ffab",
+      "outputCommit": "9b14da0c0bd4c72ce5ee15c39ae9625080570b24",
+      "state": "accepted",
+      "focusedTests": 3,
+      "focusedExitCode": 0,
+      "revision": 8,
+      "shutdown": {
+        "selfConfirmed": true,
+        "descendantsConfirmed": true,
+        "unconfirmedRunIds": [],
+        "unconfirmedCount": 0,
+        "truncated": false
+      },
+      "cleanup": {
+        "planId": "cln-0fb7bc90-5c0d-4ac5-a938-0bafa1b0666d",
+        "state": "applied",
+        "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-637754ba43910d4dcf052450881d0c7b/checkout",
+        "appliedAt": "2026-10-07T08:31:24.490Z"
+      },
+      "cleanupApplyDuplicate": false,
+      "physicalPathExists": false,
+      "integrationId": "int-5e5dcf82-548a-4de4-97c1-e7537ae19ada",
+      "integrationState": "verified",
+      "matchingPaths": [
+        "src/hey_my_buddy/buddy/harnesses/dsh/native_run.py"
+      ],
+      "differingPaths": [],
+      "missingPaths": []
+    },
+    "hostMutations": {
+      "baseline": {
+        "mode": "baseline",
+        "tests": 7,
+        "exitCode": 0,
+        "failedIds": [],
+        "errorIds": []
+      },
+      "no-reread": {
+        "mode": "no-reread",
+        "tests": 7,
+        "exitCode": 1,
+        "failedIds": [
+          "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_confirmed_unavailable_route_still_rejects_after_one_reread",
+          "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_disabled_and_catalog_refusals_carry_different_reasons_and_facts",
+          "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_missing_route_without_recovery_still_rejects_with_catalog_facts",
+          "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_refresh_never_flips_the_users_enabled_choice"
+        ],
+        "errorIds": [
+          "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_confirmed_unavailable_route_recovers_when_the_reread_lists_it_again",
+          "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_missing_route_admits_after_one_bounded_reread_recovers"
+        ]
+      },
+      "no-distinction": {
+        "mode": "no-distinction",
+        "tests": 7,
+        "exitCode": 1,
+        "failedIds": [
+          "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_disabled_and_catalog_refusals_carry_different_reasons_and_facts",
+          "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_refresh_never_flips_the_users_enabled_choice"
+        ],
+        "errorIds": []
+      },
+      "no-write-fence": {
+        "mode": "no-write-fence",
+        "tests": 7,
+        "exitCode": 1,
+        "failedIds": [
+          "blackboard.tasks.test_continue_catalog_trust.ContinueCatalogTrustTests.test_catalog_absence_confirmed_before_write_fences_the_override"
+        ],
+        "errorIds": []
+      }
+    },
+    "workerScopeViolation": {
+      "runId": "108d43ea-44c6-4f9e-a8c6-eceeb3f43e60",
+      "turnIndex": 1,
+      "reportedActions": [
+        "git stash pop against shared stash",
+        "restored AGENTS.md and docs/README.md after conflicts",
+        "removed out-of-scope .workbuddy/memory/2026-09-23.md copy"
+      ],
+      "violatedInstruction": "Worker must not delete; edits stay in authorized scope.",
+      "hostDisposition": "First artifact rejected; correction and honest reporting returned to the same run. Violation remains in the record.",
+      "retentionObservation": {
+        "retainedStashCommitObserved": "266543ce3b3b0d64f6c94fdb79ac847cc7242a9f",
+        "removedCopyPath": ".workbuddy/memory/2026-09-23.md",
+        "retainedEntries": [
+          {
+            "ref": "266543ce3b3b0d64f6c94fdb79ac847cc7242a9f^3",
+            "entry": "100644 blob 8007a4868b30038309d38d3c92a8f6675b5be1d2\t.workbuddy/memory/2026-09-23.md"
+          }
+        ],
+        "observations": "Post-incident object/path existence only; no file content read and no before-incident stash snapshot."
+      }
+    },
+    "optionalSuggestions": {
+      "explicitRereadThrottle": "not added; each absent/unavailable explicit lookup still gets one bounded reread",
+      "redundantGuardMutationCoverage": "accounts clear_confirmed_read and health restore_retained_availability retained; no new independent mutation coverage claimed",
+      "readableCommitMessages": "rework integration uses readable descriptions; old output commit messages left intact"
+    }
+  }
+}

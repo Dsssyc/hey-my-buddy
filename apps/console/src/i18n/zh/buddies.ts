@@ -1,0 +1,98 @@
+import harness from "./buddies-harness";
+import roles from "./buddies-roles";
+
+/** The Buddy page: the catalogue of buddies and the roles they hold. */
+export default {
+  sections: {
+    label: "Buddy 的分区",
+    catalog: "目录",
+    roles: "角色",
+  },
+  attention: {
+    upgrade: "Router 设置需要升级",
+    unset: "未指定 Router",
+    unusable: "Router 不可用",
+    failing: "路由连续失败",
+  },
+  /** One clear choice and three buddy preference modes. */
+  preference: {
+    unset: "不设",
+    prefer: "优先",
+    pin: "固定",
+    exclude: "排除",
+  },
+  preferenceHint: {
+    prefer: "路由时先考虑",
+    pin: "路由时只在固定的 buddy 里选",
+    exclude: "不参与路由",
+  },
+  unsaved: "未保存",
+  loginExpired: "浏览器授权已失效，操作未提交；请重新授权。",
+  models: {
+    search: "搜索 buddy",
+    enabledOnly: "只看已启用",
+    showUnavailable: "显示不可用",
+    enabled: "启用",
+    discover: "发现模型",
+    discoverBusy: "发现进行中",
+    columns: {
+      buddy: "Buddy",
+      effort: "推理强度",
+      concurrency: "并发",
+    },
+    fold: "收起 {{name}}",
+    unfold: "展开 {{name}}",
+    modelCount: "{{n}} 个模型",
+    harnessState: {
+      missing: "未找到",
+      "login-required": "未登录",
+      unhealthy: "未通过",
+      unknown: "未检测",
+      unavailable: "不可用",
+    },
+    unavailable: "不可用",
+    pending: "待确认",
+    pendingSince: "待确认，自 {{time}}",
+    fresh: "新",
+    occupancyUnknown: "占用未知",
+    occupancy: "占用 {{active}}，上限 {{limit}}",
+    reading: "正在读取不可用的 buddy",
+    retry: "重试",
+    limit: "只显示前 {{n}} 个不可用的 buddy；更早的请用搜索查找。",
+    discovered: "新增 {{n}} 个 buddy，默认不启用",
+    discoveredNone: "没有新的 buddy",
+    refused: "连接中断或没有写入资格，暂时不能发现模型；草稿仍保留。",
+    empty: {
+      none: "还没有模型",
+      noneHint: "点“发现模型”，查找本机的 Harness 能用的模型。",
+      filtered: "没有匹配的模型",
+      filteredHint: "换一个搜索词，或者去掉筛选。",
+    },
+  },
+  pane: {
+    preference: "偏好",
+    noteNone: "选择偏好后可填写备注",
+    enable: "启用 {{effort}}",
+    buddyPreference: "{{effort}} 的偏好",
+    buddyNote: "{{effort}} 的偏好备注",
+    model: "模型",
+    available: "可用",
+    unavailable: "不可用",
+    pending: "待确认",
+    concurrency: "并发",
+    concurrencyLimit: "并发上限",
+    occupancy: "占用 {{n}}",
+    occupancyUnknown: "占用未知",
+    range: "需要正整数",
+    note: "备注",
+    locked: {
+      session: "浏览器授权已失效，重新授权后可以修改",
+      saving: "正在保存或等待核对，暂时不能修改",
+      retired: "已不可用，不能启用",
+      pinBuddy: "这个 buddy 不可用或未启用，不能固定",
+    },
+  },
+  /** The two other views keep their texts in files of their own. */
+  harness,
+  roles,
+};

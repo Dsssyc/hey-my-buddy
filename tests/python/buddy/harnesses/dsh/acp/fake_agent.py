@@ -1,0 +1,1229 @@
+"""Synthetic ACP agent for exercising the standalone client without DSH.
+
+Speaks the wire shapes observed from the installed agent and confirmed against
+the public schema: initialize, session/new (the ``mcpServers`` key is required;
+a stdio ``env`` that is not an array is recorded and the server is not mounted,
+mirroring the installed agent's silent no-mount), set_config_option echo,
+session/list, session/resume, session/close, prompt with interleaved permission
+requests and notifications, and the cancel notification. Fault switches let a
+test inject delayed responses, duplicate responses, garbage frames, a
+silently-exiting leader with a surviving group member, and a slow EOF. At
+startup it verifies its inherited homes belong to the test and exits otherwise.
+
+The resume face mirrors the Host-confirmed observations: a resumed session is
+found in the persistent store under the patch-pinned sessions root (the marker
+file this fake writes on new/resume), the answer carries the configuration
+options and no session id, the passed MCP servers are mounted exactly like a
+new session's, and the replayed history notifications go out before the resume
+answer — the ordering boundary the driver's bootstrap drain relies on.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import queue
+import subprocess
+import sys
+import threading
+import time
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+
+from hey_my_buddy.paths import native_path
+
+_LOG_LOCK = threading.Lock()
+
+
+def log(log_path: Path, event: dict) -> None:
+    entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="milliseconds"), **event}
+    with _LOG_LOCK:
+        with native_path(log_path).open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(entry, default=str, sort_keys=True) + "\n")
+
+
+def check_private_home(log_path: Path, fixture_root: Path) -> bool:
+    """Require the fake's homes to stay inside its test's private directory."""
+    boundary = fixture_root.resolve()
+    home = os.environ.get("HOME")
+    native_home = os.environ.get("DSH_HOME") or str(Path(home or "/") / ".dsh")
+    ok = bool(home and Path(home).resolve().is_relative_to(boundary)
+              and Path(native_home).resolve().is_relative_to(boundary)
+              and log_path.resolve().is_relative_to(boundary))
+    entry = {"event": "home-check", "ok": ok, "home": home, "dshHome": native_home,
+             "homeSet": home is not None, "dshHomeSet": "DSH_HOME" in os.environ,
+             "permissionMode": os.environ.get("DSH_PERMISSION_MODE")}
+    if ok:
+        # JSON is valid YAML. Only synthetic fixture settings are opened, by
+        # this fake native program rather than by the production run module.
+        settings = Path(native_home) / "settings.yaml"
+        if native_path(settings).is_file():
+            entry["settings"] = json.loads(native_path(settings).read_text(encoding="utf-8"))
+        for field, relative in (("homePatch", "cordis.patch.yml"),
+                                ("profilePatch", "profiles/acp/cordis.patch.yml")):
+            path = Path(native_home) / relative
+            if native_path(path).is_file():
+                entry[field] = native_path(path).read_text(encoding="utf-8")
+    log(log_path, entry)
+    return ok
+
+
+def config_options(model_value: str, effort_value: str) -> list:
+    return [
+        {"id": "model", "name": "Model", "category": "model", "type": "select",
+         "currentValue": model_value,
+         "options": [{"group": "fake", "name": "Fake", "options": [
+             {"value": '["fake","m1"]', "name": "Fake M1"},
+             {"value": '["fake","m2"]', "name": "Fake M2"}]}]},
+        {"id": "reasoning_effort", "name": "Reasoning effort", "category": "thought_level",
+         "type": "select", "currentValue": effort_value,
+         "options": [{"value": "off", "name": "off"}, {"value": "low", "name": "low"},
+                     {"value": "high", "name": "high"}, {"value": "max", "name": "max"}]},
+    ]
+
+
+class FakeAgent:
+    #: Hostile JSON-RPC shapes a test can inject before a real answer: a wrong
+    #: version, a missing version, dict and bool ids (a bool id must never alias
+    #: this client's integer ids), a response with neither result nor error, one
+    #: with both, and a well-formed response for an id this client never sent.
+    HOSTILE_FRAMES = [
+        '{"jsonrpc":"1.0","id":1,"result":{"evil":true}}',
+        '{"id":1,"result":{"evil":true}}',
+        '{"jsonrpc":"2.0","id":{"x":1},"result":{}}',
+        '{"jsonrpc":"2.0","id":true,"result":{}}',
+        '{"jsonrpc":"2.0","id":1}',
+        '{"jsonrpc":"2.0","id":1,"result":{},"error":{"code":1,"message":"both"}}',
+        '{"jsonrpc":"2.0","id":999,"result":{"evil":"unrelated"}}',
+    ]
+
+    def __init__(self, args) -> None:
+        self.log_path = Path(args.log)
+        self.capture_method = args.capture_method
+        self.capture_path = Path(args.capture_path) if args.capture_path else None
+        self.delays = dict(item.rsplit(":", 1) for item in (args.delay or []))
+        self.garbage_on = set(args.garbage_on or [])
+        self.duplicate_on = set(args.duplicate_on or [])
+        self.die_before_answer = set(args.die_before_answer or [])
+        self.orphan_on = set(args.orphan_on or [])
+        self.respond_then_exit = set(args.respond_then_exit or [])
+        self.raw_frame_on = set(args.raw_frame or [])
+        self.freeze_on = set(args.freeze_stdin_on or [])
+        self.survive_eof = args.survive_eof
+        self.allowed_title = args.allowed_title
+        self.fs_path = args.fs_path
+        self.option_count = args.option_count
+        self.spam_notifications = args.spam_notifications
+        self.malformed_permission = args.malformed_permission
+        self.error_data_on = set(args.error_data_on or [])
+        self.freeze_mid_prompt = args.freeze_mid_prompt
+        # -- the native-run driver modes (additive; the legacy path above is unchanged)
+        self.prompt_mode = args.prompt_mode
+        self.final_answers = list(args.final_answer or [])
+        self.emit_unknown_update = args.emit_unknown_update
+        self.bridge_config = args.bridge_config
+        self.finish_tool = args.finish_tool
+        self.checkpoint_tool = args.checkpoint_tool
+        self.micro_task_permission = args.micro_task_permission
+        self.permission_command = args.permission_command
+        self.permission_path = args.permission_path
+        self.finish_fail_then_retry = args.finish_fail_then_retry
+        self.no_finish = args.no_finish
+        self.forge_receipt = args.forge_receipt
+        self.stop_reason = args.stop_reason
+        self.stop_reason_unread = args.stop_reason_unread
+        self.hang_prompt = args.hang_prompt
+        self.park_prompt = args.park_prompt
+        self.session_updates_fixture = args.session_updates_fixture
+        self.emit_tool_update = args.emit_tool_update
+        self.bare_final = args.bare_final
+        self.session_record = args.session_record
+        self.stderr_note = args.stderr_note
+        self.emit_foreign_chunk = args.emit_foreign_chunk
+        self.spam_unknown_kinds = args.spam_unknown_kinds
+        self.late_tool_update = args.late_tool_update
+        # The cooperative-checkpoint inquiry script (additive): wait for a queued
+        # Host question, checkpoint to deliver it, answer it through the real
+        # session-tool rules, or forge the checkpoint receipt when told to.
+        self.wait_for_inquiry = args.wait_for_inquiry
+        self.answer_inquiry = args.answer_inquiry
+        self.forge_checkpoint = args.forge_checkpoint
+        # The native-resume face (additive): the persistent session store lives
+        # under the patch-pinned sessions root, the history replay precedes the
+        # resume answer, and the resumed turn's rollout scenarios exercise the
+        # driver's freeze/delta boundary.
+        self.patch_path = args.patch
+        self.replay_history = args.replay_history
+        self.resume_echo_foreign_id = args.resume_echo_foreign_id
+        self.resume_foreign_root = args.resume_foreign_root
+        self.resumed_session = None
+        self.last_session_id = None
+        self.cancel_event = threading.Event()
+        self.prompt_count = 0
+        self._stop_reading = threading.Event()
+        # Handler threads run concurrently; their stdout writes must not
+        # interleave, or the client would see corrupted frames.
+        self._send_lock = threading.Lock()
+        self.lock = threading.Lock()
+        self.next_id = 0
+        self.client_pending: dict = {}
+        self.sessions: dict = {}
+        self.session_seq = 0
+        self.stubs: list = []
+
+    def send(self, payload: dict) -> None:
+        line = json.dumps(payload) + "\n"
+        with self._send_lock:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+        log(self.log_path, {"dir": "out", "raw": payload})
+
+    # -- MCP stub mounting -------------------------------------------------
+
+    def mount_stub(self, entry: dict) -> dict:
+        if "hey_my_buddy.buddy.roles.session_mcp" in entry.get("args", []):
+            arguments = entry["args"]
+            self.bridge_config = arguments[arguments.index("--config") + 1]
+        name = entry.get("name")
+        env = entry.get("env")
+        if env is not None and not isinstance(env, list):
+            # The installed agent accepts a mapping env and silently fails to
+            # mount; mirror that observable behavior exactly.
+            log(self.log_path, {"event": "stub-not-mounted", "name": name,
+                                "envShape": type(env).__name__})
+            return {"name": name, "mounted": False, "envShape": type(env).__name__}
+        argv = [entry["command"], *entry.get("args", [])]
+        environment = dict(os.environ)
+        environment.update({item["name"]: item["value"] for item in env or []})
+        try:
+            process = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                       stderr=subprocess.DEVNULL, start_new_session=False,
+                                       env=environment)
+        except (OSError, KeyError) as error:
+            return {"name": name, "mounted": False, "error": str(error)}
+        self.stubs.append(process)
+
+        def stub_round(payload: dict) -> dict:
+            replies = queue.Queue(maxsize=1)
+
+            def read_reply():
+                try:
+                    replies.put(process.stdout.readline())
+                except OSError as error:
+                    replies.put(error)
+
+            reader = threading.Thread(target=read_reply, daemon=True)
+            reader.start()
+            try:
+                process.stdin.write((json.dumps(payload) + "\n").encode())
+                process.stdin.flush()
+                try:
+                    reply = replies.get(timeout=30)
+                except queue.Empty as error:
+                    raise TimeoutError("fake agent MCP handshake did not answer") from error
+                if isinstance(reply, OSError):
+                    raise reply
+                return json.loads(reply)
+            finally:
+                reader.join(1)
+                if reader.is_alive():
+                    process.kill()
+                    process.wait(timeout=5)
+                    reader.join(5)
+                if reader.is_alive():
+                    raise RuntimeError("fake agent MCP reader remained after child exit")
+
+        try:
+            init = stub_round({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                               "params": {"protocolVersion": "2024-11-05", "capabilities": {}}})
+            process.stdin.write(b'{"jsonrpc":"2.0","method":"notifications/initialized"}\n')
+            process.stdin.flush()
+            tools = stub_round({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            names = [tool.get("name") for tool in tools.get("result", {}).get("tools", [])]
+        except (OSError, ValueError) as error:
+            return {"name": name, "mounted": False, "error": str(error)}
+        log(self.log_path, {"event": "stub-mounted", "name": name, "tools": names,
+                            "pid": process.pid})
+        return {"name": name, "mounted": True, "tools": names}
+
+    def close_stubs(self) -> None:
+        for process in self.stubs:
+            try:
+                process.stdin.close()
+            except (OSError, AttributeError):
+                pass
+        for process in self.stubs:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            process.stdout.close()
+        self.stubs = []
+
+    # -- the persistent session store ------------------------------------------
+
+    def sessions_dir(self) -> Path:
+        """The sessions root this launch's patch pinned, like the installed agent.
+
+        The public ``session-persistence-jsonl`` row names the root DSH writes
+        its rollouts under; the fake reads it from its own patch so a Worker
+        run's records land in the task's shared native root while configuration
+        stays in the inherited user home. Without a pinned root, use this
+        fake's own ``DSH_HOME`` sessions directory.
+        """
+        if self.patch_path:
+            for row in json.loads(native_path(Path(self.patch_path)).read_text(encoding="utf-8")):
+                if row["id"] == "session-persistence-jsonl":
+                    return Path(row["config"]["root"])
+        return Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "sessions"
+
+    def persist_session(self, session_id: str, session: dict, *, new: bool = False) -> bool:
+        """Record a session in the pinned root; claim new IDs across processes."""
+        directory = self.sessions_dir()
+        native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
+        marker = directory / f"{session_id}.fake-session.json"
+        if new and any(native_path(directory).glob(f"{session_id}.v3.jsonl*")):
+            return False
+        try:
+            with native_path(marker).open("x" if new else "w", encoding="utf-8", newline="\n") as handle:
+                json.dump({"cwd": session["cwd"], "model": session["model"],
+                           "effort": session["effort"]}, handle)
+        except FileExistsError:
+            if new:
+                return False
+            raise
+        storage = Path(os.environ.get("DSH_HOME") or Path(os.environ["HOME"]) / ".dsh") / "storages"
+        if self.patch_path:
+            for row in json.loads(native_path(Path(self.patch_path)).read_text(encoding="utf-8")):
+                if row.get("id") == "storage-json":
+                    storage = Path(row["config"]["root"])
+        index = storage / "session_projcache" / "sessions"
+        native_path(index).mkdir(mode=0o700, parents=True, exist_ok=True)
+        native_path(index / f"{session_id}.json").write_text(json.dumps({"sessionId": session_id, "cwd": session["cwd"]}), encoding="utf-8", newline="\n")
+        return True
+
+    def restore_session(self, session_id):
+        """The persisted session state, or ``None`` when no store carries it."""
+        marker = self.sessions_dir() / f"{session_id}.fake-session.json"
+        try:
+            value = json.loads(native_path(marker).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(value, dict):
+            return None
+        return {"cwd": value.get("cwd"), "model": value.get("model"),
+                "effort": value.get("effort")}
+
+    def replayed_history(self, session_id: str) -> None:
+        """Emit the previous turns' replayed notifications before the resume answer.
+
+        The shapes are the ones a history replay would carry — an old usage
+        snapshot, an old completed tool pair and an old message chunk — all
+        framed under the resumed session, all arriving before the answer so the
+        driver's bootstrap drain sees exactly the public protocol's ordering
+        boundary.
+        """
+        for update in (
+                {"sessionUpdate": "usage_update", "used": 500, "size": 1000000},
+                {"sessionUpdate": "tool_call", "toolCallId": "call_old_1", "kind": "other",
+                 "title": "mcp__old-attempt__old_tool", "status": "in_progress"},
+                {"sessionUpdate": "tool_call_update", "toolCallId": "call_old_1",
+                 "status": "completed"},
+                {"sessionUpdate": "agent_message_chunk",
+                 "content": {"type": "text", "text": "the previous turn's message"}},
+        ):
+            self.notify_client("session/update", {"sessionId": session_id, "update": update})
+
+    # -- client requests -----------------------------------------------------
+
+    def request_client(self, method: str, params: dict, timeout: float = 15.0) -> dict:
+        with self.lock:
+            self.next_id += 1
+            request_id = self.next_id
+            done = threading.Event()
+            self.client_pending[request_id] = [done, None]
+        self.send({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        if not done.wait(timeout):
+            with self.lock:
+                self.client_pending.pop(request_id, None)
+            return {"timeout": True}
+        with self.lock:
+            entry = self.client_pending.pop(request_id, None)
+        return (entry[1] if entry else None) or {}
+
+    def notify_client(self, method: str, params: dict) -> None:
+        self.send({"jsonrpc": "2.0", "method": method, "params": params})
+
+    # -- agent-side request dispatch -------------------------------------------
+
+    def handle(self, message: dict) -> None:
+        method = message.get("method")
+        if self.capture_method is not None and method == self.capture_method:
+            log(self.log_path, {"dir": "in", "method": method, "captured": True})
+        else:
+            log(self.log_path, {"dir": "in", "raw": message})
+        if method is None:
+            return
+        if "id" not in message:
+            if method == "session/cancel":
+                log(self.log_path, {"event": "cancel-received",
+                                    "sessionId": (message.get("params") or {}).get("sessionId")})
+                self.cancel_event.set()
+            return
+        request_id = message["id"]
+        params = message.get("params") or {}
+        if method in self.die_before_answer:
+            log(self.log_path, {"event": "dying-before-answer", "method": method})
+            self.close_stubs()
+            os._exit(0)
+        if method in self.orphan_on:
+            # Spawn a same-group child that outlives this leader, then exit
+            # without answering: the leader is gone but the group is not.
+            sleeper = subprocess.Popen([sys._base_executable, "-c", "import time; time.sleep(20)"],
+                                       start_new_session=False,
+                                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.DEVNULL)
+            log(self.log_path, {"event": "orphan-spawned", "pid": sleeper.pid})
+            self.close_stubs()
+            os._exit(0)
+        if method in self.delays:
+            time.sleep(float(self.delays[method]))
+        if method in self.garbage_on:
+            sys.stdout.write("this line is not json\n")
+            sys.stdout.write('{"half": "open"}\n')  # valid JSON object, but no jsonrpc member
+            sys.stdout.write('[1, 2, 3]\n')  # valid JSON, but not an object
+            sys.stdout.flush()
+        if method in self.raw_frame_on:
+            for raw in self.HOSTILE_FRAMES:
+                sys.stdout.write(raw + "\n")
+            sys.stdout.flush()
+        if method in self.freeze_on:
+            # Keep running but stop reading the client's stdin on the next loop
+            # tick; the serve loop stays alive without consuming any input.
+            self._stop_reading.set()
+            log(self.log_path, {"event": "stdin-frozen", "method": method})
+        if method == "session/prompt":
+            if self.park_prompt:
+                log(self.log_path, {"event": "parked-prompt"})
+                threading.Event().wait()  # never returns: only the group stop ends this
+            if self.hang_prompt:
+                log(self.log_path, {"event": "hanging-prompt", "until": "session/cancel"})
+                self.cancel_event.wait(timeout=120)
+                self.send({"jsonrpc": "2.0", "id": message["id"], "result": {"stopReason": "cancelled"}})
+                return
+            if self.prompt_mode == "final":
+                self.run_final_prompt(message)
+                if method in self.respond_then_exit:
+                    os._exit(0)
+                return
+            if self.prompt_mode == "micro-task":
+                self.run_micro_task_prompt(message)
+                if method in self.respond_then_exit:
+                    os._exit(0)
+                return
+            self.run_prompt(message)
+            if method in self.respond_then_exit:
+                os._exit(0)
+            return
+        payload = self.answer(method, params)
+        self.send({"jsonrpc": "2.0", "id": request_id, **payload})
+        if method in self.duplicate_on:
+            self.send({"jsonrpc": "2.0", "id": request_id, **payload})
+            log(self.log_path, {"event": "duplicate-response", "method": method})
+        if method in self.respond_then_exit:
+            log(self.log_path, {"event": "respond-then-exit", "method": method})
+            self.close_stubs()
+            os._exit(0)
+
+    def answer(self, method: str, params: dict) -> dict:
+        if method == "initialize":
+            return {"result": {
+                "protocolVersion": 1, "agentInfo": {"name": "fake-harness-acp", "version": "0.0.1"},
+                "agentCapabilities": {"mcpCapabilities": {"http": True},
+                                      "promptCapabilities": {"image": False, "audio": False,
+                                                             "embeddedContext": False},
+                                      "sessionCapabilities": {"close": {}, "list": {}, "resume": {}}},
+                "authMethods": []}}
+        if method == "session/new":
+            if "mcpServers" not in params:
+                return {"error": {"code": -32602, "message": "mcpServers is required"}}
+            mounted = [self.mount_stub(entry) for entry in params.get("mcpServers") or []]
+            session = {"cwd": params.get("cwd"),
+                       "model": '["fake","m1"]', "effort": "high"}
+            while True:
+                self.session_seq += 1
+                session_id = f"fake-session-{self.session_seq}"
+                if self.persist_session(session_id, session, new=True):
+                    break
+            self.sessions[session_id] = session
+            return {"result": {"sessionId": session_id, "modes": None,
+                               "configOptions": config_options(self.sessions[session_id]["model"],
+                                                               self.sessions[session_id]["effort"]),
+                               "mountedMcp": mounted}}
+        if method == "session/set_config_option":
+            session = self.sessions.get(params.get("sessionId"))
+            if session is None:
+                return {"error": {"code": -32602, "message": "unknown session"}}
+            if params.get("configId") == "model":
+                session["model"] = params.get("value")
+            elif params.get("configId") == "reasoning_effort":
+                session["effort"] = params.get("value")
+            return {"result": {"configOptions": config_options(session["model"], session["effort"])}}
+        if method == "session/list" and "session/list" in self.error_data_on:
+            return {"error": {"code": -32000, "message": "SAFE-TEST-MARKER-in-message",
+                              "data": {"marker": "SAFE-TEST-MARKER-in-data"}}}
+        if method == "session/list":
+            return {"result": {"sessions": [
+                {"sessionId": session_id, "cwd": session["cwd"], "title": None,
+                 "updatedAt": None} for session_id, session in sorted(self.sessions.items())]}}
+        if method == "session/resume":
+            if "mcpServers" not in params:
+                return {"error": {"code": -32602, "message": "mcpServers is required"}}
+            session = self.sessions.get(params.get("sessionId"))
+            if session is None:
+                session = self.restore_session(params.get("sessionId"))
+            if session is None:
+                return {"error": {"code": -32602, "message": "no such session"}}
+            self.sessions[params.get("sessionId")] = session
+            self.resumed_session = params.get("sessionId")
+            self.persist_session(params.get("sessionId"), session)
+            if self.replay_history:
+                self.replayed_history(params.get("sessionId"))
+            answer = {"result": {"modes": None,
+                                 "configOptions": config_options(session["model"], session["effort"])}}
+            if self.resume_echo_foreign_id:
+                # The observed answer carries no session id at all; an agent
+                # that echoes one naming another session is the mismatch case.
+                answer["result"]["sessionId"] = "foreign-resumed-root"
+                return answer
+            mounted = [self.mount_stub(entry) for entry in params.get("mcpServers") or []]
+            answer["result"]["mountedMcp"] = mounted
+            return answer
+        if method == "session/close":
+            # The in-memory session ends; the persisted marker and rollout stay
+            # in the pinned root, exactly what a later native resume needs.
+            self.sessions.pop(params.get("sessionId"), None)
+            self.close_stubs()
+            log(self.log_path, {"event": "session-closed", "sessionId": params.get("sessionId")})
+            return {"result": {}}
+        return {"error": {"code": -32601, "message": f"Method not found: {method}"}}
+
+    def framed_session(self, session_id: str) -> str:
+        """The session id this turn's update frames carry.
+
+        ``--resume-foreign-root`` frames every notification of the resumed
+        turn — tool calls, results, chunks — under a session this run never
+        requested: the mismatch case the driver's root-bound evidence must
+        refuse. The rollout keeps the real session id either way.
+        """
+        if self.resume_foreign_root and self.resumed_session:
+            return "foreign-live-root"
+        return session_id
+
+    def run_prompt(self, message: dict) -> None:
+        request_id = message["id"]
+        params = message.get("params") or {}
+        session_id = params.get("sessionId")
+        if self.freeze_mid_prompt:
+            # Park before asking: the client's permission answer can then never
+            # be consumed, so its non-delivery becomes a deterministic fact.
+            self._stop_reading.set()
+            log(self.log_path, {"event": "stdin-frozen", "method": "mid-prompt"})
+        if self.malformed_permission:
+            # Field shapes the client must survive: toolCall is a list, options
+            # is an int, and the answer must still go out and be recorded.
+            first = self.request_client("session/request_permission", {
+                "sessionId": session_id,
+                "toolCall": ["bad"],
+                "options": 3})
+            log(self.log_path, {"event": "permission-answer-malformed", "answer": first})
+        else:
+            first = self.request_client("session/request_permission", {
+                "sessionId": session_id,
+                "toolCall": {"toolCallId": "call_fake_1", "kind": "execute", "title": "run-command",
+                             "rawInput": {"command": self.permission_command}},
+                "options": [{"optionId": "opt-allow", "kind": "allow_once", "name": "Allow"},
+                            {"optionId": "opt-reject", "kind": "reject_once", "name": "Reject"}]})
+            log(self.log_path, {"event": "permission-answer-1", "answer": first})
+        if self.freeze_mid_prompt:
+            return
+        self.notify_client("session/update", {"sessionId": session_id,
+                                              "update": {"sessionUpdate": "agent_message_chunk",
+                                                         "content": {"type": "text", "text": "working"}}})
+        second = self.request_client("session/request_permission", {
+            "sessionId": session_id,
+            "toolCall": {"toolCallId": "call_fake_2", "kind": "edit",
+                         "title": self.allowed_title or "write-file",
+                         "rawInput": {"path": self.permission_path}},
+            "options": [{"optionId": "opt-allow-only", "kind": "allow_once", "name": "Allow"}]
+            + [{"optionId": f"opt-filler-{index}", "kind": f"kind-{index}",
+                "name": f"option {index}"}
+               for index in range(max(1, self.option_count) - 1)]})
+        log(self.log_path, {"event": "permission-answer-2", "answer": second})
+        fs = self.request_client("fs/read_text_file", {"sessionId": session_id, "path": self.fs_path})
+        log(self.log_path, {"event": "fs-answer", "answer": fs})
+        for update in (
+            {"sessionUpdate": "usage_update", "used": 900, "size": 1000000},
+            {"sessionUpdate": "tool_call", "toolCallId": "call_fake_1", "kind": "other",
+             "title": "run-command", "status": "in_progress", "rawInput": {"command": "echo"}},
+            {"sessionUpdate": "tool_call_update", "toolCallId": "call_fake_1",
+             "status": "completed"},
+        ):
+            self.notify_client("session/update", {"sessionId": session_id, "update": update})
+        self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
+
+    def emit_session_fixture(self, session_id: str) -> None:
+        """Explicit synthetic ACP display samples, separate from native rollouts."""
+        if self.session_updates_fixture:
+            fixture = json.loads(native_path(Path(self.session_updates_fixture)).read_text(encoding="utf-8"))
+            for update in fixture["updates"]:
+                self.notify_client("session/update", {"sessionId": session_id, "update": update})
+
+    def run_final_prompt(self, message: dict) -> None:
+        """The final-message carrier: usage snapshot, unknown fact, then the answer."""
+        request_id = message["id"]
+        params = message.get("params") or {}
+        session_id = params.get("sessionId")
+        self.last_session_id = session_id
+        self.write_session_record(session_id, self.prompt_text(params))
+        self.emit_session_fixture(session_id)
+        if self.emit_foreign_chunk:
+            # A message chunk framed under a session this run never opened.
+            self.notify_client("session/update", {"sessionId": "foreign-root-1",
+                                                  "update": {"sessionUpdate": "agent_message_chunk",
+                                                             "content": {"type": "text",
+                                                                         "text": "foreign"}}})
+        for index in range(self.spam_unknown_kinds):
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": f"future-{index}"}})
+        if self.emit_unknown_update:
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "hey_my_buddy_probe_unknown"}})
+        if self.emit_tool_update:
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "tool_call",
+                                                             "toolCallId": "call_probe_1", "kind": "other",
+                                                             "title": "run-command", "status": "in_progress"}})
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "tool_call_update",
+                                                             "toolCallId": "call_probe_1",
+                                                             "status": "completed"}})
+        if not self.bare_final:
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "usage_update",
+                                                             "used": 100, "size": 1000000}})
+        index = min(self.prompt_count, len(self.final_answers) - 1) if self.final_answers else 0
+        self.prompt_count += 1
+        answer = self.final_answers[index] if self.final_answers else '{"choice":"a"}'
+        if self.session_record != "quota-before":
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "agent_message_chunk",
+                                                             "content": {"type": "text", "text": answer}}})
+        self.send({"jsonrpc": "2.0", "id": request_id,
+                   "result": {} if self.stop_reason_unread
+                   else {"stopReason": self.stop_reason or "end_turn"}})
+
+    def run_micro_task_prompt(self, message: dict) -> None:
+        """The micro task carrier: real session tools through the role's own rules.
+
+        The tool results are minted by ``hey_my_buddy.buddy.roles.worker_services``
+        with this run's real bridge configuration — exactly what the stdio MCP
+        carrier would answer — so the driver verifies genuine signed receipts and
+        refusal envelopes, never fixture prose. The script: one checkpoint call
+        (an inquiry-channel refusal when no journal is mounted), one ``completed``
+        finish (refused while an attention request is outstanding), and, when that
+        refusal came back, one corrected finish with the attention disposition.
+        """
+        request_id = message["id"]
+        params = message.get("params") or {}
+        session_id = params.get("sessionId")
+        frame_id = self.framed_session(session_id)
+        self.last_session_id = session_id
+        self.write_session_record(session_id, self.prompt_text(params))
+        self.emit_session_fixture(frame_id)
+        # The same unknown-kind probes the final-message carrier emits; the
+        # micro task carrier counts them from the same update pump.
+        for index in range(self.spam_unknown_kinds):
+            self.notify_client("session/update", {"sessionId": frame_id,
+                                                  "update": {"sessionUpdate": f"future-{index}"}})
+        if self.emit_unknown_update:
+            self.notify_client("session/update", {"sessionId": frame_id,
+                                                  "update": {"sessionUpdate": "hey_my_buddy_probe_unknown"}})
+        sys.path.insert(0, str(Path(__file__).resolve().parents[6] / "src"))
+        if self.stop_reason_unread:
+            self.send({"jsonrpc": "2.0", "id": request_id, "result": {}})
+            return
+        if self.stop_reason:
+            self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": self.stop_reason}})
+            return
+        from hey_my_buddy.buddy.roles import worker_services
+        configuration = json.loads(native_path(Path(self.bridge_config)).read_text(encoding="utf-8"))
+        if self.micro_task_permission:
+            answer = self.request_client("session/request_permission", {
+                "sessionId": session_id,
+                "toolCall": {"toolCallId": "call_upgrade_1", "kind": "edit",
+                             "title": "escalate-write", "rawInput": {"path": self.permission_path}},
+                "options": [{"optionId": "opt-allow", "kind": "allow_once", "name": "Allow"},
+                            {"optionId": "opt-reject", "kind": "reject_once", "name": "Reject"}]})
+            log(self.log_path, {"event": "micro-task-permission-answer", "answer": answer})
+
+        def tool_frame(call_id: str, title: str, status: str, content=None) -> None:
+            update = {"sessionUpdate": "tool_call", "toolCallId": call_id, "kind": "other",
+                      "title": title, "status": status}
+            if content is not None:
+                update["content"] = content
+            self.notify_client("session/update", {"sessionId": frame_id, "update": update})
+
+        def tool_result(call_id: str, status: str, text: str) -> None:
+            self.notify_client("session/update", {"sessionId": frame_id, "update": {
+                "sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": status,
+                "content": [{"type": "content", "content": {"type": "text", "text": text}}]}})
+
+        checkpoint_id = "call_checkpoint_1"
+        if self.checkpoint_tool:
+            if self.wait_for_inquiry > 0:
+                # Deterministic cooperative delivery: hold the turn open until a
+                # Host question is actually queued (or the bound expires), so a
+                # test's ask can never race the checkpoint.
+                bounded = time.monotonic() + self.wait_for_inquiry
+                while time.monotonic() < bounded:
+                    if worker_services.pending_inquiries(configuration):
+                        break
+                    time.sleep(0.05)
+                log(self.log_path, {"event": "inquiry-wait-done",
+                                    "pending": bool(worker_services.pending_inquiries(configuration))})
+            # The MCP protocol passes the bare tool name; the mcp__server__tool
+            # composite is the ACP-side presentation only.
+            bare = self.checkpoint_tool.rsplit("__", 1)[-1]
+            tool_frame(checkpoint_id, self.checkpoint_tool, "in_progress")
+            checkpoint_result = worker_services.call_session_tool(bare, {}, configuration)
+            checkpoint_text = checkpoint_result["content"][0]["text"]
+            if self.forge_checkpoint and "tool-refusal" not in checkpoint_text:
+                # A tampered checkpoint receipt fails its signature verification
+                # controller-side: the id changes under a stale signature.
+                receipt = json.loads(checkpoint_text)
+                if receipt.get("inquiries"):
+                    receipt["inquiries"][0]["inquiryId"] = "forged-inquiry-id"
+                checkpoint_text = json.dumps(receipt)
+            tool_result(checkpoint_id, "completed", checkpoint_text)
+            log(self.log_path, {"event": "checkpoint-result",
+                                "refusal": "tool-refusal" in checkpoint_text})
+            if self.answer_inquiry and "tool-refusal" not in checkpoint_text:
+                receipt = json.loads(checkpoint_text)
+                questions = receipt.get("inquiries") or []
+                if questions:
+                    answer_tool = self.checkpoint_tool.rsplit("__", 1)[0] + "__hey_my_buddy_answer_inquiry"
+                    tool_frame("call_answer_1", answer_tool, "in_progress")
+                    answer_result = worker_services.call_session_tool(
+                        "hey_my_buddy_answer_inquiry",
+                        {"inquiryId": questions[0]["inquiryId"],
+                         "answer": "the root's bounded answer to the Host question"},
+                        configuration)
+                    answer_text = answer_result["content"][0]["text"]
+                    tool_result("call_answer_1", "completed", answer_text)
+                    log(self.log_path, {"event": "answer-result",
+                                        "refusal": "tool-refusal" in answer_text})
+
+        def finish(outcome: dict, call_id: str, *, fail_first: bool = False) -> str:
+            tool_frame(call_id, self.finish_tool, "in_progress")
+            if fail_first:
+                # A native tool failure keeps the turn alive: the root corrects
+                # its call and retries inside the same native turn.
+                self.notify_client("session/update", {"sessionId": frame_id, "update": {
+                    "sessionUpdate": "tool_call_update", "toolCallId": call_id, "status": "failed"}})
+                log(self.log_path, {"event": "finish-failed", "callId": call_id})
+                return ""
+            result = worker_services.call_session_tool(self.finish_tool.rsplit("__", 1)[-1], outcome, configuration)
+            text = result["content"][0]["text"]
+            if self.forge_receipt and "tool-refusal" not in text:
+                receipt = json.loads(text)
+                receipt["receiptId"] = "f" * 32  # a tampered receipt fails its signature
+                text = json.dumps(receipt)
+            tool_result(call_id, "completed", text)
+            log(self.log_path, {"event": "finish-result",
+                                "refusal": "tool-refusal" in text,
+                                "callId": call_id})
+            return text
+
+        if self.no_finish:
+            self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
+            return
+        completed_outcome = {"disposition": "completed", "summary": "the fixture turn is done",
+                             "remaining": [], "decisions": [], "artifacts": [], "request": None}
+        text = finish(completed_outcome, "call_finish_1", fail_first=self.finish_fail_then_retry)
+        if self.finish_fail_then_retry:
+            text = finish(completed_outcome, "call_finish_2")
+        elif "tool-refusal" in text:
+            envelope = json.loads(text)
+            if envelope.get("reason") == "inquiry-pending":
+                # The real root's correction: the answer the driver just verified
+                # reaches the journal moments later; wait for it, then retry the
+                # completed finish inside this same native turn.
+                bounded = time.monotonic() + 5
+                while time.monotonic() < bounded and worker_services.pending_inquiries(configuration):
+                    time.sleep(0.05)
+                text = finish(completed_outcome, "call_finish_2")
+            if "tool-refusal" in text:
+                attention_outcome = {"disposition": "attention",
+                                     "summary": "the fixture turn needs a Host decision",
+                                     "remaining": [], "decisions": [], "artifacts": [],
+                                     "request": {"summary": "the refused native upgrade request",
+                                                 "attempted": "the bounded fixture work",
+                                                 "neededWork": "a Host decision on the refused request",
+                                                 "expectedArtifacts": [],
+                                                 "acceptance": "the Host accepts the attention receipt"}}
+                finish(attention_outcome, "call_finish_3")
+        self.notify_client("session/update", {"sessionId": frame_id,
+                                              "update": {"sessionUpdate": "usage_update",
+                                                         "used": 900, "size": 1000000}})
+        self.send({"jsonrpc": "2.0", "id": request_id, "result": {"stopReason": "end_turn"}})
+
+    # -- the synthetic private session record ---------------------------------
+
+    def write_session_record(self, session_id: str, prompt_text: str) -> None:
+        """Write one synthetic ``session.v3`` rollout under the pinned sessions root.
+
+        The shapes mirror the desensitized native fixture: a version-3 session
+        header, a user message, turn/step markers, assistant messages whose
+        ``source`` names the model and whose ``usage`` carries the native
+        counters, and a terminal turn end. This is a fixture written by the
+        fake agent, never a native record; it only exercises the driver's
+        optional record reader end to end. A resumed turn appends its own
+        block to the rollout the previous process left in the shared root —
+        the boundary the driver froze — with scenario switches for the shapes
+        that must leave the turn's usage unknown.
+        """
+        mode = self.session_record
+        if not mode:
+            return
+        if mode.startswith("resume"):
+            if self.resumed_session:
+                self.write_resumed_session_record(session_id, prompt_text, mode)
+            return
+        directory = self.sessions_dir()
+        native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
+        now_ms = int(time.time() * 1000)
+        source = {"kind": "model", "provider": "fake", "model": "m1"}
+
+        def assistant(seq: int, step: int, text: str, usage=None) -> dict:
+            data = {"turn": 1, "step": step,
+                    "message": {"id": f"assistant-{session_id}-{seq}", "role": "assistant",
+                                "content": [{"type": "text", "text": text}], "source": source}}
+            if usage is not None:
+                data["usage"] = usage
+            return {"type": "assistant/message", "seq": seq, "data": data}
+
+        events = [
+            {"type": "session", "version": 3,
+             "id": "fake-session-foreign" if mode == "foreign" else session_id,
+             "createdAt": now_ms, "cwd": os.getcwd(), "isSeeded": False,
+             "origin": "acp", "delegationDepth": 0},
+            {"type": "user/message", "seq": 4, "data": {
+                "id": f"user-{session_id}", "role": "user",
+                "content": [{"type": "text", "text": prompt_text}],
+                "source": {"kind": "user"}}},
+            {"type": "turn/start", "seq": 5, "data": {"turn": 1}},
+            {"type": "step/start", "seq": 6, "data": {"turn": 1, "step": 1}},
+            assistant(7, 1, "Reading the fixture task first.", {
+                "inputTokens": 1000, "outputTokens": 100, "totalTokens": 1150,
+                "cacheReadTokens": 50, "reasoningTokens": 10}),
+            {"type": "step/end", "seq": 8, "data": {"turn": 1, "step": 1}},
+            {"type": "step/start", "seq": 9, "data": {"turn": 1, "step": 2}},
+        ]
+        if mode == "quota-before":
+            events = events[:3]
+        elif mode == "missing":
+            events.append(assistant(10, 2, "the final answer", None))
+        else:
+            events.append(assistant(10, 2, "the final answer", {
+                "inputTokens": 2000, "outputTokens": 200, "totalTokens": 2300,
+                "cacheReadTokens": 100, "reasoningTokens": 20}))
+        if mode != "quota-before":
+            events.append({"type": "step/end", "seq": 11, "data": {"turn": 1, "step": 2}})
+        if mode in ("quota", "quota-before", "quota-truncated"):
+            events.append({"type": "turn/end", "seq": 12, "data": {
+                "turn": 1, "reason": {"kind": "error",
+                                      "error": {"code": "QUOTA",
+                                                "message": "provider wording never retained"}}}})
+        else:
+            events.append({"type": "turn/end", "seq": 12,
+                           "data": {"turn": 1, "reason": {"kind": "completed"}}})
+        if mode == "flood":
+            events.insert(len(events) - 1, {"type": "fixture/oversized",
+                                            "seq": 11.5, "data": {"blob": "x" * (4 * 1024 * 1024)}})
+        lines = "".join(json.dumps(event) + "\n" for event in events)
+        if mode == "quota-truncated":
+            lines += "malformed record frame\n"
+        if mode == "corrupt":
+            path = directory / f"{session_id}.v3.jsonl.zstd"
+            native_path(path).write_bytes(b"this is not a zstd stream\n")
+        elif mode == "plain":
+            path = directory / f"{session_id}.v3.jsonl"
+            native_path(path).write_text(lines, encoding="utf-8", newline="\n")
+        else:
+            import zstandard
+            path = directory / f"{session_id}.v3.jsonl.zstd"
+            native_path(path).write_bytes(zstandard.ZstdCompressor().compress(lines.encode()))
+        log(self.log_path, {"event": "session-record-written", "mode": mode,
+                            "path": str(path), "sessionId": session_id})
+
+    def write_resumed_session_record(self, session_id: str, prompt_text: str, mode: str) -> None:
+        """The resumed turn's rollout block, appended to the frozen rollout.
+
+        The previous process left the session's rollout in the pinned root;
+        this turn appends its own user message, turn and steps with fresh
+        counters — the only records the driver may attribute to this turn. The
+        scenario switches produce the unprovable shapes: the rollout vanishing
+        (emptied in place), being rewritten with different history, shortened
+        below the frozen prefix, replaying the frozen lines byte-for-byte, or
+        growing past the reader's proportionate bound.
+        """
+        import zstandard
+        directory = self.sessions_dir()
+        native_path(directory).mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = directory / f"{session_id}.v3.jsonl.zstd"
+        existing: list[bytes] = []
+        if native_path(path).is_file():
+            try:
+                existing = [line + b"\n" for line in zstandard.ZstdDecompressor() \
+                            .decompress(native_path(path).read_bytes()).splitlines() if line]
+            except (OSError, ValueError):
+                existing = []
+        now_ms = int(time.time() * 1000)
+        source = {"kind": "model", "provider": "fake", "model": "m1"}
+
+        def assistant(seq: int, step: int, text: str, usage) -> dict:
+            return {"type": "assistant/message", "seq": seq, "data": {
+                "turn": 2, "step": step,
+                "message": {"id": f"assistant-{session_id}-{seq}", "role": "assistant",
+                            "content": [{"type": "text", "text": text}], "source": source},
+                "usage": usage}}
+
+        seq = len(existing) + 1
+        events = [
+            {"type": "user/message", "seq": seq, "data": {
+                "id": f"user-{session_id}-2", "role": "user",
+                "content": [{"type": "text", "text": prompt_text}],
+                "source": {"kind": "user"}}},
+            {"type": "turn/start", "seq": seq + 1, "data": {"turn": 2}},
+            {"type": "step/start", "seq": seq + 2, "data": {"turn": 2, "step": 1}},
+            assistant(seq + 3, 1, "Reading the resumed fixture task.", {
+                "inputTokens": 3000, "outputTokens": 300, "totalTokens": 3450,
+                "cacheReadTokens": 150, "reasoningTokens": 30}),
+            {"type": "step/end", "seq": seq + 4, "data": {"turn": 2, "step": 1}},
+            {"type": "step/start", "seq": seq + 5, "data": {"turn": 2, "step": 2}},
+            assistant(seq + 6, 2, "the resumed final answer", {
+                "inputTokens": 4000, "outputTokens": 400, "totalTokens": 4600,
+                "cacheReadTokens": 200, "reasoningTokens": 40}),
+            {"type": "step/end", "seq": seq + 7, "data": {"turn": 2, "step": 2}},
+            {"type": "turn/end", "seq": seq + 8,
+             "data": {"turn": 2, "reason": {"kind": "completed"}}},
+        ]
+        if mode == "resume-missing":
+            # The rollout the freeze saw no longer carries its records: emptied
+            # in place, the matching file set the driver needs is gone.
+            native_path(path).write_bytes(b"")
+            log(self.log_path, {"event": "session-record-written", "mode": mode,
+                                "path": str(path), "sessionId": session_id})
+            return
+        if mode == "resume-rewrite":
+            rewritten = [json.dumps({"type": "session", "version": 3, "id": session_id,
+                                     "createdAt": now_ms, "cwd": os.getcwd(),
+                                     "isSeeded": False, "origin": "acp",
+                                     "delegationDepth": 0}).encode()]
+            rewritten += [json.dumps({"type": "assistant/message", "seq": index + 1, "data": {
+                "turn": 1, "step": 1,
+                "message": {"id": f"assistant-{session_id}-r{index}", "role": "assistant",
+                            "content": [{"type": "text", "text": "rewritten history"}],
+                            "source": source},
+                "usage": {"inputTokens": 9999, "outputTokens": 999,
+                          "totalTokens": 11111, "cacheReadTokens": 90,
+                          "reasoningTokens": 9}}}).encode()
+                for index in range(max(1, len(existing)))]
+            native_path(path).write_bytes(zstandard.ZstdCompressor().compress(b"\n".join(rewritten) + b"\n"))
+            log(self.log_path, {"event": "session-record-written", "mode": mode,
+                                "path": str(path), "sessionId": session_id})
+            return
+        if mode == "resume-shorten":
+            kept = existing[:max(1, len(existing) // 2)]
+            native_path(path).write_bytes(zstandard.ZstdCompressor().compress(b"".join(kept)))
+            log(self.log_path, {"event": "session-record-written", "mode": mode,
+                                "path": str(path), "sessionId": session_id})
+            return
+        lines = list(existing)
+        if mode == "resume-duplicate":
+            lines += existing
+        else:
+            lines += [json.dumps(event).encode() + b"\n" for event in events]
+        if mode == "resume-flood":
+            lines.insert(len(lines) - 1, json.dumps({"type": "fixture/oversized", "seq": seq + 7.5,
+                                                     "data": {"blob": "x" * (4 * 1024 * 1024)}}).encode() + b"\n")
+        native_path(path).write_bytes(zstandard.ZstdCompressor().compress(b"".join(lines)))
+        log(self.log_path, {"event": "session-record-written", "mode": mode,
+                            "path": str(path), "sessionId": session_id})
+
+    @staticmethod
+    def prompt_text(params: dict) -> str:
+        """The prompt's own text blocks, without interpreting anything."""
+        blocks = params.get("prompt") if isinstance(params.get("prompt"), list) else []
+        return "".join(block.get("text", "") for block in blocks
+                       if isinstance(block, dict) and isinstance(block.get("text"), str))
+
+    def serve(self) -> None:
+        log(self.log_path, {"event": "startup"})
+        if self.stderr_note:
+            sys.stderr.write(self.stderr_note + "\n")
+            sys.stderr.flush()
+        if self.spam_notifications:
+            for index in range(self.spam_notifications):
+                self.notify_client(f"session/spam-{index}", {"index": index})
+        # Windows select does not accept an anonymous stdin pipe. The reader
+        # takes one chunk at a time and waits for the main loop to process it
+        # before reading again, so a frozen agent does not drain later frames.
+        chunks: queue.Queue[bytes | OSError] = queue.Queue(maxsize=1)
+        read_next = threading.Event()
+
+        def read_stdin() -> None:
+            while True:
+                read_next.wait()
+                read_next.clear()
+                try:
+                    chunk = os.read(0, 65536)
+                except OSError as error:
+                    chunks.put(error)
+                    return
+                chunks.put(chunk)
+                if not chunk:
+                    return
+
+        reader = threading.Thread(target=read_stdin, name="fake-agent-stdin", daemon=True)
+        reader.start()
+        # Parse lines from our own buffer; one read may contain several frames.
+        pending = b""
+        request_next = True
+        reached_eof = False
+        while not self._stop_reading.is_set():
+            while not self._stop_reading.is_set():
+                index = pending.find(b"\n")
+                if index < 0:
+                    break
+                line = pending[:index]
+                pending = pending[index + 1:]
+                self.handle_client_line(line)
+            if self._stop_reading.is_set():
+                break
+            if request_next:
+                read_next.set()
+                request_next = False
+            try:
+                chunk = chunks.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            if self._stop_reading.is_set():
+                break  # re-check after the wake: never consume a post-freeze frame
+            if isinstance(chunk, OSError):
+                reader.join(timeout=5)
+                raise chunk
+            if not chunk:
+                reached_eof = True
+                break
+            pending += chunk
+            request_next = True
+        if reached_eof:
+            reader.join(timeout=5)
+            if reader.is_alive():
+                raise RuntimeError("fake agent stdin reader did not stop after EOF")
+        if self._stop_reading.is_set():
+            # A frozen agent stays alive holding its unread stdin: the test's
+            # group termination is the only way out, never a silent exit.
+            log(self.log_path, {"event": "parked-frozen"})
+            threading.Event().wait()
+        if self.late_tool_update:
+            # Same-root frames emitted as the client drains at EOF: they arrive
+            # after the prompt answered and must still reach the role observer.
+            session_id = self.last_session_id or "fake-session-drain"
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "tool_call",
+                                                             "toolCallId": "call_late_1",
+                                                             "kind": "other",
+                                                             "title": "run-command",
+                                                             "status": "in_progress"}})
+            self.notify_client("session/update", {"sessionId": session_id,
+                                                  "update": {"sessionUpdate": "tool_call_update",
+                                                             "toolCallId": "call_late_1",
+                                                             "status": "completed"}})
+            log(self.log_path, {"event": "late-tool-emitted"})
+        self.close_stubs()
+        if self.survive_eof:
+            log(self.log_path, {"event": "surviving-eof", "seconds": self.survive_eof})
+            time.sleep(self.survive_eof)
+        log(self.log_path, {"event": "stdin-eof", "exit": 0})
+
+    def handle_client_line(self, line: bytes) -> None:
+        text = line.strip()
+        if not text:
+            return
+        try:
+            message = json.loads(text)
+        except ValueError:
+            log(self.log_path, {"event": "malformed-client-frame"})
+            return
+        if self.capture_method is not None and message.get("method") == self.capture_method:
+            native_path(self.capture_path).write_bytes(line + b"\n")
+        if "id" in message and "method" not in message:
+            with self.lock:
+                pending = self.client_pending.get(message.get("id"))
+                if pending is not None:
+                    pending[1] = message
+                    pending[0].set()
+            return
+        method = message.get("method")
+        if method in self.freeze_on or (self.freeze_mid_prompt and method == "session/prompt"):
+            # Set this before starting the handler, so the main loop cannot
+            # permit another pipe read while that thread reaches its freeze.
+            self._stop_reading.set()
+        threading.Thread(target=self.handle_request, args=(message,), daemon=True).start()
+
+    def handle_request(self, message: dict) -> None:
+        try:
+            self.handle(message)
+        except Exception as error:
+            details = f"{type(error).__name__}: {error}"
+            log(self.log_path, {"event": "request-error", "method": message.get("method"),
+                                "id": message.get("id"), "error": details,
+                                "traceback": traceback.format_exc()})
+            if "id" in message:
+                self.send({"jsonrpc": "2.0", "id": message["id"],
+                           "error": {"code": -32603, "message": details}})
+
+
+def build_parser(*, log_required: bool = True) -> argparse.ArgumentParser:
+    """This fake agent's own construction face, with its defaults.
+
+    A derived fixture builds on this parser and overrides only the defaults it
+    changes, so a switch added here reaches every fixture instead of having to
+    be copied into a hand-written argument list. ``log_required`` serves the
+    derived fixtures whose launch face, like the installed agent's, may omit
+    ``--log``.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--log", required=log_required)
+    parser.add_argument("--fixture-root", required=True,
+                        help="private directory created by the test that launched this agent")
+    parser.add_argument("--capture-method", default=None,
+                        help="method whose complete incoming frame is saved privately")
+    parser.add_argument("--capture-path", default=None,
+                        help="private output file for the selected incoming frame")
+    # The public launch face the run module's driver always passes, accepted and
+    # recorded like the installed agent's: the profile name and the patch file.
+    parser.add_argument("--profile", default=None)
+    parser.add_argument("--patch", default=None)
+    parser.add_argument("--delay", action="append", default=[],
+                        help="METHOD:SECONDS delay before answering that method")
+    parser.add_argument("--garbage-on", action="append", default=[],
+                        help="emit invalid frames before answering this method")
+    parser.add_argument("--duplicate-on", action="append", default=[],
+                        help="send a second (duplicate) response for this method")
+    parser.add_argument("--die-before-answer", action="append", default=[],
+                        help="exit without answering this method")
+    parser.add_argument("--orphan-on", action="append", default=[],
+                        help="spawn a same-group sleeper and exit without answering this method")
+    parser.add_argument("--respond-then-exit", action="append", default=[],
+                        help="answer this method and exit immediately (reply then EOF)")
+    parser.add_argument("--raw-frame", action="append", default=[],
+                        help="emit hostile JSON-RPC shapes before answering this method")
+    parser.add_argument("--freeze-stdin-on", action="append", default=[],
+                        help="stop reading stdin when this method arrives, staying alive")
+    parser.add_argument("--fs-path", default="x.txt",
+                        help="path used in the fs/* request during prompt")
+    parser.add_argument("--spam-notifications", type=int, default=0,
+                        help="emit this many distinct notification methods at startup")
+    parser.add_argument("--option-count", type=int, default=1,
+                        help="total options offered in the second permission request")
+    parser.add_argument("--malformed-permission", action="store_true",
+                        help="the first permission request carries toolCall as a list and options as an int")
+    parser.add_argument("--error-data-on", action="append", default=[],
+                        help="answer this method with a JSON-RPC error whose message and data carry markers")
+    parser.add_argument("--freeze-mid-prompt", action="store_true",
+                        help="park after sending the first permission request, mid-prompt")
+    parser.add_argument("--survive-eof", type=float, default=0.0)
+    parser.add_argument("--allowed-title", default=None)
+    # -- native-run driver modes
+    parser.add_argument("--prompt-mode", default="legacy", choices=["legacy", "final", "micro-task"])
+    parser.add_argument("--final-answer", action="append", default=[],
+                        help="the Nth prompt's message text; the last one repeats")
+    parser.add_argument("--emit-unknown-update", action="store_true",
+                        help="emit one unknown sessionUpdate kind before the answer")
+    parser.add_argument("--bridge-config", default=None,
+                        help="the finish-bridge.json the micro task session tools read")
+    parser.add_argument("--finish-tool", default=None, help="the micro task completion tool's qualified name")
+    parser.add_argument("--checkpoint-tool", default=None, help="the micro task checkpoint tool's qualified name")
+    parser.add_argument("--micro-task-permission", action="store_true",
+                        help="request one upgrade permission before the micro task tool calls")
+    parser.add_argument("--permission-command", default="printf native-command")
+    parser.add_argument("--permission-path", default="/outside/native.txt")
+    parser.add_argument("--hang-prompt", action="store_true",
+                        help="park the prompt until a session/cancel arrives, then stop cancelled")
+    parser.add_argument("--park-prompt", action="store_true",
+                        help="park the prompt forever; only the owned group stop ends it")
+    parser.add_argument("--session-updates-fixture", help="synthetic ACP display notification fixture")
+    parser.add_argument("--emit-tool-update", action="store_true",
+                        help="emit one completed tool_call/update pair before the answer")
+    parser.add_argument("--bare-final", action="store_true",
+                        help="emit no usage snapshot: only the message chunk and the stop")
+    parser.add_argument("--finish-fail-then-retry", action="store_true",
+                        help="the first finish call fails natively and the root retries")
+    parser.add_argument("--no-finish", action="store_true",
+                        help="end the micro task prompt without ever calling the finish tool")
+    parser.add_argument("--forge-receipt", action="store_true",
+                        help="tamper with the finish receipt so its signature fails")
+    parser.add_argument("--session-record", default=None,
+                        choices=["usage", "quota", "quota-before", "quota-truncated",
+                                 "missing", "foreign", "corrupt",
+                                 "flood", "plain", "resume", "resume-missing",
+                                 "resume-rewrite", "resume-shorten", "resume-duplicate",
+                                 "resume-flood"],
+                        help="write one synthetic session.v3 rollout under the patch-pinned sessions root; "
+                             "the resume* modes shape the resumed turn's rollout boundary")
+    parser.add_argument("--stderr-note", default=None,
+                        help="write one line to stderr at startup, for the tail mirror")
+    parser.add_argument("--emit-foreign-chunk", action="store_true",
+                        help="emit one agent_message_chunk framed under a foreign session id")
+    parser.add_argument("--spam-unknown-kinds", type=int, default=0,
+                        help="emit this many distinct unknown sessionUpdate kinds before the answer")
+    parser.add_argument("--late-tool-update", action="store_true",
+                        help="emit one same-root completed tool pair while the client drains at EOF")
+    parser.add_argument("--wait-for-inquiry", type=float, default=0.0,
+                        help="hold the micro task turn until a Host question is queued (bounded seconds)")
+    parser.add_argument("--answer-inquiry", action="store_true",
+                        help="answer the first delivered question through the real session-tool rules")
+    parser.add_argument("--forge-checkpoint", action="store_true",
+                        help="mutate the checkpoint receipt under its stale signature")
+    parser.add_argument("--stop-reason", default=None,
+                        help="end the prompt with this stop reason instead of end_turn")
+    parser.add_argument("--stop-reason-unread", action="store_true",
+                        help="answer the prompt with no stop reason at all")
+    parser.add_argument("--replay-history", action="store_true",
+                        help="replay the previous turns' notifications before the resume answer")
+    parser.add_argument("--resume-echo-foreign-id", action="store_true",
+                        help="echo a foreign sessionId in the resume answer the observed agent omits")
+    parser.add_argument("--resume-foreign-root", action="store_true",
+                        help="frame the resumed turn's notifications under a session this run never requested")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    log_path = Path(args.log)
+    native_path(log_path.parent).mkdir(parents=True, exist_ok=True)
+    if not check_private_home(log_path, Path(args.fixture_root)):
+        return 3
+    log(log_path, {"event": "launch-face", "profile": args.profile, "patch": args.patch})
+    FakeAgent(args).serve()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

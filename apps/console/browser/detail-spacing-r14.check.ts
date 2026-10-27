@@ -1,0 +1,57 @@
+import { expect } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+import { open, test } from "./preview";
+
+const macro = "macro-11111111-1111-4111-8111-111111111111";
+const captures = fileURLToPath(new URL("../../../tmp/readability-r16", import.meta.url));
+for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.describe(`detail groups ${theme} ${width}`, () => {
+  test.use({ locale: "zh-CN", viewport: { width, height: 1000 }, reducedMotion: "reduce" });
+  test("groups the strip into a paper band and keeps identity and tabbed content on the card", async ({ page }) => {
+    await page.addInitScript(theme => localStorage.setItem("hey-my-buddy.console.theme", theme), theme);
+    await open(page, `#tasks/${macro}/preview-run-a1/7`);
+    const header = page.locator('[data-slot=detail-header]');
+    const strip = page.locator('[data-slot=detail-strip]');
+    const band = page.locator('[data-slot=detail-step-band]');
+    const ruler = strip.locator('[data-slot=zoom-ruler]');
+    const tabs = page.locator('[data-slot=detail-tabs] [role=tablist]');
+    const title = page.locator('[data-slot=detail-pane] h3').first();
+    await expect(title).toHaveText("回合 2");
+    const [headBox, stripBox, tabsBox, titleBox] = await Promise.all([header.boundingBox(), strip.boundingBox(), tabs.boundingBox(), title.boundingBox()]);
+    expect(stripBox!.y - headBox!.y - headBox!.height).toBeCloseTo(13, 0);
+    expect(tabsBox!.y - stripBox!.y - stripBox!.height).toBeCloseTo(13, 0);
+    expect(titleBox!.y - tabsBox!.y - tabsBox!.height).toBeCloseTo(24, 0);
+    for (const group of [header, strip, tabs]) await expect(group).toHaveCSS("border-bottom-width", "0px");
+    await expect(ruler).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    const paper = await page.evaluate(() => {
+      const probe = document.createElement("span"); probe.style.backgroundColor = "var(--paper)"; document.body.append(probe);
+      const color = getComputedStyle(probe).backgroundColor; probe.remove(); return color;
+    });
+    await expect(band).toHaveCSS("background-color", paper);
+    await expect(band).toHaveCSS("border-top-width", "1px");
+    await expect(band).toHaveCSS("border-bottom-width", "1px");
+    await expect(band).toHaveCSS("padding-top", "12px");
+    await expect(band).toHaveCSS("padding-bottom", "12px");
+    expect(await header.evaluate(node => getComputedStyle(node).backgroundColor)).not.toBe(paper);
+    expect(await tabs.evaluate(node => getComputedStyle(node.closest('[data-slot=task-detail]')!).backgroundColor)).not.toBe(paper);
+    const bandBox = (await band.boundingBox())!, detailBox = (await page.locator('[data-slot=task-detail]').boundingBox())!;
+    expect(Math.abs(bandBox.x - detailBox.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bandBox.width - detailBox.width)).toBeLessThanOrEqual(1);
+    const selected = tabs.getByRole("tab", { name: "概述", exact: true });
+    expect(Math.abs((await selected.boundingBox())!.x - titleBox!.x)).toBeLessThanOrEqual(1);
+    await expect(selected).toHaveCSS("font-size", "12px");
+    await expect(selected).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    const underline = await selected.evaluate(node => ({ height: getComputedStyle(node, "::after").height, opacity: getComputedStyle(node, "::after").opacity }));
+    expect(underline).toEqual({ height: "2px", opacity: "1" });
+    const axis = ruler.locator('[data-slot=timeline-axis]');
+    const clocks = axis.locator('[data-slot=axis-label]');
+    expect(await clocks.count()).toBeLessThanOrEqual(Math.ceil((await axis.boundingBox())!.width / 160) + 2);
+    await mkdir(captures, { recursive: true });
+    await page.mouse.move(0, 0); await page.screenshot({ path: `${captures}/overview-${theme}-${width}.png` });
+    await tabs.getByRole("tab", { name: "会话", exact: true }).click();
+    const sessionHead = page.locator('[data-slot=session-view] > header > p').first();
+    await expect(sessionHead).toBeVisible();
+    expect(Math.abs((await selected.boundingBox())!.x - (await sessionHead.boundingBox())!.x)).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: `${captures}/session-${theme}-${width}.png` });
+  });
+});

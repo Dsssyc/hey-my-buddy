@@ -1,0 +1,42 @@
+{
+  "nativeSessionId": "01a0eafc-46c0-72a2-b620-df11d2c5ee23",
+  "nativeItemId": "msg_095e9ed03a5341ac016abb230a967087d09c1e7bd0d1d26860",
+  "finalTextSha256": "4f39b4025f67d7bf5536eb6a9672cb10d139a23e5a04aa721c11874c8909f017",
+  "finalTextBytes": 9797,
+  "summaryBytes": 8848,
+  "withoutCitationBytes": 8672,
+  "parsedOutcomeEqualsOriginal": true,
+  "citationPreserved": true,
+  "modelCalls": 0,
+  "originalRunner": {
+    "status": "error",
+    "code": "invalid-result",
+    "error": "the native root turn has no strict structured final outcome",
+    "sessionId": "01a0eafc-46c0-72a2-b620-df11d2c5ee23",
+    "nativeTurnId": "01a0eafc-4816-7461-98ab-ae00401939bd",
+    "resolved": {
+      "effort": "high",
+      "model": "gpt-6-luna",
+      "provider": "openai"
+    },
+    "processState": {
+      "nativeExitCode": 0,
+      "shutdownConfirmed": true
+    },
+    "nativeSession": {
+      "adapter": "codex",
+      "captured": true,
+      "nativeAppVisibility": "unknown",
+      "note": "Codex owns the native thread in its configured home; App indexing visibility is unverified. Native continuation rechecks the goal, checkout, configuration and last completed turn binding.",
+      "resumable": false,
+      "resumeMode": "initial",
+      "sessionId": "01a0eafc-46c0-72a2-b620-df11d2c5ee23",
+      "storageOwner": "harness-user-store",
+      "storageScope": "harness-user-store"
+    }
+  },
+  "originalFailureExplainedBy": "summary UTF-8 bound, not JSON or memory citation",
+  "originalContinuationMode": "reconstructed-new-session",
+  "oldBindingWrittenOnlyAfterValidOutcome": true,
+  "newPaidCodexContinuationRun": false
+}

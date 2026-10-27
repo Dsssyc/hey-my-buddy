@@ -1,0 +1,292 @@
+"""The role executor's share of the ADR-027 facts, over the registered seams.
+
+The discovery receipt crosses this layer untouched — including each harness's
+``discoveries[].accountStatus`` — and the Codex run result's model-check fact
+is published through the module's own ``native_evidence`` projection wherever
+the role merges one. No native process is spawned: the controller seam is
+mocked, and the evidence reference is a real private file the projection must
+verify by size and digest.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+
+from hey_my_buddy.buddy.harnesses import run_contract as rc
+from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity, RunRequest
+from hey_my_buddy.buddy.roles import run_execution
+from hey_my_buddy.buddy.roles.turn_io import private_json
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.private_dirs import ensure_private_dir
+from buddy.harnesses.test_run_contract import full_request
+
+
+def _catalog(name: str, account_status: str) -> dict:
+    return {"source": name + "-native", "harness": name, "harnessVersion": "fixture",
+            "providers": [], "warnings": [],
+            "discoveries": [{"harness": name, "status": "complete",
+                             "accountStatus": account_status}]}
+
+
+class InlineRunErrorTests(unittest.TestCase):
+    def test_thread_failure_reaches_every_reader_with_its_original_cause(self):
+        error = RuntimeError("the inline driver failed")
+        identity = RunIdentity(task_id="task", attempt_id="attempt", generation=1, invocation_id="invocation")
+        with tempfile.TemporaryDirectory() as directory:
+            control = {"privateRoot": directory, "timeoutSeconds": None}
+            with mock.patch("hey_my_buddy.buddy.roles.inline_run.execute", side_effect=error):
+                handle = run_execution._launch(
+                    control, None, environment={"HMB_STATE_DIR": os.environ["HMB_STATE_DIR"]},
+                    identity=identity)
+                self.assertEqual(handle.wait(10), 1)
+            self.assertFalse(handle.shutdown_confirmed())
+            for read in (run_execution._read_run, run_execution._read_request,
+                         run_execution.read_fast_result, run_execution.read_review_result):
+                with self.subTest(reader=read.__name__), self.assertRaises(RuntimeError) as caught:
+                    read(handle)
+                self.assertIs(caught.exception, error)
+
+
+class DiscoveryReceiptTests(unittest.TestCase):
+    """The discovery outer layer carries the account fact, and the refusal text."""
+
+    def _discover(self, payload: dict, *, exit_code: int = 0, stopped: bool = True) -> dict:
+        handle = SimpleNamespace(wait=lambda timeout: 0, terminate=lambda **kwargs: None)
+        collection = SimpleNamespace(payload=payload, exit_code=exit_code, stop_confirmed=stopped)
+        with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
+                mock.patch.object(run_execution, "collect_controller", return_value=collection):
+            return run_execution.discover_models("codex", state_dir=Path(os.environ["HMB_STATE_DIR"]))
+
+    def test_the_discovery_receipt_crosses_with_its_account_fact(self):
+        receipt = _catalog("codex", "unknown")
+        result = self._discover({"status": "ok", "catalog": receipt})
+        self.assertEqual(result["discoveries"],
+                         [{"harness": "codex", "status": "complete", "accountStatus": "unknown"}])
+
+    def test_expired_native_metadata_wait_has_a_structured_reason(self):
+        handle = SimpleNamespace(wait=lambda timeout: None, terminate=lambda **kwargs: None)
+        collection = SimpleNamespace(payload=None, exit_code=0, stop_confirmed=True)
+        with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
+             mock.patch.object(run_execution, "collect_controller", return_value=collection):
+            result = run_execution.discover_models("codex", state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.assertEqual(result["discoveries"], [{"harness": "codex", "status": "unknown",
+                         "accountStatus": "unknown",
+                         "reason": {"code": "native-metadata-wait-expired", "params": {}}}])
+
+    def test_a_non_object_controller_receipt_is_a_board_error(self):
+        with self.assertRaises(BoardError) as caught:
+            self._discover([])
+        self.assertEqual(caught.exception.code, 'HARNESS_UNAVAILABLE')
+        self.assertTrue(caught.exception.discovery_shutdown_confirmed)
+
+    def test_a_refused_discovery_keeps_the_harness_s_own_reason(self):
+        with self.assertRaises(BoardError) as caught:
+            self._discover({"status": "error",
+                            "error": "Codex requires an existing ChatGPT account-plan login"},
+                           exit_code=1)
+        self.assertEqual(caught.exception.code, "HARNESS_UNAVAILABLE")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+        self.assertEqual(caught.exception.details.get("harness"), "codex")
+        self.assertEqual(caught.exception.message,
+                         "Codex requires an existing ChatGPT account-plan login")
+
+    def test_an_unconfirmed_native_stop_never_publishes_a_reading(self):
+        with self.assertRaises(BoardError) as caught:
+            self._discover({"status": "ok", "catalog": _catalog("codex", "confirmed")},
+                           stopped=False)
+        self.assertEqual(caught.exception.code, "HARNESS_DISCOVERY_STOP_UNCONFIRMED")
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_a_failed_control_write_proves_no_controller_created(self):
+        with mock.patch.object(run_execution, "private_json", side_effect=OSError("fixture write failed")), \
+             mock.patch.object(run_execution, "launch_controller") as launch:
+            with self.assertRaises(OSError) as caught:
+                run_execution.discover_models("codex", state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        launch.assert_not_called()
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_an_unknown_collection_failure_never_implies_stop(self):
+        handle = SimpleNamespace(wait=lambda timeout: 0, terminate=lambda **kwargs: None)
+        with mock.patch.object(run_execution, "launch_controller", return_value=handle), \
+             mock.patch.object(run_execution, "collect_controller", side_effect=ValueError("fixture read failed")):
+            with self.assertRaises(ValueError) as caught:
+                run_execution.discover_models("codex", state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+
+    def test_an_unregistered_discovery_proves_no_controller_created(self):
+        with mock.patch("hey_my_buddy.buddy.harnesses.registry.native_operation",
+                        side_effect=BoardError("CATALOG_UNAVAILABLE", "fixture unavailable")):
+            with self.assertRaises(BoardError) as caught:
+                run_execution.discover_models("fixture", state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
+
+    def test_environment_failure_proves_no_controller_created(self):
+        with mock.patch('hey_my_buddy.buddy.harnesses.runtime_selection.controller_environment',
+                        side_effect=ValueError('fixture environment failed')), \
+             mock.patch.object(run_execution, 'launch_controller') as launch:
+            with self.assertRaises(ValueError) as caught:
+                run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        launch.assert_not_called()
+        self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), True)
+
+    def test_directory_creation_failure_proves_no_controller_created(self):
+        error = OSError('fixture catalog directory refused')
+        with mock.patch.object(run_execution, 'make_temporary_dir', side_effect=error), \
+             mock.patch.object(run_execution, 'launch_controller') as launch, \
+             mock.patch.object(run_execution.shutil, 'rmtree') as remove:
+            with self.assertRaises(OSError) as caught:
+                run_execution.discover_models('codex', state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        self.assertIs(caught.exception, error)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+        launch.assert_not_called()
+        remove.assert_not_called()
+
+    def test_cleanup_failure_after_success_keeps_confirmed_stop(self):
+        remove_directory = run_execution.shutil.rmtree
+        error = OSError('fixture catalog cleanup refused')
+
+        def remove_then_fail(directory):
+            remove_directory(directory)
+            raise error
+
+        with mock.patch.object(run_execution.shutil, 'rmtree', side_effect=remove_then_fail):
+            with self.assertRaises(OSError) as caught:
+                self._discover({'status': 'ok', 'catalog': _catalog('codex', 'confirmed')})
+        self.assertIs(caught.exception, error)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+
+    def test_cleanup_failure_after_refusal_keeps_confirmed_stop_and_reason(self):
+        remove_directory = run_execution.shutil.rmtree
+        error = OSError('fixture catalog cleanup refused')
+
+        def remove_then_fail(directory):
+            remove_directory(directory)
+            raise error
+
+        with mock.patch.object(run_execution.shutil, 'rmtree', side_effect=remove_then_fail):
+            with self.assertRaises(OSError) as caught:
+                self._discover({'status': 'error', 'error': 'fixture native refusal'}, exit_code=1)
+        self.assertIs(caught.exception, error)
+        self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
+        self.assertIsInstance(caught.exception.__context__, BoardError)
+        self.assertEqual(caught.exception.__context__.message, 'fixture native refusal')
+
+    def test_unknown_stop_retains_directory_without_cleanup(self):
+        with tempfile.TemporaryDirectory(dir=os.environ.get('HMB_CHECKS_TMPDIR', tempfile.gettempdir())) as temporary:
+            directory = Path(temporary) / 'catalog'
+            directory.mkdir()
+            with mock.patch.object(run_execution, 'make_temporary_dir', return_value=directory), \
+                 mock.patch.object(run_execution.shutil, 'rmtree', wraps=run_execution.shutil.rmtree) as remove:
+                with self.assertRaises(BoardError) as caught:
+                    self._discover({'status': 'error', 'error': 'fixture unknown stop'},
+                                   exit_code=1, stopped=False)
+            remove.assert_not_called()
+            self.assertTrue(directory.is_dir())
+            self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
+
+
+class CodexModelCheckProjectionTests(unittest.TestCase):
+    """The run result's model-check fact, published where the role merges evidence."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-roles-model-check-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+
+    def _request(self, permission: str) -> rc.RunRequest:
+        fields = full_request(Path(self.base)).to_payload()
+        fields.update(harness="codex", permission=permission, sessionServices=[])
+        return RunRequest.from_payload(fields)
+
+    def _result(self, request: rc.RunRequest, *, with_ref: bool, status: str = "error") -> rc.RunResult:
+        refs = []
+        if with_ref:
+            check = {"harness": "codex", "selectedModelListed": False,
+                     "selected": {"provider": "openai", "model": "gpt-6.1-sol", "effort": "high"}}
+            path = ensure_private_dir(self.base / "inv") / "model-check.json"
+            private_json(path, check)
+            raw = path.read_bytes()
+            refs.append(rc.EvidenceRef(kind="model-check", location=str(path),
+                                       size_bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest()))
+        return rc.RunResult(identity=request.identity, harness="codex",
+                            end=rc.RunEnd(status=status, reason_code="native-rpc-error",
+                                          message="Codex rejected turn/start: model not found: gpt-6.1-sol"),
+                            evidence_refs=refs)
+
+    def test_the_fast_receipt_publishes_the_absence_fact_at_its_own_level(self):
+        request = self._request("none")
+        payload = run_execution._fast_result(self._result(request, with_ref=True), request,
+                                             {"stopReason": None, "elapsedMs": 1})
+        self.assertEqual(payload["selectedModelListed"], False)
+        self.assertEqual(payload["selectedModel"],
+                         {"provider": "openai", "model": "gpt-6.1-sol", "effort": "high"})
+        self.assertEqual(payload["code"], "native-rpc-error")
+        # The native refusal message reaches the receipt's own error field.
+        self.assertEqual(payload["error"],
+                         "Codex rejected turn/start: model not found: gpt-6.1-sol")
+
+    def test_the_review_receipt_merges_the_same_projection(self):
+        request = self._request("read")
+        payload = run_execution._review_result(self._result(request, with_ref=True), request,
+                                               {"stopReason": None, "elapsedMs": 1})
+        self.assertEqual(payload["selectedModelListed"], False)
+        self.assertEqual(payload["selectedModel"],
+                         {"provider": "openai", "model": "gpt-6.1-sol", "effort": "high"})
+
+    def test_the_coding_receipt_publishes_the_absence_fact_from_its_verified_ref(self):
+        request = self._request("write")
+        payload = run_execution._worker_facts(self._result(request, with_ref=True))
+        self.assertIs(payload["selectedModelListed"], False)
+        self.assertEqual(payload["selectedModel"],
+                         {"provider": "openai", "model": "gpt-6.1-sol", "effort": "high"})
+        self.assertEqual(payload["error"],
+                         "Codex rejected turn/start: model not found: gpt-6.1-sol")
+
+    def test_the_coding_receipt_without_an_absence_fact_publishes_nothing(self):
+        request = self._request("write")
+        payload = run_execution._worker_facts(self._result(request, with_ref=False))
+        self.assertNotIn("selectedModelListed", payload)
+        self.assertNotIn("selectedModel", payload)
+
+    def test_a_changed_model_check_reference_fails_the_coding_receipt(self):
+        # The micro task receipt keeps the same verified-evidence rule as every
+        # other reference: a changed digest fails the collection, never silently.
+        request = self._request("write")
+        result = self._result(request, with_ref=True)
+        changed = rc.RunResult(
+            identity=request.identity, harness="codex", end=result.end,
+            evidence_refs=[rc.EvidenceRef(kind="model-check",
+                                          location=result.evidence_refs[0].location,
+                                          size_bytes=result.evidence_refs[0].size_bytes,
+                                          sha256="0" * 64)])
+        with self.assertRaises(BoardError):
+            run_execution._worker_facts(changed)
+
+    def test_a_run_without_the_absence_fact_publishes_nothing(self):
+        request = self._request("none")
+        payload = run_execution._fast_result(self._result(request, with_ref=False), request,
+                                             {"stopReason": None, "elapsedMs": 1})
+        self.assertNotIn("selectedModelListed", payload)
+        self.assertNotIn("selectedModel", payload)
+
+    def test_session_write_failure_is_reported_without_changing_run_status(self):
+        request = self._request("none")
+        result = self._result(request, with_ref=False, status="ok").model_copy(update={
+            "session_record_failure": rc.SessionRecordFailure(
+                code="session-record-write-failed", params={"category": "OSError", "message": "file write unavailable"})})
+        payload = run_execution._fast_result(result, request,
+                                             {"stopReason": None, "elapsedMs": 1})
+        self.assertEqual(payload["status"], "ok")
+        self.assertEqual(payload["sessionRecordFailure"], {
+            "code": "session-record-write-failed", "params": {"category": "OSError", "message": "file write unavailable", "truncated": False}})
+
+
+
+if __name__ == "__main__":
+    unittest.main()

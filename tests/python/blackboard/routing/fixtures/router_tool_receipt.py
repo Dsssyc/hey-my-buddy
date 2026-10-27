@@ -1,0 +1,23 @@
+"""Bound native event receipts for private, deterministic Router fixtures."""
+from hey_my_buddy.protocol.tool_evidence import ToolEventEvidence, normalize_tool_event
+
+
+def tool_receipt(binding, tool_calls=0, *, state_dir, native_identity=None, stream_complete=True, tool_name=None):
+    identity = native_identity or {"sessionId": "private-fixture-session"}
+    names = {"dsh": "read", "codex": "commandExecution", "claude": "Read", "zcode": "Read"}
+    collector = ToolEventEvidence(binding, state_dir=state_dir)
+    for number in range(tool_calls):
+        for phase in ("start", "end"):
+            collector.observe(normalize_tool_event(binding["harness"], {
+                "nativeIdentity": identity, "callId": f"fixture-call-{number}",
+                "toolName": tool_name or names[binding["harness"]], "phase": phase,
+            }))
+    return {"nativeIdentity": identity, "toolEvidence": collector.finish([identity], stream_complete)}
+
+
+def claim_tool_receipt(claim, tool_calls=0, *, state_dir, **options):
+    return tool_receipt({"harness": claim["decisionInput"]["buddy"]["harness"],
+                         "taskId": claim["task"]["taskId"],
+                         "attemptId": claim["attempt"]["attemptId"],
+                         "generation": claim["attempt"]["generation"]}, tool_calls,
+                        state_dir=state_dir, **options)

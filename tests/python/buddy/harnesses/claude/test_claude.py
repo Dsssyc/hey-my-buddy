@@ -1,0 +1,690 @@
+"""Claude role wiring against a private stream-json fixture, with no model calls.
+
+The micro task Worker turn drives the shared role executor over the registered
+claude native run; the read-only structured call drives the shared review
+entry. Only the native CLI is simulated. The availability cases run anywhere;
+the execution cases need the Host activation patch that registers the claude
+run seam, because without it this checkout has no claude execution path at
+all — which is exactly what the wiring microtask delivers.
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import sys
+import tempfile
+from temporary import TemporaryDirectory
+import threading
+import time
+import unittest
+import uuid
+from pathlib import Path
+from unittest import mock
+from buddy.harnesses.fixture_selection import mock_role_workspace, select_fixture
+from private_acl import assert_private_path
+
+from hey_my_buddy.paths import native_path
+from hey_my_buddy.private_files import read_text
+from hey_my_buddy.buddy.harnesses.claude import adapter as claude_module
+from hey_my_buddy.buddy.roles import controller, run_execution, turn_io
+from hey_my_buddy.buddy.harnesses.base import ExecutionContext
+from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter
+from hey_my_buddy.buddy.harnesses.claude.native_run import validate_turn_provenance
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.private_dirs import context_root, directory_mode
+from hey_my_buddy.protocol.tool_evidence import read_tool_calls
+
+FIXTURE = Path(__file__).parent / "fixtures/fake_claude.py"
+
+
+
+
+def flag_value(args: list[str], flag: str) -> str | None:
+    for index, item in enumerate(args):
+        if item == flag and index + 1 < len(args):
+            return args[index + 1]
+        if item.startswith(flag + "="):
+            return item[len(flag) + 1:]
+    return None
+
+
+class ClaudeFixtureCase(unittest.TestCase):
+    """The shared fake-CLI harness: private roots, scrubbed environment."""
+
+    def setUp(self):
+        self.temp = TemporaryDirectory(prefix="hey-my-buddy-claude-test-",
+                                                dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "state").mkdir(mode=directory_mode())
+        self.cwd = self.root / "checkout"
+        self.cwd.mkdir()
+        mock_role_workspace(self)
+        self.environment = {key: value for key, value in os.environ.items()
+                            if not key.startswith("HMB_") and not key.startswith(("ANTHROPIC_", "CLAUDE_"))
+                            and key not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")}
+        self.environment.update(HMB_CONSOLE_PORT="0", HMB_CLAUDE_FIXTURE_STATE=str(self.root / "fixture.json"),
+                                HMB_STATE_DIR=str(self.root / "state"), HMB_RUNTIME_ROOT=str(self.root / "runtime"),
+                                HMB_DEV_SOURCE="1")
+        select_fixture(self.environment, self.root, "claude", FIXTURE)
+        # Controllers change cwd to the fixture checkout; a relative
+        # PYTHONPATH would import the interpreter's installed source instead.
+        self.environment["PYTHONPATH"] = os.pathsep.join((str(Path(__file__).resolve().parents[5] / "src"), os.environ.get('PYTHONPATH', '')))
+        claude_module._reset_metadata_cache()
+        self.addCleanup(claude_module._reset_metadata_cache)
+        self.adapter = ClaudeAdapter()
+
+    def test_unknown_metadata_is_unavailable_and_reused_until_cache_expiry(self):
+        unknown = {'catalog': {'discoveries': [{'harness': 'claude', 'status': 'unknown',
+                                               'reason': {'code': 'catalog.native-unknown',
+                                                          'params': {'harness': 'claude'}}}]}}
+        complete = {'catalog': {'discoveries': [{'harness': 'claude', 'status': 'complete'}]}}
+        clock = [10.0]
+        with mock.patch.dict(os.environ, self.environment, clear=True), \
+             mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
+             mock.patch.object(claude_module, "cli_command", return_value=[sys.executable, str(FIXTURE)]), \
+             mock.patch.object(claude_module, '_probe_native_metadata', side_effect=[unknown, complete]) as probe, \
+             mock.patch.object(claude_module.time, 'monotonic', side_effect=lambda: clock[0]):
+            self.assertEqual(self.adapter.available(), (False, 'catalog.native-unknown'))
+            clock[0] = 11.0
+            self.assertEqual(self.adapter.available(), (False, 'catalog.native-unknown'))
+            self.assertEqual(probe.call_count, 1)
+            clock[0] = 71.0
+            self.assertEqual(self.adapter.available(), (True, None))
+            self.assertEqual(probe.call_count, 2)
+
+    def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8,
+                model="claude-opus-5-5[1m]", access=None):
+        turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
+                      "turnId": f"turn-{index}", "resumeMode": mode or ("reconstructed-new-session" if previous else "initial"),
+                      "previousSessionId": previous, "context": {},
+                      "executionWorkspace": {"path": str(self.cwd), "access": access or "write"}}
+        return ExecutionContext(task_id="micro-task-1", attempt_id=f"attempt-{index}", generation=index,
+                                session_record_path=str(self.root / f"session-attempt-{index}.jsonl"),
+                                spec={"adapter": "claude", "cwd": str(self.cwd), "task": "Write a fixture result", "expectedSeconds": 1,
+                                      **({"routerBudgetSeconds": timeout} if timeout is not None else {}),
+                                      "provider": "anthropic", "model": model, "effort": effort},
+                                directory=self.root / f"attempt-{index}", runtime={},
+                                environment={**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case},
+                                turn={"turnId": f"turn-{index}", "input": turn_input})
+
+
+class ClaudeAvailabilityTests(ClaudeFixtureCase):
+    """Capability reads over the cached discovery probe."""
+
+
+
+    def test_concurrent_capability_reads_share_one_metadata_probe(self):
+        from concurrent.futures import ThreadPoolExecutor
+        entered = threading.Event()
+        release = threading.Event()
+
+        def probe(*, state_dir: Path):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            raise BoardError("HARNESS_UNAVAILABLE", "fixture unauthenticated")
+
+        with mock.patch.dict(os.environ, self.environment, clear=True), \
+                mock.patch("hey_my_buddy.buddy.harnesses.runtime_selection.selected", return_value=None), \
+                mock.patch.object(claude_module, "cli_command", return_value=[sys.executable, str(FIXTURE)]), \
+                mock.patch.object(claude_module, "_probe_native_metadata", side_effect=probe) as discover, \
+                ThreadPoolExecutor(max_workers=8) as pool:
+            futures = [pool.submit(self.adapter.available) for _ in range(8)]
+            self.assertTrue(entered.wait(3))
+            release.set()
+            self.assertEqual([future.result(5) for future in futures],
+                             [(False, "HARNESS_UNAVAILABLE")] * 8)
+            self.assertEqual(discover.call_count, 1)
+
+
+    def fixture_state(self):
+        return json.loads(read_text(self.root / "fixture.json"))
+
+    def fixture_runs(self):
+        return self.fixture_state()["runs"]
+
+
+class ClaudeAdapterTests(ClaudeFixtureCase):
+    """The micro task turn and the read-only call through the registered run."""
+
+    def setUp(self):
+        super().setUp()
+        from hey_my_buddy.buddy.harnesses.registry import adapter as registry_adapter
+        from hey_my_buddy.buddy.roles.controller import worker_executor
+        self.executor = worker_executor("claude")
+        self.adapter = registry_adapter("claude")
+        self.assertTrue(hasattr(self.executor, "start") and hasattr(self.executor, "collect"),
+                        "the registered claude run must execute through the shared role executor")
+        self.assertFalse(any(hasattr(self.adapter, entry) for entry in
+                             ("prepare", "start", "collect", "cancel",
+                              "start_read_only_structured", "start_no_tool_structured")),
+                         "the claude description carries no execution entries")
+
+    def execute(self, context):
+        self.executor.prepare(context)
+        handle = self.executor.start(context)
+        self.last_handle = handle
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
+        return self.executor.collect(handle, context)
+
+    def fixture_state(self):
+        return json.loads(read_text(self.root / "fixture.json"))
+
+    def control(self, context):
+        """The role's private control binding of one attempt."""
+        return self.last_handle.role_run_control
+
+    def stored_request(self, context):
+        return self.last_handle.request.to_payload()
+
+    def wait_for_native_user_turn(self, handle):
+        """Wait for the fixture's user frame or the controller's actual exit.
+
+        Cancelling before the controller installed its termination handler kills
+        the controller instead of interrupting the native child, so a
+        cancellation test must wait for the turn to reach the fixture. The
+        fixture records ``userTurns`` when it reads the user frame and only then
+        parks for the ``hang`` case.
+        """
+        while True:
+            if (self.root / "fixture.json").exists() and self.fixture_state().get("userTurns") == 1:
+                return
+            if handle.wait(.05) is not None:
+                self.fail(f"the claude controller ended before its fixture recorded a user turn: "
+                          f"result={handle.result}; fixture state="
+                          f"{self.fixture_state() if (self.root / 'fixture.json').exists() else 'no fixture.json'}")
+
+    def test_completed_turn_uses_the_preallocated_session_and_never_resumes(self):
+        context = self.context()
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertEqual(outcome.exit_code, 0)
+        turn = outcome.result["turn"]
+        argv = self.fixture_state()["argv"]
+        self.assertEqual(turn["sessionId"], flag_value(argv, "--session-id"))
+        uuid.UUID(turn["sessionId"], version=4)
+        self.assertEqual(turn["provenance"]["nativeSessionId"], turn["sessionId"])
+        self.assertTrue(turn["provenance"]["structuredOutputValidated"])
+        self.assertEqual(turn["outcome"]["disposition"], "completed")
+        # The init readback is the observed session model; argv is not attestation.
+        self.assertEqual(turn["provenance"]["sessionModel"], "claude-opus-5-5[1m]")
+        self.assertEqual(outcome.result["sessionModel"], "claude-opus-5-5[1m]")
+        self.assertNotIn("--resume", argv)
+        native_session = outcome.result["nativeSession"]
+        self.assertEqual(native_session["storageScope"], "none")
+        self.assertEqual(native_session["nativeAppVisibility"], "none")
+        self.assertFalse(native_session["resumable"])
+
+    def test_observed_model_identity_stays_null_with_the_observed_set(self):
+        outcome = self.execute(self.context())
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertNotIn("observed", outcome.result)
+        self.assertEqual(outcome.result["observedModels"], ["claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"])
+        self.assertEqual(outcome.result["turn"]["provenance"]["modelUsage"],
+                         ["claude-haiku-4-5-20251001", "claude-opus-5-5[1m]"])
+
+    def test_assistance_outcome_is_imported(self):
+        outcome = self.execute(self.context("assistance"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
+
+    def test_completed_result_cannot_also_request_assistance(self):
+        outcome = self.execute(self.context("completed-request"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "invalid-result")
+        self.assertNotIn("turn", outcome.result)
+
+    def test_wrong_session_identity_is_rejected(self):
+        outcome = self.execute(self.context("wrong-session"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "wrong-native-session")
+        self.assertNotIn("turn", outcome.result)
+        self.assertFalse((self.root / "attempt-1" / "turn-output.json").exists())
+
+    def test_duplicate_or_malformed_native_results_are_rejected(self):
+        for index, case in enumerate(("duplicate-result", "invalid-json", "nonfinite", "unknown-response",
+                                      "no-result", "bad-structured", "failed", "wrong-cwd", "init-wrong-session",
+                                      "bad-subtype", "missing-is-error"), 1):
+            with self.subTest(case=case):
+                outcome = self.execute(self.context(case, index=index))
+                self.assertEqual(outcome.status, "failed", outcome.to_report())
+                self.assertNotIn("turn", outcome.result)
+                self.assertNotIn("workspaceSeal", outcome.result)
+
+    def test_non_root_subagent_result_does_not_end_the_root_turn(self):
+        outcome = self.execute(self.context("non-root-result"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+
+    def test_rejected_rate_limit_with_malformed_identity_still_fails_as_quota(self):
+        outcome = self.execute(self.context("quota-bad-type"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "harness-error")
+        self.assertEqual(outcome.result["providerRejection"]["nativeCode"], "unknown")
+        self.assertEqual(outcome.result["providerRejection"]["rejectionPhase"], "before-model")
+
+    def test_a_free_text_rate_limit_identity_is_sanitized_not_copied(self):
+        outcome = self.execute(self.context("quota-free-text-type"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "harness-error")
+        # Only the bounded reset time survives; the free-text identity never does.
+        self.assertEqual(outcome.result["providerRejection"]["nativeCode"], "unknown")
+        self.assertEqual(outcome.result["providerRejection"]["resetsAt"], "2026-09-26T12:00:00Z")
+        self.assertNotIn("SECRET-FRAGMENT", json.dumps(outcome.result))
+
+    def test_permission_request_denial_becomes_controller_attention(self):
+        outcome = self.execute(self.context("permission"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        turn = outcome.result["turn"]
+        self.assertEqual(turn["outcome"]["disposition"], "attention")
+        provenance = turn["provenance"]
+        self.assertTrue(provenance["controllerAttention"])
+        self.assertFalse(provenance["structuredOutputValidated"])
+        self.assertEqual(provenance["deniedToolUseIds"], ["toolu_fixture_1"])
+        self.assertEqual(provenance["deniedControlRequestIds"], ["perm-1"])
+        self.assertTrue(outcome.result["attentionRequired"])
+        state = self.fixture_state()
+        self.assertEqual(state["permissionReply"], {"subtype": "success", "behavior": "deny"})
+        forged = {**turn, "provenance": {key: value for key, value in provenance.items()
+                                         if key != "deniedControlRequestIds"}}
+        forged["provenance"]["permissionDenials"] = 0
+        self.assertIsNotNone(validate_turn_provenance(forged))
+        unbound = {**turn, "outcome": {**turn["outcome"], "disposition": "completed"}}
+        self.assertIsNotNone(validate_turn_provenance(unbound))
+
+    def test_result_permission_denials_alone_convert_a_completed_outcome(self):
+        outcome = self.execute(self.context("result-denials"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        turn = outcome.result["turn"]
+        self.assertEqual(turn["outcome"]["disposition"], "attention")
+        provenance = turn["provenance"]
+        self.assertTrue(provenance["controllerAttention"])
+        self.assertEqual(provenance["permissionDenials"], 1)
+        self.assertIsNone(validate_turn_provenance(turn))
+
+    def test_cancel_interrupts_the_native_child_before_stopping_the_group(self):
+        context = self.context("hang", timeout=12)
+        self.executor.prepare(context)
+        handle = self.executor.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        self.wait_for_native_user_turn(handle)
+        self.executor.cancel(handle, grace_seconds=8)
+        self.assertIsNotNone(handle.wait(15))
+        outcome = self.executor.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertNotIn("turn", outcome.result)
+        self.assertTrue(self.fixture_state()["interrupted"], "the interrupt control request must precede group stop")
+        self.assertIs(outcome.result.get("nativeInterruptRequested"), True)
+        self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), True,
+                      "the receipt must distinguish a native interrupt reply from forced shutdown")
+
+    def _force_stop_hanging_role(self, *, initiator):
+        context = self.context("hang", timeout=None)
+        self.executor.prepare(context)
+        handle = self.executor.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        self.wait_for_native_user_turn(handle)
+        controller.worker_stop(self.executor, handle, stop_initiator=initiator,
+                               grace_deadline=time.monotonic() + 300 if initiator == "host" else None)
+        self.assertIsNotNone(handle.wait(15), "Claude fixture controller did not exit after force stop")
+        outcome = self.executor.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed, outcome.to_report())
+        from hey_my_buddy.buddy.runtime.execution import classify_termination
+        self.assertEqual(classify_termination(outcome, timed_out=False, cancel_requested=True,
+                                              stop_initiator=initiator),
+                         "forced-stop" if initiator == "host" else "console-stop")
+        self.assertNotIn("turn", outcome.result)
+        self.assertFalse(native_path(Path(handle.role_run_control["privateRoot"]) /
+                          "stop-summary").exists(), "force stop must not launch a summary turn")
+        state = self.fixture_state()
+        self.assertEqual(state["userTurns"], 1, "force stop must not send a second user turn")
+        self.assertTrue(state["interrupted"], "the native child must receive its interrupt request")
+
+    def test_host_stop_for_unsupported_claude_forces_native_shutdown(self):
+        self._force_stop_hanging_role(initiator="host")
+
+    def test_console_stop_forces_native_shutdown(self):
+        self._force_stop_hanging_role(initiator="console")
+
+    def test_deadline_ends_the_native_process_group(self):
+        outcome = self.execute(self.context("hang", timeout=1))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "deadline")
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), True)
+
+    def test_quota_event_while_interrupting_does_not_lose_the_stop_receipt(self):
+        context = self.context("interrupt-quota", timeout=12)
+        self.executor.prepare(context)
+        handle = self.executor.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=.2), handle.wait(15)) if not handle.finished else None)
+        self.wait_for_native_user_turn(handle)
+        self.executor.cancel(handle, grace_seconds=8)
+        self.assertIsNotNone(handle.wait(15))
+        outcome = self.executor.collect(handle, context)
+        self.assertEqual(outcome.status, "cancelled", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertNotIn("turn", outcome.result)
+        self.assertIs(outcome.result.get("nativeInterruptAcknowledged"), False,
+                      "a quota frame that interrupts the acknowledgement wait is not an acknowledgement")
+
+    def test_absent_budget_executes_unbounded_without_an_immediate_deadline(self):
+        context = self.context(timeout=None)
+        self.executor.prepare(context)
+        handle = self.executor.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        self.assertEqual(handle.deadline, math.inf)
+        self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
+        outcome = self.executor.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+
+    def test_unsetted_background_work_blocks_a_terminal_result(self):
+        unsettled = self.execute(self.context("bg-running"))
+        self.assertEqual(unsettled.status, "failed", unsettled.to_report())
+        self.assertEqual(unsettled.result["code"], "background-work-unsettled")
+        self.assertNotIn("turn", unsettled.result)
+        lookalike = self.execute(self.context("bg-not-completed", index=2))
+        self.assertEqual(lookalike.status, "failed", lookalike.to_report())
+        self.assertEqual(lookalike.result["code"], "background-work-unsettled")
+        settled = self.execute(self.context("bg-settled", index=3))
+        self.assertEqual(settled.status, "ok", settled.to_report())
+        self.assertTrue(settled.result["turn"]["provenance"]["backgroundSettled"])
+
+    def test_a_completed_task_notification_does_not_block_the_turn(self):
+        # A foreground task reported by the real task_started/task_notification
+        # pair has settled; the turn must not end as background-work-unsettled.
+        outcome = self.execute(self.context("bg-notification", index=4))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.result["turn"]["provenance"]["backgroundSettled"])
+
+    def test_model_output_before_the_user_message_is_rejected(self):
+        outcome = self.execute(self.context("early-result", timeout=None))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "native-turn-started-early")
+        self.assertNotIn("turn", outcome.result)
+
+    def test_quota_rejection_is_sanitized_infrastructure_failure_without_import(self):
+        context = self.context("quota-rejected")
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "harness-error")
+        self.assertEqual(outcome.error, "the Claude provider quota rejected this execution")
+        failure = outcome.result["providerRejection"]
+        self.assertEqual(set(failure), {"code", "nativeCode", "source", "observedAt", "resetsAt", "rejectionPhase"})
+        self.assertEqual(failure["code"], "quota-exceeded")
+        self.assertEqual(failure["nativeCode"], "five_hour")
+        self.assertEqual(failure["resetsAt"], "2026-09-26T12:00:00Z")
+        self.assertEqual(failure["rejectionPhase"], "before-model")
+        self.assertNotIn("turn", outcome.result)
+        self.assertNotIn("workspaceSeal", outcome.result)
+        self.assertFalse(native_path(context.turn_output_file()).exists())
+        self.assertTrue(outcome.shutdown_confirmed)
+        self.assertTrue(self.fixture_state()["interrupted"], "quota rejection interrupts the native child")
+
+    def test_structured_result_quota_denial_is_classified_without_copying_errors(self):
+        for index, case in enumerate(("result-quota", "api-429"), 1):
+            with self.subTest(case=case):
+                outcome = self.execute(self.context(case, index=index))
+                self.assertEqual(outcome.status, "failed", outcome.to_report())
+                self.assertEqual(outcome.result["code"], "harness-error")
+                self.assertEqual(outcome.error, "the Claude provider quota rejected this execution")
+                self.assertEqual(outcome.result["providerRejection"]["nativeCode"], "unknown")
+                self.assertEqual(outcome.result["providerRejection"]["rejectionPhase"], "during-model")
+                self.assertIsNone(outcome.result["providerRejection"]["resetsAt"])
+                self.assertNotIn("turn", outcome.result)
+
+    def test_a_completed_turn_does_not_publish_provider_rejection(self):
+        usage_fixture = FIXTURE.with_name("fake_claude_usage.py")
+        native = json.loads(FIXTURE.with_name("native-usage-claude.json").read_text(encoding="utf-8"))
+        context = self.context("usage-ok", model=native["modelId"])
+        select_fixture(context.environment, self.root, "claude", usage_fixture)
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertIsNotNone(outcome.result["tokenUsage"])
+        self.assertNotIn("providerRejection", outcome.result)
+
+    def test_quota_warning_does_not_publish_readings(self):
+        outcome = self.execute(self.context("quota-warning"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertNotIn("rateLimitObservations", outcome.result)
+        self.assertNotIn("providerRejection", outcome.result)
+        self.assertIn("turn", outcome.result)
+
+    def test_quota_warning_survives_a_later_rejection(self):
+        outcome = self.execute(self.context("warning-then-rejected"))
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.error, "the Claude provider quota rejected this execution")
+        self.assertNotIn("rateLimitObservations", outcome.result)
+        self.assertEqual(outcome.result["providerRejection"]["rejectionPhase"], "before-model")
+        self.assertNotIn("turn", outcome.result)
+
+    def test_discovery_catalog_uses_resolved_ids_without_a_user_turn(self):
+        (self.root / "fixture.json").unlink(missing_ok=True)
+        with mock.patch.dict("os.environ", self.environment, clear=True):
+            catalog = self.adapter.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
+        provider = catalog["providers"][0]
+        self.assertEqual(provider["provider"], "anthropic")
+        # The subscription account has no tokenSource; facts come from this initialize.
+        self.assertEqual(catalog["discoveries"],
+                         [{"harness": "claude", "status": "complete", "accountStatus": "confirmed"}])
+        self.assertEqual([model["id"] for model in provider["models"]],
+                         ["claude-opus-5-5[1m]", "claude-fable-5-1", "claude-sonnet-5",
+                          "claude-haiku-4-5-20251001"])
+        efforts = {model["id"]: model["efforts"] for model in provider["models"]}
+        self.assertEqual(efforts["claude-opus-5-5[1m]"], ["low", "medium", "high"])
+        self.assertEqual(efforts["claude-fable-5-1"], ["low", "high"])
+        self.assertEqual(efforts["claude-haiku-4-5-20251001"], ["default"])
+        state = self.fixture_state()
+        self.assertTrue(state["initialize"])
+        self.assertEqual(state["userTurns"], 0, "discovery must never send a user message")
+        self.assertNotIn("--session-id", state["argv"])
+        self.assertEqual(state["runs"], 1)
+        self.assertNotIn("authStatusRuns", state)
+
+    def test_discovery_records_unknown_login_without_a_proof_process(self):
+        for case in ("empty-account", "invalid-account", "null-account", "missing-account"):
+            with self.subTest(case=case):
+                (self.root / "fixture.json").unlink(missing_ok=True)
+                environment = {**self.environment, "HMB_CLAUDE_FIXTURE_CASE": case}
+                with mock.patch.dict("os.environ", environment, clear=True):
+                    catalog = self.adapter.discover_models(state_dir=Path(os.environ["HMB_STATE_DIR"]))
+                self.assertEqual(catalog["discoveries"],
+                                 [{"harness": "claude", "status": "complete", "accountStatus": "unknown"}])
+                self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
+                                 ["claude-opus-5-5[1m]", "claude-fable-5-1", "claude-sonnet-5",
+                                  "claude-haiku-4-5-20251001"])
+                state = self.fixture_state()
+                self.assertTrue(state["initialize"])
+                self.assertEqual(state["userTurns"], 0, "discovery must never send a user message")
+                self.assertNotIn("authStatusRuns", state)
+
+    def test_micro_task_turn_leaves_unknown_login_to_the_native_cli(self):
+        context = self.context("empty-account")
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+        state = self.fixture_state()
+        self.assertEqual(state["userTurns"], 1)
+        self.assertNotIn("authStatusRuns", state)
+
+
+    def test_execution_keeps_user_sources_and_native_permission_settings(self):
+        context = self.context()
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertTrue(outcome.shutdown_confirmed)
+        argv = self.fixture_state()["argv"]
+        for flag in ("--setting-sources", "--strict-mcp-config", "--safe-mode"):
+            self.assertNotIn(flag, argv)
+        self.assertIn("--no-session-persistence", argv)
+        self.assertTrue(Path(flag_value(argv, "--settings")).resolve().is_relative_to(context_root(context, "claude").resolve()))
+
+
+
+    def test_model_and_effort_absence_in_readable_catalog_refuses_before_model_start(self):
+        for index, (model, effort) in enumerate((("claude-unknown", "low"),
+                                                 ("claude-haiku-4-5-20251001", "medium"),
+                                                 ("claude-opus-5-5[1m]", "default")), 1):
+            with self.subTest(model=model, effort=effort):
+                context = self.context(model=model, effort=effort, index=index)
+                outcome = self.execute(context)
+                self.assertEqual(outcome.status, "failed", outcome.to_report())
+                self.assertEqual(outcome.result["code"], "invalid-buddy")
+                self.assertFalse(outcome.result["modelStarted"])
+                self.assertNotIn("turn", outcome.result)
+                self.assertIsNone(self.last_handle.result.buddy.checked.model)
+                self.assertEqual(self.fixture_state()["userTurns"], 0)
+
+    def test_default_effort_omits_the_flag_for_a_model_without_levels(self):
+        outcome = self.execute(self.context(model="claude-haiku-4-5-20251001", effort="default"))
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertNotIn("--effort", self.fixture_state()["argv"])
+
+    def test_native_session_resume_is_refused_and_fresh_sessions_are_allocated(self):
+        with self.assertRaises(BoardError) as blocked:
+            self.executor.prepare(self.context(mode="native-session", previous="old-session"))
+        self.assertIn("native-session resume", blocked.exception.message)
+        with self.assertRaises(BoardError):
+            self.executor.prepare(self.context(mode="unknown"))
+        # A malformed initial turn carrying a previous session is refused by
+        # the role after the request frame, before any native run: the exact
+        # legacy code, no model turn, no invented native start.
+        carried = self.execute(self.context(mode="initial", previous="old-session", index=9))
+        self.assertEqual(carried.status, "failed")
+        self.assertEqual(carried.result["code"], "invalid-resume-mode")
+        self.assertFalse(carried.result["modelStarted"])
+        self.assertNotIn("turn", carried.result)
+        self.assertFalse((self.root / "fixture.json").exists(),
+                         "an illegal turn must never start a native child")
+        first = self.execute(self.context())
+        self.assertEqual(first.status, "ok", first.to_report())
+        second = self.execute(self.context(index=2, previous=first.result["turn"]["sessionId"]))
+        self.assertEqual(second.status, "ok", second.to_report())
+        self.assertNotEqual(second.result["turn"]["sessionId"], first.result["turn"]["sessionId"])
+        uuid.UUID(second.result["turn"]["sessionId"], version=4)
+
+    def test_native_permission_settings_and_file_mode_are_preserved(self):
+        context = self.context()
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        argv = self.fixture_state()["argv"]
+        self.assertNotIn("--restricted", argv)
+        self.assertIn("--no-session-persistence", argv)
+        for flag in ("--safe-mode", "--strict-mcp-config", "--setting-sources"):
+            self.assertNotIn(flag, argv)
+        mounted = json.loads(native_path(Path(flag_value(argv, "--mcp-config"))).read_text(encoding="utf-8"))["mcpServers"]
+        server_name, = mounted
+        self.assertEqual(flag_value(argv, "--allowedTools").split(","),
+                         [f"mcp__{server_name}__hey_my_buddy_checkpoint",
+                          f"mcp__{server_name}__hey_my_buddy_answer_inquiry"])
+        self.assertEqual(flag_value(argv, "--permission-prompt-tool"), "stdio")
+        self.assertEqual(flag_value(argv, "--permission-mode"), "acceptEdits")
+        from hey_my_buddy.buddy.harnesses.registry import worker_format
+        self.assertEqual(flag_value(argv, "--json-schema"), turn_io.canonical_json(worker_format("claude").schema))
+        control = self.control(context)
+        settings_path = Path(control["nativeRoot"], "settings.json")
+        settings = json.loads(native_path(settings_path).read_text(encoding="utf-8"))
+        self.assertEqual(set(settings), {"sandbox", "permissions"})
+        self.assertEqual(settings["permissions"], {"allow": ["Bash"]})
+        self.assertTrue(settings["sandbox"]["enabled"])
+        self.assertFalse(settings["sandbox"]["network"]["strictAllowlist"])
+        self.assertEqual(settings["sandbox"]["network"]["allowedDomains"], ["*"])
+        self.assertTrue(settings["sandbox"]["network"]["allowLocalBinding"])
+        assert_private_path(self, settings_path, 0o600)
+
+    def test_read_only_workspace_refuses_write_and_bash_tools(self):
+        context = self.context()
+        context.turn["input"]["executionWorkspace"] = {"path": str(self.cwd), "access": "read"}
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        argv = self.fixture_state()["argv"]
+        tools = flag_value(argv, "--tools")
+        self.assertEqual(set(tools.split(",")), {"Glob", "Grep", "LS", "Read", "Skill", "ToolSearch"})
+        self.assertEqual(flag_value(argv, "--permission-mode"), "default")
+        self.assertEqual(flag_value(argv, "--disallowedTools").split(","),
+                         ["Bash", "Edit", "MultiEdit", "NotebookEdit", "Write"])
+        self.assertEqual(self.stored_request(context)["permission"], "read")
+
+    def test_attempt_scoped_credential_stays_private_and_out_of_result(self):
+        context = self.context()
+        context.agent_credential = "private-attempt-secret"
+        outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        assert_private_path(self, context.credential_file(), 0o600)
+        self.assertNotIn("HMB_AGENT_CREDENTIAL_FILE", context.environment)
+        self.assertNotIn("private-attempt-secret", json.dumps(outcome.to_report()))
+        # Ordinary native Worker children do not receive launcher credentials or roots.
+        state = self.fixture_state()
+        self.assertEqual(state["seenBuddyEnv"], ["HMB_CLAUDE_FIXTURE_CASE", "HMB_CLAUDE_FIXTURE_STATE"])
+        self.assertEqual(state["seenAnthropicEnv"], [])
+
+
+    def test_preserved_final_activity_tracks_the_native_turn(self):
+        context = self.context()
+        self.executor.prepare(context)
+        handle = self.executor.start(context)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
+        outcome = self.executor.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        # The retired activity.json sidecar is replaced by the run's own final
+        # fact: the preserved RunResult frame the controller published, decoded
+        # here from its own stdout log. It is a final fact, not a process
+        # observation: the counts and the native session id below are the ones
+        # the native stream events actually drove, and no live publication
+        # success is claimed (live observation is the holder's C-Two binding,
+        # exercised by the zcode live activity suite).
+        self.assertFalse((context.directory / "activity.json").exists())
+        from hey_my_buddy.buddy.harnesses.run_contract import RunResult
+        frame = handle.result
+        self.assertEqual(frame.identity.attempt_id, context.attempt_id)
+        self.assertIsNotNone(frame.activity, "the run result carries no preserved activity")
+        activity = frame.activity.value
+        self.assertEqual(activity["phase"], "finishing")
+        self.assertEqual(activity["nativeSessionId"], outcome.result["turn"]["sessionId"])
+        self.assertEqual(activity["counts"], {"modelTurns": 1, "toolCalls": 0})
+        self.assertEqual(outcome.result["activity"], {"phase": "finishing",
+                                                      "eventSeq": activity["eventSeq"]})
+
+    def test_generic_read_only_call_has_no_workflow_turn_or_agent_credential(self):
+        from hey_my_buddy.buddy.harnesses.base import ReadOnlyStructuredRequest
+        from hey_my_buddy.buddy.roles.run_execution import start_review
+        from hey_my_buddy.buddy.roles.structured_call import collect
+        from hey_my_buddy.blackboard.routing.router import answer_schema, budget
+        context = self.context()
+        context.turn = None
+        context.agent_credential = "must-not-reach-native"
+        context.environment["HMB_AGENT_CREDENTIAL_FILE"] = "/private/must-not-reach-native.json"
+        request = ReadOnlyStructuredRequest(str(self.cwd), "Select from the frozen packet", answer_schema(["legal"]), budget())
+        handle = start_review("claude", context, request)
+        self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
+        self.assertIsNotNone(handle.wait(20))
+        result = collect(handle)
+        self.assertEqual(result.status, "ok", result.result)
+        self.assertTrue(result.shutdown_confirmed)
+        raw = result.result["rawAnswer"]
+        answer = json.loads(raw) if isinstance(raw, str) else raw
+        self.assertEqual(answer["buddyId"], "legal")
+        self.assertIsNone(result.result["usage"]["bytesRead"])
+        self.assertEqual(result.result["correctionCount"], 0)
+        self.assertFalse(native_path(context.turn_output_file()).exists())
+        # The unified receipt: a quiet tool-free stream still binds the frozen
+        # attempt identity to a complete zero-tool evidence package.
+        evidence = result.result["toolEvidence"]
+        self.assertEqual(evidence["binding"], {"harness": "claude", "taskId": "micro-task-1",
+                                               "attemptId": context.attempt_id, "generation": 1})
+        self.assertEqual(evidence["nativeIdentity"],
+                         [{"sessionId": result.result["nativeIdentity"]["sessionId"]}])
+        self.assertEqual((evidence["toolCalls"], evidence["unsettledToolCalls"]), (0, 0))
+        self.assertEqual(list(read_tool_calls(evidence, state_dir=Path(self.environment["HMB_STATE_DIR"]))), [])
+        self.assertTrue(evidence["streamComplete"])
+
+
+if __name__ == "__main__":
+    unittest.main()

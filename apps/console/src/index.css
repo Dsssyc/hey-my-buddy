@@ -1,0 +1,148 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./tokens.css";
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* One palette: the utilities read the tokens of tokens.css. The first group is
+   what the generated components expect; the second is the design's own names. */
+@theme inline {
+  --font-sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+  --color-card: var(--surface);
+  --color-ruler: var(--ruler-ground);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--popover-ground);
+  --color-popover-foreground: var(--ink);
+  --color-primary: var(--ink);
+  --color-primary-foreground: var(--surface);
+  --color-secondary: var(--sunk);
+  --color-secondary-foreground: var(--ink);
+  --color-muted: var(--sunk);
+  --color-muted-foreground: var(--ink2);
+  --color-accent: var(--selection);
+  --color-accent-foreground: var(--ink);
+  --color-destructive: var(--fail);
+  --color-destructive-foreground: var(--surface);
+  --color-border: var(--line);
+  --color-input: var(--line2);
+  --color-ring: var(--focus);
+  --color-focus: var(--focus);
+  --color-selection: var(--selection);
+  --color-selection-hover: var(--selection-hover);
+  --color-execution-ink: var(--execution-ink);
+  --color-execution-ink-light: var(--execution-ink-light);
+
+  --color-overlay: var(--overlay);
+  --color-sunk: var(--sunk);
+  --color-ink2: var(--ink2);
+  --color-ink3: var(--ink3);
+  --color-ink4: var(--ink4);
+  --color-line2: var(--line2);
+  --color-live: var(--live);
+  --color-selected-row: var(--selected-row);
+  --color-hand: var(--hand);
+  --color-hand-mark: var(--hand-mark);
+  --color-hand-wash: var(--hand-wash);
+  --color-fail: var(--fail);
+  --color-fail-wash: var(--fail-wash);
+  --color-past: var(--past);
+  --color-past-wash: var(--past-wash);
+  --color-ink: var(--ink);
+  --color-line: var(--line);
+  --color-bar: var(--bar);
+  --color-bar-ink: var(--bar-ink);
+  --color-bar-ink2: var(--bar-ink2);
+  --color-brand-mark: var(--brand-mark);
+  --color-bar-hand: var(--bar-hand);
+  --color-bar-fail: var(--bar-fail);
+  /* Controls and floating surfaces have a small radius; containers are square. */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 4px;
+  --radius-xl: 4px;
+}
+
+@keyframes detail-refresh-turn {
+  to { transform: rotate(1turn); }
+}
+
+@keyframes execution-breathe {
+  0%, 100% { opacity: .2; }
+  50% { opacity: 1; }
+}
+
+@keyframes state-breathe {
+  50% { opacity: .45; }
+}
+
+@layer components {
+  /* Radix positions a tooltip in its own box; that box must also pass clicks through. */
+  [data-radix-popper-content-wrapper]:has(> [data-slot="tooltip-content"]) { pointer-events: none; }
+  .detail-refresh-turn { animation: detail-refresh-turn 1s linear infinite; }
+  .execution-breathe { animation: execution-breathe 2s ease-in-out infinite; }
+  .state-breathe { animation: state-breathe 2.4s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    .detail-refresh-turn, .state-breathe, .execution-breathe { animation: none; }
+  }
+  .disclosure-trigger {
+    color: var(--ink);
+    transition: background-color 150ms ease;
+  }
+  .disclosure-trigger:hover { background-color: var(--sunk); }
+  .disclosure-trigger[aria-expanded="true"]:hover { background-color: var(--selection-hover); }
+  .disclosure-trigger:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: -2px;
+  }
+  .text-fade {
+    overflow: hidden;
+    white-space: nowrap;
+    mask-image: linear-gradient(to right, #000 calc(100% - 1rem), transparent);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .disclosure-trigger { transition: none; }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background font-sans text-sm text-foreground antialiased;
+  }
+  button:not(:disabled):not([aria-disabled="true"]),
+  a[href],
+  select:not(:disabled),
+  summary,
+  [role="button"]:not([aria-disabled="true"]),
+  [role="tab"]:not([aria-disabled="true"]),
+  [role="switch"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+  [role="checkbox"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([aria-disabled="true"]),
+  [role="option"]:not([aria-disabled="true"]),
+  input:is([type="button"], [type="submit"], [type="checkbox"], [type="radio"]):not(:disabled),
+  label[for] {
+    cursor: pointer;
+  }
+}
+
+/* Shared disclosure motion has its own keyframes, so the animation library's
+   height-only frames cannot replace the opacity interpolation at build time. */
+@theme inline {
+  --animate-collapsible-down: disclosure-down var(--tw-animation-duration, .2s) ease-out;
+  --animate-collapsible-up: disclosure-up var(--tw-animation-duration, .2s) ease-out;
+  @keyframes disclosure-down {
+    from { height: 0; opacity: 0; }
+    to { height: var(--radix-collapsible-content-height); opacity: 1; }
+  }
+  @keyframes disclosure-up {
+    from { height: var(--radix-collapsible-content-height); opacity: 1; }
+    to { height: 0; opacity: 0; }
+  }
+}

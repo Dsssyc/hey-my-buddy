@@ -1,0 +1,42 @@
+"""Select a Python protocol fixture without relying on executable scripts."""
+
+import json
+import sys
+from pathlib import Path
+from unittest import mock
+
+
+def mock_role_workspace(test_case) -> None:
+    """Keep native protocol fixtures independent of workspace storage.
+
+    Workspace verification and sealing have their own tests; these fixtures
+    exercise the registered role and native harness protocol with a hand-made
+    execution workspace manifest.
+    """
+    from hey_my_buddy.buddy.roles import turn_io
+
+    def verify(context):
+        context.effective_workspace = context.turn_input["executionWorkspace"]
+
+    for patcher in (mock.patch.object(turn_io, "verify_workspace", side_effect=verify),
+                    mock.patch.object(turn_io, "seal_workspace", return_value=(None, None))):
+        patcher.start()
+        test_case.addCleanup(patcher.stop)
+
+
+def select_fixture(environment: dict[str, str], directory: Path, harness: str,
+                   fixture: Path) -> None:
+    """Write the existing selected-command record for a test's private root."""
+    select_command(environment, directory, harness, [sys.executable, str(fixture)])
+
+
+def select_command(environment: dict[str, str], directory: Path, harness: str,
+                   command: list[str]) -> None:
+    """Select an explicit argv, including deliberately unstartable commands."""
+    environment.pop(f"HMB_{harness.upper()}_CLI", None)
+    record = Path(environment["HMB_HARNESS_RECORD_FILE"]) if environment.get("HMB_HARNESS_RECORD_FILE") else \
+        directory / "harness-record.json"
+    records = json.loads(record.read_text(encoding="utf-8")) if record.exists() else {}
+    records[harness] = {"harness": harness, "status": "ready", "command": command}
+    record.write_text(json.dumps(records), encoding="utf-8", newline="\n")
+    environment["HMB_HARNESS_RECORD_FILE"] = str(record)

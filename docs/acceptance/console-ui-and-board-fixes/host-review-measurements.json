@@ -1,0 +1,890 @@
+{
+  "kind": "private-synthetic-host-review-measurements",
+  "sourceCommit": "bbf6f9d6323114f6e2d2d83dbaf9e117e7f3f1ac",
+  "coreCommit": "1a9decd95736a15a5ec4b4db6526e4cb48666326",
+  "baselineCommit": "b093dd730263d861071d6102a2eba2d362e8aa67",
+  "scriptSha256": "90a4d8d24b56af07a46152526e43b93ab5f2a8644fb5f30f62cd7b6814719f0e",
+  "packetSha256": "722a0b20aece84a87b6f9682d58cc5663f8febba92245f7a7e3a9ef2e14c1869",
+  "ignoredPacket": "tmp/hr-scale/host-full-bbf6-20261010/",
+  "recipe": {
+    "macros": 60,
+    "members_per_macro": 6,
+    "helpers": 10,
+    "plain": 40,
+    "pending_roots": 130,
+    "large_results": 100,
+    "result_bytes": 1900000,
+    "evidence_files": 4000,
+    "routed_roots": 6,
+    "accepted_roots": 10
+  },
+  "seed": 613,
+  "history": {
+    "addedRows": 332093,
+    "eventsFraction": "3/4",
+    "commandsFraction": "1/4",
+    "payloadBytes": 364,
+    "payloadSha256": "1aced0b34775d38b67b0f81e8d76e0bd453fe06002a99bb70130d53f8dea3d45",
+    "targetTotalRows": 340000,
+    "onlyTablesAppended": [
+      "events",
+      "commands"
+    ],
+    "sizeCalibration": {
+      "method": "two private sqlite3 online-backup copies, 128/512-byte history JSON; interpolate page growth per added row",
+      "targetDatabaseBytes": 378000000,
+      "initialDatabaseBytes": 211673088,
+      "trials": [
+        {
+          "jsonBytes": 128,
+          "addedRows": 2048,
+          "dbBytes": 212197376,
+          "growthPerRow": 256.0
+        },
+        {
+          "jsonBytes": 512,
+          "addedRows": 2048,
+          "dbBytes": 213012480,
+          "growthPerRow": 654.0
+        }
+      ],
+      "chosenJsonBytes": 364,
+      "targetAddedRows": 332093,
+      "boundary": "generation-only size estimate; final inventory reports actual size and error; not a measured API phase"
+    }
+  },
+  "inventory": {
+    "tables": {
+      "agent_credentials": {
+        "rows": 360,
+        "jsonBytes": 72000,
+        "maxSingleJsonBytes": 200
+      },
+      "artifacts": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "attempt_activity": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "attempts": {
+        "rows": 366,
+        "jsonBytes": 190882874,
+        "maxSingleJsonBytes": 1900000
+      },
+      "catalog_current": {
+        "rows": 1,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "catalog_observations": {
+        "rows": 1,
+        "jsonBytes": 5634,
+        "maxSingleJsonBytes": 5634
+      },
+      "commands": {
+        "rows": 83787,
+        "jsonBytes": 37852374,
+        "maxSingleJsonBytes": 16706
+      },
+      "cursors": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "decision_requests": {
+        "rows": 6,
+        "jsonBytes": 42648,
+        "maxSingleJsonBytes": 3856
+      },
+      "evaluation_aggregates": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_card_history": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_cards": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_catalog": {
+        "rows": 1,
+        "jsonBytes": 1037,
+        "maxSingleJsonBytes": 1037
+      },
+      "evaluation_decisions": {
+        "rows": 6,
+        "jsonBytes": 12,
+        "maxSingleJsonBytes": 2
+      },
+      "evaluation_evidence": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_evidence_pending": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_maintenance_checkpoints": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_preferences": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_profiles": {
+        "rows": 8,
+        "jsonBytes": 490,
+        "maxSingleJsonBytes": 69
+      },
+      "evaluation_readers": {
+        "rows": 6,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_revisions": {
+        "rows": 2,
+        "jsonBytes": 222,
+        "maxSingleJsonBytes": 167
+      },
+      "evaluation_samples": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_state": {
+        "rows": 1,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "evaluation_writers": {
+        "rows": 1,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "events": {
+        "rows": 251110,
+        "jsonBytes": 90994605,
+        "maxSingleJsonBytes": 770
+      },
+      "family_annotations": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "family_preferences": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "harness_health": {
+        "rows": 4,
+        "jsonBytes": 8,
+        "maxSingleJsonBytes": 2
+      },
+      "messages": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "meta": {
+        "rows": 782,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "model_concurrency": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "model_facts": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "objectives": {
+        "rows": 61,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "resource_claims": {
+        "rows": 366,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "sqlite_sequence": {
+        "rows": 2,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "tasks": {
+        "rows": 407,
+        "jsonBytes": 286000,
+        "maxSingleJsonBytes": 427
+      },
+      "workers": {
+        "rows": 2,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "workflow_artifacts": {
+        "rows": 1081,
+        "jsonBytes": 1627871,
+        "maxSingleJsonBytes": 2111
+      },
+      "workflow_children": {
+        "rows": 10,
+        "jsonBytes": 15770,
+        "maxSingleJsonBytes": 1305
+      },
+      "workflow_continuations": {
+        "rows": 10,
+        "jsonBytes": 20,
+        "maxSingleJsonBytes": 2
+      },
+      "workflow_host_conclusions": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "workflow_integrations": {
+        "rows": 10,
+        "jsonBytes": 20,
+        "maxSingleJsonBytes": 2
+      },
+      "workflow_requests": {
+        "rows": 150,
+        "jsonBytes": 38530,
+        "maxSingleJsonBytes": 446
+      },
+      "workflow_routes": {
+        "rows": 6,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "workflow_runs": {
+        "rows": 361,
+        "jsonBytes": 752230,
+        "maxSingleJsonBytes": 2111
+      },
+      "workflow_scope_versions": {
+        "rows": 361,
+        "jsonBytes": 13503,
+        "maxSingleJsonBytes": 70
+      },
+      "workflow_suggestions": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "workflow_turns": {
+        "rows": 360,
+        "jsonBytes": 1557418,
+        "maxSingleJsonBytes": 3424
+      },
+      "workflow_workspace_conflicts": {
+        "rows": 0,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      },
+      "workspace_cleanup_plans": {
+        "rows": 10,
+        "jsonBytes": 22960,
+        "maxSingleJsonBytes": 1195
+      },
+      "workspace_reservations": {
+        "rows": 361,
+        "jsonBytes": 0,
+        "maxSingleJsonBytes": 0
+      }
+    },
+    "totalRows": 340000,
+    "referenceTables": [
+      "tasks",
+      "attempts",
+      "artifacts",
+      "objectives",
+      "resource_claims",
+      "messages",
+      "events",
+      "commands",
+      "decision_requests",
+      "harness_health",
+      "evaluation_evidence",
+      "workflow_runs",
+      "workflow_children",
+      "workspace_reservations",
+      "workflow_continuations",
+      "workflow_turns",
+      "workflow_artifacts",
+      "workflow_requests",
+      "workflow_scope_versions",
+      "workflow_workspace_conflicts",
+      "workflow_integrations",
+      "workspace_cleanup_plans",
+      "workflow_host_conclusions"
+    ],
+    "referenceRows": 338821,
+    "jsonBytes": 324166226,
+    "maxSingleJsonBytes": 1900000,
+    "databaseBytes": 385769472,
+    "walBytes": 0,
+    "integrity": "ok",
+    "foreignKeyViolations": []
+  },
+  "metrics": [
+    {
+      "label": "baseline",
+      "phase": "plan-none",
+      "seconds": 2.593,
+      "peakMiB": 625.23,
+      "writer": [],
+      "referencePasses": [],
+      "sql": {
+        "writeStatements": 0,
+        "beginImmediate": 0,
+        "readTransactions": 1
+      },
+      "scans": [
+        {
+          "rows": 338821,
+          "streaming": false,
+          "materializeSeconds": 0.932662374980282
+        }
+      ]
+    },
+    {
+      "label": "baseline",
+      "phase": "plan-orphan",
+      "seconds": 5.797,
+      "peakMiB": 627.48,
+      "writer": [],
+      "referencePasses": [
+        {
+          "entry": "_allocation_reference_reasons",
+          "seconds": 2.123822499997914,
+          "insideCandidateRemoval": false
+        }
+      ],
+      "sql": {
+        "writeStatements": 0,
+        "beginImmediate": 0,
+        "readTransactions": 1
+      },
+      "scans": [
+        {
+          "rows": 338821,
+          "streaming": false,
+          "materializeSeconds": 0.9609389580145944
+        }
+      ]
+    },
+    {
+      "label": "baseline",
+      "phase": "apply",
+      "seconds": 11.647,
+      "peakMiB": 633.67,
+      "writer": [
+        {
+          "seconds": 5.276616832998116,
+          "candidateRemovalFence": true,
+          "release": "COMMIT"
+        }
+      ],
+      "referencePasses": [
+        {
+          "entry": "_allocation_reference_reasons",
+          "seconds": 2.8036664579994977,
+          "insideCandidateRemoval": false
+        },
+        {
+          "entry": "_allocation_reference_reasons",
+          "seconds": 2.8206322499900125,
+          "insideCandidateRemoval": true
+        }
+      ],
+      "sql": {
+        "writeStatements": 0,
+        "beginImmediate": 1,
+        "readTransactions": 1
+      },
+      "scans": [
+        {
+          "rows": 338821,
+          "streaming": false,
+          "materializeSeconds": 0.8735206669953186
+        },
+        {
+          "rows": 338821,
+          "streaming": false,
+          "materializeSeconds": 0.9036532499885652
+        }
+      ]
+    },
+    {
+      "label": "baseline",
+      "phase": "migration-first",
+      "seconds": 18.094,
+      "peakMiB": 2264.8,
+      "writer": [
+        {
+          "seconds": 15.96300112499739,
+          "candidateRemovalFence": false,
+          "release": "COMMIT"
+        }
+      ],
+      "referencePasses": [],
+      "sql": {
+        "writeStatements": 5,
+        "beginImmediate": 1,
+        "readTransactions": 0
+      },
+      "scans": []
+    },
+    {
+      "label": "baseline",
+      "phase": "migration-noop",
+      "seconds": 23.442,
+      "peakMiB": 2381.42,
+      "writer": [
+        {
+          "seconds": 20.823944875010056,
+          "candidateRemovalFence": false,
+          "release": "COMMIT"
+        }
+      ],
+      "referencePasses": [],
+      "sql": {
+        "writeStatements": 0,
+        "beginImmediate": 1,
+        "readTransactions": 0
+      },
+      "scans": []
+    },
+    {
+      "label": "final",
+      "phase": "plan-none",
+      "seconds": 1.134,
+      "peakMiB": 85.56,
+      "writer": [],
+      "referencePasses": [],
+      "sql": {
+        "writeStatements": 0,
+        "beginImmediate": 0,
+        "readTransactions": 1
+      },
+      "scans": []
+    },
+    {
+      "label": "final",
+      "phase": "plan-orphan",
+      "seconds": 5.852,
+      "peakMiB": 95.14,
+      "writer": [],
+      "referencePasses": [
+        {
+          "entry": "_allocation_reference_sets",
+          "seconds": 3.3904453750001267,
+          "insideCandidateRemoval": false
+        }
+      ],
+      "sql": {
+        "writeStatements": 0,
+        "beginImmediate": 0,
+        "readTransactions": 2
+      },
+      "scans": [
+        {
+          "rows": 338821,
+          "streaming": true,
+          "consumeWallSecondsIncludingParsing": 3.39051687499159
+        }
+      ]
+    },
+    {
+      "label": "final",
+      "phase": "apply",
+      "seconds": 11.028,
+      "peakMiB": 101.33,
+      "writer": [
+        {
+          "seconds": 3.875203458010219,
+          "candidateRemovalFence": true,
+          "release": "COMMIT"
+        }
+      ],
+      "referencePasses": [
+        {
+          "entry": "_allocation_reference_sets",
+          "seconds": 3.2764123330125585,
+          "insideCandidateRemoval": false
+        },
+        {
+          "entry": "allocation_references",
+          "seconds": 3.6682394160015974,
+          "insideCandidateRemoval": true
+        }
+      ],
+      "sql": {
+        "writeStatements": 0,
+        "beginImmediate": 1,
+        "readTransactions": 2
+      },
+      "scans": [
+        {
+          "rows": 338821,
+          "streaming": true,
+          "consumeWallSecondsIncludingParsing": 3.276556500000879
+        },
+        {
+          "rows": 338821,
+          "streaming": true,
+          "consumeWallSecondsIncludingParsing": 3.6681323749944568
+        }
+      ]
+    },
+    {
+      "label": "final",
+      "phase": "migration-first",
+      "seconds": 12.572,
+      "peakMiB": 343.66,
+      "writer": [
+        {
+          "seconds": 7.380413749982836,
+          "candidateRemovalFence": false,
+          "release": "COMMIT"
+        }
+      ],
+      "referencePasses": [],
+      "sql": {
+        "writeStatements": 5,
+        "beginImmediate": 1,
+        "readTransactions": 1
+      },
+      "scans": []
+    },
+    {
+      "label": "final",
+      "phase": "migration-noop",
+      "seconds": 8.172,
+      "peakMiB": 295.23,
+      "writer": [],
+      "referencePasses": [],
+      "sql": {
+        "writeStatements": 0,
+        "beginImmediate": 0,
+        "readTransactions": 2
+      },
+      "scans": []
+    }
+  ],
+  "pairedSeedEquality": {
+    "plan-none": {
+      "beforeEqual": true,
+      "afterEqual": true
+    },
+    "plan-orphan": {
+      "beforeEqual": true,
+      "afterEqual": true
+    },
+    "apply": {
+      "beforeEqual": true,
+      "afterEqual": true
+    },
+    "migration-first": {
+      "beforeEqual": true,
+      "afterEqual": true
+    },
+    "migration-noop": {
+      "beforeEqual": true,
+      "afterEqual": true
+    }
+  },
+  "measurementPids": [
+    97552,
+    97733,
+    98269,
+    99405,
+    1073,
+    2018,
+    2199,
+    2368,
+    2779,
+    2977
+  ],
+  "rssBoundary": "Fresh child lifetime high-water at API return; includes imports/store; excludes preparation and subsequent verification. macOS bytes converted to MiB only for display.",
+  "costBoundary": "Reference recheck scans all 23 retained tables because any historical/malformed fact may retain a checkout; O(retained bytes) writer interval is unavoidable without lowering conservatism. Python holds current row/JSON and candidate indexes; migration keeps sparse projected updates and manifest proof cache, reuses existing SQLite FILE sorter/table fingerprints.",
+  "loadObservations": {
+    "atStart": [
+      25.15234375,
+      25.337890625,
+      30.53759765625
+    ],
+    "samples": [
+      {
+        "unixTime": 1791624962.233,
+        "load": [
+          24.27294921875,
+          24.93310546875,
+          29.1455078125
+        ],
+        "lastCompletedPhase": "final-apply-measure"
+      }
+    ],
+    "atEnd": [
+      24.54443359375,
+      24.9189453125,
+      28.55126953125
+    ]
+  },
+  "boundaries": [
+    "No daily board read/copied; no service, credentials, harness or model execution.",
+    "Only private synthetic process inventory is declared; ps/lsof and daily shutdown unverified.",
+    "Time is observed, never asserted; RSS includes fresh-process imports and excludes preceding preparation.",
+    "No files manually removed; product storage_apply removes exactly its proven orphan checkout.",
+    "All old materials, fixed private Git facts, seeds, logs and outputs retained.",
+    "Final Python and frontend suites passed sequentially on9f5df505; later delivery commits change records only.",
+    "No daily database copy, upgrade/install/restart or native model invocation for validation; private synthetic native-owner inventory is a declared test seam.",
+    "Overall Python suite still exceeds600seconds; real Git/history/ownership checks and all old assertions are retained, fixture-only ABBA reductions are distinct from wall time."
+  ],
+  "nativeResidualObservation": {
+    "heldLocks": {
+      "daemon": 0,
+      "supervisor": 0
+    },
+    "processes": [],
+    "problems": [],
+    "notes": [],
+    "readOnlyObservation": true,
+    "benchmarkRootPreserved": true,
+    "noNativeServiceOwnersLaunched": true
+  },
+  "finalChecks": {
+    "codeCommit": "9f5df5050c0bac50aec0194f0eaafe442f4bd850",
+    "python": {
+      "command": [
+        "uv",
+        "run",
+        "--frozen",
+        "python",
+        "-m",
+        "hey_my_buddy.cli.checks"
+      ],
+      "files": 212,
+      "tests": 3421,
+      "skipped": 1,
+      "exitCode": 0,
+      "defaultParallelWorkers": 4,
+      "seconds": 768.0870489170193
+    },
+    "frontend": {
+      "command": [
+        "npm",
+        "--prefix",
+        "apps/console",
+        "test"
+      ],
+      "files": 66,
+      "tests": 854,
+      "exitCode": 0,
+      "seconds": 32.8780893329822
+    },
+    "sequence": "Python complete, then frontend complete",
+    "firstFailedReworkPython": {
+      "commit": "41ac6c9e",
+      "files": 212,
+      "testsAttempted": 3420,
+      "successfulFileTests": 3401,
+      "failedFile": "blackboard.routing.test_router",
+      "failedFileTests": 19,
+      "errors": 5,
+      "exitCode": 1,
+      "seconds": 845.1835482910101,
+      "cause": "E fixture borrowing contract regression; not load attribution"
+    }
+  },
+  "testFileSeconds": [
+    {
+      "module": "blackboard.tasks.test_console_objective_fixture",
+      "beforeAcceptedFullSeconds": 5.2,
+      "firstReworkFailedFullSeconds": 3.9,
+      "finalPassingFullSeconds": 5.2
+    },
+    {
+      "module": "blackboard.tasks.test_objective_summary_cache",
+      "beforeAcceptedFullSeconds": 33.8,
+      "firstReworkFailedFullSeconds": 8.6,
+      "finalPassingFullSeconds": 9.2
+    },
+    {
+      "module": "blackboard.tasks.test_storage_orphans",
+      "beforeAcceptedFullSeconds": 177.0,
+      "firstReworkFailedFullSeconds": 174.8,
+      "finalPassingFullSeconds": 189.0
+    },
+    {
+      "module": "blackboard.tasks.test_workspace_git_errors",
+      "beforeAcceptedFullSeconds": 0.3,
+      "firstReworkFailedFullSeconds": 0.2,
+      "finalPassingFullSeconds": 0.2
+    },
+    {
+      "module": "blackboard.tasks.test_workspace_identity",
+      "beforeAcceptedFullSeconds": 13.0,
+      "firstReworkFailedFullSeconds": 9.6,
+      "finalPassingFullSeconds": 9.1
+    },
+    {
+      "module": "blackboard.tasks.test_workspace_submission_cleanup",
+      "beforeAcceptedFullSeconds": 90.9,
+      "firstReworkFailedFullSeconds": 70.7,
+      "finalPassingFullSeconds": 80.9
+    },
+    {
+      "module": "console.test_console_gate_deadlines",
+      "beforeAcceptedFullSeconds": 1.5,
+      "firstReworkFailedFullSeconds": 1.8,
+      "finalPassingFullSeconds": 1.7
+    },
+    {
+      "module": "console.test_console_objective_cache",
+      "beforeAcceptedFullSeconds": 9.7,
+      "firstReworkFailedFullSeconds": 12.6,
+      "finalPassingFullSeconds": 17.5
+    },
+    {
+      "module": "console.test_console_version_info",
+      "beforeAcceptedFullSeconds": 2.8,
+      "firstReworkFailedFullSeconds": 3.5,
+      "finalPassingFullSeconds": 6.4
+    },
+    {
+      "module": "install.test_workspace_identity_migration",
+      "beforeAcceptedFullSeconds": 98.5,
+      "firstReworkFailedFullSeconds": 154.6,
+      "finalPassingFullSeconds": 103.3
+    },
+    {
+      "module": "blackboard.tasks.test_workspace_lifecycle",
+      "beforeAcceptedFullSeconds": 425.6,
+      "firstReworkFailedFullSeconds": 404.0,
+      "finalPassingFullSeconds": 360.6
+    },
+    {
+      "module": "blackboard.tasks.test_workflow_preparation",
+      "beforeAcceptedFullSeconds": 213.6,
+      "firstReworkFailedFullSeconds": 201.9,
+      "finalPassingFullSeconds": 182.5
+    },
+    {
+      "module": "blackboard.tasks.test_workspace",
+      "beforeAcceptedFullSeconds": 86.1,
+      "firstReworkFailedFullSeconds": 75.1,
+      "finalPassingFullSeconds": 81.0
+    },
+    {
+      "module": "install.test_upgrade_migration",
+      "beforeAcceptedFullSeconds": 7.2,
+      "firstReworkFailedFullSeconds": 10.3,
+      "finalPassingFullSeconds": 8.5
+    }
+  ],
+  "finalSourceBinding": {
+    "measurementCommit": "bbf6f9d6",
+    "checkCommit": "9f5df5050c0bac50aec0194f0eaafe442f4bd850",
+    "performanceSourceDigestAndBothImportedFixtureHashesUnchanged": true,
+    "frontendBuildCommit": "41ac6c9e",
+    "allFrontendSourceAndFourAssetsUnchangedSinceFreshBuild": true
+  },
+  "newTenFileTotalsSeconds": {
+    "before": 432.7,
+    "final": 422.5,
+    "fileCount": 10
+  },
+  "allFourteenAffectedFileTotalsSeconds": {
+    "before": 1165.2,
+    "final": 1055.1,
+    "fileCount": 14
+  },
+  "microtaskAcceptanceAndReclaim": [
+    {
+      "alias": "hr_storage",
+      "runId": "91f46843-5004-4906-a440-11f6299d5697",
+      "artifactId": "4555c523-e4d0-480a-9fb7-71b7e99ed033",
+      "revision": 24,
+      "planId": "cln-018b3512-c2e3-493a-9157-2d98e56eae22",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-2e11a862a3bde6978e912d536a683a6a/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_identity",
+      "runId": "778ae456-460b-46d9-99d5-b3d150b75711",
+      "artifactId": "af8d5d01-698b-4daa-9c5c-ca8de500d5bb",
+      "revision": 17,
+      "planId": "cln-aff39f8f-0708-4e6e-9728-9103f7dce687",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-54fcee8c7f1d1b3709b83726c982e89e/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_cache",
+      "runId": "24db8ed8-6fed-4f06-853f-6712378cad76",
+      "artifactId": "782ac9eb-832c-42d0-a7f2-4db450424a5f",
+      "revision": 20,
+      "planId": "cln-55066a4a-44cb-4981-8ed5-32a6aeb44a8d",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-897e246ec48b82f3adea8915bf607882/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_ui",
+      "runId": "93accf26-54b0-4357-962d-60dcf6fe8980",
+      "artifactId": "2e1aed35-2556-47df-a5d6-e370c6fefd11",
+      "revision": 16,
+      "planId": "cln-285162da-74b6-4b20-a8b0-55954a4f5097",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-aede07cf842a272e9a31771e4a3b4552/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_speed",
+      "runId": "9830549b-f0af-4519-9b3b-9fa33dad6e23",
+      "artifactId": "752b5fc1-58bf-4e33-a192-ef09d2e46c34",
+      "revision": 26,
+      "planId": "cln-83098e7c-faeb-4486-8f1b-11cf46cc0bab",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-89e0e8cdd88aa0c350c34144bea5a71b/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    },
+    {
+      "alias": "hr_scale",
+      "runId": "7bd25223-0021-45e2-97da-888fda890c8a",
+      "artifactId": "8a8a8469-5977-473d-9583-2a391f318330",
+      "revision": 12,
+      "planId": "cln-647320c1-e1a5-499b-8cc3-f21e4d2b1844",
+      "state": "applied",
+      "path": "~/.local/share/hey-my-buddy/state/workspaces/ws-5b7ff39781b0895f2d212dcc57defc25/checkout",
+      "exactPathAbsent": true,
+      "retainedArtifactsAndReceipts": true
+    }
+  ]
+}

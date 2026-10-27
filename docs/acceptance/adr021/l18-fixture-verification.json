@@ -1,0 +1,428 @@
+{
+  "format": 2,
+  "historicalInventoryVerification": {
+    "addedTestIds": [],
+    "artifactSha256": {
+      "docs/design/adr021-l18-inventory.md": "f3f9f050abce4d8cdb6f249663a502f33762a440353e5bad02df84f6ced00a54",
+      "packaging/generate-upgrade-fixture.py": "8fad21338c421a3860401323af39ed3f7106846ee8755966aa4be558c64b9871",
+      "tests/fixtures/adr021-l18/board.sql": "564f058712ec8f8be223133a88505437ad9814f09f89e1fffe01fb0b2a5c9719",
+      "tests/fixtures/adr021-l18/catalog.json": "97adfc1ebcf05769ba1447a8fdde2bbed248847b1bb3e36b1e07af5bdfa44336",
+      "tests/fixtures/adr021-l18/metadata.json": "6da2932b322d7eac1d43414f5293fc884c77635020ec2712aa08e5a4c05664cb",
+      "tests/fixtures/adr021-l18/operations.json": "8f267509810336d9b75de8fd96b6f4ce77983d7ce02e5b639412e8307c920f36",
+      "tests/fixtures/adr021-l18/storage-inventory.json": "7f96dab2b2b45b380c0eeb050e8aedb17340d7f508a99ef6503cfcc8c2d8c2d8"
+    },
+    "commands": [
+      {
+        "command": "env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT UV_CACHE_DIR=\"$PWD/tmp/adr021-l18/uv-cache\" uv run --offline --no-project python packaging/generate-upgrade-fixture.py --offline --work-dir tmp/adr021-l18/run6 --output-dir tests/fixtures/adr021-l18",
+        "exitCode": 0,
+        "result": {
+          "events": 37,
+          "foreignKeyViolations": 0,
+          "integrity": "ok",
+          "schema": 15,
+          "sourceSchemaMatches": true,
+          "states": {
+            "00000000-0000-0000-0000-000000000007": "delivered",
+            "00000000-0000-0000-0000-00000000000f": "accepted",
+            "00000000-0000-0000-0000-000000000017": "awaiting-host",
+            "00000000-0000-0000-0000-00000000001e": "cancelled"
+          },
+          "tables": 49
+        }
+      },
+      {
+        "command": "env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT UV_CACHE_DIR=\"$PWD/tmp/adr021-l18/uv-cache\" uv run --offline --no-project python packaging/generate-upgrade-fixture.py --verify --work-dir tmp/adr021-l18/verify-final --output-dir tests/fixtures/adr021-l18",
+        "exitCode": 0,
+        "result": {
+          "events": 37,
+          "foreignKeyViolations": 0,
+          "integrity": "ok",
+          "schema": 15,
+          "sourceSchemaMatches": true,
+          "states": {
+            "00000000-0000-0000-0000-000000000007": "delivered",
+            "00000000-0000-0000-0000-00000000000f": "accepted",
+            "00000000-0000-0000-0000-000000000017": "awaiting-host",
+            "00000000-0000-0000-0000-00000000001e": "cancelled"
+          },
+          "tables": 49
+        }
+      },
+      {
+        "command": "env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT UV_CACHE_DIR=\"$PWD/tmp/adr021-l18/uv-cache\" uv run --offline --no-project python tmp/adr021-l18/provenance_check.py",
+        "exitCode": 0,
+        "result": {
+          "fixtureMatchesBaseSQL": true,
+          "generatorHashMatches": true,
+          "loadedBaseModules": 60,
+          "machineHomePathsInArtifacts": 0,
+          "publicOperations": 27,
+          "sourceCommits": [
+            "e4fbc91696f354991252ea2abddc73d45f286aa5",
+            "df9318f38b732681e1004cf190e71bb4bc25fe17"
+          ],
+          "sourceFilesMatchedGit": 108,
+          "sqlDefinitionsAndPragmasMatchedGit": true
+        }
+      },
+      {
+        "command": "git diff --check",
+        "exitCode": 0,
+        "result": "no whitespace errors; changes are new files only"
+      }
+    ],
+    "date": "2026-10-11",
+    "inputCommit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+    "inventoryCorrection": {
+      "boundary": "narrow static correction; original generation and SQLite checks above are retained earlier evidence, not rerun",
+      "command": "env -u BUDDY_STATE_DIR -u BUDDY_RUNTIME_ROOT -u BUDDY_RUNTIME -u BUDDY_RUNTIME_IDENTITY -u BUDDY_WORKER_STATE -u BUDDY_WORKER_ID -u BUDDY_AGENT_CREDENTIAL -u BUDDY_AGENT_CREDENTIAL_FILE -u BUDDY_PYTHON -u BUDDY_DEV_SOURCE -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT UV_CACHE_DIR=\"$PWD/tmp/adr021-l18/uv-cache\" uv run --offline --no-project python tmp/adr021-l18/revision1/check_corrections.py",
+      "exitCode": 0,
+      "result": {
+        "addedTestIds": [],
+        "baseTerminalFinishCalls": [
+          {
+            "line": 910,
+            "status": "needs-host"
+          },
+          {
+            "line": 933,
+            "status": "needs-host"
+          },
+          {
+            "line": 938,
+            "status": "needs-host"
+          },
+          {
+            "line": 945,
+            "status": "stale"
+          },
+          {
+            "line": 950,
+            "status": "stale"
+          },
+          {
+            "line": 1031,
+            "status": "failed"
+          },
+          {
+            "line": 1047,
+            "status": "cancelled"
+          },
+          {
+            "line": 1072,
+            "status": "stale"
+          },
+          {
+            "line": 1107,
+            "status": "needs-host"
+          },
+          {
+            "line": 1127,
+            "status": "failed"
+          },
+          {
+            "line": 1179,
+            "status": "cancelled"
+          },
+          {
+            "line": 1186,
+            "status": "needs-host"
+          },
+          {
+            "line": 1196,
+            "status": "failed"
+          },
+          {
+            "line": 1202,
+            "status": "needs-host"
+          },
+          {
+            "line": 1207,
+            "status": "stale"
+          },
+          {
+            "line": 1216,
+            "status": "stale"
+          },
+          {
+            "line": 1224,
+            "status": "needs-host"
+          },
+          {
+            "line": 1261,
+            "status": "needs-host"
+          },
+          {
+            "line": 1269,
+            "status": "needs-host"
+          },
+          {
+            "line": 1277,
+            "status": "needs-host"
+          },
+          {
+            "line": 1284,
+            "status": "needs-host"
+          },
+          {
+            "line": 1297,
+            "status": "needs-host"
+          },
+          {
+            "line": 1311,
+            "status": "stale"
+          },
+          {
+            "line": 1337,
+            "status": "completed"
+          },
+          {
+            "line": 1474,
+            "status": "completed"
+          }
+        ],
+        "identitySchemaCheck": "imported SCHEMA_VERSION; literal 15 only in diagnostic text",
+        "jsonAndIntegerColumns": {
+          "baseSchema": {
+            "attempts.log_paths": {
+              "default": "'{}'",
+              "notNull": 1,
+              "sqlType": "TEXT"
+            },
+            "decision_requests.considered_evidence": {
+              "default": "0",
+              "notNull": 1,
+              "sqlType": "INTEGER"
+            },
+            "workers.capabilities": {
+              "default": "'[]'",
+              "notNull": 1,
+              "sqlType": "TEXT"
+            }
+          },
+          "inputSchema": {
+            "attempts.log_paths": {
+              "default": "'{}'",
+              "notNull": 1,
+              "sqlType": "TEXT"
+            },
+            "decision_requests.considered_evidence": {
+              "default": "0",
+              "notNull": 1,
+              "sqlType": "INTEGER"
+            },
+            "workers.capabilities": {
+              "default": "'[]'",
+              "notNull": 1,
+              "sqlType": "TEXT"
+            }
+          }
+        },
+        "notRerun": [
+          "fixture generation",
+          "fixture reload",
+          "full suite",
+          "service",
+          "model execution"
+        ],
+        "removedTestIds": [],
+        "routerIdleConclusion": "base public queued/running paths bind active tasks; needs-host is terminal; retain terminal history without new Router facts",
+        "sources": {
+          "baseDecision": {
+            "commit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+            "path": "src/buddy/decision.py",
+            "sha256": "a3c276bd54d90d1091209ab8689a14fb981d7333a4449d7109c2f583b73a2ddb"
+          },
+          "baseSchema": {
+            "commit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+            "path": "src/buddy/db.py",
+            "sha256": "941ab32b600296792a7ac9cf7e06085628183e41814fdaa165379a422712aede"
+          },
+          "baseStore": {
+            "commit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+            "path": "src/buddy/store.py",
+            "sha256": "6dfe31ecc1956fbe360e19064c8f98916655836ee64eaae4d9dd922f1170679a"
+          },
+          "baseUpgrade": {
+            "commit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+            "path": "src/buddy/upgrade.py",
+            "sha256": "5c5f83ca426d23fe6d4f828cff48b3f6a6b537fa8ef3adca20f35009a0ce61db"
+          },
+          "inputDecision": {
+            "commit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+            "path": "src/hey_my_buddy/blackboard/routing/decision.py",
+            "sha256": "8d4a9667814da87da8548ba5336ff297adaed0ad592c9bcc7a104f676fa5be30"
+          },
+          "inputIdentity": {
+            "commit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+            "path": "src/hey_my_buddy/blackboard/store/workspace_identity_migration.py",
+            "sha256": "5e9b5ecabf72e68c0f2b5bba6b309934dc0293fdaace7f23710856f71fbba60c"
+          },
+          "inputSchema": {
+            "commit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+            "path": "src/hey_my_buddy/blackboard/store/db.py",
+            "sha256": "99f298a380b118a26cf8399a3d950f3f0ba2f164c82049090a3d883561579fc4"
+          },
+          "inputUpgrade": {
+            "commit": "df9318f38b732681e1004cf190e71bb4bc25fe17",
+            "path": "src/hey_my_buddy/install/upgrade.py",
+            "sha256": "c09d1e304ec8b0bbf9abcabd6fb59fd8300bb27460d0a145d669582659c8e610"
+          }
+        },
+        "staticOnly": true,
+        "unchangedArtifactSha256": {
+          "packaging/generate-upgrade-fixture.py": "8fad21338c421a3860401323af39ed3f7106846ee8755966aa4be558c64b9871",
+          "tests/fixtures/adr021-l18/board.sql": "564f058712ec8f8be223133a88505437ad9814f09f89e1fffe01fb0b2a5c9719",
+          "tests/fixtures/adr021-l18/catalog.json": "97adfc1ebcf05769ba1447a8fdde2bbed248847b1bb3e36b1e07af5bdfa44336",
+          "tests/fixtures/adr021-l18/metadata.json": "6da2932b322d7eac1d43414f5293fc884c77635020ec2712aa08e5a4c05664cb",
+          "tests/fixtures/adr021-l18/operations.json": "8f267509810336d9b75de8fd96b6f4ce77983d7ce02e5b639412e8307c920f36",
+          "tests/fixtures/adr021-l18/storage-inventory.json": "7f96dab2b2b45b380c0eeb050e8aedb17340d7f508a99ef6503cfcc8c2d8c2d8"
+        },
+        "unchangedArtifacts": 6,
+        "unchangedArtifactsMatchedSealedCommit": "2f6a4f5ca035c4ff6a45db2f7039afc3edcf8dcf",
+        "whitespaceCheck": "git diff --no-index --check: exit 1 for differing files, no whitespace diagnostics"
+      }
+    },
+    "kind": "worker-verification-only",
+    "notVerified": [
+      "schema 15 to 16 migration",
+      "install/upgrade/service IPC",
+      "Host conclusion mutation",
+      "real harness/model/account/native sessions",
+      "live workspace identity/integration/resume from redacted paths",
+      "Windows",
+      "daily board",
+      "full check suite"
+    ],
+    "processData": "<allocated-checkout>/tmp/adr021-l18/; exact local directory manifest retained in ignored retained-directories.txt; no cleanup performed",
+    "removedTestIds": [],
+    "samples": {
+      "evaluationCards": 1,
+      "familyAnnotations": 1,
+      "finishedSyntheticAttempts": 3,
+      "microTasks": 4,
+      "modelCatalog": "two fictional Codex/OpenAI models with high effort; two observations and current pointer",
+      "objectives": 1,
+      "reviewEvent": "workflow.acknowledged verdict=accepted/rejected",
+      "routerSlots": 2
+    },
+    "sourceAudit": "108 archived source/resource files match git show at the base commit; 60 loaded buddy modules all come from archived base. Independently reconstructed both commits SQLite objects and every recorded PRAGMA result; restored fixture exactly matches base SQL.",
+    "sourceCommit": "e4fbc91696f354991252ea2abddc73d45f286aa5",
+    "sqlInventory": {
+      "base": {
+        "indexesIncludingAuto": 114,
+        "tables": 49,
+        "views": 1
+      },
+      "input": {
+        "indexesIncludingAuto": 117,
+        "tables": 50,
+        "views": 1
+      },
+      "sqlite_sequence": "excluded from business table counts"
+    }
+  },
+  "kind": "worker-verification-only",
+  "portableRepair": {
+    "addedTestIds": [
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f01_restores_manifests_seals_and_frozen_hash_bindings",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f02_delivered_sample_gets_real_independent_host_seal",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f03_private_roots_rebind_legacy_identity_without_changing_native_history",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f04_raw_template_and_unproved_or_drifted_identity_are_refused",
+      "blackboard.store.test_upgrade_fixture.UpgradeFixtureTests.test_l18_f05_drifted_patch_and_fixed_git_ref_cannot_prove_a_seal"
+    ],
+    "artifactSha256": {
+      "docs/design/adr021-l18-inventory.md": "8f6b65b8c5e245889975919ea6a189eb9851d12a03f72dc6db37948f0cd6ce90",
+      "packaging/generate-upgrade-fixture.py": "e3d325e68fa3211df845b39f8a6462da82eb78bff41e2c1f78824296438c044c",
+      "tests/fixtures/adr021-l18/board.sql": "59d2e866c5ec8b0805605dcb66c9d70d6eca56d5fe426d78deb02521d6ff01f3",
+      "tests/fixtures/adr021-l18/catalog.json": "97adfc1ebcf05769ba1447a8fdde2bbed248847b1bb3e36b1e07af5bdfa44336",
+      "tests/fixtures/adr021-l18/metadata.json": "1e14357d635f00bde4b847e760c2aeb7b7e9588bca7f2286e5ddc7f1c0cf95a4",
+      "tests/fixtures/adr021-l18/operations.json": "4b9c4e11535ff9a8ec72256a9f1ed05a908c347fcb3312ee713f7c4d481d4747",
+      "tests/fixtures/adr021-l18/storage-inventory.json": "7f96dab2b2b45b380c0eeb050e8aedb17340d7f508a99ef6503cfcc8c2d8c2d8",
+      "tests/fixtures/adr021-l18/workspace-resources.json": "96218aea97644911e63b81b87bbc08d7065482e62ef52aa1880671d4e74a0ef2",
+      "tests/python/blackboard/store/test_upgrade_fixture.py": "ff44d3a29add7fa3671830c391677bb074d3a2e7c04460a3f423d1c7f2ef401f",
+      "tests/python/blackboard/store/upgrade_fixture.py": "2da13ed3819d81ef8264b92500564f44ff179699d4a5633942bee4f8c86ecc3a"
+    },
+    "bindingBoundary": "Fixed old stock is a path template. Materialization binds private paths, actual legacy device/inode identities and dependent manifest/snapshot/turn/spec/request/command hashes across sidecars and board receipts. No schema change, conclusion insertion, identity alias insertion or native provenance upgrade. Preservation baseline is the restored old board.",
+    "commands": [
+      {
+        "command": "<prepared-python> tmp/adr021-l18-portable/run.py original-repro.log tmp/adr021-l18-portable/repro.py",
+        "exitCode": 0,
+        "result": "Real host_seal rejected original template: WORKSPACE_MANIFEST_CHANGED"
+      },
+      {
+        "command": "<prepared-python> tmp/adr021-l18-portable/run.py generation-final.log packaging/generate-upgrade-fixture.py --python <prepared-python> --work-dir tmp/adr021-l18-portable/generated-final --output-dir tests/fixtures/adr021-l18",
+        "exitCode": 0,
+        "result": "Base public operations, schema 15, 49 business tables, 37 events, four states, integrity ok, foreign_key_check empty"
+      },
+      {
+        "command": "<prepared-python> tmp/adr021-l18-portable/run.py focused-stock-final.log -m unittest blackboard.store.test_upgrade_fixture -v",
+        "exitCode": 0,
+        "result": "OK",
+        "seconds": 20.586,
+        "tests": 5
+      },
+      {
+        "command": "git diff --check",
+        "exitCode": 0
+      }
+    ],
+    "date": "2026-10-11",
+    "failedDevelopmentProbes": [
+      {
+        "cause": "Archived buddy was shadowed by test buddy package; fixed by explicit base package loading",
+        "exitCode": 1,
+        "log": "<allocated-checkout>/tmp/adr021-l18-portable/generation.log"
+      },
+      {
+        "cause": "Negative test queried absent workflow_runs.request_id; fixed test query",
+        "exitCode": 1,
+        "log": "<allocated-checkout>/tmp/adr021-l18-portable/focused-first.log"
+      },
+      {
+        "cause": "Sequential substitution expanded literal marker in private root twice; real sealed-output patch validation rejected it; fixed with single-pass substitution",
+        "exitCode": 1,
+        "log": "<allocated-checkout>/tmp/adr021-l18-portable/path-marker-worker-red.log"
+      }
+    ],
+    "hostBoundary": "Host reviews the fixed artifacts and integrates load_fixture with the sealed upgrade change, then verifies workflow_conclude on delivered after real private upgrade. This record is Worker self-verification, not Host acceptance.",
+    "inputCommit": "d9091ba8c9a29ecfad4e34b1d13cd108957438a5",
+    "isolatedReplayCommand": "env -i PATH=\"$PATH\" PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=\"$PWD/src:$PWD/tests/python\" TMPDIR=\"$PWD/tmp/adr021-l18-portable/scratch\" BUDDY_STATE_DIR=\"$PWD/tmp/adr021-l18-portable/state\" BUDDY_RUNTIME_ROOT=\"$PWD/tmp/adr021-l18-portable/runtime\" BUDDY_DEV_SOURCE=1 <prepared-python> -m unittest blackboard.store.test_upgrade_fixture -v",
+    "notVerified": [
+      "schema 15 to 16 migration",
+      "install/upgrade",
+      "full workspace identity migration transaction",
+      "private daemon/IPC and workflow_conclude mutation after upgrade",
+      "real accounts/models/native sessions/resume",
+      "Windows",
+      "daily board",
+      "full check suite"
+    ],
+    "processData": "<allocated-checkout>/tmp/adr021-l18-portable/; exact local directory list in ignored retained-directories.txt; process evidence retained",
+    "provenance": {
+      "archivedSourceFilesMatched": 108,
+      "dependencyMode": "prepared-read-only-interpreter",
+      "dependencyVersions": {
+        "c-two": "0.7.4",
+        "fastdb4py": "0.2.1",
+        "numpy": "2.5.3",
+        "portalocker": "3.2.0"
+      },
+      "generatorSha256Matched": true,
+      "loadedBaseModules": 60,
+      "resources": {
+        "files": 17,
+        "gitObjects": 10,
+        "hashBindings": 26,
+        "identities": 5,
+        "refs": 22
+      },
+      "sourceCommit": "e4fbc91696f354991252ea2abddc73d45f286aa5"
+    },
+    "removedRepositoryFiles": [],
+    "removedTestIds": [],
+    "restoreInterface": "load_fixture(state: Path) -> dict; absent/empty private state; source metadata plus state/fixtureRoot Paths, operations and bindings; schema 15; baseline only after return",
+    "sealBoundary": "Real existing identity _proof/_plan and private host_seal, with aliases obtained solely from those real proofs. Independent host-output ref/patch/sidecar for delivered sample, immutable Worker output retained, replay checked. No daemon or service conclusion.",
+    "sourceCommit": "e4fbc91696f354991252ea2abddc73d45f286aa5"
+  }
+}

@@ -1,0 +1,1 @@
+The Host has stopped this micro task. Resume this exact session only to report the work already done, what remains, decisions, and artifacts. Do not continue implementation. Deliver the normal structured Worker outcome promptly. State that this is a stopped partial result; do not claim Host acceptance.

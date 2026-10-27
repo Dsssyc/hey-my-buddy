@@ -1,0 +1,11 @@
+# ADR-025 第五步 ZCode 原生问询冒烟
+
+2026-10-07，按执行计划既有授权，在a72cd9a生产源码上以ZCode0.16.9、zai-api/GLM-5.3-Flash/max做1次最小真实Worker回合；此前先做不调用模型的安装版发现。微任务执行中的Z.ai额度拒绝并不是本步新运行模块原生核对，本次单独记录，不把两类证据混同。私有state/runtime/native/fixture/主材料位于新建短任务根，HOME默认保留，没有设置CLAUDE_CONFIG_DIR或CODEX_HOME，没有登录/登出/读凭据文件/改变用户配置或日常数据，没有安装升级日常运行时。
+
+run 43b45b2f-3468-4f22-9d60-e9bdad5a17b9、attempt 8a7f7c29-9e11-4bb5-bf22-deb52018f451，selectedWorkerId是实际持有者adr025-zcode-smoke-worker。严格decode_run_result后 identity匹配、modelStarted true、native end ok/退出0、value.schemaStatus valid；requested和checked为上述同配置，不能由此独立证明提供方实际服务模型。最小任务只read一个marker、checkpoint/answer_inquiry/finish；真实Read的start/end完整，toolCalls1、streamComplete true，完成摘要ADR025_ZCODE_WORKER_OK。
+
+完成工具provenance中receiptVerified/rootSessionMatched/toolResultSuccess均true，native turnEnd completed、settlement session-closed；服务task completed/resultAvailable/shutdownConfirmed均true，原生group gone与外围停止分别核对。问询日记queued→delivered→answered，服务最终answered且答案ADR025_ZCODE_WORKER_FIXTURE准确；inquiry报告answered1/delivered0是当前未待交付计数，不能用它抹去真实journal的delivered事件。使用方上报token input99753（含cached84096）、output800、nativeRecords7、native-root-session覆盖partial，quotaFailure空；不把部分用量扩写为提供方计费事实。
+
+启动时记录Worker /tmp/c_two_ipc/cc4d9299c694373c14ebfb7a63d14df970426.sock与运行期间controller /tmp/c_two_ipc/cc53b4491816f159c4533967b82c0b75c8d6c.sock，两个exact path在各自运行阶段存在，停止后均不存在，Host再次核对。源fixture tracked diff为空；发现阶段在私有fixture生成.zcode/config.json如实登记，不是用户配置。未遍历删除/tmp/c_two_ipc中其他对象，不按旧日期或无人引用推断归属。
+
+Host独立核对原始Frame SHA-256 26ab59e87c1c2d9f1ebe9579dc6d6e50b331c76182572e75c6faec27aa95da20并严格解码，原始证据清单SHA-256 e9c790f1e0417dc484402131c7ba86c50c6cdb7bc69a24e3ffdfb728e0d6d434，端点后态SHA-256 9792111b62dc86c33c3261fd043e355ad7f9af378cc19e55cc1ef363e44cb13a。24份命名原始材料与哈希、私有Git fixture bundle留<checkout>/tmp/adr025-host/<phase>/retained-zcode-native/；严格Host摘要与exact cleanup也留tmp。Worker没有删除；Host先保留证据、核对持有停止及自己端点消失，再按创建时登记的一个确切根整体回收，进程命令核对只作补充而非终止证据。

@@ -1,0 +1,100 @@
+{
+  "source": "codex-native-app-server",
+  "harnessVersion": "codex-cli 0.160.0",
+  "discoveredAt": "2026-10-07T03:47:24.222471+00:00",
+  "discoveries": [
+    {
+      "adapter": "codex",
+      "status": "complete",
+      "accountStatus": "confirmed"
+    }
+  ],
+  "models": [
+    {
+      "provider": "openai",
+      "model": "gpt-6.1-sol",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-astra",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-sol",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-sol",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-terra",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra"
+      ]
+    },
+    {
+      "provider": "openai",
+      "model": "gpt-5.6-luna",
+      "efforts": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    }
+  ],
+  "modelCallMade": false,
+  "codexHomeChanged": false,
+  "loginChanged": false,
+  "credentialContentsReadByHost": false
+}

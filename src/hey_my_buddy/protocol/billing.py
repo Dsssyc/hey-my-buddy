@@ -1,0 +1,52 @@
+"""Secret-free billing labels from native account and provider metadata."""
+from __future__ import annotations
+
+UNKNOWN = "unknown"
+
+
+def fact(kind: str, source: str, observed_at: str) -> dict:
+    return {"kind": kind if kind in ("subscription", "metered") else UNKNOWN,
+            "source": source, "observedAt": observed_at}
+
+
+def native_provider(account: object, field: str) -> str:
+    """Keep the harness's provider spelling; an absent identity stays unknown."""
+    value = account.get(field) if isinstance(account, dict) else None
+    return value if isinstance(value, str) and value.strip() else UNKNOWN
+
+
+def codex_account(account: object, observed_at: str) -> dict:
+    kind = UNKNOWN
+    if isinstance(account, dict):
+        if account.get("type") == "apiKey":
+            kind = "metered"
+        elif account.get("type") == "chatgpt" and account.get("planType") in (
+                "plus", "pro", "team", "business", "enterprise", "edu"):
+            kind = "subscription"
+    return fact(kind, "codex/account-read", observed_at)
+
+
+def claude_status(status: object, observed_at: str) -> dict:
+    kind = UNKNOWN
+    if isinstance(status, dict) and status.get("loggedIn") is True:
+        method = status.get("authMethod")
+        if status.get("apiProvider") == "anthropic" and method in ("claude.ai", "claudeai") and isinstance(status.get("subscriptionType"), str):
+            kind = "subscription"
+        # An API key and Claude's provider label do not establish the endpoint
+        # or its funding. A redirected first-party API can still say anthropic.
+    return fact(kind, "claude/auth-status", observed_at)
+
+
+def zcode_access(access: object, observed_at: str) -> dict:
+    return fact({"api-key": "metered", "zhipu-coding-plan-api-key": "subscription"}.get(access, UNKNOWN),
+                "zcode/provider-access", observed_at)
+
+
+def for_provider(connection, harness: str, provider: str) -> dict:
+    """Only native metadata for this exact buddy may establish a label."""
+    from ..blackboard.service.harness_health import read_health
+    health = read_health(connection, harness)
+    row = health.get("billingByProvider") or {}
+    if isinstance(row, dict) and isinstance(row.get(provider), dict):
+        return row[provider]
+    return fact(UNKNOWN, "unverified", health.get("checkedAt") or "")

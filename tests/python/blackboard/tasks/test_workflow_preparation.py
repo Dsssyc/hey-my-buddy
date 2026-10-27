@@ -1,0 +1,738 @@
+"""Continuation admission and fixed handoffs with disposable real Git checkouts."""
+from admission import admit_board, admit_store
+import itertools
+import json
+import os
+import subprocess
+import shutil
+import tempfile
+import uuid
+from pathlib import Path
+from unittest.mock import patch
+
+from support import FakeClock
+from blackboard.tasks.test_workflow import WorkflowTestCase
+from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
+from hey_my_buddy.blackboard.store.db import canonical_json
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.paths import native_path
+
+
+class PreparationTests(WorkflowTestCase):
+    _repository_template = None
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        # Share only initial Git objects/config. Mutable files, index, refs,
+        # worktree registration and identity facts belong to each copied site.
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-preparation-repository-")
+        cls.addClassCleanup(temporary.cleanup)
+        fixture = cls(methodName="runTest")
+        fixture.directory = Path(temporary.name)
+        cls._repository_template = None
+        cls._repository_template = fixture.repository("template")
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = workspace
+        workflow_module._workspace_module = workspace
+        self.repo = self.repository("repo")
+
+    def git(self, path, *args):
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        result = subprocess.run(["git", "-C", str(path), *args], env=env, capture_output=True, text=True, timeout=30, encoding="utf-8")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout.strip()
+
+    def repository(self, name):
+        path = self.workdir(name).resolve()
+        if self._repository_template is not None:
+            shutil.copytree(self._repository_template, path, dirs_exist_ok=True)
+            # Rebind the copied index's stat cache to these new file inodes.
+            self.git(path, "update-index", "--refresh")
+            return path
+        self.git(path, "init", "-q")
+        self.git(path, "config", "user.name", "Preparation Test")
+        self.git(path, "config", "user.email", "preparation@example.invalid")
+        (path / "tracked.txt").write_text("base\n", encoding="utf-8", newline="\n")
+        self.git(path, "add", "tracked.txt")
+        self.git(path, "commit", "-qm", "base")
+        return path
+
+    def intent(self, path=None):
+        return {"kind": "existing", "cwd": str(path or self.repo), "access": "write",
+                "base": {"kind": "working-tree"}, "includeUntracked": [], "writeScope": ["."], "integrator": {"role": "host", "id": "host-1"}}
+
+    def pending(self, *, clock=None, kind="existing"):
+        board = self.board(clock=clock or FakeClock())
+        self.register(board)
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": kind, "access": "write"})
+        first = self.claim(board)
+        (Path(first["claim"]["task"]["cwd"]) / "tracked.txt").write_text("sealed first output\n", encoding="utf-8", newline="\n")
+        self.finish_turn(board, first, disposition="assistance")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        continuation = self.continue_run(board, view)
+        return board, submitted["runId"], first, continuation["continuationId"]
+
+    def rows(self, board, run_id, continuation_id):
+        with board.store.db.read() as connection:
+            run = dict(connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone())
+            task = dict(connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone())
+            continuation = dict(connection.execute("SELECT * FROM workflow_continuations WHERE continuation_id=?", (continuation_id,)).fetchone())
+            reservation = dict(connection.execute("SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone())
+        return run, task, continuation, reservation
+
+    def failed_helper(self, *, unvalidated_seal=False):
+        (self.repo / ".gitignore").write_text("tests/.env\ntests/cache/\n", encoding="utf-8", newline="\n")
+        self.git(self.repo, "add", ".gitignore")
+        self.git(self.repo, "commit", "-qm", "exclude private runtime files")
+        board = self.board()
+        self.register(board)
+        parent = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        approved = self.decide(board, view, view["activeRequest"]["requestId"], autoContinue=False, helpers=[{
+            "requestId": "partial-helper", "task": "write tests before returning",
+            "cwd": str(self.repo), "executionWorkspace": {"kind": "worktree", "writeScope": ["tests"]},
+        }])
+        helper_id = approved["children"][0]["taskId"]
+        failed = self.claim(board, run_id=helper_id, claim_request_id="partial-helper-first")
+        checkout = Path(failed["claim"]["task"]["cwd"])
+        (checkout / "tests").mkdir()
+        (checkout / "tests" / "test_math_ops.py").write_text("def test_partial():\n    assert 1 + 1 == 2\n", encoding="utf-8", newline="\n")
+        (checkout / "tests" / ".env").write_text("private fixture data\n", encoding="utf-8", newline="\n")
+        (checkout / "tests" / "cache").mkdir()
+        (checkout / "tests" / "cache" / "state.json").write_text("{}\n", encoding="utf-8", newline="\n")
+        (checkout / "outside.txt").write_text("outside the helper write scope\n", encoding="utf-8", newline="\n")
+        self.finish_turn(board, failed, runner_status="failed", exit_code=1, seal=False,
+                         result_mutator=(lambda report: report.update(workspaceSeal={"claim": "unvalidated"})) if unvalidated_seal else None)
+        return board, parent, helper_id, failed, checkout
+
+    def test_failed_helper_admission_revokes_only_its_new_allocation(self):
+        board = self.board()
+        self.register(board)
+        parent = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        with patch.object(board.store.workflow, "_create_helpers", side_effect=BoardError("HELPER_ADMISSION_FAILED", "controlled helper rejection")):
+            with self.assertRaises(BoardError) as caught:
+                self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
+                    "requestId": "failed-new-helper", "task": "private helper", "cwd": str(self.repo),
+                    "executionWorkspace": {"kind": "worktree", "access": "write"},
+                }])
+        self.assertEqual(caught.exception.code, "HELPER_ADMISSION_FAILED")
+        cleanup = caught.exception.details["helperPreparationCleanup"]
+        self.assertEqual(len(cleanup), 1)
+        self.assertTrue(cleanup[0]["removed"])
+        self.assertFalse(native_path(Path(cleanup[0]["path"])).exists())
+        self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        with board.store.db.read() as connection:
+            self.assertIsNone(connection.execute("SELECT task_id FROM tasks WHERE request_id='failed-new-helper'").fetchone())
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workspace_reservations").fetchone()[0], 1)
+
+    def test_continuation_attention_retains_actual_bounded_git_diagnostics(self):
+        board, run_id, _first, continuation_id = self.pending()
+        command = ["git", "-C", "<private-checkout>", "read-tree", "<fixed-tree>"]
+        failure = workspace._git_failure(command, "read-tree", returncode=128,
+                                         stdout=b"output" * 600, stderr=b"diagnostic" * 400)
+        with patch.object(workspace, "prepare", side_effect=failure):
+            self.claim(board, run_id=run_id, claim_request_id="git-error-claim")
+        with board.store.db.read() as connection:
+            row = connection.execute("SELECT * FROM workflow_requests WHERE run_id=? AND kind='attention' ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()
+        payload = json.loads(row["payload_json"])
+        self.assertEqual(set(payload), {"preparationError"})
+        self.assertIsNone(row["summary"])
+        self.assertEqual(row["reason_code"], "workspace.continuation-prepare-failed")
+        self.assertEqual(json.loads(row["reason_params_json"]), {"continuationId": continuation_id})
+        view = board.call("workflow_get", {"runId": run_id})["activeRequest"]
+        self.assertIsNone(view["summary"])
+        self.assertEqual(view["reason"], {"code": row["reason_code"], "params": {"continuationId": continuation_id}})
+        self.assertTrue({"summary", "attempted", "neededWork", "expectedArtifacts", "acceptance"}.isdisjoint(payload))
+        error = payload["preparationError"]
+        self.assertEqual(error["code"], "WORKSPACE_GIT_ERROR")
+        self.assertIn("details", error)
+        self.assertEqual(error["details"]["argv"], command)
+        self.assertEqual(error["details"]["returncode"], 128)
+        for field in ("stdout", "stderr", "reason"):
+            self.assertLessEqual(len(error["details"][field]), 2000)
+            self.assertTrue(error["details"][field + "Truncated"])
+
+    def test_git_timeout_leaves_continuation_queued_for_retry(self):
+        board, run_id, _first, continuation_id = self.pending()
+        before = self.rows(board, run_id, continuation_id)
+        unknown = BoardError("WORKSPACE_GIT_UNKNOWN", "controlled Git wait expiration")
+        with patch.object(workspace, "prepare", side_effect=unknown):
+            blocked = self.claim(board, run_id=run_id, claim_request_id="git-unknown-claim")
+        self.assertIsNone(blocked["claim"])
+        self.assertEqual(blocked["reason"], "awaiting-workspace-preparation")
+        during = self.rows(board, run_id, continuation_id)
+        self.assertEqual(during[0]["state"], "executing")
+        self.assertEqual(during[0]["revision"], before[0]["revision"])
+        self.assertEqual(during[2]["state"], "queued")
+        self.assertIsNone(during[2]["workspace_manifest_json"])
+        self.assertIsNone(during[0]["active_request_id"])
+        resumed = self.claim(board, run_id=run_id, claim_request_id="git-unknown-retry")
+        self.assertIsNotNone(resumed["claim"], resumed)
+        self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
+
+    def test_preparation_attention_default_view_names_the_git_operation(self):
+        board, run_id, _first, _continuation_id = self.pending()
+        stderr = (b"warning: another Git process seems to be running\n"
+                  b"fatal: unable to access 'https://user:token@example.invalid/owner/repo.git/':"
+                  b" The requested URL returned error: 403\n")
+        failure = workspace._git_failure(["git", "-C", "<private-checkout>", "read-tree", "<fixed-tree>"],
+                                         "read-tree", returncode=128, stdout=b"", stderr=stderr)
+        with patch.object(workspace, "prepare", side_effect=failure):
+            self.claim(board, run_id=run_id, claim_request_id="git-error-claim")
+        view = board.call("workflow_get", {"runId": run_id})
+        problem = view["activeRequest"]["preparationError"]
+        self.assertEqual(problem["code"], "WORKSPACE_GIT_ERROR")
+        self.assertEqual(problem["reason"], "git read-tree: fatal: unable to access"
+                         " 'https://example.invalid/owner/repo.git/': The requested URL returned error: 403")
+        self.assertNotIn("user:token", problem["reason"])
+        self.assertNotIn("details", problem)
+        audited = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
+        recorded = next(request["payload"]["preparationError"] for request in audited["audit"]["requests"]
+                        if request.get("payload", {}).get("preparationError"))
+        self.assertIn("user:token@example.invalid", recorded["details"]["stderr"])
+        self.assertIn("read-tree", recorded["details"]["argv"])
+
+    def test_preparation_reason_line_is_bounded_and_redacted(self):
+        limit = workflow_module.PREPARATION_REASON_LIMIT
+        overlong = workflow_module._preparation_reason({"operation": "fetch", "reason": "x" * 4000})
+        self.assertEqual(overlong, "git fetch: " + "x" * (limit - len("git fetch: ")))
+        self.assertLessEqual(len(overlong), limit)
+        mixed = workflow_module._preparation_reason({
+            "operation": "fetch",
+            "reason": "fatal: unable to access 'https://user:token@example.invalid/owner/repo.git/': " + "y" * 300,
+        })
+        self.assertNotIn("user:token", mixed)
+        self.assertIn("https://example.invalid", mixed)
+        self.assertLessEqual(len(mixed), limit)
+        scp = workflow_module._preparation_reason({
+            "operation": "fetch", "reason": "git@example.invalid: Permission denied (publickey).\r\n",
+        })
+        self.assertEqual(scp, "git fetch: example.invalid: Permission denied (publickey).")
+        self.assertIsNone(workflow_module._preparation_reason({"code": "PREPARATION_CONFLICT"}))
+        self.assertIsNone(workflow_module._preparation_reason(None))
+
+    def test_unvalidated_seal_in_failed_report_cannot_block_partial_recovery(self):
+        board, parent, helper_id, failed, checkout = self.failed_helper(unvalidated_seal=True)
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        self.continue_run(board, view, targetRunId=helper_id, command_id="recover-unvalidated-seal")
+        resumed = self.claim(board, run_id=helper_id, claim_request_id="claim-after-unvalidated-seal")
+        self.assertIsNotNone(resumed["claim"], resumed)
+        manifest = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        self.assertEqual(manifest["snapshot"]["includedUntracked"], ["tests/test_math_ops.py"])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_artifacts WHERE attempt_id=? AND kind='output'",
+                                                (failed["claim"]["attempt"]["attemptId"],)).fetchone()[0], 0)
+
+    def test_manual_continue_reclaims_released_helper_and_captures_partial_output(self):
+        board, parent, helper_id, failed, checkout = self.failed_helper()
+        with board.store.db.read() as connection:
+            original = dict(connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (helper_id,)).fetchone())
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workspace_reservations WHERE holder_task_id=? AND state='held'", (helper_id,)).fetchone()[0], 0)
+        before = {"head": self.git(checkout, "rev-parse", "HEAD"), "index": self.git(checkout, "ls-files", "--stage"),
+                  "status": self.git(checkout, "status", "--porcelain=v1", "--untracked-files=all")}
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        continued = self.continue_run(board, view, targetRunId=helper_id, command_id="recover-partial", input="Use the partial tests and finish")
+        resumed = self.claim(board, run_id=helper_id, claim_request_id="partial-helper-next")
+        self.assertIsNotNone(resumed["claim"], resumed)
+        manifest = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        self.assertEqual(manifest["path"], str(checkout))
+        self.assertEqual(manifest["writeScope"], ["tests"])
+        self.assertEqual(manifest["snapshot"]["includedUntracked"], ["tests/test_math_ops.py"])
+        self.assertEqual(self.git(checkout, "show", f"{manifest['inputCommit']}:tests/test_math_ops.py"), "def test_partial():\n    assert 1 + 1 == 2")
+        self.assertNotIn("outside.txt", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
+        self.assertNotIn("tests/.env", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
+        self.assertNotIn("tests/cache/state.json", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
+        after = self.rows(board, helper_id, continued["continuationId"])
+        self.assertEqual(after[3]["state"], "held")
+        for key in ("request_fingerprint", "execution_workspace_json"):
+            self.assertEqual(after[0][key], original[key])
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT state FROM workflow_turns WHERE attempt_id=?", (failed["claim"]["attempt"]["attemptId"],)).fetchone()[0], "failed")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_artifacts WHERE attempt_id=? AND kind='output'", (failed["claim"]["attempt"]["attemptId"],)).fetchone()[0], 0)
+        self.assertEqual({"head": self.git(checkout, "rev-parse", "HEAD"), "index": self.git(checkout, "ls-files", "--stage"),
+                          "status": self.git(checkout, "status", "--porcelain=v1", "--untracked-files=all")}, before)
+
+    def test_released_helper_cannot_reclaim_another_writers_checkout(self):
+        self.reclaim_conflict("write")
+
+    def test_released_helper_cannot_reclaim_another_readers_checkout(self):
+        self.reclaim_conflict("read")
+
+    def reclaim_conflict(self, access):
+        board, parent, helper_id, failed, checkout = self.failed_helper()
+        competing = self.submit(board, request_id="competing-owner", cwd=str(checkout),
+                                executionWorkspace={"kind": "existing", "access": access})
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        with patch.object(workspace, "prepare", side_effect=AssertionError("must reject before Git")) as prepare:
+            with self.assertRaises(BoardError) as raised:
+                self.continue_run(board, view, targetRunId=helper_id, command_id="conflicting-reclaim")
+        self.assertEqual(raised.exception.code, "PREPARATION_CONFLICT")
+        self.assertEqual(raised.exception.details["holderTaskId"], competing["runId"])
+        prepare.assert_not_called()
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT state FROM workflow_runs WHERE run_id=?", (helper_id,)).fetchone()[0], "failed")
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?", (helper_id,)).fetchone()[0], 0)
+            checkout_id = failed["claim"]["turn"]["input"]["executionWorkspace"]["checkoutId"]
+            holders = connection.execute("SELECT holder_task_id FROM workspace_reservations WHERE checkout_id=? AND state='held'", (checkout_id,)).fetchall()
+        self.assertEqual([row[0] for row in holders], [competing["runId"]])
+
+    def test_new_manual_input_supersedes_every_unconsumed_manual_intent(self):
+        board, run_id, _, old_id = self.pending()
+        view = board.call("workflow_get", {"runId": run_id})
+        current = self.continue_run(board, view, command_id="replace-manual", input="Only execute this input")
+        with board.store.db.read() as connection:
+            old = connection.execute("SELECT state FROM workflow_continuations WHERE continuation_id=?", (old_id,)).fetchone()[0]
+            pending = connection.execute("SELECT continuation_id FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued')", (run_id,)).fetchall()
+        self.assertEqual(old, "invalidated")
+        self.assertEqual([row[0] for row in pending], [current["continuationId"]])
+        claimed = self.claim(board, run_id=run_id, claim_request_id="consume-new-input")
+        self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["continuation"]["input"], "Only execute this input")
+        with board.store.db.read() as connection:
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE run_id=? AND state IN ('recorded','queued')", (run_id,)).fetchone()[0], 0)
+
+    def test_partial_recovery_is_fenced_by_a_new_manual_input(self):
+        board, parent, helper_id, _, _ = self.failed_helper()
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        first = self.continue_run(board, view, targetRunId=helper_id, command_id="recover-first")
+        before = self.rows(board, helper_id, first["continuationId"])
+        prepare = workspace.prepare
+        replacement = []
+
+        def supersede(*args, **kwargs):
+            manifest = prepare(*args, **kwargs)
+            view = board.call("workflow_get", {"runId": parent["runId"]})
+            replacement.append(self.continue_run(board, view, targetRunId=helper_id, command_id="recover-newer", input="Newer recovery input"))
+            return manifest
+
+        with patch.object(workspace, "prepare", side_effect=supersede):
+            board.store.workflow.prepare_continuation_workspace({"runId": helper_id})
+        after = self.rows(board, helper_id, first["continuationId"])
+        self.assertEqual(after[2]["state"], "invalidated")
+        self.assertIsNone(after[2]["workspace_manifest_json"])
+        self.assertEqual(after[0]["workspace_manifest_json"], before[0]["workspace_manifest_json"])
+        claimed = self.claim(board, run_id=helper_id, claim_request_id="newer-recovery-claim")
+        self.assertIsNotNone(claimed["claim"], claimed)
+        self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["continuation"]["input"], "Newer recovery input")
+        self.assertEqual(self.rows(board, helper_id, replacement[0]["continuationId"])[2]["state"], "consumed")
+
+    def test_queued_continuation_with_lost_ownership_becomes_visible_attention(self):
+        board, parent, helper_id, _, _ = self.failed_helper()
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        continued = self.continue_run(board, view, targetRunId=helper_id, command_id="recover-before-loss")
+        with board.store.db.write() as connection:
+            board.store.workflow._release_reservations(connection, helper_id, board.store.now())
+        with patch.object(workspace, "prepare", side_effect=AssertionError("must not scan unowned files")) as prepare:
+            board.store.workflow.prepare_continuation_workspace({"runId": helper_id})
+        prepare.assert_not_called()
+        helper = board.call("workflow_get", {"runId": helper_id})
+        self.assertEqual(helper["state"], "awaiting-host")
+        self.assertEqual(helper["activeRequest"]["preparationError"]["code"], "PREPARATION_CONFLICT")
+        self.assertEqual(self.rows(board, helper_id, continued["continuationId"])[2]["state"], "invalidated")
+        parent_view = board.call("workflow_get", {"runId": parent["runId"]})
+        self.assertTrue(any(request["origin"]["runId"] == helper_id for request in parent_view["pendingRequests"] if request["origin"]))
+
+    def test_success_updates_current_reservation_without_rewriting_original_input(self):
+        board, run_id, first, cont = self.pending()
+        before = self.rows(board, run_id, cont)
+        board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        after = self.rows(board, run_id, cont)
+        manifest = json.loads(after[2]["workspace_manifest_json"])
+        self.assertEqual(manifest["checkoutId"], json.loads(before[0]["workspace_manifest_json"])["checkoutId"])
+        self.assertEqual(after[3]["manifest_sha256"], manifest["manifestSha256"])
+        self.assertEqual(after[3]["workspace_id"], manifest["workspaceId"])
+        for key in ("request_fingerprint", "execution_workspace_json"):
+            self.assertEqual(after[0][key], before[0][key])
+        self.assertEqual(after[1]["cwd"], before[1]["cwd"])
+        self.assertEqual(after[1]["spec_json"], before[1]["spec_json"])
+        for key in ("input_text", "helper_outcomes_json", "expected_revision"):
+            self.assertEqual(after[2][key], before[2][key])
+        with board.store.db.read() as connection:
+            saved = connection.execute("SELECT input_json FROM workflow_turns WHERE attempt_id=?", (first["claim"]["attempt"]["attemptId"],)).fetchone()[0]
+        self.assertEqual(json.loads(saved), first["claim"]["turn"]["input"])
+        self.assertEqual(self.claim(board, claim_request_id="next")["claim"]["turn"]["input"]["executionWorkspace"], manifest)
+
+    def test_workspace_drift_becomes_attention_and_another_task_can_be_claimed(self):
+        board, run_id, _, cont = self.pending()
+        (self.repo / "tracked.txt").write_text("unreviewed post-seal drift\n", encoding="utf-8", newline="\n")
+        ordinary = board.submit_execution(**{"requestId": "ordinary", "adapter": "command", "argv": ["/bin/true"], "task": "independent", "cwd": str(self.workdir("ordinary"))})["task"]
+        claimed = self.claim(board, claim_request_id="scan")
+        self.assertEqual(claimed["claim"]["task"]["taskId"], ordinary["runId"])
+        view = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
+        self.assertEqual(view["state"], "awaiting-host")
+        self.assertEqual(view["activeRequest"]["kind"], "attention")
+        self.assertEqual(view["activeRequest"]["preparationError"]["code"], "WORKSPACE_BASE_MISMATCH")
+        self.assertEqual(self.rows(board, run_id, cont)[2]["state"], "invalidated")
+
+        self.assertEqual(self.rows(board, run_id, cont)[1]["state"], "queued")
+        self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "unreviewed post-seal drift\n")
+        with board.store.db.read() as connection:
+            event = connection.execute("SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.workspace_preparation_failed'", (run_id,)).fetchone()
+        self.assertEqual(json.loads(event[0])["errorCode"], "WORKSPACE_BASE_MISMATCH")
+        self.assertTrue(list((self.directory / "workspaces").glob("*/request.json")))
+        # The attention boundary is actionable: after an explicit repair and new
+        # Host input the same micro task can run, with the failed preparation preserved.
+        (self.repo / "tracked.txt").write_text("sealed first output\n", encoding="utf-8", newline="\n")
+        self.continue_run(board, view, command_id="recover-preparation", input="Use the repaired fixed output")
+        self.register(board, worker_id="recovery-worker")
+        resumed = self.claim(board, worker_id="recovery-worker", claim_request_id="recovery-claim", run_id=run_id)
+        self.assertIsNotNone(resumed["claim"], resumed)
+        self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
+        self.assertEqual(self.rows(board, run_id, cont)[2]["state"], "invalidated")
+
+    def test_replayed_continuation_rechecks_changes_after_its_input_was_prepared(self):
+        board, run_id, _, continuation_id = self.pending()
+        with board.store.db.read() as connection:
+            run = board.store.workflow._run_row(connection, run_id)
+            row = connection.execute("SELECT * FROM workflow_continuations WHERE continuation_id=?",
+                                     (continuation_id,)).fetchone()
+            intent = board.store.workflow._continuation_intent(connection, run, row)
+        prepared = workspace.prepare(self.directory, f"{run_id}:{continuation_id}", intent)
+        native_path(Path(prepared["path"]) / "tracked.txt").write_text("changed after the prepared input\n", encoding="utf-8", newline="\n")
+        board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        view = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(view["state"], "awaiting-host")
+        self.assertEqual(view["activeRequest"]["preparationError"]["code"], "WORKSPACE_CHANGED")
+        self.assertIsNone(self.rows(board, run_id, continuation_id)[2]["workspace_manifest_json"])
+
+    def test_concurrent_preparation_lock_retains_continuation_and_allows_recovery(self):
+        board, run_id, _, cont = self.pending(kind="worktree")
+        before = self.rows(board, run_id, cont)
+        _, directory = workspace._workspace_directory(self.directory, f"{run_id}:{cont}")
+        # The same real nonblocking flock used by competing worker RPCs. Its holder
+        # may publish a manifest or die before publishing; neither case is a Host
+        # decision, and no worker may claim the old input while it is held.
+        with workspace._lock(directory):
+            blocked = self.claim(board, claim_request_id="contending", run_id=run_id)
+            self.assertIsNone(blocked["claim"])
+            self.assertEqual(blocked["reason"], "awaiting-workspace-preparation")
+            during = self.rows(board, run_id, cont)
+            self.assertEqual(during[0]["state"], "executing")
+            self.assertEqual(during[0]["revision"], before[0]["revision"])
+            self.assertEqual(during[2]["state"], "queued")
+            self.assertIsNone(during[2]["workspace_manifest_json"])
+            self.assertIsNone(during[0]["active_request_id"])
+        resumed = self.claim(board, claim_request_id="recovered", run_id=run_id)
+        self.assertIsNotNone(resumed["claim"])
+        self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
+        self.assertEqual(resumed["claim"]["task"]["cwd"], before[1]["cwd"])
+        self.assertEqual((Path(before[1]["cwd"]) / "tracked.txt").read_text(encoding="utf-8"), "sealed first output\n")
+
+    def test_real_worktree_continuation_retains_checkout_and_source_files(self):
+        board, run_id, first, cont = self.pending(kind="worktree")
+        previous = first["claim"]["turn"]["input"]["executionWorkspace"]
+        resumed = self.claim(board, claim_request_id="worktree-continuation", run_id=run_id)
+        self.assertIsNotNone(resumed["claim"], resumed)
+        current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        for field in ("checkoutId", "checkoutRoot", "repositoryId", "path"):
+            self.assertEqual(current[field], previous[field])
+        self.assertEqual(resumed["claim"]["task"]["cwd"], previous["path"])
+        self.assertEqual((self.repo / "tracked.txt").read_text(encoding="utf-8"), "base\n")
+        self.assertEqual(native_path(Path(current["path"]) / "tracked.txt").read_text(encoding="utf-8"), "sealed first output\n")
+
+    def test_admission_prepares_the_current_continuation_manifest(self):
+        board, run_id, first, _ = self.pending()
+        claim = admit_board(board, {'nonce': 'n' * 16, 'runId': run_id})
+        self.assertIsNotNone(claim["claim"])
+        workspace = claim["claim"]["turn"]["input"]["executionWorkspace"]
+        previous = first["claim"]["turn"]["input"]["executionWorkspace"]
+        self.assertNotEqual(workspace["baseCommit"], previous["baseCommit"])
+        output = next(item for item in board.call("workflow_get", {"runId": run_id})["artifacts"]
+                      if item["kind"] == "output")
+        self.assertEqual(workspace["baseCommit"], output["outputCommit"])
+        self.assertEqual(native_path(Path(workspace["path"]) / "tracked.txt").read_text(encoding="utf-8"), "sealed first output\n")
+
+    def test_cancel_during_git_cannot_activate_prepared_files(self):
+        self.preparation_race("cancel")
+
+    def test_takeover_during_git_cannot_activate_old_owner_preparation(self):
+        self.preparation_race("takeover")
+
+    def test_manual_override_during_git_cannot_activate_old_input(self):
+        self.preparation_race("continue")
+
+    def test_checkout_change_during_git_cannot_overwrite_current_allocation(self):
+        self.preparation_race("checkout")
+
+    def preparation_race(self, operation):
+        board, run_id, _, cont = self.pending()
+        before = self.rows(board, run_id, cont)
+        replacement = workspace.prepare(self.directory, "replacement", self.intent(self.repository("replacement"))) if operation == "checkout" else None
+        prepared = []
+        original = workspace.prepare
+
+        def race(*args, **kwargs):
+            manifest = original(*args, **kwargs)
+            prepared.append(manifest)
+            view = board.call("workflow_get", {"runId": run_id})
+            if operation == "cancel":
+                board.call("workflow_cancel", {"runId": run_id, "commandId": "cancel-during-prepare", **self.control(view)})
+            elif operation == "takeover":
+                board.call("workflow_takeover", {"runId": run_id, "commandId": "takeover-during-prepare", "expectedOwnerGeneration": view["ownerGeneration"], "newHostId": "host-2", **self.control(view)})
+            elif operation == "continue":
+                self.continue_run(board, view, command_id="override-during-prepare", input="new Host input")
+            else:
+                # A coordinator allocation replacement, including its reservation.
+                # Deliberately retain revision to require actual manifest comparison.
+                with board.store.db.write() as connection:
+                    connection.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?", (canonical_json(replacement), run_id))
+                    connection.execute("UPDATE tasks SET cwd=? WHERE task_id=?", (replacement["path"], run_id))
+                    connection.execute("UPDATE workspace_reservations SET workspace_id=?, checkout_id=?, repository_id=?, path=?, manifest_sha256=? WHERE holder_task_id=? AND state='held'", (replacement["workspaceId"], replacement["checkoutId"], replacement["repositoryId"], replacement["path"], replacement["manifestSha256"], run_id))
+            return manifest
+
+        with patch.object(workspace, "prepare", side_effect=race):
+            board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        after = self.rows(board, run_id, cont)
+        self.assertIsNone(after[2]["workspace_manifest_json"])
+        self.assertEqual(after[0]["workspace_manifest_json"], canonical_json(replacement) if replacement else before[0]["workspace_manifest_json"])
+        self.assertEqual(after[1]["cwd"], replacement["path"] if replacement else before[1]["cwd"])
+        self.assertEqual(after[2]["input_text"], before[2]["input_text"])
+        self.assertEqual(after[1]["spec_json"], before[1]["spec_json"])
+        self.assertTrue((self.directory / "workspaces" / prepared[0]["workspaceId"] / "manifest.json").exists(), "fenced preparation remains recoverable")
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(board.store.workflow.claim_blocker(connection, connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()))
+
+    def test_wrong_prepared_checkout_becomes_attention(self):
+        board, run_id, _, cont = self.pending()
+        replacement = workspace.prepare(self.directory, "wrong-checkout", self.intent(self.repository("wrong-checkout")))
+        before = self.rows(board, run_id, cont)
+        def wrong_checkout(*args, _preparation, **kwargs):
+            _preparation["replayed"] = False
+            return replacement
+
+        with patch.object(workspace, "prepare", side_effect=wrong_checkout), patch.object(workspace, "verify") as verify:
+            board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        verify.assert_not_called()
+        after = self.rows(board, run_id, cont)
+        self.assertEqual(after[0]["state"], "awaiting-host")
+        self.assertEqual(after[0]["workspace_manifest_json"], before[0]["workspace_manifest_json"])
+        self.assertEqual(after[1]["cwd"], before[1]["cwd"])
+        self.assertIsNone(after[2]["workspace_manifest_json"])
+
+    def test_transferred_checkout_is_not_scanned_by_preparation(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{"requestId": "helper", "task": "shared helper", "cwd": str(self.repo), "executionWorkspace": {"kind": "existing", "access": "write"}}])
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.continue_run(board, view, helper_policy="keep")
+        with patch.object(workspace, "prepare", side_effect=AssertionError("must not scan a transferred checkout")) as prepare:
+            board.store.workflow.prepare_continuation_workspace({"runId": submitted["runId"]})
+        prepare.assert_not_called()
+
+    def test_latest_seal_uses_publication_order_with_equal_timestamps(self):
+        self.seal_order(False)
+
+    def test_latest_seal_uses_publication_order_after_clock_rollback(self):
+        self.seal_order(True)
+
+    def seal_order(self, rollback):
+        clock = FakeClock()
+        board, run_id, _, _ = self.pending(clock=clock)
+        second = self.claim(board, claim_request_id="second")
+        (self.repo / "tracked.txt").write_text("newest second output\n", encoding="utf-8", newline="\n")
+        if rollback:
+            clock.value = "2000-01-01T00:00:00.000Z"
+        # A newer UUID that sorts before the old artifact makes the timestamp
+        # tie regression deterministic, independently of random UUID luck.
+        ids = (uuid.UUID(int=value) for value in itertools.count(1))
+        with patch.object(workflow_module.uuid, "uuid4", side_effect=lambda: next(ids)):
+            self.finish_turn(board, second, disposition="assistance")
+        view = board.call("workflow_get", {"runId": run_id})
+        self.continue_run(board, view, command_id="third")
+        third = self.claim(board, claim_request_id="claim-third")
+        self.assertIsNotNone(third["claim"])
+        with board.store.db.read() as connection:
+            latest = connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='output' ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()
+        self.assertEqual(third["claim"]["turn"]["input"]["executionWorkspace"]["baseCommit"], json.loads(latest[0])["commit"])
+
+    def test_helper_output_reference_never_impersonates_a_new_failed_attempt(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        helper_repo = self.repository("helper")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        approved = self.decide(board, view, view["activeRequest"]["requestId"], autoContinue=False,
+                               helpers=[{"requestId": "helper", "task": "independent helper", "cwd": str(helper_repo), "executionWorkspace": {"kind": "existing", "access": "write"}}])
+        child = approved["children"][0]["taskId"]
+        first = self.claim(board, claim_request_id="helper-first", run_id=child)
+        self.finish_turn(board, first, disposition="attention")
+        with board.store.db.read() as connection:
+            handed = board.store.workflow._helper_outcomes(connection, submitted["runId"])[0]
+        self.assertEqual(handed["artifact"]["attemptId"], first["claim"]["attempt"]["attemptId"])
+        child_view = board.call("workflow_get", {"runId": child})
+        board.store.workflow.continue_run({"runId": child, "commandId": "helper-second", "expectedRevision": child_view["revision"], "input": "new attempt", "helperPolicy": "keep"}, console_authority={"sessionId": "private-test-console"})
+        second = self.claim(board, claim_request_id="claim-helper-second", run_id=child)
+        self.assertIsNotNone(second["claim"], second)
+        self.finish_turn(board, second, runner_status="failed", exit_code=1, seal=False)
+        with board.store.db.read() as connection:
+            handed = board.store.workflow._helper_outcomes(connection, submitted["runId"])[0]
+        self.assertEqual(handed["attemptId"], second["claim"]["attempt"]["attemptId"])
+        self.assertEqual(handed["generation"], 2)
+        self.assertNotIn("artifact", handed)
+
+    def test_handoff_ignores_outputs_from_other_actual_checkouts(self):
+        board, run_id, first, cont = self.pending()
+        original = self.rows(board, run_id, cont)[0]
+        other = workspace.prepare(self.directory, "other-input", self.intent(self.repository("other")))
+        attempt_id = first["claim"]["attempt"]["attemptId"]
+        seal = workspace.seal(self.directory, other, run_id, attempt_id)
+        with board.store.db.write() as connection:
+            board.store.workflow._pin_artifact(connection, run_id=run_id, kind="output", manifest=seal, attempt_id=attempt_id, turn_id=first["claim"]["turn"]["turnId"], now=board.store.now())
+        with board.store.db.read() as connection:
+            chosen = board.store.workflow._latest_handoff(connection, original, json.loads(original["workspace_manifest_json"]))
+        self.assertEqual(chosen["manifestSha256"], json.loads(original["workspace_manifest_json"])["manifestSha256"])
+        self.assertNotEqual(chosen["manifestSha256"], other["manifestSha256"])
+
+    def test_authorized_helper_seal_becomes_the_same_checkout_handoff(self):
+        board = self.board(clock=FakeClock())
+        self.register(board)
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
+        parent = self.claim(board)
+        (self.repo / "tracked.txt").write_text("parent output\n", encoding="utf-8", newline="\n")
+        self.finish_turn(board, parent, disposition="assistance")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{"requestId": "helper", "task": "shared checkout helper", "cwd": str(self.repo), "executionWorkspace": {"kind": "existing", "access": "write"}}])
+        helper = approved["children"][0]["taskId"]
+        claim = self.claim(board, claim_request_id="helper-claim", run_id=helper)
+        (self.repo / "tracked.txt").write_text("newer helper output\n", encoding="utf-8", newline="\n")
+        self.finish_turn(board, claim)
+        with board.store.db.read() as connection:
+            artifact = connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='output'", (helper,)).fetchone()
+        resumed = self.claim(board, claim_request_id="resumed", run_id=submitted["runId"])
+        self.assertIsNotNone(resumed["claim"], resumed)
+        self.assertEqual(resumed["claim"]["turn"]["input"]["executionWorkspace"]["baseCommit"], json.loads(artifact[0])["commit"])
+
+
+class RestartPreparationTests(WorkflowTestCase):
+    """Persisted preparation and ownership survive a new board coordinator."""
+
+    _repository_template = None
+    git = PreparationTests.git
+    repository = PreparationTests.repository
+    failed_helper = PreparationTests.failed_helper
+    rows = PreparationTests.rows
+
+    def setUp(self):
+        super().setUp()
+        self.workspace = workspace
+        workflow_module._workspace_module = workspace
+        self.repo = self.repository("repo")
+
+    def manifest(self, board, run_id):
+        with board.store.db.read() as connection:
+            return json.loads(connection.execute(
+                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (run_id,)
+            ).fetchone()[0])
+
+    def test_initial_immutable_input_wins_over_later_manifest_reservation_and_cwd(self):
+        board = self.board()
+        self.register(board)
+        run = self.submit(board, request_id="initial-project", cwd=str(self.repo),
+                          executionWorkspace={"kind": "worktree", "access": "write"},
+                          macroTask={"title": "initial project"})
+        original = self.manifest(board, run["runId"])
+        project = workspace.inspect(str(self.repo))["repositoryId"]
+        other = self.repository("other-project")
+        foreign = self.submit(board, request_id="foreign-project", cwd=str(other),
+                              executionWorkspace={"kind": "worktree", "access": "write"})
+        foreign_manifest = self.manifest(board, foreign["runId"])
+        # These mutable fallbacks describe a later execution site. The first
+        # immutable input artifact continues to name the delegated project.
+        with board.store.db.write() as connection:
+            connection.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?",
+                               (canonical_json(foreign_manifest), run["runId"]))
+            connection.execute("UPDATE workspace_reservations SET repository_id=?,path=? WHERE holder_task_id=?",
+                               (foreign_manifest["repositoryId"], foreign_manifest["path"], run["runId"]))
+            connection.execute("UPDATE tasks SET cwd=? WHERE task_id=?", (str(other), run["runId"]))
+        board = self.board()
+        task = board.call("task_get", {"runId": run["runId"]})["task"]
+        self.assertEqual(task["lineage"]["project"]["id"], project)
+        listed = board.call("task_list", {"projectId": project})
+        self.assertIn(run["runId"], {row["runId"] for row in listed["runs"]})
+        foreign_list = board.call("task_list", {"projectId": foreign_manifest["repositoryId"]})
+        self.assertNotIn(run["runId"], {row["runId"] for row in foreign_list["runs"]})
+        timeline = board.call("macro_task_timeline", {"macroTaskId": run["macroTaskId"]})
+        self.assertEqual(timeline["macroTask"]["project"]["id"], project)
+        with board.store.db.read() as connection:
+            retained = json.loads(connection.execute(
+                "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
+                (run["runId"],)).fetchone()[0])
+        self.assertEqual(retained, original)
+
+    def test_restart_helper_transfer_handoff_and_return_keep_single_ownership(self):
+        board = self.board()
+        self.register(board)
+        root = self.submit(board, request_id="restart-parent", cwd=str(self.repo),
+                           executionWorkspace={"kind": "existing", "access": "write"})
+        parent = self.claim(board, run_id=root["runId"])
+        (self.repo / "tracked.txt").write_text("parent output\n", encoding="utf-8", newline="\n")
+        self.finish_turn(board, parent, disposition="assistance")
+        view = board.call("workflow_get", {"runId": root["runId"]})
+        approved = self.decide(board, view, view["activeRequest"]["requestId"], helpers=[{
+            "requestId": "restart-shared-helper", "task": "finish shared checkout", "cwd": str(self.repo),
+            "executionWorkspace": {"kind": "existing", "access": "write"},
+        }])
+        helper_id = approved["children"][0]["taskId"]
+        old = parent["claim"]["turn"]["input"]["executionWorkspace"]
+        board = self.board()
+        for access in ("read", "write"):
+            with self.subTest(access=access):
+                with self.assertRaises(BoardError) as blocked:
+                    self.submit(board, request_id=f"restart-competing-{access}", cwd=str(self.repo),
+                                executionWorkspace={"kind": "existing", "access": access})
+                self.assertEqual(blocked.exception.code, "PREPARATION_CONFLICT")
+                self.assertEqual(blocked.exception.details["checkoutId"], workspace.inspect(str(self.repo))["checkoutId"])
+                if access == "write":
+                    self.assertEqual(blocked.exception.details["holderTaskId"], helper_id)
+        helper = self.claim(board, run_id=helper_id, claim_request_id="restart-helper-claim")
+        self.assertIsNotNone(helper["claim"], helper)
+        (self.repo / "tracked.txt").write_text("helper output after restart\n", encoding="utf-8", newline="\n")
+        self.finish_turn(board, helper)
+        with board.store.db.read() as connection:
+            output = json.loads(connection.execute(
+                "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='output'", (helper_id,)).fetchone()[0])
+        resumed = self.claim(board, run_id=root["runId"], claim_request_id="restart-parent-claim")
+        self.assertIsNotNone(resumed["claim"], resumed)
+        current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        self.assertEqual(current["baseCommit"], output["commit"])
+        self.assertEqual(current["path"], old["path"])
+        self.assertEqual(current["checkoutId"], workspace.inspect(str(self.repo))["checkoutId"])
+        with board.store.db.read() as connection:
+            holders = connection.execute("SELECT holder_task_id FROM workspace_reservations WHERE state='held'").fetchall()
+        self.assertEqual([row[0] for row in holders], [root["runId"]])
+
+    def test_restart_failed_helper_partial_recovery_uses_the_same_checkout(self):
+        board, parent, helper_id, failed, checkout = self.failed_helper()
+        with board.store.db.read() as connection:
+            original_turn = tuple(connection.execute("SELECT t.input_json,a.result_json FROM workflow_turns t"
+                                                    " JOIN attempts a USING(attempt_id) WHERE t.attempt_id=?",
+                                                    (failed["claim"]["attempt"]["attemptId"],)).fetchone())
+        board = self.board()
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        continuation = self.continue_run(board, view, targetRunId=helper_id,
+                                         command_id="restart-recover-partial", input="finish the preserved partial tests")
+        resumed = self.claim(board, run_id=helper_id, claim_request_id="restart-partial-claim")
+        self.assertIsNotNone(resumed["claim"], resumed)
+        manifest = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        self.assertEqual(manifest["path"], str(checkout))
+        self.assertEqual(manifest["snapshot"]["includedUntracked"], ["tests/test_math_ops.py"])
+        self.assertIn("test_partial", self.git(checkout, "show", f"{manifest['inputCommit']}:tests/test_math_ops.py"))
+        self.assertNotIn("outside.txt", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
+        self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "outside the helper write scope\n")
+        rows = self.rows(board, helper_id, continuation["continuationId"])
+        self.assertEqual(rows[3]["state"], "held")
+        with board.store.db.read() as connection:
+            saved = connection.execute("SELECT t.input_json,a.result_json FROM workflow_turns t"
+                                       " JOIN attempts a USING(attempt_id) WHERE t.attempt_id=?",
+                                       (failed["claim"]["attempt"]["attemptId"],)).fetchone()
+        self.assertEqual(json.loads(saved["input_json"]), failed["claim"]["turn"]["input"])
+        self.assertEqual(tuple(saved), original_turn)

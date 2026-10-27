@@ -1,0 +1,681 @@
+"""Shared test support: private state directories and an in-process board harness.
+
+Every service test uses a unique private state directory. Cleanup addresses only
+that directory through its authenticated service endpoint and lifetime locks,
+including a replacement daemon that the CLI may have started after a restart.
+"""
+from __future__ import annotations
+
+import errno
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from contextlib import ExitStack, closing, contextmanager
+from pathlib import Path
+
+PYTHON_ROOT = (Path(__file__).resolve().parents[2] / "src")
+DELEGATE_ROOT = PYTHON_ROOT.parent
+if str(PYTHON_ROOT) not in sys.path:
+    sys.path.insert(0, str(PYTHON_ROOT))
+
+from hey_my_buddy import locking  # noqa: E402
+from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
+from hey_my_buddy.cli.checks import prepare_test_home, remove_private_test_root  # noqa: E402
+from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference, read_execution_receipt  # noqa: E402
+from hey_my_buddy.private_dirs import attempt_root, directory_mode  # noqa: E402
+from hey_my_buddy.paths import native_path  # noqa: E402
+from hey_my_buddy.blackboard.store.db import DB_FILE  # noqa: E402
+from hey_my_buddy.console.server import Console  # noqa: E402
+from hey_my_buddy.blackboard.routing.decision import DecisionCoordinator  # noqa: E402
+from hey_my_buddy.blackboard.evaluation.evaluation import EvaluationStore  # noqa: E402
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION  # noqa: E402
+from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission, WaitService, call_operation  # noqa: E402
+from hey_my_buddy.blackboard.service.live_registry import LiveRegistry  # noqa: E402
+from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
+
+#: A discovery document with the same shape the installed-harness helper emits. Tests
+#: point ``HMB_MODEL_CATALOG_FILE`` at this fixture instead of invoking Node.
+FIXTURE_CATALOG = {
+    "source": "file:test-fixture",
+    "harnessVersion": "test-harness-1",
+    "providerVersion": "@deepseek-ai/dsh-llm-deepseek@test",
+    "discoveredAt": "2026-01-01T00:00:00.000Z",
+    "providers": [
+        {
+            "provider": "deepseek-official",
+            "displayName": "DeepSeek",
+            "packageName": "@deepseek-ai/dsh-llm-deepseek",
+            "packageVersion": "test",
+            "harness": "dsh",
+            "efforts": ["off", "low", "high", "max"],
+            "models": [
+                {
+                    "id": "deepseek-flash",
+                    "name": "DeepSeek-V41-Flash",
+                    "description": "fixture fast model",
+                    "contextWindow": 1000000,
+                    "inputModalities": ["text", "image"],
+                },
+                {
+                    "id": "deepseek-v4-pro",
+                    "name": "DeepSeek-V4-Pro",
+                    "description": "fixture strong model",
+                    "contextWindow": 1000000,
+                    "inputModalities": ["text"],
+                },
+            ],
+        }
+    ],
+    "warnings": [],
+}
+
+
+def write_catalog_fixture(directory: Path, payload: dict | None = None) -> Path:
+    path = Path(directory) / "model-catalog.json"
+    path.write_text(json.dumps(payload or FIXTURE_CATALOG), encoding="utf-8", newline="\n")
+    os.chmod(path, 0o600)
+    return path
+
+
+class FakeClock:
+    """Deterministic wall clock so lease and expiry fences are exercisable."""
+
+    def __init__(self, start: str = "2026-01-01T00:00:00.000Z"):
+        self.value = start
+
+    def __call__(self) -> str:
+        return self.value
+
+    def advance(self, seconds: float) -> str:
+        from datetime import datetime, timedelta
+
+        moment = datetime.fromisoformat(self.value.replace("Z", "+00:00")) + timedelta(seconds=seconds)
+        self.value = moment.isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        return self.value
+
+
+def shutdown_private_rpc() -> None:
+    """End this fixture's communication before another private state is selected."""
+    import c_two as cc
+    if not cc.shutdown().get("completed"):
+        raise AssertionError("Private test RPC shutdown is unconfirmed; preserve its state")
+
+
+def _lock_held(path: Path) -> bool:
+    try:
+        fd = os.open(path, os.O_RDWR)
+    except FileNotFoundError:
+        return False
+    try:
+        try:
+            locking.lock(fd, blocking=False)
+        except BlockingIOError:
+            return True
+        locking.unlock(fd)
+        return False
+    finally:
+        os.close(fd)
+
+
+_confirmed_private_stops: dict[Path, tuple[int, str, str]] = {}
+
+
+def _service_generation(endpoint: dict) -> tuple[int, str, str]:
+    return endpoint['pid'], endpoint['startedAt'], endpoint['serviceId']
+
+
+def request_private_service_stop(directory: Path, call, **params) -> dict:
+    """Confirm one private service's stop reply for its later lock drain."""
+    from hey_my_buddy.protocol.transport import _read_endpoint
+
+    directory = Path(directory).resolve()
+    _confirmed_private_stops.pop(directory, None)
+    endpoint = _read_endpoint(directory)
+    generation = _service_generation(endpoint) if endpoint is not None else None
+    reply = call("service_control", {"action": "stop", **params})
+    if not reply.get("stopped") or reply.get("unresolvedAttempts"):
+        raise AssertionError(f"Test service shutdown unconfirmed; preserved {directory}: {reply}")
+    if generation is not None:
+        _confirmed_private_stops[directory] = generation
+    return reply
+
+
+def stop_private_service(directory: Path, timeout: float = 35.0) -> None:
+    """Stop the daemon attached to this exact test directory and await its locks."""
+    from hey_my_buddy.protocol.transport import ServiceError, _read_endpoint, _request
+
+    directory = Path(directory).resolve()
+    deadline = time.monotonic() + timeout
+    requested = False
+    observed_running = False
+    while True:
+        starting = _lock_held(directory / "control-start.lock")
+        running = any(_lock_held(directory / name) for name in ("control-daemon.lock", "board-owner.lock"))
+        if not starting and not running:
+            if os.name == "nt" and observed_running and not requested:
+                raise AssertionError(f"Test service stop reply unconfirmed; preserved {directory}")
+            _confirmed_private_stops.pop(directory, None)
+            return
+        if running:
+            observed_running = True
+            endpoint = _read_endpoint(directory)
+            confirmed = _confirmed_private_stops.get(directory)
+            # control.json can disappear just before the stopped generation
+            # releases its locks. A replacement publishes a different identity.
+            requested = confirmed is not None and (endpoint is None or confirmed == _service_generation(endpoint))
+            if endpoint is not None and not requested:
+                try:
+                    request_private_service_stop(directory,
+                        lambda operation, params: _request(endpoint, operation, params, state_dir=directory),
+                        drainSeconds=20, note="private test cleanup")
+                except ServiceError:
+                    # The endpoint may have disappeared during a restart. Recheck
+                    # the lifetime locks and attach to its replacement if needed.
+                    pass
+                else:
+                    requested = True
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"Test service still owns state; preserved {directory}")
+        time.sleep(0.05)
+
+
+def assert_private_processes_gone(directory: Path) -> None:
+    """Keep private evidence if a service or execution still uses this state root."""
+    if os.name == "nt":
+        # stop_private_service confirms the drain reply before these lifecycle
+        # locks are released. The enclosing runner owns ordinary suite descendants
+        # in its held Job; a whole-machine file scan cannot prove them stopped.
+        held = [name for name in ("control-start.lock", "control-daemon.lock", "board-owner.lock")
+                if _lock_held(Path(directory) / name)]
+        if held:
+            raise AssertionError(f"Private test service shutdown unconfirmed; preserved {directory}: {held}")
+        return
+    if not any((directory / name).exists() for name in ('control-daemon.lock', 'control.json')):
+        return
+    from hey_my_buddy.cli.checks import observed_processes
+
+    processes, problems, _ = observed_processes(Path(directory))
+    if processes or problems:
+        raise AssertionError(f"Private test process shutdown unconfirmed; preserved {directory}: "
+                             f"{len(processes)} process(es), {problems}")
+
+
+def cleanup_private_tree(directory: Path, state_directories: tuple[Path, ...]) -> None:
+    """Retire a fixture tree, draining its explicitly owned service states.
+
+    The enclosing checks Job covers ordinary Windows descendants. POSIX keeps
+    the full-tree argv, open-path and lifetime-lock observation before deletion.
+    """
+    from hey_my_buddy.cli.checks import held_locks, observed_processes, request_cooperative_stop
+
+    for state in state_directories:
+        stop_private_service(state)
+    shutdown_private_rpc()
+    problems = []
+    processes = []
+    if os.name != "nt":
+        problems = request_cooperative_stop(directory)
+        processes, observation_problems, _ = observed_processes(directory)
+        problems.extend(observation_problems)
+    held = held_locks(directory)["daemon"]
+    if held or processes or problems:
+        raise AssertionError(f"Private fixture shutdown unconfirmed; preserved {directory}: "
+                             f"{len(held)} lock(s), {len(processes)} process(es), {problems}")
+    remove_private_test_root(directory)
+
+
+_INHERITED_CHILD_KEYS = {
+    "HMB_STATE_DIR", "HMB_RUNTIME_ROOT", "HMB_RUNTIME", "HMB_RUNTIME_IDENTITY",
+    "HMB_AGENT_CREDENTIAL_FILE", "HMB_DEV_SOURCE", "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT",
+    "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
+}
+
+
+def _child_environment(directory: Path, overrides: dict | None = None) -> dict:
+    environment = {key: value for key, value in os.environ.items() if key not in _INHERITED_CHILD_KEYS and not key.startswith(("HMB_", "ANTHROPIC_", "CLAUDE_CODE_", "C2_", "ZCODE_", "ZAI_", "ZHIPU_", "GLM_", "DSH_", "DEEPSEEK_"))}
+    # HOME and SDK locations belong to this fixture, never to the interpreter's
+    # inherited account. Harness configuration directories stay empty.
+    private_home = directory / "home"
+    environment.update(
+        HOME=str(private_home),
+        USERPROFILE=str(private_home),
+        CODEX_HOME=str(private_home / ".codex"),
+        CLAUDE_CONFIG_DIR=str(private_home / ".claude"),
+        ZCODE_DATA_BASE_DIR=str(private_home / ".zcode"),
+        DSH_HOME=str(private_home / ".dsh"),
+        XDG_CONFIG_HOME=str(private_home / ".config"),
+        XDG_DATA_HOME=str(private_home / ".local/share"),
+        XDG_CACHE_HOME=str(private_home / ".cache"),
+        XDG_STATE_HOME=str(private_home / ".local/state"),
+        XDG_RUNTIME_DIR=str(directory / "runtime-root"),
+        APPDATA=str(private_home / "AppData/Roaming"),
+        LOCALAPPDATA=str(private_home / "AppData/Local"),
+        HMB_STATE_DIR=str(directory),
+        HMB_RUNTIME_ROOT=str(directory / "runtime-root"),
+        PYTHONPATH=str(PYTHON_ROOT) + (os.pathsep + environment["PYTHONPATH"] if environment.get("PYTHONPATH") else ""),
+        HMB_DEV_SOURCE="1",
+        # A test child never shares the console backend's fixed default port; the
+        # operating system assigns a private one. Tests may override this explicitly.
+        HMB_CONSOLE_PORT="0",
+        HMB_CLAUDE_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/claude-not-installed"),
+        HMB_CODEX_CLI=str(PYTHON_ROOT.parent / "tests/python/fixtures/codex-not-installed"),
+    )
+    environment.update(overrides or {})
+    if environment.get("HMB_HARNESS_RECORD_FILE"):
+        selected = json.loads(Path(environment["HMB_HARNESS_RECORD_FILE"]).read_text(encoding="utf-8"))
+        for harness in selected:
+            environment.pop(f"HMB_{harness.upper()}_CLI", None)
+    # Test-supplied paths may vary within the fixture, but must not redirect its
+    # daemon or installed runtime into another board's state.
+    environment["HMB_STATE_DIR"] = str(directory)
+    if not Path(environment["HMB_RUNTIME_ROOT"]).resolve().is_relative_to(directory.resolve()):
+        raise ValueError("Test runtime root must be inside its private state directory")
+    for key in ("HOME", "USERPROFILE", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "ZCODE_DATA_BASE_DIR",
+                "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE", "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "DSH_HOME",
+                "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
+                "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "HMB_MODEL_CATALOG_FILE"):
+        if key in environment and not Path(environment[key]).resolve().is_relative_to(directory.resolve()):
+            raise ValueError(f"Test {key} must be inside its private state directory")
+    prepare_test_home(Path(environment["HOME"]))
+    return environment
+
+
+@contextmanager
+def private_state_dir(prefix: str = "hey-my-buddy-test-"):
+    # The resolved form keeps one path identity for the whole board: macOS's
+    # per-user /var/folders alias and its /private/var target must never be two
+    # different roots inside one test (storage boundaries and Git both resolve).
+    directory = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
+    os.chmod(directory, 0o700)
+    try:
+        yield directory
+    finally:
+        stop_private_service(directory)
+        shutdown_private_rpc()
+        assert_private_processes_gone(directory)
+        remove_private_test_root(directory)
+
+
+def publish_result_receipt(state_dir: Path, params: dict) -> dict:
+    """Turn a model-free inline test report into the one production RPC shape."""
+    state_dir = Path(state_dir)
+    attempt_id = params["attemptId"]
+    with closing(sqlite3.connect((state_dir / DB_FILE).resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        row = db.execute("SELECT task_id, adapter, model_harness, created_at FROM attempts WHERE attempt_id = ?",
+                         (attempt_id,)).fetchone()
+    if row is None:
+        raise AssertionError(f"Fixture result has no claimed attempt: {attempt_id}")
+    adapter = row["model_harness"] if row["adapter"] == "decision" else row["adapter"]
+    directory = attempt_root(state_dir, adapter, row["task_id"], attempt_id)
+    path = directory / RECEIPT
+    report = {key: value for key, value in params.items()
+              if key not in ("attemptId", "generation", "nonce")}
+    native_path(directory).mkdir(mode=directory_mode(), parents=True, exist_ok=True)
+    fsync_json(path, {"taskId": row["task_id"], "attemptId": attempt_id,
+                                        "generation": params["generation"], "report": report,
+                                        "createdAt": row["created_at"]})
+    return {"attemptId": attempt_id, "generation": params["generation"], "nonce": params["nonce"],
+            "receipt": receipt_reference(directory)}
+
+
+def settle_fixture_receipt(board: "InProcessBoard", attempt_id: str, *, native_stopped: bool = False) -> dict:
+    """Give a received fixture its root-stop proof; native proof must be explicit."""
+    with board.store.db.read() as connection:
+        attempt = board.store._attempt_row(connection, attempt_id)
+        adapter = attempt["model_harness"] if attempt["adapter"] == "decision" else attempt["adapter"]
+        directory = attempt_root(board.directory, adapter, attempt["task_id"], attempt_id)
+        binding = {"taskId": attempt["task_id"], "attemptId": attempt_id, "generation": attempt["generation"]}
+        digest = connection.execute("SELECT sha256 FROM attempt_received_receipts WHERE attempt_id=?",
+                                    (attempt_id,)).fetchone()[0]
+    receipt = read_execution_receipt(directory, binding=binding, sha256=digest)
+    if receipt["report"].get("shutdownConfirmed", False) or native_stopped:
+        return board.store.finalize_execution_receipt(attempt_id, receipt, {
+            "kind": "process-reaped", "native": "receipt" if not native_stopped else "identity-absent"})
+    task = board.call("task_get", {"runId": binding["taskId"]})["task"]
+    return {"attempt": task["selectedAttempt"], "task": task, "committed": False, "duplicate": False}
+
+
+class FixtureBoardClient(BoardClient):
+    """Publish a model-free execution receipt for the in-process fixture."""
+
+    def __init__(self, board: "InProcessBoard", **options):
+        super().__init__(board.directory, call=board.call, **options)
+        self._board = board
+
+    def submit_result(self, attempt_id: str, generation: int, nonce: str, report: dict) -> dict:
+        if set(report) == {"path", "sha256"}:
+            super().submit_result(attempt_id, generation, nonce, report)
+            return settle_fixture_receipt(self._board, attempt_id)
+        return self._board.call("execution_result", {"attemptId": attempt_id,
+                                                     "generation": generation, "nonce": nonce, **report})
+
+
+class InProcessBoard:
+    """The real store and the real resource implementations, in one process.
+
+    Only the C-Two transport is skipped; every validation, transaction, transition
+    and error code is the production code path.
+    """
+
+    def __init__(self, directory: Path, **options):
+        self.directory = Path(directory)
+        self._resources = ExitStack()
+        try:
+            self._initialize(**options)
+        except BaseException:
+            self._resources.close()
+            raise
+
+    def _initialize(self, **options):
+        clock = options.get("clock")
+        self.store = BoardStore(
+            self.directory,
+            max_concurrent=options.get("max_concurrent", 2),
+            **({"clock": clock} if clock is not None else {}),
+        )
+        self._resources.callback(self.store.db.close)
+        # One evaluation store and one decision coordinator for the whole harness:
+        # the store hooks and resource implementations share selection state.
+        self.store.evaluation = EvaluationStore(
+            self.store,
+            clock=clock,
+        )
+        self.store.decisions = DecisionCoordinator(self.store, self.store.evaluation)
+        self.store.initialize()
+        # These store/transport unit fixtures model healthy native harnesses.
+        # Dedicated discovery/service tests start with empty real health records.
+        with self.store.db.write() as db:
+            for name in ('dsh', 'zcode', 'codex', 'claude'):
+                db.execute("INSERT OR IGNORE INTO harness_health(harness,status,record_json) VALUES(?,'ready',?)",
+                           (name, json.dumps({"reason": None})))
+        self.admission = WaitAdmission(options.get("wait_capacity", 4))
+        self.control: dict = {"wait_admission": self.admission, "contract_version": CONTRACT_VERSION}
+        self.stopped: list[dict] = []
+        self.restarted: list[dict] = []
+        self.evaluation = self.store.evaluation
+        self.console: Console | None = None
+        self.live_registry = LiveRegistry()
+        self._resources.callback(self.live_registry.close)
+        self.service = BoardService(
+            self.store,
+            live_registry=self.live_registry,
+            token="test-token",
+            control=self.control,
+            on_stop=lambda params: self.stopped.append(params) or {"action": "stop", "stopped": True},
+            on_restart=lambda params: self.restarted.append(params) or {"action": "restart", "restarting": True},
+            console_factory=self.console_action,
+        )
+        self._resources.callback(self.service.harnesses.close)
+        # Native startup validation shares this synthetic health boundary. The
+        # real service/discovery suites construct BoardService independently.
+        self.service.harnesses.refresh = lambda name, **kwargs: self.service.harnesses.get(name)
+        self.wait_service = WaitService(self.store, self.admission, token="test-token")
+        self.console = Console(
+            self.store,
+            self.service,
+            port=0,
+            assets_dir=options.get("console_assets", self.directory / "console-assets"),
+        )
+        self._resources.callback(lambda: self.console.close())
+
+    def console_action(self, params: dict) -> dict:
+        if self.console is None:  # pragma: no cover - only during construction
+            return {"url": None, "running": False, "readOnly": False}
+        if params["action"] == "close":
+            return self.console.close(expected_console_id=params.get("expectedConsoleId"))
+        if params["action"] == "status":
+            return self.console.status()
+        return self.console.start()
+
+    def call(self, operation: str, params: dict) -> dict:
+        service = self.wait_service if operation.startswith("events_wait") or operation == "wait_capacity" else self.service
+        if operation == "execution_result" and "receipt" not in params:
+            params = publish_result_receipt(self.directory, params)
+            call_operation(service, operation, params)
+            return settle_fixture_receipt(self, params["attemptId"])
+        return call_operation(service, operation, params)
+
+    def console_call(self, operation: str, params: dict) -> dict:
+        """Exercise an authenticated private console session in process."""
+        session = "test-console-session"
+        self.service.register_console_authority(session)
+        return self.call(operation, {**params, "consoleAuthority": {"sessionId": session}})
+
+    def client(self, **kwargs) -> BoardClient:
+        return FixtureBoardClient(self, **kwargs)
+
+    def submit_execution(self, **params) -> dict:
+        """Seed an execution through the service's store, outside the Host API."""
+        return self.store.task_submit(params)
+
+    def close(self) -> None:
+        self._resources.close()
+
+
+class BoardTestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._stack = []
+        self._cleanup_failures = []
+        self.directory = Path(tempfile.mkdtemp(prefix="hey-my-buddy-test-")).resolve()
+        os.chmod(self.directory, 0o700)
+        super().addCleanup(self._cleanup)
+
+    def addCleanup(self, function, /, *args, **kwargs):
+        # Only observe explicitly registered cleanup; never discover resources.
+        def cleanup():
+            try:
+                function(*args, **kwargs)
+            except Exception as error:
+                self._cleanup_failures.append(error)
+                raise
+
+        super().addCleanup(cleanup)
+
+    def _cleanup(self) -> None:
+        failures = list(self._cleanup_failures)
+
+        def attempt(action, *args):
+            try:
+                action(*args)
+            except Exception as error:
+                failures.append(error)
+
+        def stop_child(handle):
+            if handle.poll() is None:
+                handle.terminate()
+                try:
+                    handle.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    handle.kill()
+                    handle.wait(timeout=5)
+
+        attempt(stop_private_service, self.directory)
+        for board in getattr(self, "_stack", []):
+            attempt(board.close)
+        for handle in getattr(self, "children", []):
+            attempt(stop_child, handle)
+        attempt(shutdown_private_rpc)
+        attempt(assert_private_processes_gone, self.directory)
+        if failures:
+            raise ExceptionGroup(f"Test resource close failed; preserved {self.directory}", failures)
+        remove_private_test_root(self.directory)
+
+    def board(self, **options) -> InProcessBoard:
+        board = InProcessBoard(self.directory, **options)
+        self._stack.append(board)
+        return board
+
+    def assert_rpc_state_dir(self, state_dir) -> None:
+        """RPC substitutes accept only this test's explicitly supplied state root."""
+        self.assertIsInstance(state_dir, (str, Path), "RPC requires an explicit private state_dir")
+        self.assertEqual(Path(state_dir).resolve(), self.directory.resolve(),
+                         "RPC state_dir must belong to the current test")
+
+    @contextmanager
+    def rpc_connection(self, contract, *, name: str, address: str):
+        """A direct native connection in this fixture's private state domain."""
+        import c_two as cc
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        configure_client(self.directory)
+        with cc.connect(contract, name=name, address=address) as proxy:
+            yield proxy
+
+    def workdir(self, name: str = "work") -> Path:
+        path = self.directory / name
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def catalog_fixture(self, payload: dict | None = None) -> Path:
+        """Point discovery at a private fixture instead of the installed harness."""
+        path = write_catalog_fixture(self.directory, payload)
+        self._catalog_fixture_path = path
+        previous = os.environ.get("HMB_MODEL_CATALOG_FILE")
+        os.environ["HMB_MODEL_CATALOG_FILE"] = str(path)
+
+        def restore() -> None:
+            if previous is None:
+                os.environ.pop("HMB_MODEL_CATALOG_FILE", None)
+            else:
+                os.environ["HMB_MODEL_CATALOG_FILE"] = previous
+
+        self.addCleanup(restore)
+        return path
+
+    def child_environment(self, overrides: dict | None = None) -> dict:
+        """Pass this owner's catalog explicitly after inherited pins are cleared."""
+        explicit = {}
+        if getattr(self, "_catalog_fixture_path", None) is not None:
+            explicit["HMB_MODEL_CATALOG_FILE"] = str(self._catalog_fixture_path)
+        explicit.update(overrides or {})
+        return _child_environment(self.directory, explicit)
+
+    # -- real daemon helpers -------------------------------------------------
+    def submit_execution(self, **params) -> dict:
+        """Write a queued execution to this fixture's existing private board.
+
+        Do not initialize a second store: startup reconciliation belongs to the
+        daemon holding board-owner.lock. SQLite serializes this short transaction
+        with the daemon's writes, and its scheduler picks up the row on its next
+        two-second scan without a cross-process notification or submission RPC.
+        Read its actual capacity so the initial queue reason uses the same limit.
+        """
+        capacity = BoardClient(self.directory, autostart=False).health()["capacity"]
+        store = BoardStore(self.directory, max_concurrent=capacity["totalLimit"])
+        try:
+            return store.task_submit(params)
+        finally:
+            store.db.close()
+
+    @contextmanager
+    def daemon(self, *, env: dict | None = None):
+        """Start the real daemon in a child process and wait for health."""
+        from hey_my_buddy.protocol.transport import _request, _read_endpoint, ServiceError
+
+        from hey_my_buddy.protocol.rpc_config import configure_client
+        configure_client(self.directory)
+        _confirmed_private_stops.pop(self.directory.resolve(), None)
+        environment = self.child_environment(env)
+        log = open(self.directory / "test-daemon.log", "ab")
+        command = [sys.executable, '-m', 'hey_my_buddy.blackboard.service.daemon']
+        if environment.get('HMB_MODEL_CATALOG_FILE'):
+            command = [sys.executable, str(Path(__file__).parent / 'blackboard/service/fixtures/daemon_with_catalog.py')]
+        process = subprocess.Popen(
+            command,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            start_new_session=True,
+        )
+        self.children = getattr(self, "children", [])
+        self.children.append(process)
+
+        def terminate_child():
+            process.terminate()
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:  # pragma: no cover - test watchdog
+                process.kill()
+
+        deadline = time.monotonic() + 180
+        try:
+            while time.monotonic() < deadline:
+                endpoint = _read_endpoint(self.directory)
+                if endpoint:
+                    try:
+                        health = _request(endpoint, "health", {}, state_dir=self.directory)
+                        break
+                    except ServiceError:
+                        pass
+                if process.poll() is not None:
+                    raise AssertionError(
+                        f"daemon exited early: {(self.directory / 'test-daemon.log').read_text(encoding="utf-8")[-2000:]}"
+                    )
+                time.sleep(0.05)
+            else:
+                raise AssertionError(
+                    f"daemon did not become healthy: {(self.directory / 'test-daemon.log').read_text(encoding="utf-8")[-2000:]}"
+                )
+            yield process
+        finally:
+            try:
+                if process.poll() is None:
+                    if os.name == "nt":
+                        try:
+                            stop_private_service(self.directory)
+                            process.wait(timeout=15)
+                        except Exception as error:
+                            self._cleanup_failures.append(error)
+                            terminate_child()
+                            raise
+                    else:
+                        terminate_child()
+            finally:
+                log.close()
+
+    def cli(self, *arguments: str, env: dict | None = None, timeout: int = 90) -> tuple[int, dict]:
+        """Run the real CLI in a child process; returns (exit code, parsed stdout)."""
+        environment = self.child_environment(env)
+        completed = subprocess.run(
+            [sys.executable, "-m", "hey_my_buddy.cli.main", *arguments],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=timeout, encoding="utf-8",
+        )
+        text = completed.stdout.strip()
+        try:
+            # The CLI pretty-prints one JSON document; parse the whole document.
+            payload = json.loads(text) if text else {}
+        except ValueError:
+            try:
+                payload = json.loads(text.splitlines()[-1]) if text else {}
+            except (ValueError, IndexError):
+                payload = {"raw": completed.stdout, "stderr": completed.stderr}
+        return completed.returncode, payload
+
+
+def wait_for(predicate, timeout: float = 20.0, interval: float = 0.05):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(interval)
+    return None
+
+
+def enable_fixture_buddy(store, buddy):
+    """Explicit private fixture policy; negative policy tests call the service directly."""
+    keys = ("harness", "provider", "model", "effort")
+    if not all(buddy.get(key) for key in keys):
+        return
+    with store.db.write() as db:
+        db.execute("INSERT OR IGNORE INTO buddies(buddy_id,label,harness,provider,model,effort,enabled,available) VALUES(?,?,?,?,?,?,1,1) ON CONFLICT(buddy_id) DO UPDATE SET enabled=1,available=1",
+                   (":".join(buddy[key] for key in keys), "Private enabled fixture", *(buddy[key] for key in keys)))

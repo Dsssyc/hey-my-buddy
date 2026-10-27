@@ -1,0 +1,257 @@
+{
+  "ANCESTOR_TERMINAL": [],
+  "CONFLICT": [],
+  "ILLEGAL_TRANSITION": [],
+  "REVISION_CONFLICT": [],
+  "SHUTDOWN_UNCONFIRMED": [],
+  "UPGRADE_IN_PROGRESS": [],
+  "account.login-required": [],
+  "account.not-checked": [],
+  "all-candidates-cooling": [
+    "retryAt"
+  ],
+  "answer-empty": [],
+  "answer-invalid-json": [],
+  "answer-not-json": [],
+  "answer-shape": [],
+  "answer-unexpected-field": [],
+  "bridge-refused": [
+    "errorCode"
+  ],
+  "call-timeout": [],
+  "catalog-unavailable": [],
+  "catalog.account-binding-changed": [],
+  "catalog.account-status-unknown": [
+    "harness"
+  ],
+  "catalog.acp-initialize-unreadable": [],
+  "catalog.discovery-failed": [
+    "harness",
+    "errorCode"
+  ],
+  "catalog.effort-directory-omitted": [],
+  "catalog.effort-retired": [],
+  "catalog.initialize-incomplete": [],
+  "catalog.model-absent": [],
+  "catalog.model-identity-omitted": [],
+  "catalog.model-identity-or-effort-omitted": [],
+  "catalog.model-list-unreadable": [
+    "shape"
+  ],
+  "catalog.model-shape-unreadable": [],
+  "catalog.native-unavailable": [],
+  "catalog.native-unknown": [
+    "harness"
+  ],
+  "catalog.native-warning": [],
+  "config-options-shape-unreadable": [],
+  "config-shape-unreadable": [],
+  "console.entry-unavailable": [],
+  "deadline": [],
+  "decision-cancelled": [],
+  "decision-publication-failed": [
+    "errorCode"
+  ],
+  "dispatch.buddy-rejected": [
+    "errorCode",
+    "buddy",
+    "enabled",
+    "catalogReadAt",
+    "legalEfforts",
+    "access",
+    "requiredCapability",
+    "missingCapabilities",
+    "adapter",
+    "harness",
+    "cause"
+  ],
+  "execution-launch-failed": [],
+  "execution-process-not-created": [],
+  "harness.account-read-failed": [
+    "operation"
+  ],
+  "harness.auth-unverified": [
+    "operation"
+  ],
+  "harness.command-line-too-long": [
+    "operation",
+    "utf16Units",
+    "limit"
+  ],
+  "harness.entry-unsupported": [
+    "operation"
+  ],
+  "harness.interpreter-missing": [
+    "operation"
+  ],
+  "harness.launch-failed": [
+    "operation"
+  ],
+  "harness.login-required": [
+    "operation"
+  ],
+  "harness.node-missing": [
+    "operation"
+  ],
+  "harness.not-checked": [
+    "operation"
+  ],
+  "harness.not-found": [
+    "operation"
+  ],
+  "harness.output-limit": [
+    "operation"
+  ],
+  "harness.pipe-failed": [
+    "operation"
+  ],
+  "harness.probe-failed": [
+    "operation"
+  ],
+  "harness.readonly-not-implemented": [],
+  "harness.readonly-platform-unsupported": [],
+  "harness.readonly-resource-missing": [],
+  "harness.readonly-tools-unrestricted": [],
+  "harness.scan-timeout": [
+    "operation"
+  ],
+  "harness.shutdown-unverified": [
+    "operation"
+  ],
+  "harness.timeout": [
+    "operation"
+  ],
+  "harness.version-unknown": [
+    "operation"
+  ],
+  "helpers-settled": [],
+  "history.reason-unavailable": [
+    "recordId"
+  ],
+  "inquiry-answer-empty": [],
+  "inquiry-no-live-agent": [],
+  "inquiry-observe-only": [],
+  "inquiry-queued-at-attempt-end": [],
+  "inquiry-delivered-at-attempt-end": [],
+  "inquiry-root-turn-ended": [],
+  "interrupted-before-delivery": [],
+  "journal-attempt-mismatch": [],
+  "journal-attempt-unbound": [],
+  "journal-question-unknown": [],
+  "journal-record-invalid": [],
+  "journal-task-mismatch": [],
+  "lead.owned-concluded": [
+    "leadRunId"
+  ],
+  "lead.result-refused": [
+    "disposition",
+    "unfinished",
+    "total"
+  ],
+  "macro-task-deletion": [],
+  "macro-task-deletion.attached-branch": [],
+  "macro-task-deletion.awaiting-host": [],
+  "macro-task-deletion.checkout-missing": [],
+  "macro-task-deletion.dependency-retained": [],
+  "macro-task-deletion.identity-changed": [],
+  "macro-task-deletion.lock-mismatch": [],
+  "macro-task-deletion.not-a-managed-worktree": [],
+  "macro-task-deletion.owner-unproven": [],
+  "macro-task-deletion.physical-failed": [
+    "errorCode"
+  ],
+  "macro-task-deletion.queued": [],
+  "macro-task-deletion.ref-changed": [],
+  "macro-task-deletion.ref-unproven": [],
+  "macro-task-deletion.repository-changed": [],
+  "macro-task-deletion.repository-missing": [],
+  "macro-task-deletion.review": [],
+  "macro-task-deletion.routing": [],
+  "macro-task-deletion.running": [],
+  "macro-task-deletion.sealed-output-invalid": [],
+  "macro-task-deletion.stop-unconfirmed": [],
+  "macro-task-deletion.unregistered-checkout": [],
+  "macro-task-deletion.unsafe-path": [],
+  "macro-task-deletion.unsealed-changes": [],
+  "macro-task-deletion.unsealed-handoff": [],
+  "micro-task-cancelled": [],
+  "micro-task-not-found": [],
+  "micro-task-not-owned": [],
+  "model-cursor-shape-unreadable": [],
+  "model-list-shape-unreadable": [],
+  "native-authority-required": [
+    "kind"
+  ],
+  "native-metadata-wait-expired": [],
+  "no-legal-candidate": [],
+  "not-enabled": [],
+  "readonly-budget-exhausted": [],
+  "router-abstained": [],
+  "router-all-unavailable": [],
+  "router-budget-exhausted": [],
+  "router-catalog-unavailable": [
+    "cause"
+  ],
+  "router-disabled": [],
+  "router-dispatch-unverified": [],
+  "router-evidence-out-of-bounds": [],
+  "router-harness-unavailable": [
+    "cause"
+  ],
+  "router-incomplete": [],
+  "router-input-changed": [],
+  "router-input-too-large": [
+    "bytes",
+    "limit",
+    "collection",
+    "count"
+  ],
+  "router-input-unknown": [],
+  "router-list-exhausted": [],
+  "router-no-answer": [],
+  "router-no-tool-unsupported": [
+    "errorCode"
+  ],
+  "router-not-configured": [],
+  "router-not-published": [],
+  "router-not-published-at-freeze": [],
+  "router-out-of-bounds": [
+    "bound"
+  ],
+  "router-quota-exhausted": [],
+  "router-review-unavailable": [],
+  "router-review-unsupported": [
+    "cause",
+    "errorCode"
+  ],
+  "router-skip-window": [
+    "buddyId",
+    "retryAt"
+  ],
+  "router-stop-unconfirmed": [],
+  "router-timeout": [],
+  "router-tool-evidence-unverified": [],
+  "router-tools-forbidden": [],
+  "routing-taken-over": [],
+  "routing-unusable-selection": [],
+  "service-stopped-before-launch": [],
+  "session-record-write-failed": ["category", "message", "truncated"],
+  "session.codex-internal-reasoning-omitted": [],
+  "session.deleted": [],
+  "session.invalid-record": [],
+  "session.not-integrated": [],
+  "session.not-recorded": [],
+  "session.unreadable": [],
+  "single-candidate": [],
+  "timeout": [],
+  "workflow-routing-fenced": [],
+  "workspace-cleanup-started": [],
+  "workspace-error": [],
+  "workspace-ownership-lost": [],
+  "workspace-scope-violation": [
+    "conflictIds"
+  ],
+  "workspace.continuation-prepare-failed": [
+    "continuationId"
+  ]
+}
