@@ -165,12 +165,10 @@ class InstallWithoutUpgradeTests(BoardTestCase):
                 finally:
                     release.touch()
                 awaited = waiter.result(timeout=60)
-            self.assertEqual(awaited["outcome"], "unavailable", awaited)
-            self.assertEqual(awaited["error"]["code"], "SERVICE_STOPPING")
-            self.assertEqual(awaited["recovery"]["runId"], run_id)
-            # The caller explicitly resumes observation after the installation.
-            recovered = await_run({"runId": run_id, "waitSeconds": 90}, self.directory)
-            self.assertEqual(recovered["outcome"], "completed", recovered)
+            self.assertEqual(awaited["outcome"], "completed", awaited)
+            self.assertTrue(awaited["ok"], awaited)
+            self.assertIsNone(awaited["error"])
+            self.assertEqual(awaited["runId"], run_id)
             finished = wait_for(lambda: self.finished(run_id), timeout=35)
             self.assertIsNotNone(finished, self.client().get(runId=run_id))
             self.assertEqual(finished["selectedAttempt"]["attemptId"], original["attemptId"])

@@ -17,7 +17,9 @@ deadline, never to this wait. Reaching the window returns an honest
 * it never starts, resumes, retries or cancels anything, on timeout or otherwise;
 * for an active execution, it consumes one durable reminder when returning it;
 * a service failure returns an unavailable envelope with commands to inspect
-  and await the SAME durable ``runId``;
+  and await the SAME durable ``runId``; while an installation's journal exists,
+  errors from the service handover are temporary and this call keeps waiting
+  inside its own window;
 * stopping this wait (Ctrl-C, a closed terminal, a killed client, ``waitSeconds``
   expiry) only stops the *wait*. The named run ends through ``hey-my-buddy cancel``
   (micro tasks, with the owner's control file), ``execution-cancel`` (execution
@@ -41,6 +43,12 @@ MAX_WAIT_SECONDS = 86400
 MIN_WAIT_SECONDS = 1
 DEFAULT_AWAIT_SECONDS = 86400
 WAIT_SLICE_MS = 30000
+
+# An installation writes its journal before the old service stops and removes it
+# only after the new service has verified. While it exists, a service error is
+# the handover rather than a final answer; this cadence only keeps observing it
+# without spinning. It is not a retry limit: the wait window still ends the wait.
+UPGRADE_HANDOVER_POLL_SECONDS = 0.2
 
 # ``reconciliation-needed`` is terminal for a wait: the task will not move again
 # without an explicit retry, and no wait may relaunch it.
@@ -516,6 +524,13 @@ def _wait_until_terminal(
                                        "timeoutMs": timeout_ms,
                                        "consumeReminders": True, "reminderWaitId": reminder_wait_id}, state_dir)
         except ServiceError as failure:
+            if (state_dir / "upgrade.json").exists():
+                # The installation owns the service between the old daemon
+                # stopping and the new one answering. Its journal is the signal
+                # that this failure belongs to that handover, so keep following
+                # the same run; the wait window still bounds this call.
+                time.sleep(min(UPGRADE_HANDOVER_POLL_SECONDS, max(deadline - clock(), 0.0)))
+                continue
             return _envelope(
                 run,
                 request_id=request_id,
