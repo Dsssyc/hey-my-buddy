@@ -92,7 +92,7 @@
 
   合格的先写入；不合格的连同具体原因发回，最多两轮。仍不合格的记在这次维护上，批里没归类的微任务留到下一个间隔。
 - **执行**：
-  - 复用 Router 调用的内部任务、派发、认领与无工具调用，`spec.decision.kind` 加一种 `maintain`。角色文本 `router.txt` 已经写了维护的工作，另加维护的说明。
+  - 维护是一个内部任务（`spec.decision.kind = maintain`），输入冻结在任务的 spec 里；复用任务队列、模型服务的名额、执行入口与无工具调用。它不写 `router_requests`、`router_dispatches` 与 `router_claims`：这三张表为路由按列表依次换 Router 而设，并经外键挂在路由专用的 `decision_requests` 上，维护面只有一个 buddy，用不着它们（第 2 个微任务开工时指出，Host 同日定）。角色文本 `router.txt` 已经写了维护的工作，另加维护的说明。
   - 维护的结果记在 `maintenance_runs`，不写 `router_outcomes`，免得影响路由面的跳过窗口。
   - 时限不用快速路由的 60 秒，因为一批要写的内容多，改用审阅模式的预算档。
   - 发回的两轮放在同一次执行里，照现有格式纠正的做法，所以一次维护对应一个内部任务；做不到就停下来问 Host。
