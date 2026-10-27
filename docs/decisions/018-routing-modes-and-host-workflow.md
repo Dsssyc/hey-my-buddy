@@ -4,6 +4,8 @@
 
 已接受：开发者于 2026-09-29 确认了第一部分（路由双模式）的方向、档位改名与各项取舍，并在审阅后接受了第二部分（Host 工作流，第 11–23 条与同时修复的缺陷）。第一部分已在 0.20.0 实现并[安装](../acceptance/installs/0.20.0.md)，验证与限制见[验收记录](../acceptance/adr018/routing-modes-0.20.0.md)；第二部分已按开发者授权及另行批准的 schema 15 方案在 0.21.0 源码中实现，逐条验证与未验证范围见 [Host 工作流验收](../acceptance/adr018/host-workflow-0.21.0.md)，尚未安装，合并与日常安装仍需另行授权。本文修改 [ADR-014](014-router-buddy-and-read-only-routing.md) 中"移除无工具决策助手、只保留一种会查看代码的 Router"的部分；ADR-014 的其余内容（冻结候选、只按路由边界校验、程序计算的偏好检查、Host 边界）不变，并同时适用于两种路由模式。
 
+2026-10-27 补注：第二部分随 0.21.0 安装（[安装记录](../acceptance/installs/0.21.0.md)）。路由的两个位置、按次的 `routingMode` 与降级由 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 修改，分步的整合与确认由 ADR-021 合并为 `accept`、`conclude` 与 `reclaim`；额度窗口的读数与接近上限的提醒已在本文后面撤销。
+
 ## 背景
 
 ADR-014 的 Router 在限定预算内只读查看代码仓库再做选择，要求 harness 的原生沙盒能证明读取范围受限、禁止写入、工具不能联网。截至 2026-09-29 只有 macOS 上的 Codex 0.157.0 通过了原生探针（[ADR-017 验收记录](../acceptance/local-harness-discovery-0.19.0.md)）：DSH 的工具不限制读取范围与联网，DeepSeek 系列无论哪个模型都不能担任 Router；验证绑定 harness、版本与平台，Codex 一升级 Router 就不可用；每次委派都要运行一次查看代码的模型回合，较慢也较贵。而 Router 的主要价值是把任务与 Host 维护的评价、用户偏好对上号，其中相当一部分只靠任务描述和评价表就能完成。

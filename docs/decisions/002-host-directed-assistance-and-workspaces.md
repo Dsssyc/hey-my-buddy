@@ -4,7 +4,7 @@
 
 ## 状态与适用范围
 
-状态：设计原则已确认，运行时改动尚未实现。日期：2026-09-21。
+状态：设计原则已确认，运行时改动尚未实现。日期：2026-09-21。2026-10-27 补注：原则已经实施，并经后来的决定修订；Host 的决定、续接、接管、验收、结论与回收见 [ADR-018](018-routing-modes-and-host-workflow.md) 与 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 的 L3，执行时限改为预期时长见 [ADR-022](022-expected-duration-and-graceful-stop.md)。具体行为以现行契约为准，下文是当时的设计。
 
 本记录保存架构讨论确认的目标与边界，供后续实现使用。文中的合同名称表达领域概念，不代表已经发布的 CLI 参数、C-Two 方法或数据库字段。当前行为仍以 [architecture.md](../reference/architecture.md)、[workers.md](../reference/workers.md) 和对应源码为准。
 

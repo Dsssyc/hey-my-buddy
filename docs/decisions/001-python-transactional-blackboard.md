@@ -4,6 +4,8 @@
 
 Status: Accepted for implementation; acceptance evidence is required before release. Date: 2026-09-19
 
+Note (2026-10-27): implemented in 0.4.0 ([acceptance](../acceptance/adr001/python-blackboard-0.4.0.md)). The promises to keep the old `start`/`run` entry points and the public `command` path, and to import old Node records, were withdrawn by [ADR-007](007-neutral-core-and-single-current-contract.md).
+
 > **Historical record.** This ADR preserves the design requirements that led to the 0.4.0 implementation. It is not a description of current behavior, and its implementation and migration instructions are historical — do not repeat the migration. Implemented behavior is documented in [architecture.md](../reference/architecture.md); the acceptance evidence is [python-blackboard-0.4.0.md](../acceptance/adr001/python-blackboard-0.4.0.md).
 
 ## Purpose

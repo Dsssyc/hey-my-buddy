@@ -4,6 +4,8 @@
 
 已接受：开发者于 2026-09-28 在讨论中确认了下列方向，并在审阅本文后接受。开发者随后授权实现并单独同意 schema 14；0.19.0 源码已实现下列范围，验收见 [local-harness-discovery-0.19.0.md](../acceptance/local-harness-discovery-0.19.0.md)。日常仍是 0.18.0/schema 13；日常安装、迁移、配置与发布未执行，仍需单独授权。Windows 真机与 Linux/Windows Router 尚未验证，CI 仅构建产物与校验信息，尚未发布。本文扩展 [ADR-015](015-shared-agent-skill-distribution.md)：skill 位置（`~/.agents/skills/buddy` 及 `~/.claude/skills/buddy` 链接）、不做复制回退、插件退役与不设项目级 skill 不变；安装入口、启动器、版本切换与 harness 发现以本文为准。
 
+2026-10-27 补注：本地安装与 harness 发现已经实施；0.54.1 已发到 PyPI，并在空 HOME 上照 README 安装核对过（[记录](../acceptance/installs/0.54.1.md)）。“忙时一律拒绝安装”已由 [ADR-031](031-one-process-per-execution.md) 第 10 条收窄：中间号不变、存储形式不变的安装接回正在执行的工作，契约或存储形式变化的安装仍要求空闲。各 harness 在 Windows 与 Linux 上的真实运行仍没有验证。
+
 ## 背景
 
 2026-09-28 以 Claude Code 作为 Host 试用时观察到以下事实：

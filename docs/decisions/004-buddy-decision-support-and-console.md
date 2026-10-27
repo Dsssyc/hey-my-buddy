@@ -4,7 +4,7 @@
 
 ## 状态与阅读方式
 
-状态：讨论整理提案，运行时未实现。本文不构成已经接受的政策，也不表示任何可调用操作已经存在。日期：2026-09-21。
+状态：讨论整理提案，运行时未实现。本文不构成已经接受的政策，也不表示任何可调用操作已经存在。日期：2026-09-21。2026-10-27 补注：其中被后来的决定采纳的部分已经实现，例如可写的评价控制台随 0.7.0 安装（[验收记录](../acceptance/console-evaluation-0.7.0.md)）；其余被取代：评价补丁先由 [ADR-008](008-harness-owned-evaluation-maintenance.md) 改为 Harness 发起，再由 [ADR-021](021-router-buddy-planes-and-routing-evidence.md) 取代，路由由 [ADR-014](014-router-buddy-and-read-only-routing.md)、[ADR-018](018-routing-modes-and-host-workflow.md) 与 ADR-021 决定。
 
 > 2026-09-22 状态更新：[ADR-005](005-shared-assessments-and-table-exclusion.md) 已裁决本文第三部分的治理选择，并取代其中第 1 项。阅读第三部分与第二部分第 4 条时，以 ADR-005 为当前政策；本文其余内容仍是讨论整理提案，未经 ADR-005 整体接受。
 

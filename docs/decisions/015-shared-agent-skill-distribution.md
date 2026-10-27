@@ -6,6 +6,8 @@
 
 后续扩展（实施边界，见文末）：[ADR-017](017-local-installation-and-harness-discovery.md) 于同日接受，扩展了本文的安装入口、启动器、版本切换与 harness 发现。当前源码候选为 0.19.0/contract 0.19.0/schema 14，日常已安装版本为 [0.18.0/contract 0.18.0/schema 13](../acceptance/installs/0.18.0.md)；安装入口、启动器与发现以 ADR-017 和现行参考文档为准，本文以下原文保留 0.18.0 时的决定记录。
 
+2026-10-27 补注：这一分发方式已经实施。skill 与命令后来改名为 `hey-my-buddy`（[ADR-021](021-router-buddy-planes-and-routing-evidence.md) 的 L14），安装方式由 [ADR-017](017-local-installation-and-harness-discovery.md) 扩展；0.54.1 已发到 PyPI（[记录](../acceptance/installs/0.54.1.md)）。
+
 ## 背景
 
 目前 Host 只能通过 Codex 插件拿到 `$buddy` skill 和 `bin/buddy` 启动器，Claude Code 没有对应入口。`SKILL.md` 链接仓库里的 `docs/reference/...`，并从插件根目录解析启动器，离开插件就无法使用。真正的服务、运行时、状态和备份一直在 `~/.local/share/hey-my-buddy`，与插件无关。
