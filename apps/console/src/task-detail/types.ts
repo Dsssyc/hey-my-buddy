@@ -159,6 +159,10 @@ export type RoutingEntry = {
   routingMode: RoutingMode | null;
   reason: Reason | null;
   note: string | null;
+  /** Present together only when the Router recorded a judgment. Null means unclassified. */
+  domainNodeId?: string | null;
+  domainNodeName?: string | null;
+  taskType?: "create" | "change" | "debug" | "verify" | "review" | "research" | "write";
 };
 
 /** What was frozen when a routing decision was asked for: the bounds the program chose within. */

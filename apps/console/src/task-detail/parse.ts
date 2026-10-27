@@ -319,6 +319,10 @@ function parseContinuation(value: unknown): Continuation {
 function parseRoutingEntry(value: unknown): RoutingEntry {
   const entry = rec(value, "routingHistory");
   const mode = entry.routingMode;
+  const hasDomain = Object.prototype.hasOwnProperty.call(entry, "domainNodeId");
+  const hasDomainName = Object.prototype.hasOwnProperty.call(entry, "domainNodeName");
+  const hasTaskType = Object.prototype.hasOwnProperty.call(entry, "taskType");
+  if (hasDomain !== hasTaskType || hasDomain !== hasDomainName) refuse("routingHistory.judgment");
   return {
     decisionId: str(entry.decisionId, "routingHistory.decisionId"), status: str(entry.status, "routingHistory.status"),
     source: strOrNull(entry.source, "routingHistory.source"),
@@ -327,6 +331,11 @@ function parseRoutingEntry(value: unknown): RoutingEntry {
     routingMode: (mode === null || mode === undefined ? null : oneOf(mode, ["fast", "review"] as const, "routingHistory.routingMode")) as RoutingMode | null,
     reason: reasonOrNull(entry.reason, "routingHistory.reason"),
     note: strOrNull(entry.note, "routingHistory.note"),
+    ...(hasDomain ? {
+      domainNodeId: strOrNull(entry.domainNodeId, "routingHistory.domainNodeId"),
+      domainNodeName: strOrNull(entry.domainNodeName, "routingHistory.domainNodeName"),
+      taskType: oneOf(entry.taskType, ["create", "change", "debug", "verify", "review", "research", "write"] as const, "routingHistory.taskType"),
+    } : {}),
   };
 }
 

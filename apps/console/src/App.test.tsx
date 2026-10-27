@@ -116,7 +116,7 @@ describe("console interactions", () => {
     expect(api.command).not.toHaveBeenCalled();
   });
 
-  it("offers no maintenance or evidence-submission action anywhere", async () => {
+  it("keeps evaluation read-only in the buddy drawer", async () => {
     const state = initial();
     const command = vi.fn(async (operation: string) => {
       throw new Error(`Unexpected command: ${operation}`);
@@ -135,8 +135,9 @@ describe("console interactions", () => {
     await selectModel(user, FLASH, "DSH");
     expect(screen.queryByRole("button", { name: "记录待整理观察" })).toBeNull();
     expect(screen.queryByRole("button", { name: "评价维护" })).toBeNull();
-    // The drawer's only button selects its one native reasoning effort; it sends no request.
-    expect(within(pane()).getAllByRole("button").map(button => button.getAttribute("aria-label"))).toEqual(["off"]);
+    // The native effort selector and evaluation fold send no request.
+    expect(within(pane()).getAllByRole("button").filter(button => button.getAttribute("aria-label") !== null).map(button => button.getAttribute("aria-label"))).toEqual(["off"]);
+    await user.click(screen.getByRole("button", { name: /评价与领域经验/ }));
     expect(command).not.toHaveBeenCalled();
   });
 

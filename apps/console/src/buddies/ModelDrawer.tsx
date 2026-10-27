@@ -19,6 +19,7 @@ import type { ConsoleView, PreferenceMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
 import { CoolingStatus } from "./cooling";
 import { ConcurrencyNotice } from "./ConcurrencyNotice";
+import { KindEvaluation } from "./KindEvaluation";
 import { modelIdentity, reasonTexts } from "./models";
 import type { BuddyChip, ModelRow } from "./models";
 
@@ -105,9 +106,10 @@ function BuddySettings({ chip, data, recorded, editor, modelAvailable }: {
 }
 
 /** A model's shared settings and one selected buddy, unfolded below its row. */
-export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy }: {
+export function ModelDrawer({ row, harnessState, data, recorded, editor, selectedBuddyId, onSelectBuddy, onOpenTask }: {
   row: ModelRow; harnessState?: string; data: ConsoleView; recorded: Snapshot; editor: Editor;
   selectedBuddyId: string; onSelectBuddy: (id: string) => void;
+  onOpenTask?: (macroTaskId: string, runId: string) => void;
 }) {
   const { t } = useTranslation("buddies");
   const editing = editor.editing;
@@ -193,5 +195,8 @@ export function ModelDrawer({ row, harnessState, data, recorded, editor, selecte
         <BuddySettings chip={selected} data={data} recorded={recorded} editor={editor} modelAvailable={row.available} />
       </div>
     </div>
+    <KindEvaluation key={selected.buddy.buddyId}
+      evaluation={data.kindEvaluations?.find(item => item.harness === selected.buddy.harness && item.model === selected.buddy.model && item.effort === selected.buddy.effort)}
+      domains={data.domainNodes ?? []} onOpenTask={onOpenTask} />
   </section>;
 }

@@ -142,7 +142,6 @@ export default {
   "routing-taken-over": "The Host took over this route.",
   "routing-unusable-selection": "The route did not select a usable buddy.",
   "service-stopped-before-launch": "The service stopped before the execution process launched.",
-  "session.codex-internal-reasoning-omitted": "Codex internal reasoning (only native reasoning summaries are provided).",
   "macro-task-deletion": "Deleted with its macro task.",
   "session-record-write-failed": "The session record could not be written.",
   "session.deleted": "The session was deleted.",

@@ -1,0 +1,38 @@
+import type zh from "../zh/evaluation";
+
+/** Recorded outcomes for one buddy kind, shown inside its settings. */
+export default {
+  toggle: "Evaluation and domain experience",
+  noEvidence: "No evaluation data for this buddy kind yet.",
+  summary: "Summary",
+  noSummary: "No summary yet.",
+  citedTasks: "Cited micro tasks",
+  statistics: "Cumulative outcomes",
+  samples: "Samples",
+  successes: "Successes",
+  firstPasses: "First pass",
+  reworkRounds: "Rework rounds",
+  failures: "Failures",
+  medianDelivery: "Approx. median delivery time",
+  medianInput: "Approx. median input usage",
+  medianCached: "Approx. median cached usage",
+  medianOutput: "Approx. median output usage",
+  noMedian: "No record",
+  tokens: "{{n}} tokens",
+  domainTable: "Domains and task types",
+  domain: "Domain",
+  noDomains: "No domain nodes yet.",
+  noSample: "No samples",
+  foldDomain: "Collapse subdomains of {{name}}",
+  unfoldDomain: "Expand subdomains of {{name}}",
+  cell: "{{samples}} samples · {{rate}} first pass · {{rework}} rework rounds",
+  taskTypes: {
+    create: "Create",
+    change: "Change",
+    debug: "Debug",
+    verify: "Verify",
+    review: "Review",
+    research: "Research",
+    write: "Write",
+  },
+} satisfies typeof zh;

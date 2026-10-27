@@ -236,7 +236,6 @@
   "routing-unusable-selection": [],
   "service-stopped-before-launch": [],
   "session-record-write-failed": ["category", "message", "truncated"],
-  "session.codex-internal-reasoning-omitted": [],
   "session.deleted": [],
   "session.invalid-record": [],
   "session.not-integrated": [],

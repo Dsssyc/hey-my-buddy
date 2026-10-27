@@ -37,6 +37,6 @@ export function BuddyConfig({ snapshot, editor, api, refresh, active = true, mut
     {location.view === "roles" && <div className="flex min-h-12 border-b bg-card px-3 sm:px-6"><BuddyHeader location={location} attention={attention} onNavigate={navigate} /></div>}
     <CatalogView {...shared} editor={editor} api={api} refresh={refresh} attention={attention} mutationsAvailable={mutationsAvailable}
       active={active && location.view === "models"} hidden={location.view !== "models"} />
-    <RolesView {...shared} editor={editor} active={active && location.view === "roles"} hidden={location.view !== "roles"} />
+    <RolesView {...shared} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} active={active && location.view === "roles"} hidden={location.view !== "roles"} />
   </div>;
 }

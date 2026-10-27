@@ -13,6 +13,8 @@ import { locale } from "../i18n";
 import { formatDuration } from "../i18n/format";
 import type { Configuration, Buddy, RoutingBudget, RoutingMode, Snapshot } from "../types";
 import type { Editor } from "../use-editor";
+import type { ConsoleApi } from "../api";
+import { MaintenanceView } from "./MaintenanceView";
 import { RolesRecords } from "./RolesRecords";
 import { RouterList, routerLineId } from "./RouterList";
 import type { BuddyLocation } from "./navigation";
@@ -48,8 +50,8 @@ function noteText(note: RouterNote | null, buddies: Buddy[], t: TFunction<"buddi
  * snapshot records of routing. Every change goes into the page's draft, which
  * the save bar publishes; the records are read only.
  */
-export function RolesView({ snapshot, editor, active, location, onNavigate, hidden }: {
-  snapshot: Snapshot; editor: Editor;
+export function RolesView({ snapshot, editor, active, location, onNavigate, hidden, api, refresh, mutationsAvailable }: {
+  snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; mutationsAvailable: boolean;
   /** The page is in front and this is the view it shows. */
   active: boolean; location: BuddyLocation; onNavigate: (next: BuddyLocation) => void; hidden: boolean;
 }) {
@@ -146,6 +148,8 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
           </span>
         </div>
       </Section>
+
+      <MaintenanceView snapshot={snapshot} editor={editor} api={api} refresh={refresh} mutationsAvailable={mutationsAvailable} />
 
       <Section name={t("roles.records.name")} id={RECORDS_ID} tabIndex={-1}>
         <RolesRecords health={snapshot.routingHealth} />

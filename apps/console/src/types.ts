@@ -283,6 +283,7 @@ export const configurationSchema = z.looseObject({
   routerBuddyIds: z.array(nonblankString).refine(ids => new Set(ids).size === ids.length),
   routerRetryIntervalSeconds: integer.min(1).max(2147483647), defaultRoutingMode: routingMode, routingBudget,
   routingBudgetLimits: z.custom<RoutingBudgetLimits>().optional(),
+  maintenanceBuddyId: nonblankString.nullable().optional(), maintenanceIntervalSeconds: integer.positive().optional(),
 }).refine(config => !["decisionBuddyId", "routerBuddyId", "fastRouterBuddyId", "reviewRouterBuddyId"].some(key => key in config));
 export type Configuration = z.infer<typeof configurationSchema>;
 
@@ -313,6 +314,35 @@ export const routingHealthSchema = z.looseObject({
 });
 export type RoutingHealth = z.infer<typeof routingHealthSchema>;
 
+export const TASK_TYPES = ["create", "change", "debug", "verify", "review", "research", "write"] as const;
+export const domainNodeSchema = z.object({ nodeId: nonblankString, name: nonblankString, definition: z.string(), parentId: z.string().nullable(), mergedIntoId: z.string().nullable() });
+export type DomainNode = z.infer<typeof domainNodeSchema>;
+export const evaluationStatisticsSchema = z.object({
+  samples: safeCount, successes: safeCount, failures: safeCount, firstPasses: safeCount, reworkRounds: safeCount,
+  firstPassRate: z.number().min(0).max(1).nullable(), failureRate: z.number().min(0).max(1).nullable(),
+  medianDeliverySeconds: z.number().nonnegative().nullable(),
+  usage: z.object({ samples: safeCount, medianInputTokens: z.number().nonnegative().nullable(), medianCachedInputTokens: z.number().nonnegative().nullable(), medianOutputTokens: z.number().nonnegative().nullable() }),
+});
+export type EvaluationStatistics = z.infer<typeof evaluationStatisticsSchema>;
+export const kindEvaluationSchema = z.object({ harness: nonblankString, model: nonblankString, effort: nonblankString,
+  summary: z.object({ text: z.string(), citations: z.array(z.object({ runId: nonblankString, title: z.string().nullable(), macroTaskId: z.string().nullable() })) }).nullable(),
+  statistics: z.object({ overall: evaluationStatisticsSchema, byDomain: z.record(z.string(), evaluationStatisticsSchema),
+    byDomainTaskType: z.record(z.string(), z.partialRecord(z.enum(TASK_TYPES), evaluationStatisticsSchema)),
+    infrastructureFailures: z.array(z.object({ provider: z.string(), count: safeCount, lastAt: z.string().nullable() })) }),
+});
+export type KindEvaluation = z.infer<typeof kindEvaluationSchema>;
+const maintenanceTokenUsageSchema = z.object({
+  inputTokens: safeCount.nullable(), cachedInputTokens: safeCount.nullable(), outputTokens: safeCount.nullable(), source: nonblankString, scope: z.literal("attempt"),
+  inputBasis: z.enum(["includes-cached", "excludes-cached"]).optional(), completeness: z.enum(["complete", "partial", "unknown"]).optional(),
+  coverage: z.enum(["native-root-session", "native-root-thread", "native-attempt"]).optional(),
+}).refine(usage => usage.inputBasis === "excludes-cached" || usage.inputTokens === null || usage.cachedInputTokens === null || usage.cachedInputTokens <= usage.inputTokens);
+export const maintenanceSchema = z.object({ pendingCount: safeCount, runs: z.array(z.object({
+  maintenanceRunId: nonblankString, triggerType: z.enum(["manual", "interval"]), buddyId: nonblankString, buddy: routerHealthIdentitySchema, taskId: nonblankString,
+  state: z.enum(["running", "completed", "failed"]), reason: reason.nullable(), startedAt: dateString, finishedAt: dateString.nullable(),
+  usage: z.object({ attempts: z.array(z.object({ attemptId: nonblankString, elapsedMs: z.number().nullable(), toolCalls: safeCount.nullable(), tokenUsage: maintenanceTokenUsageSchema.nullable() })) }).nullable(),
+})) });
+export type Maintenance = z.infer<typeof maintenanceSchema>;
+
 /** Authenticated browser session; the CSRF token stays separate. */
 export const consoleSessionSchema = z.looseObject({ id: nonblankString });
 export type ConsoleSession = z.infer<typeof consoleSessionSchema>;
@@ -331,6 +361,7 @@ export const snapshotReadSchema = z.object({
   buddies: z.array(z.custom<Buddy>()), preferences: preferencesSchema,
   modelServiceNotes: z.array(z.custom<ModelServiceNote>()), modelServiceConcurrency: z.array(z.custom<ModelServiceConcurrencyEntry>(isModelServiceConcurrencyEntry)),
   tasks: z.object({ pendingCount: safeCount }),
+  maintenance: maintenanceSchema.optional(), domainNodes: z.array(domainNodeSchema).optional(), kindEvaluations: z.array(kindEvaluationSchema).optional(),
   // Drafts share this field's nullable type; a server read still requires settings.
 }).refine(snapshot => snapshot.configuration !== null);
 export type Snapshot = z.infer<typeof snapshotReadSchema> & {

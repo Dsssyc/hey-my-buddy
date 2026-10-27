@@ -130,8 +130,10 @@ class RouterDomainTests(WorkflowTestCase):
 
     def test_chosen_and_abstained_answers_record_judgment_without_classifying(self):
         self.seed_domains()
+        decision_ids = []
         for index, (buddy_id, domain) in enumerate(((BUDDY_ID, "ipc"), (None, None))):
             request = self.request(f"judgment-{index}")
+            decision_ids.append(request["decisionId"])
             claim = self.claim(self.board_, "router", run_id=request["runId"])["claim"]
             result = self.report(claim, self.answer(claim, buddy_id=buddy_id, domain=domain))
             self.assertEqual(result["decision"]["status"], "needs-host" if buddy_id is None else "completed")
@@ -141,6 +143,10 @@ class RouterDomainTests(WorkflowTestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM domain_nodes").fetchone()[0], 4)
             self.assertEqual(db.execute("SELECT samples FROM kind_statistics").fetchone()[0], 3)
+        decisions = {item["decisionId"]: item for item in self.board_.store.evaluation.console_core()["decisions"]}
+        self.assertEqual(decisions[decision_ids[0]]["taskType"], "debug")
+        self.assertEqual(decisions[decision_ids[0]]["domainNodeName"], "IPC")
+        self.assertIsNone(decisions[decision_ids[1]]["domainNodeId"])
 
     def test_judgment_and_decision_roll_back_together_when_terminal_event_fails(self):
         self.seed_domains()

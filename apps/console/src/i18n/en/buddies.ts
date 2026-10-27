@@ -1,8 +1,11 @@
 import type zh from "../zh/buddies";
 import harness from "./buddies-harness";
 import roles from "./buddies-roles";
+import evaluation from "./evaluation";
+import maintenance from "./maintenance";
 
 export default {
+  maintenance,
   sections: {
     label: "Sections of the Buddies page",
     catalog: "Catalog",
@@ -93,4 +96,5 @@ export default {
   },
   harness,
   roles,
+  evaluation,
 } satisfies typeof zh;

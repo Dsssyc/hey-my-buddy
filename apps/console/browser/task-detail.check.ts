@@ -1,5 +1,7 @@
 import { expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import { contrastOf, expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
 
 // The detail of a micro task on the synthetic preview. Macro task A holds a1 (accepted, two turns, a change
@@ -98,6 +100,28 @@ async function go(page: Page, hash: string): Promise<void> {
 /** A slice of the strip by the words its readout carries. */
 const step = (page: Page, text: string | RegExp) => strip(page).getByRole("button", { name: typeof text === "string"
   ? new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?: ·|$)`) : text });
+
+for (const theme of ["dark", "light"]) for (const width of [1440, 390]) {
+  test.describe(`recorded Router judgment ${theme} ${width}px`, () => {
+    test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 900 }, reducedMotion: "reduce" });
+    test("shows the domain node and task type without clipping", async ({ page }) => {
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await open(page, `#tasks/${A}/preview-run-a1/2`);
+      await expect(pane(page)).toContainText("领域节点");
+      await expect(pane(page)).toContainText("界面工程");
+      await expect(pane(page)).toContainText("任务类型");
+      await expect(pane(page)).toContainText("改造");
+      await expectTextUncut(pane(page).getByText("界面工程"));
+      await expectNoSidewaysScroll(page);
+      const screenshotDirectory = process.env.HMB_ROUTE_SCREENSHOTS;
+      if (screenshotDirectory) {
+        await pane(page).getByText("界面工程").scrollIntoViewIfNeeded();
+        await mkdir(screenshotDirectory, { recursive: true });
+        await page.screenshot({ path: join(screenshotDirectory, `route-${theme}-${width}.png`), fullPage: true });
+      }
+    });
+  });
+}
 
 for (const { locale } of languages) for (const theme of ["dark", "light"]) for (const reducedMotion of ["reduce", "no-preference"] as const) {
   test.describe(`strip selection ${locale} ${theme} ${reducedMotion}`, () => {

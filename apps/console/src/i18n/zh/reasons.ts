@@ -140,7 +140,6 @@ export default {
   "routing-taken-over": "Host 已接管本次路由。",
   "routing-unusable-selection": "本次路由未能选出可用 buddy。",
   "service-stopped-before-launch": "服务在执行进程启动前停止。",
-  "session.codex-internal-reasoning-omitted": "Codex 内部推理（原生只提供推理摘要）。",
   "macro-task-deletion": "随所属宏任务删除。",
   "session-record-write-failed": "会话记录写入失败。",
   "session.deleted": "会话已删除。",

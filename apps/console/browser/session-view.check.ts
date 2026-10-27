@@ -55,7 +55,7 @@ for (const language of ["en", "zh"] as const) for (const width of [1440, 390]) f
       await expect(panel(page).getByText(language === "zh" ? "已结束" : "Ended", { exact: true })).toBeVisible();
       await panel(page).getByRole("button", { name: language === "zh" ? "会话内容" : "Session content", exact: true }).click();
       const coverage = page.getByRole("table", { name: language === "zh" ? "会话内容" : "Session content" });
-      await expect(coverage.getByText(/Codex/)).toContainText(language === "zh" ? "不提供" : "Not provided");
+      await expect(coverage.getByText(language === "zh" ? "不提供：未记录此执行的会话。" : "Not provided: Session was not recorded for this execution.", { exact: true })).toContainText(language === "zh" ? "不提供" : "Not provided");
       await expect(coverage.getByRole("row")).toHaveCount(5);
       await expect(coverage.getByText(language === "zh" ? "有证据 · fixture CLI 1" : "Evidence available · fixture CLI 1", { exact: true })).toBeVisible();
       await expect(coverage.getByText(language === "zh" ? "未核实" : "Unverified", { exact: true })).toHaveCount(3);
@@ -541,7 +541,7 @@ test.describe("four harness preview records", () => {
     await expect(task.locator('[data-slot="session-output"]')).toContainText("ROLE: Router buddy");
     await expect(task.locator('[data-slot="session-output"]')).toContainText("为合成任务选择执行 buddy。");
     const answer = row(page, "answer");
-    await expect(answer.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Selected buddy", "Explanation", "Evidence"]);
+    await expect(answer.locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Domain node", "Task type", "Selected buddy", "Explanation", "Evidence"]);
     await expect(answer).toContainText("dsh:deepseek-official:deepseek-flash:max");
     await expect(answer).toContainText("合成任务由 DeepSeek Flash 执行。");
     await expect(answer).toContainText("符合本次合成路由约束。");
@@ -553,7 +553,7 @@ test.describe("four harness preview records", () => {
   test("review-mode Router abstention keeps its own task heading and structured decision", async ({ page }) => {
     await openSession(page, session("preview-run-a2", 5));
     await expect(row(page, "task").locator("h3")).toHaveText("Choose a buddy for this micro task (review mode)");
-    await expect(row(page, "answer").locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Selected buddy", "Explanation", "Evidence"]);
+    await expect(row(page, "answer").locator('[data-slot="session-answer-fields"] dt')).toHaveText(["Domain node", "Task type", "Selected buddy", "Explanation", "Evidence"]);
     await expect(row(page, "answer")).toContainText("null");
     await expect(row(page, "answer")).toContainText("合成证据不足，请 Host 选择。");
   });
@@ -624,7 +624,7 @@ for (const language of ["en", "zh"] as const) test.describe(`structured answers 
     await page.evaluate(hash => { location.hash = hash; }, session("preview-run-a1", 2));
     await expect(panel(page)).toBeVisible();
     const router = row(page, "answer");
-    await expect(router.locator('[data-slot="session-answer-fields"] dt')).toHaveText(language === "zh" ? ["选中的 buddy", "说明", "依据"] : ["Selected buddy", "Explanation", "Evidence"]);
+    await expect(router.locator('[data-slot="session-answer-fields"] dt')).toHaveText(language === "zh" ? ["领域节点", "任务类型", "选中的 buddy", "说明", "依据"] : ["Domain node", "Task type", "Selected buddy", "Explanation", "Evidence"]);
     await expectNoSidewaysScroll(page);
     await router.scrollIntoViewIfNeeded();
     await page.screenshot({ path: `${screenshots}/session-router-${language}-narrow-light.png`, fullPage: true });
