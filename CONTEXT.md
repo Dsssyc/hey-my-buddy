@@ -24,6 +24,10 @@ _Avoid_: 状态根 / state root
 A participant, normally an agent, that acts on the blackboard in the Host, Worker or Router role. A buddy is identified by its harness, provider, model and reasoning effort, for example `dsh / deepseek-official / deepseek-flash / off`; anything of that shape is a buddy, and one run of it is an execution of that buddy. Buddies are peers in standing and interact only through the blackboard.
 _Avoid_: Buddy (for the product or the blackboard), peer Buddy; configuration, profile, model or template (for a buddy); 伙伴 (Chinese text keeps the word buddy, as it keeps Host, Worker, Router and harness)
 
+**同型 buddy / buddy kind**:
+The harness, model and reasoning effort of a buddy, without its provider. Buddies of one kind share one evaluation, so a change of provider keeps it and a change of harness does not. Developers use the word more than users do.
+_Avoid_: buddy model, 型号 (for the kind; 型号 reads as a model)
+
 **推理强度 / reasoning effort**:
 The fourth part of a buddy's identity: how much reasoning the harness asks of the model. A harness offers it in values such as `off`, `high` and `max`, and each value of a model is a different buddy. Each harness names and grades its efforts in its own way, so two harnesses' values are not comparable even when they share a name.
 _Avoid_: 思考强度, 档位, 思考档位 (档位 names a permission level), effort level, thinking level
@@ -59,7 +63,7 @@ The Router's plane that chooses the Worker buddy for one micro task within its r
 _Avoid_: 工作面 / work plane (it reads as a name for all three planes), 执行面
 
 **维护面 / maintenance plane**:
-The Router's plane that classifies finished micro tasks into the domain list and the task types and writes each buddy's evaluation from the recorded outcomes.
+The Router's plane that classifies finished micro tasks into the domain tree and the task types and writes each buddy kind's evaluation from the recorded outcomes.
 
 **画像面 / profile plane**:
 The Router's plane that builds model profiles from public sources.
@@ -86,17 +90,18 @@ The public picture of a model: its positioning and its commonly reported strengt
 _Avoid_: model card, evaluation (for public information)
 
 **评价 / evaluation**:
-What the blackboard's recorded outcomes show about one buddy in this user's work, organised by domain and task type: counted results and observations that cite micro tasks. It belongs to the buddy.
+What the blackboard's recorded outcomes show about one buddy kind in this user's work, organised by the domain tree and the task types: counted results, derived from the outcome facts when read, and observations that cite micro tasks. It belongs to the buddy kind.
 _Avoid_: card, assessment, profile (for local evidence)
 
-**领域清单 / domain list**:
-The user's own vertical domains, each the kind of expertise their micro tasks call for, grown from those micro tasks and maintained by the Router. A domain is neither a project nor a task type.
+**领域树 / domain tree**:
+The user's own vertical domains as a tree, each node the kind of expertise their micro tasks call for, grown from those micro tasks and maintained by the Router, with no limit on nodes or depth. A domain is neither a project nor a task type.
+_Avoid_: 领域清单 / domain list
 
 **任务类型 / task type**:
 One of seven fixed kinds of work: create (新建), change (改造), debug (排错), verify (验证), review (审查), research (调研) and write (撰写).
 
 **探索 / exploration**:
-An occasional routing choice of a rarely used buddy for a short micro task, made to gather evidence about it.
+An occasional routing choice of the buddy kind with the fewest samples for the micro task's domain and task type, made to gather evidence about it; the user sets how often.
 
 ### Where buddies run
 
