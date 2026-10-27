@@ -77,6 +77,8 @@
 
 ## 安装与存储
 
+**发出去的包不由提交固定：控制台资源在发版时重新构建，构建后端也不固定版本。**（2026-10-27 Host 发 0.54.1 时见到；开发者定为事故，要求下次发版之前修好，确保发出去的包与验收、安装的一致）`build-distribution.yml` 在打包之前用 npm 重新构建控制台，Vite 的输出目录就是 `src/hey_my_buddy/console/assets`（`emptyOutDir`），所以发到 PyPI 的是 Ubuntu 上新构建的资源，而源码安装用的是提交里的资源；两者是否一致，只有本地的完整检查在 macOS 上比对过，CI 与发版流程都不比对。构建后端写的是 `hatchling>=1.27`，而 wheel 记着构建它的版本（这次是 `Generator: hatchling 1.32.4`），所以同一个提交晚一些构建，字节也会不同。这一次是 Host 在打标签之前手动试跑了一次只构建的发版流程，才确认一致（[记录](../acceptance/installs/0.54.1.md)）。建议：发版流程直接打包提交里的资源，去掉 Node 与 npm 两步，与源码安装共用一套；发版构建把构建后端与它的插件固定到确切版本；发布之后，Host 照旧把 PyPI 上的文件与本地从同一提交构建的逐个比对。
+
 **最新的执行活动存了两份。**（2026-10-23 Host 查 C1 能否省掉心跳记录时见到，开发者要求记着；2026-10-24 在源码里做完，`attempt.activity` 事件只带身份，随 0.53.0 的升级转换存量，随 0.53.0 安装）`attempt_activity` 表每次执行一行，存最新的活动；`attempt.activity` 事件替换式地只留最新一条，它的载荷又是同一份活动（`store.py` 的 `_append_event` 与 `_store_activity`）。按 AGENTS.md 的存储规则核对它是不是重复存值：事件若只为通知读者，载荷能否只带指向；若有读者靠事件里的活动，说明为什么不能读表。随存储那一批做。
 
 **挪基点到 0.51.0 留下的顺带项。**（2026-10-23 Host 验收微任务“把升级基点挪到 0.51.0”时见到，[记录](../acceptance/installs/0.51.0.md)；2026-10-24 在源码里做完：那条读取测试已恢复，两个参数是 28 → 29 升级核验的一部分，留着；随 0.53.0 安装）`tests/python/blackboard/store/test_upgrade_fixture.py` 的 `test_retained_execution_rows_remain_readable_with_no_buddy` 删多了：它测的是读取方对没有 buddy 的执行行与回合输入的读法，与 27 → 28 的转换无关，只是借这次转换打开看板，应改对新基点后保留；日常看板里是否还有这类行，没有核对。另有两处被删转换留下的参数已没有用处：`backup.database_snapshot` 的 `column_projections`，`install/upgrade.py` 里 `verify_started` 的 `expected_schema`（现在恒等于当前 schema）。随存储那一批做。
