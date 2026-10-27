@@ -13,7 +13,7 @@
   "answer-empty": [],
   "answer-invalid-json": [],
   "answer-not-json": [],
-  "answer-shape": ["errors"],
+  "answer-shape": [],
   "answer-unexpected-field": [],
   "bridge-refused": [
     "errorCode"
@@ -177,6 +177,7 @@
   "micro-task-cancelled": [],
   "micro-task-not-found": [],
   "micro-task-not-owned": [],
+  "maintenance-answer-invalid": ["errors"],
   "model-cursor-shape-unreadable": [],
   "model-list-shape-unreadable": [],
   "native-authority-required": [

@@ -13,6 +13,7 @@ export default {
   "answer-invalid-json": "The Router's answer is not valid JSON.",
   "answer-not-json": "The Router's answer contains no JSON object.",
   "answer-shape": "The Router's answer has an invalid shape.",
+  "maintenance-answer-invalid": "The maintenance answer remains invalid.",
   "answer-unexpected-field": "The Router's answer contains an undeclared field.",
   "all-candidates-cooling": "All candidates are cooling down; try again around {{retryAt}}.",
   "bridge-refused": "The inquiry bridge refused the request.",

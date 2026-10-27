@@ -182,12 +182,12 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
                        (run["runId"],))
         self.assertEqual(browser.bootstrap()["maintenance"]["pendingCount"], 0)
         with board.store.db.write() as db:
-            db.execute("UPDATE maintenance_runs SET state='failed',reason_code='answer-shape',reason_params_json=?"
+            db.execute("UPDATE maintenance_runs SET state='failed',reason_code='maintenance-answer-invalid',reason_params_json=?"
                        " WHERE maintenance_run_id='maintenance-read'",
                        (json.dumps({"errors": ["citation-outside-batch"]}),))
         failed = browser.bootstrap()["maintenance"]["runs"][0]
         self.assertEqual(failed["state"], "failed")
-        self.assertEqual(failed["reason"], {"code": "answer-shape", "params": {"errors": ["citation-outside-batch"]}})
+        self.assertEqual(failed["reason"], {"code": "maintenance-answer-invalid", "params": {"errors": ["citation-outside-batch"]}})
 
     def test_pending_count_counts_distinct_roots_awaiting_their_host(self):
         board = self.board()

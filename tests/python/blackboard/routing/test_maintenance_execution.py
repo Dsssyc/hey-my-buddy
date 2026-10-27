@@ -22,6 +22,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
 )
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol import maintenance as files
+from hey_my_buddy.protocol.reasons import REGISTERED_REASON_PARAMETERS
 
 
 BUDDY_ID = "dsh:fixture:maintenance:off"
@@ -374,8 +375,11 @@ class MaintenanceExecutionTests(WorkflowTestCase):
             "result": {"status": "error", "code": "router-budget-exhausted"}})
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT * FROM maintenance_runs").fetchone()
-        self.assertEqual(run["reason_code"], "router-budget-exhausted")
-        self.assertEqual(json.loads(run["reason_params_json"])["errors"], feedback["errors"])
+        self.assertEqual(run["reason_code"], "maintenance-answer-invalid")
+        self.assertEqual(json.loads(run["reason_params_json"]), {"errors": feedback["errors"]})
+        with self.board_.store.db.read() as db:
+            attempt = db.execute("SELECT result_json FROM attempts WHERE attempt_id=?", (claim["attempt"]["attemptId"],)).fetchone()
+        self.assertEqual(json.loads(attempt["result_json"])["result"]["code"], "router-budget-exhausted")
         self.assertEqual(self.run_files(run["maintenance_run_id"]), [])
 
     def test_interruption_fence_keeps_final_errors_before_completion(self):
@@ -388,8 +392,23 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                 reason={"code": "interrupted-before-delivery", "params": {}}, now=self.clock.value)
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT * FROM maintenance_runs").fetchone()
-        self.assertEqual(json.loads(run["reason_params_json"])["errors"], feedback["errors"])
+        self.assertEqual(run["reason_code"], "maintenance-answer-invalid")
+        self.assertEqual(json.loads(run["reason_params_json"]), {"errors": feedback["errors"]})
         self.assertEqual(self.run_files(run["maintenance_run_id"]), [])
+
+    def test_final_invalid_answer_has_a_distinct_fixed_reason_shape(self):
+        self.configure()
+        claim = self.claim_maintenance(self.start()["runId"])
+        for round_index in range(3):
+            feedback = self.submit_answer(claim, round_index, {})
+            self.assertTrue(feedback["errors"])
+        self.settle_success(claim)
+        with self.board_.store.db.read() as db:
+            run = db.execute("SELECT state,reason_code,reason_params_json FROM maintenance_runs").fetchone()
+        self.assertEqual((run["state"], run["reason_code"]), ("failed", "maintenance-answer-invalid"))
+        self.assertEqual(json.loads(run["reason_params_json"]), {"errors": feedback["errors"]})
+        self.assertEqual(REGISTERED_REASON_PARAMETERS["maintenance-answer-invalid"], ("errors",))
+        self.assertEqual(REGISTERED_REASON_PARAMETERS["answer-shape"], ())
 
     def test_complete_answer_drains_evidence_without_a_second_model_call(self):
         self.configure()
