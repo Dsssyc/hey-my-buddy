@@ -23,18 +23,19 @@ class RouterContractTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "router-out-of-bounds")
         self.assertEqual(caught.exception.details, {"bound": "not-a-candidate"})
 
-    def test_statistics_reference_names_a_frozen_candidate_in_both_modes(self):
+    def test_statistics_reference_is_an_advisory_summary_and_buddy_id_stays_bounded(self):
         answer = {"buddyId": "legal", "note": "Past delivery supports this choice",
-                  "evidence": [{"kind": "statistics", "ref": "alternative"}]}
+                  "evidence": [{"kind": "statistics",
+                                "ref": "legal — samples 266, successes 259, failureRate 0.0263"}]}
         for mode in ("fast", "review"):
             with self.subTest(mode=mode):
                 self.assertEqual(router.validate_answer(answer, ["legal", "alternative"], mode), answer)
                 self.assertIn("statistics", router.answer_schema(["legal", "alternative"], mode)
                               ["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
-                with self.assertRaises(BoardError) as caught:
-                    router.validate_answer({**answer, "evidence": [{"kind": "statistics", "ref": "outsider"}]},
-                                           ["legal", "alternative"], mode)
-                self.assertEqual(caught.exception.code, "router-evidence-out-of-bounds")
+        with self.assertRaises(BoardError) as caught:
+            router.validate_answer({**answer, "buddyId": "outsider"}, ["legal", "alternative"])
+        self.assertEqual(caught.exception.code, "router-out-of-bounds")
+        self.assertEqual(caught.exception.details, {"bound": "not-a-candidate"})
 
     def test_file_references_cannot_escape_or_embed_lines(self):
         for ref in ("../secret", "/tmp/other-run", "src/../../secret", "C:\\secret", "file\ncontents"):
@@ -180,16 +181,6 @@ class RouterPublicationTests(WorkflowTestCase):
         self.assertEqual(decision['status'], 'completed')
         self.assertEqual(decision['policyCheck']['userPreference'], 'alternative')
         self.assertEqual(decision['evidence'], [{'kind': 'annotation', 'ref': 'not-supplied'}])
-
-    def test_publication_rechecks_statistics_reference_against_frozen_candidates(self):
-        board, decision = self.settle(SECOND_BUDDY_ID,
-                                      evidence=[{'kind': 'statistics', 'ref': BUDDY_ID}])
-        self.assertEqual(decision['status'], 'completed')
-        self.assertEqual(decision['evidence'], [{'kind': 'statistics', 'ref': BUDDY_ID}])
-        board, decision = self.settle(SECOND_BUDDY_ID,
-                                      evidence=[{'kind': 'statistics', 'ref': 'outsider'}])
-        self.assertEqual(decision['status'], 'needs-host')
-        self.assertEqual(decision['reason']['code'], 'router-evidence-out-of-bounds')
 
     def test_boundary_and_budget_counters_are_separate(self):
         for code, counter in [('router-budget-exhausted', 'budgetExhaustedCount'),
