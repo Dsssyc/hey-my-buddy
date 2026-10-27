@@ -20,7 +20,7 @@ from typing import Any
 
 from ...protocol import schemas
 from ..evaluation import user_policy
-from . import selection_policy, router, router_sequence, router_failover
+from . import selection_policy, router, router_sequence, router_failover, evidence
 from ...protocol import tool_evidence
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ..store.db import canonical_json, sha256_text
@@ -190,6 +190,7 @@ class DecisionCoordinator:
         *,
         buddies: list[sqlite3.Row],
         include_preferences: bool,
+        now: str,
     ) -> dict:
         """The complete bounded table slice for one request — never a silent truncation.
 
@@ -200,16 +201,18 @@ class DecisionCoordinator:
         preferences: list[dict] = []
         if include_preferences:
             preferences = user_policy.preferences(connection, buddy_ids)
+        candidate_evidence = evidence.candidate_facts(self.board, connection, buddies, now=now)
         return {
-            "buddies": [self._buddy_input(row) for row in buddies],
+            "buddies": [{**self._buddy_input(row), **candidate_evidence[row["buddy_id"]]}
+                        for row in buddies],
             "preferences": preferences,
             # User notes are kept per model service; the model service key is on every buddy.
             "annotations": user_policy.model_service_notes(connection, buddy_ids),
         }
 
-    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, task_text: str, candidates: list[sqlite3.Row], hard_constraints: dict | None = None) -> dict:
+    def _select_input(self, connection: sqlite3.Connection, *, request_id: str, task_text: str, candidates: list[sqlite3.Row], now: str, expected_seconds: int, hard_constraints: dict | None = None) -> dict:
         table = self._table_input(
-            connection, buddies=candidates, include_preferences=True
+            connection, buddies=candidates, include_preferences=True, now=now
         )
         # The program-computed preference truth for this request. It is request-local
         # (it depends on this candidate slice and the user's published prefer entries),
@@ -222,7 +225,8 @@ class DecisionCoordinator:
             ],
             hard_constraints=hard_constraints or {},
         )
-        return {"operation": "select", "requestId": request_id, "task": task_text, **table}
+        return {"operation": "select", "requestId": request_id, "task": task_text,
+                "expectedSeconds": expected_seconds, **table}
 
     # -- request operations --------------------------------------------------
     def request_select(self, params: dict) -> dict:
@@ -279,7 +283,9 @@ class DecisionCoordinator:
             sole_candidate: sqlite3.Row | None = None
             resolution = None
             facts = {"routerBuddyId": None, "routingMode": None, "budget": None, "routerCalled": False}
-            snapshot: dict = {"facts": facts, "baseInput": {"task": task_text}, "inspections": []}
+            expected_seconds = request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS)
+            snapshot: dict = {"facts": facts, "baseInput": {"task": task_text,
+                                                              "expectedSeconds": expected_seconds}, "inspections": []}
             if len(candidates) == 1:
                 # One frozen legal candidate leaves the Router nothing to compare,
                 # so the program selects it directly: no Router task is created and
@@ -305,6 +311,7 @@ class DecisionCoordinator:
                 base_input = self._select_input(
                     connection, request_id=request_id,
                     task_text=task_text, candidates=candidates,
+                    now=now, expected_seconds=expected_seconds,
                     hard_constraints=request.get("constraints") or {})
                 base_input.update(facts)
                 base_input["routingBasis"] = request["routingBasis"]
@@ -401,6 +408,7 @@ class DecisionCoordinator:
             required_capabilities.append(f"permission:{access}")
         request = {
             "kind": "select", "task": task_text,
+            "expectedSeconds": spec["expectedSeconds"],
             "executionWorkspace": manifest,
             "requiredCapabilities": required_capabilities,
             "constraints": schemas.buddy_constraints(spec),
@@ -420,10 +428,10 @@ class DecisionCoordinator:
         request_key = request_key or f"decision:{request_id}"
         spec = {
             "adapter": DECISION_ADAPTER,
-            # A private per-decision directory the decision adapter creates; it never
-            # overlaps a project cwd, so a decision run consumes capacity without
-            # reserving any workspace a business task needs.
-            "cwd": str(self.board.directory / "decisions" / decision_id),
+            # The execution launcher creates this owned evidence root before
+            # starting the Router. It is unique to this task and is reclaimed
+            # with the task's attempt evidence.
+            "cwd": str(self.board.directory / "attempts" / task_id),
             "task": "Bounded selection decision over the current evaluation table.",
             "routerBudgetSeconds": router_budget_seconds + TIMEOUT_GRACE_SECONDS,
             "requiredCapabilities": [DECISION_ADAPTER],
@@ -893,7 +901,9 @@ class DecisionCoordinator:
             resolution.facts["budget"] = {**resolution.facts["budget"], "timeoutSeconds": router_budget_seconds}
         document = self._select_input(
             connection, request_id=row["request_id"], task_text=request["task"],
-            candidates=candidates, hard_constraints=request.get("constraints") or {})
+            candidates=candidates, now=now,
+            expected_seconds=request.get("expectedSeconds", schemas.DEFAULT_EXPECTED_SECONDS),
+            hard_constraints=request.get("constraints") or {})
         document.update({**resolution.facts,
                          "routingBasis": request["routingBasis"], "constraints": request.get("constraints", {}),
                          "requiredCapabilities": request.get("requiredCapabilities", [])})

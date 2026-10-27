@@ -23,6 +23,19 @@ class RouterContractTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, "router-out-of-bounds")
         self.assertEqual(caught.exception.details, {"bound": "not-a-candidate"})
 
+    def test_statistics_reference_names_a_frozen_candidate_in_both_modes(self):
+        answer = {"buddyId": "legal", "note": "Past delivery supports this choice",
+                  "evidence": [{"kind": "statistics", "ref": "alternative"}]}
+        for mode in ("fast", "review"):
+            with self.subTest(mode=mode):
+                self.assertEqual(router.validate_answer(answer, ["legal", "alternative"], mode), answer)
+                self.assertIn("statistics", router.answer_schema(["legal", "alternative"], mode)
+                              ["properties"]["evidence"]["items"]["properties"]["kind"]["enum"])
+                with self.assertRaises(BoardError) as caught:
+                    router.validate_answer({**answer, "evidence": [{"kind": "statistics", "ref": "outsider"}]},
+                                           ["legal", "alternative"], mode)
+                self.assertEqual(caught.exception.code, "router-evidence-out-of-bounds")
+
     def test_file_references_cannot_escape_or_embed_lines(self):
         for ref in ("../secret", "/tmp/other-run", "src/../../secret", "C:\\secret", "file\ncontents"):
             with self.subTest(ref=ref), self.assertRaises(BoardError):
@@ -82,6 +95,21 @@ class RouterContractTests(unittest.TestCase):
         self.assertNotIn("display-only", first)
         self.assertNotIn("private display label", second)
 
+    def test_prompt_renders_frozen_candidate_facts_and_expected_duration(self):
+        facts = {"billing": {"kind": "subscription", "source": "native", "observedAt": "now"},
+                 "load": {"active": 2, "limit": 2, "queued": 1,
+                          "wait": {"seconds": 300, "atLeast": True, "overdue": 1}},
+                 "statistics": {"samples": 4, "successes": 3, "failures": 1,
+                                "firstPasses": 2, "firstPassRate": 0.5, "failureRate": 0.25,
+                                "reworkRounds": 1, "medianDeliverySeconds": 120},
+                 "infrastructureFailures": {"count": 1, "lastAt": "now"}}
+        prompt = router.render_prompt({"routingMode": "fast", "task": "fix parser",
+                                       "expectedSeconds": 600, "buddies": [{"buddyId": "legal", **facts}]})
+        self.assertIn('"expectedSeconds":600', prompt)
+        for key in facts:
+            self.assertIn('"' + key + '":', prompt)
+        self.assertIn("Router protocol version 14", prompt)
+
 
 from unittest.mock import patch
 from blackboard.routing.test_decision import DecisionTestCase, BUDDY_ID, SECOND_BUDDY_ID
@@ -98,9 +126,27 @@ class RouterPublicationTests(WorkflowTestCase):
         mock_readonly.install(self)
         self.enterContext(patch('hey_my_buddy.blackboard.routing.decision.DecisionCoordinator._adapter_available', return_value=(True, None)))
 
-    def settle(self, buddy, *, code=None, preferences=None, result_status=None):
+    def test_frozen_router_packet_contains_accepted_lifecycle_statistics(self):
+        board = self.board()
+        self.seed(board)
+        submitted = self.submit(board, request_id='accepted-sample')
+        self.finish_turn(board, self.claim(board, run_id=submitted['runId']))
+        delivered = board.call('workflow_get', {'runId': submitted['runId']})
+        self.accept_run(board, delivered)
+        request = board.call('selection_request', {'requestId': 'route-after-sample',
+                                                   'task': 'choose a capable buddy'})
+        decision = board.call('selection_get', {'decisionId': request['decisionId'],
+                                                'includeAudit': True})['decision']
+        candidate = next(item for item in decision['input']['buddies'] if item['buddyId'] == BUDDY_ID)
+        self.assertEqual(candidate['statistics']['samples'], 1)
+        self.assertEqual(candidate['statistics']['successes'], 1)
+        self.assertEqual(candidate['statistics']['firstPasses'], 1)
+        self.assertEqual(candidate['billing']['kind'], 'metered')
+        self.assertIn('wait', candidate['load'])
+
+    def settle(self, buddy, *, code=None, preferences=None, result_status=None, evidence=None):
         from support import InProcessBoard
-        board = InProcessBoard(self.directory / (code or "publication"))
+        board = InProcessBoard(self.directory / (code or f"publication-{len(self._stack)}"))
         self._stack.append(board)
         self.seed(board, preferences=preferences)
         request = board.call('selection_request', {'requestId': 'route', 'task': 'choose'})
@@ -112,7 +158,7 @@ class RouterPublicationTests(WorkflowTestCase):
                   'usage': {'elapsedMs': 100, 'toolCalls': 0},
                   'inputVerification': {'unchanged': True, 'manifestSha256': None, 'snapshotSha256': 'fixture-digest'},
                   'decision': {'buddyId': buddy, 'note': 'Read the frozen input',
-                               'evidence': [{'kind': 'annotation', 'ref': 'not-supplied'}]}}
+                               'evidence': evidence if evidence is not None else [{'kind': 'annotation', 'ref': 'not-supplied'}]}}
         if code:
             result['code'] = code
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': NONCE, 'status': result_status or ('failed' if code else 'ok'), 'shutdownConfirmed': True, 'result': result})
@@ -123,6 +169,16 @@ class RouterPublicationTests(WorkflowTestCase):
         self.assertEqual(decision['status'], 'completed')
         self.assertEqual(decision['policyCheck']['userPreference'], 'alternative')
         self.assertEqual(decision['evidence'], [{'kind': 'annotation', 'ref': 'not-supplied'}])
+
+    def test_publication_rechecks_statistics_reference_against_frozen_candidates(self):
+        board, decision = self.settle(SECOND_BUDDY_ID,
+                                      evidence=[{'kind': 'statistics', 'ref': BUDDY_ID}])
+        self.assertEqual(decision['status'], 'completed')
+        self.assertEqual(decision['evidence'], [{'kind': 'statistics', 'ref': BUDDY_ID}])
+        board, decision = self.settle(SECOND_BUDDY_ID,
+                                      evidence=[{'kind': 'statistics', 'ref': 'outsider'}])
+        self.assertEqual(decision['status'], 'needs-host')
+        self.assertEqual(decision['reason']['code'], 'router-evidence-out-of-bounds')
 
     def test_boundary_and_budget_counters_are_separate(self):
         for code, counter in [('router-budget-exhausted', 'budgetExhaustedCount'),
