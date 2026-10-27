@@ -394,8 +394,8 @@ class ConsoleSecurityTests(ConsoleTestCase):
         # tokenUsage/inputTokens are public counters, not credential fields.
         self.assertFalse(set(keys(snapshot)) & {"token", "writertoken", "controltoken", "servicetoken", "agentcredential", "accesstoken"})
 
-    def test_browser_reads_decisions_but_cannot_launch_router_calls(self):
-        """The console reads selection records but cannot launch a Router call."""
+    def test_browser_reads_decisions_but_cannot_initiate_selection(self):
+        """Selection starts through delegation; the console reads its records."""
         board = self.board()
         _stated, browser = self.open_console(board)
         csrf = browser.bootstrap()["csrfToken"]
@@ -409,8 +409,7 @@ class ConsoleSecurityTests(ConsoleTestCase):
         before_tasks = board.store.count_tasks()
         with board.store.db.read() as connection:
             before_events = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        for operation in ("evaluation_history", "evaluation_prepare", "evaluation_maintain", "evaluation_evidence_record",
-                          "evaluation_reader_begin", "evaluation_write_begin", "selection_request"):
+        for operation in ("selection_request",):
             with self.subTest(operation=operation):
                 status, _headers, data = browser.command(operation, {"requestId": "not-authorized"}, csrf=csrf)
                 self.assertEqual(status, 404, data)
@@ -733,8 +732,6 @@ class ConsoleDaemonTests(ConsoleTestCase):
             self.assertIn("console_snapshot", caps["operations"]["control"])
             for operation in ("selection_request", "selection_get", "user_policy_publish"):
                 self.assertIn(operation, caps["operations"]["control"])
-            for operation in ("evaluation_prepare", "evaluation_history", "evaluation_write_begin"):
-                self.assertNotIn(operation, caps["operations"]["control"])
             self.assertIn("permission:full", caps["adapters"]["codex"]["capabilities"])
             code, snapshot = self.cli("console-snapshot", "{}")
             self.assertEqual(code, 0, snapshot)

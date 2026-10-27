@@ -159,6 +159,9 @@ class Daemon:
             from ..tasks.reminders import Scheduler
             self._reminders = Scheduler(self.store)
             self._reminders.thread.start()
+            from ..routing.maintenance import Scheduler as MaintenanceScheduler
+            self._router_maintenance = MaintenanceScheduler(self.store)
+            self._router_maintenance.thread.start()
             self._maintenance = threading.Thread(target=self._maintain, name="workspace-maintenance", daemon=True)
             self._maintenance.start()
             self.stopping.wait()
@@ -276,6 +279,8 @@ class Daemon:
             self.scheduler.stop()
         if getattr(self, '_reminders', None) is not None:
             self._reminders.thread.join()
+        if getattr(self, '_router_maintenance', None) is not None:
+            self._router_maintenance.thread.join()
         if self._maintenance is not None:
             self._maintenance.join()
         if getattr(self, 'harnesses', None) is not None:

@@ -58,6 +58,7 @@ class RouterListConfigurationTests(BoardTestCase):
         self.assertEqual(snapshot["configuration"], {
             "routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
             "defaultRoutingMode": "fast", "routingBudget": "standard",
+            "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
             "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24,
                                     "bytesRead": 524288},
         })
@@ -119,7 +120,8 @@ class RouterListConfigurationTests(BoardTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(router.configuration(db), {
                 "routerBuddyIds": [B], "defaultRoutingMode": "review",
-                "routingBudget": "standard", "routerRetryIntervalSeconds": 47})
+                "routingBudget": "standard", "routerRetryIntervalSeconds": 47,
+                "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600})
         self.assertEqual(self.board_.call("console_snapshot", {})["configuration"]["routerBuddyIds"], [B])
 
     def test_list_items_need_published_complete_identity_and_nothing_more(self):

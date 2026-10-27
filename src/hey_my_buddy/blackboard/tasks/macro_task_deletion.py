@@ -465,7 +465,7 @@ def _delete_rows(store, connection, scope, deletion):
     remove('router_outcomes',('event_seq',outcome_events))
     for table,conditions in [
         ('micro_task_classifications',[('run_id',r)]),
-        ('kind_summary_citations',[('run_id',r)]),
+        ('kind_summary_evidence',[('run_id',r)]),
         ('routing_judgments',[('decision_id',d)]),
         ('workflow_host_conclusions',[('run_id',r),('attempt_id',a)]),
         ('workflow_lead_tasks',[('lead_run_id',r),('owned_run_id',r),('lead_turn_id',u)]),

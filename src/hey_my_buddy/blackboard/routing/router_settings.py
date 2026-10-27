@@ -6,7 +6,8 @@ from collections.abc import Mapping, Sequence
 from ...errors import BoardError
 from ...protocol.schemas import IDENTIFIER_PATTERN
 
-FIELDS = frozenset({"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget"})
+FIELDS = frozenset({"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget",
+                    "maintenanceBuddyId", "maintenanceIntervalSeconds"})
 MODES = ("fast", "review")
 PRESETS = ("brief", "standard", "deep")
 RETRY_INTERVAL_MIN_SECONDS = 1
@@ -14,7 +15,8 @@ RETRY_INTERVAL_MAX_SECONDS = 2147483647
 
 
 DEFAULT_ROUTER_SETTINGS = {"routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
-                           "defaultRoutingMode": "fast", "routingBudget": "standard"}
+                           "defaultRoutingMode": "fast", "routingBudget": "standard",
+                           "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600}
 
 
 def _object(value: object, fields: frozenset[str], label: str) -> Mapping:
@@ -76,4 +78,14 @@ def validate_router_settings_patch(value: object) -> dict:
         result["defaultRoutingMode"] = _choice(entry["defaultRoutingMode"], MODES, "defaultRoutingMode")
     if "routingBudget" in entry:
         result["routingBudget"] = _choice(entry["routingBudget"], PRESETS, "routingBudget")
+    if "maintenanceBuddyId" in entry:
+        buddy_id = entry["maintenanceBuddyId"]
+        if buddy_id is not None:
+            _buddy_entries([buddy_id], "maintenanceBuddyId")
+        result["maintenanceBuddyId"] = buddy_id
+    if "maintenanceIntervalSeconds" in entry:
+        seconds = entry["maintenanceIntervalSeconds"]
+        if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
+            raise BoardError("INVALID_ARGUMENT", "maintenanceIntervalSeconds must be a positive integer")
+        result["maintenanceIntervalSeconds"] = seconds
     return result

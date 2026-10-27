@@ -151,7 +151,8 @@ class RouterAnswerTests(unittest.TestCase):
 
     def test_schema_freezes_candidates_and_has_no_model_policy_fields(self):
         from hey_my_buddy.blackboard.routing import router
-        from hey_my_buddy.buddy.roles.structured_call import correction_code, schema_errors
+        from hey_my_buddy.buddy.roles.structured_call import correction_code
+        from hey_my_buddy.protocol.structured_schema import schema_errors
         schema = router.answer_schema([DSH_ID, ZCODE_ID])
         self.assertEqual(schema["properties"]["buddyId"]["enum"], [DSH_ID, ZCODE_ID, None])
         self.assertEqual(set(schema["properties"]), {"buddyId", "note", "evidence"})

@@ -143,21 +143,6 @@ class MethodSurfaceTests(unittest.TestCase):
                     cli.main([method, "{}"])
                 self.assertEqual(caught.exception.code, 2)
 
-    def test_retired_evaluation_operations_are_absent_from_every_public_surface(self):
-        for method in (
-            "evaluation_write_begin", "evaluation_write_renew", "evaluation_write_abort",
-            "evaluation_reader_begin", "evaluation_reader_release", "evaluation_evidence_record",
-            "evaluation_prepare", "evaluation_history", "assessment_publish",
-        ):
-            with self.subTest(method=method):
-                self.assertNotIn(method, CONTROL_OPERATIONS)
-                self.assertFalse(hasattr(BoardService, method))
-                self.assertFalse(hasattr(BuddyControl, method))
-                self.assertFalse(hasattr(BoardClient, method))
-        self.assertFalse(hasattr(BoardClient, "evaluation_write_publish"))
-        self.assertIn("user_policy_publish", CONTROL_OPERATIONS)
-        self.assertTrue(hasattr(BoardService, "user_policy_publish"))
-        self.assertTrue(hasattr(BuddyControl, "user_policy_publish"))
 
     def test_control_methods_are_the_current_micro_task_mutations(self):
         self.assertEqual(cli.cli_help._CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"}))

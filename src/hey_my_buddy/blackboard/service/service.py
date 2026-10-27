@@ -45,6 +45,10 @@ CONTROL_OPERATIONS = (
     "console",
     "console_snapshot",
     "reminder_settings_set",
+    "maintenance_start",
+    "maintenance_pending",
+    "domain_rename",
+    "domain_merge",
     "runtime_info",
     "storage_plan",
     "storage_apply",
@@ -58,6 +62,7 @@ CONTROL_OPERATIONS = (
     "task_wait",
     "execution_progress",
     "execution_result",
+    "execution_maintenance",
     "message_get",
     "message_list",
     "inquiry_observe",
@@ -442,6 +447,54 @@ class BoardService(_BaseResource):
         with self.store.db.read() as db:
             row = db.execute("SELECT silence_seconds,updated_at,revision FROM reminder_settings WHERE id=1").fetchone()
         return {"silenceSeconds": row["silence_seconds"], "updatedAt": row["updated_at"], "revision": row["revision"]}
+
+    @staticmethod
+    def _require_console():
+        scope = workflow_module.current_scope()
+        if scope is None or scope.get("kind") != workflow_module.CONSOLE_KIND:
+            raise BoardError("UNAUTHORIZED", "Maintenance controls require an authenticated console session")
+
+    def maintenance_start(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, set(), "maintenance.start")
+            return self.store.maintenance.trigger(manual=True)
+        return self._guard("maintenance.start", request_json, handler)
+
+    def maintenance_pending(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, set(), "maintenance.pending")
+            from ..routing.maintenance_data import pending_count
+            with self.store.db.read() as connection:
+                return {"pendingMicroTaskCount": pending_count(connection)}
+        return self._guard("maintenance.pending", request_json, handler)
+
+    def domain_rename(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, {"nodeId", "name", "definition"}, "domain.rename")
+            from ..routing.maintenance_data import rename_domain
+            with self.store.db.write() as connection:
+                rename_domain(connection, params.get("nodeId"), params.get("name"), params.get("definition"))
+                self.store._append_event(connection, "domain.renamed", payload=params)
+                head = self.store._head_of(connection)
+            self.store._notify(head)
+            return {"nodeId": params["nodeId"]}
+        return self._guard("domain.rename", request_json, handler)
+
+    def domain_merge(self, request_json: str) -> str:
+        def handler(params):
+            self._require_console()
+            schemas.reject_unknown(params, {"sourceId", "targetId"}, "domain.merge")
+            from ..routing.maintenance_data import merge_domain
+            with self.store.db.write() as connection:
+                merge_domain(connection, params.get("sourceId"), params.get("targetId"))
+                self.store._append_event(connection, "domain.merged", payload=params)
+                head = self.store._head_of(connection)
+            self.store._notify(head)
+            return {"sourceId": params["sourceId"], "targetId": params["targetId"]}
+        return self._guard("domain.merge", request_json, handler)
 
     def reminder_settings_set(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
@@ -891,6 +944,9 @@ class BoardService(_BaseResource):
 
     def execution_result(self, request_json: str) -> str:
         return self._guard("execution.result", request_json, self.store.execution_result_reference)
+
+    def execution_maintenance(self, request_json: str) -> str:
+        return self._guard("execution.maintenance", request_json, self.store.maintenance.answer)
 
     # -- messages -----------------------------------------------------------
     def message_get(self, request_json: str) -> str:

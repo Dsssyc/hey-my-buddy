@@ -88,7 +88,7 @@ def parse_macro_task_query(query: str, allowed: frozenset[str]) -> dict:
 #: or an unwrapped store call — is not reachable through this surface.
 #:
 #: The browser can publish authenticated user settings and inspect selection
-#: decisions, but cannot invoke Router model calls.
+#: decisions and invoke maintenance, but cannot initiate routing selections.
 CONSOLE_OPERATIONS = (
     "accounts",
     "capabilities",
@@ -96,6 +96,10 @@ CONSOLE_OPERATIONS = (
     "quota_redetect",
     "user_policy_publish",
     "reminder_settings_set",
+    "maintenance_start",
+    "maintenance_pending",
+    "domain_rename",
+    "domain_merge",
     "selection_get",
     "selection_list",
     "model_catalog_refresh",

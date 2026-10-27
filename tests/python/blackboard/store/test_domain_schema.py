@@ -80,17 +80,21 @@ class DomainSchemaTests(WorkflowTestCase):
                 with self.subTest(column=column, value=value), self.assertRaises(sqlite3.IntegrityError):
                     db.execute(f"UPDATE micro_task_classifications SET {column}=?", (value,))
 
-    def test_summary_and_citation_natural_keys_have_foreign_keys(self):
+    def test_summary_evidence_records_read_and_cited_state_with_natural_keys(self):
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO kind_summaries VALUES('codex','fixture','high','Observed expertise','maintenance')")
             with self.assertRaises(sqlite3.IntegrityError):
                 db.execute("INSERT INTO kind_summaries VALUES('codex','fixture','high','Duplicate','maintenance')")
-            db.execute("INSERT INTO kind_summary_citations VALUES('codex','fixture','high',?)", (self.run["runId"],))
+            db.execute("INSERT INTO kind_summary_evidence VALUES('codex','fixture','high',?,0)", (self.run["runId"],))
+            self.assertEqual(db.execute("SELECT cited FROM kind_summary_evidence").fetchone()[0], 0)
+            db.execute("UPDATE kind_summary_evidence SET cited=1")
+            self.assertEqual(db.execute("SELECT cited FROM kind_summary_evidence").fetchone()[0], 1)
             with self.assertRaises(sqlite3.IntegrityError):
-                db.execute("INSERT INTO kind_summary_citations VALUES('codex','fixture','high',?)", (self.run["runId"],))
-            for column, value in (("effort", "missing"), ("run_id", "missing")):
+                db.execute("INSERT INTO kind_summary_evidence VALUES('codex','fixture','high',?,0)", (self.run["runId"],))
+            for column, value in (("effort", "missing"), ("run_id", "missing"),
+                                  ("cited", None), ("cited", -1), ("cited", 2)):
                 with self.subTest(column=column), self.assertRaises(sqlite3.IntegrityError):
-                    db.execute(f"UPDATE kind_summary_citations SET {column}=?", (value,))
+                    db.execute(f"UPDATE kind_summary_evidence SET {column}=?", (value,))
             with self.assertRaises(sqlite3.IntegrityError):
                 db.execute("UPDATE kind_summaries SET maintenance_run_id='missing'")
             with self.assertRaises(sqlite3.IntegrityError):
