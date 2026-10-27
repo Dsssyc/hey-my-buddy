@@ -90,7 +90,7 @@ The public picture of a model: its positioning and its commonly reported strengt
 _Avoid_: model card, evaluation (for public information)
 
 **评价 / evaluation**:
-What the blackboard's recorded outcomes show about one buddy kind in this user's work, organised by the domain tree and the task types: counted results, derived from the outcome facts when read, and a summary. It belongs to the buddy kind.
+What the blackboard's recorded outcomes show about one buddy kind in this user's work, organised by the domain tree and the task types: counted results, accumulated as each micro task closes, and a summary. It belongs to the buddy kind.
 _Avoid_: card, assessment, profile (for local evidence)
 
 **归纳 / summary**:
