@@ -41,7 +41,7 @@
 |L6|完成，随 0.48.0 安装；R/router:46–60、94–115 复用只读的结构化调用与冻结副本，四家都声明 `read`。|
 |L7|部分；d:367–457 没有领域、分类、结果事实与评价的表，结算（w:3798、4370）不生成领域结果事实。|
 |L8|完成之后于 2026-10-20 删去：快照没有读者，随 schema 剪枝删掉存储与刷新；路由面要读价格时再做。|
-|L9|部分；r:60–119 的答案只有 buddyId、note、evidence，依据只有 annotation、preference、file；缺领域、类型、画像、分层统计与价格。额度一支已改为真实拒绝之后的冷却（B/routing/quota_routing:22–75）。|
+|L9|部分；2026-10-27 R1 加上负载、计费方式、按同型 buddy 的整体统计与基础设施失败、预期时长与 `statistics` 依据（`blackboard/routing/evidence.py`，源码中，0.55.0 未安装，[验收记录](../../acceptance/adr021/router-step1.md)）；缺领域、类型、画像与价格。额度一支已改为真实拒绝之后的冷却（B/routing/quota_routing:22–75）。|
 |L10|未开始；a:272–279 只有选择请求，没有维护的请求、触发与游标。|
 |L11|未开始；没有按模型存画像的表，也没有画像面的 buddy、触发与运行。|
 |L12|未开始；P/capabilities 与 H/run_contract:64–68 只有 none、read、write、full，没有只联网。|
