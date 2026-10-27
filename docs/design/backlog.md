@@ -83,7 +83,7 @@
 
 **Windows 上工作目录过长时 harness 起不来，却报成不可用。**（2026-10-26 “Windows 残余（四）”在测试机上实测，排在首次发版之后） 进程的工作目录超过约 260 个字符时，Windows 直接拒绝创建进程（WinError 267；测试机上 282 与 286 个字符的工作目录都起不来，没有创建子进程），DSH 把启动处的 `OSError` 投影成 `harness-unavailable`，看起来像 harness 没装好。安全的一边已经守住：没有起进程，就没有要停的。要改的是如实报出系统拒绝启动的原因与工作目录，让 Host 知道换一个浅一些的检出位置；其余 harness 的启动处是否同样投影，一起核对。
 
-**机器忙时检查套件偶发超时：`test_parallel_dispatch`。**（2026-10-23 完整检查时撞到一次，2026-10-25 又一次；同日没能复现：负载 20–224 下 27 次启动都在 0.6–3.3 秒，所以 60 秒是原因未知的停滞；时限不动，超时时测试把任务与执行的状态、问题、最近事件、执行日志与启动文件写进失败信息，等下一次真撞上再查根因，[验收记录](../acceptance/release/complete-check-and-dispatch-flake.md)） `blackboard.tasks.test_parallel_dispatch` 的 `test_command_processes_use_free_slots_then_complete` 在 `--jobs 4` 的完整检查里等两个命令执行启动，等满 60 秒失败，失败信息里的服务日志是空的；单独跑两次都通过（约 50 秒）。归入发版一步里的“机器忙时的偶发失败”，先量清楚它在等什么。
+**CI 的墙钟还剩两处拖尾。**（2026-10-27 Host 验收“CI 偶发失败与分片”时记下，[验收记录](../acceptance/check-runner/ci-flakes-and-shards.md)） 浏览器作业里 Playwright 的 `--with-deps` 走 apt，最近两次各有一个作业在这一步用了 9 分钟以上，其余作业只要 0.2 分钟；Windows ARM 分 6 片时最慢一片 13.5 分钟，成了 Python 的关键路径。`test_parallel_dispatch` 的偶发超时已在那一批里找到根因并修好（执行启动按 C-Two 的 `retryable` 重试），原来那一条随之删去。
 
 **官方的 ACP SDK 等 1.0 正式版再评估。**（开发者 2026-10-23 定） 0.12.1 的默认传输不满足本项目的帧上限、关闭与原生字段的约定，净删的收益估计只有 0–100 行，见[调研记录](../research/2026-10-23-acp-sdk.md)。SDK 发布 1.0 正式版时，用原来的 72 个原型场景重跑，并核对 Windows 上的管道接法。
 
