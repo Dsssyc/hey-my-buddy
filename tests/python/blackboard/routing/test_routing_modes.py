@@ -150,7 +150,7 @@ class RoutingModesTests(BoardTestCase):
             facts = claim_tool_receipt(claim, count if type(count) is int else 0, state_dir=board.directory)
             if proof is None:
                 facts.pop('toolEvidence')
-            board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**facts, 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 100, 'toolCalls': count}, 'decision': {'buddyId': BUDDY_ID, 'note': 'candidate match', 'evidence': []}}})
+            board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**facts, 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'usage': {'elapsedMs': 100, 'toolCalls': count}, 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': BUDDY_ID, 'note': 'candidate match', 'evidence': []}}})
             decision = board.call('selection_get', {'decisionId': result['decisionId']})['decision']
             self.assertEqual(decision['status'], expected)
             if expected == 'needs-host':
@@ -159,7 +159,7 @@ class RoutingModesTests(BoardTestCase):
 
     def test_file_evidence_is_rejected_even_if_schema_was_bypassed(self):
         with self.assertRaises(BoardError) as caught:
-            router.validate_answer({'buddyId': 'legal', 'note': 'x', 'evidence': [{'kind': 'file', 'ref': 'src/a.py'}]}, ['legal'], 'fast')
+            router.validate_answer({"domainNodeId": None, "taskType": "change", 'buddyId': 'legal', 'note': 'x', 'evidence': [{'kind': 'file', 'ref': 'src/a.py'}]}, ['legal'], 'fast')
         self.assertEqual(caught.exception.code, 'router-evidence-out-of-bounds')
 
     def test_fast_prompt_drops_repository_and_history_payloads(self):

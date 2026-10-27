@@ -203,7 +203,8 @@ class DecisionAdapter(Adapter):
         if code is None and outcome.status == "ok" and document.get("kind") != "maintain":
             try:
                 result["decision"] = router.validate_answer(native_result.get("rawAnswer"),
-                                                           [item["buddyId"] for item in document["buddies"]], document.get("routingMode", "review"))
+                                                           [item["buddyId"] for item in document["buddies"]], document["routingMode"],
+                                                           domain_node_ids=[node["nodeId"] for node in document["domainNodes"]])
             except BoardError as failure:
                 code = failure.code
         if code:

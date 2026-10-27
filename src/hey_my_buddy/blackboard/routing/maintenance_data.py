@@ -5,21 +5,14 @@ from collections import Counter, defaultdict
 import json
 
 from ...protocol.structured_schema import schema_errors
+from ...protocol.task_types import TASK_TYPES
 from ...errors import BoardError
 from ...protocol.turn_input import turn_buddy
 from .evidence import kind_domain_statistics
 from .statistics import NEITHER, PROVIDER_REJECTIONS, accumulate_cell, round_classification
 
 
-TASK_TYPES = {
-    "create": "Build a new capability or artifact.",
-    "change": "Change an existing capability or artifact.",
-    "debug": "Find and repair a defect.",
-    "verify": "Check behavior or evidence against a requirement.",
-    "review": "Assess work and identify defects or risks.",
-    "research": "Investigate a question and synthesize findings.",
-    "write": "Write or revise explanatory content.",
-}
+
 _ENDED_TURNS = ("returned", "failed", "rejected", "interrupted")
 
 

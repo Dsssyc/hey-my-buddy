@@ -207,7 +207,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             frozen.mkdir()
             manifest = {"inputTree": "frozen-tree", "manifestSha256": "manifest"}
             budget = router.budget("brief")
-            document = {"buddy": {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
+            document = {"domainNodes": [], "buddy": {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"},
                         "executionWorkspace": manifest, "budget": budget, "outputSchema": router.answer_schema([BUDDY_ID]),
                         "buddies": [{"buddyId": BUDDY_ID}], "task": "bounded read"}
             context = ExecutionContext(task_id="microTask", attempt_id="attempt", generation=1,
@@ -241,7 +241,7 @@ class DecisionCapabilityTests(unittest.TestCase):
             self.assertEqual(handle.router_input, (manifest, frozen, "digest"))
 
     def test_router_prompt_carries_no_task_preference_slot(self):
-        prompt = router.render_prompt({"routingMode": "review", "task": "choose", "buddies": [],
+        prompt = router.render_prompt({"domainNodes": [], "routingMode": "review", "task": "choose", "buddies": [],
                                        "policyFacts": {"hardConstraints": {}, "userPreferredBuddyIds": []}})
         self.assertNotIn("routingPreferences", prompt)
 
@@ -338,7 +338,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         note = document["annotations"][0]
         self.assertEqual({key: note[key] for key in ("harness", "provider", "model", "text")},
                          {**model_service_key(CATALOG_BUDDY), "text": "Human preference for this workflow"})
-        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
+        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["source"], "model-selection")
         self.assertNotIn("routingPreferences", routed["routing"])
@@ -365,7 +365,7 @@ class RetiredRoutingInputWorkflowTests(WorkflowTestCase):
         document = owned["claim"]["decisionInput"]
         self.assertEqual(sorted(entry["buddyId"] for entry in document["buddies"]),
                          sorted([SECOND_BUDDY_ID, THIRD_BUDDY_ID]))
-        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {'buddyId': SECOND_BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
+        board.call('execution_result', {'attemptId': owned['claim']['attempt']['attemptId'], 'generation': owned['claim']['attempt']['generation'], 'nonce': NONCE, 'status': 'ok', 'shutdownConfirmed': True, 'result': {**claim_tool_receipt(owned['claim'], state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'stopEvidence': {'shutdownConfirmed': True, 'native': {'shutdownConfirmed': True}}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': document['executionWorkspace']['manifestSha256']}, 'decision': {"domainNodeId": None, "taskType": "change", 'buddyId': SECOND_BUDDY_ID, 'note': 'fixture selection', 'evidence': []}}})
         routed = board.call("workflow_get", {"runId": view["runId"]})
         self.assertEqual(routed["routing"]["status"], "completed")
         decision = board.call("selection_get", {"decisionId": view["routing"]["decisionId"]})["decision"]

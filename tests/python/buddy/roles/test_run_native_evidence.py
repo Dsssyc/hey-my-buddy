@@ -168,8 +168,8 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertEqual(outcome.result["workspaceManifest"], {"partial": True})
         self.assertEqual(outcome.artifacts, partial)
 
-    def router_collect(self, payload, mode="fast"):
-        context = SimpleNamespace(decision_input={"buddy": {}, "budget": {},
+    def router_collect(self, payload, mode="fast", domain_nodes=()):
+        context = SimpleNamespace(decision_input={"domainNodes": list(domain_nodes), "buddy": {}, "budget": {},
                                                  "routingMode": mode, "buddies": [{"buddyId": "chosen"}]})
         handle = SimpleNamespace(role_run_control={"operation": mode},
                                  exit_code=0, shutdown_confirmed=lambda: True)
@@ -199,11 +199,25 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertIsNone(correction.stop_reason)
         evidence = rc.NativeEvidence(unknown_events=facts["unknownEvents"])
         payload = self.project(self.result(evidence=evidence))[0]
-        payload["rawAnswer"] = {"buddyId": "chosen", "note": "fits", "evidence": []}
+        payload["rawAnswer"] = {"domainNodeId": None, "taskType": "change", "buddyId": "chosen", "note": "fits", "evidence": []}
         outcome = self.router_collect(payload)
         self.assertEqual(outcome.status, "ok")
         self.assertEqual(outcome.result["decision"]["buddyId"], "chosen")
         self.assertEqual(outcome.result["nativeEvidence"]["unknownEvents"], facts["unknownEvents"])
+
+    def test_router_role_uses_the_frozen_domain_enum_in_both_modes(self):
+        for mode, payload in zip(("fast", "review"), self.project(self.result())):
+            answer = {"buddyId": "chosen", "domainNodeId": "ipc", "taskType": "debug",
+                      "note": "fits", "evidence": [{"kind": "statistics", "ref": "chosen — IPC history"}]}
+            payload["rawAnswer"] = answer
+            nodes = [{"nodeId": "ipc", "name": "IPC"}]
+            outcome = self.router_collect(payload, mode, nodes)
+            self.assertEqual(outcome.status, "ok", outcome.result)
+            self.assertEqual(outcome.result["decision"], answer)
+            payload["rawAnswer"] = {**answer, "domainNodeId": "merged-ipc"}
+            rejected = self.router_collect(payload, mode, nodes)
+            self.assertEqual(rejected.status, "failed")
+            self.assertEqual(rejected.result["code"], "answer-shape")
 
     def test_unknown_events_use_the_ordinary_format_correction_rule(self):
         correction = FastCorrection({"type": "object"}, "Choose")

@@ -503,7 +503,7 @@ def decision_result(record: dict) -> dict:
         **{key: record[key] for key in ROUTING_FACT_KEYS},
         "stopEvidence": {"shutdownConfirmed": True, "native": "stopped",
                          "nativeInterruptRequested": False, "nativeInterruptAcknowledged": False},
-        **({"decision": {"buddyId": ":".join(selected[key] for key in ("harness", "provider", "model", "effort")) if selected else None,
+        **({"decision": {"domainNodeId": None, "taskType": "change", "buddyId": ":".join(selected[key] for key in ("harness", "provider", "model", "effort")) if selected else None,
                          "note": record["note"], "evidence": []}} if ok else
            {"code": "router-out-of-bounds" if record["status"] == "failed" else "cancelled"}),
     }
@@ -1528,7 +1528,7 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
         return [session_event(attempt_id, "user_message_chunk",
                               content=session_text("ROLE: Router buddy\n为合成任务选择执行 buddy。")),
                 session_event(attempt_id, "agent_message_chunk",
-                              content=session_text(json.dumps({"buddyId": "dsh:deepseek-official:deepseek-flash:max",
+                              content=session_text(json.dumps({"domainNodeId": None, "taskType": "change", "buddyId": "dsh:deepseek-official:deepseek-flash:max",
                                                                "note": "合成任务由 DeepSeek Flash 执行。",
                                                                "evidence": ["符合本次合成路由约束。"]},
                                                               ensure_ascii=False)))]
@@ -1541,7 +1541,7 @@ def session_events(pair: tuple[str, str]) -> list[dict]:
                 session_event(attempt_id, "tool_call_update", toolCallId="router-review-read",
                               status="completed", rawOutput="Insufficient evidence for a confident selection."),
                 session_event(attempt_id, "agent_message_chunk",
-                              content=session_text(json.dumps({"buddyId": None,
+                              content=session_text(json.dumps({"domainNodeId": None, "taskType": "change", "buddyId": None,
                                                                "note": "合成证据不足，请 Host 选择。",
                                                                "evidence": ["候选约束仅指定 Claude。"]},
                                                               ensure_ascii=False)))]
@@ -2391,7 +2391,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
 def decision_view(router: dict) -> dict:
     """One compact decision record from this exact internal router row."""
     routing = router["routing"]
-    return {"decisionId": router["decisionId"], "requestId": router["requestId"],
+    return {"domainNodeId": None, "taskType": "change", "decisionId": router["decisionId"], "requestId": router["requestId"],
             "status": routing["status"], "task": router["task"], "runId": router["runId"],
             "buddyId": None, "selectedBuddy": routing["selectedBuddy"],
             "decisionModel": {"requested": ROUTER_BUDDY, "resolved": None},

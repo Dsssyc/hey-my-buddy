@@ -164,14 +164,17 @@ def _loads(store, connection, services, *, now):
 
 def candidate_facts(store, connection, buddies, *, now: str) -> dict:
     """The aggregate packet frozen for a Router, with explicit no-data rates."""
-    statistics = _stored_statistics(connection, "kind_statistics", {_key(buddy, KIND) for buddy in buddies})
-    infrastructure = _infrastructure(connection, buddies)
+    statistics = domain_statistics(connection, buddies)
+    summaries = {_key(row, KIND): row["text"] for row in connection.execute(
+        "SELECT harness,model,effort,text FROM kind_summaries")}
     loads = _loads(store, connection, {_key(buddy, ("harness", "provider", "model")) for buddy in buddies}, now=now)
     return {
         buddy["buddy_id"]: {
             "billing": for_provider(connection, buddy["harness"], buddy["provider"]),
             "load": loads[_key(buddy, ("harness", "provider", "model"))],
-            "statistics": _statistics_fact(statistics[_key(buddy, KIND)]),
-            "infrastructureFailures": infrastructure[_key(buddy, IDENTITY)],
+            "statistics": {key: value for key, value in statistics[buddy["buddy_id"]].items()
+                           if key != "infrastructureFailures"},
+            "infrastructureFailures": statistics[buddy["buddy_id"]]["infrastructureFailures"],
+            "summary": summaries.get(_key(buddy, KIND)),
         } for buddy in buddies
     }
