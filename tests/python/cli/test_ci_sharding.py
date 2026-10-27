@@ -1,0 +1,74 @@
+"""CI shard allocation accounts for the check runner's parallel file order."""
+from contextlib import chdir, redirect_stdout
+import importlib.util
+import io
+import json
+import os
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+
+SCRIPT = Path(__file__).resolve().parents[3] / ".github/select-test-shard.py"
+SPEC = importlib.util.spec_from_file_location("ci_shards", SCRIPT)
+sharding = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(sharding)
+
+
+class ShardSelectionTests(unittest.TestCase):
+    def split(self, costs, count, *, workers=2):
+        with tempfile.TemporaryDirectory(prefix="ci-shards-") as raw:
+            root = Path(raw)
+            (root / ".github").mkdir()
+            (root / "tests/python").mkdir(parents=True)
+            durations = {}
+            for index, seconds in enumerate(costs):
+                module = f"test_{index:02}"
+                (root / f"tests/python/{module}.py").touch()
+                durations[module] = seconds
+            (root / ".github/check-durations.json").write_text(
+                json.dumps({"fixture": durations}), encoding="utf-8")
+            manifests = []
+            with (chdir(root), redirect_stdout(io.StringIO()),
+                  patch.dict(os.environ, {"CHECK_OS": "fixture", "CHECK_SHARDS": str(count),
+                                          "CHECK_WORKERS": str(workers),
+                                          "RUNNER_TEMP": str(root), "GITHUB_ENV": str(root / "environment")}),
+                  patch.object(sharding.os, "cpu_count", side_effect=AssertionError(
+                      "shard allocation must use the workflow's shared worker count"))):
+                for number in range(1, count + 1):
+                    os.environ["CHECK_SHARD"] = str(number)
+                    sharding.main()
+                    manifests.append(json.loads((root / "logs/python-shard.json").read_text(encoding="utf-8")))
+            return manifests
+
+    def test_per_system_shard_counts_cover_every_file_exactly_once(self):
+        costs = [6, 5, 6, 6, 4, 2, 10, 4, 1, 1]
+        expected = [f"tests/python/test_{index:02}.py" for index in range(len(costs))]
+        for count in (1, 2, 6, 7):
+            with self.subTest(shards=count):
+                manifests = self.split(costs, count)
+                self.assertEqual(sorted(path for item in manifests for path in item["files"]), expected)
+                self.assertTrue(all(item["files"] and item["shards"] == count for item in manifests))
+
+    def test_weight_order_avoids_an_alphabetical_tail(self):
+        # Re-sorting the balanced manifest alphabetically takes 16 seconds.
+        # Submitting its longer files first finishes in 12 seconds.
+        costs = [6, 5, 6, 6, 4, 2, 10, 4, 1, 1]
+        for manifest in self.split(costs, 2):
+            lanes = [0, 0]
+            ordered_costs = [costs[int(Path(path).stem.removeprefix('test_'))]
+                             for path in manifest['files']]
+            self.assertEqual(ordered_costs, sorted(ordered_costs, reverse=True))
+            for path in manifest["files"]:
+                worker = lanes.index(min(lanes))
+                lanes[worker] += costs[int(Path(path).stem.removeprefix("test_"))]
+            self.assertLessEqual(max(lanes), 12)
+            self.assertEqual(manifest["estimated-wall-seconds"], max(lanes))
+            self.assertEqual(manifest["workers"], 2)
+
+    def test_parallel_slots_do_not_make_additional_heavy_files_free(self):
+        manifests = self.split([100, 90, 80, 70, 60, 50, 40, 30, 20, 10], 4, workers=4)
+        # Minimizing only the parallel tail piles 220 seconds onto one shard,
+        # with only 90 on another. LPT bounds the largest shard here at 150.
+        self.assertLessEqual(max(item['estimated-seconds'] for item in manifests), 150)

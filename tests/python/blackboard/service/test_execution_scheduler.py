@@ -559,11 +559,14 @@ class ExecutionObservationTests(unittest.TestCase):
             pairs = [self.recovered(Path(root) / name, task_id=name, attempt_id=name) for name in ('a', 'b')]
             clients = {name: self.client() for name in ('a', 'b')}
             waits = queue.Queue()
+            other_waits = queue.Queue()
             original_wait = threading.Condition.wait_for
             def wait(condition, predicate, timeout=None):
                 name = threading.current_thread().name
                 if name in ('execution-a', 'execution-b'):
                     waits.put((name, timeout))
+                    if name == 'execution-b':
+                        other_waits.put(timeout)
                 return original_wait(condition, predicate, timeout)
             with patch('hey_my_buddy.blackboard.service.execution_scheduler.inspect_process_identity', return_value='alive'), \
                  patch('hey_my_buddy.blackboard.service.execution_scheduler.read_execution_endpoint',
@@ -575,6 +578,7 @@ class ExecutionObservationTests(unittest.TestCase):
                 try:
                     self.assertEqual({waits.get(timeout=2), waits.get(timeout=2)},
                                      {('execution-a', None), ('execution-b', None)})
+                    self.assertIsNone(other_waits.get(timeout=2))
                     other_reads = store.task_get.call_args_list.count(call({'runId': 'b'}))
                     scheduler.wake(frozenset({'a'}))
                     self.assertEqual(waits.get(timeout=2), ('execution-a', None))
@@ -585,8 +589,10 @@ class ExecutionObservationTests(unittest.TestCase):
                     self.assertEqual(name, 'execution-a')
                     self.assertGreater(timeout, 0)
                     self.assertEqual(store.task_get.call_args_list.count(call({'runId': 'b'})), other_reads)
+                    # A may wait again after its reconnect timer; B must not.
                     with self.assertRaises(queue.Empty):
-                        waits.get(timeout=.03)
+                        other_waits.get(timeout=.03)
+                    self.assertEqual(store.task_get.call_args_list.count(call({'runId': 'b'})), other_reads)
                 finally:
                     scheduler.stop()
 
@@ -776,14 +782,14 @@ class ExecutionObservationTests(unittest.TestCase):
             scheduler = ExecutionScheduler(Mock(store=store), live_registry=self.live_registry)
             claim, location = self.recovered(root)
             client = self.client()
-            with self.observing(scheduler, claim, location, client) as waits:
+            with patch('hey_my_buddy.blackboard.service.execution_scheduler.time.monotonic', return_value=100.0), \
+                 self.observing(scheduler, claim, location, client) as waits:
                 self.assertIsNone(waits.get(timeout=2))
                 fsync_json(location.budget_path, {"binding": location.execution_binding,
-                                                "deadline": time.monotonic() + 60})
+                                                "deadline": 160.0})
                 scheduler.wake()
                 timeout = waits.get(timeout=2)
-                self.assertGreater(timeout, 58)
-                self.assertLessEqual(timeout, 60)
+                self.assertEqual(timeout, 60.0)
                 client.connect.assert_called_once()
                 client.stop.assert_not_called()
 
@@ -1294,10 +1300,14 @@ class SessionRecordGroupingTests(WorkflowTestCase):
 
                 self.finish_turn(board, {"claim": claim}, disposition="assistance")
                 view = board.call("workflow_get", {"runId": root["runId"]})
+                helper_dir = self.workdir(f"session-child-{named}")
+                # Each existing helper represents a separate checkout, even when
+                # the private test root is nested beneath the source repository.
+                (helper_dir / ".git").mkdir()
                 decision = self.decide(board, view, view["activeRequest"]["requestId"],
                                        command_id=f"session-helper-{named}", helpers=[{
                                            "requestId": f"session-child-{named}", "task": "assist",
-                                           "cwd": str(self.workdir(f"session-child-{named}")),
+                                           "cwd": str(helper_dir),
                                            "executionWorkspace": {"kind": "existing", "access": "write"}}])
                 child_id = decision["children"][0]["taskId"]
                 helper = self.claim(board, run_id=child_id,

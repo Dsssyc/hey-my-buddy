@@ -6,6 +6,7 @@ import os
 import runpy
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -38,6 +39,26 @@ def write_service_endpoint(root: Path, *, pid=123, started='fixture-start', serv
 
 
 class FixtureCleanupTests(unittest.TestCase):
+    def test_failed_process_evidence_keeps_identity_and_only_private_references(self):
+        target = Mock(pid=123)
+        target.create_time.return_value = 42.0
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / 'fixture'
+            worker = str(directory / 'worker')
+            native = str(directory / 'runtime' / 'native.so')
+            outside = str(directory.parent / 'outside-private-file')
+            with patch('hey_my_buddy.cli.checks.observe_process_argv', return_value=(
+                    [(target, ['python', worker, 'private-token'])], [])), \
+                 patch('hey_my_buddy.cli.checks.observe_open_paths', return_value=(
+                    {123: {native, outside}}, None, True, [])):
+                evidence = support.private_process_failure_evidence(
+                    directory, [{'pid': 123, 'source': 'openFiles', 'executable': 'python'}])
+        self.assertEqual(evidence['identitySnapshot'], [
+            {'pid': 123, 'createTime': 42.0, 'rootArguments': [worker]}])
+        self.assertEqual(evidence['rootReferences'], {'123': [native]})
+        self.assertNotIn('private-token', json.dumps(evidence))
+        self.assertNotIn('outside-private-file', json.dumps(evidence))
+
     def test_daemon_fixture_cooperates_on_windows_and_keeps_posix_sigterm(self):
         for platform, fail_stop in (("nt", False), ("nt", True), ("posix", False)):
             with self.subTest(platform=platform, fail_stop=fail_stop):
@@ -95,6 +116,7 @@ class FixtureCleanupTests(unittest.TestCase):
                       patch.object(support, "os", wraps=os) as native,
                       patch.object(support, "stop_private_service") as stop,
                       patch.object(support, "shutdown_private_rpc"),
+                      patch.object(support, "private_process_failure_evidence", return_value={}),
                       patch.object(checks, "request_cooperative_stop", return_value=[]) as drain,
                       patch.object(checks, "held_locks", return_value={"daemon": [base / "elsewhere/board-owner.lock"]
                                                                     if residue == "lock" else []}),

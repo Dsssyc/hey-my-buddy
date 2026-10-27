@@ -202,7 +202,29 @@ def assert_private_processes_gone(directory: Path) -> None:
     processes, problems, _ = observed_processes(Path(directory))
     if processes or problems:
         raise AssertionError(f"Private test process shutdown unconfirmed; preserved {directory}: "
-                             f"{len(processes)} process(es), {problems}")
+                             f"{len(processes)} process(es), {problems}; processes={processes}")
+
+
+def private_process_failure_evidence(directory: Path, processes: list[dict]) -> dict:
+    """Capture why the failed observation associated these PIDs with this root."""
+    from hey_my_buddy.cli.checks import observe_process_argv, observe_open_paths
+
+    pids = {item['pid'] for item in processes}
+    prefixes = (str(directory), str(directory.resolve()))
+
+    def matches(value):
+        return any(value == prefix or value.startswith(prefix + os.sep) for prefix in prefixes)
+
+    rows, problems = observe_process_argv()
+    opened, error, available, denied = observe_open_paths()
+    return {'processes': processes, 'identitySnapshot': [
+                {'pid': process.pid, 'createTime': process.create_time(),
+                 'rootArguments': [value for value in argv if matches(value)][:16]}
+                for process, argv in rows if process.pid in pids],
+            'rootReferences': {str(pid): sorted(value for value in opened.get(pid, ()) if matches(value))[:16]
+                               for pid in sorted(pids)},
+            'argvProblems': problems, 'pathError': error, 'pathObservationAvailable': available,
+            'denied': [str(item) for item in denied if item.pid in pids]}
 
 
 def cleanup_private_tree(directory: Path, state_directories: tuple[Path, ...]) -> None:
@@ -224,8 +246,10 @@ def cleanup_private_tree(directory: Path, state_directories: tuple[Path, ...]) -
         problems.extend(observation_problems)
     held = held_locks(directory)["daemon"]
     if held or processes or problems:
+        evidence = private_process_failure_evidence(directory, processes) if processes else {}
         raise AssertionError(f"Private fixture shutdown unconfirmed; preserved {directory}: "
-                             f"{len(held)} lock(s), {len(processes)} process(es), {problems}")
+                             f"{len(held)} lock(s), {len(processes)} process(es), {problems}; "
+                             f"processEvidence={json.dumps(evidence, ensure_ascii=False)}")
     remove_private_test_root(directory)
 
 

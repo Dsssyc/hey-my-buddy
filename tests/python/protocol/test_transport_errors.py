@@ -155,7 +155,7 @@ class PreflightFailureTests(unittest.TestCase):
                              {'raw_os_error': errno.ENOSPC, 'io_operation': 'state_write'})
             self.assertIs(caught.exception.__cause__, failure)
 
-    @unittest.skipIf(os.name == 'nt', 'POSIX AF_UNIX cleanup')
+    @unittest.skipIf(os.name == 'nt', 'POSIX independent native namespace')
     def test_replaced_temp_path_does_not_redirect_socket_cleanup(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -166,27 +166,37 @@ class PreflightFailureTests(unittest.TestCase):
             unrelated.mkdir()
             sentinel = unrelated / 's'
             sentinel.write_text('keep', encoding='utf-8')
-            listener = Mock()
-            connector = Mock()
-            listener.bind.side_effect = lambda address: Path(address).touch()
+            runtime = Mock()
+            runtime.shutdown.return_value = {'completed': True}
 
             def replace_then_fail(_address):
                 socket_directory.rename(relocated)
                 socket_directory.symlink_to(unrelated, target_is_directory=True)
                 raise FileNotFoundError(errno.ENOENT, 'path replaced')
 
-            connector.connect.side_effect = replace_then_fail
+            runtime.ping_direct_ipc.side_effect = replace_then_fail
             with patch.object(transport.tempfile, 'mkdtemp', return_value=str(socket_directory)), \
-                 patch.object(transport.socket, 'socket', side_effect=[listener, connector]), \
+                 patch.object(transport, 'RuntimeSession', return_value=runtime), \
                  self.assertRaises(transport.ServiceError) as caught:
                 transport._cold_start_preflight(root / 'state')
             self.assertEqual(caught.exception.code, 'LAUNCH_IO_ERROR')
-            self.assertEqual(caught.exception.details,
-                             {'raw_os_error': errno.ENOENT, 'io_operation': 'connect'})
+            self.assertEqual(caught.exception.details['io_operation'], 'cleanup')
             self.assertEqual(sentinel.read_text(encoding='utf-8'), 'keep')
             self.assertFalse((relocated / 's').exists())
             self.assertTrue(relocated.is_dir())
             self.assertTrue(socket_directory.is_symlink())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX independent native namespace')
+    def test_unconfirmed_native_probe_shutdown_keeps_its_namespace(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runtime = Mock()
+            runtime.shutdown.return_value = {'completed': False}
+            with patch.object(transport, 'RuntimeSession', return_value=runtime), \
+                 self.assertRaises(transport.ServiceError) as caught:
+                transport._cold_start_preflight(root)
+            self.assertEqual(caught.exception.details['io_operation'], 'shutdown')
+            self.assertTrue(Path(caught.exception.details['path']).is_dir())
 
 
 class EndpointRetirementTests(unittest.TestCase):

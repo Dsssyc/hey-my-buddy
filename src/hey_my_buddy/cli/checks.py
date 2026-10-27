@@ -278,27 +278,27 @@ def python_test_modules(root: Path) -> list[str]:
 
 
 def selected_test_modules(root: Path, arguments: list[str]) -> list[str]:
-    """Select paths from the same package discovery used for a full run."""
+    """Preserve explicit path priority; expand directories in discovery order."""
     modules = python_test_modules(root)
     if not arguments:
         return modules
     top = (root / "tests" / "python").resolve()
     files = {top.joinpath(*module.split(".")).with_suffix(".py"): module
              for module in modules}
-    selected: set[str] = set()
+    selected: dict[str, None] = {}
     for argument in arguments:
         path = (root / argument).resolve()
         if not path.is_relative_to(top):
             raise ValueError(f"{argument!r}: path must be below tests/python")
         if not path.exists():
             raise ValueError(f"{argument!r}: path does not exist")
-        matches = {module for file, module in files.items()
+        matches = [module for file, module in files.items()
                    if file.match("test_*.py")
-                   and (file == path or (path.is_dir() and file.is_relative_to(path)))}
+                   and (file == path or (path.is_dir() and file.is_relative_to(path)))]
         if not matches:
             raise ValueError(f"{argument!r}: path contains no discoverable test_*.py files")
-        selected.update(matches)
-    return sorted(selected)
+        selected.update(dict.fromkeys(matches))
+    return list(selected)
 
 
 class ChildOutcome:
@@ -450,7 +450,7 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
 
     Every child gets its own private sub-root below the checks root, so no state,
     runtime or temp directory is shared while the suites run; the whole-root teardown
-    afterwards still covers them all. Python files retain discovery order.
+    afterwards still covers them all. Python files retain selection order.
     A failing child's captured output is printed in full — unittest's verbose
     listing names the module, class and test — and the failure is summarized by file.
     """
@@ -810,10 +810,11 @@ def remove_private_test_root(directory: Path) -> None:
 
     The caller must first close its resources and confirm its work has stopped.
     On Windows an exited process's handles, such as its working directory, may
-    still be closing after shutdown is confirmed. Retry sharing violations for
-    up to 60 seconds to allow that cleanup; a process that leaked will keep its
-    handles open and still fail at the deadline. Other deletion failures raise
-    immediately, and any final failure preserves the remaining tree.
+    still be closing after shutdown is confirmed. A mapped extension can report
+    access denied (5), and an open handle a sharing violation (32). Retry both
+    for up to 60 seconds; a process that leaked still fails at the deadline.
+    Other deletion failures raise immediately, and any final failure preserves
+    the remaining tree.
     """
     directory = native_path(directory)
 
@@ -842,7 +843,7 @@ def remove_private_test_root(directory: Path) -> None:
             shutil.rmtree(directory, onexc=readonly_file)
             return
         except OSError as error:
-            if os.name != "nt" or getattr(error, "winerror", None) != 32:
+            if os.name != "nt" or getattr(error, "winerror", None) not in (5, 32):
                 raise
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -957,11 +958,8 @@ def _safe_teardown(private_root: Path) -> dict | None:
 
 def private_root_directory() -> Path:
     """The shared location for new roots and abandoned-root sweeps."""
-    # macOS's per-user temporary path leaves too little room for nested native
-    # AF_UNIX sockets (sun_path is only 104 bytes). Keep the suite's one owned
-    # root short; all child TMPDIRs still stay inside it and share its teardown.
     temporary = os.environ.get("HMB_CHECKS_TMPDIR")
-    return Path(temporary) if temporary else (Path("/tmp") if sys.platform == "darwin" else Path(tempfile.gettempdir()))
+    return Path(temporary) if temporary else Path(tempfile.gettempdir())
 
 
 def sweep_private_roots(directory: Path) -> int:

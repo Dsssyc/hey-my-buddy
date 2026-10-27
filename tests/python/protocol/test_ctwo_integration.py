@@ -26,9 +26,32 @@ from hey_my_buddy.buddy.runtime.execution import LiveEndpointDescriptor
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.protocol import rpc_config
 from hey_my_buddy.protocol.client import BoardClient
-from hey_my_buddy.protocol.contracts import ExecutionLive
+from hey_my_buddy.protocol.contracts import BuddyControl, CONTROL_NAME, ExecutionLive
+from hey_my_buddy.protocol.process_identity import inspect_process_identity
+from hey_my_buddy.protocol.execution import read_spawn_marker
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
-from protocol.fixtures.ctwo_controller import BUDDY, SELF, exchange, join_exchanges
+from protocol.fixtures.ctwo_controller import BUDDY, SELF, exchange, join_exchanges, read_execution_material
+
+
+class FixtureStatusTests(unittest.TestCase):
+    def test_status_can_read_while_the_execution_retires_its_endpoint(self):
+        with tempfile.TemporaryDirectory(prefix="retiring-execution-") as raw:
+            root = Path(raw)
+            material = root / "state/harnesses/dsh/micro-tasks/run/attempts/attempt/execution-live.json"
+            material.parent.mkdir(parents=True)
+            material.write_text('{"descriptor": {}}', encoding="utf-8")
+            read_text = Path.read_text
+
+            def retire_before_read(path, *args, **kwargs):
+                if path == material:
+                    path.unlink()
+                return read_text(path, *args, **kwargs)
+
+            # Execution shutdown removes this material between glob and open.
+            # Its disappearance must not kill the service's fixture controller.
+            with patch.object(Path, "read_text", retire_before_read):
+                self.assertIsNone(read_execution_material(root))
+            self.assertIsNone(read_execution_material(root))
 
 
 @unittest.skipUnless(os.name == "posix", "private IPC inspection is POSIX")
@@ -68,7 +91,7 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.processes.append(process)
         return process
 
-    def until(self, predicate, message, timeout=10):
+    def until(self, predicate, message, timeout=180):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             result = predicate()
@@ -94,6 +117,10 @@ class CTwoIntegrationTests(unittest.TestCase):
         self.descriptors["service"] = self.service_endpoint["address"]
 
     def start_execution(self):
+        self.submit_execution()
+        return self.attach_execution()
+
+    def submit_execution(self):
         work = self.root / "work"
         work.mkdir(mode=0o700)
         for number, arguments in enumerate((("init", "-q"),
@@ -106,10 +133,16 @@ class CTwoIntegrationTests(unittest.TestCase):
             "task": "model-free live transport fixture", "cwd": str(work), "expectedSeconds": 30,
             "executionWorkspace": {"kind": "existing", "access": "write"}})
         self.run_id = submitted["runId"]
+
+    def attach_execution(self):
         def attached():
             self.assertIsNone(self.service.poll(), "private service exited")
             value = exchange(self.service, {"op": "status"})
             self.assertEqual(value["errors"], [])
+            if value["executionPid"] is not None and not value["running"]:
+                logs = {str(path.relative_to(self.root)): path.read_text(encoding="utf-8")[-6000:]
+                        for path in self.root.rglob("*.stderr.log")}
+                self.fail("execution exited before native readiness: " + json.dumps(logs))
             return value if value["running"] and value["execution"] and value["bound"] and value["nativeReady"] else None
 
         value = self.until(attached, "service did not start its live execution")
@@ -202,6 +235,82 @@ class CTwoIntegrationTests(unittest.TestCase):
     def test_parent_identity_capture_failure_is_closed_by_execution_self_report(self):
         self.env["HMB_C2_PARENT_CAPTURE_FAILURE"] = "1"
         self.exercise(kill=False)
+
+    def hold_startup_namespace(self):
+        self.env["HMB_C2_STARTUP_GATE_ROOT"] = str(self.root)
+        self.start_service()
+        locker = self.spawn([sys.executable, str(SELF), "namespace-lock", "--root", str(self.root)],
+                            "namespace-lock")
+
+        def release():
+            (self.root / "namespace-release").touch()
+            self.assertEqual(locker.wait(timeout=180), 0)
+
+        self.addCleanup(release)
+        return release
+
+    def startup_inspection(self):
+        path = self.root / "startup-inspection.json"
+        result = self.until(lambda: json.loads(path.read_text(encoding="utf-8")) if path.exists() else None,
+                            "execution did not inspect its endpoint under the namespace lock")
+        self.assertEqual(result["status"], "io-error", result)
+        self.assertEqual(result["io_kind"], "WouldBlock", result)
+        self.assertIs(result["retryable"], True, result)
+        return result
+
+    def test_execution_starts_after_another_process_releases_the_namespace_gate(self):
+        release = self.hold_startup_namespace()
+        self.submit_execution()
+        self.startup_inspection()
+        # Retire the held namespace only after the real inspection encountered it.
+        # An endpoint cannot be published while that inspection keeps retrying.
+        self.assertIsNone(exchange(self.service, {"op": "status"})["execution"])
+        release()
+        value = self.attach_execution()
+        self.assertTrue(value["nativeReady"])
+        exchange(self.service, {"op": "finish"})
+        def finished():
+            status = exchange(self.service, {"op": "status"})
+            task = self.client.get(runId=self.run_id)
+            return not status["running"] and task["shutdownConfirmed"]
+        self.until(finished, "execution did not finish after the namespace was released")
+
+    def test_cancel_during_endpoint_startup_confirms_the_execution_is_gone(self):
+        release = self.hold_startup_namespace()
+        with cc.connect(BuddyControl, name=CONTROL_NAME, address=self.service_endpoint["address"], timeout=180) as peer:
+            # The command adapter is admitted only by this model-free fixture's
+            # store writer. It shares execution startup and has no wrap-up turn.
+            self.run_id = exchange(self.service, {"op": "submit-command"})["runId"]
+            inspection = self.startup_inspection()
+            query = canonical_json({"token": self.service_endpoint["token"], "runId": self.run_id})
+            before = json.loads(peer.task_get(query))["task"]
+            attempt = before["selectedAttempt"]
+            identity = self.until(lambda: read_spawn_marker(self.state, {
+                "taskId": self.run_id, "attemptId": attempt["attemptId"], "generation": attempt["generation"]}),
+                "service did not record its created execution identity")
+            self.assertEqual(inspect_process_identity(identity), "alive")
+            cancelled = json.loads(peer.task_cancel(query))
+            self.assertNotIn("error", cancelled, cancelled)
+
+            def stopped():
+                value = json.loads(peer.task_get(query))["task"]
+                return value if value["shutdownConfirmed"] else None
+
+            final = self.until(stopped, "cancelled startup execution was not stopped")
+            self.assertEqual(final["state"], "cancelled", final)
+            self.assertEqual(inspect_process_identity(identity), "identity-absent")
+            self.assertFalse((self.root / "namespace-release").exists())
+            self.assertFalse((self.root / "command-started").exists())
+            self.record("cancelled-startup.json", final)
+        release()
+        # The forced startup had no published descriptor. Retire only its exact
+        # owned native endpoint after its process was independently observed gone.
+        inspected = self.endpoint_status(inspection["address"])
+        if inspected["status"] == "present":
+            reaped = cc.reap_endpoint(inspection["address"], inspected["credential"])
+            self.assertIn(reaped["status"], ("reaped", "already-absent"), reaped)
+        else:
+            self.assertEqual(inspected["status"], "absent", inspected)
 
     def stop_owned(self):
         # Finally only asks objects created here to stop. No PID scan or signals.

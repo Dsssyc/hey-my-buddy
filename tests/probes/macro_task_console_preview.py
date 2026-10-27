@@ -90,7 +90,6 @@ import signal
 import socket
 import sys
 import threading
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -2638,7 +2637,6 @@ class PreviewHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address, *, assets: Path, scenario: str, verbose: bool):
         self.assets = assets
-        self.started = time.monotonic()
         self.scenario = scenario
         self.state = PreviewState()
         self.verbose = verbose
@@ -2650,11 +2648,13 @@ class PreviewHandler(BaseHTTPRequestHandler):
     timeout = 30
 
     def date_time_string(self, timestamp=None):  # noqa: D401 - BaseHTTPRequestHandler API
-        """The ``Date`` of every response runs on from the instant the fixtures were observed, by the time the
-        service has been up, so that what waits is measured against the fixture clock, reads the same on any
-        day, and the time of a check moves on."""
+        """Keep the synthetic clock fixed, independent of server age or shard order.
+
+        Manual previews also hold open spans at this instant. Browser checks of
+        elapsed time explicitly advance the response clock for that scenario.
+        """
         observed = datetime.fromisoformat(OBSERVED_AT.replace("Z", "+00:00"))
-        return format_datetime(observed + timedelta(seconds=int(time.monotonic() - self.server.started)), usegmt=True)
+        return format_datetime(observed, usegmt=True)
 
     def log_message(self, format, *args):  # noqa: A002 - BaseHTTPRequestHandler API
         if self.server.verbose:

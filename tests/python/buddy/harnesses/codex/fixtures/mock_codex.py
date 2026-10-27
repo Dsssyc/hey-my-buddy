@@ -355,11 +355,11 @@ def main():
                 # The controller test releases this only after it reads a
                 # flushed message while no completed item has been sent.
                 release = state_path().with_suffix('.release')
-                deadline = time.monotonic() + 5
-                while not release.exists() and time.monotonic() < deadline:
+                # The caller owns the fixture readiness budget and stops this
+                # child if it cannot observe the stream. Completion depends on
+                # that observation, never on how quickly the caller is scheduled.
+                while not release.exists():
                     time.sleep(0.01)
-                if not release.exists():
-                    raise RuntimeError('session stream was not visible before completion')
                 if case == 'session-stream-disconnect':
                     return
                 send({"method": "item/completed", "params": {"threadId": thread_id, "turnId": turn_id,
@@ -378,7 +378,7 @@ def main():
                 state["threads"][thread_id]["turns"].append(turn)
                 write_state(state)
                 continue
-            if case in ("hang", "interrupt-settled", "interrupt-foreign", "session-interrupt") or (case == "wrap-up" and turn_index == 0):
+            if case in ("hang", "hang-unbounded", "interrupt-settled", "interrupt-foreign", "session-interrupt") or (case == "wrap-up" and turn_index == 0):
                 # These scenarios record an explicit start fact, and only
                 # after the turn/start response and the turn/started notification
                 # were actually emitted: a thread merely existing never counts as a
@@ -387,7 +387,12 @@ def main():
                 state = read_state()
                 state['threads'][thread_id]['turnStart'] = {"threadId": thread_id, "turnId": turn_id}
                 write_state(state)
-                if case == "hang":
+                if case == "hang-unbounded":
+                    # Cancellation must stop this child; it cannot finish by
+                    # reaching a fixture sleep limit or reading another frame.
+                    while True:
+                        time.sleep(1)
+                elif case == "hang":
                     time.sleep(60)
                 else:
                     request = json.loads(sys.stdin.readline())

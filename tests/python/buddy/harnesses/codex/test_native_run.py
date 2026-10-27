@@ -95,7 +95,7 @@ class RejectionPhaseTests(unittest.TestCase):
 
 
 class SeamCase(unittest.TestCase):
-    """The shared private environment for direct seam calls."""
+    """Private seam calls use a readiness budget; deadline checks pass their own."""
 
     def setUp(self):
         developer_source = mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"})
@@ -140,7 +140,7 @@ class SeamCase(unittest.TestCase):
         return mock.patch.object(native_run, "_halt_owned_group", halt_then_unconfirmed)
 
     def request(self, *, permission: str, output_schema: dict, prompt: str,
-                timeout: int = 8, continuation=None, capture_evidence=False,
+                timeout: int = 180, continuation=None, capture_evidence=False,
                 input_sha256: str | None = None, turn_id: str | None = None,
                 native: str | None = None) -> RunRequest:
         marker = uuid.uuid4().hex[:8]
@@ -179,7 +179,7 @@ class SeamCase(unittest.TestCase):
                 marker = uuid.uuid4().hex
                 catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / ('discovery-' + marker),
                                         native_root=self.base / ('discovery-native-' + marker),
-                                        timeout_seconds=8, cancelled=lambda: False)
+                                        timeout_seconds=180, cancelled=lambda: False)
                 provider = catalog['providers'][0]['provider']
                 self.assertEqual(provider, expected)
                 self.assertEqual(set(catalog['billingByProvider']), {expected})
@@ -221,7 +221,7 @@ class FastSeamTests(SeamCase):
             "multi_agent_version": "v2"}]}
         (self.home / "models_cache.json").write_text(json.dumps(cache), encoding="utf-8", newline="\n")
 
-    def fast_run(self, case: str, correction: FastCorrection, *, timeout: int = 6,
+    def fast_run(self, case: str, correction: FastCorrection, *, timeout: int = 180,
                  observer=None):
         self.set_case(case)
         prompt = "Pick a buddy"
@@ -550,7 +550,7 @@ class FastSeamTests(SeamCase):
         garbage.write_bytes(b"\x00\x01not an executable")
         select_command(os.environ, self.base, "codex", [str(garbage)])
         request = self.request(permission="none", output_schema=FAST_SCHEMA,
-                               prompt="Pick a buddy", timeout=5)
+                               prompt="Pick a buddy")
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         result = run(request, observer=correction.observer, services=None,
                      cancelled=lambda: False)
@@ -570,7 +570,7 @@ class FastSeamTests(SeamCase):
         correction = FastCorrection(FAST_SCHEMA, "Pick a buddy")
         self.set_case("unlisted-model")
         result = run(self.request(permission="none", output_schema=FAST_SCHEMA,
-                                  prompt="Pick a buddy", timeout=6),
+                                  prompt="Pick a buddy"),
                      observer=correction.observer, services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "native-rpc-error")
@@ -592,7 +592,7 @@ class CodexSeamCase(SeamCase):
         os.environ.update(self.environment)
         os.environ["HMB_CODEX_FIXTURE_STATE"] = str(self.base / "trace.json")
 
-    def worker_run(self, case: str, *, continuation=None, timeout: int = 12,
+    def worker_run(self, case: str, *, continuation=None, timeout: int = 180,
                    observer=None, input_text: str = "fixture micro task task", live=None, level="write"):
         self.set_case(case)
         turn_input = {"taskId": "micro-task-1", "attemptId": "attempt-check", "generation": 7,
@@ -604,7 +604,7 @@ class CodexSeamCase(SeamCase):
                    observer=observer or (lambda _facts: FEEDBACK_CONTINUE),
                    services=self.worker_services(live=live), cancelled=lambda: False)
 
-    def review_run(self, case: str, *, observer=None, capture_evidence=False, timeout: int = 8):
+    def review_run(self, case: str, *, observer=None, capture_evidence=False, timeout: int = 180):
         self.set_case(case)
         return run(self.request(permission="read", output_schema=REVIEW_SCHEMA,
                                 prompt="Select from the frozen packet", timeout=timeout,
@@ -868,7 +868,7 @@ class WorkerSeamTests(CodexSeamCase):
         prompt = worker_format("codex").prompt(task, turn)
         expected = prompt.encode("utf-8")
         self.assertGreater(len(expected), 2 * 1024 * 1024)
-        result = self.worker_run("large-prompt", input_text=prompt, timeout=20)
+        result = self.worker_run("large-prompt", input_text=prompt)
         self.assertEqual(result.end.status, "ok", result.end.message)
         self.assertEqual(result.stop_evidence.native.group_state, "gone")
         capture = Path(os.environ["HMB_CODEX_FIXTURE_STATE"]).with_suffix(".prompt.txt")
@@ -1050,7 +1050,8 @@ class WorkerSeamTests(CodexSeamCase):
                 with mock.patch.object(native_run.Connection, 'pump', observe_pump):
                     result = run(request, observer=lambda _facts: FEEDBACK_CONTINUE,
                                  services=self.worker_services(), cancelled=lambda: False)
-                self.assertTrue(visible, 'the native fixture waits for a flushed running message')
+                self.assertTrue(visible, f'the native fixture waits for a flushed running message: {result.end}\n'
+                                + (Path(request.private_state.invocation_root) / 'native.stderr.log').read_text(encoding='utf-8'))
                 self.assertEqual(result.end.status, 'ok' if case == 'session-stream' else 'error')
                 self.assertEqual(result.stop_evidence.native.group_state, 'gone')
                 lines = notifications(path)
@@ -1194,7 +1195,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_null_native_provider_uses_codex_default_in_discovery(self):
         self.set_case('provider-null')
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / 'null-discovery',
-                                native_root=self.base / 'null-native', timeout_seconds=8, cancelled=lambda: False)
+                                native_root=self.base / 'null-native', timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog['providers'][0]['provider'], 'openai')
         self.assertEqual(set(catalog['billingByProvider']), {'openai'})
         self.assertEqual(catalog['billingByProvider']['openai']['kind'], 'subscription')
@@ -1270,7 +1271,7 @@ class WorkerSeamTests(CodexSeamCase):
         (self.home / "config.toml").write_text('model_provider = "fixture-provider"\n', encoding="utf-8", newline="\n")
         self.set_case("api-key")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "catalog-read",
-                                native_root=self.base / "catalog-native", timeout_seconds=8,
+                                native_root=self.base / "catalog-native", timeout_seconds=180,
                                 cancelled=lambda: False)
         self.assertEqual(catalog["providers"][0]["provider"], "fixture-provider")
         self.assertEqual(catalog["discoveries"][0]["accountStatus"], "confirmed")
@@ -1475,7 +1476,7 @@ class WorkerSeamTests(CodexSeamCase):
     def test_native_events_publish_through_the_shared_endpoint_callback(self):
         self.set_case("worker-tool")
         request = self.request(permission="write", output_schema=OUTCOME_SCHEMA,
-                               prompt="fixture micro task task", timeout=12,
+                               prompt="fixture micro task task",
                                input_sha256=input_hash({"fixture": "live"}), turn_id="turn-live",
                                native="worker-native")
         endpoint = activity_endpoint(request.identity)
@@ -1686,7 +1687,7 @@ class WorkerSeamTests(CodexSeamCase):
             return RunFeedback(action="correct", input_text="retry")
 
         request = self.request(permission="write", output_schema=OUTCOME_SCHEMA,
-                               prompt="fixture micro task task", timeout=12,
+                               prompt="fixture micro task task",
                                input_sha256=input_hash({"taskId": "micro-task-1", "attemptId": "x",
                                                         "generation": 1, "turnId": "t"}),
                                turn_id="t", native="worker-native")
@@ -1994,13 +1995,13 @@ class DiscoverySeamTests(SeamCase):
         self.set_case("bad-catalog")
         return run_discovery(cwd=str(self.cwd), invocation_root=self.base / f"discovery-{marker}",
                              native_root=self.base / f"discovery-native-{marker}",
-                             timeout_seconds=10, cancelled=lambda: False)
+                             timeout_seconds=180, cancelled=lambda: False)
 
     def test_discovery_reads_the_catalog_without_a_prompt_or_turn(self):
         self.set_case("ok")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog["harness"], "codex")
         self.assertEqual(catalog["harnessVersion"], "codex-cli fixture")
         models = catalog["providers"][0]["models"]
@@ -2018,7 +2019,7 @@ class DiscoverySeamTests(SeamCase):
                 self.set_case(case)
                 catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / case,
                                         native_root=self.base / (case + "-native"),
-                                        timeout_seconds=10, cancelled=lambda: False)
+                                        timeout_seconds=180, cancelled=lambda: False)
                 self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
                 self.assertEqual(catalog["discoveries"][0]["reason"],
                                  {"code": "config-shape-unreadable", "params": {}})
@@ -2031,7 +2032,7 @@ class DiscoverySeamTests(SeamCase):
         self.set_case("unreadable-catalog-result")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "rpc-discovery",
                                 native_root=self.base / "rpc-discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"][0]["status"], "unknown")
         self.assertEqual(catalog["unknownEvents"]["countsByType"],
                          {"account/updated": 1, "rpc/result-unreadable/model/list": 1})
@@ -2071,7 +2072,7 @@ class CatalogTrustTests(CodexSeamCase):
         self.set_case("ok")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog["discoveries"],
                          [{"harness": "codex", "status": "complete", "accountStatus": "confirmed"}])
         self.assertEqual(catalog["warnings"], [])
@@ -2083,7 +2084,7 @@ class CatalogTrustTests(CodexSeamCase):
         self.set_case("account-unknown")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
                          ["fixture-model"])
         self.assertEqual(catalog["discoveries"],
@@ -2100,7 +2101,7 @@ class CatalogTrustTests(CodexSeamCase):
                 catalog = run_discovery(cwd=str(self.cwd),
                                         invocation_root=self.base / f"discovery-{case}",
                                         native_root=self.base / f"discovery-native-{case}",
-                                        timeout_seconds=10, cancelled=lambda: False)
+                                        timeout_seconds=180, cancelled=lambda: False)
                 self.assertEqual([model["id"] for model in catalog["providers"][0]["models"]],
                                  ["fixture-model"])
                 self.assertEqual(catalog["discoveries"],
@@ -2209,7 +2210,7 @@ class CatalogTrustTests(CodexSeamCase):
         self.set_case("no-efforts-row")
         catalog = run_discovery(cwd=str(self.cwd), invocation_root=self.base / "discovery",
                                 native_root=self.base / "discovery-native",
-                                timeout_seconds=10, cancelled=lambda: False)
+                                timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog["providers"][0]["models"], [])
         self.assertEqual(catalog["warnings"],
                          [{"reason": {"code": "catalog.model-identity-or-effort-omitted", "params": {}}}])

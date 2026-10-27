@@ -94,8 +94,9 @@ class ClaudeFixtureCase(unittest.TestCase):
             self.assertEqual(self.adapter.available(), (True, None))
             self.assertEqual(probe.call_count, 2)
 
-    def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=8,
+    def context(self, case="ok", *, index=1, previous=None, mode=None, effort="low", timeout=None,
                 model="claude-opus-5-5[1m]", access=None):
+        # Ordinary micro tasks have no Router budget. Deadline tests opt in.
         turn_input = {"version": 1, "taskId": "micro-task-1", "attemptId": f"attempt-{index}", "generation": index,
                       "turnId": f"turn-{index}", "resumeMode": mode or ("reconstructed-new-session" if previous else "initial"),
                       "previousSessionId": previous, "context": {},
@@ -166,7 +167,7 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         handle = self.executor.start(context)
         self.last_handle = handle
         self.addCleanup(lambda: (handle.terminate(grace_seconds=0.2), handle.wait(15)) if not handle.finished else None)
-        self.assertIsNotNone(handle.wait(20), "Claude fixture controller did not exit")
+        self.assertIsNotNone(handle.wait(180), "Claude fixture controller did not exit")
         return self.executor.collect(handle, context)
 
     def fixture_state(self):

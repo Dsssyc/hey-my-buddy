@@ -137,7 +137,20 @@ class ExecutionInstallFenceTests(BoardTestCase):
             attempt = self.client().get(runId=created["runId"])["selectedAttempt"]
             self.install_at_fence(self.directory / "preflight.release", self.directory / "preflight.refused",
                                   not_started=started)
-            self.assertTrue(wait_for(started.exists, timeout=40), "preflight did not retry")
+            if not wait_for(started.exists, timeout=40):
+                logs = self.directory / "attempts" / created["runId"] / attempt["attemptId"]
+                evidence = {"executionLogs": {path.name: path.read_text(encoding="utf-8", errors="replace")[-8192:]
+                                              for path in logs.glob("*.log")}}
+                budget = attempt_root(self.directory, "dsh", created["runId"], attempt["attemptId"]) / "execution-budget.json"
+                evidence["budgetPublished"] = native_path(budget).exists()
+                agent_log = self.directory / "fixture-agent.log"
+                evidence["fixtureAgentLog"] = (agent_log.read_text(encoding="utf-8", errors="replace")[-8192:]
+                                               if agent_log.exists() else None)
+                # Print the owned file evidence before a diagnostic RPC, so an
+                # unavailable new daemon cannot hide the original startup stall.
+                print("preflight did not retry; startup evidence: " + json.dumps(evidence), flush=True)
+                evidence["task"] = self.client().get(runId=created["runId"])
+                self.fail("preflight did not retry\n" + json.dumps(evidence))
             self.assertEqual(inspect_process_identity(attempt["processIdentity"]), "alive")
             release.touch()
             decision = wait_for(lambda: install_fixture.InstallWithoutUpgradeTests._completed_decision(

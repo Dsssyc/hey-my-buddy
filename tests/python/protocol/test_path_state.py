@@ -195,17 +195,14 @@ class PathStateTests(unittest.TestCase):
         before = set(self.state.iterdir())
         # Supplemental local preflight check: sockets alone are substitutes.
         # Real cold startup is separately exercised below.
-        sockets = Mock()
-        sockets.return_value.accept.return_value = (Mock(), None)
-        with patch.dict(os.environ, {}, clear=True), patch.object(transport.socket, 'socket', sockets), \
-                patch.object(transport.tempfile, 'mkdtemp', wraps=tempfile.mkdtemp) as temporary:
+        with patch.dict(os.environ, {}, clear=True), patch.object(transport, '_probe_local_ipc') as probe:
             try:
                 transport._cold_start_preflight(self.state)
             except BoardError as error:
                 self.fail('owner preflight refused its 0755 state: ' + json.dumps(error.payload()))
         self.assertEqual(stat.S_IMODE(self.state.stat().st_mode), 0o700)
         self.assertEqual(set(self.state.iterdir()), before | {self.state / 'ipc'})
-        temporary.assert_called_once_with(prefix='hey-my-buddy-ipc-')
+        probe.assert_called_once_with(self.state)
 
     @unittest.skipIf(os.name == 'nt', 'POSIX state mode repair')
     def test_path03_daemon_run_repairs_before_rpc_configuration(self):
@@ -253,14 +250,13 @@ class PathStateTests(unittest.TestCase):
         boundaries = ('write', 'named-pipe') if os.name == 'nt' else ('write', 'ipc')
         for boundary in boundaries:
             with self.subTest(boundary=boundary):
-                sockets = Mock()
-                sockets.return_value.bind.side_effect = PermissionError('injected local IPC denial')
                 patcher = (patch.object(private_dirs, 'open_regular_fd',
                                         side_effect=PermissionError('injected state write denial'))
                            if boundary == 'write' else
                            patch.object(rpc_config, 'configure_local_endpoint',
                                         side_effect=PermissionError('injected Named Pipe denial'))
-                           if boundary == 'named-pipe' else patch.object(transport.socket, 'socket', sockets))
+                           if boundary == 'named-pipe' else patch.object(transport, '_probe_local_ipc',
+                                        side_effect=PermissionError('injected local IPC denial')))
                 with patcher, self.assertRaises(transport.ServiceError) as caught:
                     transport._cold_start_preflight(self.state)
                 self.assertEqual(caught.exception.code, 'LAUNCH_ACCESS_DENIED')

@@ -98,21 +98,24 @@ class TestNamedContract(BoardTestCase):
             with self.rpc_connection(BuddyControl, name=CONTROL_NAME, address=endpoint["address"]) as board:
                 reply = self.submit_execution(
                     requestId="wait-route", task="do", cwd=str(self.workdir()),
-                    adapter="command", argv=[sys.executable, "-c", "import time; time.sleep(30)"],
+                    adapter="command", argv=[sys.executable, "-c", "import time\nwhile True: time.sleep(1)"],
                     expectedSeconds=60,
                 )
                 self.assertEqual(reply["task"]["state"], "queued")
                 task_id = reply["task"]["runId"]
-                # The attempt becomes `executing` only when its process reports in,
-                # in the same transaction that appends attempt.progress; waiting for
-                # that state leaves the cancellation below as the only later event of
-                # this task, so nothing else can end the scoped wait.
-                deadline = time.monotonic() + 10
-                while json.loads(board.task_get(json.dumps({"token": endpoint["token"],
-                                                           "runId": task_id})))["task"].get("attemptState") != "executing":
-                    self.assertLess(time.monotonic(), deadline)
+                # Admission can publish an executing attempt before its first
+                # progress. Read the cursor from a page containing that progress,
+                # after which only our cancellation can wake this command's wait.
+                deadline = time.monotonic() + 180
+                while True:
+                    page = json.loads(board.events_read(json.dumps({
+                        "token": endpoint["token"], "runId": task_id})))
+                    if any(event["kind"] == "attempt.progress" and event["payload"]["phase"] == "executing"
+                           for event in page["events"]):
+                        break
+                    self.assertLess(time.monotonic(), deadline, page)
                     time.sleep(0.02)
-                cursor = json.loads(board.events_read(json.dumps({"token": endpoint["token"]})))["cursor"]
+                cursor = page["cursor"]
                 # Scope the wait to this task; unrelated events cannot release it.
                 params = {"after": cursor, "runId": task_id, "timeoutMs": 10000}
                 with ThreadPoolExecutor(max_workers=1) as pool:
