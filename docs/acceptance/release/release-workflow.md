@@ -6,5 +6,5 @@
 - **持续集成：** Python 矩阵加上 GitHub 给公开仓库的 ARM 版 Windows（`windows-11-arm`），分片沿用 x64 Windows 的用时；前端任务装上与其他任务同版本的 uv，因为预览测试在没设 `HMB_PREVIEW_PYTHON` 时用 `uv run --no-project python`（上一轮 CI 这个文件因此失败）。
 - **核对：** 两个文件的差异读过；actionlint 1.7.12 退出 0。
 - **开发者要在 PyPI 设置的：** 可信发布者（首次发布可在账户的 Publishing 页面建 pending publisher）：项目名 `hey-my-buddy`，GitHub owner `Dsssyc`，仓库 `hey-my-buddy`，工作流文件名 `build-distribution.yml`，environment 名 `pypi`。
-- **验证边界：** ARM 版 Windows 与前端任务的 uv 要等下一次推送到 `ci/cross-platform` 才真正运行；发布任务只能在发版时、PyPI 一侧设好之后验证。
+- **验证边界：** ARM 版 Windows 与前端任务的 uv 此后在推送到 `ci/cross-platform` 的 CI 里运行；发布任务在 2026-10-27 发 0.54.1 时第一次运行并成功（[发版记录](../installs/0.54.1.md)）。
 - **消耗：** 见看板上这个微任务的记录。
