@@ -34,8 +34,8 @@ class StatisticsStorageTests(WorkflowTestCase):
             packet = maintenance_data.build_packet(db)
         answer = {"newNodes": [{"id": "root", "name": "Root", "definition": "Work", "parentId": None}],
                   "merges": [], "classifications": [{"runId": self.run["runId"], "domainNodeId": "root", "taskType": "verify"}],
-                  "summaries": [{**{field: kind[field] for field in statistics.KIND}, "text": "Observed work", "citations": []}
-                                for kind in packet["kinds"]]}
+                  "summaries": {kind["kindId"]: {"text": "Observed work", "citations": []}
+                                for kind in packet["kinds"]}}
         return packet, answer
 
     def test_acceptance_and_conclusion_roll_back_with_their_statistics(self):
