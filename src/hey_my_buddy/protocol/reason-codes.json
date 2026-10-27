@@ -13,7 +13,7 @@
   "answer-empty": [],
   "answer-invalid-json": [],
   "answer-not-json": [],
-  "answer-shape": [],
+  "answer-shape": ["errors"],
   "answer-unexpected-field": [],
   "bridge-refused": [
     "errorCode"
