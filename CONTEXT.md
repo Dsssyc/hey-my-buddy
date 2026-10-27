@@ -90,8 +90,11 @@ The public picture of a model: its positioning and its commonly reported strengt
 _Avoid_: model card, evaluation (for public information)
 
 **评价 / evaluation**:
-What the blackboard's recorded outcomes show about one buddy kind in this user's work, organised by the domain tree and the task types: counted results, derived from the outcome facts when read, and observations that cite micro tasks. It belongs to the buddy kind.
+What the blackboard's recorded outcomes show about one buddy kind in this user's work, organised by the domain tree and the task types: counted results, derived from the outcome facts when read, and a summary. It belongs to the buddy kind.
 _Avoid_: card, assessment, profile (for local evidence)
+
+**归纳 / summary**:
+The maintenance plane's written observations about one buddy kind, citing the micro tasks they rest on. It holds no numbers; the counted results stand beside it.
 
 **领域树 / domain tree**:
 The user's own vertical domains as a tree, each node the kind of expertise their micro tasks call for, grown from those micro tasks and maintained by the Router, with no limit on nodes or depth. A domain is neither a project nor a task type.
