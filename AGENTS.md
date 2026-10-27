@@ -42,6 +42,8 @@ Tests use private state and runtime roots created by the test harness, never the
 
 `main` changes only through pull requests and is protected on GitHub. Enable the shared hooks once per clone with `git config core.hooksPath .githooks`; `.githooks/reference-transaction` keeps local `main` equal to the fetched `origin/main`.
 
+A release goes out from `main` after the integration branch reaches it through a pull request. The tag `v<version>` goes on the commit that was installed, which `main` contains through the pull request, not on the merge commit, so the published package records the same source commit as the installed one. Pushing the tag runs `.github/workflows/build-distribution.yml`, which packages the committed console assets and builds with the pinned build backend, so a commit builds byte-identical distributions on any machine; dispatching that workflow by hand builds without publishing. After publishing, the files on PyPI are compared byte for byte with a local build of the tagged commit.
+
 Build the skill with `uv run --frozen python packaging/build-skill.py --destination <separate directory>/hey-my-buddy`. Installation and upgrade are described in [operations](docs/reference/operations.md). Keep raw local logs and experiment scripts in the ignored `tmp/`.
 
 ## Documentation
