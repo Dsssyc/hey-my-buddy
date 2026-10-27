@@ -1,0 +1,102 @@
+{
+  "buddies": {
+    "codex:openai:fixture-alpha:high": {
+      "byDomain": {},
+      "byDomainTaskType": {},
+      "infrastructureFailures": {
+        "count": 2,
+        "lastAt": "2026-01-01T00:02:00.000Z"
+      },
+      "overall": {
+        "failureRate": 0.16666666666666666,
+        "failures": 1,
+        "firstPassRate": 0.6666666666666666,
+        "firstPasses": 4,
+        "medianDeliverySeconds": 0.0,
+        "reworkRounds": 0,
+        "samples": 6,
+        "successes": 5,
+        "usage": {
+          "medianCachedInputTokens": null,
+          "medianInputTokens": null,
+          "medianOutputTokens": null,
+          "samples": 0
+        }
+      }
+    },
+    "codex:openai:fixture-beta:high": {
+      "byDomain": {},
+      "byDomainTaskType": {},
+      "infrastructureFailures": {
+        "count": 0,
+        "lastAt": null
+      },
+      "overall": {
+        "failureRate": null,
+        "failures": 0,
+        "firstPassRate": null,
+        "firstPasses": 0,
+        "medianDeliverySeconds": null,
+        "reworkRounds": 0,
+        "samples": 0,
+        "successes": 0,
+        "usage": {
+          "medianCachedInputTokens": null,
+          "medianInputTokens": null,
+          "medianOutputTokens": null,
+          "samples": 0
+        }
+      }
+    },
+    "codex:openai:fixture-gamma:high": {
+      "byDomain": {},
+      "byDomainTaskType": {},
+      "infrastructureFailures": {
+        "count": 0,
+        "lastAt": null
+      },
+      "overall": {
+        "failureRate": null,
+        "failures": 0,
+        "firstPassRate": null,
+        "firstPasses": 0,
+        "medianDeliverySeconds": null,
+        "reworkRounds": 0,
+        "samples": 0,
+        "successes": 0,
+        "usage": {
+          "medianCachedInputTokens": null,
+          "medianInputTokens": null,
+          "medianOutputTokens": null,
+          "samples": 0
+        }
+      }
+    }
+  },
+  "fixture": {
+    "path": "tests/fixtures/upgrade-base",
+    "sha256": {
+      "board.sql": "df3c47f4ec6370c825f7079133e12ba23245c571def3689e286cf559fa4395a6",
+      "catalog.json": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",
+      "metadata.json": "bf220c1b70090f4b0f823d2752a7b55ed7ee8294e21fd6d57b5b3f335c2ca7c5",
+      "operations.json": "a61e0aac454dca78ba6b82d5f7a692fce11c532206fdcf83b1fdd612b1a39216",
+      "workspace-resources.json": "350b4a63afce3b5ab02d44b19c773efc424895614c6e77ecf7aac9fa1e14dabe"
+    },
+    "sourceCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d"
+  },
+  "format": 1,
+  "generationCommand": "env -u HMB_STATE_DIR -u HMB_RUNTIME_ROOT -u HMB_RUNTIME -u HMB_RUNTIME_IDENTITY -u HMB_AGENT_CREDENTIAL_FILE -u HMB_AGENT_CREDENTIAL_FD -u VIRTUAL_ENV -u UV_PROJECT_ENVIRONMENT TMPDIR=tmp/upgrade-statistics-oracle PYTHONPATH=src:tests/python tmp/upgrade-statistics-oracle/venv/bin/python tests/python/blackboard/store/test_upgrade_statistics.py --write-oracle",
+  "preparationCommands": [
+    "mkdir -p tmp/upgrade-statistics-oracle",
+    "UV_PROJECT_ENVIRONMENT=tmp/upgrade-statistics-oracle/venv UV_CACHE_DIR=tmp/upgrade-statistics-oracle/uv-cache TMPDIR=tmp/upgrade-statistics-oracle uv sync --frozen --no-install-project"
+  ],
+  "source": {
+    "commit": "403c4d3b569fa9fc1084fce1abaaa35b7f26275f",
+    "functions": [
+      "_statistics",
+      "_statistics_fact"
+    ],
+    "path": "src/hey_my_buddy/blackboard/routing/evidence.py",
+    "sha256": "68ff761196d67787fcd2b908b5bb554492e38b7c1bbe96a00b72d8148278db1b"
+  }
+}

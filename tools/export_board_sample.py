@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, initialize_defaults
 from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA
+from hey_my_buddy.blackboard.routing.statistics import backfill
 from hey_my_buddy.blackboard.tasks.macro_tasks import RUN_GROUPS_SQL
 from hey_my_buddy.state_root import get_state_dir
 
@@ -204,6 +205,11 @@ def export_sample(source: Path, output: Path) -> Path:
                         columns = ','.join(f'"{key}"' for key in row)
                         writer.execute(f'INSERT INTO "{table}" ({columns}) VALUES '
                                        f'({",".join("?" for _ in row)})', tuple(row.values()))
+                if version == str(SCHEMA_VERSION):
+                    # This is a new private board containing only the selected
+                    # history. Its cumulative facts describe that same history;
+                    # no source-wide statistics or maintenance records escape.
+                    backfill(writer)
                 # The surviving lineage determines each destination session's
                 # group; source group identity still locates the original file.
                 target_groups = _session_groups(records, {

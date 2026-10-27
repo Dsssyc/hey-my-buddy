@@ -1047,6 +1047,72 @@ CREATE TABLE IF NOT EXISTS routing_judgments (
     task_type      TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write'))
 );
 """
+STATISTICS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS kind_statistics (
+    harness TEXT NOT NULL,
+    model TEXT NOT NULL,
+    effort TEXT NOT NULL,
+    samples INTEGER NOT NULL CHECK (typeof(samples)='integer' AND samples > 0),
+    successes INTEGER NOT NULL CHECK (typeof(successes)='integer' AND successes >= 0),
+    first_passes INTEGER NOT NULL CHECK (typeof(first_passes)='integer' AND first_passes >= 0 AND first_passes <= successes),
+    rework_rounds INTEGER NOT NULL CHECK (typeof(rework_rounds)='integer' AND rework_rounds >= 0),
+    failures INTEGER NOT NULL CHECK (typeof(failures)='integer' AND failures >= 0),
+    PRIMARY KEY (harness, model, effort),
+    CHECK (successes + failures = samples)
+);
+CREATE TABLE IF NOT EXISTS kind_cell_statistics (
+    harness TEXT NOT NULL,
+    model TEXT NOT NULL,
+    effort TEXT NOT NULL,
+    domain_node_id TEXT NOT NULL REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    task_type TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write')),
+    samples INTEGER NOT NULL CHECK (typeof(samples)='integer' AND samples > 0),
+    successes INTEGER NOT NULL CHECK (typeof(successes)='integer' AND successes >= 0),
+    first_passes INTEGER NOT NULL CHECK (typeof(first_passes)='integer' AND first_passes >= 0 AND first_passes <= successes),
+    rework_rounds INTEGER NOT NULL CHECK (typeof(rework_rounds)='integer' AND rework_rounds >= 0),
+    failures INTEGER NOT NULL CHECK (typeof(failures)='integer' AND failures >= 0),
+    PRIMARY KEY (harness, model, effort, domain_node_id, task_type),
+    CHECK (successes + failures = samples)
+);
+CREATE TABLE IF NOT EXISTS kind_statistics_buckets (
+    harness TEXT NOT NULL,
+    model TEXT NOT NULL,
+    effort TEXT NOT NULL,
+    metric TEXT NOT NULL CHECK (metric IN ('delivery_seconds','input_tokens','cached_input_tokens','output_tokens')),
+    sign INTEGER NOT NULL CHECK (typeof(sign)='integer' AND sign IN (-1,0,1)),
+    bucket INTEGER NOT NULL CHECK (typeof(bucket)='integer'),
+    count INTEGER NOT NULL CHECK (typeof(count)='integer' AND count > 0),
+    CHECK (sign != 0 OR bucket = 0),
+    CHECK (sign != -1 OR metric = 'delivery_seconds'),
+    PRIMARY KEY (harness, model, effort, metric, sign, bucket),
+    FOREIGN KEY (harness, model, effort) REFERENCES kind_statistics(harness, model, effort) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS kind_cell_statistics_buckets (
+    harness TEXT NOT NULL,
+    model TEXT NOT NULL,
+    effort TEXT NOT NULL,
+    domain_node_id TEXT NOT NULL,
+    task_type TEXT NOT NULL,
+    metric TEXT NOT NULL CHECK (metric IN ('delivery_seconds','input_tokens','cached_input_tokens','output_tokens')),
+    sign INTEGER NOT NULL CHECK (typeof(sign)='integer' AND sign IN (-1,0,1)),
+    bucket INTEGER NOT NULL CHECK (typeof(bucket)='integer'),
+    count INTEGER NOT NULL CHECK (typeof(count)='integer' AND count > 0),
+    CHECK (sign != 0 OR bucket = 0),
+    CHECK (sign != -1 OR metric = 'delivery_seconds'),
+    PRIMARY KEY (harness, model, effort, domain_node_id, task_type, metric, sign, bucket),
+    FOREIGN KEY (harness, model, effort, domain_node_id, task_type)
+        REFERENCES kind_cell_statistics(harness, model, effort, domain_node_id, task_type) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS buddy_infrastructure_failures (
+    harness TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    effort TEXT NOT NULL,
+    count INTEGER NOT NULL CHECK (typeof(count)='integer' AND count > 0),
+    last_at TEXT NOT NULL,
+    PRIMARY KEY (harness, provider, model, effort)
+);
+"""
 CATALOG_PENDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS catalog_pending (
     harness      TEXT NOT NULL REFERENCES catalog_current(harness) ON DELETE RESTRICT,
@@ -1098,7 +1164,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
 """
 SCHEMA = "\n".join((CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
                     EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
-                    HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA, DOMAIN_EVALUATION_SCHEMA,
+                    HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA, DOMAIN_EVALUATION_SCHEMA, STATISTICS_SCHEMA,
                     CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))
 
 

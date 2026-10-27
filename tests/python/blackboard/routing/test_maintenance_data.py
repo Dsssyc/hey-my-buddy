@@ -2,7 +2,7 @@
 from copy import deepcopy
 import json
 
-from blackboard.tasks.test_workflow import WorkflowTestCase
+from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
 from hey_my_buddy.blackboard.routing.maintenance_data import (
     answer_schema, apply_answer, build_packet, merge_domain, pending, rename_domain,
     pending_count,
@@ -160,6 +160,51 @@ class MaintenanceDataTests(WorkflowTestCase):
             rename_domain(db, "child", " Renamed ", "C")
             self.assertEqual(db.execute("SELECT name FROM domain_nodes WHERE node_id='child'").fetchone()[0],
                              "Renamed")
+
+    def test_packet_reads_kind_counts_and_real_provider_failure_columns(self):
+        with self.board_.store.db.write() as db:
+            db.execute("INSERT INTO kind_statistics(harness,model,effort,samples,successes,"
+                       "first_passes,rework_rounds,failures) VALUES(?,?,?,2,1,1,0,1)",
+                       (BUDDY["harness"], BUDDY["model"], BUDDY["effort"]))
+            db.executemany(
+                "INSERT INTO buddy_infrastructure_failures(harness,provider,model,effort,count,last_at)"
+                " VALUES(?,?,?,?,?,?)",
+                [(BUDDY["harness"], provider, BUDDY["model"], BUDDY["effort"], count,
+                  "2026-01-01T00:00:00Z") for provider, count in
+                 ((BUDDY["provider"], 2), ("other-provider", 3))])
+        packet = self.packet()
+        self.assertEqual(len(packet["kinds"]), 1)
+        kind = packet["kinds"][0]
+        self.assertEqual({field: kind[field] for field in ("harness", "model", "effort")},
+                         {field: BUDDY[field] for field in ("harness", "model", "effort")})
+        self.assertEqual((kind["statistics"]["overall"]["samples"],
+                          kind["statistics"]["overall"]["failures"]), (2, 1))
+        self.assertEqual({entry["provider"]: entry["count"]
+                          for entry in kind["statistics"]["infrastructureFailures"]},
+                         {BUDDY["provider"]: 2, "other-provider": 3})
+
+    def test_repeated_classification_answer_accumulates_cell_once(self):
+        accepted = self.submit(self.board_, request_id="accepted-cell", task="Accepted evidence",
+                               cwd=str(self.workdir("accepted-cell")), kind="worktree")
+        self.finish_turn(self.board_, self.claim(self.board_, run_id=accepted["runId"]))
+        self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": accepted["runId"]}))
+        packet = self.packet()
+        answer = {"newNodes": [{"id": "cell", "name": "Cell", "definition": "Classified work",
+                                "parentId": None}], "merges": [],
+                  "classifications": [{"runId": run_id, "domainNodeId": "cell", "taskType": "review"}
+                                      for run_id in packet["classificationRunIds"]],
+                  "summaries": self.summary(packet, [accepted["runId"]])}
+        with self.board_.store.db.write() as db:
+            first = apply_answer(db, packet=packet, answer=answer,
+                                 maintenance_run_id=self.maintenance_id)
+            repeated = apply_answer(db, packet=packet, answer=answer,
+                                    maintenance_run_id=self.maintenance_id)
+            cell = db.execute("SELECT samples,successes FROM kind_cell_statistics"
+                              " WHERE domain_node_id='cell' AND task_type='review'").fetchone()
+        self.assertEqual(first["errors"], [])
+        self.assertEqual(repeated["errors"], [])
+        self.assertEqual(repeated["written"]["classifications"], 0)
+        self.assertEqual(tuple(cell), (3, 1))
 
     def test_partial_write_correction_cannot_replace_accepted_facts(self):
         packet = self.packet()

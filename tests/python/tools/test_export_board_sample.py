@@ -98,6 +98,8 @@ class ExportBoardSampleTests(WorkflowTestCase):
             self.assertEqual(set(row[0] for row in connection.execute('SELECT run_id FROM workflow_runs')),
                              {first['runId'], second['runId']})
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM agent_credentials').fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT SUM(samples),SUM(successes) FROM kind_statistics').fetchone(), (2, 2))
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM kind_cell_statistics').fetchone()[0], 0)
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts WHERE execution_state!=\'finished\'').fetchone()[0], 0)
             self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
             self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')

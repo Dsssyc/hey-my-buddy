@@ -36,6 +36,8 @@ from ...paths import is_absolute_path
 from ...protocol import schemas
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ...protocol.stop import WRAP_UP_INITIATORS
+from ...protocol.turn_input import turn_buddy
+from ..routing.statistics import accumulate_infrastructure, accumulate_overall
 from . import fixes as task_fixes
 from . import host_conclusions
 from . import micro_task
@@ -4295,6 +4297,7 @@ class WorkflowCoordinator:
         )
         if updated.rowcount != 1:
             raise BoardError("REVISION_CONFLICT", "The micro-task run changed concurrently; re-read it and retry")
+        accumulate_overall(connection, run_id)
         if not host_completion:
             # Logical ownership ends with the recorded acceptance exactly as before;
             # keepCheckout keeps the checkout directory, not the writer exclusion.
@@ -4618,6 +4621,7 @@ class WorkflowCoordinator:
         self.board._transition_task(connection, task, "concluded")
         connection.execute("UPDATE tasks SET queue_reason=NULL WHERE task_id=?", (run_id,))
         connection.execute("UPDATE workflow_runs SET state='concluded' WHERE run_id=?", (run_id,))
+        accumulate_overall(connection, run_id)
         run_row = self._bump_run(connection, run_row, now)
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
         view = self.compact(connection, run_row, task)
@@ -6873,6 +6877,12 @@ class WorkflowCoordinator:
         turn = self.turn_outcome(payload)
         if turn_row is None:
             return None
+        accumulate_infrastructure(
+            connection, turn_buddy(turn_row["input_json"]),
+            json.loads(attempt["result_json"]) if attempt["result_json"] is not None else None,
+            attempt["finished_at"],
+            new_round=turn_row["state"] in ("prepared", "running"),
+        )
         # The seal-side shared-stash fact is pinned for every outcome of a turn
         # that froze a start observation — completed, failed, cancelled or late.
         # It is evidence only and never changes this import's state machine.

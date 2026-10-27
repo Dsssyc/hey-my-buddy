@@ -1,12 +1,15 @@
 """Outcome and load facts over synthetic boards, without a model call."""
-import json
+import math
+import sqlite3
 import unittest
+from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase, BUDDY
 from support import FakeClock
 from hey_my_buddy.blackboard.routing.evidence import (
-    NEITHER, candidate_facts, domain_statistics, round_classification,
+    candidate_facts, domain_statistics,
 )
+from hey_my_buddy.blackboard.routing.statistics import NEITHER, accumulate_cell, round_classification
 from hey_my_buddy.protocol.stop import TERMINATION_REASONS
 from hey_my_buddy.protocol.usage import normalize_token_usage
 
@@ -55,22 +58,37 @@ class RoutingEvidenceTests(WorkflowTestCase):
             "inputTokens": input_tokens, "cachedInputTokens": cached_tokens,
             "outputTokens": output_tokens, "completeness": completeness})
 
-    def end_turn(self, run, *, seconds=10, failed=False, category=None, disposition="completed", usage=None):
+    def end_turn(self, run, *, seconds=10, failed=False, category=None, disposition="completed", usage=None,
+                 code=None, provider_rejection=None):
         claim = self.claim(self.board_, run_id=run["runId"])
         self.assertIsNotNone(claim["claim"])
         self.clock.advance(seconds)
-        self.finish_turn(self.board_, claim, runner_status="failed" if failed else "ok",
-                         disposition=disposition)
-        attempt_id = claim["claim"]["attempt"]["attemptId"]
-        with self.board_.store.db.write() as db:
-            receipt = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?", (attempt_id,)).fetchone()[0])
-            receipt["terminationReason"] = category or ("harness-error" if failed else "completed")
+        original_call = self.board_.call
+
+        def call_with_termination(operation, params):
+            if operation == "execution_result":
+                params = {**params, "terminationReason": category or ("harness-error" if failed else "completed")}
+            return original_call(operation, params)
+
+        def mutate(result):
             # Explicit false must not erase ability evidence under the revised rule.
-            receipt["result"]["modelStarted"] = False
+            result["modelStarted"] = False
             if usage is not None:
-                receipt["result"]["tokenUsage"] = usage
-            db.execute("UPDATE attempts SET result_json=? WHERE attempt_id=?", (json.dumps(receipt), attempt_id))
+                result["tokenUsage"] = usage
+            if code is not None:
+                result["code"] = code
+            if provider_rejection is not None:
+                result["providerRejection"] = provider_rejection
+
+        with patch.object(self.board_, "call", side_effect=call_with_termination):
+            self.finish_turn(self.board_, claim, runner_status="failed" if failed else "ok",
+                             disposition=disposition, result_mutator=mutate)
+        attempt_id = claim["claim"]["attempt"]["attemptId"]
         return self.view(run), attempt_id
+
+    def assert_bucket_close(self, actual, expected):
+        self.assertIsNotNone(actual)
+        self.assertLessEqual(abs(actual - expected), expected * (math.sqrt(1.2) - 1) + 1e-9)
 
     def conclude(self, run):
         return self.board_.call("workflow_conclude", {"runId": run["runId"],
@@ -109,6 +127,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
                     "INSERT INTO micro_task_classifications(run_id,domain_node_id,task_type,maintenance_run_id)"
                     " VALUES(?,?,?,?)",
                     (run["runId"], node_id, task_type, maintenance_run_id))
+                accumulate_cell(db, run["runId"], node_id, task_type)
 
     def test_no_data_is_explicit_and_provider_changes_share_only_kind_statistics(self):
         empty = self.facts()[0]
@@ -123,9 +142,11 @@ class RoutingEvidenceTests(WorkflowTestCase):
             BUDDY, {**BUDDY, "provider": "other"}, {**BUDDY, "effort": "high"},
             {**BUDDY, "harness": "codex"})
         self.assertEqual(same["statistics"], other_provider["statistics"])
+        duration = same["statistics"].pop("medianDeliverySeconds")
         self.assertEqual(same["statistics"], {"samples": 1, "successes": 1, "failures": 0,
                          "firstPasses": 1, "reworkRounds": 0, "firstPassRate": 1,
-                         "failureRate": 0, "medianDeliverySeconds": 12, "usage": NO_USAGE})
+                         "failureRate": 0, "usage": NO_USAGE})
+        self.assert_bucket_close(duration, 12)
         self.assertEqual(other_effort["statistics"]["samples"], 0)
         self.assertEqual(other_harness["statistics"]["samples"], 0)
 
@@ -155,9 +176,11 @@ class RoutingEvidenceTests(WorkflowTestCase):
         root = same["byDomain"]["root"]
         self.assertEqual((root["samples"], root["successes"], root["failures"],
                           root["firstPassRate"], root["failureRate"]), (3, 2, 1, 2 / 3, 1 / 3))
-        self.assertEqual(root["medianDeliverySeconds"], 15)
-        self.assertEqual(root["usage"], {"samples": 2, "medianInputTokens": 20,
-                                          "medianCachedInputTokens": 4, "medianOutputTokens": 6})
+        self.assert_bucket_close(root["medianDeliverySeconds"], 15)
+        self.assertEqual(root["usage"]["samples"], 2)
+        for field, expected in (("medianInputTokens", 20), ("medianCachedInputTokens", 4),
+                                ("medianOutputTokens", 6)):
+            self.assert_bucket_close(root["usage"][field], expected)
         self.assertEqual(same["byDomain"]["child"]["samples"], 1)
         self.assertEqual(same["byDomain"]["sibling"]["samples"], 2)
         self.assertEqual(set(same["byDomainTaskType"]["root"]), {"create", "debug"})
@@ -175,8 +198,8 @@ class RoutingEvidenceTests(WorkflowTestCase):
 
         facts = self.domain_facts()[0]
         cell = facts["byDomainTaskType"]["leaf"]["review"]
-        self.assertEqual((cell["samples"], cell["firstPasses"], cell["reworkRounds"],
-                          cell["medianDeliverySeconds"]), (1, 0, 1, 4))
+        self.assertEqual((cell["samples"], cell["firstPasses"], cell["reworkRounds"]), (1, 0, 1))
+        self.assert_bucket_close(cell["medianDeliverySeconds"], 4)
         self.assertEqual(cell["usage"], NO_USAGE)
         self.assertEqual(cell, facts["byDomain"]["leaf"])
         self.assertEqual(cell, facts["byDomain"]["root"])
@@ -191,8 +214,10 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.accept_run(self.board_, second)
         stats = self.facts()[0]["statistics"]
         self.assertEqual(stats["samples"], 2)
-        self.assertEqual(stats["usage"], {"samples": 2, "medianInputTokens": 65,
-                                          "medianCachedInputTokens": 8, "medianOutputTokens": 7})
+        self.assertEqual(stats["usage"]["samples"], 2)
+        for field, expected in (("medianInputTokens", 65), ("medianCachedInputTokens", 8),
+                                ("medianOutputTokens", 7)):
+            self.assert_bucket_close(stats["usage"][field], expected)
 
     def test_partial_or_missing_usage_keeps_the_sample_out(self):
         mixed, _ = self.end_turn(self.new_run(), usage=self.usage(10, 2, 3))
@@ -208,6 +233,37 @@ class RoutingEvidenceTests(WorkflowTestCase):
     def test_unsettled_delivery_is_not_a_sample(self):
         self.end_turn(self.new_run())
         self.assertEqual(self.facts()[0]["statistics"]["samples"], 0)
+
+    def test_statistics_read_does_not_scan_outcome_history(self):
+        run, _ = self.end_turn(self.new_run(), usage=self.usage(5, 0, 2))
+        self.accept_run(self.board_, run)
+        blocked = {"workflow_turns", "workflow_continuations", "workflow_integrations",
+                   "attempts", "workflow_runs", "workflow_host_conclusions"}
+        with self.board_.store.db.read() as db:
+            def authorize(action, table, _column, _database, _source):
+                if action == sqlite3.SQLITE_READ and table in blocked:
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            db.set_authorizer(authorize)
+            try:
+                facts = domain_statistics(db, [{"buddy_id": "candidate", **BUDDY}])
+            finally:
+                db.set_authorizer(None)
+        self.assertEqual(facts["candidate"]["overall"]["samples"], 1)
+
+    def test_replayed_acceptance_and_conclusion_do_not_count_twice(self):
+        accepted, _ = self.end_turn(self.new_run())
+        self.accept_run(self.board_, accepted)
+        repeated_accept = self.accept_run(self.board_, accepted)
+        self.assertTrue(repeated_accept["duplicate"])
+        concluded, _ = self.end_turn(self.new_run(), failed=True)
+        self.conclude(concluded)
+        repeated_conclusion = self.conclude(concluded)
+        self.assertTrue(repeated_conclusion["duplicate"])
+        self.assertEqual(self.facts()[0]["statistics"]["samples"], 2)
+        self.assertEqual((self.facts()[0]["statistics"]["successes"],
+                          self.facts()[0]["statistics"]["failures"]), (1, 1))
 
     def test_never_spawned_release_has_no_receipt_and_discards_an_earlier_delivery(self):
         run, _ = self.end_turn(self.new_run())
@@ -227,14 +283,24 @@ class RoutingEvidenceTests(WorkflowTestCase):
         self.accept_run(self.board_, run)
         stats = self.facts()[0]["statistics"]
         self.assertEqual((stats["samples"], stats["successes"], stats["firstPasses"], stats["reworkRounds"]), (1, 1, 0, 1))
-        self.assertEqual(stats["medianDeliverySeconds"], 20)
+        self.assert_bucket_close(stats["medianDeliverySeconds"], 20)
 
     def test_adjusted_integration_is_not_first_pass(self):
         run, _ = self.end_turn(self.new_run())
-        self.accept_run(self.board_, run)
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_integrations SET verification_json=? WHERE run_id=?",
-                       (json.dumps({"differingPaths": [], "missingPaths": [], "hostPaths": ["changed.py"]}), run["runId"]))
+        target = self.workdir("adjusted-target")
+        original_verify = self.workspace.integration_verify
+
+        def adjusted_verification(*args, **kwargs):
+            verification = original_verify(*args, **kwargs)
+            return {**verification, "verified": True, "hostPaths": ["changed.py"]}
+
+        with patch.object(self.workspace, "integration_verify", side_effect=adjusted_verification) as verify:
+            self.board_.call("workflow_accept", {"runId": run["runId"],
+                                                   "artifactId": run["finalArtifactId"],
+                                                   "note": "Reviewed Host adjustment", "adjusted": True,
+                                                   "target": {"path": str(target), "ref": "a" * 40},
+                                                   **self.control(run)})
+            self.assertEqual(verify.call_count, 1)
         stats = self.facts()[0]["statistics"]
         self.assertEqual((stats["successes"], stats["firstPasses"]), (1, 0))
 
@@ -269,25 +335,19 @@ class RoutingEvidenceTests(WorkflowTestCase):
         for reason in ("workspace-error", "harness-error"):
             run, _ = self.end_turn(self.new_run())
             self.continue_run(self.board_, run, command_id=f"continue-{reason}")
-            run, attempt = self.end_turn(run, failed=True, category=reason)
-            if reason == "harness-error":
-                with self.board_.store.db.write() as db:
-                    db.execute("UPDATE attempts SET result_json=json_set(result_json,'$.result.code','harness-unavailable') WHERE attempt_id=?", (attempt,))
+            run, _ = self.end_turn(run, failed=True, category=reason,
+                                   code="harness-unavailable" if reason == "harness-error" else None)
             self.conclude(run)
         facts = self.facts()[0]
         self.assertEqual(facts["statistics"]["samples"], 0)
         self.assertEqual(facts["infrastructureFailures"], {"count": 1, "lastAt": self.clock()})
 
     def test_every_infrastructure_turn_counts_without_terminal_run_or_ability_sample(self):
-        run, attempt = self.end_turn(self.new_run(), failed=True)
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE attempts SET result_json=json_set(result_json,'$.result.providerRejection',json(?)) WHERE attempt_id=?",
-                       (json.dumps({"code": "quota-exceeded", "rejectionPhase": "before-model"}), attempt))
+        run, _ = self.end_turn(self.new_run(), failed=True,
+                               provider_rejection={"code": "quota-exceeded", "rejectionPhase": "before-model"})
         self.assertEqual(self.facts()[0]["infrastructureFailures"]["count"], 1)
         self.continue_run(self.board_, run)
-        run, attempt = self.end_turn(run, failed=True)
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE attempts SET result_json=json_set(result_json,'$.result.code','harness-unavailable') WHERE attempt_id=?", (attempt,))
+        run, _ = self.end_turn(run, failed=True, code="harness-unavailable")
         facts, other = self.facts(BUDDY, {**BUDDY, "provider": "other"})
         self.assertEqual(facts["infrastructureFailures"], {"count": 2, "lastAt": self.clock()})
         self.assertEqual(other["infrastructureFailures"], {"count": 0, "lastAt": None})
