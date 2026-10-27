@@ -494,11 +494,6 @@ def handle_message(message):
             selection["options"]["reasoningLevel"] = params["thoughtLevel"]
         result = snapshot()
     elif method == "session/subscribe":
-        if case == "session-content-resume":
-            # Replayed old content before the admitted input must stay out of
-            # the display record, even when the restored session id matches.
-            event("message.upserted", {"message": {"info": {"role": "assistant"}, "parts": [
-                {"type": "text", "partId": "old-part", "text": "previous turn secret"}]}}, turn="old-turn")
         result = {"sessionId": session_id, "events": [], "eventSeq": 0}
     elif method == "session/send":
         prompt_input_id = params["inputId"]
@@ -511,15 +506,15 @@ def handle_message(message):
             time.sleep(120)
         event("turn.started", {"inputId": "wrong-input" if case == "wrong-input" else params["inputId"]})
         if case in ("session-content", "session-content-resume"):
-            # Synthetic stream exercise, using the versioned 0.16.9 message
-            # parts. This does not claim a captured native plan event.
-            sample = json.loads(Path(__file__).with_name("native-usage-zcode.json").read_text(encoding="utf-8"))
-            for item in sample["finalMessages"]["messages"]:
-                if item["info"]["role"] != "assistant":
-                    continue
-                event("message.upserted", {"message": {
-                    "info": {**item["info"], "sessionId": session_id},
-                    "parts": [{**part, "sessionId": session_id} for part in item["parts"]]}})
+            # The stream shapes the installed ZCode app 0.17.0 really emits,
+            # as recorded against a loopback scripted model by the
+            # session-content probe: content streams as model.streaming
+            # text_delta/reasoning_delta frames keyed by assistantMessageId
+            # and the final response arrives in turn.completed.
+            event("model.streaming", {"kind": "reasoning_delta", "assistantMessageId": "msg-display-1",
+                                      "delta": "fixture reasoning that is never assistant output", "done": False})
+            event("model.streaming", {"kind": "text_delta", "assistantMessageId": "msg-display-1",
+                                      "delta": "fixture 正文 before the tools", "done": False})
             read_input = {"file_path": "/workspace/file.py"}
             event("model.streaming", {"kind": "tool_call", "toolCallId": "display-read", "toolName": "Read",
                                       "input": read_input, "delta": "", "done": False})
@@ -532,12 +527,13 @@ def handle_message(message):
             event("tool.updated", {"kind": "scheduled", "toolCallId": "display-execute", "toolName": "Bash",
                                    "input": {"command": "pwd"}})
             event("tool.updated", {"kind": "result", "toolCallId": "display-execute", "result": {"success": True}})
-            event("part.upserted", {"part": {"type": "plan", "partId": "display-plan", "entries": [
-                {"content": "finish fixture", "status": "completed", "priority": "high"}]}})
-            event("part.upserted", {"part": {"type": "text", "partId": "foreign-part", "text": "foreign secret"}},
+            event("model.streaming", {"kind": "text_delta", "assistantMessageId": "msg-display-2",
+                                      "delta": "fixture body after the tools", "done": False})
+            event("model.streaming", {"kind": "text_delta", "assistantMessageId": "msg-foreign",
+                                      "delta": "foreign secret", "done": False},
                   root="foreign-session", turn="foreign-turn")
-            event("part.upserted", {"part": {"type": "text", "partId": "child-part", "text": "child secret",
-                                             "source": "sub-agent"}})
+            event("model.streaming", {"kind": "reasoning_delta", "assistantMessageId": "msg-child",
+                                      "delta": "child secret", "done": False, "source": "sub-agent"})
         if case in ("turn-failed-quota", "turn-failed-quota-after-output", "turn-failed-quiet"):
             # The exported native turn.failed shape: error.type plus, for the
             # quota case, error.code and the strict attribution object. The raw
@@ -552,7 +548,8 @@ def handle_message(message):
                     "modelId": "fixture-model", "providerKind": "anthropic", "transport": "sse",
                     "statusCode": 429, "providerErrorCode": "1308", "retryable": False}})
             if case == "turn-failed-quota-after-output":
-                event("part.delta", {"delta": {"type": "text", "text": "partial answer"}})
+                event("model.streaming", {"kind": "text_delta", "assistantMessageId": "msg-quota-output",
+                                          "delta": "partial answer", "done": False})
             event("turn.failed", {"error": error, "turnPhase": "stream", "inputId": params["inputId"]})
             return
         if case.startswith("refusal-"):
