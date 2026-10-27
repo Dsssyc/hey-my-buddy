@@ -62,7 +62,7 @@ async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
   // Events and inquiries share the time scale with bars; the axis and row occupy separate bands.
   await expectWholeAndApart(canvas, strip(page).locator('[data-slot=timeline-axis], [data-slot=timeline-track]'));
   await expectTextUncut(strip(page).locator("text:visible"));
-  await expectWholeAndApart(content(page), content(page).locator(":scope > *"));
+  await expectWholeAndApart(content(page), content(page).locator(":scope > :not(:last-child), :scope > :last-child > *"));
   await expectTextUncut(pane(page).locator("[data-slot=detail-band] span, [data-slot=detail-live] span"));
   await expectNoSidewaysScroll(page);
   const sideways = await pane(page).locator("[data-slot=scroll-area-viewport]").evaluate(node => node.scrollWidth - node.clientWidth);

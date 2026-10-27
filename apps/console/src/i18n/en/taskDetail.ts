@@ -13,8 +13,8 @@ export default {
   refresh: { label: "Read again", verified: "Verified {{time}}", unverified: "Verification time not recorded" },
   header: { started: "Started", elapsed: "Elapsed", turns: "Turns" },
   state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
-  wait: { host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
-  strip: { label: "The steps of this micro task", position: "Step {{current}} / {{total}}", previous: "Previous step", next: "Next step", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
+  wait: { queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
+  strip: { label: "The steps of this micro task", position: "Step {{current}} / {{total}}", previous: "Previous step", next: "Next step", focusItem: "Select {{item}} in the step strip · {{time}}", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {
     delegation: "Delegate", routing: "Route", turn: "Turn {{n}}", handoff: "Handoff", decision: "Decision", continue: "Continue",
     takeover: "Takeover", acceptance: "Acceptance",

@@ -91,7 +91,7 @@ export function MacroTasks({ snapshot, api, refresh, active = true, authority, w
 
   const [listCollapsed, setListCollapsed] = useViewPreference("macro-task-list-collapsed");
   const [location, setLocation] = useState<TasksLocation>(() => tasksLocation(window.location.hash) ?? TASKS_ROOT);
-  // The timeline item the open detail came from; it names the step the detail opens on.
+  // The one focused item, shared by the detail strip and its overview.
   const [origin, setOrigin] = useState<string | null>(null);
   function go(next: TasksLocation, how: "push" | "replace", from: string | null = null) {
     next = { ...next, sort: next.sort ?? location.sort };
@@ -253,7 +253,10 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
       nowMs={timeline.displayObservedAt ? Date.parse(timeline.displayObservedAt) : null}
       step={location.step} origin={origin} active={active} sessionClient={api} tab={location.tab ?? "overview"}
       onTab={(tab, replace) => { const { tab: _tab, ...next } = location; go({ ...next, ...(tab === "session" ? { tab: "session" } : {}) }, replace ? "replace" : "push", origin); }}
-      onStep={step => { go({ ...location, macroTaskId: selected, runId, step }, "replace", origin); }}
+      onStep={(step, item) => {
+        const { tab: _tab, ...overview } = location;
+        go({ ...(item === undefined ? location : overview), macroTaskId: selected, runId, step }, "replace", item ?? origin);
+      }}
       onBack={backToTimeline} onOpenRun={next => openRun(next)} />}
     headerActions={stopControl} listToggle={listCollapsed ? <ListFold label={t("expand")} onClick={onExpandList}/> : undefined}
     buddies={snapshot.buddies} onOpen={(runId, key) => openRun(runId, key)} onClose={backToTimeline}

@@ -271,7 +271,6 @@ export type Context = {
   inquiries: Inquiries | null;
   /** Where each inquiry is shown, by the key of the step: none is left out. */
   asked: Record<string, Inquiry[]>;
-  highlightedInquiry?: string | null;
   timeline: MacroTaskTimeline | null;
   row: TimelineRow | null;
   nowMs: number;

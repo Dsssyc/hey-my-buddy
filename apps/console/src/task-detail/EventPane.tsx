@@ -18,14 +18,15 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
   const unrecorded = t("unrecorded");
   const stopped = event?.kind === "cancel" ? event.actor?.role ?? null : null;
   const note = event ? eventDetails(event) : null;
+  const title = step.kind === "cancel" ? eventName(event!) : t(`step.${step.kind}`);
   return <Pane>
-    <PaneTitle title={step.kind === "cancel" ? eventName(event!) : t(`step.${step.kind}`)}><Moment at={step.at} /></PaneTitle>
+    <PaneTitle title={title}><Moment at={step.at} itemKey={step.key} label={title} /></PaneTitle>
     <Section name={t("event.facts")} className="border-t">
       {step.kind === "handoff"
         ? <Facts items={[[t("event.from"), quad(step.from) ?? unrecorded, true], [t("event.to"), quad(step.to) ?? unrecorded, true]]} />
         : <Facts items={[
           [t("decision.who"), event?.actor ? actorText(event.actor) : unrecorded],
-          [t("decision.when"), <Moment key="when" at={step.at} />],
+          [t("decision.when"), <Moment key="when" at={step.at} itemKey={step.key} label={eventName(event!)} />],
           ...(stopped ? [[t("event.stoppedBy"), stopActorText(stopped)] as [string, string]] : []),
           ...(note ? [[t("event.details"), note] as [string, string]] : []),
         ]} />}

@@ -135,9 +135,9 @@ for (const theme of ["light", "dark"]) for (const width of [1440, 390]) test.des
     await page.keyboard.press("+");
     expect(Math.abs((await inquiry.boundingBox())!.x - before)).toBeLessThanOrEqual(1);
     await inquiry.click();
-    const highlighted = page.locator('[data-inquiry-id="inq-a3-1"][data-highlighted=true]');
+    const highlighted = page.locator('[data-item-key="inquiry:inq-a3-1"][data-highlighted=true]');
     await expect(highlighted).toBeInViewport();
-    await expect(page.locator('[data-slot=detail-strip] [aria-pressed=true]')).toHaveAccessibleName(/回合 1/);
+    await expect(page.locator('[data-slot=detail-strip] [aria-pressed=true]')).toHaveAccessibleName(/问询/);
     await page.screenshot({ path: `${shots}/inquiry-${theme}-${width}.png` });
     await expectNoSidewaysScroll(page);
   });

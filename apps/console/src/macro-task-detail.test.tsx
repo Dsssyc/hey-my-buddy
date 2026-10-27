@@ -189,7 +189,7 @@ describe("the detail of a micro task in its macro task", () => {
     await f.user.dblClick(document.querySelector('[data-key="span:s-r2-w"]') as SVGElement);
     await screen.findByRole("group", { name: "这个微任务的各步" });
     expect(hashNow()).toBe("#tasks/macro-1/r2/4");
-    expect(document.querySelector('[data-slot=detail-strip] [data-key="event:5"]')!.getAttribute("aria-pressed")).toBe("true");
+    expect(document.querySelector('[data-slot=detail-strip] [data-key="span:s-r2-w"]')!.getAttribute("aria-pressed")).toBe("true");
   });
 
   it.each([false, true])("collapses by its back button and Escape, returning focus to that row (narrow %s)", async narrow => {

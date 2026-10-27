@@ -1,31 +1,35 @@
 import { cn } from "cn";
-import { useState } from "react";
+import { useContext, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Hint } from "@/components/hint";
 import { formatClock, formatMoment } from "../i18n/format";
+import { DetailItem, DetailLinks, ItemTime } from "./linking";
 
 /** A recorded instant in the reader's clock; one that was not recorded is said so. */
-export function Moment({ at, className }: { at: string | number | null | undefined; className?: string }) {
+export function Moment({ at, className, itemKey, label = "" }: { at: string | number | null | undefined; className?: string; itemKey?: string; label?: string }) {
   const { t } = useTranslation("taskDetail");
   const ms = typeof at === "number" ? at : at ? Date.parse(at) : NaN;
   if (!Number.isFinite(ms)) return <span className={cn("text-ink3", className)}>{t("unrecorded")}</span>;
-  return <time dateTime={new Date(ms).toISOString()} className={cn("tabular-nums", className)}>{formatMoment(ms, Date.now())}</time>;
+  const time = formatMoment(ms, Date.now());
+  const content = <time dateTime={new Date(ms).toISOString()} className={cn("tabular-nums", className)}>{time}</time>;
+  return itemKey ? <ItemTime itemKey={itemKey} label={label} time={time}>{content}</ItemTime> : content;
 }
 
 /** A recorded interval names its local date once when both ends share that date. */
-export function MomentRange({ start, end }: { start: number | null; end: string | null }) {
+export function MomentRange({ start, end, itemKey, label = "" }: { start: number | null; end: string | null; itemKey?: string; label?: string }) {
   const { t } = useTranslation("taskDetail");
   const endMs = end === null ? NaN : Date.parse(end);
   const sameDay = start !== null && Number.isFinite(start) && Number.isFinite(endMs)
     && new Date(start).toDateString() === new Date(endMs).toDateString();
-  return <span className="font-mono tabular-nums">
+  const content = <span className="font-mono tabular-nums">
     {start !== null ? <Moment at={start} /> : t("unrecorded")} – {end !== null
       ? sameDay ? <time dateTime={new Date(endMs).toISOString()}>{formatClock(endMs)}</time> : <Moment at={end} />
       : null}
   </span>;
+  return itemKey ? <ItemTime itemKey={itemKey} label={label} time={start === null ? t("unrecorded") : formatMoment(start, Date.now())}>{content}</ItemTime> : content;
 }
 
 /** The name of a pane, its state in words, and its moment on the right. */
@@ -43,8 +47,10 @@ export function PaneTitle({ title, state, tone = "past", warnings = [], note, ch
 
 /** What one step has to say, scrolled; a footer stays under it. */
 export function Pane({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
+  const links = useContext(DetailLinks);
   return <section data-slot="detail-pane" className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-    <ScrollArea className="min-h-0 flex-1"><div className="w-0 min-w-full pb-4">{children}</div></ScrollArea>
+    <ScrollArea className="min-h-0 flex-1"><div className="w-0 min-w-full pb-4">{links?.waits}{links
+      ? <DetailItem itemKey={links.stepKey || undefined}>{children}</DetailItem> : children}</div></ScrollArea>
     {footer}
   </section>;
 }

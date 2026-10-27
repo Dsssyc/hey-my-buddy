@@ -14,7 +14,7 @@ const labels = [
 
 /** Check the actual rendered line fragments, including wrapping and scroll clipping. */
 async function expectInquiryWhole(page: Page, inquiryId: string, text: string) {
-  const inquiry = page.locator(`[data-slot=detail-pane] [data-inquiry-id="${inquiryId}"]`);
+  const inquiry = page.locator(`[data-slot=detail-pane] [data-item-key="inquiry:${inquiryId}"]`);
   await expect(inquiry).toBeVisible();
   await inquiry.scrollIntoViewIfNeeded();
   const label = inquiry.getByText(text, { exact: true });
@@ -89,7 +89,7 @@ for (const words of labels) for (const width of [390, 1440]) for (const theme of
         });
       }
       if (width === 390) {
-        const starts = await page.locator("[data-slot=detail-pane] [data-inquiry-id] .bg-sunk > div > span:last-child")
+        const starts = await page.locator('[data-slot=detail-pane] [data-item-key^="inquiry:"] .bg-sunk > div > span:last-child')
           .evaluateAll(nodes => nodes.map(node => {
             const state = node.getBoundingClientRect();
             const time = node.parentElement!.querySelector("time")!.getBoundingClientRect();

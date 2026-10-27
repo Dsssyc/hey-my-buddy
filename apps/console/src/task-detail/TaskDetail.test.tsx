@@ -780,9 +780,9 @@ it("opens and highlights the exact inquiry in its turn, then scrolls it into vie
   try {
     open({ origin: "inquiry:inq-1", timeline: found, replies: { inquiries: { items: [inquiry({ messageId: "different-message-id", inquiryId: "inq-1" })], more: false } } });
     await ready();
-    await waitFor(() => expect(document.querySelector('[data-inquiry-id="inq-1"]')?.getAttribute("data-highlighted")).toBe("true"));
+    await waitFor(() => expect(document.querySelector('[data-item-key="inquiry:inq-1"]')?.getAttribute("data-highlighted")).toBe("true"));
     expect(pane().textContent).toContain("回合 1");
-    expect(stripSlice("span:e1")!.getAttribute("aria-pressed")).toBe("true");
+    expect(stripSlice("inquiry:inq-1")!.getAttribute("aria-pressed")).toBe("true");
     expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center" }));
   } finally { HTMLElement.prototype.scrollIntoView = original; }
 });

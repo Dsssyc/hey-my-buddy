@@ -34,7 +34,7 @@ export function RoutingPane({ step, ctx }: { step: Step; ctx: Context }) {
     : step.outcome === "abstention" ? t("routing.abstained") : t("state.ended");
   return <Pane>
     <PaneTitle title={t("step.routing")} state={state} tone={running ? "live" : failed ? "fail" : step.outcome === "unknown" ? "hand" : "past"} note={failed && span.error ? span.error : undefined}>
-      <MomentRange start={step.at} end={span.endAt}/>
+      <MomentRange start={step.at} end={span.endAt} itemKey={step.key} label={t("step.routing")}/>
       {step.ms !== null && <b className="text-sm font-normal text-foreground tabular-nums">{formatDuration(step.ms, "fine")}</b>}
     </PaneTitle>
     <Band role="Router" identity={notCalled ? undefined : quad(entry?.routerBuddy) ?? <span className="font-sans text-ink3">{unrecorded}</span>}
