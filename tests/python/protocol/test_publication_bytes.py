@@ -21,6 +21,7 @@ from hey_my_buddy.cli import main as cli
 from hey_my_buddy.console.console_sessions import BrowserSession, ConsoleSessions
 from hey_my_buddy.home import submission_file_path
 from hey_my_buddy.install import runtime, skill_install, upgrade
+from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.protocol.process_identity import NativeProcessJournal
 
 
@@ -110,7 +111,7 @@ class PublicationByteTests(unittest.TestCase):
             current = Path(result["path"])
             payload_size = (current / "board.sqlite3.gz").stat().st_size
             expected = (
-                b'{"backupToolContract": "0.54.0", "contract": "0.50.0", '
+                b'{"backupToolContract": "' + CONTRACT_VERSION.encode("ascii") + b'", "contract": "0.50.0", '
                 b'"createdAt": "2026-01-02T03:04:05Z", "databaseSnapshot": {"z": "caf\xc3\xa9"}, '
                 b'"files": {"board.sqlite3.gz": {"bytes": ' + str(payload_size).encode("ascii")
                 + b', "sha256": "' + b'a' * 64 + b'"}}, "format": 1, "pluginCommit": null, '
