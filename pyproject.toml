@@ -34,7 +34,7 @@ hey-my-buddy = "hey_my_buddy.install.package_install:main"
 dev = ["distlib>=0.4,<0.5"]
 
 [build-system]
-requires = ["hatchling>=1.27", "hatch-fancy-pypi-readme==25.1.0", "portalocker>=3,<4"]
+requires = ["hatchling==1.32.4", "hatch-fancy-pypi-readme==25.1.0"]
 build-backend = "hatchling.build"
 
 [tool.hatch.metadata.hooks.fancy-pypi-readme]
