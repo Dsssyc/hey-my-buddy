@@ -79,7 +79,15 @@ def collect(handle: ProcessHandle) -> AdapterOutcome:
         try:
             if not isinstance(binding, _NoToolEvidence):
                 raise BoardError("PRIVATE_PATH_UNSAFE", "The no-tool handle has no frozen evidence binding")
-            _retain_no_tool_evidence(binding, payload)
+            if handle.role_run_control.get("maintenance"):
+                # The maintenance packet and answers are transient. Retain the
+                # call's identity and native proof, without a second plaintext
+                # copy of its prompt or answer in the ordinary attempt audit.
+                evidence = ensure_private_dir(binding.evidence_root)
+                private_json(evidence / "request.json", json.loads(binding.request_json))
+                private_json(evidence / "result.json", {key: value for key, value in payload.items() if key != "rawAnswer"})
+            else:
+                _retain_no_tool_evidence(binding, payload)
         except (OSError, ValueError, TypeError, BoardError, RecursionError) as error:
             diagnostic = {"status": "failed", "reason": str(error),
                           "nativeStatus": payload.get("status"), "nativeCode": payload.get("code")}

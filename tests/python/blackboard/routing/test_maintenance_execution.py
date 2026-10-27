@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from unittest.mock import patch
 
 from admission import admit_board, release_before_spawn
@@ -32,19 +33,22 @@ OBSERVATIONS = {"toolCalls": 0, "toolMarkerFrames": 0, "deniedInteractions": 0}
 class EmptyMaintenanceTests(BoardTestCase):
     def test_empty_board_never_queues_a_model_call(self):
         board = self.board()
-        self.assertEqual(board.console_call("maintenance_start", {}), {"status": "no-new-evidence"})
+        with patch("hey_my_buddy.blackboard.routing.maintenance_data.build_packet", side_effect=AssertionError("must not scan")), \
+                patch("hey_my_buddy.blackboard.routing.maintenance_data.pending", side_effect=AssertionError("must not scan")):
+            self.assertEqual(board.console_call("maintenance_start", {}), {"status": "not-configured"})
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs").fetchone()[0], 0)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM tasks WHERE owner='decision'").fetchone()[0], 0)
 
-    def test_private_material_is_bound_to_run_location_and_digest(self):
+    def test_private_material_is_bound_to_run_and_digest(self):
         board = self.board()
         reference = files.publish(board.directory, "run-a", {"largeFact": "evidence"})
+        self.assertEqual(set(reference), {"sha256"})
         self.assertEqual(files.read(board.directory, "run-a", reference), {"largeFact": "evidence"})
-        with self.assertRaises(BoardError) as caught:
+        with self.assertRaises((FileNotFoundError, BoardError)):
             files.read(board.directory, "run-b", reference)
-        self.assertEqual(caught.exception.code, "PRIVATE_PATH_UNSAFE")
-        native_path(reference["location"]).write_text("{}", encoding="utf-8")
+        path = board.directory / "maintenance" / hashlib.sha256(b"run-a").hexdigest() / (reference["sha256"] + ".json")
+        native_path(path).write_text("{}", encoding="utf-8")
         with self.assertRaises(BoardError) as caught:
             files.read(board.directory, "run-a", reference)
         self.assertEqual(caught.exception.code, "ARTIFACT_MISMATCH")
@@ -59,8 +63,8 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                           cwd=str(self.workdir("source")), kind="worktree")
         self.evidence_id = run["runId"]
         self.finish_turn(self.board_, self.claim(self.board_, run_id=self.evidence_id))
+        self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": self.evidence_id}))
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET state='concluded' WHERE run_id=?", (self.evidence_id,))
             db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,"
                        "available,enabled,capabilities_json) VALUES(?,?,?,?,?,?,1,1,?)",
                        (BUDDY_ID, "Maintenance", "dsh", "fixture", "maintenance", "off", canonical_json([])))
@@ -70,6 +74,14 @@ class MaintenanceExecutionTests(WorkflowTestCase):
             router._write_settings(db, {"maintenanceBuddyId": buddy_id,
                                          "maintenanceIntervalSeconds": interval,
                                          "routingBudget": preset})
+
+    def admission_input(self):
+        from hey_my_buddy.blackboard.routing.maintenance_data import build_packet
+
+        with self.board_.store.db.read() as db:
+            settings = dict(db.execute("SELECT * FROM router_settings WHERE id=1").fetchone())
+            buddy, _code, _facts = router.buddy_problem(db, settings["maintenance_buddy_id"], "fast", now=self.clock.value)
+            return {"settings": settings, "buddy": buddy, "packet": build_packet(db), "trigger_type": "manual"}
 
     def start(self):
         return self.board_.console_call("maintenance_start", {})
@@ -97,9 +109,13 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                                "parentId": None}], "merges": [],
                 "classifications": [{"runId": run_id, "domainNodeId": "software",
                                      "taskType": "debug"} for run_id in packet["classificationRunIds"]],
-                "summaries": [{"harness": kind["harness"], "model": kind["model"],
-                               "effort": kind["effort"], "text": "Parser repair",
-                               "citations": [self.evidence_id]} for kind in packet["kinds"]]}
+                "summaries": {kind["kindId"]: {"text": "Parser repair",
+                                               "citations": kind["citationRunIds"][:1]}
+                              for kind in packet["kinds"]}}
+
+    def run_files(self, run_id):
+        root = self.board_.directory / "maintenance" / hashlib.sha256(run_id.encode()).hexdigest()
+        return list(root.iterdir()) if root.exists() else []
 
     def settle_success(self, claim):
         result = {**claim_tool_receipt(claim, state_dir=self.board_.directory),
@@ -114,8 +130,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         run = self.submit(self.board_, request_id=f"maintenance-{suffix}", task=f"Task {suffix}",
                           cwd=str(self.workdir(f"source-{suffix}")), kind="worktree")
         self.finish_turn(self.board_, self.claim(self.board_, run_id=run["runId"]))
-        with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET state='concluded' WHERE run_id=?", (run["runId"],))
+        self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": run["runId"]}))
         return run["runId"]
 
     def test_console_authority_configuration_and_no_tool_eligibility(self):
@@ -194,7 +209,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         claim = self.claim_maintenance(self.start()["runId"])
         packet = self.packet(claim)
         answer = self.valid_answer(packet)
-        answer["summaries"] = []
+        answer["summaries"] = {}
         self.assertTrue(self.submit_answer(claim, 0, answer)["errors"])
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
                          {"pendingMicroTaskCount": 1})
@@ -204,6 +219,27 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(self.submit_answer(claim, 1, self.valid_answer(packet))["errors"], [])
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
                          {"pendingMicroTaskCount": 0})
+
+    def test_pending_count_requires_host_accepted_or_concluded_state(self):
+        run = self.submit(self.board_, request_id="pending-state", task="Review another parser",
+                          cwd=str(self.workdir("pending-state")), kind="worktree")
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 1})
+        self.finish_turn(self.board_, self.claim(self.board_, run_id=run["runId"]))
+        self.assertEqual(self.board_.call("workflow_get", {"runId": run["runId"]})["state"], "delivered")
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 1})
+        self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": run["runId"]}))
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 2})
+        concluded = self.submit(self.board_, request_id="concluded-state", task="Investigate parser failure",
+                                cwd=str(self.workdir("concluded-state")), kind="worktree")
+        self.finish_turn(self.board_, self.claim(self.board_, run_id=concluded["runId"]))
+        self.board_.call("workflow_conclude", {"runId": concluded["runId"],
+                                                "note": "Investigation ended without acceptance",
+                                                **self.control(concluded)})
+        self.assertEqual(self.board_.console_call("maintenance_pending", {}),
+                         {"pendingMicroTaskCount": 3})
 
     def test_start_claim_frozen_packet_budget_and_no_router_table_pollution(self):
         self.configure(preset="deep")
@@ -265,6 +301,31 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                              (self.evidence_id, 1))
             self.assertEqual(db.execute("SELECT COUNT(*) FROM router_outcomes").fetchone()[0], 0)
 
+    def test_answer_rollback_removes_unbound_files_and_preserves_active_input(self):
+        self.configure()
+        claim = self.claim_maintenance(self.start()["runId"])
+        run_id = claim["decisionInput"]["maintenanceRunId"]
+        before = self.run_files(run_id)
+        with patch.object(self.board_.store, "_append_event", side_effect=RuntimeError("answer event failed")):
+            with self.assertRaises(BoardError) as caught:
+                self.submit_answer(claim, 0, self.valid_answer(self.packet(claim)))
+        self.assertEqual(caught.exception.code, "INTERNAL_ERROR")
+        self.assertEqual(self.run_files(run_id), before)
+        self.assertEqual(self.packet(claim)["classificationRunIds"], [self.evidence_id])
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications").fetchone()[0], 0)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summaries").fetchone()[0], 0)
+
+    def test_restart_file_reconciliation_preserves_active_and_removes_orphans(self):
+        self.configure()
+        started = self.start()
+        active = self.run_files(started["maintenanceRunId"])
+        files.publish(self.board_.directory, "uncommitted-run", {"packet": "orphan"})
+        self.assertTrue(self.run_files("uncommitted-run"))
+        self.board_.store.maintenance.recover_files()
+        self.assertEqual(self.run_files("uncommitted-run"), [])
+        self.assertEqual(self.run_files(started["maintenanceRunId"]), active)
+
     def test_observer_corrects_twice_in_one_run_and_stops_before_tool_use(self):
         feedbacks = [{"errors": ["first rejection"]}, {"errors": ["second rejection"]}, {"errors": []}]
         seen = []
@@ -287,6 +348,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.configure(interval=120)
         started = self.start()
         claim = self.claim_maintenance(started["runId"])
+        self.assertTrue(self.run_files(started["maintenanceRunId"]))
         self.board_.call("execution_result", {
             "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
             "nonce": NONCE, "status": "failed", "shutdownConfirmed": True,
@@ -295,6 +357,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
             run = db.execute("SELECT state,reason_code,finished_at FROM maintenance_runs").fetchone()
             self.assertEqual((run["state"], run["reason_code"]), ("failed", "router-no-answer"))
             self.assertIsNotNone(run["finished_at"])
+        self.assertEqual(self.run_files(started["maintenanceRunId"]), [])
         self.assertEqual(self.board_.store.maintenance.collect(), 120)
         self.assertEqual(self.start()["status"], "running")
         with self.board_.store.db.read() as db:
@@ -312,8 +375,21 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT * FROM maintenance_runs").fetchone()
         self.assertEqual(run["reason_code"], "router-budget-exhausted")
-        reference = json.loads(run["reason_params_json"])["feedback"]
-        self.assertEqual(files.read(self.board_.directory, run["maintenance_run_id"], reference), feedback)
+        self.assertEqual(json.loads(run["reason_params_json"])["errors"], feedback["errors"])
+        self.assertEqual(self.run_files(run["maintenance_run_id"]), [])
+
+    def test_interruption_fence_keeps_final_errors_before_completion(self):
+        self.configure()
+        claim = self.claim_maintenance(self.start()["runId"])
+        feedback = self.submit_answer(claim, 0, {})
+        with self.board_.store.db.write() as db:
+            attempt = self.board_.store._attempt_row(db, claim["attempt"]["attemptId"])
+            self.board_.store.decisions.fence_attempt(db, attempt=attempt,
+                reason={"code": "interrupted-before-delivery", "params": {}}, now=self.clock.value)
+        with self.board_.store.db.read() as db:
+            run = db.execute("SELECT * FROM maintenance_runs").fetchone()
+        self.assertEqual(json.loads(run["reason_params_json"])["errors"], feedback["errors"])
+        self.assertEqual(self.run_files(run["maintenance_run_id"]), [])
 
     def test_complete_answer_drains_evidence_without_a_second_model_call(self):
         self.configure()
@@ -323,12 +399,90 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(feedback["errors"], [])
         self.assertEqual(self.start()["maintenanceRunId"], started["maintenanceRunId"])
         self.settle_success(claim)
+        self.assertEqual(self.run_files(started["maintenanceRunId"]), [])
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT state,reason_code FROM maintenance_runs").fetchone()
             self.assertEqual((run["state"], run["reason_code"]), ("completed", None))
             self.assertEqual(db.execute("SELECT COUNT(*) FROM router_outcomes").fetchone()[0], 0)
         self.assertEqual(self.board_.store.maintenance.collect(), 3600)
         self.assertEqual(self.start()["status"], "no-new-evidence")
+
+    def test_rolled_back_creation_removes_private_input_and_run(self):
+        self.configure()
+        prepared = self.admission_input()
+        with self.assertRaisesRegex(RuntimeError, "abort maintenance creation"):
+            with self.board_.store.db.write() as db:
+                response, _ = self.board_.store.maintenance._admit(db, **prepared)
+                self.assertEqual(response["status"], "running")
+                self.assertTrue(self.run_files(response["maintenanceRunId"]))
+                run_id = response["maintenanceRunId"]
+                raise RuntimeError("abort maintenance creation")
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs").fetchone()[0], 0)
+        self.assertEqual(self.run_files(run_id), [])
+
+    def test_rolled_back_finish_keeps_active_input(self):
+        self.configure()
+        started = self.start()
+        before = self.run_files(started["maintenanceRunId"])
+        self.assertTrue(before)
+        with self.assertRaisesRegex(RuntimeError, "abort maintenance finish"):
+            with self.board_.store.db.write() as db:
+                self.board_.store.maintenance.finish(
+                    db, task_id=started["runId"], now=self.board_.store.now(), code="test-abort")
+                raise RuntimeError("abort maintenance finish")
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT state FROM maintenance_runs WHERE task_id=?",
+                                        (started["runId"],)).fetchone()[0], "running")
+        self.assertEqual(self.run_files(started["maintenanceRunId"]), before)
+        claim = self.claim_maintenance(started["runId"])
+        self.assertEqual(self.packet(claim)["classificationRunIds"], [self.evidence_id])
+
+    def test_collect_skips_pending_scan_without_buddy_and_before_deadline(self):
+        from hey_my_buddy.blackboard.routing import maintenance_data
+
+        with patch.object(maintenance_data, "pending", side_effect=AssertionError("unexpected scan")):
+            self.assertIsNone(self.board_.store.maintenance.collect())
+        self.configure(interval=120)
+        started = self.start()
+        claim = self.claim_maintenance(started["runId"])
+        self.board_.call("execution_result", {
+            "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
+            "nonce": NONCE, "status": "failed", "shutdownConfirmed": True,
+            "result": {"status": "error", "code": "router-no-answer"}})
+        with patch.object(maintenance_data, "pending", side_effect=AssertionError("unexpected scan")):
+            self.assertEqual(self.board_.store.maintenance.collect(), 120)
+            with self.board_.store.db.write() as db:
+                self.board_.store._append_event(db, "fixture.unrelated", payload={})
+                head = self.board_.store._head_of(db)
+            self.board_.store._notify(head)
+            self.assertEqual(self.board_.store.maintenance.collect(), 120)
+
+    def test_queued_claim_cancels_after_buddy_clear_or_reassignment(self):
+        for replacement in (None, "dsh:fixture:other:off"):
+            with self.subTest(replacement=replacement):
+                self.configure()
+                started = self.start()
+                self.configure(buddy_id=replacement)
+                outcome = admit_board(self.board_, {"nonce": NONCE, "taskId": started["runId"]})
+                self.assertIsNone(outcome["claim"])
+                with self.board_.store.db.read() as db:
+                    run = db.execute("SELECT state,reason_code FROM maintenance_runs WHERE task_id=?",
+                                     (started["runId"],)).fetchone()
+                    self.assertEqual(run["state"], "failed")
+                    self.assertEqual(db.execute("SELECT COUNT(*) FROM attempts WHERE task_id=?",
+                                                (started["runId"],)).fetchone()[0], 0)
+
+    def test_running_maintenance_can_finish_after_buddy_clear(self):
+        self.configure()
+        started = self.start()
+        claim = self.claim_maintenance(started["runId"])
+        self.configure(buddy_id=None)
+        self.assertEqual(self.submit_answer(claim, 0, self.valid_answer(self.packet(claim)))["errors"], [])
+        self.settle_success(claim)
+        with self.board_.store.db.read() as db:
+            self.assertEqual(db.execute("SELECT state FROM maintenance_runs WHERE task_id=?",
+                                        (started["runId"],)).fetchone()[0], "completed")
 
     def test_success_with_unclassified_evidence_starts_next_batch_immediately(self):
         second_id = self.add_settled_evidence("second")
@@ -364,7 +518,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         started = self.start()
         claim = self.claim_maintenance(started["runId"])
         answer = self.valid_answer(self.packet(claim))
-        answer["summaries"] = []
+        answer["summaries"] = {}
         self.assertTrue(self.submit_answer(claim, 0, answer)["errors"])
         self.settle_success(claim)
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
@@ -413,33 +567,39 @@ class MaintenanceExecutionTests(WorkflowTestCase):
             self.assertEqual(db.execute("SELECT text FROM kind_summaries").fetchone()[0], "Parser repair")
 
     def test_one_run_with_two_kinds_remains_pending_until_both_kinds_are_read(self):
-        with self.board_.store.db.write() as db:
-            turn = db.execute("SELECT input_json,access,expected_seconds FROM workflow_turns"
-                              " WHERE run_id=? ORDER BY turn_index DESC LIMIT 1", (self.evidence_id,)).fetchone()
-            another_input = json.loads(turn["input_json"])
-            another_input["context"]["buddy"]["model"] = "maintenance-other"
-            next_index = db.execute("SELECT MAX(turn_index)+1 FROM workflow_turns WHERE run_id=?",
-                                    (self.evidence_id,)).fetchone()[0]
-            db.execute("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,"
-                       "expected_seconds,state,created_at,updated_at)"
-                       " VALUES(?,?,?,'reconstructed-new-session',?,?,?,'returned',?,?)",
-                       ("maintenance-other-turn", self.evidence_id, next_index, canonical_json(another_input),
-                        turn["access"], turn["expected_seconds"], T0, T0))
         self.configure()
+        original = self.claim_maintenance(self.start()["runId"])
+        self.assertEqual(self.submit_answer(original, 0, self.valid_answer(self.packet(original)))["errors"], [])
+        self.settle_success(original)
+        from blackboard.tasks.test_workflow import BUDDY
+        run = self.submit(self.board_, request_id="two-kind-evidence", task="Repair another parser",
+                          cwd=str(self.workdir("two-kind-source")), kind="worktree")
+        self.finish_turn(self.board_, self.claim(self.board_, run_id=run["runId"]))
+        delivered = self.board_.call("workflow_get", {"runId": run["runId"]})
+        other = {**BUDDY, "model": "maintenance-other"}
+        self.continue_run(self.board_, delivered, buddy=other, command_id="two-kind-continue")
+        self.finish_turn(self.board_, self.claim(self.board_, run_id=run["runId"], nonce="n" * 16),
+                         nonce="n" * 16, session_id="sess-2")
+        self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": run["runId"]}))
+        self.evidence_id = run["runId"]
         started = self.start()
         claim = self.claim_maintenance(started["runId"])
         packet = self.packet(claim)
         self.assertEqual(len(packet["kinds"]), 2)
         self.assertTrue(all(kind["unreadRunIds"] == [self.evidence_id] for kind in packet["kinds"]))
+        self.assertTrue(all(turn["failureCategory"] == "ability" for turn in packet["microTasks"][0]["result"]["turns"]))
         answer = self.valid_answer(packet)
-        answer["summaries"] = answer["summaries"][:1]
+        answer["summaries"].pop(next(kind["kindId"] for kind in packet["kinds"]
+                                     if kind["model"] == "maintenance-other"))
         self.assertTrue(self.submit_answer(claim, 0, answer)["errors"])
         self.settle_success(claim)
         self.assertEqual(self.board_.console_call("maintenance_pending", {}),
                          {"pendingMicroTaskCount": 1})
         with self.board_.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications").fetchone()[0], 1)
-            self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summary_evidence").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications WHERE run_id=?",
+                                        (self.evidence_id,)).fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summary_evidence WHERE run_id=?",
+                                        (self.evidence_id,)).fetchone()[0], 1)
         next_run = self.start()
         next_claim = self.claim_maintenance(next_run["runId"])
         packet = self.packet(next_claim)
@@ -468,7 +628,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(packet["kinds"][0]["summary"]["citations"], [self.evidence_id])
         answer = self.valid_answer(packet)
         answer["newNodes"] = []
-        answer["summaries"][0]["citations"] = [second_id]
+        answer["summaries"][packet["kinds"][0]["kindId"]]["citations"] = [second_id]
         self.assertEqual(self.submit_answer(next_claim, 0, answer)["errors"], [])
         with self.board_.store.db.read() as db:
             evidence = {row["run_id"]: row["cited"] for row in db.execute(
@@ -553,11 +713,16 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         second = {**good, "classifications": [{**good["classifications"][0],
                                                 "domainNodeId": "still-missing"}]}
         actions = []
+        transcripts = []
 
         def fake_run(request, *, observer, services, cancelled):
             self.assertEqual(request.permission, "none")
             self.assertEqual(request.budget.timeout_seconds, 300)
             self.assertFalse(cancelled())
+            session = native_path(request.private_state.native_root) / "dsh-home" / "sessions" / "session.jsonl"
+            session.parent.mkdir(parents=True, exist_ok=True)
+            session.write_text(request.input_text + "\n" + canonical_json(good), encoding="utf-8")
+            transcripts.append(session)
             for answer in (first, second, good):
                 response = observer({"settled": True, "rawAnswer": canonical_json(answer), **OBSERVATIONS})
                 actions.append(response.action)
@@ -591,6 +756,8 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                     patch.object(module, "native_evidence", return_value={}):
                 execution.run()
         self.assertEqual(actions, ["correct", "correct", "continue"], logs)
+        self.assertTrue(transcripts)
+        self.assertTrue(all(not path.exists() for path in transcripts))
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT state,reason_code FROM maintenance_runs").fetchone()
             self.assertEqual((run["state"], run["reason_code"]), ("completed", None))
@@ -600,3 +767,10 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                 "SELECT payload_json FROM events WHERE kind='maintenance.answer_checked' ORDER BY seq")]
             self.assertEqual(rounds, [0, 1, 2])
             self.assertEqual(db.execute("SELECT COUNT(*) FROM micro_task_classifications").fetchone()[0], 1)
+        audits = self.board_.directory / "attempts" / started["runId"]
+        requests = list(native_path(audits).rglob("request.json"))
+        self.assertTrue(requests)
+        for path in requests:
+            self.assertNotIn("prompt", json.loads(path.read_text(encoding="utf-8")))
+        for path in native_path(audits).rglob("result.json"):
+            self.assertNotIn("rawAnswer", json.loads(path.read_text(encoding="utf-8")))

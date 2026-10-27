@@ -1347,8 +1347,8 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                        observer: Callable[[Mapping], RunFeedback], activity: _ActivityWriter) -> None:
     """Fast/review: rounds on one thread; corrections are the role's decision.
 
-    How often a correction is offered — at most once, never for an enum
-    violation — is the role's rule alone; this loop only executes what a
+    How often a correction is offered, and for which errors, is the role's
+    rule alone; this loop only executes what a
     settled feedback asks, under the shared deadline and cancel.
     """
     input_text = request.input_text

@@ -38,9 +38,8 @@ class MaintenanceDataTests(WorkflowTestCase):
             return build_packet(db)
 
     def summary(self, packet, citations=None):
-        return [{**{key: kind[key] for key in ("harness", "model", "effort")},
-                 "text": "Observed work", "citations": citations or []}
-                for kind in packet["kinds"]]
+        return {kind["kindId"]: {"text": "Observed work", "citations": citations or []}
+                for kind in packet["kinds"]}
 
     def test_packet_has_oldest_unclassified_tasks_and_declared_schema(self):
         packet = self.packet()
@@ -49,7 +48,7 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertEqual({item["runId"] for item in packet["microTasks"]},
                          {run["runId"] for run in self.runs})
         self.assertEqual(len(packet["taskTypes"]), 7)
-        self.assertEqual(packet["microTasks"][0]["task"], "Task 0")
+        self.assertEqual({item["task"] for item in packet["microTasks"]}, {"Task 0", "Task 1"})
         schema = answer_schema(packet)
         answer = {"newNodes": [{"id": "new", "name": "Systems", "definition": "Systems work",
                                  "parentId": None}], "merges": [],
@@ -65,16 +64,113 @@ class MaintenanceDataTests(WorkflowTestCase):
         with self.board_.store.db.read() as db:
             self.assertFalse(pending(db))
 
+    def test_summary_schema_binds_kind_combinations_and_citations(self):
+        packet = deepcopy(self.packet())
+        first, second = (run["runId"] for run in self.runs)
+        original = packet["kinds"][0]
+        other = deepcopy(original)
+        other["model"] = "other-model"
+        other["kindId"] = json.dumps([other[key] for key in ("harness", "model", "effort")],
+                                      separators=(",", ":"))
+        original["citationRunIds"] = [first]
+        original["unreadRunIds"] = [first]
+        other["citationRunIds"] = [second]
+        other["unreadRunIds"] = [second]
+        packet["kinds"].append(other)
+        schema = answer_schema(packet)
+        answer = {"newNodes": [], "merges": [], "classifications": [],
+                  "summaries": {original["kindId"]: {"text": "First", "citations": [first]},
+                                other["kindId"]: {"text": "Second", "citations": [second]}}}
+        self.assertEqual(schema_errors(answer, schema), [])
+        answer["summaries"][original["kindId"]]["citations"] = [second]
+        self.assertIn("enum", schema_errors(answer, schema))
+        answer["summaries"][original["kindId"]]["citations"] = [first]
+        answer["summaries"][json.dumps([original["harness"], other["model"], "invalid-effort"])] = {
+            "text": "Invalid combination", "citations": []}
+        self.assertIn("additionalProperties", schema_errors(answer, schema))
+        packet["kinds"] = []
+        packet["classificationRunIds"] = []
+        answer = {"newNodes": [], "merges": [], "classifications": [], "summaries": {}}
+        self.assertEqual(schema_errors(answer, answer_schema(packet)), [])
+
+    def test_schema_permitted_values_pass_the_write_boundary(self):
+        kind = self.packet()["kinds"][0]
+        prior = self.submit(self.board_, request_id="older-evidence", task="Earlier work",
+                            cwd=str(self.workdir("older-evidence")), kind="existing")
+        self.finish_turn(self.board_, self.claim(self.board_, run_id=prior["runId"]))
+        self.accept_run(self.board_, self.board_.call("workflow_get", {"runId": prior["runId"]}))
+        key = tuple(kind[field] for field in ("harness", "model", "effort"))
+        with self.board_.store.db.write() as db:
+            db.execute("INSERT INTO domain_nodes VALUES('older','Older','Previous expertise',NULL,NULL,?)", (self.maintenance_id,))
+            db.execute("INSERT INTO micro_task_classifications VALUES(?,'older','review',?)", (prior["runId"], self.maintenance_id))
+            db.execute("INSERT INTO kind_summaries VALUES(?,?,?,?,?)", (*key, "Earlier observations", self.maintenance_id))
+            db.execute("INSERT INTO kind_summary_evidence VALUES(?,?,?,?,1)", (*key, prior["runId"]))
+            packet = build_packet(db)
+            schema = answer_schema(packet)
+            references = [[], [self.runs[0]["runId"]], [prior["runId"]],
+                          [run["runId"] for run in self.runs] + [prior["runId"]]]
+            for task_type in packet["taskTypes"]:
+                for text in ("Observed expertise", " ", "x" * 4000):
+                    for citations in references:
+                        answer = {
+                            "newNodes": [{"id": "fresh", "name": " Fresh ", "definition": "Current expertise", "parentId": None}],
+                            "merges": [], "classifications": [
+                                {"runId": run_id, "domainNodeId": "fresh", "taskType": task_type["id"]}
+                                for run_id in packet["classificationRunIds"]],
+                            "summaries": {kind["kindId"]: {"text": text, "citations": citations}},
+                        }
+                        with self.subTest(task_type=task_type["id"], text_length=len(text), citations=citations):
+                            self.assertEqual(schema_errors(answer, schema), [])
+                            db.execute("SAVEPOINT schema_case")
+                            try:
+                                checked = apply_answer(db, packet=packet, answer=answer, maintenance_run_id=self.maintenance_id)
+                                self.assertEqual(checked["errors"], [])
+                            finally:
+                                db.execute("ROLLBACK TO schema_case")
+                                db.execute("RELEASE schema_case")
+
+    def test_existing_id_cannot_change_parent_and_names_are_canonical(self):
+        packet = self.packet()
+        answer = {"newNodes": [
+            {"id": "parent-a", "name": " Parent A ", "definition": "A", "parentId": None},
+            {"id": "parent-b", "name": "Parent B", "definition": "B", "parentId": None},
+            {"id": "child", "name": " Child ", "definition": "C", "parentId": "parent-a"}],
+            "merges": [], "classifications": [
+                {"runId": run["runId"], "domainNodeId": "child", "taskType": "create"}
+                for run in self.runs], "summaries": self.summary(packet)}
+        self.assertEqual(schema_errors(answer, answer_schema(packet)), [])
+        with self.board_.store.db.write() as db:
+            applied = apply_answer(db, packet=packet, answer=answer,
+                                   maintenance_run_id=self.maintenance_id)
+            self.assertEqual(applied["errors"], [])
+            self.assertEqual(db.execute("SELECT name FROM domain_nodes WHERE node_id='child'").fetchone()[0],
+                             "Child")
+            changed = deepcopy(answer)
+            changed["newNodes"][2]["parentId"] = "parent-b"
+            changed["newNodes"].append(
+                {"id": "duplicate", "name": " Parent A ", "definition": "Same name", "parentId": None})
+            rejected = apply_answer(db, packet=packet, answer=changed,
+                                    maintenance_run_id=self.maintenance_id)
+            self.assertTrue(any("existing node cannot be changed" in error for error in rejected["errors"]))
+            self.assertTrue(any("active domain name already exists" in error for error in rejected["errors"]))
+            self.assertEqual(db.execute("SELECT parent_id FROM domain_nodes WHERE node_id='child'").fetchone()[0],
+                             "parent-a")
+            with self.assertRaises(BoardError):
+                rename_domain(db, "child", " Parent B ", "Duplicate")
+            rename_domain(db, "child", " Renamed ", "C")
+            self.assertEqual(db.execute("SELECT name FROM domain_nodes WHERE node_id='child'").fetchone()[0],
+                             "Renamed")
+
     def test_partial_write_correction_cannot_replace_accepted_facts(self):
         packet = self.packet()
         first = self.runs[0]["runId"]
         second = self.runs[1]["runId"]
-        kind = {key: packet["kinds"][0][key] for key in ("harness", "model", "effort")}
+        kind_id = packet["kinds"][0]["kindId"]
         answer = {"newNodes": [{"id": "root", "name": "Engineering", "definition": "Build systems",
                                  "parentId": None}], "merges": [],
                   "classifications": [{"runId": first, "domainNodeId": "root", "taskType": "create"},
                                       {"runId": second, "domainNodeId": "missing", "taskType": "debug"}],
-                  "summaries": [{**kind, "text": "Observed engineering work", "citations": [first]}]}
+                  "summaries": {kind_id: {"text": "Observed engineering work", "citations": [first]}}}
         with self.board_.store.db.write() as db:
             result = apply_answer(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
@@ -83,7 +179,7 @@ class MaintenanceDataTests(WorkflowTestCase):
         answer["classifications"] = [
             {"runId": first, "domainNodeId": "root", "taskType": "debug"},
             {"runId": second, "domainNodeId": "root", "taskType": "debug"}]
-        answer["summaries"][0]["text"] = "Attempted replacement"
+        answer["summaries"][kind_id]["text"] = "Attempted replacement"
         with self.board_.store.db.write() as db:
             result = apply_answer(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
@@ -131,9 +227,9 @@ class MaintenanceDataTests(WorkflowTestCase):
 
     def test_invalid_citation_keeps_previous_summary(self):
         packet = self.packet()
-        kind = {key: packet["kinds"][0][key] for key in ("harness", "model", "effort")}
+        kind_id = packet["kinds"][0]["kindId"]
         answer = {"newNodes": [], "merges": [], "classifications": [],
-                  "summaries": [{**kind, "text": "Unsupported", "citations": ["outside-batch"]}]}
+                  "summaries": {kind_id: {"text": "Unsupported", "citations": ["outside-batch"]}}}
         with self.board_.store.db.write() as db:
             result = apply_answer(db, packet=packet, answer=answer,
                                   maintenance_run_id=self.maintenance_id)
@@ -156,7 +252,7 @@ class MaintenanceDataTests(WorkflowTestCase):
                 {"runId": first, "domainNodeId": "good", "taskType": "create"},
                 {"runId": second, "domainNodeId": "good", "taskType": "invalid"},
             ],
-            "summaries": [],
+            "summaries": {},
         }
         with self.board_.store.db.write() as db:
             result = apply_answer(db, packet=packet, answer=answer,
@@ -170,7 +266,7 @@ class MaintenanceDataTests(WorkflowTestCase):
         self.assertTrue(any("answer.merges: type" in error for error in result["errors"]))
         self.assertTrue(any("active domain name already exists" in error for error in result["errors"]))
         self.assertTrue(any("parent cycle" in error for error in result["errors"]))
-        self.assertTrue(any("missing summary" in error for error in result["errors"]))
+        self.assertTrue(any("answer.summaries" in error and "required" in error for error in result["errors"]))
 
     def test_merge_target_must_still_be_active(self):
         packet = self.packet()
@@ -190,7 +286,7 @@ class MaintenanceDataTests(WorkflowTestCase):
                                   maintenance_run_id=self.maintenance_id)
             nodes = {row["node_id"]: row for row in db.execute("SELECT * FROM domain_nodes")}
         self.assertEqual(result["written"]["merges"], 1)
-        self.assertTrue(any("merge target is not active" in error for error in result["errors"]))
+        self.assertTrue(any("merge target" in error for error in result["errors"]))
         self.assertIsNone(nodes["source"]["merged_into_id"])
         self.assertEqual(nodes["child"]["parent_id"], "source")
 
@@ -303,3 +399,42 @@ class MaintenanceDataTests(WorkflowTestCase):
             self.assertIsNone(build_packet(db))
             self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summary_evidence").fetchone()[0], 60)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM kind_summary_evidence WHERE cited=1").fetchone()[0], 1)
+
+    def test_only_ability_rounds_require_kind_summary(self):
+        first, second = (run["runId"] for run in self.runs)
+        with self.board_.store.db.write() as db:
+            db.execute("INSERT INTO domain_nodes VALUES('existing','Existing','Domain',NULL,NULL,?)",
+                       (self.maintenance_id,))
+            db.executemany("INSERT INTO micro_task_classifications VALUES(?,'existing','review',?)",
+                           [(first, self.maintenance_id), (second, self.maintenance_id)])
+            db.execute("UPDATE attempts SET result_json=json_set(result_json,'$.terminationReason','service-stop')"
+                       " WHERE attempt_id=(SELECT attempt_id FROM workflow_turns WHERE run_id=?)", (first,))
+            self.assertEqual(pending_count(db), 1)
+            packet = build_packet(db)
+            self.assertEqual([task["runId"] for task in packet["microTasks"]], [second])
+            self.assertEqual(packet["kinds"][0]["citationRunIds"], [second])
+            db.execute("UPDATE attempts SET result_json=json_set(result_json,'$.result.providerRejection.code',"
+                       "'overloaded') WHERE attempt_id=(SELECT attempt_id FROM workflow_turns WHERE run_id=?)",
+                       (second,))
+            self.assertEqual(pending_count(db), 0)
+            self.assertIsNone(build_packet(db))
+
+    def test_packet_order_and_finish_follow_conclusion_time(self):
+        first, second = (run["runId"] for run in self.runs)
+        with self.board_.store.db.write() as db:
+            db.execute("UPDATE workflow_runs SET updated_at='2026-01-01T00:00:00Z'"
+                       " WHERE run_id=?", (first,))
+            db.execute("UPDATE workflow_runs SET updated_at='2025-01-01T00:00:00Z'"
+                       " WHERE run_id=?", (second,))
+            for number, run_id in enumerate((first, second)):
+                ended = f"202{5 + number}-01-01T00:00:00Z"
+                db.execute(
+                    "INSERT INTO workflow_host_conclusions"
+                    "(conclusion_id,run_id,run_revision,owner_generation,execution_status,note,"
+                    "actor_role,actor_id,command_id,created_at) VALUES(?,?,1,1,'failed','Done',"
+                    "'host','test',?,?)",
+                    (f"conclusion-{number}", run_id, f"command-{number}", ended))
+            packet = build_packet(db)
+        self.assertEqual([task["runId"] for task in packet["microTasks"]], [first, second])
+        self.assertEqual([task["result"]["finishedAt"] for task in packet["microTasks"]],
+                         ["2025-01-01T00:00:00Z", "2026-01-01T00:00:00Z"])
