@@ -8,7 +8,14 @@ const tool = z.object({ sessionUpdate: z.enum(["tool_call", "tool_call_update"])
 const plan = z.object({ sessionUpdate: z.literal("plan"), entries: z.array(z.object({ content: z.string(), status: z.enum(["pending", "in_progress", "completed"]), priority: z.enum(["high", "medium", "low"]) })) });
 const notification = z.object({ sessionId: z.string(), update: z.union([message, tool, plan]) });
 const reason = z.object({ code: z.string(), params: z.record(z.string(), z.unknown()) });
-const page = z.object({ state: z.enum(["running", "ended"]), stopped: reason.nullable(), omitted: z.array(reason), events: z.array(notification), before: z.number().int().nonnegative(), after: z.number().int().nonnegative(), hasEarlier: z.boolean() });
+const coverageStatus = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("evidenced"), version: z.string().trim().min(1), source: z.string().trim().min(1) }),
+  z.object({ status: z.literal("unavailable"), reason }),
+  z.object({ status: z.literal("unverified") }),
+]);
+export const sessionContentKinds = ["messages", "reasoning", "tool-input", "tool-output", "plan"] as const;
+const coverage = z.record(z.enum(sessionContentKinds), coverageStatus);
+const page = z.object({ state: z.enum(["running", "ended"]), stopped: reason.nullable(), coverage, events: z.array(notification), before: z.number().int().nonnegative(), after: z.number().int().nonnegative(), hasEarlier: z.boolean() });
 export type JsonValue = z.infer<ReturnType<typeof z.json>>;
 export type SessionPage = z.infer<typeof page>;
 export type SessionEvent = z.infer<typeof notification>;

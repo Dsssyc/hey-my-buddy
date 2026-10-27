@@ -1,3 +1,4 @@
+import { fixtureCoverage } from "./test-fixtures";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nextProvider } from "react-i18next";
@@ -30,7 +31,7 @@ const reachTop = () => act(() => {
 });
 
 const event = (text: string) => ({ sessionId: "attempt", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
-const page = (before: number, count: number, hasEarlier: boolean) => ({ state: "ended", stopped: null, omitted: [], before, after: before + count, hasEarlier, events: Array.from({ length: count }, (_, index) => event(`第 ${before + index} 条记录`)) });
+const page = (before: number, count: number, hasEarlier: boolean) => ({ state: "ended", stopped: null, coverage: fixtureCoverage, before, after: before + count, hasEarlier, events: Array.from({ length: count }, (_, index) => event(`第 ${before + index} 条记录`)) });
 
 let i18n: ReturnType<typeof createInstance>;
 beforeEach(async () => {

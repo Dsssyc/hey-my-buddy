@@ -1,3 +1,4 @@
+import { fixtureCoverage } from "./test-fixtures";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { I18nextProvider } from "react-i18next";
@@ -16,7 +17,7 @@ import { sessionRows, toolObject, displayPath, unwrappedCommand, taskExcerpt, an
 const project = "/home/worker/project";
 const tool = (id: string, kind = "read", extra = {}) => ({ sessionUpdate: "tool_call", toolCallId: id, title: id, kind, status: "completed", ...extra });
 const message = (text: string, extra = {}) => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text }, ...extra });
-const rows = (updates: unknown[]) => sessionRows(sessionBlocks(records(parseSession({ state: "ended", stopped: null, omitted: [], before: 0, after: 10, hasEarlier: false, events: updates.map(update => ({ sessionId: "attempt", update })) }))));
+const rows = (updates: unknown[]) => sessionRows(sessionBlocks(records(parseSession({ state: "ended", stopped: null, coverage: fixtureCoverage, before: 0, after: 10, hasEarlier: false, events: updates.map(update => ({ sessionId: "attempt", update })) }))));
 afterEach(cleanup);
 
 describe("session rows", () => {
@@ -169,7 +170,7 @@ describe("session rows", () => {
       tool("No input", "other", { locations: [{ path: project + "/README.md" }] }),
       tool("Old title", "read"),
     ];
-    const blocks = sessionBlocks(records(parseSession({ state: "ended", stopped: null, omitted: [], before: 0, after: 1, hasEarlier: false, events: objects.map(update => ({ sessionId: "x", update })) })));
+    const blocks = sessionBlocks(records(parseSession({ state: "ended", stopped: null, coverage: fixtureCoverage, before: 0, after: 1, hasEarlier: false, events: objects.map(update => ({ sessionId: "x", update })) })));
     expect(blocks.map(block => block.type === "tool" && toolObject(block.update, project, pattern => `“${pattern}”`))).toEqual(["src/main.py", "~/notes.ipynb", "rg main", "“main” src/**", "https://example.com", "README.md", "Old title"]);
     expect(displayPath(project + "-other/src", project)).toBe("~/project-other/src");
     expect(displayPath("C:\\Users\\worker\\notes.txt", project)).toBe("~\\notes.txt");

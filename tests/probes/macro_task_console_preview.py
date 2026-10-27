@@ -1568,6 +1568,16 @@ def session_query(query: str) -> dict[str, int]:
     return params
 
 
+def session_coverage(pair: tuple[str, str]) -> dict:
+    """Invented coverage examples for the synthetic preview, not native evidence."""
+    coverage = {kind: {"status": "unverified"}
+                for kind in ("messages", "reasoning", "tool-input", "tool-output", "plan")}
+    coverage["messages"] = {"status": "evidenced", "version": "fixture CLI 1", "source": "synthetic preview"}
+    if pair in (SESSION_LONG, SESSION_ROUTER_REVIEW):
+        coverage["reasoning"] = {"status": "unavailable", "reason": reason("session.codex-internal-reasoning-omitted")}
+    return coverage
+
+
 def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewState) -> dict:
     """Page by JSONL byte boundaries, with bounded future appends for the running fixture."""
     events = session_events(pair) + (state.session_appends if pair == SESSION_RUNNING else [])
@@ -1578,7 +1588,7 @@ def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewSt
     cursor = params.get("before", params.get("after"))
     if cursor == 0:
         if "before" in params:
-            return {"state": "running" if pair == SESSION_RUNNING else "ended", "omitted": [],
+            return {"state": "running" if pair == SESSION_RUNNING else "ended", "coverage": session_coverage(pair),
                     "events": [], "before": 0, "after": 0, "hasEarlier": False, "stopped": None}
         cursor = start
     if cursor is not None and cursor not in boundaries:
@@ -1600,9 +1610,7 @@ def session_page(pair: tuple[str, str], params: dict[str, int], state: PreviewSt
     else:
         last = boundaries.index(cursor) if cursor is not None else len(events)
         first = max(0, last - limit)
-    omitted = ([reason("session.codex-internal-reasoning-omitted")]
-               if pair in (SESSION_LONG, SESSION_ROUTER_REVIEW) else [])
-    return {"state": "running" if pair == SESSION_RUNNING else "ended", "omitted": omitted,
+    return {"state": "running" if pair == SESSION_RUNNING else "ended", "coverage": session_coverage(pair),
             "events": events[first:last], "before": boundaries[first], "after": boundaries[last],
             "hasEarlier": first > 0, "stopped": None}
 

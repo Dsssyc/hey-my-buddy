@@ -5,6 +5,7 @@ from unittest import mock
 from console.test_console import Browser, ConsoleTestCase
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy import private_dirs
+from hey_my_buddy.buddy.harnesses.registry import session_coverage
 from hey_my_buddy.blackboard.tasks import storage
 from hey_my_buddy.buddy.harnesses.session_record import SessionRecord
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
@@ -59,7 +60,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
     def test_latest_before_to_start_and_after_to_empty_preserve_positions(self):
         _, browser, route, path, events, start, _ = self.fixture(count=7)
         page = self.get(browser, route + '?limit=3')
-        self.assertEqual(set(page), {'state', 'stopped', 'omitted', 'events', 'before', 'after', 'hasEarlier'})
+        self.assertEqual(set(page), {'state', 'stopped', 'coverage', 'events', 'before', 'after', 'hasEarlier'})
         self.assertEqual(page['events'], events[4:])
         expected_before = start + sum(len(self.line(event)) for event in events[:4])
         self.assertEqual((page['before'], page['after'], page['stopped']),
@@ -220,13 +221,13 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
                          ([], start, start, False))
         self.assertEqual(self.get(browser, route + f'?after={start}'), page)
 
-    def test_very_long_event_is_returned_whole_with_omitted_reason(self):
+    def test_very_long_event_is_returned_whole_with_coverage(self):
         _, browser, route, path, _, _, _ = self.fixture()
         event = self.event('session-attempt', '内容 /workspace/src/large.py\n' * 10000)
         self.append(path, event)
         page = self.get(browser, route)
         self.assertEqual(page['events'], [event])
-        self.assertEqual(page['omitted'], [{'code': 'session.codex-internal-reasoning-omitted', 'params': {}}])
+        self.assertEqual(page['coverage']['reasoning'], {'status': 'unavailable', 'reason': {'code': 'session.codex-internal-reasoning-omitted', 'params': {}}})
 
     def test_bad_json_header_and_event_shapes_fail_without_source_paths(self):
         _, browser, route, path, _, _, _ = self.fixture()
@@ -270,7 +271,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
     def test_claude_reads_its_attempt_record_and_missing_history_is_not_recorded(self):
         board, browser, route, path, events, _, _ = self.fixture(count=2, harness='claude')
         page = self.get(browser, route)
-        self.assertEqual((page['events'], page['omitted'], page['state']), (events, [], 'running'))
+        self.assertEqual((page['events'], page['coverage'], page['state']), (events, {kind: value.to_payload() for kind, value in session_coverage('claude').items()}, 'running'))
         cursor = page['after']
         appended = self.event('session-attempt', 'Claude Code 追加')
         self.append(path, appended)
@@ -285,7 +286,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         board, browser, route, path, events, _, _ = self.fixture(count=2, harness='dsh')
         page = self.get(browser, route)
         self.assertEqual(page['events'], events)
-        self.assertEqual(page['omitted'], [])
+        self.assertEqual(page['coverage'], {kind: value.to_payload() for kind, value in session_coverage('dsh').items()})
         self.assertEqual(page['state'], 'running')
         cursor = page['after']
         appended = self.event('session-attempt', 'DSH 追加')
@@ -300,7 +301,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
     def test_zcode_reads_its_attempt_record_and_missing_history_is_not_recorded(self):
         board, browser, route, path, events, _, _ = self.fixture(count=2, harness='zcode')
         page = self.get(browser, route)
-        self.assertEqual((page['events'], page['omitted'], page['state']), (events, [], 'running'))
+        self.assertEqual((page['events'], page['coverage'], page['state']), (events, {kind: value.to_payload() for kind, value in session_coverage('zcode').items()}, 'running'))
         cursor = page['after']
         appended = self.event('session-attempt', 'ZCode 追加')
         self.append(path, appended)
