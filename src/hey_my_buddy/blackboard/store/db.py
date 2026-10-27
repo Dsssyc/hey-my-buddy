@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 31
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -946,13 +946,19 @@ CREATE TABLE IF NOT EXISTS router_outcomes (
 );
 """
 
+# Shared verbatim with the additive upgrade so fresh and upgraded schemas agree.
+ROUTER_MAINTENANCE_COLUMNS = (
+    "maintenance_buddy_id TEXT",
+    "maintenance_interval_seconds INTEGER NOT NULL DEFAULT 3600 CHECK (maintenance_interval_seconds >= 1)",
+)
+
 ROUTER_SCHEMA = f"""
 CREATE TABLE IF NOT EXISTS router_settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     default_mode TEXT NOT NULL CHECK (default_mode IN ('fast','review')),
     budget_preset TEXT NOT NULL CHECK (budget_preset IN ('brief','standard','deep')),
     retry_interval_seconds INTEGER NOT NULL CHECK (retry_interval_seconds >= 1)
-);
+, {', '.join(ROUTER_MAINTENANCE_COLUMNS)});
 CREATE TABLE IF NOT EXISTS router_buddies (
     position INTEGER PRIMARY KEY CHECK (position >= 0),
     buddy_id TEXT NOT NULL UNIQUE
@@ -972,6 +978,73 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempts_router_outcome_binding_unique ON atte
 CREATE INDEX IF NOT EXISTS router_outcomes_buddy_idx ON router_outcomes(buddy_id, event_seq);
 CREATE INDEX IF NOT EXISTS router_outcomes_task_idx ON router_outcomes(task_id, event_seq);
 CREATE INDEX IF NOT EXISTS router_outcomes_attempt_idx ON router_outcomes(attempt_id);
+"""
+
+DOMAIN_EVALUATION_SCHEMA = """
+CREATE TABLE IF NOT EXISTS maintenance_runs (
+    maintenance_run_id TEXT NOT NULL PRIMARY KEY,
+    trigger_type       TEXT NOT NULL CHECK (trigger_type IN ('interval','manual')),
+    buddy_id           TEXT NOT NULL,
+    task_id            TEXT NOT NULL UNIQUE REFERENCES tasks(task_id) ON DELETE RESTRICT,
+    state              TEXT NOT NULL CHECK (state IN ('running','completed','failed')),
+    reason_code        TEXT,
+    reason_params_json TEXT,
+    started_at         TEXT NOT NULL,
+    finished_at        TEXT,
+    CHECK ((state='running') = (finished_at IS NULL)),
+    CHECK ((reason_code IS NULL AND reason_params_json IS NULL)
+        OR (reason_code IS NOT NULL AND reason_params_json IS NOT NULL
+            AND json_valid(reason_params_json) AND json_type(reason_params_json)='object')),
+    CHECK (state!='failed' OR reason_code IS NOT NULL),
+    CHECK (finished_at IS NULL OR finished_at >= started_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS maintenance_runs_running_unique
+    ON maintenance_runs(state) WHERE state='running';
+
+CREATE TABLE IF NOT EXISTS domain_nodes (
+    node_id            TEXT NOT NULL PRIMARY KEY,
+    name               TEXT NOT NULL CHECK (length(trim(name)) > 0),
+    definition         TEXT NOT NULL CHECK (length(trim(definition)) > 0),
+    parent_id          TEXT REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    merged_into_id     TEXT REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT,
+    CHECK (parent_id IS NULL OR parent_id != node_id),
+    CHECK (merged_into_id IS NULL OR merged_into_id != node_id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS domain_nodes_active_name_unique
+    ON domain_nodes(name) WHERE merged_into_id IS NULL;
+CREATE INDEX IF NOT EXISTS domain_nodes_parent_idx ON domain_nodes(parent_id);
+
+CREATE TABLE IF NOT EXISTS micro_task_classifications (
+    run_id             TEXT NOT NULL PRIMARY KEY REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    domain_node_id     TEXT NOT NULL REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    task_type          TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write')),
+    maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT
+);
+
+CREATE TABLE IF NOT EXISTS kind_summaries (
+    harness            TEXT NOT NULL,
+    model              TEXT NOT NULL,
+    effort             TEXT NOT NULL,
+    text               TEXT NOT NULL,
+    maintenance_run_id TEXT NOT NULL REFERENCES maintenance_runs(maintenance_run_id) ON DELETE RESTRICT,
+    PRIMARY KEY (harness, model, effort)
+);
+CREATE TABLE IF NOT EXISTS kind_summary_citations (
+    harness TEXT NOT NULL,
+    model   TEXT NOT NULL,
+    effort  TEXT NOT NULL,
+    run_id  TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
+    PRIMARY KEY (harness, model, effort, run_id),
+    FOREIGN KEY (harness, model, effort) REFERENCES kind_summaries(harness, model, effort) ON DELETE RESTRICT
+);
+CREATE INDEX IF NOT EXISTS kind_summary_citations_run_idx ON kind_summary_citations(run_id);
+
+CREATE TABLE IF NOT EXISTS routing_judgments (
+    decision_id    TEXT NOT NULL PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
+    domain_node_id TEXT REFERENCES domain_nodes(node_id) ON DELETE RESTRICT,
+    task_type      TEXT NOT NULL CHECK (task_type IN ('create','change','debug','verify','review','research','write'))
+);
 """
 CATALOG_PENDING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS catalog_pending (
@@ -1024,7 +1097,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS attempt_reminders_silence_idx
 """
 SCHEMA = "\n".join((CORE_SCHEMA, ATTEMPT_PROCESS_IDENTITIES_DDL, ATTEMPT_RECEIVED_RECEIPTS_DDL, CORE_SCHEMA_TAIL,
                     EVENTS_ROUTER_CLAIMED_INDEX_DDL, MESSAGES_DDL, MACRO_TASK_DELETIONS_DDL, EVALUATION_SCHEMA, WORKFLOW_SCHEMA, HARNESS_SCHEMA,
-                    HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA,
+                    HOST_CONCLUSION_TABLE, HOST_CONCLUSION_INDEX + ";", ROUTER_SCHEMA, DOMAIN_EVALUATION_SCHEMA,
                     CATALOG_PENDING_SCHEMA, REMINDER_SCHEMA, FIX_SCHEMA))
 
 

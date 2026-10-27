@@ -63,7 +63,50 @@ def _usage_fact(usages):
             "medianOutputTokens": median([item[2] for item in usages]) if usages else None}
 
 
-def _statistics(connection):
+def _empty_statistics():
+    return {"samples": 0, "successes": 0, "failures": 0,
+            "firstPasses": 0, "reworkRounds": 0, "durations": [], "usages": []}
+
+
+def _statistics_fact(stats):
+    samples = stats["samples"]
+    return {**{key: value for key, value in stats.items() if key not in ("durations", "usages")},
+            "firstPassRate": stats["firstPasses"] / samples if samples else None,
+            "failureRate": stats["failures"] / samples if samples else None,
+            "medianDeliverySeconds": median(stats["durations"]) if stats["durations"] else None,
+            "usage": _usage_fact(stats["usages"])}
+
+
+def _add_sample(stats, sample):
+    stats["samples"] += 1
+    stats["successes"] += int(sample["success"])
+    stats["failures"] += int(not sample["success"])
+    stats["firstPasses"] += int(sample["first_pass"])
+    stats["reworkRounds"] += sample["rework"]
+    stats["durations"].extend(sample["durations"])
+    if sample["usage"] is not None:
+        stats["usages"].append(sample["usage"])
+
+
+def _domain_lineage(node_id, nodes):
+    node = nodes[node_id]
+    current = node["merged_into_id"] or node_id
+    lineage = []
+    while current is not None:
+        lineage.append(current)
+        current = nodes[current]["parent_id"]
+    return tuple(lineage)
+
+
+def _statistics(connection, *, with_domains=False):
+    if with_domains:
+        nodes = {row["node_id"]: row for row in connection.execute(
+            "SELECT node_id,parent_id,merged_into_id FROM domain_nodes")}
+        classifications = {row["run_id"]: (_domain_lineage(row["domain_node_id"], nodes), row["task_type"])
+                           for row in connection.execute(
+                               "SELECT run_id,domain_node_id,task_type FROM micro_task_classifications")}
+    else:
+        classifications = {}
     groups = defaultdict(list)
     infrastructure = defaultdict(lambda: {"count": 0, "lastAt": None})
     # A returned/failed/rejected/interrupted turn has ended; a merely received
@@ -107,9 +150,9 @@ def _statistics(connection):
         " JOIN workflow_runs r ON r.run_id=i.run_id AND r.final_artifact_id=i.artifact_id"
         " WHERE r.state='accepted'"
     )}
-    statistics = defaultdict(lambda: {"samples": 0, "successes": 0, "failures": 0,
-                                      "firstPasses": 0, "reworkRounds": 0, "durations": [],
-                                      "usages": []})
+    statistics = defaultdict(_empty_statistics)
+    by_domain = defaultdict(lambda: defaultdict(_empty_statistics))
+    by_domain_task_type = defaultdict(lambda: defaultdict(lambda: defaultdict(_empty_statistics)))
     for (run_id, kind), turns in groups.items():
         ability = [turn for turn in turns if turn["category"] == "ability"]
         run = terminal.get(run_id)
@@ -138,22 +181,46 @@ def _statistics(connection):
                 (item["turn_index"] > first["turn_index"] if item["turn_index"] is not None
                  else _time(item["created_at"]) >= _time(first["finished_at"]))
                 for item in continuations[run_id])
-        stats = statistics[kind]
-        stats["samples"] += 1
-        stats["successes"] += int(success)
-        stats["failures"] += int(not success)
-        stats["reworkRounds"] += rework
+        first_pass = False
         if success:
             verification = integrations[run_id]
             unchanged = not any(verification.get(field) for field in ("differingPaths", "missingPaths", "hostPaths"))
-            stats["firstPasses"] += int(deliveries[0] is accepted and rework == 0 and unchanged)
-        stats["durations"].extend(
-            (_time(turn["finished_at"]) - _time(turn["started_at"])).total_seconds()
-            for turn in deliveries)
-        usage = _usage_totals(ability)
-        if usage is not None:
-            stats["usages"].append(usage)
-    return statistics, infrastructure
+            first_pass = deliveries[0] is accepted and rework == 0 and unchanged
+        sample = {
+            "success": success, "first_pass": first_pass, "rework": rework,
+            "durations": [
+                (_time(turn["finished_at"]) - _time(turn["started_at"])).total_seconds()
+                for turn in deliveries],
+            "usage": _usage_totals(ability),
+        }
+        _add_sample(statistics[kind], sample)
+        if run_id in classifications:
+            lineage, task_type = classifications[run_id]
+            for node_id in lineage:
+                _add_sample(by_domain[kind][node_id], sample)
+                _add_sample(by_domain_task_type[kind][node_id][task_type], sample)
+    return statistics, infrastructure, by_domain, by_domain_task_type
+
+
+def domain_statistics(connection, buddies) -> dict:
+    """Three levels of capability facts by buddy ID; node and cell maps are sparse.
+
+    A classified sample follows a merged node's retained target, then counts at
+    each ancestor. Unclassified samples count only overall. Infrastructure
+    failures remain separate and belong to the full buddy identity.
+    """
+    overall, infrastructure, by_domain, by_domain_task_type = _statistics(connection, with_domains=True)
+    return {
+        buddy["buddy_id"]: {
+            "overall": _statistics_fact(overall[_key(buddy, KIND)]),
+            "byDomain": {node_id: _statistics_fact(stats)
+                         for node_id, stats in by_domain[_key(buddy, KIND)].items()},
+            "byDomainTaskType": {
+                node_id: {task_type: _statistics_fact(stats) for task_type, stats in types.items()}
+                for node_id, types in by_domain_task_type[_key(buddy, KIND)].items()},
+            "infrastructureFailures": infrastructure[_key(buddy, IDENTITY)],
+        } for buddy in buddies
+    }
 
 
 def _loads(store, connection, services, *, now):
@@ -203,21 +270,15 @@ def _loads(store, connection, services, *, now):
 
 def candidate_facts(store, connection, buddies, *, now: str) -> dict:
     """The aggregate packet frozen for a Router, with explicit no-data rates."""
-    statistics, infrastructure = _statistics(connection)
+    statistics, infrastructure, _, _ = _statistics(connection)
     loads = _loads(store, connection, {_key(buddy, ("harness", "provider", "model")) for buddy in buddies}, now=now)
     facts = {}
     for buddy in buddies:
         stats = statistics[_key(buddy, KIND)]
-        samples = stats["samples"]
-        usages = stats["usages"]
         facts[buddy["buddy_id"]] = {
             "billing": for_provider(connection, buddy["harness"], buddy["provider"]),
             "load": loads[_key(buddy, ("harness", "provider", "model"))],
-            "statistics": {**{key: value for key, value in stats.items() if key not in ("durations", "usages")},
-                           "firstPassRate": stats["firstPasses"] / samples if samples else None,
-                           "failureRate": stats["failures"] / samples if samples else None,
-                           "medianDeliverySeconds": median(stats["durations"]) if stats["durations"] else None,
-                           "usage": _usage_fact(usages)},
+            "statistics": _statistics_fact(stats),
             "infrastructureFailures": infrastructure[_key(buddy, IDENTITY)],
         }
     return facts

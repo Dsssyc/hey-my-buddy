@@ -886,12 +886,9 @@ class DecisionSurfaceTests(DecisionTestCase):
 
         for operation in ("selection_request", "selection_get"):
             self.assertIn(operation, CONTROL_OPERATIONS)
-        # The console keeps the read-only decision history but never starts a
-        # selection or maintenance model call; maintenance is Harness-owned and its
-        # preparation read is never a browser command.
+        # The console reads routing history; selection starts through delegation.
         self.assertNotIn("selection_request", CONSOLE_OPERATIONS)
         self.assertIn("selection_get", CONSOLE_OPERATIONS)
-        self.assertNotIn("evaluation_prepare", CONSOLE_OPERATIONS)
         self.assertEqual(METHOD_MAP["selection-request"], ("control", "selection_request"))
         self.assertEqual(METHOD_MAP["selection-get"], ("control", "selection_get"))
         for method in ("selection-request", "selection-get"):
