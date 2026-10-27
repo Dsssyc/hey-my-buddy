@@ -45,7 +45,7 @@ export default {
     highlightFailed: "Code highlighting could not be loaded",
     title: "Session", content: "Session content", loading: "Reading session…",
     loadingEarlier: "Reading earlier content…", empty: "This execution has no session content yet", newContent: "New content",
-    coverage: { title: "Session content", evidenced: "Evidence available", unverified: "Unverified", unavailable: "Not provided: {{reason}}",
+    coverage: { title: "Session content", evidenced: "Evidence available · {{version}}", unverified: "Unverified", unavailable: "Not provided: {{reason}}",
       kinds: { messages: "Messages", reasoning: "Reasoning", "tool-input": "Tool input", "tool-output": "Tool output", plan: "Plan" } },
     reasoning: "Reasoning", plan: "Plan",
     copy: "Copy full text", copied: "Copied", copyFailed: "Copy failed", recordingStopped: "Session recording stopped: {{reason}}",

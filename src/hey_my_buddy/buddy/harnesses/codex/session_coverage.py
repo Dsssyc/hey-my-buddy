@@ -1,13 +1,16 @@
-from ....protocol.reasons import reason
-from ....protocol.session_coverage import Evidenced, SessionCoverage, Unavailable, Unverified
+from ....protocol.session_coverage import Evidenced, SessionCoverage, Unverified
+
+_RECORDED = Evidenced(
+    version="Codex CLI 0.164.0",
+    source="tests/probes/codex_session_content.py; tests/python/buddy/harnesses/codex/fixtures/session-content-codex-0.164.0.json",
+)
 
 COVERAGE: SessionCoverage = {
-    "messages": Unverified(),
-    "reasoning": Unavailable(reason("session.codex-internal-reasoning-omitted")),
-    "tool-input": Unverified(),
-    "tool-output": Evidenced(
-        version="Codex CLI 0.162.1",
-        source="tests/python/buddy/harnesses/codex/fixtures/protocol_items.py:1-6 (offline native protocol sample: functionCallOutput.output)",
-    ),
+    "messages": _RECORDED,
+    # The recorded readable reasoning is a summary, labelled as such by the
+    # projector's metadata. Codex's internal chain of thought is not supplied.
+    "reasoning": _RECORDED,
+    "tool-input": _RECORDED,
+    "tool-output": _RECORDED,
     "plan": Unverified(),
 }

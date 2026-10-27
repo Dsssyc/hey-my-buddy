@@ -14,7 +14,7 @@ class Evidenced:
     source: str
 
     def to_payload(self) -> dict:
-        return {"status": "evidenced", "version": self.version, "source": self.source}
+        return {"status": "evidenced", "version": self.version}
 
 
 @dataclass(frozen=True)

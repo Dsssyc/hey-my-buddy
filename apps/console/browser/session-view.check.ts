@@ -57,10 +57,10 @@ for (const language of ["en", "zh"] as const) for (const width of [1440, 390]) f
       const coverage = page.getByRole("table", { name: language === "zh" ? "会话内容" : "Session content" });
       await expect(coverage.getByText(/Codex/)).toContainText(language === "zh" ? "不提供" : "Not provided");
       await expect(coverage.getByRole("row")).toHaveCount(5);
-      await expect(coverage.getByText(language === "zh" ? "有证据" : "Evidence available", { exact: true })).toBeVisible();
+      await expect(coverage.getByText(language === "zh" ? "有证据 · fixture CLI 1" : "Evidence available · fixture CLI 1", { exact: true })).toBeVisible();
       await expect(coverage.getByText(language === "zh" ? "未核实" : "Unverified", { exact: true })).toHaveCount(3);
       if (language === "zh" && width === 1440) {
-        const directory = fileURLToPath(new URL("../../../tmp/session-coverage-c1/", import.meta.url));
+        const directory = fileURLToPath(new URL("../../../tmp/session-coverage-c2/", import.meta.url));
         mkdirSync(directory, { recursive: true });
         await page.locator('[data-slot="popover-content"]').screenshot({ path: `${directory}coverage-${theme}.png` });
       }

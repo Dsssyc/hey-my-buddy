@@ -1,6 +1,6 @@
 /** Invented HTTP coverage for component and browser fixtures. */
 export const fixtureCoverage = {
-  messages: { status: "evidenced", version: "fixture CLI 1", source: "synthetic HTTP fixture" },
+  messages: { status: "evidenced", version: "fixture CLI 1" },
   reasoning: { status: "unavailable", reason: { code: "session.codex-internal-reasoning-omitted", params: {} } },
   "tool-input": { status: "unverified" },
   "tool-output": { status: "unverified" },

@@ -227,7 +227,8 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         self.append(path, event)
         page = self.get(browser, route)
         self.assertEqual(page['events'], [event])
-        self.assertEqual(page['coverage']['reasoning'], {'status': 'unavailable', 'reason': {'code': 'session.codex-internal-reasoning-omitted', 'params': {}}})
+        self.assertEqual(page['coverage']['reasoning'], {'status': 'evidenced', 'version': session_coverage('codex')['reasoning'].version})
+        self.assertEqual(page['coverage']['tool-output'], {'status': 'evidenced', 'version': session_coverage('codex')['tool-output'].version})
 
     def test_bad_json_header_and_event_shapes_fail_without_source_paths(self):
         _, browser, route, path, _, _, _ = self.fixture()

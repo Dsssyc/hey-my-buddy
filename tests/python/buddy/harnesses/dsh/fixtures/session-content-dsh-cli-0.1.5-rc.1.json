@@ -1,0 +1,468 @@
+{
+  "recordedFrom": "DSH CLI --version 0.1.5-rc.1; 2026-10-27; tests/probes/dsh_session_content.py; same ACP turn and session.v3.jsonl.zstd",
+  "note": "All four assistant messages, three tool calls/results and native todo/write from the same private loopback turn. Timing, usage and unrelated envelope fields omitted; private paths and session id replaced. Reasoning comes from reasoning_content. ACP supplies the complete plan as todo_write rawInput, not as a standalone plan update.",
+  "nativeSessionId": "fixture-session",
+  "acpNotifications": [
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "agent_thought_chunk",
+          "messageId": "5477c11a-2265-431f-b731-8f91181887c0",
+          "content": {
+            "type": "text",
+            "text": "Reasoning stage 0. "
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "5477c11a-2265-431f-b731-8f91181887c0",
+          "content": {
+            "type": "text",
+            "text": "Before first tool. "
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_probe_0",
+          "title": "read",
+          "kind": "other",
+          "status": "in_progress",
+          "rawInput": {
+            "file_path": "probe.txt"
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_probe_0",
+          "status": "completed",
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "<path><probe-root>/cwd/probe.txt</path>\n<type>file</type>\n<content>\n1: DSH session coverage fixture\n\n(End of file - total 1 lines)\n</content>"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "agent_thought_chunk",
+          "messageId": "a5006c71-7f97-42fb-93de-fc7dce1ad5a7",
+          "content": {
+            "type": "text",
+            "text": "Reasoning stage 1. "
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "a5006c71-7f97-42fb-93de-fc7dce1ad5a7",
+          "content": {
+            "type": "text",
+            "text": "Between first and second tools. "
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_probe_1",
+          "title": "glob",
+          "kind": "other",
+          "status": "in_progress",
+          "rawInput": {
+            "pattern": "probe.txt"
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_probe_1",
+          "status": "completed",
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "probe.txt"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "agent_thought_chunk",
+          "messageId": "badff3d7-59e1-4d0e-8b99-5e6bf9252267",
+          "content": {
+            "type": "text",
+            "text": "Reasoning stage 2. "
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "badff3d7-59e1-4d0e-8b99-5e6bf9252267",
+          "content": {
+            "type": "text",
+            "text": "Between second and third tools. "
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "tool_call",
+          "toolCallId": "call_probe_2",
+          "title": "todo_write",
+          "kind": "other",
+          "status": "in_progress",
+          "rawInput": {
+            "todos": [
+              {
+                "content": "Inspect loopback evidence",
+                "status": "completed"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "tool_call_update",
+          "toolCallId": "call_probe_2",
+          "status": "completed",
+          "content": [
+            {
+              "type": "content",
+              "content": {
+                "type": "text",
+                "text": "Updated todo list: 0 pending, 0 in progress, 1 completed."
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "agent_thought_chunk",
+          "messageId": "892aa42e-8124-4d00-b701-471a22ed2016",
+          "content": {
+            "type": "text",
+            "text": "Reasoning stage 3. "
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "fixture-session",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "892aa42e-8124-4d00-b701-471a22ed2016",
+          "content": {
+            "type": "text",
+            "text": "After third tool."
+          }
+        }
+      }
+    }
+  ],
+  "nativeEvents": [
+    {
+      "type": "assistant/message",
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "reasoning",
+              "text": "Reasoning stage 0. "
+            },
+            {
+              "type": "text",
+              "text": "Before first tool. "
+            },
+            {
+              "type": "tool-call",
+              "id": "call_probe_0",
+              "name": "read",
+              "arguments": "{\"file_path\":\"probe.txt\"}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "tool/call",
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "callId": "call_probe_0",
+        "name": "read",
+        "arguments": "{\"file_path\":\"probe.txt\"}"
+      }
+    },
+    {
+      "type": "tool/result",
+      "data": {
+        "turn": 1,
+        "step": 1,
+        "message": {
+          "role": "user",
+          "source": {
+            "kind": "tool",
+            "callId": "call_probe_0"
+          },
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call_probe_0",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "<path><probe-root>/cwd/probe.txt</path>\n<type>file</type>\n<content>\n1: DSH session coverage fixture\n\n(End of file - total 1 lines)\n</content>"
+                }
+              ],
+              "isError": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "assistant/message",
+      "data": {
+        "turn": 1,
+        "step": 2,
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "reasoning",
+              "text": "Reasoning stage 1. "
+            },
+            {
+              "type": "text",
+              "text": "Between first and second tools. "
+            },
+            {
+              "type": "tool-call",
+              "id": "call_probe_1",
+              "name": "glob",
+              "arguments": "{\"pattern\":\"probe.txt\"}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "tool/call",
+      "data": {
+        "turn": 1,
+        "step": 2,
+        "callId": "call_probe_1",
+        "name": "glob",
+        "arguments": "{\"pattern\":\"probe.txt\"}"
+      }
+    },
+    {
+      "type": "tool/result",
+      "data": {
+        "turn": 1,
+        "step": 2,
+        "message": {
+          "role": "user",
+          "source": {
+            "kind": "tool",
+            "callId": "call_probe_1"
+          },
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call_probe_1",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "probe.txt"
+                }
+              ],
+              "isError": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "assistant/message",
+      "data": {
+        "turn": 1,
+        "step": 3,
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "reasoning",
+              "text": "Reasoning stage 2. "
+            },
+            {
+              "type": "text",
+              "text": "Between second and third tools. "
+            },
+            {
+              "type": "tool-call",
+              "id": "call_probe_2",
+              "name": "todo_write",
+              "arguments": "{\"todos\":[{\"content\":\"Inspect loopback evidence\",\"status\":\"completed\"}]}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "tool/call",
+      "data": {
+        "turn": 1,
+        "step": 3,
+        "callId": "call_probe_2",
+        "name": "todo_write",
+        "arguments": "{\"todos\":[{\"content\":\"Inspect loopback evidence\",\"status\":\"completed\"}]}"
+      }
+    },
+    {
+      "type": "todo/write",
+      "data": {
+        "todos": [
+          {
+            "content": "Inspect loopback evidence",
+            "status": "completed"
+          }
+        ]
+      }
+    },
+    {
+      "type": "tool/result",
+      "data": {
+        "turn": 1,
+        "step": 3,
+        "message": {
+          "role": "user",
+          "source": {
+            "kind": "tool",
+            "callId": "call_probe_2"
+          },
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call_probe_2",
+              "content": [
+                {
+                  "type": "text",
+                  "text": "Updated todo list: 0 pending, 0 in progress, 1 completed."
+                }
+              ],
+              "isError": false
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "assistant/message",
+      "data": {
+        "turn": 1,
+        "step": 4,
+        "message": {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "reasoning",
+              "text": "Reasoning stage 3. "
+            },
+            {
+              "type": "text",
+              "text": "After third tool."
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -9,7 +9,7 @@ const plan = z.object({ sessionUpdate: z.literal("plan"), entries: z.array(z.obj
 const notification = z.object({ sessionId: z.string(), update: z.union([message, tool, plan]) });
 const reason = z.object({ code: z.string(), params: z.record(z.string(), z.unknown()) });
 const coverageStatus = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("evidenced"), version: z.string().trim().min(1), source: z.string().trim().min(1) }),
+  z.object({ status: z.literal("evidenced"), version: z.string().trim().min(1) }),
   z.object({ status: z.literal("unavailable"), reason }),
   z.object({ status: z.literal("unverified") }),
 ]);

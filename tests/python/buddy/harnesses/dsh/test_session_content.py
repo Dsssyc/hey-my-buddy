@@ -136,6 +136,50 @@ class ProjectorTests(unittest.TestCase):
         self.text('agent_message_chunk', 'two', session='other')
         self.assertNotEqual(first['contentSegment'], self.record.events[-1]['_meta']['contentSegment'])
 
+    def test_installed_cli_recording_projects_intertool_body_reasoning_and_tool_facts(self):
+        fixture = json.loads((Path(__file__).with_name('fixtures') /
+            'session-content-dsh-cli-0.1.5-rc.1.json').read_text(encoding='utf-8'))
+        self.assertIn('DSH CLI --version 0.1.5-rc.1', fixture['recordedFrom'])
+        native = [event['data']['message']['content'] for event in fixture['nativeEvents']
+                  if event['type'] == 'assistant/message']
+        native_bodies = [part['text'] for message in native for part in message if part['type'] == 'text']
+        native_reasoning = [part['text'] for message in native for part in message if part['type'] == 'reasoning']
+        projector = DshSessionProjector(self.record)
+        projector.start_prompt(fixture['nativeSessionId'], 'fixture prompt', 'recorded-run/prompt-1')
+        for notification in fixture['acpNotifications']:
+            projector.observe_notification(notification)
+        events = self.record.events
+        bodies = [event['content']['text'] for event in events
+                  if event['sessionUpdate'] == 'agent_message_chunk']
+        thoughts = [event['content']['text'] for event in events
+                    if event['sessionUpdate'] == 'agent_thought_chunk']
+        self.assertEqual(bodies, native_bodies)
+        self.assertEqual(thoughts, native_reasoning)
+        self.assertEqual(bodies[1:3], ['Between first and second tools. ',
+                                       'Between second and third tools. '])
+        native_calls = [event['data'] for event in fixture['nativeEvents'] if event['type'] == 'tool/call']
+        native_results = [event['data']['message']['content'][0] for event in fixture['nativeEvents']
+                          if event['type'] == 'tool/result']
+        calls = [event for event in events if event['sessionUpdate'] == 'tool_call']
+        self.assertEqual(len(calls), 3)
+        self.assertEqual([call['toolCallId'] for call in calls], [call['callId'] for call in native_calls])
+        for call, native_call, native_result in zip(calls, native_calls, native_results, strict=True):
+            self.assertEqual(call['rawInput'], json.loads(native_call['arguments']))
+            self.assertTrue(any(event.get('status') == 'completed' and
+                                event.get('toolCallId') == call['toolCallId'] for event in events))
+            outputs = [event['content'][0]['content']['text'] for event in events
+                       if event['sessionUpdate'] == 'tool_call_update' and event.get('content')
+                       and event['toolCallId'] == call['toolCallId']]
+            self.assertEqual(outputs, [native_result['content'][0]['text']])
+        sequence = [event['toolCallId'] if event['sessionUpdate'] == 'tool_call' else event['content']['text']
+                    for event in events if event['sessionUpdate'] in ('tool_call', 'agent_message_chunk')]
+        self.assertEqual(sequence, [bodies[0], calls[0]['toolCallId'], bodies[1], calls[1]['toolCallId'],
+                                    bodies[2], calls[2]['toolCallId'], bodies[3]])
+        plan = next(event['data'] for event in fixture['nativeEvents'] if event['type'] == 'todo/write')
+        self.assertEqual(calls[2]['title'], 'todo_write')
+        self.assertEqual(calls[2]['rawInput'], plan)
+        self.assertFalse(any(event['sessionUpdate'] == 'plan' for event in events))
+
 
 class SessionRunTests(NativeRunCase):
     def test_projector_exceptions_preserve_completed_native_facts(self):

@@ -1572,7 +1572,7 @@ def session_coverage(pair: tuple[str, str]) -> dict:
     """Invented coverage examples for the synthetic preview, not native evidence."""
     coverage = {kind: {"status": "unverified"}
                 for kind in ("messages", "reasoning", "tool-input", "tool-output", "plan")}
-    coverage["messages"] = {"status": "evidenced", "version": "fixture CLI 1", "source": "synthetic preview"}
+    coverage["messages"] = {"status": "evidenced", "version": "fixture CLI 1"}
     if pair in (SESSION_LONG, SESSION_ROUTER_REVIEW):
         coverage["reasoning"] = {"status": "unavailable", "reason": reason("session.codex-internal-reasoning-omitted")}
     return coverage

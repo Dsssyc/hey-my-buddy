@@ -1,0 +1,509 @@
+{
+  "observedWith": "Codex CLI 0.164.0",
+  "probe": "tests/probes/codex_session_content.py",
+  "note": "Selected App Server notifications and native rollout response_item payloads from the same loopback turn with two tools. Thread/turn IDs and private paths replaced; unrelated metadata, process IDs and envelope timing omitted. Reasoning is a readable summary, not internal chain of thought. No update_plan tool or plan item was present.",
+  "events": [
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "01a17dcc-0aa0-7da1-8ae6-ee3345f16546",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Call update_plan once if available, run two local print commands, and finish.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "startedAtMs": 1793111886497
+      },
+      "emittedAtMs": 1793111886497
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "userMessage",
+          "id": "01a17dcc-0aa0-7da1-8ae6-ee3345f16546",
+          "clientId": null,
+          "content": [
+            {
+              "type": "text",
+              "text": "Call update_plan once if available, run two local print commands, and finish.",
+              "text_elements": []
+            }
+          ]
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "completedAtMs": 1793111886497
+      },
+      "emittedAtMs": 1793111886499
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "reasoning",
+          "id": "rs_probe",
+          "summary": [
+            "Probe reasoning summary."
+          ],
+          "content": []
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "startedAtMs": 1793111886505
+      },
+      "emittedAtMs": 1793111886505
+    },
+    {
+      "method": "item/reasoning/summaryPartAdded",
+      "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "itemId": "rs_probe",
+        "summaryIndex": 0
+      },
+      "emittedAtMs": 1793111886505
+    },
+    {
+      "method": "item/reasoning/summaryTextDelta",
+      "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "itemId": "rs_probe",
+        "delta": "Probe reasoning summary.",
+        "summaryIndex": 0
+      },
+      "emittedAtMs": 1793111886505
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "reasoning",
+          "id": "rs_probe",
+          "summary": [
+            "Probe reasoning summary."
+          ],
+          "content": []
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "completedAtMs": 1793111886505
+      },
+      "emittedAtMs": 1793111886505
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_before",
+          "text": "Body before tools.",
+          "phase": null,
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "startedAtMs": 1793111886506
+      },
+      "emittedAtMs": 1793111886506
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "itemId": "msg_before",
+        "delta": "Body before tools."
+      },
+      "emittedAtMs": 1793111886506
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_before",
+          "text": "Body before tools.",
+          "phase": null,
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "completedAtMs": 1793111886506
+      },
+      "emittedAtMs": 1793111886507
+    },
+    {
+      "method": "rawResponseItem/completed",
+      "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "item": {
+          "type": "function_call",
+          "status": "completed",
+          "id": "fc_probe_1",
+          "name": "exec_command",
+          "arguments": "{\"cmd\": \"printf probe-tool-output-1\"}",
+          "call_id": "call_probe_1",
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "turn"
+          }
+        }
+      },
+      "emittedAtMs": 1793111886508
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_probe_1",
+          "pluginId": null,
+          "scriptPath": null,
+          "command": "/bin/zsh -lc 'printf probe-tool-output-1'",
+          "cwd": "/fixture/workspace",
+          "source": "unifiedExecStartup",
+          "status": "inProgress",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "printf probe-tool-output-1"
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "startedAtMs": 1793111886550
+      },
+      "emittedAtMs": 1793111886551
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_probe_1",
+          "pluginId": null,
+          "scriptPath": null,
+          "command": "/bin/zsh -lc 'printf probe-tool-output-1'",
+          "cwd": "/fixture/workspace",
+          "source": "unifiedExecStartup",
+          "status": "completed",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "printf probe-tool-output-1"
+            }
+          ],
+          "aggregatedOutput": "probe-tool-output-1",
+          "exitCode": 0,
+          "durationMs": 0
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "completedAtMs": 1793111886550
+      },
+      "emittedAtMs": 1793111886552
+    },
+    {
+      "method": "rawResponseItem/completed",
+      "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "item": {
+          "type": "function_call_output",
+          "id": "fco_01a17dcc-0ad9-79c2-b8ff-87ff4614549c",
+          "call_id": "call_probe_1",
+          "output": "Chunk ID: 3c0e43\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nprobe-tool-output-1",
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "turn",
+            "create_time": 1793111886.553259
+          }
+        }
+      },
+      "emittedAtMs": 1793111886553
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_between",
+          "text": "Body between tools.",
+          "phase": null,
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "startedAtMs": 1793111886557
+      },
+      "emittedAtMs": 1793111886557
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "itemId": "msg_between",
+        "delta": "Body between tools."
+      },
+      "emittedAtMs": 1793111886557
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_between",
+          "text": "Body between tools.",
+          "phase": null,
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "completedAtMs": 1793111886557
+      },
+      "emittedAtMs": 1793111886557
+    },
+    {
+      "method": "rawResponseItem/completed",
+      "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "item": {
+          "type": "function_call",
+          "status": "completed",
+          "id": "fc_probe_2",
+          "name": "exec_command",
+          "arguments": "{\"cmd\": \"printf probe-tool-output-2\"}",
+          "call_id": "call_probe_2",
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "turn"
+          }
+        }
+      },
+      "emittedAtMs": 1793111886558
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_probe_2",
+          "pluginId": null,
+          "scriptPath": null,
+          "command": "/bin/zsh -lc 'printf probe-tool-output-2'",
+          "cwd": "/fixture/workspace",
+          "source": "unifiedExecStartup",
+          "status": "inProgress",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "printf probe-tool-output-2"
+            }
+          ],
+          "aggregatedOutput": null,
+          "exitCode": null,
+          "durationMs": null
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "startedAtMs": 1793111886601
+      },
+      "emittedAtMs": 1793111886601
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "commandExecution",
+          "id": "call_probe_2",
+          "pluginId": null,
+          "scriptPath": null,
+          "command": "/bin/zsh -lc 'printf probe-tool-output-2'",
+          "cwd": "/fixture/workspace",
+          "source": "unifiedExecStartup",
+          "status": "completed",
+          "commandActions": [
+            {
+              "type": "unknown",
+              "command": "printf probe-tool-output-2"
+            }
+          ],
+          "aggregatedOutput": "probe-tool-output-2",
+          "exitCode": 0,
+          "durationMs": 0
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "completedAtMs": 1793111886601
+      },
+      "emittedAtMs": 1793111886602
+    },
+    {
+      "method": "rawResponseItem/completed",
+      "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "item": {
+          "type": "function_call_output",
+          "id": "fco_01a17dcc-0b0b-7271-8449-e00ca4d75a02",
+          "call_id": "call_probe_2",
+          "output": "Chunk ID: f59bda\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nprobe-tool-output-2",
+          "internal_chat_message_metadata_passthrough": {
+            "turn_id": "turn",
+            "create_time": 1793111886.603463
+          }
+        }
+      },
+      "emittedAtMs": 1793111886604
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_after",
+          "text": "Body after tools.",
+          "phase": null,
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "startedAtMs": 1793111886607
+      },
+      "emittedAtMs": 1793111886607
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "thread",
+        "turnId": "turn",
+        "itemId": "msg_after",
+        "delta": "Body after tools."
+      },
+      "emittedAtMs": 1793111886607
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "type": "agentMessage",
+          "id": "msg_after",
+          "text": "Body after tools.",
+          "phase": null,
+          "memoryCitation": null,
+          "delivery": null,
+          "questions": null
+        },
+        "threadId": "thread",
+        "turnId": "turn",
+        "completedAtMs": 1793111886607
+      },
+      "emittedAtMs": 1793111886608
+    }
+  ],
+  "nativeResponses": [
+    {
+      "type": "reasoning",
+      "id": "rs_probe",
+      "summary": [
+        {
+          "type": "summary_text",
+          "text": "Probe reasoning summary."
+        }
+      ],
+      "content": null,
+      "encrypted_content": null
+    },
+    {
+      "type": "message",
+      "status": "completed",
+      "id": "msg_before",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Body before tools.",
+          "annotations": []
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "status": "completed",
+      "id": "fc_probe_1",
+      "name": "exec_command",
+      "arguments": "{\"cmd\": \"printf probe-tool-output-1\"}",
+      "call_id": "call_probe_1"
+    },
+    {
+      "type": "function_call_output",
+      "id": "fco_01a17dcc-0ad9-79c2-b8ff-87ff4614549c",
+      "call_id": "call_probe_1",
+      "output": "Chunk ID: 3c0e43\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nprobe-tool-output-1"
+    },
+    {
+      "type": "message",
+      "status": "completed",
+      "id": "msg_between",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Body between tools.",
+          "annotations": []
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "status": "completed",
+      "id": "fc_probe_2",
+      "name": "exec_command",
+      "arguments": "{\"cmd\": \"printf probe-tool-output-2\"}",
+      "call_id": "call_probe_2"
+    },
+    {
+      "type": "function_call_output",
+      "id": "fco_01a17dcc-0b0b-7271-8449-e00ca4d75a02",
+      "call_id": "call_probe_2",
+      "output": "Chunk ID: f59bda\nWall time: 0.0000 seconds\nProcess exited with code 0\nOriginal token count: 5\nOutput:\nprobe-tool-output-2"
+    },
+    {
+      "type": "message",
+      "status": "completed",
+      "id": "msg_after",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Body after tools.",
+          "annotations": []
+        }
+      ]
+    }
+  ]
+}
