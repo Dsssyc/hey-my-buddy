@@ -1,6 +1,6 @@
 [project]
 name = "hey-my-buddy"
-version = "0.56.3"
+version = "0.56.4"
 description = "A local blackboard where a Host buddy delegates micro tasks to Worker buddies in other coding harnesses and accepts every result itself."
 requires-python = ">=3.12,<3.13"
 dynamic = ["readme"]
