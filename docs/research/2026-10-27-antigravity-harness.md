@@ -38,6 +38,11 @@ Gemini 4 Argon 发布之后，开发者问能不能把 Google Antigravity 接成
   - 原生会话存成 `transcript.jsonl`，字段格式没有文档。
   - 权限：headless 不弹审批，工作区里的读写自动允许，shell 命令默认被拒；`--mode`、`--sandbox`（三个系统都有 OS 级隔离）与一个全放开的开关可以调整。没有逐次调用的只读档位。
   - 文档没写：SIGTERM 之后怎样结束子进程树。
+- **API key 只从进程的环境变量读**（本机核对，agy 1.4.8 CLI，2026-10-28，不联网、用假 key）：
+  - `settings.json` 设了 `"modelProvider": "gemini"`、环境里却没有 `GEMINI_API_KEY` 时，它立刻报错退出，不退回 app 的消费者登录；
+  - `~/.gemini/.env`、`~/.env`、工作目录的 `.env` 与 `.gemini/.env` 都不读，`settings.json` 里的 `env`、`envOverrides` 与 `apiKey` 也不认；
+  - 它认 `HOME`：设了私有的 HOME，就不碰真实的 `~/.gemini/antigravity-cli`；
+  - CC Switch 3.20.4 没有 Antigravity 一项，它给 Gemini CLI 写的 `~/.gemini/.env` 对 `agy` 不起作用。
 - **SDK**（厂商自述）：Python 包，Alpha 阶段；认证只写了 API key 与 Vertex，没有 Google 账户登录。
 - **托管的 Antigravity Agent**（厂商自述）：在 Gemini API 里，可以选 Argon，但跑在 Google 托管的沙箱里，不在用户的机器上。
 - **ACP**：ACP 的公开注册表里有 Google 登记的 Antigravity 条目，Antigravity 在 Zed 里就靠它接入；Antigravity 自己的文档里没有提到 ACP。MCP 只作为客户端。
@@ -82,5 +87,6 @@ Gemini 4 Argon 发布之后，开发者问能不能把 Google Antigravity 接成
 以下任何一项变化，都会让这份记录过时：
 - Antigravity 的 FAQ 或附加条款改写，尤其是放开消费者计划下的包装；
 - `agy` 出了新的大版本，或者官方给出逐次调用的只读档位与 SIGTERM 的说明；
+- `agy` 能从文件或系统钥匙串读 API key，或者 CC Switch 加上 Antigravity；
 - Gemini CLI 恢复接受消费者订阅；
 - Argon 的提供范围变了。
