@@ -16,6 +16,15 @@ from hey_my_buddy.protocol.transport import LIFETIME_LOCKS, ServiceError
 
 
 class DaemonAdmissionTests(BoardTestCase):
+    def test_cleanup_propagates_native_shutdown_failure(self):
+        daemon = Daemon(self.directory / "state")
+        self.addCleanup(daemon.store.db.close)
+        error = CoreError("lifecycle", "fixture shutdown failure")
+        with patch("hey_my_buddy.blackboard.service.daemon.cc.shutdown", side_effect=error):
+            with self.assertRaises(CoreError) as caught:
+                daemon.cleanup()
+        self.assertIs(caught.exception, error)
+
     def test_scheduling_issues_share_the_service_issue_event_and_health_view(self):
         board = self.board()
         from hey_my_buddy.blackboard.service.execution_scheduler import ExecutionScheduler
