@@ -2372,6 +2372,7 @@ def kind_evaluation_views() -> list[dict]:
     overall = evaluation_statistics(4, 3, 2, 1, 1)
     change = evaluation_statistics(3, 2, 1, 1, 1)
     routing = evaluation_statistics(1, 1, 1, 0, 0)
+    sparse = evaluation_statistics(1, 1, 1, 0, 0)
     return [{"harness": "dsh", "model": "deepseek-flash", "effort": "max",
              "summary": {"text": "合成样例：界面改造有过一次返工，路由验证一次通过。",
                          "citations": [{"runId": "preview-run-a1", "title": "合成预览任务 A1",
@@ -2381,7 +2382,14 @@ def kind_evaluation_views() -> list[dict]:
                             "byDomainTaskType": {"preview-domain-ui": {"change": change, "verify": routing},
                                                  "preview-domain-routing": {"verify": routing}},
                             "infrastructureFailures": [{"provider": "deepseek-official", "count": 1,
-                                                        "lastAt": instant(8, 36)}]}}]
+                                                        "lastAt": instant(8, 36)}]}},
+            # One kind with evidence on a single deep node: the matrix lists that
+            # node and its ancestors, not the other branches of the domain tree.
+            {"harness": "codex", "model": "gpt-5-codex", "effort": "high",
+             "summary": {"text": "合成样例：只有样式与排版这个节点有样本。", "citations": []},
+             "statistics": {"overall": sparse, "byDomain": {"preview-domain-tokens": sparse},
+                            "byDomainTaskType": {"preview-domain-tokens": {"debug": sparse}},
+                            "infrastructureFailures": []}}]
 
 
 def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | None = None) -> dict:
@@ -2432,6 +2440,14 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
              "parentId": None, "mergedIntoId": None},
             {"nodeId": "preview-domain-routing", "name": "路由判断", "definition": "核对选择依据和路由结果。",
              "parentId": "preview-domain-ui", "mergedIntoId": None},
+            {"nodeId": "preview-domain-console", "name": "控制台", "definition": "读取并呈现看板事实。",
+             "parentId": "preview-domain-ui", "mergedIntoId": None},
+            {"nodeId": "preview-domain-tokens", "name": "样式与排版", "definition": "控制台的颜色、间距与字号。",
+             "parentId": "preview-domain-console", "mergedIntoId": None},
+            {"nodeId": "preview-domain-docs", "name": "文档与技能", "definition": "说明、决定与共享技能。",
+             "parentId": None, "mergedIntoId": None},
+            {"nodeId": "preview-domain-skill", "name": "共享技能", "definition": "交给 agent 的使用说明。",
+             "parentId": "preview-domain-docs", "mergedIntoId": None},
         ],
         "kindEvaluations": kind_evaluation_views(),
         "routingHealth": {"windowSize": 20, "sampleCount": 6, "failureCount": 1,

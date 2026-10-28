@@ -230,7 +230,7 @@ class Maintenance:
         if event is not None:
             feedback_ref = json.loads(event[0])["feedback"]
             feedback = files.read(self.store.directory, run["maintenance_run_id"], feedback_ref)
-            if feedback["errors"]:
+            if code is None and feedback["errors"]:
                 code = "maintenance-answer-invalid"
                 params = {"errors": feedback["errors"]}
         elif code is None:

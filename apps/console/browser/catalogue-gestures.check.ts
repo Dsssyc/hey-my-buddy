@@ -375,14 +375,18 @@ test.describe("the Buddy page in English", () => {
       const cjk = /[　-〿一-鿿＀-￯]/;
       const found: string[] = [];
       // Domain names and definitions are the user's content, in any language.
-      const content = [...document.querySelectorAll("[data-slot=domain-row] p")].map(node => node.textContent ?? "").filter(Boolean);
-      const isChineseLabel = (value: string) => cjk.test(content.reduce((text, fact) => text.replaceAll(fact, ""), value));
-      for (const element of document.body.querySelectorAll("*")) for (const name of ["aria-label", "aria-description", "placeholder", "title", "alt"]) {
-        const value = element.getAttribute(name);
-        if (value && isChineseLabel(value)) found.push(`<${element.tagName.toLowerCase()} ${name}> ${value}`);
+      const inDomain = (node: Node | null) => node instanceof Element && node.closest("[data-slot=domain-row]") !== null;
+      for (const element of document.body.querySelectorAll("*")) {
+        if (inDomain(element)) continue;
+        for (const name of ["aria-label", "aria-description", "placeholder", "title", "alt"]) {
+          const value = element.getAttribute(name);
+          if (value && cjk.test(value)) found.push(`<${element.tagName.toLowerCase()} ${name}> ${value}`);
+        }
       }
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-      for (let node = walker.nextNode(); node; node = walker.nextNode()) if (isChineseLabel(node.textContent ?? "")) found.push(`text: ${node.textContent}`);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!inDomain(node.parentElement) && cjk.test(node.textContent ?? "")) found.push(`text: ${node.textContent}`);
+      }
       return found;
     });
   }

@@ -29,10 +29,12 @@ describe("the numbers and the times the detail writes", () => {
     expect(formatDuration(2 * 3_600_000 + 59_000, "minutes")).toBe("2 时 0 分");
   });
 
-  it("writes a count of tokens short above a thousand, and whole below", () => {
+  it("writes a count of tokens short above a thousand, whole below, and in millions from a million", () => {
     expect(formatCompact(999)).toBe("999");
     expect(formatCompact(23_400)).toBe("23.4k");
     expect(formatCompact(18_000)).toBe("18.0k");
+    expect(formatCompact(1_000_000)).toBe("1.0M");
+    expect(formatCompact(9_638_100)).toBe("9.6M");
     expect(formatNumber(12_000)).toBe("12,000");
   });
 

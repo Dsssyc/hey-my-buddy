@@ -364,36 +364,38 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs").fetchone()[0], 2)
 
-    def test_native_failure_retains_final_rejected_entries_on_the_run(self):
+    def test_stop_unconfirmed_keeps_its_reason_over_a_rejected_answer(self):
+        self.configure()
+        started = self.start()
+        claim = self.claim_maintenance(started["runId"])
+        feedback = self.submit_answer(claim, 0, {})
+        self.assertTrue(feedback["errors"])
+        with self.board_.store.db.write() as db:
+            task = db.execute("SELECT * FROM tasks WHERE task_id=?", (started["runId"],)).fetchone()
+            attempt = db.execute("SELECT * FROM attempts WHERE attempt_id=?",
+                                 (claim["attempt"]["attemptId"],)).fetchone()
+            self.board_.store.maintenance.complete(
+                db, task=task, attempt=attempt, status="ok", result={"status": "ok"},
+                shutdown_confirmed=False, error=None, now=self.clock.value)
+        with self.board_.store.db.read() as db:
+            run = db.execute("SELECT * FROM maintenance_runs").fetchone()
+        self.assertEqual(run["reason_code"], "router-stop-unconfirmed")
+        self.assertEqual(json.loads(run["reason_params_json"]), {})
+        self.assertEqual(self.run_files(started["maintenanceRunId"]), [])
+
+    def test_interruption_fence_keeps_its_reason_over_a_rejected_answer(self):
         self.configure()
         claim = self.claim_maintenance(self.start()["runId"])
         feedback = self.submit_answer(claim, 0, {})
         self.assertTrue(feedback["errors"])
-        self.board_.call("execution_result", {
-            "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
-            "nonce": NONCE, "status": "failed", "shutdownConfirmed": True,
-            "result": {"status": "error", "code": "router-budget-exhausted"}})
-        with self.board_.store.db.read() as db:
-            run = db.execute("SELECT * FROM maintenance_runs").fetchone()
-        self.assertEqual(run["reason_code"], "maintenance-answer-invalid")
-        self.assertEqual(json.loads(run["reason_params_json"]), {"errors": feedback["errors"]})
-        with self.board_.store.db.read() as db:
-            attempt = db.execute("SELECT result_json FROM attempts WHERE attempt_id=?", (claim["attempt"]["attemptId"],)).fetchone()
-        self.assertEqual(json.loads(attempt["result_json"])["result"]["code"], "router-budget-exhausted")
-        self.assertEqual(self.run_files(run["maintenance_run_id"]), [])
-
-    def test_interruption_fence_keeps_final_errors_before_completion(self):
-        self.configure()
-        claim = self.claim_maintenance(self.start()["runId"])
-        feedback = self.submit_answer(claim, 0, {})
         with self.board_.store.db.write() as db:
             attempt = self.board_.store._attempt_row(db, claim["attempt"]["attemptId"])
             self.board_.store.decisions.fence_attempt(db, attempt=attempt,
                 reason={"code": "interrupted-before-delivery", "params": {}}, now=self.clock.value)
         with self.board_.store.db.read() as db:
             run = db.execute("SELECT * FROM maintenance_runs").fetchone()
-        self.assertEqual(run["reason_code"], "maintenance-answer-invalid")
-        self.assertEqual(json.loads(run["reason_params_json"]), {"errors": feedback["errors"]})
+        self.assertEqual(run["reason_code"], "interrupted-before-delivery")
+        self.assertEqual(json.loads(run["reason_params_json"]), {})
         self.assertEqual(self.run_files(run["maintenance_run_id"]), [])
 
     def test_final_invalid_answer_has_a_distinct_fixed_reason_shape(self):

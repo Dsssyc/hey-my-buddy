@@ -11,11 +11,26 @@ import type { DomainNode, EvaluationStatistics, KindEvaluation as KindEvaluation
 
 type OpenTask = (macroTaskId: string, runId: string) => void;
 
-/** One row of the user's domain tree, with its aggregate and seven task-type cells. */
-function visibleDomains(nodes: DomainNode[], collapsed: ReadonlySet<string>): { node: DomainNode; depth: number; children: boolean }[] {
+/**
+ * The rows of the user's domain tree that carry this buddy kind's evidence: the
+ * sampled nodes and the ancestors that place them. A branch without a sample
+ * anywhere below it is left out.
+ */
+function visibleDomains(nodes: DomainNode[], sampled: ReadonlySet<string>,
+                        collapsed: ReadonlySet<string>): { node: DomainNode; depth: number; children: boolean }[] {
   const active = nodes.filter(node => node.mergedIntoId === null);
+  const byId = new Map(active.map(node => [node.nodeId, node]));
+  const included = new Set<string>();
+  for (const nodeId of sampled) {
+    let node = byId.get(nodeId);
+    while (node && !included.has(node.nodeId)) {
+      included.add(node.nodeId);
+      node = node.parentId === null ? undefined : byId.get(node.parentId);
+    }
+  }
   const children = new Map<string | null, DomainNode[]>();
   for (const node of active) {
+    if (!included.has(node.nodeId)) continue;
     const parent = node.parentId;
     children.set(parent, [...(children.get(parent) ?? []), node]);
   }
@@ -71,7 +86,9 @@ export function KindEvaluation({ evaluation, domains, onOpenTask }: {
   const { t } = useTranslation("buddies");
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  const rows = open ? visibleDomains(domains, collapsed) : [];
+  const sampled = new Set(Object.entries(evaluation?.statistics.byDomain ?? {})
+    .filter(([, statistics]) => statistics.samples > 0).map(([nodeId]) => nodeId));
+  const rows = open ? visibleDomains(domains, sampled, collapsed) : [];
   const rate = (value: number | null) => value === null ? "—"
     : new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 0 }).format(value);
 
@@ -105,7 +122,9 @@ export function KindEvaluation({ evaluation, domains, onOpenTask }: {
         </div>
         <section aria-label={t("evaluation.domainTable")} className="border-t border-line pt-4">
           <h4 className="mb-2 text-xs font-medium text-ink2">{t("evaluation.domainTable")}</h4>
-          {rows.length === 0 ? <p className="text-xs text-ink3">{t("evaluation.noDomains")}</p> :
+          {rows.length === 0 ? <p className="text-xs text-ink3">
+            {t(domains.some(node => node.mergedIntoId === null) ? "evaluation.noSample" : "evaluation.noDomains")}
+          </p> :
             <div data-slot="evaluation-table-scroll" className="max-w-full overflow-x-auto">
               <table className="min-w-[960px] w-full border-collapse text-xs">
                 <thead><tr className="border-y border-line text-ink3">

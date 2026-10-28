@@ -70,9 +70,10 @@ export function formatNumber(value: number): string {
   return formatters().whole.format(value);
 }
 
-/** 23.4k: a count of tokens in the room of a few characters; below a thousand it is written whole. */
+/** 23.4k or 9.6M: a count of tokens in the room of a few characters; below a thousand it is written whole. */
 export function formatCompact(value: number): string {
-  return value < 1000 ? formatters().whole.format(value) : `${formatters().tenth.format(value / 1000)}k`;
+  if (value < 1000) return formatters().whole.format(value);
+  return value < 1_000_000 ? `${formatters().tenth.format(value / 1000)}k` : `${formatters().tenth.format(value / 1_000_000)}M`;
 }
 
 /** A duration; "fine" includes seconds, while "minutes" reads completed whole minutes. */
