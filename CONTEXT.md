@@ -37,11 +37,11 @@ The authority a buddy acts with on the blackboard, Host, Worker or Router, estab
 
 **Host buddy**:
 A buddy acting with Host authority: it owns the micro tasks it delegates or takes over, defining their authorization, deciding their boundaries and accepting their results. Short form: Host.
-_Avoid_: coordinator, orchestrator, manager
+_Avoid_: Host agent, main agent, coordinator, orchestrator, manager
 
 **Worker buddy**:
 A buddy that executes turns of a micro task with attempt-scoped authority; it may finish, ask for assistance or raise attention, but cannot create micro tasks, authorize helpers or accept results. Its results reach the Host for acceptance. The one exception is a Lead. Short form: Worker.
-_Avoid_: a Buddy, coding Buddy
+_Avoid_: Worker agent, subagent, a Buddy, coding Buddy
 
 **Lead buddy**:
 The buddy executing a micro task that carries delegation authority. Toward the Host that delegated that micro task it is a Worker: it reports only to that Host, which accepts its result, and it never talks to the user. Toward the micro tasks created under that micro task it acts with Host authority: it delegates them, decides their boundaries, sends them back and accepts them. It is the buddy the user names for that work, and exists only when the user asks for it. Short form: Lead.
@@ -56,7 +56,7 @@ _Avoid_: child task, sub-task; a helper is a different thing
 
 **Router buddy**:
 A buddy acting with Router authority in one of the three planes (三个面 / three planes): the routing plane, the maintenance plane and the profile plane. The user lists one or more buddies in order for the routing plane, and the first available one holds it; the maintenance and profile planes each have the one buddy the user names. Unlike a Worker's result, its output takes effect without Host acceptance; the blackboard checks it for bounds and structure only. Short form: Router.
-_Avoid_: decision Buddy, selector (for the buddy)
+_Avoid_: Router agent, decision Buddy, selector (for the buddy)
 
 **路由面 / routing plane**:
 The Router's plane that chooses the Worker buddy for one micro task within its routing bounds, in fast or review mode; each choice is one routing calculation.
