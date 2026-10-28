@@ -1,7 +1,11 @@
 import { StrictMode } from "react";
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "./api";
+import { createApi } from "./api";
+import { MacroTaskList } from "./MacroTaskList";
+import { TooltipProvider } from "./components/ui/tooltip";
+import * as formatting from "./i18n/format";
 import type { MacroTaskPage, MacroTaskQuery, MacroTaskSummary } from "./macro-task-types";
 import { useMacroTaskList } from "./use-macro-task-list";
 
@@ -38,6 +42,80 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); setHidden(false); });
 
 describe("work macro task list hook", () => {
+  it("retains a pending reorder notice when an unchanged poll repeats it", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("first", 3)])));
+    const changed = page([summary("new", 9), summary("first", 3)]);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[1]!.resolve(changed));
+    const notice = f.result.current.reorder;
+    expect(notice).toEqual({ count: 1 });
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    await act(async () => f.requests[2]!.resolve({ ...changed }));
+    expect(f.result.current.reorder).toBe(notice);
+  });
+
+  it("does not redraw an entry after an HTTP 304 with a newer verification date", async () => {
+    const body = page([summary("first", 3)]);
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify(body), { headers: { ETag: '"list"', Date: "Thu, 01 Jan 1970 00:00:01 GMT" } }))
+      .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: "Thu, 01 Jan 1970 00:00:04 GMT" } }));
+    const api = createApi("", fetcher);
+    const relative = vi.spyOn(formatting, "formatRelative");
+    function List() {
+      const list = useMacroTaskList(api, query, true);
+      return <><output>{list.verifiedAtMs}</output><MacroTaskList {...list} sort="activity-desc" filter="all" query="" selected={null}
+        onSortChange={() => {}} onFilterChange={() => {}} onQueryChange={() => {}} onCollapse={() => {}} onSelect={() => {}}
+        onMore={list.more} onApplyReorder={list.applyReorder}/></>;
+    }
+    try {
+      const view = render(<TooltipProvider><List/></TooltipProvider>);
+      await startRead();
+      const calls = relative.mock.calls.length;
+      expect(calls).toBeGreaterThan(0);
+      expect(view.container.querySelector("output")!.textContent).toBe("1000");
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(fetcher.mock.calls[1]![1]!.headers).toEqual({ "If-None-Match": '"list"' });
+      expect(view.container.querySelector("output")!.textContent).toBe("4000");
+      expect(relative).toHaveBeenCalledTimes(calls);
+    } finally { relative.mockRestore(); }
+  });
+
+  it("starts paging during a pending poll and ignores that poll's late reply", async () => {
+    const f = harness();
+    await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("first", 3)], "older")));
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(f.requests).toHaveLength(2);
+    act(() => f.result.current.more());
+    expect(f.requests).toHaveLength(3);
+    expect(f.requests[1]!.signal!.aborted).toBe(true);
+    expect(f.requests[2]!.query.before).toBe("older");
+    expect(f.result.current.loading).toBe(true);
+    await act(async () => f.requests[1]!.resolve(page([summary("stale", 9)])));
+    expect(f.result.current.loading).toBe(true);
+    await act(async () => f.requests[2]!.resolve(page([summary("second", 2)])));
+    expect(f.result.current.rows.map(row => row.macroTaskId)).toEqual(["first", "second"]);
+    expect(f.result.current.loading).toBe(false);
+  });
+
+  it("retains the rows and totals for an unchanged poll while advancing verification", async () => {
+    let verified = 1000;
+    const f = harness(() => verified);
+    await startRead();
+    const first = page([summary("first", 3)]);
+    await act(async () => f.requests[0]!.resolve(first));
+    const { rows, totals } = f.result.current;
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    verified = 4000;
+    await act(async () => f.requests[1]!.resolve({ ...first }));
+    expect(f.result.current.rows).toBe(rows);
+    expect(f.result.current.totals).toBe(totals);
+    expect(f.result.current.verifiedAtMs).toBe(4000);
+  });
+
   it("keeps creation order when later activity changes, then resets paging on a sort change", async () => {
     const f = harness();
     const sortedQuery: MacroTaskQuery = { ...query, sort: "created-asc" };

@@ -1,10 +1,25 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { setLanguageChoice } from "./index";
-import { formatCoolingTime, formatClockMinutes, formatCompact, formatDuration, formatList, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
+import { dateTimeFormat, formatCoolingTime, formatClockMinutes, formatCompact, formatDuration, formatList, formatMoment, formatMomentMinutes, formatNumber, formatRelative } from "./format";
 
 afterEach(() => setLanguageChoice("browser"));
 
 describe("the numbers and the times the detail writes", () => {
+  it("reuses date formatters for the same locale, local zone and options", () => {
+    setLanguageChoice("en");
+    const options = { hour: "2-digit", minute: "2-digit", hour12: false } as const;
+    const first = dateTimeFormat(options);
+    expect(dateTimeFormat({ ...options })).toBe(first);
+    expect(dateTimeFormat({ ...options, second: "2-digit" })).not.toBe(first);
+    setLanguageChoice("zh");
+    const translated = dateTimeFormat(options);
+    expect(translated).not.toBe(first);
+    expect(dateTimeFormat(options)).toBe(translated);
+    const zone = vi.spyOn(Date.prototype, "toTimeString").mockReturnValue("12:00:00 GMT+0000 (Coordinated Universal Time)");
+    expect(dateTimeFormat(options)).not.toBe(translated);
+    zone.mockRestore();
+  });
+
   it("lists two and three names with the language's separators", () => {
     setLanguageChoice("zh");
     expect(formatList(["Codex", "DSH"])).toBe("Codex、DSH");

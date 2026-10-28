@@ -23,7 +23,6 @@ export default {
   "someoneElseChangedYourDraftIsRetained": "{{v0}} 已被其他人更改{{v1}}；草稿已保留，请重新加载核对。",
   "settingsNeedUpgrading": "（设置需升级）",
   "correctTheInvalidDraftValuesFirst": "（请先修正草稿中的无效值）",
-  "aReadIsStillInProgressTry": "现有读取尚未完成，请稍后重试。",
   "notRecorded": "未记录",
   "executionCompleted": "执行完成",
   "started": "已开始",

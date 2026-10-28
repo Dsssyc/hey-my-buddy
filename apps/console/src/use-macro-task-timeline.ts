@@ -3,7 +3,7 @@ import i18n from "i18next";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
-import { waitForRead } from "./global-refresh";
+import { retainEqual } from "./retain-equal";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
 import type { MacroTaskTimeline } from "./macro-task-types";
 
@@ -36,14 +36,16 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
   const dataRef = useRef<MacroTaskTimeline | null>(null);
   dataRef.current = data;
 
-  const read = useCallback(async (strict = false) => {
+  const read = useCallback(async (strict = false, background = false) => {
     if (!macroTaskId) return;
     if (pending.current) {
-      if (!strict) return;
-      await waitForRead(() => pending.current);
+      if (background) return;
+      ++generation.current;
+      request.current?.abort();
     }
     const version = generation.current, controller = new AbortController();
     request.current = controller; pending.current = true;
+    if (!background) setLoading(true);
     try {
       const { timeline: next, verifiedAtMs } = await api.macroTaskTimeline(macroTaskId, { limit: 200 }, controller.signal);
       if (version !== generation.current || controller.signal.aborted) return;
@@ -79,17 +81,21 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
       }
       // A fresh selection marks nothing as new: the 新 label is only for rows
       // appended to an already displayed timeline.
-      const merged = { ...next, rows };
+      const oldSpans = new Map(previous?.spans.map(span => [span.spanId, span]));
+      const spans = next.spans.map(span => retainEqual(oldSpans.get(span.spanId), span)!);
+      const oldEvents = new Map(previous?.events.map(event => [event.seq, event]));
+      const events = next.events.map(event => retainEqual(oldEvents.get(event.seq), event)!);
+      const merged = previous ? retainEqual(previous, { ...next, rows, spans, events }) : { ...next, rows, spans, events };
       // Keep the ref in step at write time so a same-tick follow-up read merges
       // against this data rather than treating it as a selection change.
       dataRef.current = merged;
       setData(merged);
-      setNewRunIds(new Set(appended));
+      setNewRunIds(previous => previous.size === appended.length && appended.every(id => previous.has(id)) ? previous : new Set(appended));
     } catch (failure) {
       if (version === generation.current && !controller.signal.aborted && !isAbortError(failure)) setError(() => errorText(failure));
       if (strict && !isAbortError(failure)) throw failure;
     } finally {
-      if (version === generation.current) pending.current = false;
+      if (version === generation.current) { pending.current = false; setLoading(false); }
     }
   }, [api, macroTaskId]);
 
@@ -120,7 +126,7 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
       if (active && visible) setLoading(true);
     }
     if (!active || !visible) return cleanup;
-    void read();
+    void read(false, true);
     return cleanup;
   }, [macroTaskId, active, visible, read]);
 
@@ -130,13 +136,10 @@ export function useMacroTaskTimeline(api: ConsoleApi, macroTaskId: string | null
       // Invocation-time document check: the visibilitychange cleanup can lag
       // the actual hide, and an interval firing inside that gap must not
       // start a GET.
-      if (documentVisibleNow()) void read();
+      if (documentVisibleNow()) void read(false, true);
     }, 3000);
     return () => clearInterval(timer);
   }, [macroTaskId, active, visible, read]);
-
-  // "Loading" describes only the first read of a selection; polling is silent.
-  useEffect(() => { if (!loading) return; if (data || error) setLoading(false); }, [data, error, loading]);
 
   return {
     timeline: data,

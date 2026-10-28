@@ -58,7 +58,7 @@ function ConsoleApp({ suppliedApi }: { suppliedApi?: ConsoleApi }) {
   const { t } = useTranslation(["shell", "common"]);
   const [api] = useState(() => suppliedApi || createApi(window.location.pathname));
   const state = useConsole(api);
-  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} refresh={state.refresh} connectionError={state.error} /> :
+  return state.snapshot ? <Connected api={api} snapshot={state.snapshot} verifiedAt={state.verifiedAtMs} refresh={state.refresh} connectionError={state.error} /> :
     <main className="flex min-h-dvh flex-col items-center justify-center gap-5 p-6 text-center">
       <img src={buddyIcon} alt="" width="32" height="32" className="size-8" />
       <h1 className="text-lg font-semibold">{state.error ? t("startup.failed") : t("startup.connecting")}</h1>
@@ -99,8 +99,8 @@ function Notice({ tone, role, children }: { tone: "fail" | "hand" | "plain"; rol
   </div>;
 }
 
-function Connected({ api, snapshot, refresh, connectionError }: {
-  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string;
+function Connected({ api, snapshot, refresh, connectionError, verifiedAt }: {
+  api: ConsoleApi; snapshot: Snapshot; refresh: () => Promise<Snapshot | null>; connectionError: string; verifiedAt: number | null;
 }) {
   const { t } = useTranslation(["shell", "common"]);
   const [tab, setTab] = useState<Tab>(currentTab);
@@ -135,7 +135,6 @@ function Connected({ api, snapshot, refresh, connectionError }: {
   const saveRefusal = editor.saveBlockedReason;
   // Draft banners belong to the Buddy settings page.
   const draftTab = tab === "buddies";
-  const verifiedAt = api.readVerifiedAt?.(snapshot) ?? null;
   // What a mark on a tab means; the tab shows it on hover and on focus.
   const buddies = useTranslation("buddies");
   const waiting = attentionHints(buddyAttention(editor.view, snapshot), buddies.t);

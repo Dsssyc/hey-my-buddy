@@ -1,13 +1,22 @@
 import i18n from "i18next";
 import { locale } from "./index";
 
-// Clock times use 24 hours in every language: they are read against a timeline.
+// The host's local zone name and offset change when the system zone changes.
+// Reading them needs no new Intl formatter on a hot formatting path.
+let dateContext = "";
+const dates = new Map<string, Intl.DateTimeFormat>();
+export function dateTimeFormat(options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const context = `${locale}\0${new Date().toTimeString().slice(9)}`;
+  if (dateContext !== context) { dateContext = context; dates.clear(); }
+  const key = JSON.stringify(Object.entries(options).sort(([left], [right]) => left.localeCompare(right)));
+  let formatter = dates.get(key);
+  if (!formatter) { formatter = new Intl.DateTimeFormat(locale, options); dates.set(key, formatter); }
+  return formatter;
+}
+
 function makeFormatters() {
   return {
-    clock: new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }),
-    dateTime: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" }),
     list: new Intl.ListFormat(locale, { type: "conjunction" }),
-    minuteClock: new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }),
     whole: new Intl.NumberFormat(locale),
     tenth: new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
   };
@@ -24,7 +33,7 @@ function formatters() {
 
 /** 18:06:41 */
 export function formatClock(ms: number): string {
-  return formatters().clock.format(ms);
+  return dateTimeFormat({ hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).format(ms);
 }
 
 /** 09-27 06:05, in digits and local time: for rows and fields that have room for no more. */
@@ -41,12 +50,12 @@ export function formatList(names: string[]): string {
 
 /** A full local date and time, with the month written out where the locale's numeric order is ambiguous. */
 export function formatDateTime(ms: number): string {
-  return formatters().dateTime.format(ms);
+  return dateTimeFormat({ dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" }).format(ms);
 }
 
 /** 18:06 */
 export function formatClockMinutes(ms: number): string {
-  return formatters().minuteClock.format(ms);
+  return dateTimeFormat({ hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(ms);
 }
 
 /** A local instant without seconds, with enough date context to distinguish older days. */
@@ -61,7 +70,7 @@ export function formatMomentMinutes(ms: number, nowMs: number): string {
 /** Local cooldown deadline: only the time today, otherwise the date too. */
 export function formatCoolingTime(ms: number, nowMs = Date.now()): string {
   const today = new Date(ms).toDateString() === new Date(nowMs).toDateString();
-  return new Intl.DateTimeFormat(locale, { ...(today ? {} : { month: "short", day: "numeric" } as const),
+  return dateTimeFormat({ ...(today ? {} : { month: "short", day: "numeric" } as const),
     hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(ms);
 }
 

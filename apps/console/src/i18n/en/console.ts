@@ -25,7 +25,6 @@ export default {
   "someoneElseChangedYourDraftIsRetained": "Someone else changed {{v0}}{{v1}}. Your draft is retained; reload and check it.",
   "settingsNeedUpgrading": " (settings need upgrading)",
   "correctTheInvalidDraftValuesFirst": " (correct the invalid draft values first)",
-  "aReadIsStillInProgressTry": "A read is still in progress. Try again shortly.",
   "notRecorded": "Not recorded",
   "executionCompleted": "Execution completed",
   "started": "Started",
