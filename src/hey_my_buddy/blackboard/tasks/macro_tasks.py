@@ -64,11 +64,14 @@ SELECT lineage.run_id,
 """
 
 #: Every grouped execution, including helper and Router tasks. Plain execution
-#: records without a micro task root belong to no group.
+#: records without a micro task root belong to no group. Materialize history as
+#: well as ownership: across history's many LEFT JOINs SQLite otherwise estimates
+#: too few outer rows to build a lookup index for the computed root_run_id join.
 MEMBERS_SQL = f"""
+WITH history AS MATERIALIZED ({micro_task.TASK_HISTORY_SQL}),
+ownership AS MATERIALIZED ({RUN_GROUPS_SQL})
 SELECT h.*, ownership.group_id
-  FROM ({micro_task.TASK_HISTORY_SQL}) AS h
-  JOIN ({RUN_GROUPS_SQL}) ownership ON ownership.run_id = h.root_run_id
+  FROM history h JOIN ownership ON ownership.run_id = h.root_run_id
 """
 
 # Build at import so source drift cannot silently remove the page restriction.
@@ -362,13 +365,15 @@ def macro_task_list(store, params: dict) -> dict:
                       f"({order_column} = ? AND group_id {comparison} ?))")
         page_values.extend([key, key, group_id])
     groups_sql = f"""
-WITH members AS MATERIALIZED (
+WITH history AS MATERIALIZED (
+    SELECT {narrow}, CASE WHEN {base_match} THEN 1 ELSE 0 END AS base_matching
+      FROM ({memo.THIN_HISTORY_SQL}) h
+),
+ownership AS MATERIALIZED ({RUN_GROUPS_SQL}),
+members AS MATERIALIZED (
     SELECT base.*, {selected_match} AS matching
-      FROM (SELECT {narrow}, ownership.group_id,
-                   h.base_matching
-              FROM (SELECT h.*, CASE WHEN {base_match} THEN 1 ELSE 0 END AS base_matching
-                      FROM ({memo.THIN_HISTORY_SQL}) h) h
-              JOIN ({RUN_GROUPS_SQL}) ownership ON ownership.run_id=h.root_run_id) base
+      FROM (SELECT {narrow}, h.base_matching, ownership.group_id FROM history h
+              JOIN ownership ON ownership.run_id=h.root_run_id) base
 ),
 matched AS (
     SELECT group_id, MAX(base_matching) AS all_match, MAX(matching) AS selected_match,
@@ -416,17 +421,14 @@ SELECT stats.*,latest.latest,page.group_id AS page_group_id,page.activity_seq,
         filters = json.dumps(applied, sort_keys=True, ensure_ascii=False)
         information = store.db.path.stat()
         board = (information.st_dev, information.st_ino)
-        summary_inputs = None
-
-        def summarize(group):
-            nonlocal summary_inputs
-            if summary_inputs is None:
-                summary_inputs = _summary_inputs(connection, page, clauses, values)
-            return _summary(connection, group, summary_inputs[group])
-
-        summaries = [cache.get(
-            (board, group, filters), markers[group],
-            lambda group=group: summarize(group),
+        keys = {group: (board, group, filters) for group in page}
+        cached = {group: cache.lookup(keys[group], markers[group], reusable=reusable[group])
+                  for group in page}
+        missing = [group for group in page if cached[group] is None]
+        summary_inputs = _summary_inputs(connection, missing, clauses, values) if missing else {}
+        summaries = [cached[group] if cached[group] is not None else cache.get(
+            keys[group], markers[group],
+            lambda group=group: _summary(connection, group, summary_inputs[group]),
             reusable=reusable[group],
         ) for group in page]
         issued_head = before[2] if before is not None else head
@@ -443,7 +445,7 @@ def _members(connection, group_id: str) -> list:
 
 
 def _summary_inputs(connection, groups: list[str], clauses: list[str], values: list[Any]) -> dict:
-    """Derive one page's members, matching counts and failed conclusions once.
+    """Derive the wanted groups' executions, matches and failed conclusions once.
 
     Resolve ownership with the shared relation, then restrict the task-history
     entry point to those runs and their Routers. Its lineage and stop-proof CTEs
@@ -460,15 +462,17 @@ page_tasks AS (
     UNION
     SELECT routing.task_id FROM ({micro_task.ROUTING_TASKS_SQL}) routing
       JOIN page_runs ON page_runs.run_id=routing.run_id
-)
+),
+history AS MATERIALIZED ({PAGE_HISTORY_SQL})
 SELECT h.*, ownership.group_id, CASE WHEN {matching} THEN 1 ELSE 0 END AS summary_matching
-  FROM ({PAGE_HISTORY_SQL}) h JOIN page_runs ownership ON ownership.run_id=h.root_run_id
+  FROM history h JOIN page_runs ownership ON ownership.run_id=h.root_run_id
  ORDER BY h.summary_task_rowid
 """, [*groups, *values]).fetchall()
-    inputs = {group: {"members": [], "matching": 0, "failed": set()} for group in groups}
+    inputs = {group: {"members": [], "executions": [], "matching": 0, "failed": set()} for group in groups}
     for row in rows:
+        group = inputs[row["group_id"]]
+        group["executions"].append(row)
         if row["micro_task_run_id"] is not None:
-            group = inputs[row["group_id"]]
             group["members"].append(row)
             group["matching"] += row["summary_matching"]
     # A conclusion belongs by the run's stored macro_task_id (or the exact
@@ -585,18 +589,13 @@ def macro_task_timeline(store, params: dict) -> dict:
             if root is None or root["macro_task_id"] is not None:
                 # A root that belongs to a macro task is read through that macro task.
                 raise BoardError("NOT_FOUND", "Unknown standalone micro task", macroTaskId=group_id)
-        members = _members(connection, group_id)
+        inputs = _summary_inputs(connection, [group_id], clauses, values)[group_id]
+        members = inputs["executions"]
         if not members:
             raise BoardError("NOT_FOUND", "The group has no readable micro tasks", macroTaskId=group_id)
-        summary = _summary(connection, group_id, _summary_inputs(connection, [group_id], clauses, values)[group_id])
-        runs = [row for row in members if row["micro_task_run_id"] is not None]
-        matching_ids = {
-            row["task_id"] for row in connection.execute(
-                f"SELECT task_id FROM ({MEMBERS_SQL}) WHERE group_id = ? AND "
-                + " AND ".join(["micro_task_run_id IS NOT NULL", *clauses]),
-                [group_id, *values],
-            ).fetchall()
-        }
+        summary = _summary(connection, group_id, inputs)
+        runs = inputs["members"]
+        matching_ids = {row["task_id"] for row in runs if row["summary_matching"]}
         ordered = _tree_order(runs)
         selected = [(row, depth) for row, depth in ordered if row["task_id"] in matching_ids]
         shown = selected[:limit]

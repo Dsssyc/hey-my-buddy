@@ -122,6 +122,28 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                                          if row["micro_task_run_id"] is not None
                                          and row["child_parent_run_id"] is None])
 
+    def test_changed_group_batches_only_its_missing_inputs(self):
+        with patch.object(macro_tasks, "_summary_inputs", wraps=macro_tasks._summary_inputs) as derive:
+            self.read()
+            self.assertEqual(derive.call_count, 1)
+            self.assertCountEqual(derive.call_args.args[1], self.fixture.macros)
+            derive.reset_mock()
+            self.read()
+            derive.assert_not_called()
+            group = self.fixture.macros[0]
+            self.sql("UPDATE workflow_runs SET revision=revision+1 WHERE run_id=?", (self.root_for(group),))
+            self.read()
+            self.assertEqual(derive.call_count, 1)
+            self.assertEqual(derive.call_args.args[1], [group])
+
+    def test_timeline_derives_summary_members_and_matches_together(self):
+        with patch.object(macro_tasks, "_summary_inputs", wraps=macro_tasks._summary_inputs) as derive, \
+                patch.object(macro_tasks, "_members", side_effect=AssertionError("repeated history read")):
+            result = macro_tasks.macro_task_timeline(self.store, {"macroTaskId": self.fixture.macros[0],
+                                                                 "query": "Fictional"})
+            self.assertEqual(derive.call_count, 1)
+            self.assertEqual(result["macroTask"]["matchingRuns"], result["totals"]["rows"])
+
     def test_unrelated_raw_sql_commits_reuse_every_summary(self):
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             expected = self.read()
