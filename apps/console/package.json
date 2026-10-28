@@ -11,7 +11,8 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "test:browser": "npm run build && playwright test"
+    "test:browser": "npm run build && playwright test",
+    "screenshot:readme": "npm run typecheck && vite build --outDir ../../tmp/readme-shot/assets && playwright test --config browser/readme.config.ts --workers=1"
   },
   "dependencies": {
     "@lobehub/icons-static-svg": "1.95.1",

@@ -464,8 +464,10 @@ page_tasks AS (
       JOIN page_runs ON page_runs.run_id=routing.run_id
 ),
 history AS MATERIALIZED ({PAGE_HISTORY_SQL})
-SELECT h.*, ownership.group_id, CASE WHEN {matching} THEN 1 ELSE 0 END AS summary_matching
+SELECT h.*, ownership.group_id, conclusion.execution_status AS conclusion_status,
+       CASE WHEN {matching} THEN 1 ELSE 0 END AS summary_matching
   FROM history h JOIN page_runs ownership ON ownership.run_id=h.root_run_id
+  LEFT JOIN workflow_host_conclusions conclusion ON conclusion.run_id=h.micro_task_run_id
  ORDER BY h.summary_task_rowid
 """, [*groups, *values]).fetchall()
     inputs = {group: {"members": [], "executions": [], "matching": 0, "failed": set()} for group in groups}
@@ -687,6 +689,7 @@ def _timeline_row(connection, row, depth: int) -> dict:
         "createdAt": row["created_at"],
         "state": row["run_state"],
         "status": row["state"],
+        "conclusionStatus": row["conclusion_status"],
         "category": _state(row),
         "shutdownConfirmed": attempts == confirmed and not unproven,
         "depth": depth,

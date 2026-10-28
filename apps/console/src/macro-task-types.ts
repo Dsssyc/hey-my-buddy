@@ -53,6 +53,8 @@ export type TimelineRow = z.infer<typeof timelineRowSchema> & {
   state: string;
   /** Execution task status (queued, running, completed, failed, cancelled, ...). */
   status: string;
+  /** Recorded Host conclusion; null until the Host closes the micro task. */
+  conclusionStatus: "failed" | "cancelled" | "delivered" | null;
   category: MacroTaskCategory;
   /** Every recorded attempt proved its stop; unknown is never reported as stopped. */
   shutdownConfirmed: boolean;
