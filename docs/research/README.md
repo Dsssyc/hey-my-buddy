@@ -58,5 +58,6 @@
 | 2026-10-26 | [Codex 的睡眠工具与排队唤醒：比 2026-10-14 多了什么](2026-10-26-codex-sleep-and-queue-wake.md) | Codex 的 Host 指南的等待方式；待办“执行上的问题要让控制台与 Host 都知道”（发版之后）；续查 10-14 的三份 |
 | 2026-10-27 | [Antigravity 能不能作为 harness 接进来](2026-10-27-antigravity-harness.md) | 是否接入 Antigravity，待开发者定 |
 | 2026-10-28 | [Antigravity 的 API key 从哪里读；API key 模式下的冒烟测试](2026-10-28-antigravity-api-key-and-smoke.md) | 是否接入 Antigravity 与接入计划，待开发者定；续查 10-27 的一份 |
+| 2026-10-28 | [一次执行的全部后代怎样找到、怎样证明已停：三个系统的机制与成熟工具的做法](2026-10-28-descendant-process-containment.md) | ADR-031 第 4、5 条停止证据的修订，待开发者定 |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。
