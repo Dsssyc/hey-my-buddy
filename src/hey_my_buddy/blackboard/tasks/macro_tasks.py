@@ -71,6 +71,14 @@ SELECT h.*, ownership.group_id
   JOIN ({RUN_GROUPS_SQL}) ownership ON ownership.run_id = h.root_run_id
 """
 
+# Build at import so source drift cannot silently remove the page restriction.
+PAGE_HISTORY_SQL = micro_task.replace_sql_once(
+    micro_task.replace_sql_once(
+        micro_task.TASK_HISTORY_SQL, "t.*,", "t.rowid AS summary_task_rowid, t.*,",
+    ),
+    "FROM tasks t\n", "FROM tasks t JOIN page_tasks ON page_tasks.task_id=t.task_id\n",
+)
+
 #: Disjoint micro task states, in the display priority 待决定 > 进行中 > 待验收 > 已结束.
 _HOST_SQL = micro_task.FILTER_SQL["host"]
 _ACTIVE_SQL = f"({micro_task.FILTER_SQL['active']} AND NOT {_HOST_SQL})"
@@ -408,9 +416,17 @@ SELECT stats.*,latest.latest,page.group_id AS page_group_id,page.activity_seq,
         filters = json.dumps(applied, sort_keys=True, ensure_ascii=False)
         information = store.db.path.stat()
         board = (information.st_dev, information.st_ino)
+        summary_inputs = None
+
+        def summarize(group):
+            nonlocal summary_inputs
+            if summary_inputs is None:
+                summary_inputs = _summary_inputs(connection, page, clauses, values)
+            return _summary(connection, group, summary_inputs[group])
+
         summaries = [cache.get(
             (board, group, filters), markers[group],
-            lambda group=group: _summary(connection, group, clauses, values),
+            lambda group=group: summarize(group),
             reusable=reusable[group],
         ) for group in page]
         issued_head = before[2] if before is not None else head
@@ -426,20 +442,55 @@ def _members(connection, group_id: str) -> list:
     return connection.execute(f"SELECT * FROM ({MEMBERS_SQL}) WHERE group_id = ?", (group_id,)).fetchall()
 
 
-def _summary(connection, group_id: str, clauses: list[str], values: list[Any]) -> dict:
+def _summary_inputs(connection, groups: list[str], clauses: list[str], values: list[Any]) -> dict:
+    """Derive one page's members, matching counts and failed conclusions once.
+
+    Resolve ownership with the shared relation, then restrict the task-history
+    entry point to those runs and their Routers. Its lineage and stop-proof CTEs
+    remain intact: review readiness still covers every owned execution.
+    """
+    placeholders = ",".join("?" for _ in groups)
+    matching = " AND ".join(["micro_task_run_id IS NOT NULL", *clauses])
+    rows = connection.execute(f"""
+WITH page_runs AS MATERIALIZED (
+    SELECT * FROM ({RUN_GROUPS_SQL}) WHERE group_id IN ({placeholders})
+),
+page_tasks AS (
+    SELECT run_id AS task_id FROM page_runs
+    UNION
+    SELECT routing.task_id FROM ({micro_task.ROUTING_TASKS_SQL}) routing
+      JOIN page_runs ON page_runs.run_id=routing.run_id
+)
+SELECT h.*, ownership.group_id, CASE WHEN {matching} THEN 1 ELSE 0 END AS summary_matching
+  FROM ({PAGE_HISTORY_SQL}) h JOIN page_runs ownership ON ownership.run_id=h.root_run_id
+ ORDER BY h.summary_task_rowid
+""", [*groups, *values]).fetchall()
+    inputs = {group: {"members": [], "matching": 0, "failed": set()} for group in groups}
+    for row in rows:
+        if row["micro_task_run_id"] is not None:
+            group = inputs[row["group_id"]]
+            group["members"].append(row)
+            group["matching"] += row["summary_matching"]
+    # A conclusion belongs by the run's stored macro_task_id (or the exact
+    # standalone root), independently of the display ownership relation above.
+    roots = ",".join("(?,?)" for _ in groups)
+    for row in connection.execute(
+        f"WITH wanted(group_id,root_id) AS (VALUES {roots}) "
+        "SELECT r.macro_task_id AS group_id,c.run_id FROM workflow_host_conclusions c"
+        " JOIN workflow_runs r ON r.run_id=c.run_id"
+        f" WHERE c.execution_status='failed' AND r.macro_task_id IN ({placeholders})"
+        " UNION SELECT wanted.group_id,c.run_id FROM workflow_host_conclusions c"
+        " JOIN wanted ON wanted.root_id=c.run_id WHERE c.execution_status='failed'",
+        [*(value for group in groups for value in (group, group.removeprefix("run:"))), *groups],
+    ):
+        inputs[row["group_id"]]["failed"].add(row["run_id"])
+    return inputs
+
+
+def _summary(connection, group_id: str, inputs: dict) -> dict:
     result_summary = None
     description = None
-    members = [row for row in _members(connection, group_id) if row["micro_task_run_id"] is not None]
-    matching = connection.execute(
-        f"SELECT COUNT(*) AS count FROM ({MEMBERS_SQL}) WHERE group_id = ? AND "
-        + " AND ".join(["micro_task_run_id IS NOT NULL", *clauses]),
-        [group_id, *values],
-    ).fetchone()["count"]
-    failed_conclusions = {row["run_id"] for row in connection.execute(
-        "SELECT run_id FROM workflow_host_conclusions WHERE execution_status='failed' AND run_id IN "
-        "(SELECT run_id FROM workflow_runs WHERE macro_task_id=? UNION SELECT ?)",
-        (group_id, group_id.removeprefix("run:")),
-    )}
+    members, matching, failed_conclusions = inputs["members"], inputs["matching"], inputs["failed"]
     counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
               "failed": 0,
               "stoppableRoots": 0, "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}
@@ -537,7 +588,7 @@ def macro_task_timeline(store, params: dict) -> dict:
         members = _members(connection, group_id)
         if not members:
             raise BoardError("NOT_FOUND", "The group has no readable micro tasks", macroTaskId=group_id)
-        summary = _summary(connection, group_id, clauses, values)
+        summary = _summary(connection, group_id, _summary_inputs(connection, [group_id], clauses, values)[group_id])
         runs = [row for row in members if row["micro_task_run_id"] is not None]
         matching_ids = {
             row["task_id"] for row in connection.execute(

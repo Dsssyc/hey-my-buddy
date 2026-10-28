@@ -26,7 +26,8 @@ _CREATION_LOCK = threading.Lock()
 # rules. Drop t.* before materializing: spec/input/result JSON does not belong
 # in a list's change marker. Query-only columns remain inside SQLite, evaluated
 # before the bounded scalar projection is materialized.
-THIN_HISTORY_SQL = micro_task.TASK_HISTORY_SQL.replace(
+THIN_HISTORY_SQL = micro_task.replace_sql_once(
+    micro_task.TASK_HISTORY_SQL,
     "t.*,",
     "t.rowid AS task_rowid, t.task_id, t.adapter, t.state, t.selected_attempt_id, t.active_attempt_id,"
     " t.created_at, t.accepted_at, t.revision, t.updated_at,",
