@@ -311,8 +311,8 @@ class TestCrashWindows(BoardTestCase):
     @staticmethod
     def _finished_fake_handle():
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(mock.Mock(pid=123), own_group=False, log_paths={}, stop_channel="signal")
-        handle.pgid = 123
+            handle = ProcessHandle(mock.Mock(pid=123, returncode=0), log_paths={}, stop_channel="signal")
+        handle.session_id = 123
         handle.wait = lambda timeout: 0
         handle.shutdown_confirmed = lambda: True
         handle.identity = lambda: {

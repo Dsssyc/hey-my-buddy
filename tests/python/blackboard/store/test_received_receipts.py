@@ -135,9 +135,9 @@ class ReceivedReceiptTests(BoardTestCase):
         journal = processes.native_process_journal_path(self.receipt_path.parent, IDENTITY)
         fsync_json(journal, {"binding": {"taskId": self.run_id, "attemptId": self.attempt_id, "generation": 1},
                              "pending": [], "identities": [native]})
-        with patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_group") as kill:
+        with patch("hey_my_buddy.blackboard.service.execution_scheduler.kill_verified_process_session") as kill:
             ExecutionScheduler._force_if_required(IDENTITY)
-            kill.assert_called_once_with(IDENTITY)
+            kill.assert_called_once_with(IDENTITY, members=None)
         for observation in ("alive", "unknown"):
             with patch.object(processes, "inspect_process_identity", return_value=observation):
                 self.assertEqual(board.store.recover_executions(self.attempt_id), [])

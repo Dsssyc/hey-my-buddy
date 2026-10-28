@@ -192,7 +192,7 @@ class CancelTest(AcpTestCase):
             lambda: any(entry.get("event") == "cancel-received" for entry in self.agent_log())),
             "the agent must record the cancel notification")
         # The cancel notification is transport only: the agent still runs.
-        self.assertTrue(client.handle.group_alive())
+        self.assertTrue(client.handle.session_alive())
         self.assertFalse(client.handle.shutdown_confirmed())
         client.close_session(session["sessionId"], timeout=15.0)
 
@@ -249,7 +249,7 @@ class StopStateTest(AcpTestCase):
         """The shutdown guard presents an unconfirmed stop as a test failure.
 
         The synthetic observation is fully in-memory: a Job-like handle whose
-        group is still active drives the production ``group_observation`` job
+        group is still active drives the production ``session_observation`` job
         branch to ``alive`` with ``shutdownConfirmed`` false on every platform,
         and no process group of this run is touched. The guard must raise with
         that evidence in the message - the failure is the record, and no
@@ -257,6 +257,15 @@ class StopStateTest(AcpTestCase):
         """
 
         class UnstoppableHandle:
+            def poll(self):
+                return None
+
+            def session_observation(self):
+                return "alive"
+
+            def shutdown_confirmed(self, settle_seconds=0):
+                return False
+
             process = type("FakeProcess", (), {"poll": lambda self: None})()
             job = type("ActiveJob", (), {"active": lambda self: 1})()
 
@@ -266,7 +275,7 @@ class StopStateTest(AcpTestCase):
             def wait(self, timeout):
                 return None
 
-            def group_alive(self):
+            def session_alive(self):
                 return True
 
         class UnconfirmedClient:

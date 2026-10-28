@@ -438,7 +438,7 @@ class Execution:
         """Run one attempt and always return a durable receipt.
 
         The whole body is guarded: if anything fails after the adapter was started,
-        the owned process group is terminated and a receipt is still written, so a
+        the owned process session is terminated and a receipt is still written, so a
         failure can never leave an orphaned child with no record.
         """
         claim = self.claim
@@ -729,7 +729,7 @@ class Execution:
                 role_seam.worker_cancel(implementation, handle)
             if deadline is not None and time.monotonic() >= deadline:
                 timed_out = True
-                self.log("Router budget reached; cancelling this owned process group")
+                self.log("Router budget reached; cancelling this owned process session")
                 role_seam.worker_cancel(implementation, handle)
                 handle.wait(timeout=None)
                 break

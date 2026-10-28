@@ -2444,8 +2444,8 @@ def deletion_inspect(state_dir, manifest: dict, artifacts: list[dict], *, retain
 def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False) -> dict:
     """Delete exactly the registered worktree of one manifest's physical allocation.
 
-    The caller has rechecked acceptance, integration, shutdown and dependency
-    evidence. This function only proves that the exact path still is that
+    The caller has rechecked acceptance, integration, shutdown, dependency and
+    checkout working-directory evidence before its deletion fence. This function only proves that the exact path still is that
     allocation's own locked worktree and then removes that one path; no parent
     directory, source checkout, outputs directory or Git reference is touched.
     A borrowed existing checkout, a sibling worktree and a registry entry that

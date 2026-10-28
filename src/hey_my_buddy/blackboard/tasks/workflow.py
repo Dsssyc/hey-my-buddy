@@ -4740,6 +4740,8 @@ class WorkflowCoordinator:
                 if error.details.get("unsealedPaths"):
                     blocked.update({key: value for key, value in error.details.items()
                                     if key.startswith("unsealedPaths")})
+                if "reason" in error.details:
+                    blocked["reason"] = error.details["reason"]
                 return blocked
             return {"removed": False, "reasons": [error.code], "detail": error.message,
                     "planId": plan["planId"], "path": plan["path"]}
@@ -5563,6 +5565,8 @@ class WorkflowCoordinator:
             task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
             manifest = json.loads(run_row["workspace_manifest_json"])
             retained = self._allocation_provenance(connection, run_row)
+            from .checkout_processes import first_execution_time
+            first_execution_at = first_execution_time(connection, manifest)
             allocation = workspace_module().resolve_allocation(self.board.directory, manifest, retained)
             sealed = self._latest_handoff(connection, run_row, manifest)
             # Board eligibility proves the whole owned lineage stopped. Reclaim
@@ -5602,6 +5606,9 @@ class WorkflowCoordinator:
                 if inspection.get("attachedBranch") is not None:
                     details["attachedBranch"] = inspection["attachedBranch"]
                 refusal = BoardError("NOT_READY", "This checkout is not eligible for cleanup", **details)
+            if not blocked and (path.exists() or path.is_symlink()):
+                from .checkout_processes import require_idle_checkout
+                require_idle_checkout(path, first_execution_at=first_execution_at)
             now = self.now()
             with self.db.write() as connection:
                 receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.cleanup_apply", request_key)

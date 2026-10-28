@@ -24,7 +24,7 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.protocol.client import BoardClient
 from hey_my_buddy.protocol.execution import fsync_json
-from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_group
+from hey_my_buddy.protocol.process_identity import inspect_process_identity, kill_verified_process_session
 from hey_my_buddy.protocol.process_start import process_start
 from hey_my_buddy.protocol.run_identity import RunIdentity
 from hey_my_buddy.protocol.transport import _read_endpoint, _request
@@ -260,10 +260,10 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             if identity is not None and inspect_process_identity(identity) == "alive":
                 self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
-                kill_verified_process_group(identity)
+                kill_verified_process_session(identity)
             for journal in native_path(self.directory).glob("harnesses/command/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
-                    kill_verified_process_group(native)
+                    kill_verified_process_session(native)
 
     def _unknown(self, run_id):
         view = self.client().get(runId=run_id)
@@ -458,10 +458,10 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             if identity is not None and inspect_process_identity(identity) == "alive":
                 self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
-                kill_verified_process_group(identity)
+                kill_verified_process_session(identity)
             for journal in native_path(self.directory).glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
-                    kill_verified_process_group(native)
+                    kill_verified_process_session(native)
 
     def _completed_decision(self, decision_id):
         decision = self.client().call("selection_get", {"decisionId": decision_id})["decision"]
@@ -534,10 +534,10 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
             if identity is not None and inspect_process_identity(identity) == "alive":
                 self.resume_execution(identity, frozen_process)
                 wait_for(lambda: inspect_process_identity(identity) == "identity-absent", timeout=5)
-                kill_verified_process_group(identity)
+                kill_verified_process_session(identity)
             for journal in native_path(self.directory).glob("harnesses/dsh/micro-tasks/*/attempts/*/native-process-journal-*.json"):
                 for native in json.loads(journal.read_text(encoding="utf-8"))["identities"]:
-                    kill_verified_process_group(native)
+                    kill_verified_process_session(native)
 
     def _live_bridge(self, run_id):
         observed = self.client().call("inquiry_observe", {"runId": run_id, "timeoutMs": 1000})

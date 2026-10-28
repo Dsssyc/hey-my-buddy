@@ -7,6 +7,7 @@ import { ScrollArea } from "./components/ui/scroll-area";
 import { StateMark } from "./components/ui/state-mark";
 import { displayTitle } from "./macro-task-display";
 import { formatNumber } from "./i18n/format";
+import { reasonText } from "./i18n/reason";
 import { byteText } from "./settings/storage-display";
 import type { MacroTaskSummary } from "./macro-task-types";
 import type { DeletionBlocker, DeletionBlockerKind } from "./macro-task-deletion";
@@ -103,7 +104,7 @@ export function MacroTaskDeleteDialog({ summary, open, returnFocus, onClose, ...
           </>)}
           {busy && <p role="status" className="pt-3 text-foreground state-breathe">{t("deletion.submitting")}</p>}
           {unresolved && <p role="status" className="pt-3 text-hand">{t(phase === "unknown" ? "deletion.unknown" : "deletion.incomplete")}</p>}
-          {failure && phase !== "submitting" && <p className="pt-2 text-xs text-ink2">{t("deletion.physicalFailure", { kind: t(`deletion.objects.${failure.objectKind}`), code: failure.reason.params.errorCode })}</p>}
+          {failure && phase !== "submitting" && <p className="pt-2 text-xs text-ink2">{failure.reason.code === "macro-task-deletion.physical-failed" ? t("deletion.physicalFailure", { kind: t(`deletion.objects.${failure.objectKind}`), code: failure.reason.params.errorCode }) : reasonText(failure.reason)}</p>}
           {error && <p role="alert" className="pt-3 text-fail">{error}</p>}
           {!deletion.writable && <p role="alert" className="pt-3 text-fail">{t("deletion.unavailable")}</p>}
         </div>

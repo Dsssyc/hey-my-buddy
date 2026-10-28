@@ -12,6 +12,7 @@ Worker and review carriers, ``no_tool_codex.py`` the fast no-tool carrier.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -131,13 +132,13 @@ class SeamCase(unittest.TestCase):
         recorded confirmation is replaced — a group whose stop cannot be
         proven after the fact.
         """
-        real = native_run._halt_owned_group
+        real = native_run._halt_owned_session
 
         def halt_then_unconfirmed(handle, deadline):
             shutdown, signalled = real(handle, deadline)
             return False, signalled
 
-        return mock.patch.object(native_run, "_halt_owned_group", halt_then_unconfirmed)
+        return mock.patch.object(native_run, "_halt_owned_session", halt_then_unconfirmed)
 
     def request(self, *, permission: str, output_schema: dict, prompt: str,
                 timeout: int = 180, continuation=None, capture_evidence=False,
@@ -1695,32 +1696,28 @@ class WorkerSeamTests(CodexSeamCase):
             run(request, observer=correcting, services=self.worker_services(),
                 cancelled=lambda: False)
 
-    def test_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
+    def test_unconfirmed_native_session_stop_reports_unknown_not_gone(self):
         observed = []
-        observe = ProcessHandle.shutdown_confirmed
-
-        def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
-            if "--version" in handle.process.args:
-                return observe(handle, settle_seconds=settle_seconds)
-            observed.append(handle)
-            return False
-
-        with mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
-            result = self.worker_run("ok")
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
-        stop = result.stop_evidence.native
-        self.assertEqual(stop.group_state, "unknown")
-        # The micro task turn's observed completion is a stream fact of its own;
-        # the unknown group must not overwrite it — and still never saves a
-        # resumable binding. (The halt's real handle below shows the leader
-        # reaped: the reappearance is that handle's fact.)
-        self.assertTrue(result.tool_evidence.value["streamComplete"])
-        self.assertIsNone(result.continuation.resumable)
-        # No orphan: the halt really stopped the group it owned.
-        handle = observed[0]
-        self.assertIsNotNone(handle.process.poll())
-        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
+        initialize = ProcessHandle.__init__
+        def fail_scan(handle, *args, **kwargs):
+            initialize(handle, *args, **kwargs)
+            if "--version" not in handle.process.args:
+                target, attribute = (handle._members, "snapshot") if handle._members is not None else (handle.job, "active")
+                observed.append((handle, target, attribute, getattr(target, attribute)))
+                setattr(target, attribute, mock.Mock(side_effect=OSError("fixture member scan failed")))
+        try:
+            with mock.patch.object(ProcessHandle, "__init__", fail_scan):
+                result = self.worker_run("ok")
+            self.assertEqual(result.end.status, "error")
+            self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+            self.assertEqual(result.stop_evidence.native.group_state, "unknown")
+            self.assertTrue(result.tool_evidence.value["streamComplete"])
+            self.assertIsNone(result.continuation.resumable)
+            self.assertIsNotNone(observed[0][0].poll())
+        finally:
+            for handle, target, attribute, observation in observed:
+                setattr(target, attribute, observation)
+                self.assertTrue(handle.terminate(grace_seconds=0)[0])
 
     def test_cancelled_run_reports_cancel_and_native_interrupt(self):
         cancel_after_admission = self.cancel_after_native_start()
@@ -1818,21 +1815,26 @@ class DiscoveryBoundaryTests(unittest.TestCase):
             return run_discovery(cwd=str(self.base), invocation_root=self.base / 'invocation',
                                  native_root=self.base / 'native', timeout_seconds=2, cancelled=lambda: False)
 
+    @contextmanager
     def keep_child_for_teardown(self, before=None):
         create = native_run.owned_popen
 
         def owned(*args, **kwargs):
             if before is not None:
                 before(kwargs)
-            child = create(*args, **kwargs)
-            handle = ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
+            return create(*args, **kwargs)
 
+        def capture(*args, **kwargs):
+            handle = ProcessHandle(*args, **kwargs)
             def reap():
-                native_run._halt_owned_group(handle, time.monotonic() + 5)
-                child.stdout.close()
+                native_run._halt_owned_session(handle, time.monotonic() + 5)
+                handle.process.stdout.close()
             self.addCleanup(reap)
-            return child
-        return mock.patch.object(native_run, 'owned_popen', side_effect=owned)
+            return handle
+
+        with mock.patch.object(native_run, 'owned_popen', side_effect=owned), \
+             mock.patch.object(native_run, 'ProcessHandle', side_effect=capture):
+            yield
 
     def test_missing_command_proves_no_native_child(self):
         self.record.update(status='unavailable', command=[],
@@ -1943,7 +1945,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
         self.assertIs(caught.exception.discovery_shutdown_confirmed, True)
 
     def test_connection_failure_with_unknown_halt_keeps_unknown_stop(self):
-        halt = native_run._halt_owned_group
+        halt = native_run._halt_owned_session
 
         def halt_without_evidence(handle, deadline):
             halt(handle, deadline)
@@ -1951,7 +1953,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
 
         with self.keep_child_for_teardown(), \
              mock.patch.object(native_run, 'Connection', side_effect=ValueError('fixture connection refused')), \
-             mock.patch.object(native_run, '_halt_owned_group', side_effect=halt_without_evidence):
+             mock.patch.object(native_run, '_halt_owned_session', side_effect=halt_without_evidence):
             with self.assertRaises(ValueError) as caught:
                 self.discover()
         self.assertIs(caught.exception.discovery_shutdown_confirmed, False)
@@ -2053,13 +2055,13 @@ class DiscoverySeamTests(SeamCase):
         self.assertIs(unknown.exception.discovery_shutdown_confirmed, False)
 
     def test_discovery_stop_observation_failure_keeps_unknown_stop(self):
-        halt = native_run._halt_owned_group
+        halt = native_run._halt_owned_session
 
         def halt_without_evidence(handle, deadline):
             halt(handle, deadline)
             raise ValueError('fixture stop observation failed')
 
-        with mock.patch.object(native_run, '_halt_owned_group', side_effect=halt_without_evidence):
+        with mock.patch.object(native_run, '_halt_owned_session', side_effect=halt_without_evidence):
             with self.assertRaises(ValueError) as caught:
                 self.discover('unknown-stop')
         self.assertIs(caught.exception.discovery_shutdown_confirmed, False)

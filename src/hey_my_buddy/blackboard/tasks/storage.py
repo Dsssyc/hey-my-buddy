@@ -370,6 +370,9 @@ def _remove_orphan_workspace(store, candidate: dict) -> None:
         # Git and allocation-record proof precede the writer transaction. The
         # allocation lock still fences same-request preparation/admission.
         fresh = _orphan_workspace(store, directory)
+        if not fresh['reasons']:
+            from .checkout_processes import require_idle_checkout
+            require_idle_checkout(Path(candidate['path']))
         with store.db.write() as connection:
             if not fresh['reasons']:
                 fresh['reasons'].extend(allocation_references(

@@ -330,7 +330,11 @@ def _delete_sessions(store, scope):
 
 def _delete_workspaces(store, scope):
     from .macro_task_deletion_workspace import delete_workspaces
-    return delete_workspaces(store, scope.manifests, scope.artifacts)
+    from .checkout_processes import first_execution_time
+    with store.db.read() as connection:
+        starts = {(m["repositoryId"], m["checkoutId"]): first_execution_time(connection, m)
+                  for m in scope.manifests}
+    return delete_workspaces(store, scope.manifests, scope.artifacts, first_execution_times=starts)
 
 
 def _remove_owned_tree(path, *, object_kind='private-root'):
@@ -555,8 +559,10 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                 skipped.extend(operation(store,scope))
             except (BoardError,OSError) as error:
                 return {**_summary(deletion,scope,duplicate=duplicate),
-                        'reason':reason('macro-task-deletion.physical-failed',
-                                        errorCode=error.code if isinstance(error,BoardError) else 'IO_ERROR'),
+                        'reason':(error.details['reason'] if isinstance(error, BoardError)
+                                  and error.code == 'NOT_READY' and 'reason' in error.details
+                                  else reason('macro-task-deletion.physical-failed',
+                                              errorCode=error.code if isinstance(error,BoardError) else 'IO_ERROR')),
                         'objectKind':phase}
         with store.db.write() as connection:
             current = _record(connection,target)

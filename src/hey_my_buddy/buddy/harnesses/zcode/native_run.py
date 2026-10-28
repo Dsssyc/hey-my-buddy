@@ -56,7 +56,7 @@ from ..native_support import (
     ObserverInterrupt,
     buddy_spec,
     execution_deadline,
-    halt_owned_group,
+    halt_owned_session,
     identity_or_none,
     shape_guard,
     utc_now,
@@ -725,7 +725,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
                 raise
             # Take the actual process/group handle before releasing the stderr
             # descriptor: descriptor cleanup can fail after successful creation.
-            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", log_paths={})
             if owned is not None:
                 owned[:] = [handle]
         finally:
@@ -737,7 +737,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
         # actual handle registered, never the initial no-child receipt.
         if process is not None:
             try:
-                shutdown, _escalated = halt_owned_group(handle, time.monotonic() + 5.0)
+                shutdown, _escalated = halt_owned_session(handle, time.monotonic() + 5.0)
                 if owned is not None:
                     owned[:] = [{"created": True, "shutdown": shutdown,
                                  "exit_code": process.returncode}]
@@ -749,7 +749,7 @@ def _spawn_app_server(*, cwd: str, invocation_root: Path, native_root: Path, dea
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, bool]:
     """Stop the run's owned app-server through the shared halt primitive."""
-    return halt_owned_group(spawn.handle, deadline)
+    return halt_owned_session(spawn.handle, deadline)
 
 
 def _project_session(session: ZcodeSessionProjector | None, state: _RunState, message: dict) -> None:
@@ -1445,14 +1445,14 @@ def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFla
         state.runtime_preferences = spawn.connection.runtime_preferences_facts
         shutdown, escalated = _stop_native(spawn, deadline)
         state.shutdown = shutdown
-        state.exit_code = spawn.process.returncode
+        state.exit_code = spawn.handle.poll()
         state.escalated = escalated
         state.interrupted = escalated or state.observer_stopped
-        if state.status == "ok" and (not shutdown or spawn.process.returncode != 0):
+        if state.status == "ok" and (not shutdown or state.exit_code != 0):
             state.status = "error"
             state.reason = "native-shutdown-failed"
             state.error_text = ("the native app server did not exit normally "
-                                "with confirmed group shutdown")
+                                "with confirmed session shutdown")
             outcome.record = None
         if tools is not None and shutdown:
             # The native server has exited. Read through its terminal EOF so
@@ -1745,7 +1745,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
                 spawn.process.stdout.close()
         if not shutdown:
             raise NativeError("native-shutdown-failed",
-                              "the native app server group shutdown was not confirmed")
+                              "the native app server session shutdown was not confirmed")
         if spawn.process.returncode != 0:
             raise NativeError("native-process-failed", "the native app server exited unsuccessfully")
         return catalog_value

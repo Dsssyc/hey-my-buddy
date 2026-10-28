@@ -960,21 +960,23 @@ class NativeConnectionShapeTests(unittest.TestCase):
 
 
 class OwnedProcessEvidenceTests(unittest.TestCase):
-    def test_failed_group_observation_cannot_confirm_shutdown(self):
+    def test_failed_membership_observation_cannot_confirm_shutdown(self):
         process = mock.Mock(pid=12345)
         process.poll.return_value = 0
+        process.returncode = 0
         if os.name == "nt":
             job = mock.Mock()
             process._buddy_job = job
         with mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10):
-            handle = ProcessHandle(process, own_group=True, log_paths={}, stop_channel="signal")
+            handle = ProcessHandle(process, log_paths={}, stop_channel="signal")
+        handle._exit_code = 0
         for error in (OSError(errno.EIO, "process observation unavailable"), PermissionError()):
             with self.subTest(error=type(error).__name__):
                 if os.name == "nt":
                     job.active.side_effect = error
                     self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
                 else:
-                    with mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=error):
+                    with mock.patch.object(handle._members, "observe", side_effect=error):
                         self.assertFalse(handle.shutdown_confirmed(settle_seconds=0))
         if os.name == "nt":
             job.active.side_effect = None
@@ -982,7 +984,7 @@ class OwnedProcessEvidenceTests(unittest.TestCase):
             self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
             job.close.assert_called_once_with(confirmed=True)
         else:
-            with mock.patch("hey_my_buddy.protocol.process_handle.os.killpg", side_effect=ProcessLookupError()):
+            with mock.patch.object(handle._members, "observe", return_value="identity-absent"):
                 self.assertTrue(handle.shutdown_confirmed(settle_seconds=0))
 
 

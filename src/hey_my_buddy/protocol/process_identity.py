@@ -1,11 +1,12 @@
 """Durable OS identity and conservative recovery evidence for one execution.
 
-A POSIX root records its boot session, PID, creation time and owned process
-group; a Windows root records the PID and raw-FILETIME creation time of the
+A POSIX root records its boot session, PID and creation time; its PID is also
+its session ID. The existing `processGroupId` field stores that session ID. A
+Windows root records the PID and raw-FILETIME creation time of the
 process the service created plus the exclusively created root Job, and reads no
 boot identifier. Only the complete recorded identity authorizes the service to
 stop an orphan after its execution has ended. An uninspectable identity remains
-unknown; a numeric PID or process-group ID alone is never authority.
+unknown; a numeric PID or session ID alone is never authority.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from ..errors import BoardError
 from ..json_codec import canonical_json, decode_strict_json
 from ..private_dirs import open_regular_fd
 from .process_start import process_start
+from .process_members import SessionProcesses, process_snapshot
 
 
 COMMAND_STOP_GRACE_SECONDS = 3.0
@@ -157,22 +159,11 @@ def _started_at(pid: int) -> int | None:
     return process_start(pid, include_exited=False)
 
 
-def _group_alive(pgid: int) -> bool:
-    try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
 class _SystemSource:
     boot_id = staticmethod(boot_id)
     started_at = staticmethod(_started_at)
-    group_alive = staticmethod(_group_alive)
-
-    @staticmethod
-    def group_id(pid: int) -> int:
-        return os.getpgid(pid)
+    creation_time = staticmethod(_creation_time)
+    snapshot = staticmethod(process_snapshot)
 
     @staticmethod
     @contextmanager
@@ -192,16 +183,17 @@ class _SystemSource:
             job.close()
 
     @staticmethod
-    def signal_group(pgid: int, sig: int) -> None:
-        os.killpg(pgid, sig)
+    def signal_process(pid: int, sig: int) -> None:
+        os.kill(pid, sig)
 
 
 def validate_process_identity(record: object) -> dict:
     """Validate the one stored form at the RPC/storage boundary.
 
     The two platforms carry one shape each, told apart by the Job and
-    process-group exclusion: a Windows root names its Job and records no boot
-    or group; a POSIX root records its boot session and process-group leader.
+    boot/session fields: a Windows root names its Job and records no boot or
+    session; a POSIX root records its boot session and root session ID. The
+    stored ``processGroupId`` key is retained and contains the root session ID.
     """
     if not isinstance(record, dict):
         raise BoardError("INVALID_ARGUMENT", "process identity has an invalid shape")
@@ -233,11 +225,11 @@ def validate_process_identity(record: object) -> dict:
             raise ValueError("noncanonical boot identifier")
     except ValueError as error:
         raise BoardError("INVALID_ARGUMENT", "boot identifier is invalid") from error
-    pgid, job = record["processGroupId"], record["jobName"]
-    if type(pgid) is not int or pgid <= 0 or pgid != record["pid"]:
-        raise BoardError("INVALID_ARGUMENT", "owned process-group leader must match the root PID")
+    session_id, job = record["processGroupId"], record["jobName"]
+    if type(session_id) is not int or session_id <= 0 or session_id != record["pid"]:
+        raise BoardError("INVALID_ARGUMENT", "owned process session must match the root PID")
     if job is not None:
-        raise BoardError("INVALID_ARGUMENT", "exactly one process group or Job is required")
+        raise BoardError("INVALID_ARGUMENT", "exactly one process session or Job is required")
     return record
 
 
@@ -251,19 +243,19 @@ def capture_process_identity(handle) -> dict:
     if job is not None:
         return {"pid": pid, "startedAt": child_start, "jobName": job.name}
     boot = boot_id()
-    if handle.pgid is None:
-        raise OSError("owned process group was not captured at spawn")
+    if handle.session_id is None:
+        raise OSError("owned process session was not captured at spawn")
     try:
-        current_group = os.getpgid(pid)
+        current_session = os.getsid(pid)
     except ProcessLookupError:
         # The root may already have exited. ProcessHandle captured its
-        # creation time and owned group before callers could reap it.
+        # creation time and session before callers could reap it.
         pass
     else:
-        if current_group != handle.pgid:
-            raise OSError("owned process group changed before identity capture")
+        if current_session != handle.session_id:
+            raise OSError("owned process session changed before identity capture")
     return {"bootId": boot, "pid": pid, "startedAt": child_start,
-            "processGroupId": handle.pgid, "jobName": None}
+            "processGroupId": handle.session_id, "jobName": None}
 
 
 def _inspect_job_identity(record: dict, source, job) -> str:
@@ -276,39 +268,43 @@ def _inspect_job_identity(record: dict, source, job) -> str:
     return "alive"
 
 
-def inspect_process_identity(record: dict, *, source=None) -> str:
+def inspect_process_identity(record: dict, *, source=None, members=None) -> str:
     """Return boot-changed, identity-absent, alive, or unknown."""
     source = source or _SystemSource()
     try:
         if record["jobName"] is not None:
             with source.open_job(record["jobName"]) as job:
                 return _inspect_job_identity(record, source, job)
-        if source.boot_id() != record["bootId"]:
-            return "boot-changed"
-        root_start = source.started_at(record["pid"])
-        group_alive = source.group_alive(record["processGroupId"])
-        if root_start is None and not group_alive:
-            return "identity-absent"
-        if root_start is not None and root_start != record["startedAt"]:
-            # A recycled root PID is not the old leader. With group members
-            # still present, its provenance cannot be proven from the PGID.
-            return "unknown" if group_alive else "identity-absent"
-        if root_start is None:
-            # A bare PGID cannot prove these are the original descendants.
-            return "unknown"
-        if not group_alive:
-            return "unknown"
-        if source.group_id(record["pid"]) != record["processGroupId"]:
-            return "unknown"
-        # The root may exit and its PID be reused during observation.
-        return "alive" if source.started_at(record["pid"]) == root_start else "unknown"
+        persistent = members is not None
+        members = members or _posix_members(record, source)
+        observation = _inspect_posix(record, source, members)
+        if observation == "empty" and not persistent:
+            observation = _inspect_posix(record, source, members)
+        return "unknown" if observation == "empty" else observation
     except Exception as error:
         if not _observation_failure(error):
             raise
         return "unknown"
 
 
-def kill_verified_process_group(record: dict, *, source=None) -> None:
+def _posix_members(record, source):
+    return SessionProcesses(record["pid"], record["startedAt"], session=record["pid"],
+                            snapshot=source.snapshot, creation=source.creation_time,
+                            alive=source.started_at, send=source.signal_process)
+
+
+def _inspect_posix(record, source, members):
+    try:
+        current_boot = source.boot_id()
+    except OSError:
+        members.invalidate_observation()
+        raise
+    if current_boot != record["bootId"]:
+        return "boot-changed"
+    return members.observe()
+
+
+def kill_verified_process_session(record: dict, *, source=None, members=None) -> None:
     """Request a hard stop only while the complete recorded identity is alive.
 
     Sending a signal is not shutdown evidence; the observer must establish absence.
@@ -317,9 +313,18 @@ def kill_verified_process_group(record: dict, *, source=None) -> None:
     if record["jobName"] is not None:
         _stop_windows_job(record, source, settle_seconds=2.0)
         return
-    if inspect_process_identity(record, source=source) != "alive":
+    try:
+        if source.boot_id() != record["bootId"]:
+            return
+        if members is None:
+            members = _posix_members(record, source)
+            try:
+                members.observe()
+            except OSError:
+                pass  # The verified root remains stoppable; no absence is claimed.
+        members.signal(signal.SIGKILL)
+    except OSError:
         return
-    source.signal_group(record["processGroupId"], signal.SIGKILL)
 
 
 def _stop_windows_job(record: dict, source, *, settle_seconds: float) -> str:
@@ -363,37 +368,38 @@ def stop_orphan_process(record: dict, *, source=None, settle_seconds: float = 2.
     source = source or _SystemSource()
     if record["jobName"] is not None:
         return _stop_windows_job(record, source, settle_seconds=settle_seconds)
-    observation = inspect_process_identity(record, source=source)
-    if observation != "alive":
-        return observation
     try:
-        source.signal_group(record["processGroupId"], signal.SIGTERM)
-    except Exception as error:
-        if not _observation_failure(error):
-            raise
+        if source.boot_id() != record["bootId"]:
+            return "boot-changed"
+    except OSError:
         return "unknown"
-    escalated = False
+    members = _posix_members(record, source)
     deadline = time.monotonic() + COMMAND_STOP_GRACE_SECONDS
+    escalated = False
+    requested = False
     while True:
-        observation = inspect_process_identity(record, source=source)
-        if observation in ("boot-changed", "identity-absent"):
-            return "orphan-stopped"
-        if time.monotonic() >= deadline:
-            if escalated or observation != "alive":
+        try:
+            observation = members.observe()
+        except OSError:
+            observation = "unknown"
+        if observation == "identity-absent":
+            return "orphan-stopped" if requested else observation
+        if not requested:
+            if observation in ("alive", "unknown"):
+                verified = members.signal(signal.SIGTERM)
+                if observation == "unknown" and not verified:
+                    return "unknown"
+                requested = True
+        now = time.monotonic()
+        if now >= deadline and not escalated:
+            escalated = True
+            deadline = now + settle_seconds
+        if escalated:
+            # Unknown prevents confirming absence, never stopping known members.
+            members.signal(signal.SIGKILL)
+            if now >= deadline:
                 return "unknown"
-            try:
-                # Recheck the complete root/group identity directly before escalation.
-                if inspect_process_identity(record, source=source) == "alive":
-                    source.signal_group(record["processGroupId"], signal.SIGKILL)
-                    escalated = True
-                    deadline = time.monotonic() + settle_seconds
-                    continue
-            except Exception as error:
-                if not _observation_failure(error):
-                    raise
-                return "unknown"
-            return "unknown"
-        time.sleep(0.05)
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
 def _observation_failure(error: Exception) -> bool:

@@ -171,7 +171,7 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertIn("codex", context.credential_file().parts)
 
     @unittest.skipUnless(sys.platform in {"darwin", "linux"}, "POSIX unreaped child failure")
-    def test_missing_native_creation_time_becomes_harness_error_with_stop_proof(self):
+    def test_missing_native_creation_time_cannot_prove_session_shutdown(self):
         with tempfile.TemporaryDirectory() as directory:
             state = Path(directory)
             claim = {"task": {"taskId": "task-identity", "spec": {
@@ -203,8 +203,8 @@ class ExecutionEndpointTests(unittest.TestCase):
                 self.assertEqual(len(children), 1)
                 self.assertEqual(report["status"], "failed")
                 self.assertEqual(report["terminationReason"], "harness-error")
-                self.assertIn("process identity vanished before capture", report["error"])
-                self.assertTrue(report["shutdownConfirmed"])
+                self.assertIn("owned child shutdown is unconfirmed", report["error"])
+                self.assertFalse(report["shutdownConfirmed"])
                 self.assertEqual(children[0].returncode, 0)
             finally:
                 for child in children:

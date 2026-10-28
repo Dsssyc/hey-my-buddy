@@ -1,6 +1,8 @@
 import type zh from "../zh/shell";
 
 export default {
+  reasonNoProcesses: "none",
+  reasonProcess: "{{executable}} ({{pid}})",
   reasonFact: "{{name}}: {{value}}",
   reasonParam: {
     "errors": "Problems",

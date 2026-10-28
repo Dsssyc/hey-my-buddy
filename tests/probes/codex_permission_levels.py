@@ -38,7 +38,7 @@ sys.path.insert(0, str(CHECKOUT / "src"))
 from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 from hey_my_buddy.buddy.harnesses.codex.protocol import CodexProtocolError, Connection
 from hey_my_buddy.buddy.harnesses.discovery import native_environment
-from hey_my_buddy.buddy.harnesses.native_support import halt_owned_group
+from hey_my_buddy.buddy.harnesses.native_support import halt_owned_session
 from hey_my_buddy.buddy.runtime.windows_process import owned_popen
 
 
@@ -72,7 +72,7 @@ def run(codex: str, root: Path, python: str) -> int:
                               env=native_environment(dict(os.environ), command=command),
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr,
                               start_new_session=True, close_fds=True)
-    handle = ProcessHandle(process, own_group=True, log_paths={})
+    handle = ProcessHandle(process, log_paths={})
     failed = False
     try:
         connection = Connection(process, time.monotonic() + 330, threading.Event())
@@ -110,7 +110,7 @@ def run(codex: str, root: Path, python: str) -> int:
         emit({"status": "failed", "reason": f"{type(error).__name__}: {error}"})
         failed = True
     finally:
-        stopped, signalled = halt_owned_group(process, handle, time.monotonic() + 5)
+        stopped, signalled = halt_owned_session(process, handle, time.monotonic() + 5)
         process.stdout.close()
         emit({"nativeGroupStopped": stopped, "nativeExitCode": process.returncode,
               "stopSignalled": signalled, "modelCalls": 0})

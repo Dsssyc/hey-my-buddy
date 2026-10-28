@@ -38,6 +38,7 @@ from hey_my_buddy.buddy.harnesses.run_contract import (
     SessionService,
 )
 from hey_my_buddy.buddy.harnesses.zcode import native_run
+from hey_my_buddy.protocol import process_members
 from hey_my_buddy.buddy.harnesses.zcode.native_run import (
     SessionServices,
     prepare_session_service,
@@ -397,45 +398,33 @@ class FastSeamTests(NativeRunCase):
         # fields; the common result no longer carries it, so the surviving
         # facts here are the confirmed group stop and the failure reason.)
 
-    def test_an_unconfirmed_native_group_stop_reports_unknown_not_gone(self):
-        # The run module's own stop collection through the real run path: the
-        # narrow stop-observation point (ProcessHandle.shutdown_confirmed) is
-        # denied confirmation, so the halt still closes stdin, waits and
-        # terminates the real fake app-server while the reported group state
-        # stays the honest unknown — a factually reaped leader never becomes
-        # confirmed-gone evidence, and the settlement is refused without it.
+    def test_an_unconfirmed_native_session_stop_reports_unknown_not_gone(self):
         from unittest import mock as _mock
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-        observed: list[ProcessHandle] = []
-        observe = ProcessHandle.shutdown_confirmed
-
-        def unconfirmed(handle, settle_seconds: float = 2.0) -> bool:
-            if "--version" in handle.process.args:
-                return observe(handle, settle_seconds=settle_seconds)
-            observed.append(handle)
-            return False
-
+        observed = []
+        initialize = ProcessHandle.__init__
+        def fail_scan(handle, *args, **kwargs):
+            initialize(handle, *args, **kwargs)
+            if "--version" not in handle.process.args:
+                target, attribute = (handle._members, "snapshot") if handle._members is not None else (handle.job, "active")
+                observed.append((handle, target, attribute, getattr(target, attribute)))
+                setattr(target, attribute, _mock.Mock(side_effect=OSError("fixture member scan failed")))
         os.environ["HMB_ZCODE_TEST_CASE"] = "ok"
         prompt = structured_prompt("Choose a buddy", SCHEMA)
         correction = FastCorrection(SCHEMA, prompt)
-        with _mock.patch.object(ProcessHandle, "shutdown_confirmed", unconfirmed):
-            result = run(self.fast_request(prompt), observer=correction.observer,
-                         services=None, cancelled=lambda: False)
-        native = result.stop_evidence.native
-        self.assertEqual(native.group_state, "unknown")
-        self.assertIsNotNone(result.end.native_exit_code)
-        self.assertEqual(result.end.status, "error")
-        self.assertEqual(result.end.reason_code, "native-shutdown-failed")
-        # Denied confirmation applies to this run's owned handle. An EOF exit
-        # needs no signal; withholding evidence still refuses settlement.
-        self.assertGreaterEqual(len(observed), 1)
-        # No orphan: with the patch gone, the run's own captured handle shows
-        # the leader reaped and the whole group confirmed gone by the real
-        # observation the halt performed.
-        handle = observed[0]
-        self.assertIsNotNone(handle.process.poll())
-        self.assertTrue(handle.shutdown_confirmed(settle_seconds=0.5))
-        self.assertFalse(handle.group_alive())
+        try:
+            with _mock.patch.object(ProcessHandle, "__init__", fail_scan):
+                result = run(self.fast_request(prompt), observer=correction.observer,
+                             services=None, cancelled=lambda: False)
+            self.assertEqual(result.stop_evidence.native.group_state, "unknown")
+            self.assertIsNotNone(result.end.native_exit_code)
+            self.assertEqual(result.end.status, "error")
+            self.assertEqual(result.end.reason_code, "native-shutdown-failed")
+            self.assertIsNotNone(observed[0][0].poll())
+        finally:
+            for handle, target, attribute, observation in observed:
+                setattr(target, attribute, observation)
+                self.assertTrue(handle.terminate(grace_seconds=0)[0])
 
     def test_the_peer_receives_the_refusal_before_the_observer_stop_ends_the_run(self):
         # The refusal answer completes first — the peer reads the reply with
@@ -1643,7 +1632,7 @@ class DiscoveryStopTests(NativeRunCase):
             finally:
                 connection.assert_not_called()
 
-    def discover_with_fd_close_failure(self, error, *, windows_api=None, process=None):
+    def discover_with_fd_close_failure(self, error, *, windows_api=None, process=None, fail_observation=False):
         """Fail only the app-server stderr close after real owned_popen runs.
 
         Windows uses injected API/Popen handles; POSIX starts the real private
@@ -1668,21 +1657,30 @@ class DiscoveryStopTests(NativeRunCase):
                 raise OSError("fixture process creation refused")
             return process
 
+        handle_type = native_run.ProcessHandle
+
         def owned_popen(*args, **kwargs):
             child = windows_process.owned_popen(*args, windows_api=windows_api, **kwargs)
             self.fd_close_child = child
+            return child
+
+        def capture(*args, **kwargs):
             creation_time = (mock.patch("hey_my_buddy.protocol.process_identity._creation_time", return_value=10)
                              if windows_api is not None else nullcontext())
             with creation_time:
-                owner = native_run.ProcessHandle(child, own_group=True, log_paths={}, stop_channel="signal")
-
+                owner = handle_type(*args, **kwargs)
+            if fail_observation and owner._members is not None:
+                owner._members.snapshot = lambda: (_ for _ in ()).throw(
+                    PermissionError("fixture session scan refused"))
             def reap():
                 try:
-                    native_run.halt_owned_group(owner, time.monotonic() + 5)
+                    if owner._members is not None:
+                        owner._members.snapshot = process_members.process_snapshot
+                    native_run.halt_owned_session(owner, time.monotonic() + 5)
                 finally:
-                    child.stdout.close()
+                    owner.process.stdout.close()
             self.addCleanup(reap)
-            return child
+            return owner
 
         def close(fd):
             nonlocal close_failed
@@ -1692,6 +1690,7 @@ class DiscoveryStopTests(NativeRunCase):
                 raise error
 
         with mock.patch.object(native_run, "owned_popen", owned_popen), \
+             mock.patch.object(native_run, "ProcessHandle", side_effect=capture), \
              mock.patch.object(windows_process.subprocess, "Popen", side_effect=popen), \
              mock.patch.object(native_run.os, "close", side_effect=close), \
              mock.patch.object(native_run, "NativeConnection") as connection:
@@ -1729,7 +1728,8 @@ class DiscoveryStopTests(NativeRunCase):
         error = OSError("fixture stderr close failed")
         with self.assertRaises(Exception) as caught:
             self.discover_with_fd_close_failure(error, windows_api=api, process=process)
-        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False,
+                      f"{type(caught.exception).__name__}: {caught.exception!r}")
         self.assertIs(caught.exception, error)
         self.assertIs(self.fd_close_child, process)
         self.assertIn(("terminate", 77), api.events)
@@ -1757,7 +1757,8 @@ class DiscoveryStopTests(NativeRunCase):
         with mock.patch.object(process, "kill", side_effect=OSError("fixture kill refused")):
             with self.assertRaises(Exception) as caught:
                 self.discover_with_fd_close_failure(error, windows_api=api, process=process)
-        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
+        self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False,
+                      f"{type(caught.exception).__name__}: {caught.exception!r}")
         self.assertIs(caught.exception, error)
         self.assertIsNone(self.fd_close_child)
         self.assertTrue(caught.exception.__context__.owned_popen_evidence.created)
@@ -1792,20 +1793,12 @@ class DiscoveryStopTests(NativeRunCase):
     @unittest.skipIf(os.name == "nt", "POSIX group observation; Windows Job uncertainty is tested above")
     def test_fd_close_failure_after_posix_creation_keeps_unknown_stop(self):
         error = OSError("fixture stderr close failed")
-        real_killpg = os.killpg
-
-        def killpg(pgid, sig):
-            if self.fd_close_child is not None and pgid == self.fd_close_child.pid and sig == 0:
-                raise PermissionError("fixture group observation refused")
-            return real_killpg(pgid, sig)
-
-        with mock.patch.object(os, "killpg", side_effect=killpg):
-            with self.assertRaises(Exception) as caught:
-                self.discover_with_fd_close_failure(error)
+        with self.assertRaises(Exception) as caught:
+            self.discover_with_fd_close_failure(error, fail_observation=True)
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
         self.assertIs(caught.exception, error)
         self.assertIsNotNone(self.fd_close_child)
-        self.assertIsNotNone(self.fd_close_child.poll())
+        self.assertIsNone(self.fd_close_child.returncode)
         self.assertTrue(self.fd_close_child.stdout.closed)
 
     def test_original_non_native_read_error_keeps_confirmed_stop(self):
@@ -1929,12 +1922,12 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_connection_construction_failure_keeps_unconfirmed_stop(self):
-        halt = native_run.halt_owned_group
+        halt = native_run.halt_owned_session
         def unobserved(handle, deadline):
             halt(handle, deadline)
             return False, True
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
-             mock.patch.object(native_run, 'halt_owned_group', side_effect=unobserved):
+             mock.patch.object(native_run, 'halt_owned_session', side_effect=unobserved):
             with self.assertRaises(ValueError) as caught:
                 self.discover()
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), False)
@@ -1959,12 +1952,12 @@ class DiscoveryStopTests(NativeRunCase):
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)
 
     def test_unknown_connection_stop_keeps_owned_child_uncertain(self):
-        halt = native_run.halt_owned_group
+        halt = native_run.halt_owned_session
         def stopped_without_receipt(handle, deadline):
             halt(handle, deadline)
             raise ValueError('fixture stop observation failed')
         with mock.patch.object(native_run, 'NativeConnection', side_effect=ValueError('fixture connection failed')), \
-             mock.patch.object(native_run, 'halt_owned_group', side_effect=stopped_without_receipt):
+             mock.patch.object(native_run, 'halt_owned_session', side_effect=stopped_without_receipt):
             with self.assertRaises(ValueError) as caught:
                 self.discover()
         self.assertIs(getattr(caught.exception, 'discovery_shutdown_confirmed', None), False)

@@ -56,6 +56,27 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         self.assertEqual(caught.exception.code, code)
         return caught.exception
 
+    def test_process_blocker_retains_deletion_journal_and_rows_for_retry(self):
+        from hey_my_buddy.protocol.reasons import reason
+        board = self.board()
+        run = self.closed(board, "cwd-blocker", macro_task="Blocked deletion")
+        target = run["macroTaskId"]
+        cause = reason("checkout.process-blockers", processes=[
+            {"pid": 321, "startedAt": 456, "executable": "python"}], unreadableProcesses=[])
+        with self.without_physical_io()[0], patch.object(macro_task_deletion, "_delete_workspaces",
+                side_effect=BoardError("NOT_READY", "process blocker", reason=cause)):
+            blocked = macro_task_deletion.delete(board.store, target, 1)
+        self.assertEqual(blocked["state"], "deleting")
+        self.assertEqual(blocked["reason"], cause)
+        with board.store.db.read() as db:
+            self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
+            self.assertIsNotNone(db.execute("SELECT 1 FROM macro_task_deletions WHERE target_id=?", (target,)).fetchone())
+        with self.without_physical_io()[0]:
+            deleted = macro_task_deletion.delete(board.store, target, 1)
+        self.assertTrue(deleted["duplicate"])
+        self.assertEqual(deleted["deletionId"], blocked["deletionId"])
+        self.assertEqual(deleted["state"], "deleted")
+
     def test_preview_and_delete_use_entire_group_and_leave_other_group_untouched(self):
         board = self.board()
         first = self.closed(board, "first", macro_task="Disposable group")

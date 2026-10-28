@@ -63,7 +63,7 @@ from ..native_support import (
     ObserverInterrupt,
     buddy_spec,
     execution_deadline,
-    halt_owned_group as _halt_owned_group,
+    halt_owned_session as _halt_owned_session,
     identity_or_none,
     shape_guard,
     utc_now,
@@ -502,7 +502,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
                     raise CodexProtocolError("harness-unavailable",
                                              "The selected Codex executable could not start") from None
                 raise
-            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", log_paths={})
             owned[:] = [handle]
         finally:
             os.close(fd)
@@ -510,7 +510,7 @@ def _spawn_app_server(prep: _Preparation, cancel: CancelFlag, owned: list) -> _S
     except BaseException:
         if process is not None:
             try:
-                shutdown, _signalled = _halt_owned_group(handle, time.monotonic() + 5.0)
+                shutdown, _signalled = _halt_owned_session(handle, time.monotonic() + 5.0)
                 owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
             finally:
                 process.stdout.close()
@@ -1551,20 +1551,20 @@ def _stop_collection(request: RunRequest, prep: _Preparation,
         # The initial no-child fact, public probe result and creation receipt
         # occupy the same boundary. A retained handle without a receipt is unknown.
         state.shutdown = isinstance(receipt, dict) and receipt["shutdown"] is True
-        state.exit_code = receipt["exit_code"] if isinstance(receipt, dict) else receipt.process.returncode
+        state.exit_code = receipt["exit_code"] if isinstance(receipt, dict) else receipt.poll()
         return
-    shutdown, _signalled = _halt_owned_group(spawn.handle, prep.deadline)
+    shutdown, _signalled = _halt_owned_session(spawn.handle, prep.deadline)
     state.shutdown = shutdown
-    state.exit_code = spawn.process.returncode
+    state.exit_code = spawn.handle.poll()
     try:
         spawn.process.stdout.close()
     except OSError:
         pass
     if mode == "worker":
         _save_binding(request, prep, state)
-    if state.status == "ok" and (not shutdown or spawn.process.returncode != 0):
+    if state.status == "ok" and (not shutdown or state.exit_code != 0):
         state.status, state.reason = "error", "native-shutdown-failed"
-        state.error_text = "Codex App Server did not exit with confirmed process-group shutdown"
+        state.error_text = "Codex App Server did not exit with confirmed session shutdown"
     if cancel.is_set() and state.status != "ok":
         state.status, state.reason = "cancelled", "user-cancel"
         state.error_text = "the Codex execution was cancelled"
@@ -1943,12 +1943,12 @@ def _control_connection(*, cwd: str, invocation_root: Path, native_root: Path,
             yield connection, version, facts
         finally:
             try:
-                shutdown, _signalled = _halt_owned_group(spawn.handle, deadline)
+                shutdown, _signalled = _halt_owned_session(spawn.handle, deadline)
             finally:
                 spawn.process.stdout.close()
         if not shutdown or spawn.process.returncode != 0:
             raise CodexProtocolError("native-shutdown-failed",
-                                     "the native app server did not exit normally with confirmed group shutdown")
+                                     "the native app server did not exit normally with confirmed session shutdown")
     except Exception as error:
         error.discovery_shutdown_confirmed = shutdown
         raise

@@ -389,7 +389,7 @@ class Probe:
         controller outer stop layer is a micro task run fact and stays with the
         later Worker smoke verification, not this probe.
         """
-        from hey_my_buddy.buddy.harnesses.dsh.acp.connection import group_observation, stop_evidence
+        from hey_my_buddy.buddy.harnesses.dsh.acp.connection import session_observation, stop_evidence
 
         facts: dict = {"wallClockEpoch": time.time()}
         try:
@@ -408,7 +408,7 @@ class Probe:
             shutdown = stop_evidence(client.handle)
             facts["shutdownAfterEscalation"] = shutdown
             confirmed = bool(shutdown.get("shutdownConfirmed"))
-        facts["finalGroupObservation"] = group_observation(client.handle)
+        facts["finalGroupObservation"] = session_observation(client.handle)
         facts["leaderExitCode"] = client.process.poll()
         facts["stopConfirmed"] = bool(facts["leaderExitCode"] is not None
                                       and facts["finalGroupObservation"] == "gone")

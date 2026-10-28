@@ -165,7 +165,7 @@ def self_process_identity(job_name: str | None) -> dict:
     """Capture this execution process's own complete identity.
 
     A Windows execution reports the interpreter it runs in and the root Job it
-    belongs to; a POSIX execution is itself the recorded group-leader root.
+    belongs to; a POSIX execution is itself the recorded session-leader root.
     """
     pid = os.getpid()
     started_at = _creation_time(pid)
@@ -177,7 +177,7 @@ def self_process_identity(job_name: str | None) -> dict:
         record = {"pid": pid, "startedAt": started_at, "jobName": job_name}
     else:
         if job_name is not None or os.getpgrp() != pid or os.getsid(pid) != pid:
-            raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution does not own its process group")
+            raise BoardError("PROCESS_IDENTITY_UNKNOWN", "Execution does not own its process session")
         record = {"bootId": boot_id(), "pid": pid, "startedAt": started_at,
                   "processGroupId": pid, "jobName": None}
     return validate_process_identity(record)

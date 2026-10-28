@@ -1,5 +1,7 @@
 /** The frame around every page: top bar, connection state and the startup screen. */
 export default {
+  reasonNoProcesses: "无",
+  reasonProcess: "{{executable}}（{{pid}}）",
   reasonFact: "{{name}}：{{value}}",
   reasonParam: {
     "errors": "问题",

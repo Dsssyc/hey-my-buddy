@@ -44,6 +44,8 @@
     "harness"
   ],
   "catalog.native-warning": [],
+  "checkout.process-scan-failed": [],
+  "checkout.process-blockers": ["processes", "unreadableProcesses"],
   "config-options-shape-unreadable": [],
   "config-shape-unreadable": [],
   "console.entry-unavailable": [],

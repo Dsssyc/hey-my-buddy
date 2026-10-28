@@ -188,7 +188,7 @@ class FailoverTests(RouterDispatchTestCase):
                 self.assertGreater(elapsed, 11)
             self.assertEqual(receipt["report"]["terminationReason"], "deadline")
             self.assertTrue(receipt["report"]["shutdownConfirmed"])
-            self.assertFalse(holder["handle"].group_alive())
+            self.assertFalse(holder["handle"].session_alive())
             self.assertTrue(deliver_receipt(self.client, receipt, directory, nonce=execution.nonce))
             next_task = self.current_task(request["decisionId"])
             self.assertNotEqual(next_task, request["runId"])

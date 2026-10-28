@@ -1478,7 +1478,7 @@ def _build_result(request: RunRequest, *, state: _RunState,
     if state.status == "ok" and sessions and not stop.get("shutdown"):
         state.status = "error"
         state.reason = "native-shutdown-failed"
-        state.error_text = "the native agent did not exit with a confirmed group shutdown"
+        state.error_text = "the native agent did not exit with a confirmed session shutdown"
     if not sessions:
         # No root session was ever opened — three honest shapes, and a missing
         # session never means a missing process: a held client's own group
@@ -1717,7 +1717,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path,
         raise error
     if not shutdown.get("shutdownConfirmed") or client.process.returncode != 0:
         failed = NativeError("native-shutdown-failed",
-                             "the native agent did not exit normally with confirmed group shutdown")
+                             "the native agent did not exit normally with confirmed session shutdown")
         failed.discovery_shutdown_confirmed = shutdown.get("shutdownConfirmed") is True
         raise failed
     return catalog_value

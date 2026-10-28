@@ -69,7 +69,7 @@ from ..native_support import (
     CancelFlag,
     ObserverInterrupt,
     execution_deadline,
-    halt_owned_group as _halt_owned_group,
+    halt_owned_session as _halt_owned_session,
     identity_or_none,
     utc_now,
     truncate_utf8,
@@ -337,7 +337,7 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
                     raise ClaudeProtocolError("harness-unavailable",
                                               "The selected Claude executable could not start") from None
                 raise
-            handle = ProcessHandle(process, stop_channel="stdin", own_group=True, log_paths={})
+            handle = ProcessHandle(process, stop_channel="stdin", log_paths={})
             if owned is not None:
                 owned[:] = [handle]
         finally:
@@ -348,7 +348,7 @@ def _spawn_native(*, command: list[str], args: list[str], cwd: str, environment:
         # only its actual stop can replace the earlier diagnostic receipt.
         if process is not None:
             try:
-                shutdown, _signalled = _halt_owned_group(handle, time.monotonic() + 5.0)
+                shutdown, _signalled = _halt_owned_session(handle, time.monotonic() + 5.0)
                 if owned is not None:
                     owned[:] = [{"created": True, "shutdown": shutdown, "exit_code": process.returncode}]
             finally:
@@ -558,7 +558,7 @@ class _TurnCollector:
                         self.root_stop_requested = True
                         self.root_unanswered_input = self.bridge.report()["unansweredDelivered"] > 0
                         self._request_interrupt()
-                        _halt_owned_group(self._native_handle, self._connection.deadline)
+                        _halt_owned_session(self._native_handle, self._connection.deadline)
                 self._observe_inquiry_tool(frame)
                 self.bridge.note_event({"kind": frame.get("type") or "event"},
                                        "finishing" if self.evidence.result is not None else "running")
@@ -770,12 +770,12 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
 
 def _stop_native(spawn: _Spawn, deadline: float) -> tuple[bool, int | None]:
     """Close, wait, then terminate; report only what the owned group confirmed."""
-    shutdown, _signalled = _halt_owned_group(spawn.handle, deadline)
+    shutdown, _signalled = _halt_owned_session(spawn.handle, deadline)
     try:
         spawn.process.stdout.close()
     except OSError:
         pass
-    return shutdown, spawn.process.returncode
+    return shutdown, spawn.handle.poll()
 
 
 # -- phase 6: the factual result -------------------------------------------------
@@ -947,7 +947,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     if spawn is not None and collector is not None:
         # The stream's own observed end is a transport fact, reported exactly
         # as observed: it is never downgraded by the business verdict nor by
-        # the process-group stop, which travel in their own fields. The one
+        # the session stop, which travel in their own fields. The one
         # exclusion is the verified built-in delivery call — the value carrier,
         # never an ordinary task tool.
         tool_package = _usable(_validated_tool_evidence, collector.tools.finish(
@@ -959,7 +959,7 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
     if state.terminal_ok and native_result is not None:
         # The delivery facts report what the transport and the terminal checks
         # each observed on their own: the stream's end is the drain's fact,
-        # never back-inferred from the process-group stop. A verified built-in delivery call stays excluded from
+        # never back-inferred from the session stop. A verified built-in delivery call stays excluded from
         # tool facts; an unverified call remains counted there.
         completion = CompletionEvidence(stream_end=stream_ended)
     checked = CheckedBuddy()
@@ -1218,7 +1218,7 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
                     state.status = "error"
                     state.reason = "native-shutdown-failed"
                     state.error_text = ("the Claude native process did not exit with confirmed "
-                                        "process-group shutdown")
+                                        "session shutdown")
             if cancel.is_set() and state.status != "ok":
                 state.status = "cancelled"
                 state.reason = "user-cancel"
@@ -1294,7 +1294,7 @@ def run_discovery(*, cwd: str, invocation_root: Path, native_root: Path, timeout
     if not shutdown or spawn.process.returncode != 0:
         raise _with_stop_fact(ClaudeProtocolError("native-shutdown-failed",
                                                   "the Claude native process did not exit with confirmed "
-                                                  "process-group shutdown"), shutdown)
+                                                  "session shutdown"), shutdown)
     return catalog
 
 

@@ -1,5 +1,7 @@
 """Physical deletion boundaries against disposable Git worktrees."""
 import unittest
+import os
+from protocol.session_case import descendant_case
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +25,24 @@ class DeletionWorkspaceTests(unittest.TestCase):
 
     def delete(self, manifest, artifacts=()):
         return delete_workspaces(SimpleNamespace(directory=self.state), [manifest], list(artifacts))
+
+    @unittest.skipIf(os.name == "nt", "POSIX cwd guard")
+    def test_daemon_cwd_refuses_deletion_and_exit_allows_retry(self):
+        manifest = self.prepare()
+        checkout = Path(manifest["checkoutRoot"])
+        directory = self.state / "workspaces" / manifest["workspaceId"]
+        with descendant_case(self, self.state, "daemon", cwd=str(checkout)) as (handle, member):
+            self.assertTrue(handle.terminate(grace_seconds=0)[0])
+            with self.assertRaises(BoardError) as caught:
+                self.delete(manifest)
+            self.assertEqual(caught.exception.details["reason"]["code"], "checkout.process-blockers")
+            processes = caught.exception.details["reason"]["params"]["processes"]
+            self.assertIn(member["pid"], [process["pid"] for process in processes])
+            self.assertTrue(checkout.exists())
+            self.assertTrue(directory.exists())
+            self.assertTrue(self.git("show-ref", "--verify", manifest["snapshot"]["inputRef"]))
+        self.assertEqual(self.delete(manifest), [])
+        self.assertFalse(directory.exists())
 
     def test_deletes_checkout_refs_and_sealed_record_then_replays(self):
         manifest = self.prepare()

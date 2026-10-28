@@ -10,6 +10,8 @@ import os
 import shutil
 import shlex
 import subprocess
+import unittest
+from protocol.session_case import descendant_case
 from pathlib import Path
 from unittest import mock
 from support import FakeClock
@@ -22,6 +24,31 @@ from hey_my_buddy.paths import native_path
 
 
 class ReclaimResumeLifecycleTests(LifecycleTestCase):
+    @unittest.skipIf(os.name == "nt", "POSIX cwd guard")
+    def test_daemon_cwd_blocks_reclaim_before_changes_then_exit_allows_retry(self):
+        board = self.board()
+        self.register(board)
+        submitted, _, manifest, checkout, _, view, artifact = self.run_worktree(board)
+        self.accept(board, view, artifact, target=self.target_with_artifact(artifact), keepCheckout=True)
+        before = self.view(board, submitted["runId"])
+        with descendant_case(self, self.directory, "daemon", cwd=str(checkout)) as (handle, member):
+            self.assertTrue(handle.terminate(grace_seconds=0)[0])
+            with self.assertRaises(BoardError) as caught:
+                self.reclaim(board, before)
+            blocked = caught.exception.details["reclaim"]
+            self.assertEqual(blocked["reasons"], ["checkout.process-blockers"])
+            processes = blocked["reason"]["params"]["processes"]
+            self.assertIn(member["pid"], [process["pid"] for process in processes])
+            self.assertTrue(all(set(process) == {"pid", "startedAt", "executable"} for process in processes))
+            after = self.view(board, submitted["runId"])
+            self.assertEqual(after["state"], before["state"])
+            self.assertEqual(after["cleanup"]["state"], "planned")
+            # No applying cleanup fence may hide the concrete process reason.
+            self.assertTrue(checkout.exists())
+        result = self.reclaim(board, self.view(board, submitted["runId"]))
+        self.assertTrue(result["removed"])
+        self.assertFalse(checkout.exists())
+
     def test_a_blocked_reclaim_needs_a_fresh_removal_for_the_same_exact_path(self):
         board = self.board()
         self.register(board)

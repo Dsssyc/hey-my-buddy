@@ -12,6 +12,8 @@ const samples: Record<string, unknown> = {
   collection: "buddies", conflictIds: ["conflict-1"], continuationId: "continuation-1", count: 1234, disposition: "completed", enabled: false,
   errorCode: "SAMPLE", errors: ["summary-citation-outside-batch"], harness: "codex", kind: "permission", leadRunId: "lead-1", legalEfforts: ["high", "max"], limit: 12000,
   missingCapabilities: ["decision"], operation: "probe", recordId: "record-1",
+  processes: [{ pid: 321, startedAt: 456, executable: "python" }],
+  unreadableProcesses: [{ pid: 654, startedAt: 789, executable: "python" }],
   requiredCapability: "decision", retryAt: "2026-10-18T01:02:03Z", shape: "object", total: 12,
   unfinished: [{ runId: "micro-1", state: "executing" }], utf16Units: 32768,
 };
@@ -33,6 +35,17 @@ describe("the program reason catalog", () => {
       expect(text, code).not.toMatch(/\{\{|shell:|reasons:|\[object Object\]/);
       expect(text.trim(), code).not.toBe("");
     }
+  });
+
+  for (const language of ["zh", "en"] as const) it(`shows executable and PID without kernel start counters in ${language}`, () => {
+    setLanguageChoice(language);
+    const text = reasonText({ code: "checkout.process-blockers", params: {
+      processes: [{ pid: 321, startedAt: 9876543210, executable: "python" }],
+      unreadableProcesses: [{ pid: 654, startedAt: 9876543211, executable: "node" }],
+    } });
+    expect(text).toContain(language === "zh" ? "python（321）" : "python (321)");
+    expect(text).toContain(language === "zh" ? "node（654）" : "node (654)");
+    expect(text).not.toMatch(/987654321|startedAt|\{|\}/);
   });
 
   it("formats every current candidate bound in both languages", () => {

@@ -11,7 +11,7 @@ from .....errors import BoardError
 from .....protocol.owned_process import owned_popen
 from .....protocol.process_handle import ProcessHandle
 from ... import discovery
-from ...native_support import halt_owned_group
+from ...native_support import halt_owned_session
 from .connection import stop_evidence
 
 
@@ -46,15 +46,15 @@ def child_environment(extra_env: dict | None = None, *, source: dict | None = No
 def stop_after_spawn_failure(process, handle, error: BaseException) -> LaunchOwnershipError:
     """Use the shared owned-group stop, then record the actual observation."""
     try:
-        halt_owned_group(handle, time.monotonic() + 5.0)
+        halt_owned_session(handle, time.monotonic() + 5.0)
     except BaseException as stop_error:
         error.add_note(f"owned-group stop raised {type(stop_error).__name__}: {stop_error}")
     try:
         evidence = stop_evidence(handle)
     except BaseException as observation_error:
         error.add_note(f"stop observation raised {type(observation_error).__name__}: {observation_error}")
-        evidence = {"leaderExited": process.poll() is not None,
-                    "leaderExitCode": process.poll(), "groupObserved": "unknown",
+        evidence = {"leaderExited": handle.poll() is not None,
+                    "leaderExitCode": handle.poll(), "groupObserved": "unknown",
                     "shutdownConfirmed": False}
     return LaunchOwnershipError(f"ACP startup failed after spawn: {error}",
                                 process=process, handle=handle, evidence=evidence)
@@ -92,7 +92,7 @@ def launch(argv: list[str], *, private_root: Path, extra_env: dict | None = None
 
     try:
         handle = ProcessHandle(process, stop_channel="stdin", close_input=close_input,
-                               own_group=True, log_paths={})
+                               log_paths={})
     except BaseException as error:
         receipt = error.owned_popen_evidence
         evidence = {"leaderExited": receipt.exit_code is not None,

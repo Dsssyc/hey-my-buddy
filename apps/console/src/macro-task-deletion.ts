@@ -44,7 +44,11 @@ type DeletionReceipt = {
 export type MacroTaskDeletionResult = DeletionReceipt & (
   | { state: "deleted"; deletedAt: string; skipped?: DeletionSkipped[] }
   | { state: "deleting"; deletedAt: null;
-      reason: { code: "macro-task-deletion.physical-failed"; params: { errorCode: string } };
+      reason: { code: "macro-task-deletion.physical-failed"; params: { errorCode: string } }
+        | { code: "checkout.process-blockers"; params: {
+            processes: { pid: number; startedAt: number; executable: string }[];
+            unreadableProcesses: { pid: number; startedAt: number; executable: string }[] } }
+        | { code: "checkout.process-scan-failed"; params: Record<string, never> };
       objectKind: "native-session" | "workspace" | "private-root" | "cli-file" }
 );
 
@@ -103,6 +107,21 @@ function skipped(value: unknown): boolean {
     : keys(value, ["objectKind", "path", "reason"]) && ["private-root", "cli-file"].includes(value.objectKind as string);
 }
 
+function processIdentities(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.every(process => record(process) && keys(process, ["pid", "startedAt", "executable"])
+      && count(process.pid) && process.pid > 0 && count(process.startedAt) && process.startedAt > 0 && text(process.executable));
+}
+
+function physicalFailureReason(value: unknown): boolean {
+  if (!record(value) || !keys(value, ["code", "params"]) || !record(value.params)) return false;
+  if (value.code === "checkout.process-scan-failed") return keys(value.params, []);
+  if (value.code === "macro-task-deletion.physical-failed") return keys(value.params, ["errorCode"]) && text(value.params.errorCode);
+  if (value.code === "checkout.process-blockers") return keys(value.params, ["processes", "unreadableProcesses"])
+    && processIdentities(value.params.processes) && processIdentities(value.params.unreadableProcesses);
+  return false;
+}
+
 export function parseMacroTaskDeletionResult(confirmed: ConfirmedMacroTaskDeletion, value: unknown): MacroTaskDeletionResult {
   const required = ["deletionId", "macroTaskId", "state", "deletedAt", "microTaskCount", "duplicate"];
   if (!record(value) || !text(value.deletionId) || value.macroTaskId !== confirmed.macroTaskId
@@ -114,8 +133,7 @@ export function parseMacroTaskDeletionResult(confirmed: ConfirmedMacroTaskDeleti
     const reason = value.reason;
     if (!keys(value, [...required, "reason", "objectKind"]) || value.deletedAt !== null
       || !["native-session", "workspace", "private-root", "cli-file"].includes(value.objectKind as string)
-      || !record(reason) || !keys(reason, ["code", "params"]) || reason.code !== "macro-task-deletion.physical-failed"
-      || !record(reason.params) || !keys(reason.params, ["errorCode"]) || !text(reason.params.errorCode)) invalid();
+      || !physicalFailureReason(reason)) invalid();
   } else invalid();
   return value as MacroTaskDeletionResult;
 }
