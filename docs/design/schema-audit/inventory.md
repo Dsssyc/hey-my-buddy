@@ -1847,7 +1847,7 @@ JSON：`efforts_json` 是努力档位字符串数组，顶层没有对象键；�
 | --- | --- | --- |
 | `macro_task_deletions` 已完成行，包括 deletion_id/target_kind/target_id/state/started_at/deleted_at/micro_task_count | `macro_task_deletion._delete_rows` 最后把 state 更新为 deleted，保留对象身份/时间/数量；guard 继续可查墓碑 | 已定，随 26 → 27 实现。完成事务连记录一起删；升级清理既有完成行，不把它重新列为选择题。deleting 行仍是恢复日志，保留。 |
 | `commands` 中 deletion_id 绑定的被删任务命令 | `_delete_rows` 将 task_id/attempt_id 清 NULL、response_json 清 `{}`、设置 deletion_id，命令ID/hash/kind/subject/created_at 等仍在；回放返回已删除语义 | 已定，随 26 → 27 实现。删除完成同事务删除这些命令，升级清既有残留；幂等到删除为止，不继续保留空回执。 |
-| `events.kind='macro_task.deleted'` 的全局事件 | `_delete_rows` 已清目标事件之后，另 append 无 task_id/attempt_id 绑定的事件，payload 顶层含 macroTaskId/microTaskCount；后续按任务集合删不到它 | 与 ADR-028 #7“看板上不留下这个宏任务的任何东西”直接冲突，归已定删除不留残留规则的遗漏实现；26 → 27 应清已有事件并改完成路径不留对象证据。它不是要求新增日志功能。 |
+| `events.kind='macro_task.deleted'` 的全局事件 | `_delete_rows` 已清目标事件之后，另 append 无 task_id/attempt_id 绑定的事件，payload 顶层含 macroTaskId/microTaskCount；后续按任务集合删不到它 | 与 ADR-028 #7“黑板上不留下这个宏任务的任何东西”直接冲突，归已定删除不留残留规则的遗漏实现；26 → 27 应清已有事件并改完成路径不留对象证据。它不是要求新增日志功能。 |
 
 除以上三项，已逐读 `_collect/_delete_rows` 的当前作用域与外键删除顺序：workflow 的 scope/conflict/integration/plan/artifact/suggestion/conclusion、attempt 的停止/进程证据、Router 的 request/dispatch/claim/outcome/decision 以及绑定事件均在所属任务删除集合内。`workflow_fixes`、Lead/child 关系按任一端删除；这些关系本身不会留悬挂键。独立 catalog/账户/用户设置描述的对象不是被删微任务，不因此列违规。未来 maintenance/portrait 仅是 DDL 允许值，当前无产品 outcome 调用；不能用未实现面来推断已有遗留。
 

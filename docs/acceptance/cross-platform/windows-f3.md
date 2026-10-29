@@ -44,7 +44,7 @@
 
 ## 残余（一）：测试与夹具（2026-10-26）
 
-微任务“残余一：Windows 测试与夹具”（run `a86becbc`，Codex CLI 的 `gpt-6.1-sol / max`），基点 `04162c28`，产物 `62e221a0`（92 个测试、探针与工作流文件，没有产品源码），合入 `3369a9fe`（一处与“样板看板的 Git 调用”的冲突由 Host 保留产品的 `_git_command`）。
+微任务“残余一：Windows 测试与夹具”（run `a86becbc`，Codex CLI 的 `gpt-6.1-sol / max`），基点 `04162c28`，产物 `62e221a0`（92 个测试、探针与工作流文件，没有产品源码），合入 `3369a9fe`（一处与“样板黑板的 Git 调用”的冲突由 Host 保留产品的 `_git_command`）。
 
 - **最大的一类（删除时文件被占用，WinError 32）的根因在测试支持：** `InProcessBoard.close` 关掉自己的资源后就删数据库，而同一测试里另一个黑板还连着它；删除改由测试的私有根统一清场，实现方先在 Windows 基线上复现了这个错误。各测试自己建的数据库也显式关闭。
 - **其余：** 临时树经检查运行器已有的私有根删除；长路径经 `native_path`；只在 POSIX 上有的调用（`O_NOFOLLOW`、SIGINT、负退出码）给出 Windows 的对应验证；只设 HOME 的夹具同时设 USERPROFILE；文件模式与 Windows 上不合法的名字按平台；CI 的 Windows 任务把 TEMP 放到 `%LOCALAPPDATA%\Temp`（运行器的 `D:\a\_temp` 不在用户目录之下，状态根的规则拒绝它）；启动器测试的上限与同类的 240 秒一致。

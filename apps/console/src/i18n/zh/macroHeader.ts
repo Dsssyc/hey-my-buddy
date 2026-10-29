@@ -46,7 +46,7 @@ export default {
     action: "删除宏任务…",
     title: "删除「{{title}}」",
     blockedTitle: "还不能删除「{{title}}」",
-    lead: "这个宏任务的全部内容将从看板上删除，不能恢复。",
+    lead: "这个宏任务的全部内容将从黑板上删除，不能恢复。",
     loading: "正在读取删除范围…",
     scope: "删除范围与拦截原因",
     blocked: "名下还有 {{n}} 个微任务或路由计算没有了结。",
@@ -83,7 +83,7 @@ export default {
     skipped: "已删除「{{title}}」；{{n}} 项存储内容按检查结果留在原处。",
     storage: "查看存储",
     dismiss: "关闭删除结果",
-    refreshFailed: "列表或看板刷新失败，请重新读取；删除已完成。",
+    refreshFailed: "列表或详情刷新失败，请重新读取；删除已完成。",
     objects: { "native-session": "原生会话", workspace: "受管检出", "private-root": "私有目录", "cli-file": "控制文件" },
     blockers: {
       queued: { state: "排队中", resolution: "等它结束，或在“更多”里停止宏任务" },

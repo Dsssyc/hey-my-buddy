@@ -8,7 +8,7 @@ export default {
   "ILLEGAL_TRANSITION": "The current state does not allow this transition.",
   "REVISION_CONFLICT": "The record has changed; read it again.",
   "SHUTDOWN_UNCONFIRMED": "The execution's stop has not been confirmed.",
-  "UPGRADE_IN_PROGRESS": "The board is being upgraded.",
+  "UPGRADE_IN_PROGRESS": "The blackboard is being upgraded.",
   "account.login-required": "Log in to the harness, then check again.",
   "account.not-checked": "Check this harness to see its account status.",
   "answer-empty": "The Router returned an empty answer.",

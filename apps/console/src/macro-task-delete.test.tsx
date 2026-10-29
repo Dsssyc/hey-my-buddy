@@ -365,7 +365,7 @@ describe("macro task deletion workspace integration", () => {
     f.refresh.mockRejectedValueOnce(new Error("synthetic refresh failure"));
     vi.mocked(f.api.macroTasks).mockRejectedValueOnce(new ApiError("NETWORK", "synthetic list failure"));
     await confirm();
-    await screen.findByText("列表或看板刷新失败，请重新读取；删除已完成。");
+    await screen.findByText("列表或详情刷新失败，请重新读取；删除已完成。");
     expect(screen.queryByRole("button", { name: new RegExp(`^${f.timeline.macroTask.title}`) })).toBeNull();
     expect(window.location.hash).toBe("#tasks");
     expect(screen.queryByRole("dialog")).toBeNull();

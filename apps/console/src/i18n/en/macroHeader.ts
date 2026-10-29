@@ -48,7 +48,7 @@ export default {
     action: "Delete macro task…",
     title: "Delete “{{title}}”",
     blockedTitle: "Cannot delete “{{title}}” yet",
-    lead: "All content in this macro task will be deleted from the board. This cannot be undone.",
+    lead: "All content in this macro task will be deleted from the blackboard. This cannot be undone.",
     loading: "Reading the deletion scope…",
     scope: "Deletion scope and blocking reasons",
     blocked: "Unsettled micro tasks or routing calculations: {{n}}.",
@@ -85,7 +85,7 @@ export default {
     skipped: "Deleted “{{title}}”. Storage items left in place after checks: {{n}}.",
     storage: "View storage",
     dismiss: "Dismiss deletion result",
-    refreshFailed: "Could not refresh the list or board. Read again; deletion is complete.",
+    refreshFailed: "Could not refresh the list or the detail. Read again; deletion is complete.",
     objects: { "native-session": "native sessions", workspace: "managed checkouts", "private-root": "private directories", "cli-file": "control files" },
     blockers: {
       queued: { state: "Queued", resolution: "Wait for it to finish, or stop the macro task from More" },

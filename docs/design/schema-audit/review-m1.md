@@ -126,7 +126,7 @@ SELECT COUNT(*) FROM tasks WHERE acceptance_verdict IS NOT CASE WHEN accepted_at
 
 ### 8. 备份校验重复做完整性检查（小事）
 
-- `src/hey_my_buddy/blackboard/store/backup.py:268-270` 重新加回了 `Database(trial).initialize()`，而且 schema 27 的备份也会走到。2fcc50fd 当时有意删掉了它，理由是“只对备份看板直接检查一次”。
+- `src/hey_my_buddy/blackboard/store/backup.py:268-270` 重新加回了 `Database(trial).initialize()`，而且 schema 27 的备份也会走到。2fcc50fd 当时有意删掉了它，理由是“只对备份黑板直接检查一次”。
 - 对 schema 27 的备份，它重复的是几行之前刚做过的 `integrity_check` 与 `foreign_key_check`。对 schema 26 的备份，同一份副本要做 4 次完整性检查：`_verify` 一次，`upgrade` 前后各一次，`initialize` 一次。
 - `initialize` 额外做的只有 `_load_secret`。
 - 完整性检查的耗时随黑板变大而增长，安装与回滚还原时都会走这条路径。

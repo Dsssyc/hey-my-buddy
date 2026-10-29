@@ -54,6 +54,6 @@
 
 `test_upgrade_host_cutover.py` 原来就用同 schema 的两个私有运行时；当前样板随源码变为 19 → 19，测试名明确指出这一点，Host 等待、控制能力、受管检出、命令重放及跨升级 wait 的断言逐项保留。它没有跨 schema 保留开放微任务的断言。`test_upgrade_waiting_host.py` 的 `test_stopped_host_boundaries_are_idle_and_leave_the_board_untouched` 把写死的 schema 18 断言改为当前 `SCHEMA_VERSION`；attention、排队/运行、待续工作、停止未确认与 Host 操作封锁的原断言保留。新增的 schema 18 检查逐项拒绝等 Host、等协助、排队/运行、停止未确认、受管检出；未结论的已交付微任务由 `test_upgrade_migration.py` 拒绝，并比较黑板字节。原来预检要求每一份跳过的私有文件有搬迁计划的断言删除；当前预检只拒绝备份声明位置的不安全项，跳过的文件继续显示 `needsAttention` 并原样留下。
 
-样板由基点源码的真实命名操作生成，原生发现和 Worker 结果是合成输入，不登录、不读账户、不调用模型。它包含四项非默认 Router 设置、六类设置表、启用与禁用的 buddy、固定/优先/排除偏好、已验收、已交付而 Host 结束、取消与失败的历史，没有开放工作，也没有受管检出。样板加载器先绑定测试私有路径与摘要，这一步是夹具准备。逐表比较排除两块新黑板各自生成的密钥与时间，其他行与“新建看板加设置”一致。
+样板由基点源码的真实命名操作生成，原生发现和 Worker 结果是合成输入，不登录、不读账户、不调用模型。它包含四项非默认 Router 设置、六类设置表、启用与禁用的 buddy、固定/优先/排除偏好、已验收、已交付而 Host 结束、取消与失败的历史，没有开放工作，也没有受管检出。样板加载器先绑定测试私有路径与摘要，这一步是夹具准备。逐表比较排除两块新黑板各自生成的密钥与时间，其他行与“新建黑板加设置”一致。
 
 最终组合检查以指定的现成 Python 与 `PYTHONPATH=src` 经 `hey_my_buddy.cli.checks` 运行 `tests/python/install`、`tests/python/blackboard/store`，再加 `test_storage.py`、`test_storage_orphans.py`、`test_workspace_identity.py`、`test_private_directories.py` 与 `test_harness_test_safety.py`：27 个文件、304 项、无跳过，退出码 0，私有根已清理。此前的组合检查曾因工作区非分配项扫描和只读打开创建 sidecar 失败，均修在根因后复验通过。样板生成也完成基点 schema、完整性与外键核对；最后补强新密钥不同于旧密钥的断言，单独复验样板测试，4 项全部通过、退出码 0，私有根已清理。未执行日常安装、日常服务操作、付费模型路由或真实账户探测；路由能力验证限于私有服务与合成 harness 事实。未执行 Windows 本机升级；Windows 目录重命名的断电保证沿用现有备份边界，不新增保证。

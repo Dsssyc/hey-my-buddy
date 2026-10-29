@@ -6,7 +6,7 @@ export default {
   "ILLEGAL_TRANSITION": "当前状态不允许这次转换。",
   "REVISION_CONFLICT": "记录已更新，请重新读取。",
   "SHUTDOWN_UNCONFIRMED": "尚未确认执行已停止。",
-  "UPGRADE_IN_PROGRESS": "看板正在升级。",
+  "UPGRADE_IN_PROGRESS": "黑板正在升级。",
   "account.login-required": "在 harness 中登录后检测。",
   "account.not-checked": "检测当前 harness 后查看账户状态。",
   "answer-empty": "Router 返回了空回答。",

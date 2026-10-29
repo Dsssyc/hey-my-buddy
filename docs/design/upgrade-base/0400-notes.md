@@ -24,7 +24,7 @@
 
 ## 测试
 
-用检查运行器跑过：`tests/python/install/`、`tests/python/blackboard/store/`、`tests/python/blackboard/service/test_daemon.py` 与本改动涉及但不在前三个范围里的 `tests/python/cli/test_harness_test_safety.py`；前三个目录合并运行 28 个文件 287 条测试全部通过（`exit 0`，私有根自行回收），最后一个单跑 3 条通过。"升级样板看板、与新建的看板比对"改写为 `test_contract_cutover_preserves_stock_and_matches_fresh_structure`：基点 schema 与当前相同，无待做换算，契约切换后每一张表的每一行都原样保留，结构与新建黑板逐项一致。生成器另用自身 `--verify` 复核过。未跑完整检查，由 Host 整合后统一跑。
+用检查运行器跑过：`tests/python/install/`、`tests/python/blackboard/store/`、`tests/python/blackboard/service/test_daemon.py` 与本改动涉及但不在前三个范围里的 `tests/python/cli/test_harness_test_safety.py`；前三个目录合并运行 28 个文件 287 条测试全部通过（`exit 0`，私有根自行回收），最后一个单跑 3 条通过。"升级样板黑板、与新建的黑板比对"改写为 `test_contract_cutover_preserves_stock_and_matches_fresh_structure`：基点 schema 与当前相同，无待做换算，契约切换后每一张表的每一行都原样保留，结构与新建黑板逐项一致。生成器另用自身 `--verify` 复核过。未跑完整检查，由 Host 整合后统一跑。
 
 ## 与要求不一致的情形
 
