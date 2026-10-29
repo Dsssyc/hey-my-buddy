@@ -85,6 +85,8 @@
 
 ## 运行环境
 
+**停服务时，服务对停在 Host 边界的微任务也用了底层取消。**（2026-10-29 安装 0.57.0 之前在日常服务上看到） `daemon.py` 的 `cancel_queued` 对 `active_work()` 里的每个排队任务调用 `task_cancel`；停在 `awaiting-host`、没有待执行续接的微任务也算排队任务，而它不在 `cancel_for_service_stop` 给出的排除集合里，于是被 `guard_task_control` 以 `UNAUTHORIZED` 拒绝，留下一条 `cancel-queued` 的服务问题。它没有取消任何东西，但这条服务问题要等下一次停止时一个都没失败才会清掉。修在原因处：停止只处理有自主下一步的工作，与安装的空闲规则对 Host 边界的认定一致。
+
 **Windows 上工作目录过长时 harness 起不来，却报成不可用。**（2026-10-26 “Windows 残余（四）”在测试机上实测，排在首次发版之后） 进程的工作目录超过约 260 个字符时，Windows 直接拒绝创建进程（WinError 267；测试机上 282 与 286 个字符的工作目录都起不来，没有创建子进程），DSH 把启动处的 `OSError` 投影成 `harness-unavailable`，看起来像 harness 没装好。安全的一边已经守住：没有起进程，就没有要停的。要改的是如实报出系统拒绝启动的原因与工作目录，让 Host 知道换一个浅一些的检出位置；其余 harness 的启动处是否同样投影，一起核对。
 
 **CI 的墙钟还剩两处拖尾。**（2026-10-27 Host 验收“CI 偶发失败与分片”时记下，[验收记录](../acceptance/check-runner/ci-flakes-and-shards.md)） 浏览器作业里 Playwright 的 `--with-deps` 走 apt，最近两次各有一个作业在这一步用了 9 分钟以上，其余作业只要 0.2 分钟；Windows ARM 分 6 片时最慢一片 13.5 分钟，成了 Python 的关键路径。`test_parallel_dispatch` 的偶发超时已在那一批里找到根因并修好（执行启动按 C-Two 的 `retryable` 重试），原来那一条随之删去。
