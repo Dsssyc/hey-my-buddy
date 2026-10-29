@@ -13,7 +13,8 @@ from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.buddy.roles.run_observers import MaintenanceCorrection
-from hey_my_buddy.buddy.runtime.execution import Execution
+from hey_my_buddy.buddy.runtime.execution import Execution, classify_termination
+from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.protocol import process_identity
 from hey_my_buddy.buddy.harnesses.registry import run_seam
@@ -363,6 +364,108 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.assertEqual(self.start()["status"], "running")
         with self.board_.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM maintenance_runs").fetchone()[0], 2)
+
+    def test_console_reads_native_activity_and_stops_the_existing_execution(self):
+        from console.test_console import Browser
+
+        self.configure(interval=120)
+        started = self.start()
+        claim = self.claim_maintenance(started["runId"])
+        browser = Browser(self.board_.call("console", {"action": "open"})["url"])
+        snapshot = browser.bootstrap()
+        csrf = snapshot["csrfToken"]
+        actor = {"role": "console", "id": snapshot["consoleSession"]["id"]}
+        activity = {"phase": "streaming-model", "lastNativeActivityAt": T0, "eventSeq": 5}
+        self.board_.call("execution_progress", {
+            "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
+            "nonce": NONCE, "data": {"activity": activity}})
+        status, _, body = browser.get("/api/tasks/" + started["runId"])
+        self.assertEqual(status, 200, body)
+        self.assertEqual(json.loads(body)["activity"]["lastNativeActivityAt"], T0)
+        denied, _, _ = browser.command("task_cancel", {"runId": started["runId"]})
+        self.assertEqual(denied, 403)
+        denied, _, body = browser.command("task_cancel", {"runId": self.evidence_id}, csrf=csrf)
+        self.assertNotEqual(denied, 200)
+        self.assertEqual(json.loads(body)["error"]["code"], "FORBIDDEN")
+        status, _, body = browser.command("task_cancel", {"runId": started["runId"]}, csrf=csrf)
+        self.assertEqual(status, 200, body)
+        task = json.loads(body)["result"]["task"]
+        self.assertEqual(task["state"], "cancelling")
+        self.assertTrue(task["cancelRequested"])
+        self.assertEqual(task["stopInitiator"], "console")
+        events = self.board_.call("events_read", {"runId": started["runId"], "after": 0})["events"]
+        cancel = next(event["payload"] for event in events if event["kind"] == "task.cancel_requested")
+        self.assertEqual(cancel["actor"], actor)
+        self.assertEqual(browser.bootstrap()["maintenance"]["runs"][0]["state"], "running")
+        outcome = AdapterOutcome(status="cancelled", result={"status": "error", "code": "user-cancel"},
+                                 shutdown_confirmed=True)
+        termination = classify_termination(outcome, timed_out=False, cancel_requested=task["cancelRequested"],
+                                           stop_initiator=task["stopInitiator"])
+        self.board_.call("execution_result", {
+            "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
+            "nonce": NONCE, "status": "cancelled", "shutdownConfirmed": True,
+            "terminationReason": termination, "result": outcome.result})
+        finished = self.board_.call("task_get", {"runId": started["runId"]})["task"]
+        self.assertEqual(finished["terminationReason"], "console-stop")
+        self.assertEqual(finished["selectedAttempt"]["stopInitiator"], "console")
+        run = browser.bootstrap()["maintenance"]["runs"][0]
+        self.assertEqual((run["state"], run["reason"]["code"], run["finishedAt"]), ("failed", "user-cancel", T0))
+        self.assertEqual(self.board_.store.maintenance.collect(), 120)
+
+    def test_console_cannot_supply_requested_by_even_for_maintenance(self):
+        from console.test_console import Browser
+
+        self.configure()
+        run_id = self.start()["runId"]
+        browser = Browser(self.board_.call("console", {"action": "open"})["url"])
+        csrf = browser.bootstrap()["csrfToken"]
+        before = self.board_.store.head()
+        for requested_by in ("forged-host", None):
+            status, _, body = browser.command("task_cancel", {"runId": run_id, "requestedBy": requested_by}, csrf=csrf)
+            self.assertEqual(status, 400, body)
+            self.assertEqual(json.loads(body)["error"]["code"], "INVALID_ARGUMENT")
+        with self.assertRaises(BoardError) as refused:
+            self.board_.console_call("task_cancel", {"runId": run_id, "requestedBy": "forged-host"})
+        self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
+        self.assertEqual(self.board_.call("task_get", {"runId": run_id})["task"]["state"], "queued")
+        self.assertEqual(self.board_.store.head(), before)
+
+    def test_failed_native_execution_keeps_reported_usage_and_leaves_missing_usage_unknown(self):
+        from console.test_console import Browser
+
+        self.configure()
+        browser = Browser(self.board_.call("console", {"action": "open"})["url"])
+        reported = {"inputTokens": 120, "cachedInputTokens": 5, "outputTokens": None,
+                    "source": "synthetic-native", "scope": "attempt"}
+        for usage in (reported, None):
+            with self.subTest(usage=usage):
+                claim = self.claim_maintenance(self.start()["runId"])
+
+                def fake_run(request, *, observer, services, cancelled):
+                    return RunResult(identity=request.identity, harness=request.harness,
+                        end=RunEnd(status="error", reason_code="deadline", native_exit_code=1),
+                        model_started=True, usage=usage,
+                        stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
+
+                module = run_seam("dsh")
+                logs = []
+                with patch.object(process_identity, "_active_native_journal", None):
+                    execution = Execution(claim, self.board_.directory, NONCE, client=self.board_.client(),
+                                          session_record_path=claim["sessionRecordPath"], log=logs.append)
+                    native_path(execution.directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+                    native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700, exist_ok=True)
+                    with patch.object(module, "run", side_effect=fake_run), \
+                            patch.object(module, "check_preparation", return_value=None), \
+                            patch.object(module, "native_evidence", return_value={}):
+                        execution.run()
+                run = browser.bootstrap()["maintenance"]["runs"][0]
+                self.assertEqual(run["state"], "failed", logs)
+                self.assertEqual(run["reason"]["code"], "router-budget-exhausted")
+                actual = run["usage"]["attempts"][0]["tokenUsage"]
+                if usage is None:
+                    self.assertIsNone(actual)
+                else:
+                    self.assertEqual({key: actual[key] for key in reported}, reported)
 
     def test_stop_unconfirmed_keeps_its_reason_over_a_rejected_answer(self):
         self.configure()

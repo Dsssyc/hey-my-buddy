@@ -412,7 +412,7 @@ export function parseInquiries(value: unknown, limit: number): Inquiries {
 const PHASES: readonly ActivityPhase[] = ["starting", "waiting-model", "streaming-model", "tool-running", "waiting-external", "waiting-host", "finishing", "unknown"];
 const STOPPERS = ["host", "lead", "console", "service", "unknown"] as const;
 
-function parseActivity(value: unknown): Activity | null {
+export function parseActivity(value: unknown): Activity | null {
   const activity = recOrNull(value, "task.activity");
   if (!activity) return null;
   const counts = recOrNull(activity.counts, "task.activity.counts");

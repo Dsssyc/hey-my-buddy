@@ -98,6 +98,7 @@ CONSOLE_OPERATIONS = (
     "reminder_settings_set",
     "maintenance_start",
     "maintenance_pending",
+    "task_cancel",
     "domain_rename",
     "domain_merge",
     "selection_get",

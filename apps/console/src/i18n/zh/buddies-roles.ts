@@ -82,7 +82,7 @@ export default {
     consecutiveFailures: "连续失败",
     abstention: "弃权",
     cancelled: "取消",
-    budgetExhausted: "预算耗尽",
+    budgetExhausted: "超出时限或工具调用上限",
     boundsRejected: "越界",
     inputChanged: "输入变化",
     lastSuccess: "最近成功",

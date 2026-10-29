@@ -78,7 +78,7 @@ export default {
   ending: { cause: "终止原因：{{cause}}", unrecorded: "终止原因未记录" },
   termination: {
     "wrap-up": "Host 有序收尾完成", "grace-expired": "有序收尾的宽限期到期后停止", "forced-stop": "强制停止",
-    "service-stop": "服务停止", "unknown-stop": "停止（发起者未知）", deadline: "Router 预算用完", "harness-error": "Harness 错误",
+    "service-stop": "服务停止", "unknown-stop": "停止（发起者未知）", deadline: "Router 超出时限", "harness-error": "Harness 错误",
     "transport-error": "传输故障", "workspace-error": "工作区错误", completed: "正常完成", wrapUpLead: "Lead 有序收尾完成",
   },
   providerRejection: { "overloaded": "模型服务满载", "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },

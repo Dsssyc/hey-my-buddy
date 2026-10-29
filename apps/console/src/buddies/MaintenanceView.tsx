@@ -19,6 +19,7 @@ import type { Reason } from "../reason";
 import type { Editor } from "../use-editor";
 import { buddyQuad, withConfiguration } from "./roles";
 import { DomainTree } from "./DomainTree";
+import { MaintenanceActivity } from "./MaintenanceActivity";
 
 const liveT = i18n.getFixedT(null, "buddies");
 
@@ -29,9 +30,12 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
   snapshot: Snapshot; editor: Editor; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; mutationsAvailable: boolean;
 }) {
   const { t } = useTranslation("buddies");
+  const detailT = useTranslation("taskDetail").t;
+  const runs = snapshot.maintenance?.runs ?? [];
   const config = editor.view.configuration;
   const [choosing, setChoosing] = useState(false), [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState<string | null>(null);
   const [feedbackScope, setFeedbackScope] = useState<"maintenance" | "domain">("maintenance");
   const [note, setNote] = useCopyState(), [error, setError] = useCopyState();
   const locked = !editor.sessionWritable || !editor.editing || !config;
@@ -43,7 +47,7 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
   function change(patch: Partial<Configuration>) { if (!locked) editor.update(draft => withConfiguration(draft, patch)); }
   async function command(operation: string, params: object): Promise<boolean> {
     if (actionLocked) return false;
-    setFeedbackScope(operation === "maintenance_start" ? "maintenance" : "domain");
+    setFeedbackScope(operation === "maintenance_start" || operation === "task_cancel" ? "maintenance" : "domain");
     setBusy(true); editor.setAuxiliaryBusy(true); setError(""); setNote("");
     try {
       if (operation === "maintenance_start") {
@@ -54,12 +58,16 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
           : liveT(result.status === "settings-changed" ? "maintenance.settingsChanged" : result.status === "not-configured" ? "maintenance.notConfigured" : result.status === "no-new-evidence" ? "maintenance.noData" : result.runId ? "maintenance.started" : "maintenance.alreadyRunning"));
       } else {
         await api.command(operation, params, snapshot.csrfToken);
-        setNote(() => liveT(operation === "domain_merge" ? "maintenance.merged" : "maintenance.saved"));
+        setNote(() => liveT(operation === "task_cancel" ? "maintenance.stopRequested" : operation === "domain_merge" ? "maintenance.merged" : "maintenance.saved"));
       }
       if (!await refresh()) setError(() => liveT("maintenance.readFailed"));
       return true;
     } catch (failure) { setError(() => errorText(failure)); return false; }
     finally { setBusy(false); editor.setAuxiliaryBusy(false); }
+  }
+  async function stop(taskId: string) {
+    setStopping(taskId);
+    if (!await command("task_cancel", { runId: taskId })) setStopping(null);
   }
   return <div data-slot="maintenance-plane" aria-busy={busy}>
     <h3 className="px-6 pt-6 pb-2 text-base font-semibold">{t("maintenance.title")}</h3>
@@ -89,8 +97,8 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
       {feedbackScope === "maintenance" && error && <p role="alert" className="mt-2 text-xs text-fail">{error}</p>}
     </Section>
     <Section name={t("maintenance.records")}>
-      {!snapshot.maintenance?.runs.length ? <p className="text-xs text-ink3">{t("maintenance.noRecords")}</p> : <ul className="divide-y divide-line">
-        {snapshot.maintenance.runs.map(run => {
+      {!runs.length ? <p className="text-xs text-ink3">{t("maintenance.noRecords")}</p> : <ul className="divide-y divide-line">
+        {runs.map((run, index) => {
           const buddy = run.buddy;
           return <li key={run.maintenanceRunId} className="space-y-2 py-3 first:pt-0 text-xs" data-slot="maintenance-record">
             <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
@@ -98,13 +106,23 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
               {run.finishedAt && <time dateTime={run.finishedAt}>{formatDateTime(Date.parse(run.finishedAt))}</time>}
               <span className="text-ink2">{t(run.triggerType === "manual" ? "maintenance.manual" : "maintenance.intervalTrigger")}</span>
               <span className={run.state === "failed" ? "text-fail" : "text-foreground"}>{t(`maintenance.${run.state}`)}</span>
+              {run.state === "running" && <Button variant="outline" size="sm" disabled={actionLocked || stopping === run.taskId}
+                onClick={() => void stop(run.taskId)}>{stopping === run.taskId ? detailT("state.stopping") : t("maintenance.stop")}</Button>}
             </div>
             <p className="font-mono wrap-anywhere text-ink2">{buddy ? buddyQuad(buddy) : run.buddyId}</p>
+            {run.state === "running" && <MaintenanceActivity key={run.taskId} taskId={run.taskId} api={api} />}
             {run.usage?.attempts.map(attempt => <dl key={attempt.attemptId} className="flex flex-wrap gap-x-5 gap-y-1 tabular-nums text-ink2" aria-label={t("maintenance.usage")}>
               {([['input', attempt.tokenUsage?.inputTokens], ['cached', attempt.tokenUsage?.cachedInputTokens], ['output', attempt.tokenUsage?.outputTokens]] as const).map(([name, n]) =>
                 <div key={name} className="flex gap-2"><dt>{t(`maintenance.${name}`)}</dt><dd>{n == null ? t("maintenance.unknown") : formatNumber(n)}</dd></div>)}
             </dl>)}
             {run.reason && <p className="wrap-anywhere text-fail">{reasonText(run.reason)}</p>}
+            {index === 0 && run.state === "failed" && <div className="flex flex-wrap items-center gap-x-4 gap-y-2" data-slot="maintenance-retry">
+              <span className="text-ink2">{!snapshot.configuration?.maintenanceBuddyId ? t("maintenance.notConfigured") : run.finishedAt && snapshot.configuration.maintenanceIntervalSeconds !== undefined
+                ? t("maintenance.nextRun", { when: formatDateTime(Date.parse(run.finishedAt) + snapshot.configuration.maintenanceIntervalSeconds * 1000) })
+                : t("maintenance.unknown")}</span>
+              <Hint text={dirty ? t("maintenance.unsaved") : undefined}><Button variant="outline" size="sm" disabled={actionLocked || dirty || runs.some(item => item.state === "running")}
+                onClick={() => void command("maintenance_start", {})}>{t("maintenance.runNow")}</Button></Hint>
+            </div>}
           </li>;
         })}
       </ul>}

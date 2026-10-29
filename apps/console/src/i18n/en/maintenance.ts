@@ -1,4 +1,5 @@
 export default {
+  stop: "Stop", stopRequested: "Stop requested", nextRun: "Next automatic run {{when}}", runNow: "Run now",
   settingsChanged: "Settings changed; retry with the refreshed settings", invalidReply: "Could not read the maintenance response",
   title: "Maintenance", buddy: "Maintenance buddy", choose: "Choose buddy", none: "Not configured", search: "Search buddies", noCandidates: "No eligible buddies",
   interval: "Maintenance interval", seconds: "seconds", intervalInvalid: "Maintenance interval must be a positive integer in seconds", ineligible: "Choose an enabled, available buddy that supports no tools",

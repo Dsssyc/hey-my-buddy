@@ -82,6 +82,16 @@ class TestAtomicity(BoardTestCase):
         self.assertEqual([payload["note"] for payload in cancelled], ["Host asked to stop", None])
         self.assertTrue(all("reason" not in payload for payload in cancelled))
 
+    def test_execution_cancel_keeps_the_cli_requested_identity(self):
+        board = self.board()
+        task = board.submit_execution(requestId="cli-cancel-identity", task="do", cwd=str(self.workdir()),
+                                      adapter="command", argv=["/bin/true"])["task"]
+        cancelled = board.call("task_cancel", {"runId": task["runId"], "requestedBy": "host-operator"})
+        self.assertEqual(cancelled["task"]["state"], "cancelled")
+        events = board.call("events_read", {"after": 0})["events"]
+        event = next(event["payload"] for event in events if event["kind"] == "task.cancelled")
+        self.assertEqual(event["actor"], {"role": "host", "id": "host-operator"})
+
     def test_reconnect_sees_only_committed_state_and_integrity_passes(self):
         board = self.board()
         client = board.client()

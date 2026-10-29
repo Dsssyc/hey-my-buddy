@@ -79,7 +79,7 @@ export default {
   ending: { cause: "End cause: {{cause}}", unrecorded: "Cause not recorded" },
   termination: {
     "wrap-up": "Host wrap-up finished", "grace-expired": "Stopped when the wrap-up grace ran out", "forced-stop": "Forced stop",
-    "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "Router budget used up", "harness-error": "Harness error",
+    "service-stop": "Service stopped", "unknown-stop": "Stopped (initiator unknown)", deadline: "Router exceeded its time limit", "harness-error": "Harness error",
     "transport-error": "Transport failure", "workspace-error": "Workspace error", completed: "Completed normally", wrapUpLead: "Lead wrap-up finished",
   },
   providerRejection: { "overloaded": "Model service overloaded", "quota-exceeded": "Quota used up", "rate-limited": "Rate limited by the native service" },

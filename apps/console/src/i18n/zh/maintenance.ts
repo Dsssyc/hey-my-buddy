@@ -1,4 +1,5 @@
 export default {
+  stop: "停止", stopRequested: "已请求停止", nextRun: "下次自动运行 {{when}}", runNow: "立即运行",
   settingsChanged: "设置已变化，请按刷新后的设置重试", invalidReply: "维护回复无法读取",
   title: "维护面", buddy: "维护 buddy", choose: "选择 buddy", none: "未设置", search: "搜索 buddy", noCandidates: "没有能担任的 buddy",
   interval: "维护间隔", seconds: "秒", intervalInvalid: "维护间隔需要是正整数秒数", ineligible: "请选择已启用、可用且支持不用工具的 buddy",

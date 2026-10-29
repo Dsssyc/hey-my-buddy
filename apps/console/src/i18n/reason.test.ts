@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { setLanguageChoice } from "./index";
 import { reasonText } from "./reason";
 import zh from "./zh/reasons";
+import i18n from "i18next";
 
 const codes = JSON.parse(readFileSync("../../src/hey_my_buddy/protocol/reason-codes.json", "utf8")) as Record<string, string[]>;
 const samples: Record<string, unknown> = {
@@ -21,6 +22,16 @@ const samples: Record<string, unknown> = {
 afterEach(() => setLanguageChoice("browser"));
 
 describe("the program reason catalog", () => {
+  for (const [language, router, tools, deadline, count] of [
+    ["zh", "Router 超出了这次调用的时限或工具调用上限。", "只读调用超出了工具调用上限。", "Router 超出时限", "超出时限或工具调用上限"],
+    ["en", "The Router exceeded this call's time limit or tool-call limit.", "The read-only call exceeded its tool-call limit.", "Router exceeded its time limit", "Time or tool-call limit exceeded"],
+  ] as const) it(`names the actual execution limits in ${language}`, () => {
+    setLanguageChoice(language);
+    expect(reasonText({ code: "router-budget-exhausted", params: {} })).toBe(router);
+    expect(reasonText({ code: "readonly-budget-exhausted", params: {} })).toBe(tools);
+    expect(i18n.t("taskDetail:termination.deadline")).toBe(deadline);
+    expect(i18n.t("buddies:roles.records.budgetExhausted")).toBe(count);
+  });
   it("has exactly the protocol's codes as its Chinese leaves", () => {
     expect(Object.values(zh).every(value => typeof value === "string")).toBe(true);
     expect(Object.keys(zh).sort()).toEqual(Object.keys(codes).sort());
