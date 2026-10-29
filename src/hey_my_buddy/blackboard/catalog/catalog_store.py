@@ -5,7 +5,7 @@ import json
 import uuid
 
 from ..evaluation import user_policy
-from .catalog import CatalogView
+from .catalog import CatalogView, canonical_payload
 from ..store.db import canonical_json, sha256_text
 from ...errors import BoardError
 from ...protocol.reasons import reason
@@ -41,14 +41,15 @@ def current(db):
             from ..service.harness_health import read_health
             health = read_health(db, row['harness'])
             healthy = health['status'] == 'ready'
+            payload = canonical_payload(json.loads(row['payload_json']))
             providers.extend({**p, 'models': [{**m, 'available': bool(m.get('available', True)) and healthy,
                               'unavailableReason': m.get('unavailableReason') if healthy or not m.get('available', True) else health['reason'],
                               'unavailableContent': m.get('unavailableContent') if healthy or not m.get('available', True) else None} for m in p['models']]}
-                             for p in json.loads(row['payload_json'])['providers'] if p['harness'] == row['harness'])
+                             for p in payload['providers'] if p['harness'] == row['harness'])
     if not results:
         return None
     return CatalogView({'source': 'current-native-observations', 'harnessVersion': None,
-                        'providerVersion': None, 'discoveredAt': None,
+                        'discoveredAt': None,
                         'providers': providers, 'discoveries': results, 'warnings': []})
 
 

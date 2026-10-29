@@ -2006,6 +2006,8 @@ class DiscoverySeamTests(SeamCase):
                                 timeout_seconds=180, cancelled=lambda: False)
         self.assertEqual(catalog["harness"], "codex")
         self.assertEqual(catalog["harnessVersion"], "codex-cli fixture")
+        self.assertNotIn("providerVersion", catalog)
+        self.assertFalse({"packageName", "packageVersion"} & catalog["providers"][0].keys())
         models = catalog["providers"][0]["models"]
         self.assertEqual([model["id"] for model in models], ["fixture-model"])
         self.assertEqual(models[0]["efforts"], ["low", "high"])

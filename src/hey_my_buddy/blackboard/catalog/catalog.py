@@ -187,8 +187,8 @@ def identities_from_payload(payload_json: Any, harness: str) -> set[tuple[str, s
     identities: set[tuple[str, str, str]] = set()
     if payload_json is None:
         return identities
-    view = CatalogView(json.loads(payload_json))
-    for entry in view.payload["providers"]:
+    payload = canonical_payload(json.loads(payload_json))
+    for entry in payload["providers"]:
         if entry["harness"] != harness:
             continue
         for model in entry["models"]:
@@ -372,8 +372,6 @@ def canonical_payload(value: dict) -> dict:
         providers.append({
             "harness": harness, "provider": provider,
             "displayName": _text(entry.get("displayName"), 200) or provider,
-            "packageName": _text(entry.get("packageName"), 200),
-            "packageVersion": _text(entry.get("packageVersion"), 64),
             **({"accessType": entry["accessType"]} if harness == "zcode" and
                entry.get("accessType") in ("api-key", "zhipu-coding-plan-api-key") else {}),
             "efforts": list(dict.fromkeys(effort for model in models for effort in model["efforts"])),
@@ -406,7 +404,6 @@ def canonical_payload(value: dict) -> dict:
     return {
         "source": source,
         "harnessVersion": _text(value.get("harnessVersion"), 256) or None,
-        "providerVersion": _text(value.get("providerVersion"), 512) or None,
         "discoveredAt": _text(value.get("discoveredAt"), 64) or None,
         "providers": providers,
         "discoveries": discoveries,

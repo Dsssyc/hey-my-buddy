@@ -567,7 +567,7 @@ def _catalog(connection: Connection, version: str | None, provider: str | None) 
     catalog = {"source": "codex-native-app-server", "harness": "codex", "harnessVersion": version or "unknown",
                "discoveredAt": datetime.now(timezone.utc).isoformat(),
                "providers": [{"harness": "codex", "provider": provider, "displayName": provider,
-                              "packageName": "codex", "packageVersion": version or "unknown", "models": models}]
+                              "models": models}]
                             if provider is not None else [],
                "warnings": warnings,
                "discoveries": [{"harness": "codex", "status": read_status,

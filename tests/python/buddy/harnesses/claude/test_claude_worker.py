@@ -27,7 +27,6 @@ class ClaudeWorkerTests(MicroTaskWorkerTestCase):
         super().setUp()
         self.catalog_fixture({"source": "file:claude-worker-fixture", "providers": [{
             "harness": "claude", "provider": "anthropic", "displayName": "Anthropic",
-            "packageName": "claude-code", "packageVersion": "fixture",
             "models": [{"id": BUDDY["model"], "name": "Opus fixture",
                         "efforts": ["high"], "inputModalities": ["text"]}]}], "warnings": []})
 
@@ -101,4 +100,6 @@ class ClaudeCatalogRuleTests(unittest.TestCase):
                        {"value": "haiku", "resolvedModel": "haiku"}]}, "fixture")
         self.assertEqual([m["id"] for m in catalog["providers"][0]["models"]], ["haiku"])
         self.assertEqual(catalog["providers"][0]["models"][0]["efforts"], ["default"])
+        self.assertNotIn("providerVersion", catalog)
+        self.assertFalse({"packageName", "packageVersion"} & catalog["providers"][0].keys())
         self.assertTrue(catalog["warnings"])

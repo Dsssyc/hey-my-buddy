@@ -142,6 +142,37 @@ class UpgradeChainTests(unittest.TestCase):
         self.assertGreater(self.db.execute("SELECT COUNT(*) FROM router_requests,json_tree(snapshot_json) WHERE json_tree.key='bytesRead'").fetchone()[0], 0)
         self.assertEqual(self.db.execute("SELECT json_extract(spec_json,'$.decision.document.budget.bytesRead') FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()[0], 524288)
 
+    def test_catalog_observation_stock_drops_only_unused_metadata(self):
+        self.schema31()
+        query = 'SELECT rowid,observation_id,request_id,response_json,harnesses_json FROM catalog_observations ORDER BY rowid'
+        before = [tuple(row) for row in self.db.execute(query)]
+        self.assertEqual(len(before), 4)
+        expected = {}
+        removed = {'providerVersion': 0, 'packageName': 0, 'packageVersion': 0}
+        for row in before:
+            if row[3] is None:
+                expected[row[0]] = None
+                continue
+            value = json.loads(row[3])
+            catalog = value['catalog']
+            self.assertEqual(catalog.pop('providerVersion'),
+                             None if row[1] == 3 else 'fixture-provider-version')
+            removed['providerVersion'] += 1
+            for provider in catalog['providers']:
+                for field in ('packageName', 'packageVersion'):
+                    self.assertEqual(provider.pop(field), '')
+                    removed[field] += 1
+            expected[row[0]] = value
+        self.assertEqual(removed, {'providerVersion': 3, 'packageName': 3, 'packageVersion': 3})
+        retained = {table: [tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
+                    for table in ('evaluation_catalog', 'catalog_current', 'catalog_pending')}
+        upgrade.upgrade_state(self.state)
+        after = [tuple(row) for row in self.db.execute(query)]
+        self.assertEqual([row[:3] + row[4:] for row in after], [row[:3] + row[4:] for row in before])
+        self.assertEqual({row[0]: json.loads(row[3]) if row[3] is not None else None for row in after}, expected)
+        for table, rows in retained.items():
+            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
+
     def test_floor_runs_every_step_with_schema31_stock_and_matches_a_new_board(self):
         def step_with_new_form(db):
             schema_30_31.upgrade(db)

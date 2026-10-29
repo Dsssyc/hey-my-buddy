@@ -257,6 +257,18 @@ class UpgradeFixtureTests(unittest.TestCase):
             elif name == 'attempt_process_identities':
                 keep = [i for i, column in enumerate(identity_columns) if column != 'process_group_id']
                 self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
+            elif name == 'catalog_observations':
+                self.assertEqual(len(actual), len(original))
+                for old, new in zip(original, actual):
+                    self.assertEqual(new[:3] + new[4:], old[:3] + old[4:])
+                    if old[3] is None:
+                        self.assertIsNone(new[3])
+                        continue
+                    expected = json.loads(old[3])
+                    del expected['catalog']['providerVersion']
+                    for provider in expected['catalog']['providers']:
+                        del provider['packageName'], provider['packageVersion']
+                    self.assertEqual(json.loads(new[3]), expected)
             elif name == 'router_settings':
                 self.assertEqual([row[:len(original[0])] for row in actual], original)
                 self.assertEqual(actual[0][-2:], (None, 3600))
@@ -273,6 +285,89 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual(upgrade.idle_snapshot(state), after)
         self.assertEqual({p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
                           if p.is_file() and not p.name.startswith('board.sqlite3')}, files)
+
+    def test_retained_catalog_is_normalized_for_refresh_and_console_without_rewriting_evidence(self):
+        from console.test_console import Browser
+        from support import FakeClock, InProcessBoard
+        from hey_my_buddy.blackboard.catalog import catalog, catalog_store
+
+        fixture, connection = self.restored('retained-catalog')
+        original = dict(connection.execute('SELECT discovery_id,CAST(payload_json AS BLOB) FROM evaluation_catalog'))
+        self.assertEqual(len(original), 3)
+        for raw in original.values():
+            value = json.loads(raw)
+            self.assertIn('providerVersion', value)
+            for provider in value['providers']:
+                self.assertTrue({'packageName', 'packageVersion'} <= provider.keys())
+        legacy_id = connection.execute("SELECT discovery_id FROM catalog_current WHERE harness='codex'").fetchone()[0]
+        pending = [tuple(row) for row in connection.execute('SELECT * FROM catalog_pending ORDER BY model')]
+        sources = [tuple(row) for row in connection.execute('SELECT buddy_id,source FROM buddies ORDER BY buddy_id')]
+        board = InProcessBoard(fixture['state'], clock=FakeClock('2026-01-01T00:03:00.000Z'))
+        self.addCleanup(board.close)
+
+        def assert_current_form(value):
+            if isinstance(value, dict):
+                self.assertFalse({'packageName', 'packageVersion', 'providerVersion'} & value.keys())
+                children = value.values()
+            elif isinstance(value, list):
+                children = value
+            else:
+                return
+            for child in children:
+                assert_current_form(child)
+
+        def current():
+            with board.store.db.read() as db:
+                view = catalog_store.current(db)
+                self.assertEqual(db.execute("SELECT discovery_id FROM catalog_current WHERE harness='codex'").fetchone()[0], legacy_id)
+            metadata = view.metadata()
+            self.assertEqual([model['id'] for provider in metadata['providers'] for model in provider['models']], ['fixture-alpha'])
+            assert_current_form(metadata)
+
+        current()
+        request_id = connection.execute('SELECT request_id FROM catalog_observations WHERE observation_id=3').fetchone()[0]
+        replay = board.call('model_catalog_refresh', {'requestId': request_id})
+        self.assertTrue(replay['duplicate'])
+        self.assertEqual(replay['discoveryId'], legacy_id)
+        assert_current_form(replay)
+        unknown = {'source': 'fixture:native-unknown', 'providers': [], 'discoveries': [
+            {'harness': 'codex', 'status': 'unknown', 'accountStatus': 'unknown',
+             'reason': {'code': 'model-list-shape-unreadable', 'params': {}}}]}
+        with mock.patch('hey_my_buddy.buddy.harnesses.registry.adapter') as native:
+            native.return_value.discover_models.return_value = unknown
+            board.service._refresh_harness_catalog('codex', board.service.harnesses.get('codex'))
+            native.return_value.discover_models.assert_called_once_with(state_dir=fixture['state'])
+        current()
+        self.assertEqual(connection.execute("SELECT status FROM catalog_current WHERE harness='codex'").fetchone()[0], 'unknown')
+
+        board.service.automatic_discovery = True
+        browser = Browser(board.call('console', {'action': 'open'})['url'])
+        snapshot = browser.bootstrap()
+        assert_current_form(snapshot)
+        self.assertEqual({buddy['model'] for buddy in snapshot['buddies']}, {'fixture-alpha', 'fixture-beta', 'fixture-gamma'})
+        status, _headers, body = browser.command('model_catalog_refresh', {'requestId': 'retained-http-refresh'}, csrf=snapshot['csrfToken'])
+        self.assertEqual(status, 200, body)
+        response = json.loads(body)['result']
+        self.assertEqual(response['catalog']['source'], 'current-native-observations')
+        self.assertTrue(response['catalog']['providers'])
+        assert_current_form(response)
+        current()
+        self.assertEqual([tuple(row) for row in connection.execute('SELECT * FROM catalog_pending ORDER BY model')], pending)
+        self.assertEqual([tuple(row) for row in connection.execute('SELECT buddy_id,source FROM buddies ORDER BY buddy_id')], sources)
+
+        board.service.automatic_discovery = False
+        with mock.patch.dict(os.environ, {'HMB_MODEL_CATALOG_FILE': str(FIXTURE / 'catalog.json')}):
+            fresh = board.call('model_catalog_refresh', {'requestId': 'new-file-discovery'})
+        assert_current_form(fresh)
+        self.assertEqual(len(fresh['catalog']['providers'][0]['models']), 3)
+        rows = dict(connection.execute('SELECT discovery_id,CAST(payload_json AS BLOB) FROM evaluation_catalog'))
+        self.assertEqual({key: rows[key] for key in original}, original)
+        self.assertGreater(len(rows), len(original))
+        for key in rows.keys() - original.keys():
+            assert_current_form(json.loads(rows[key]))
+        for (raw,) in connection.execute('SELECT response_json FROM catalog_observations WHERE response_json IS NOT NULL'):
+            assert_current_form(json.loads(raw))
+        self.assertEqual(catalog.identities_from_payload(rows[legacy_id], 'codex'), {('openai', 'fixture-alpha', 'high')})
 
     def test_failed_second_column_addition_rolls_back_the_whole_upgrade(self):
         fixture, connection = self.restored('failed-upgrade', migrate=False)
