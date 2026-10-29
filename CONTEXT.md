@@ -18,6 +18,10 @@ _Avoid_: Buddy, Buddy service; `看板` (for a blackboard or what it stores)
 The private directory where one blackboard keeps its data on disk. It lies under the user's home by default; `HMB_STATE_DIR` selects another one.
 _Avoid_: 状态根 / state root
 
+**升级下限 / upgrade floor**:
+The oldest stored form of a blackboard that the current version can still upgrade; every newer form is reached from it one step at a time. It moves only by an explicit decision, and a blackboard older than it is refused with the release that can upgrade it.
+_Avoid_: 升级基点 / upgrade base (it named a start that moved at every release)
+
 **控制台 / console**:
 The blackboard's private local entry for the user: a web application that shows what the blackboard records and lets the user act on it only through the blackboard's own operations. Larger to smaller: 黑板 / blackboard, then 控制台 / console, then 界面 / page.
 
