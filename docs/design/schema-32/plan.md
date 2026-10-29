@@ -90,7 +90,8 @@
 ### 3. 目录里没人读的三个字段
 
 - 删掉 `packageName`、`packageVersion` 与 `providerVersion`，连同写者：Claude 与 Codex 发现产出的包名与包版本、ZCode 的包版本，以及 `catalog.py` 里的规整；
-- 升级去掉目录各表存量里的这三个键。
+- 升级去掉 `catalog_observations.response_json` 存量里的这三个键。
+- **2026-10-30 实现方查出、Host 定：** `evaluation_catalog.payload_json` 不改写。它的 `discoveryId` 是负载内容的哈希，`buddies.source` 与封存的快照引用它，所以它是冻结证据，旧行原样保留。回流在源头堵住：从存储的负载里取出、会进入视图或被带进新负载的条目，都经过新发现用的同一个规整，只留下当前形式的字段。
 
 ### 4. 封存只存一份补丁（开发者 2026-10-29 同意随这一批）
 
