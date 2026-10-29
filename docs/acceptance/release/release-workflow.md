@@ -7,4 +7,4 @@
 - **核对：** 两个文件的差异读过；actionlint 1.7.12 退出 0。
 - **开发者要在 PyPI 设置的：** 可信发布者（首次发布可在账户的 Publishing 页面建 pending publisher）：项目名 `hey-my-buddy`，GitHub owner `Dsssyc`，仓库 `hey-my-buddy`，工作流文件名 `build-distribution.yml`，environment 名 `pypi`。
 - **验证边界：** ARM 版 Windows 与前端任务的 uv 此后在推送到 `ci/cross-platform` 的 CI 里运行；发布任务在 2026-10-27 发 0.54.1 时第一次运行并成功（[发版记录](../installs/0.54.1.md)）。
-- **消耗：** 见看板上这个微任务的记录。
+- **消耗：** 见黑板上这个微任务的记录。

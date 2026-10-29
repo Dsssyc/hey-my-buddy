@@ -72,7 +72,7 @@ blackboard.evaluation.test_evaluation
 
 完整 check suite、安装/冷启动及真实 harness 回合与故障注入留给 Host，不由 Worker 执行；需要真实启动器、服务或共享内存的 `tests/python/install/test_launcher.py`、`tests/python/install/test_upgrade_service.py` 与 `tests/python/buddy/harnesses/test_c_two_live.py` 由 Host 在其允许这些能力的环境运行。Frontend 和浏览器测试本批未运行，未修改 `apps/console`。Host 仍需在私有服务重跑已有 PATH 交替实验，并核对首次采用目录后的 revision 保持、没有新的目录 observation、健康 revision 没有被线索变化推进；超过六小时或强制刷新可以产生新 observation，但相同内容仍不改变 table revision。源码修改不证明已安装服务的行为，验收应绑定实际候选安装。
 
-另一个无需模型或服务的验证办法如下：在候选检出根目录运行，使用已清理继承凭据的 Python 环境及 `PYTHONPATH=src`，只创建临时 SQLite 看板，用合成健康行与可信目录读取驱动生产 `record`；不调用原生发现或账号读取。这个脚本本地已执行，输出为 `tableRevisions: [1, 1, 2]`、修订 `(1, catalog)` 与 `(2, catalog)`，目录事件总数 2。
+另一个无需模型或服务的验证办法如下：在候选检出根目录运行，使用已清理继承凭据的 Python 环境及 `PYTHONPATH=src`，只创建临时 SQLite 黑板，用合成健康行与可信目录读取驱动生产 `record`；不调用原生发现或账号读取。这个脚本本地已执行，输出为 `tableRevisions: [1, 1, 2]`、修订 `(1, catalog)` 与 `(2, catalog)`，目录事件总数 2。
 
 ```python
 from pathlib import Path

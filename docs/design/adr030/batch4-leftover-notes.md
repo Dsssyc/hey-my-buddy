@@ -22,7 +22,7 @@
 
 ## Worker 局部验证
 
-使用 Host 提供的只读解释器，清掉 AGENTS.md 列出的十个继承变量，以本检出的 `src:tests/python` 为 PYTHONPATH；通过现有 `cli.checks.child_environment` 给每个文件建立独立的私有 HOME、harness 配置路径、state/runtime 和临时目录。每个测试文件单独一个 unittest 子进程，未使用 uv、安装依赖、真实 harness、日常看板或模型调用。
+使用 Host 提供的只读解释器，清掉 AGENTS.md 列出的十个继承变量，以本检出的 `src:tests/python` 为 PYTHONPATH；通过现有 `cli.checks.child_environment` 给每个文件建立独立的私有 HOME、harness 配置路径、state/runtime 和临时目录。每个测试文件单独一个 unittest 子进程，未使用 uv、安装依赖、真实 harness、日常黑板或模型调用。
 
 | 文件模块 | 本次执行范围 | 结果 |
 | --- | --- | --- |

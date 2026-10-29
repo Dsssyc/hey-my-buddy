@@ -6,7 +6,7 @@
 
 - `protocol/process_handle.py` 的 `ProcessHandle`：POSIX 上把进程组号定为根的 pid；`group_alive()` 只用 `killpg(pgid, 0)`；`terminate()` 按第 14 条的顺序请停、补 SIGTERM、反复 SIGKILL 直到组空；`shutdown_confirmed()` 要根已回收、组已空。
 - 以新会话起根的地方：`buddy/harnesses/codex/native_run.py`、`claude/native_run.py`、`zcode/native_run.py`、`dsh/acp/launch.py`、`buddy/runtime/command.py`、`protocol/process_controller.py`、`codex/account_probe.py`，以及服务起执行进程的地方。每个根各自是一个会话的首进程。
-- 恢复：`protocol/process_identity.py` 的 `inspect_process_identity`、`kill_verified_process_group`、`stop_orphan_process`。看板的 `attempt_process_identities` 记执行根的开机会话、根进程号、启动时刻与进程组（POSIX）或 Job 名（Windows）；原生 harness 的停止，POSIX 上由服务读执行写下的原生进程日志来证明（第 7 条）。
+- 恢复：`protocol/process_identity.py` 的 `inspect_process_identity`、`kill_verified_process_group`、`stop_orphan_process`。黑板的 `attempt_process_identities` 记执行根的开机会话、根进程号、启动时刻与进程组（POSIX）或 Job 名（Windows）；原生 harness 的停止，POSIX 上由服务读执行写下的原生进程日志来证明（第 7 条）。
 - 删受管检出有两条路：回收走 `blackboard/tasks/workflow.py` 的 `_reclaim_checkout`，受阻时报出具体原因、什么都不改；删除宏任务走 `blackboard/tasks/macro_task_deletion.py` 的 `_delete_workspaces`。
 - 进程观察已经用 psutil（`process_observation.py`）。
 

@@ -42,7 +42,7 @@ Router 的 `DecisionAdapter.collect` 已原样带出 `nativeEvidence`，模拟�
 
 ## 检查与交接
 
-使用任务提供的只读依赖解释器，从本检出的 `src:tests/python` 导入源码。测试子进程使用 `cli.checks.child_environment`：先清除继承的 runtime、Worker、agent 凭据及环境钉住的路径，再给每个测试进程单独的私有 HOME、四个 harness 的配置根、状态根、运行时根与临时根；只启动离线夹具，没有启动已安装的 harness，没有读取用户主目录、日常看板或账户，没有模型调用。临时执行脚本和日志在系统临时目录，不属于交付文件。
+使用任务提供的只读依赖解释器，从本检出的 `src:tests/python` 导入源码。测试子进程使用 `cli.checks.child_environment`：先清除继承的 runtime、Worker、agent 凭据及环境钉住的路径，再给每个测试进程单独的私有 HOME、四个 harness 的配置根、状态根、运行时根与临时根；只启动离线夹具，没有启动已安装的 harness，没有读取用户主目录、日常黑板或账户，没有模型调用。临时执行脚本和日志在系统临时目录，不属于交付文件。
 
 最终受影响文件及相关角色回归共 13 个模块、311 条测试通过：`buddy.harnesses.test_run_contract` 37，`buddy.roles.test_run_native_evidence` 9，`buddy.harnesses.codex.test_native_run` 82，`buddy.harnesses.codex.test_no_tool_codex` 13，`buddy.harnesses.dsh.test_native_run` 60，`buddy.harnesses.zcode.test_no_tool_zcode` 10，`buddy.harnesses.zcode.test_zcode_tool_evidence` 27，`buddy.roles.test_permission_evidence` 3，`buddy.roles.test_registered_review` 4，`buddy.roles.test_schema_worker` 12，`buddy.roles.test_run_execution` 18，`buddy.roles.test_registered_run_wiring` 21，`buddy.roles.test_role_controller` 15。全部模块在上述隔离环境里完整运行，没有跳过测试；`git diff --check` 通过。首次新版 ZCode 测试因夹具不发完成事件而超时，修正上述单一分支后已通过；不是通过放宽结束或停止条件解决。
 

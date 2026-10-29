@@ -1,6 +1,6 @@
 # ADR-019 第 11 条：attempt 证据与 harness 私有目录盘点
 
-本文是 `socu/private-dirs` 在 `0c5592b` 上的只读源码盘点，供第 11 条实施时逐项迁移与登记备份白名单；路径均相对于 Buddy 状态目录，除非显式写出系统临时目录。未运行模型、原生 harness 或日常看板。当前代码以 `attempts/<taskId>/<attemptId>/` 为 Worker 的 `ExecutionContext.directory`，同时把证据、控制文件、凭据和部分原生内容放在其中；`backup.py` 目前仍整棵复制并按位置排除少数私有项。
+本文是 `socu/private-dirs` 在 `0c5592b` 上的只读源码盘点，供第 11 条实施时逐项迁移与登记备份白名单；路径均相对于 Buddy 状态目录，除非显式写出系统临时目录。未运行模型、原生 harness 或日常黑板。当前代码以 `attempts/<taskId>/<attemptId>/` 为 Worker 的 `ExecutionContext.directory`，同时把证据、控制文件、凭据和部分原生内容放在其中；`backup.py` 目前仍整棵复制并按位置排除少数私有项。
 
 目标布局为 `harnesses/<adapter>/goals/<sha256(taskId)>/native/` 保存续做所需的 goal 级原生会话与绑定，`harnesses/<adapter>/goals/<sha256(taskId)>/attempts/<attemptId>/` 保存每次执行的私有主目录、凭据、socket、服务商快照与无工具调用私有根。`attempts/<taskId>/<attemptId>/` 仅保存经声明的普通证据文件。`decision` 是虚拟适配器，其私有内容按实际执行的原生 adapter 存放；`review-check` 使用 Codex 私有区。为后续 B2 独立账户预留 `harnesses/<adapter>/accounts/worker/`，本批不创建账户或改变登录来源。迁移的路径构造必须由统一的路径接口按已验证的 adapter、taskId 和 attemptId 完成，控制器不能自行重新拼接布局。
 
@@ -37,7 +37,7 @@
 
 生命周期必须以 Worker/控制器共同确认的真实停止证据为准：`worker.py` 在 collect 后形成 `shutdownConfirmed` 并写 durable receipt；Codex 对审阅/fast 的 auth 链接只在控制器确认 native stop 时执行 `_remove_private_auth`；ZCode bridge 关闭时删除 socket，但当前没有针对 `agent-credential.json`、`inquiry.json`、`finish-bridge.json` 与 provider 快照的统一停止后删除。`storage.py` 当前只认识 `harnesses/zcode/<sha256(goal)>` 的可回收原生根，其 `_zcode_reasons` 要求 accepted、真实 self/descendant stop、宽限期、无待续做和开放请求；新的各 adapter goal/attempt 私有根需纳入同等审查，未知停止不能回收。`tree_info` 使用 `lstat` 和 `os.walk(followlinks=False)` 计量，`shutil.rmtree` 删除目录本身而不沿链接；路径身份、Windows junction/reparse point 的相应防护仍需在实施中核实。
 
-现有备份 `_excluded_attempt_path` 只按位置跳过 review `native/codex-home`、no-tool 的 `dsh-home`/`native` 和 ZCode provider 快照；`_regular_files` 对 attempts 里的其余链接或特殊文件只记为 skipped，其他普通文件全复制。它会把上述凭据 JSON 和控制器签名 key 当普通文件备份，且 `claude-private/`、DSH `sessions/`、`deepseek-delegate-run-*`、review `frozen-input/` 没有结构排除。第 11 条要求改为明确文件类别白名单：白名单以外记数量和最多 20 条相对路径并提示 health/控制台，白名单内链接或特殊文件拒绝且指明相对路径；备份和恢复绝不跟随链接或向链接写入。`decision-input.json`/`decision-output.json` 见 ADR 的既有看板样例，但本次在当前源码的实际写入路径搜索未找到这两个文件，旧看板整理时仍须作为历史证据审查，不能凭文件名自动归类。
+现有备份 `_excluded_attempt_path` 只按位置跳过 review `native/codex-home`、no-tool 的 `dsh-home`/`native` 和 ZCode provider 快照；`_regular_files` 对 attempts 里的其余链接或特殊文件只记为 skipped，其他普通文件全复制。它会把上述凭据 JSON 和控制器签名 key 当普通文件备份，且 `claude-private/`、DSH `sessions/`、`deepseek-delegate-run-*`、review `frozen-input/` 没有结构排除。第 11 条要求改为明确文件类别白名单：白名单以外记数量和最多 20 条相对路径并提示 health/控制台，白名单内链接或特殊文件拒绝且指明相对路径；备份和恢复绝不跟随链接或向链接写入。`decision-input.json`/`decision-output.json` 见 ADR 的既有黑板样例，但本次在当前源码的实际写入路径搜索未找到这两个文件，旧黑板整理时仍须作为历史证据审查，不能凭文件名自动归类。
 
 控制 JSON 字段检查的边界是：`zcode-control.json` 直接嵌入 inquiry token，`agent-credential.json` 直接嵌入 agent token，`inquiry.json` 直接嵌入 bridge token，`finish-bridge.json` 直接嵌入签名 key；这些文件及其暂存文件绝不可作为证据复制。`codex-control.json`、`claude-control.json`、`readonly-control.json`、`no-tool-control.json` 在当前源码没有密钥字段，但均包含私有路径或 prompt，白名单应精确到文件名与常规文件类型，不应泛化为所有 `*-control.json`。DSH no-tool 的 `patch.json` 引用原生设置和凭据文件的绝对路径，`--dump-config` 的 preflight stdout 可能带原生配置内容；在证明脱敏之前把这两者归私有内容。DSH coding 的 inquiry token 也以 `--inquiry-token` 传给 Node runner，迁移目录不解决这一现有命令行暴露面。
 

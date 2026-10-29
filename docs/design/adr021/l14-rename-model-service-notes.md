@@ -151,7 +151,7 @@ Python 的指定目录检查退出 1：137 个文件中 116 个通过、21 个�
 
 `store/migrations.py` 的 `UPGRADE_BASE_TABLES` 固定将当前表 `model_service_notes` 指向旧基点的 `family_annotations`，将 `model_service_concurrency` 指向旧基点的 `model_concurrency`；读取时只查这两个旧表，得到的设置以当前名字为键，写入时只使用当前表名。映射也显式列出其余没有改名的设置表，没有探测、别名或同时认新旧名字的运行路径。备注、并发上限及其时间字段按原列顺序携带，工作历史的处理未改。
 
-`tests/fixtures/` 与旧样板生成器均未改。`test_upgrade_migration.py` 从旧表取得独立的原始值，再用新表逐项核对；`test_upgrade_fixture.py` 继续比较升级结果和带相同设置的全新看板的全部表及数据。两个文件在本次指定目录检查中均通过，归档、恢复等已有检查也随所属目录运行。新看板直接创建新表和新索引，schema 数字未改。
+`tests/fixtures/` 与旧样板生成器均未改。`test_upgrade_migration.py` 从旧表取得独立的原始值，再用新表逐项核对；`test_upgrade_fixture.py` 继续比较升级结果和带相同设置的全新黑板的全部表及数据。两个文件在本次指定目录检查中均通过，归档、恢复等已有检查也随所属目录运行。新黑板直接创建新表和新索引，schema 数字未改。
 
 ## 留下的每一处匹配
 
@@ -166,14 +166,14 @@ Python 的指定目录检查退出 1：137 个文件中 116 个通过、21 个�
 | `packaging/generate-upgrade-fixture.py:281:17` | `familyPreferenceChanges` | 生成和校验 0.34.1/schema 18 的固定样板，调用旧基点源码的旧参数、旧表及固定备注文字。 |
 | `packaging/generate-upgrade-fixture.py:282:84` | `family` | 生成和校验 0.34.1/schema 18 的固定样板，调用旧基点源码的旧参数、旧表及固定备注文字。 |
 | `packaging/generate-upgrade-fixture.py:417:44` | `family_annotations` | 生成和校验 0.34.1/schema 18 的固定样板，调用旧基点源码的旧参数、旧表及固定备注文字。 |
-| `tests/python/blackboard/store/test_upgrade_fixture.py:68:77` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新看板。 |
-| `tests/python/blackboard/store/test_upgrade_fixture.py:78:73` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新看板。 |
-| `tests/python/blackboard/store/test_upgrade_fixture.py:79:24` | `family_annotations` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新看板。 |
-| `tests/python/blackboard/store/test_upgrade_fixture.py:79:46` | `model_concurrency` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新看板。 |
-| `tests/python/blackboard/store/test_upgrade_fixture.py:196:34` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新看板。 |
-| `tests/python/blackboard/store/test_upgrade_fixture.py:197:34` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新看板。 |
-| `tests/python/blackboard/store/test_upgrade_fixture.py:215:27` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新看板。 |
-| `tests/python/blackboard/store/test_upgrade_fixture.py:226:65` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新看板。 |
+| `tests/python/blackboard/store/test_upgrade_fixture.py:68:77` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新黑板。 |
+| `tests/python/blackboard/store/test_upgrade_fixture.py:78:73` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新黑板。 |
+| `tests/python/blackboard/store/test_upgrade_fixture.py:79:24` | `family_annotations` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新黑板。 |
+| `tests/python/blackboard/store/test_upgrade_fixture.py:79:46` | `model_concurrency` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新黑板。 |
+| `tests/python/blackboard/store/test_upgrade_fixture.py:196:34` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新黑板。 |
+| `tests/python/blackboard/store/test_upgrade_fixture.py:197:34` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新黑板。 |
+| `tests/python/blackboard/store/test_upgrade_fixture.py:215:27` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新黑板。 |
+| `tests/python/blackboard/store/test_upgrade_fixture.py:226:65` | `family_preferences` | 读取或修改旧 schema 18 样板，或断言旧偏好表不被带到新黑板。 |
 | `src/hey_my_buddy/console/assets/assets/index-BI7ePOsQ.js:8:11998` | `fontFamily` | 依赖生成的 React 字体属性映射或 CSS 解析器字体类型名。 |
 | `src/hey_my_buddy/console/assets/assets/index-BI7ePOsQ.js:8:12012` | `font-family` | 依赖生成的 React 字体属性映射或 CSS 解析器字体类型名。 |
 | `src/hey_my_buddy/console/assets/assets/index-BI7ePOsQ.js:9:66120` | `family-name` | 依赖生成的 React 字体属性映射或 CSS 解析器字体类型名。 |

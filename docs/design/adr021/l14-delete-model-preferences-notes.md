@@ -4,7 +4,7 @@
 
 ## 删除清单与当前读写
 
-删除新看板的 `family_preferences` 表与 `effective_preferences` 合成视图；`evaluation_preferences` 只存一个 buddy 自己的 `pin`、`prefer` 或 `exclude`，没有记录表示不设偏好。表的 CHECK 与发布边界都删除旧取值 `none`，清除继续使用 `preferenceChanges[].mode: null`。
+删除新黑板的 `family_preferences` 表与 `effective_preferences` 合成视图；`evaluation_preferences` 只存一个 buddy 自己的 `pin`、`prefer` 或 `exclude`，没有记录表示不设偏好。表的 CHECK 与发布边界都删除旧取值 `none`，清除继续使用 `preferenceChanges[].mode: null`。
 
 删除快照、控制台核心及 buddy 分页里的 `familyPreferences` 和 `preferenceOverrides`，偏好条目与路由冻结的排除条目里的 `source`，发布请求与回应计数里的 `familyPreferenceChanges`。沿用 `preferences`、`preferenceChanges`、`profile`、`adapter` 与 `family` 的现有名字；其他来源字段继续表达各自的来源。
 
@@ -14,9 +14,9 @@
 
 ## 从基点带设置
 
-升级基点仍是固定的 0.34.1、schema 18 夹具，当前新看板仍在待做的 schema 19 升级里调整形式。`read_settings` 只在升级基点上读取一次旧视图的 `profile_id,mode,reason`，把基点已经合成的结果变成新看板的 `evaluation_preferences` 行；`write_settings` 按当前单层形式写入。模型服务默认值不再作为单独的表带走，覆盖值的理由与旧 `none` 抑制默认值的结果均由基点视图确定。
+升级基点仍是固定的 0.34.1、schema 18 夹具，当前新黑板仍在待做的 schema 19 升级里调整形式。`read_settings` 只在升级基点上读取一次旧视图的 `profile_id,mode,reason`，把基点已经合成的结果变成新黑板的 `evaluation_preferences` 行；`write_settings` 按当前单层形式写入。模型服务默认值不再作为单独的表带走，覆盖值的理由与旧 `none` 抑制默认值的结果均由基点视图确定。
 
-新增 `test_upgrade_preserves_each_buddys_composed_preference`：加载固定夹具到私有副本，补出两个 effort 变体，放入模型服务 prefer、一条 buddy exclude 覆盖与一条旧 none 覆盖，把一个继承默认值的 buddy 设为不可用并禁用；记录升级前每个 buddy 合成后的 mode 与 reason，走真实 `idle_snapshot` 与 `migrate_board` 后逐个比较，包括没有偏好的 buddy，核对新看板没有旧表或视图。原有升级与新建看板逐表对照测试继续运行，夹具文件未改。
+新增 `test_upgrade_preserves_each_buddys_composed_preference`：加载固定夹具到私有副本，补出两个 effort 变体，放入模型服务 prefer、一条 buddy exclude 覆盖与一条旧 none 覆盖，把一个继承默认值的 buddy 设为不可用并禁用；记录升级前每个 buddy 合成后的 mode 与 reason，走真实 `idle_snapshot` 与 `migrate_board` 后逐个比较，包括没有偏好的 buddy，核对新黑板没有旧表或视图。原有升级与新建黑板逐表对照测试继续运行，夹具文件未改。
 
 旧名称的必要读取只留在升级基点的视图读取及基点夹具验证、私有旧形式测试输入中；旧接口与取值也出现在拒绝或缺席断言里。当前运行的源码、前端与测试数据没有双层读法。
 
@@ -30,7 +30,7 @@
 
 ## Python 测试清单
 
-- `test_fresh_snapshot_is_unconfigured_without_a_verified_router`：原守新看板未设置 Router 与空策略，删除两层字段断言，其他边界保留。
+- `test_fresh_snapshot_is_unconfigured_without_a_verified_router`：原守新黑板未设置 Router 与空策略，删除两层字段断言，其他边界保留。
 - `test_core_carries_the_state_keys_and_snapshot_wraps_them`：原守核心与快照的字段一致，改为只有 preferences。
 - `test_family_preference_covers_every_effort_and_a_none_override_wins`：原守默认值扩散、覆盖胜出与 none 抑制；替换为 `test_buddy_preferences_are_saved_per_profile_and_can_be_cleared`，走真实发布与读取，证明 prefer 只属于指定 buddy、可修改为 exclude、按 ID 读取与 null 清除。
 - `test_family_preference_null_clears_and_bad_families_are_refused`：原守默认值清除、未知模型服务与重复补丁拒绝；替换为 `test_retired_preference_shapes_are_rejected_without_changes`，证明旧发布字段与 none 拒绝且无写入。
@@ -57,7 +57,7 @@
 - `test_assets_are_served_with_headers_and_traversal_is_refused`：原守资源标头与路径穿越拒绝；丢弃未使用的控制台说明，断言不变。
 - `test_backup_preflight_is_computed_on_demand_only`：原守预检按需计算及条件读取；丢弃未读取的重放标头，断言不变。
 - `test_pending_count_counts_distinct_roots_awaiting_their_host`：原守等待 Host 的根微任务计数；丢弃未读取的 HTTP 状态，断言不变。
-- `test_a_database_replacement_invalidates_every_cached_route`：原守看板替换让缓存读路径重算；丢弃未读取的重放正文，断言不变。
+- `test_a_database_replacement_invalidates_every_cached_route`：原守黑板替换让缓存读路径重算；丢弃未读取的重放正文，断言不变。
 
 ## 前端与浏览器测试清单
 
@@ -231,4 +231,4 @@ operation timed out
 
 全仓库按删除的表、视图、字段与偏好取值搜索。当前源码唯一旧视图读取在待做升级的基点设置读取里；Python 中仅旧夹具验证、私有旧形式准备与拒绝断言保留旧名，前端仅缺席断言保留 familyPreferenceChanges。project_identity_reason、recorded_project_id 与 identityReason 在当前源码和测试中无使用；harness 与登录开关无版本写入参数，微任务的同名版本参数保留。
 
-固定夹具、其基点生成脚本与历史设计或验收记录仍含基点形式；写入范围之外的 reference 与其他设计页尚待计划第 12 行的文档最后整理。本次没有修改 tests/fixtures、packaging 或其他 docs，没有改动日常安装或运行日常服务、Worker，没有读取用户自己的 harness 配置、凭据或执行模型调用。安装类检查只在 runner 提供的私有目录里构建或安装，浏览器仅访问带 synthetic-fixture-data 标头的预览；真实日常看板、真实 harness、Windows 与实际安装后的运行不在本次验证内。
+固定夹具、其基点生成脚本与历史设计或验收记录仍含基点形式；写入范围之外的 reference 与其他设计页尚待计划第 12 行的文档最后整理。本次没有修改 tests/fixtures、packaging 或其他 docs，没有改动日常安装或运行日常服务、Worker，没有读取用户自己的 harness 配置、凭据或执行模型调用。安装类检查只在 runner 提供的私有目录里构建或安装，浏览器仅访问带 synthetic-fixture-data 标头的预览；真实日常黑板、真实 harness、Windows 与实际安装后的运行不在本次验证内。

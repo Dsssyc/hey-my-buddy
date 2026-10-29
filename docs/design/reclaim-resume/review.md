@@ -10,7 +10,7 @@ A1（不删错；功能上严重）被忽略的文件，续做与计划时的证
 
 A2（低；两条路径都有，早就有）登记目录里，HEAD 与索引之外的东西没有证明。`git worktree remove` 最后会删掉 `.git/worktrees/<名字>`，跟着一起没了的有：这个 worktree 自己的引用（`refs/worktree/*`、`refs/bisect/*`）、`logs/HEAD`，以及进行中的 rebase 或合并状态。续做（`workspace.py:2271-2281`）和计划时的证明都只比 HEAD 与索引。如果 Worker 用 `git update-ref refs/worktree/keep <未封存的提交>` 留了一个提交，删除之后这个提交就从可达处消失了，要等 gc 才真正丢掉。复现做法：在检出里建这样一个引用，然后回收，看引用还在不在。这一条只记下来，不属于这个微任务的范围。
 
-A3（低；两条路径都有，早就有）证明与删除之间的空档。内容证明在 `workflow.py:5443` 的 `cleanup_inspect` 里做，删除在 `workflow.py:5502` 的 `cleanup_remove` 里做，中间隔着一次数据库写。`cleanup_remove` 续做时只重新证明身份（`workspace.py:2535`），不重新证明内容。`applying` 的围栏只挡住看板上的写者，挡不住看板之外的进程（Host 自己的 shell、开发者）。这段时间里写进去的文件会被删掉。计划时的路径也有同样的空档（`inspect` 与 `remove` 之间同样隔着这次写），所以续做没有让它变大。复现做法：替换 `cleanup_remove` 外面那一层，先写一个文件，再调用真正的删除。
+A3（低；两条路径都有，早就有）证明与删除之间的空档。内容证明在 `workflow.py:5443` 的 `cleanup_inspect` 里做，删除在 `workflow.py:5502` 的 `cleanup_remove` 里做，中间隔着一次数据库写。`cleanup_remove` 续做时只重新证明身份（`workspace.py:2535`），不重新证明内容。`applying` 的围栏只挡住黑板上的写者，挡不住黑板之外的进程（Host 自己的 shell、开发者）。这段时间里写进去的文件会被删掉。计划时的路径也有同样的空档（`inspect` 与 `remove` 之间同样隔着这次写），所以续做没有让它变大。复现做法：替换 `cleanup_remove` 外面那一层，先写一个文件，再调用真正的删除。
 
 A4（站得住）身份证明骗不过去。逐项看：登记目录按路径加 inode 的 `_identity` 认（`workspace.py:2235-2242`），清单里没有 `gitDir`，所以只能遍历 `worktrees/`，这样做是必要的；`gitdir` 必须指回 `<检出>/.git`（2243-2245）；检出里的 `.git` 如果在，必须是一个普通文件，并且解析后指向同一个登记目录，是目录或符号链接都拒绝（2246-2257）；登记按路径从 `git worktree list` 取（2231）；锁的原因属于别人就拒绝（2259-2260）；检出根是符号链接或不是目录就拒绝（2227-2228）；仓库的 `repositoryId` 也重新核对（2229）。有一种情形：两个登记目录都声称这一个路径，这时 `record` 可能取自另一个目录，但 `git worktree remove` 会校验 `.git` 指针是否指回它自己选中的那个登记目录，对不上就拒绝，什么都不删。补写的 `.git`（2539-2540）只指向已经证明过的那个登记目录；`_write_once` 遇到内容不同的已有文件就拒绝，读的时候用了 `O_NOFOLLOW`，靠硬链接落地，也不会跟随链接。
 
@@ -26,7 +26,7 @@ A8（不删错；次要）仓库里已经没有登记、检出是个空目录时
 
 B1（重）续做前接管过的话，续做永远被拒。`_cleanup_apply_precheck`（`workflow.py:5568`）拿计划里记下的 `ownerGeneration` 和现在的比，接管之后两者不等，就报 `review-changed`。`applying` 的计划不会过期，`cleanup_plan`（5298-5304）每次都返回同一个计划，所以接管之后这个计划永远续做不完，围栏永远不放。进程被杀之后 Host 换人接管，并不罕见。这段比对是原来就有的，但它属于待办这一条要消掉的“产品里没有出路”。`_reclaim_checkout` 的文档字符串（4542-4545）说接管只会挡住删除，“直到新的所有者重试”；对 `applying` 的计划，这句话不成立。复现做法：`interrupted_reclaim`，然后 `workflow_takeover`，再用新的控制三元组 `reclaim`，预期删完，现在返回 `NOT_READY` 加 `review-changed`。
 
-B2（低）续做成功时，会改写第一次执行的证据。`workflow.py:5479-5495` 在续做时照样执行 UPDATE：`evidence.workspace` 换成续做时的检查结果，`retention.checkoutRoot` 与 `cwd` 重写，`fixedRefs` 合并，`command_id` 换成续做的命令号。第一次回收用来进入 `applying` 的那份证明就此丢了，看板上也没有任何记录说明这次删除是续做完成的。要求只规定了拒绝的续做不改写，没有说成功时怎样；照“记录照实”，更简单的写法是计划已经是 `applying` 时根本不执行这次 UPDATE。
+B2（低）续做成功时，会改写第一次执行的证据。`workflow.py:5479-5495` 在续做时照样执行 UPDATE：`evidence.workspace` 换成续做时的检查结果，`retention.checkoutRoot` 与 `cwd` 重写，`fixedRefs` 合并，`command_id` 换成续做的命令号。第一次回收用来进入 `applying` 的那份证明就此丢了，黑板上也没有任何记录说明这次删除是续做完成的。要求只规定了拒绝的续做不改写，没有说成功时怎样；照“记录照实”，更简单的写法是计划已经是 `applying` 时根本不执行这次 UPDATE。
 
 B3（低；现在的行为与实现方说明里的定义一致）如果 Git 在被杀之前已经删完了工作目录、只剩登记目录，续做看到路径不在，就记 `alreadyRemoved: true`，事件读起来像是别人删的，实际上是同一个计划的上一次执行删的。没执行到的那一步删除登记目录也没有补做，留下一个可剪除的登记，以及它里面的 `refs/worktree/*`。这一点与并发删除完成时的情形相同，早就存在。
 

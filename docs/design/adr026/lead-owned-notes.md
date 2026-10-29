@@ -4,7 +4,7 @@
 
 归属单独记在 `workflow_lead_tasks`：`owned_run_id` 是名下微任务的主键及 `workflow_runs` 外键，`lead_run_id` 是持有委派权的微任务外键，`lead_turn_id` 是创建时 Lead 执行回合的 `workflow_turns` 外键，`created_at` 是建立时刻；另有按 `lead_run_id` 的索引和不能归属于自身的约束。归属与微任务的提交、控制令牌和事件在同一个事务里建立，失败时一起回滚；不会写入协助任务的 `workflow_children`，也不把协助任务的批准命令或状态用于另一种意义。
 
-存储改动并入已有 schema 19 → 20 升级：按当前声明创建空的归属表及其索引，schema 仍为 20；`attempts` 重建纳入 `stop_initiator='lead'`，`agent_credentials` 按当前声明重建，删除只写不读的 `scopes_json`，保留凭据的身份、令牌验证值、状态及时间字段。凭据写入及对旧操作集合的存储断言一并删除，授权始终从 `workflow_runs.delegation_authority` 读取。基点样板看板升级后的 SQLite 表和索引声明与新建看板一致，归属表的存量为空，原有原生会话绑定和冻结输入证据不被改写。
+存储改动并入已有 schema 19 → 20 升级：按当前声明创建空的归属表及其索引，schema 仍为 20；`attempts` 重建纳入 `stop_initiator='lead'`，`agent_credentials` 按当前声明重建，删除只写不读的 `scopes_json`，保留凭据的身份、令牌验证值、状态及时间字段。凭据写入及对旧操作集合的存储断言一并删除，授权始终从 `workflow_runs.delegation_authority` 读取。基点样板黑板升级后的 SQLite 表和索引声明与新建黑板一致，归属表的存量为空，原有原生会话绑定和冻结输入证据不被改写。
 
 普通执行凭据继续使用 `AGENT_OPERATIONS` 和自己的微任务绑定。仅持有委派权的微任务的执行凭据增加 `workflow_submit`、`task_list`、`task_wait`、`events_wait`、`message_wait`、`workflow_decide`、`workflow_continue`、`workflow_cancel`、`workflow_accept`、`workflow_conclude`、`workflow_reclaim`、`workflow_scope_amend` 和 `workflow_workspace_resolve`；原有读取和询问操作可用于直属名下微任务，Worker 的 `workflow_suggest` 和 `message_update` 仍只绑定自己的微任务。接管、宏任务的停止、共享设置、评价、安装与升级不加入白名单。
 

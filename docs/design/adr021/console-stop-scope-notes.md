@@ -20,7 +20,7 @@
 
 `macro_task.stop` 的新回复为 `{macroTaskId, results, duplicate}`，`results` 是统一清单，每项为 `{runId, state, stopped}`，覆盖此次冻结范围里的微任务；`stopped: true` 表示此次请求已将其取消，`state` 为 `cancelled`，不承诺进程已经结束，`stopped: false` 表示保持原状态。旧的 `runIds`、`acceptedRunIds` 与 `concludedRunIds` 字段已删除。同一个 `commandId` 重放保存的清单，仅把 `duplicate` 标为 `true`，不扩大到后来加入的工作。
 
-命令回执的形式在待做的 schema 21→22 升级中换算。换算后的每项严格只有 `runId`、`state`、`stopped`，与新写入的回复同形；旧的 `cancelled`、`duplicate`、`note` 与 compact 字段不进入新清单，旧的已验收、已结论清单换成同一份 `results` 中的状态记录。旧回执仅记录当时的顶层范围，升级不补造下级历史；原始回执仍由安装的已验证备份保留。升级严格检查旧形式、身份与状态，无法识别的记录使整个事务回滚，控制台也只解析现在这一种形式。样板看板升级后的数据库结构与新建看板比较由升级测试验证。
+命令回执的形式在待做的 schema 21→22 升级中换算。换算后的每项严格只有 `runId`、`state`、`stopped`，与新写入的回复同形；旧的 `cancelled`、`duplicate`、`note` 与 compact 字段不进入新清单，旧的已验收、已结论清单换成同一份 `results` 中的状态记录。旧回执仅记录当时的顶层范围，升级不补造下级历史；原始回执仍由安装的已验证备份保留。升级严格检查旧形式、身份与状态，无法识别的记录使整个事务回滚，控制台也只解析现在这一种形式。样板黑板升级后的数据库结构与新建黑板比较由升级测试验证。
 
 安装迁移核对把这次回执换算作为声明过的改动：迁移前先对所有 `commands` 行作预期投影，只替换 `kind=macro_task.stop` 的 `response_json`，再计算整行、整表的指纹；只有迁移后的指纹和行数与该投影相同才通过。停止命令的其他列、其他命令行，以及原来要求保留的其他表仍严格比对。已验证备份的快照替换迁移前快照时保留这个预期指纹；启动后的 `verify_started` 使用迁移完成后的快照，继续核对包括换算后 `commands` 在内的原始指纹，不另开豁免。
 
@@ -36,7 +36,7 @@ Host 通过 `get` 或 `status` 读取取消说明中的 `actor.role: console` �
 
 ## 验证
 
-本轮 Python 使用 Host 指定的解释器，通过 `PYTHONPATH=src <python> -m hey_my_buddy.cli.checks <文件或目录>` 运行，使用默认进程数和检查运行器的私有看板；41 个文件、492 项测试通过，私有根目录已清除，退出 0，未运行完整检查。
+本轮 Python 使用 Host 指定的解释器，通过 `PYTHONPATH=src <python> -m hey_my_buddy.cli.checks <文件或目录>` 运行，使用默认进程数和检查运行器的私有黑板；41 个文件、492 项测试通过，私有根目录已清除，退出 0，未运行完整检查。
 
 检查范围为 `tests/python/install/`、`tests/python/blackboard/store/`、`tests/python/console/`，以及以下文件：
 

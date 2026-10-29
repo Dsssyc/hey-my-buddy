@@ -179,7 +179,7 @@ Host 本次输入报告：前一封存在整合树上完整 Python 检查 216 �
 
 ## Host 全量回归打回：只隔离主目录
 
-Host 在 a1096620 与整合分支合并后的树上报告：两进程无模型探针、三次授权的可写/同会话续接/无工具调用通过，用户会话索引目录零新增，原生发现的 16 个名字与现有看板一致；这些是 Host 提供的证据，本回合没有读取日常看板或重复真实调用。完整检查 218 文件有四文件失败，Host 交回 test_continue_catalog_trust、test_catalog_trust、test_harness_health 和 test_upgrade_service 的具体输出；本回合只修测试基础设施，不改 DSH 产品行为。
+Host 在 a1096620 与整合分支合并后的树上报告：两进程无模型探针、三次授权的可写/同会话续接/无工具调用通过，用户会话索引目录零新增，原生发现的 16 个名字与现有黑板一致；这些是 Host 提供的证据，本回合没有读取日常黑板或重复真实调用。完整检查 218 文件有四文件失败，Host 交回 test_continue_catalog_trust、test_catalog_trust、test_harness_health 和 test_upgrade_service 的具体输出；本回合只修测试基础设施，不改 DSH 产品行为。
 
 核对源码与输出：BUDDY_MODEL_CATALOG_FILE 指向不存在的文件会让目录读取走覆盖分支，绕过各测试本来准备的真实规则/模拟 reread；默认 missing 选择会改变健康与能力路径；BoardTestCase 的 harness-selection.json 是 load_fixture(self.directory) 拒绝非空目录的直接来源。已删除这些默认值与文件物化，将并行子进程的主目录由 child_environment 的必填 home_root 显式指定在同一检查根内的兄弟位置；原状态、runtime、tmp 的路径不变，隔离也不再往状态根写 catalog/selection 文件。support._child_environment 的原有每夹具子进程 home 约定未变，它不是这次新增的本进程默认值；该夹具自己的显式配置与边界继续沿用。
 

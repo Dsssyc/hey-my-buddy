@@ -1,6 +1,6 @@
 # 回合状态改称 returned 的说明
 
-开发者于 2026-10-14 决定将回合的状态取值 `concluded` 改为 `returned`；微任务与任务的 `concluded` 继续表示 Host 已写入结论。本次直接修改新看板形式，版本号与 schema 版本不变，不增加旧值兼容、历史换算或迁移；升级基点的样板与生成脚本均未修改。
+开发者于 2026-10-14 决定将回合的状态取值 `concluded` 改为 `returned`；微任务与任务的 `concluded` 继续表示 Host 已写入结论。本次直接修改新黑板形式，版本号与 schema 版本不变，不增加旧值兼容、历史换算或迁移；升级基点的样板与生成脚本均未修改。
 
 ## 修改位置
 
@@ -38,7 +38,7 @@
 
 续接回合按 Host 补充的范围，将 `src/hey_my_buddy/blackboard/tasks/workflow.py:6395` 的方法改为 `settle_turn`；这个名字涵盖有效交回、执行失败、拒收、取消后的迟到结果与未启动释放等结束情形，不把全部结束情形称作 returned。调用点 `src/hey_my_buddy/blackboard/store/store.py:2531` 与 `src/hey_my_buddy/blackboard/tasks/workflow.py:3575` 同步修改，未保留旧名或别名。
 
-续接回合将 `src/hey_my_buddy/blackboard/tasks/workflow.py:6520` 与 `:6531` 的事件改为 `workflow.turn_returned`。先核对控制流：两处都在同一事务中 `:6487` 将回合写为 `returned` 之后发生，分别对应 completed 与 assistance/attention；失败、拒收与迟到结果分支在此前返回，不写该事件。本次只改事件名字，不增加新事件、不改变触发条件，不转换旧看板事件。`tests/python/blackboard/tasks/test_console_macro_task_fixture.py:49` 同步事件名，`:51` 至 `:55` 扩展现有样例测试，逐条关联事件与回合，验证该事件对应的回合均为 `returned`。样例由真实写入路径生成，没有另一个写死旧名的当前样例数据需要修改；升级基点 SQL 中两条旧事件保留原样。
+续接回合将 `src/hey_my_buddy/blackboard/tasks/workflow.py:6520` 与 `:6531` 的事件改为 `workflow.turn_returned`。先核对控制流：两处都在同一事务中 `:6487` 将回合写为 `returned` 之后发生，分别对应 completed 与 assistance/attention；失败、拒收与迟到结果分支在此前返回，不写该事件。本次只改事件名字，不增加新事件、不改变触发条件，不转换旧黑板事件。`tests/python/blackboard/tasks/test_console_macro_task_fixture.py:49` 同步事件名，`:51` 至 `:55` 扩展现有样例测试，逐条关联事件与回合，验证该事件对应的回合均为 `returned`。样例由真实写入路径生成，没有另一个写死旧名的当前样例数据需要修改；升级基点 SQL 中两条旧事件保留原样。
 
 控制台没有读取回合 `state` 的逻辑：`apps/console/src/workflow-types.ts:48` 的 `TurnRouting` 不包含状态，`WorkflowPanel.tsx` 使用回合配置、摘要、会话和用量；`ui.tsx:204` 与 `macro-task-display.ts:201` 的 `concluded` 标签读取微任务状态，`macro-task-stop-reply.ts` 与 `macro-task-types.ts` 的 `concludedRunIds` 表示保留 Host 结论的根微任务，因此均不改。本次没有修改前端或重建资产，也没有执行前端全量或浏览器检查。
 

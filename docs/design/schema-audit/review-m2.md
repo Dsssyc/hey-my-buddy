@@ -4,7 +4,7 @@
 
 ## 结论先行
 
-没有阻塞的缺陷。每一处删除或推导，我都在 `839fefff` 上找过写入者与读者，结论是等价：被当作权威的那一份（`tasks.spec_json/input_fingerprint`、`attempts.generation/started_at`、`workflow_runs.workspace_manifest_json`、`workflow_children.workspace_manifest_json`、`workflow_artifacts.kind/run_id`、`workflow_suggestions.attempt_id`）没有任何产品路径在写下之后改动它；唯一会改 `workflow_runs.workspace_manifest_json` 的地方（工作区准备，`workflow.py` 原 6739 行）原本就同时改两份副本。下面列出的都是小事，以及一处要 Host 在真实看板副本上核对的风险。
+没有阻塞的缺陷。每一处删除或推导，我都在 `839fefff` 上找过写入者与读者，结论是等价：被当作权威的那一份（`tasks.spec_json/input_fingerprint`、`attempts.generation/started_at`、`workflow_runs.workspace_manifest_json`、`workflow_children.workspace_manifest_json`、`workflow_artifacts.kind/run_id`、`workflow_suggestions.attempt_id`）没有任何产品路径在写下之后改动它；唯一会改 `workflow_runs.workspace_manifest_json` 的地方（工作区准备，`workflow.py` 原 6739 行）原本就同时改两份副本。下面列出的都是小事，以及一处要 Host 在真实黑板副本上核对的风险。
 
 ## 怎样核对的
 
@@ -22,10 +22,10 @@
 4. **升级。**
    - 各项换算对。重建走“临时表复制 → 删表 → 用新 DDL 建表 → 拷回 → 按新 schema 建索引”，不经过 `RENAME`，所以别的表对 `workflow_runs` 的外键引用不会被改名；整个过程在 `foreign_keys=OFF` 的一个 `BEGIN IMMEDIATE` 里，前后都做 `integrity_check` 与 `foreign_key_check`，失败整体回滚（新的十四种不一致各有一个变异子测试，都要求行数改动大于零并且回滚到逐字相同）。schema 里没有触发器与视图，不会因删表丢东西。被重建的表里只有 `attempt_reminders` 是 `AUTOINCREMENT`，它的高水位在重建前取出、重建后写回，并有专门的测试（序列先加 100 再升级）。
    - 备份校验去掉 `Database(trial).initialize()` 是对的：对一个已存在的文件，它只重复版本、`integrity_check`、`foreign_key_check` 三项，前两项 `_verify` 已经对备份做过，试转换之后 `upgrade()` 自己又做了一遍；剩下的 `_load_secret` 只会往试转换的临时副本里写一个密钥，不是校验。说明里写的是“只在试转换时做一次初始化”，实际是一次也不做；按上面的理由，这样更准确。
-   - 推导值与存储值不一致就整体回滚，是必要的一次边界校验，不是过度防御：升级会不可逆地丢掉这些列，而看板里的存量是多个版本写下的（例如 `5c13158a` 那次转换用两个不同的函数分别改写 `micro_task_json` 与 `tasks.spec_json`）；只核对有读者的列，没读者的列（`workspace_intent_json`、`revision`、`updated_at`、`input_bytes` 等）直接删，比例得当。
+   - 推导值与存储值不一致就整体回滚，是必要的一次边界校验，不是过度防御：升级会不可逆地丢掉这些列，而黑板里的存量是多个版本写下的（例如 `5c13158a` 那次转换用两个不同的函数分别改写 `micro_task_json` 与 `tasks.spec_json`）；只核对有读者的列，没读者的列（`workspace_intent_json`、`revision`、`updated_at`、`input_bytes` 等）直接删，比例得当。
    - 封存的内容没有被改写：`workflow_turns`、原生检查点、回执与物理封存记录都不在重建的表里；`workflow_artifacts` 重建时 `manifest_json/manifest_sha256` 逐字拷回，被删的 `source_task_id` 不在任何摘要的原像里。`test_upgrade_matches_fresh_structure_and_preserves_every_retained_value` 在我那次运行里通过。
 5. **删干净了没有。** 代码里被删的列没有残留的 SQL 读写（`rg` 过 `src/`、`apps/console/src`、`skills/`）；残留的是一个参数、一组重复的读法与几处文档，见下面的发现。
-6. **样板看板。** 这一步动到的每张表都有存量：`workflow_runs` 4 行、`agent_credentials` 3 行、`workflow_artifacts` 14 行（`input` 4 行为空，其余为 `run_id`）、`workflow_host_conclusions` 2 行、`workspace_reservations` 4 行，来自基线的操作；`workflow_children`、`workflow_suggestions`（有 attempt 与无 attempt 各一）、`attempt_activity`、`attempt_reminders`（两种 kind）、`workflow_routes`、`workflow_continuations` 来自生成器里显式列出的合成行（`syntheticRetiredStock`），`metadata.json` 的 `sourceVersion` 仍是 0.48.0、`sourceTree` 未变。合成行是照旧写入者的样子手写的 SQL，证明的是“这种形式能被转换”，不证明基线真的写出过这些值；真正守住真实存量的是升级里的核对。变异子测试与序列测试能抓住转换上的真实回归。
+6. **样板黑板。** 这一步动到的每张表都有存量：`workflow_runs` 4 行、`agent_credentials` 3 行、`workflow_artifacts` 14 行（`input` 4 行为空，其余为 `run_id`）、`workflow_host_conclusions` 2 行、`workspace_reservations` 4 行，来自基线的操作；`workflow_children`、`workflow_suggestions`（有 attempt 与无 attempt 各一）、`attempt_activity`、`attempt_reminders`（两种 kind）、`workflow_routes`、`workflow_continuations` 来自生成器里显式列出的合成行（`syntheticRetiredStock`），`metadata.json` 的 `sourceVersion` 仍是 0.48.0、`sourceTree` 未变。合成行是照旧写入者的样子手写的 SQL，证明的是“这种形式能被转换”，不证明基线真的写出过这些值；真正守住真实存量的是升级里的核对。变异子测试与序列测试能抓住转换上的真实回归。
 7. **其他。** 计划“微任务 2”列出的各项都做了；计划之外的改动只有随 `workflow_routes.updated_at` 一起删掉的 `routing_dispatched`（它只写那一列），合理。
 
 ## 发现
@@ -72,10 +72,10 @@
 - `AGENTS.md` 里待做升级的描述只写到第一步。
 - 这些属于计划“Host 随后改的文档”，不算实现方的缺陷，列出来免得漏。
 
-## 未验证的风险：日常看板的历史存量
+## 未验证的风险：日常黑板的历史存量
 
-这一步的升级核对以“同次写下的副本”为前提。样板满足它，但日常看板经过多次历史转换，例如 `5c13158a` 用 `_run` 与 `_task` 两个函数分别改写 `workflow_runs.micro_task_json/micro_task_fingerprint` 与 `tasks.spec_json/input_fingerprint`，其中 `input_fingerprint` 当时取自 `spec_canonical_json`。我查到的那个版本里两份 spec 的写入值相同，所以推测不会分叉，但没有核对过真实存量，也无权读日常看板。若有分叉，结果是升级拒绝并整体回滚、安装受阻，不会改坏数据。建议 Host 现在就把 `upgrade.py:34–66` 的八个核对只读地跑在日常看板的副本上，不必等四个微任务都合入之后的演练。
+这一步的升级核对以“同次写下的副本”为前提。样板满足它，但日常黑板经过多次历史转换，例如 `5c13158a` 用 `_run` 与 `_task` 两个函数分别改写 `workflow_runs.micro_task_json/micro_task_fingerprint` 与 `tasks.spec_json/input_fingerprint`，其中 `input_fingerprint` 当时取自 `spec_canonical_json`。我查到的那个版本里两份 spec 的写入值相同，所以推测不会分叉，但没有核对过真实存量，也无权读日常黑板。若有分叉，结果是升级拒绝并整体回滚、安装受阻，不会改坏数据。建议 Host 现在就把 `upgrade.py:34–66` 的八个核对只读地跑在日常黑板的副本上，不必等四个微任务都合入之后的演练。
 
 ## 总的结论
 
-这一步把工作流各表里的副本与死列删得等价、干净，删除路径、凭据边界与升级的原子性都守住了，封存内容未被改写；没有阻塞项，F1–F8 可作下一批的顺带项。前提是 Host 在正常环境里补跑我没能跑成的受影响测试，并在日常看板副本上先跑一遍升级核对。
+这一步把工作流各表里的副本与死列删得等价、干净，删除路径、凭据边界与升级的原子性都守住了，封存内容未被改写；没有阻塞项，F1–F8 可作下一批的顺带项。前提是 Host 在正常环境里补跑我没能跑成的受影响测试，并在日常黑板副本上先跑一遍升级核对。

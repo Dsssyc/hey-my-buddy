@@ -67,7 +67,7 @@ D2 修 Windows 上两类现存的缺陷：服务的启动与停止报法会把"�
 ### 存储形式与升级
 
 - **`attempt_process_identities`**（`blackboard/store/db.py:209–218`）：`boot_id` 只有 POSIX 行必填，Windows 行为 NULL，与 `process_group_id`、`job_name` 的互斥写进同一个 CHECK。新建与升级共用同一份 DDL。
-- **升级：** 真实看板里没有 Windows 身份的存量：日常看板的 923 行全是 POSIX，Windows 上没有日常看板；首发之前"升级基线写出的看板"只有开发者 macOS 上那一块。待做升级照新 DDL 重建这张表（`blackboard/store/upgrade.py` 的 `_rebuild_table`），POSIX 行原值复制，把旧列登记进 `RETAINED_COLUMN_PROJECTIONS`，安装核验就能证明值没变；旧形式的 Windows 行违反新约束，升级失败并回滚，不做转换与清理。样板看板与生成器不改：现有两行 macOS 身份就是这张表的存量。`test_upgrade_fixture.py` 里行数、rowid 与非数据库文件的严格断言保持原样。
+- **升级：** 真实黑板里没有 Windows 身份的存量：日常黑板的 923 行全是 POSIX，Windows 上没有日常黑板；首发之前"升级基线写出的看板"只有开发者 macOS 上那一块。待做升级照新 DDL 重建这张表（`blackboard/store/upgrade.py` 的 `_rebuild_table`），POSIX 行原值复制，把旧列登记进 `RETAINED_COLUMN_PROJECTIONS`，安装核验就能证明值没变；旧形式的 Windows 行违反新约束，升级失败并回滚，不做转换与清理。样板黑板与生成器不改：现有两行 macOS 身份就是这张表的存量。`test_upgrade_fixture.py` 里行数、rowid 与非数据库文件的严格断言保持原样。
 - **文件形式：** POSIX 的 intent、startup、marker 的写入时机与内容、live、native journal 逐字节不变，升级不转换、不清理任何文件。Windows 上只有 marker 与 live 里的身份项去掉 `bootId`；intent 与 `execution-start.json` 不变（`jobName` 已在 startup 里）。
 - 封存的内容、回执及其摘要绑定的内容不动；budget 没有进程身份，不变；`result-delivery.json` 的退役归 E；`meta` 只放 schema 与 secret。服务的 `control.json` 不加进程身份字段。
 
@@ -111,7 +111,7 @@ D2 合入后由 Host 改：设计正文与 ADR-031 第 4、5 条（执行根与�
 
 初稿里删去或改掉的，及理由：
 
-- 升级不转换、不清理 Windows 的旧身份与旧文件，样板看板不补 Windows 存量，测试的严格断言不放宽：真实看板里没有这种存量；为它设计的清理资格、待清理标记、备份覆盖与历史视图变空的分析一并不需要。
+- 升级不转换、不清理 Windows 的旧身份与旧文件，样板黑板不补 Windows 存量，测试的严格断言不放宽：真实黑板里没有这种存量；为它设计的清理资格、待清理标记、备份覆盖与历史视图变空的分析一并不需要。
 - intent 与 startup 不加会话与 Job 的绑定：只有 intent 时一律 unknown，这份绑定没有读者。
 - 服务的 `control.json` 不加 FILETIME 与会话字段：没有读者，lifetime 锁已经是所有者的证据。
 - 不为 `control.json` 缺失、损坏或不可读加分支：没发生过，而第二个服务已被 lifetime 锁挡住。

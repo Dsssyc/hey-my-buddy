@@ -69,7 +69,7 @@ Host 在本次续接输入中报告：真实 ZCode 0.16.9 无须另外指定就�
 
 ## 供应方名字与计费
 
-改前目录的供应方名字来自 `settings.model.available[].ref.providerId`，只是经过访问类型筛选；改后仍来自同一字段，删除筛选，`providerLabel` 仍只作显示名称。模型 ID 仍是 `ref.modelId`，推理强度仍是原生 `reasoning.levels[].value`，harness 仍是 `zcode`。原来已被接受的供应方不会改名；同一份配置内容交给同一原生 CLI，四段身份的来源没有变。Host 在第二回合输入中报告：用真实 ZCode 0.16.9、只补内置定位的无模型探针读到 12 个四段名字，与日常记录全部一致，配置读回等于请求；这是 Host 的探测证据，本实现方没有读日常看板或执行真实 CLI。Host 在本次续接输入中已报告原文件定位与用户偏好的真实复核结果，见上节；模拟 CLI 不证明真实接口。
+改前目录的供应方名字来自 `settings.model.available[].ref.providerId`，只是经过访问类型筛选；改后仍来自同一字段，删除筛选，`providerLabel` 仍只作显示名称。模型 ID 仍是 `ref.modelId`，推理强度仍是原生 `reasoning.levels[].value`，harness 仍是 `zcode`。原来已被接受的供应方不会改名；同一份配置内容交给同一原生 CLI，四段身份的来源没有变。Host 在第二回合输入中报告：用真实 ZCode 0.16.9、只补内置定位的无模型探针读到 12 个四段名字，与日常记录全部一致，配置读回等于请求；这是 Host 的探测证据，本实现方没有读日常黑板或执行真实 CLI。Host 在本次续接输入中已报告原文件定位与用户偏好的真实复核结果，见上节；模拟 CLI 不证明真实接口。
 
 没有增加名为 `unknown` 的供应方或向原生 setter 传入伪造名字。ZCode 这条接口报告的是每个可用模型自己的 `ref.providerId`，没有依赖“缺省供应方”的目录分支；用户的默认选择来自原生 `settings.model.current.providerId`，配置核对使用显式请求与原生读回。缺少这些身份事实时，本批没有猜一个通用内置名字；真实 CLI 若出现这样的形状，交 Host 根据原生证据决定。
 

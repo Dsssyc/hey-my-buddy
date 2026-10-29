@@ -5,7 +5,7 @@
 ## 验证边界
 
 - **检查运行器没能在这个沙箱里跑通。** `uv run --frozen` 写不进 uv 的缓存，被沙箱拒绝。换用开发者主检出里的 `.venv` 解释器加 `PYTHONPATH=src` 再跑，`test_upgrade_fixture.py` 的 13 个测试里 12 个通过，剩下 1 个和其余 6 个文件都死在 `ModuleNotFoundError: pydantic`，因为那个 venv 太旧。所以受影响的测试我**没有跑过**，下面关于测试的判断都来自读代码。
-- **复现过的一处（R1）。** 脚本放在 `$TMPDIR`，用私有 HOME 和私有状态目录，没碰日常看板。步骤：用 `load_fixture` 恢复样板看板，执行 `upgrade.upgrade`，再对样板里还在删除中的宏任务调用 `macro_task_deletion.delete`；原生会话的删除替换为空操作，免得碰到真实的 harness 目录。结果如下：
+- **复现过的一处（R1）。** 脚本放在 `$TMPDIR`，用私有 HOME 和私有状态目录，没碰日常黑板。步骤：用 `load_fixture` 恢复样板黑板，执行 `upgrade.upgrade`，再对样板里还在删除中的宏任务调用 `macro_task_deletion.delete`；原生会话的删除替换为空操作，免得碰到真实的 harness 目录。结果如下：
   - 删除完成，`state` 为 `deleted`，`duplicate` 为 true；
   - `macro_task_deletions` 剩 0 行；
   - `commands` 从 15 行降到 7 行，剩下的只有 `user_policy.publish` 与 `quota.redetect`，都不提这个宏任务或它的 4 个微任务；
@@ -28,7 +28,7 @@
 - **第 3 段提交之后、回复之前中断：** 重试得到 `NOT_FOUND`。控制台只在“结果未确认 / 未完成”时把 `NOT_FOUND` 当作已删完（`apps/console/src/use-macro-task-deletion.ts:87`）。
 - **删完之后：** 指名这个宏任务的提交得到 `NOT_FOUND`（`macro_tasks.py:152-155`），workflow 命令的重放因为找不到 run 也得到 `NOT_FOUND`。这些都和 ADR-028 第 7 条一致。
 
-我没有找到新引入的、会让看板或私有目录永久不一致的中断。`owner-unproven` 的对象删完之后留在磁盘上而看板上没有记录，这是改动之前就有的行为，不是这次引入的。
+我没有找到新引入的、会让黑板或私有目录永久不一致的中断。`owner-unproven` 的对象删完之后留在磁盘上而黑板上没有记录，这是改动之前就有的行为，不是这次引入的。
 
 ## 2. 升级
 
@@ -36,7 +36,7 @@
   - 删除顺序满足原来的 `ON DELETE RESTRICT`。
   - 0.48.0 只在最后一个事务里才给命令写 `deletion_id`，那个事务同时把记录置为 `deleted`，所以还在删除中的记录名下不会有已关联的命令。把它们留下是对的，R1 也证实了留下来的删除能做完。
 - **外键与原子性：** 整个升级在 `foreign_keys=OFF` 下用一个 `BEGIN IMMEDIATE` 事务完成，前后各跑一次 `integrity_check` 与 `foreign_key_check`。
-  - 重建的表里没有 `AUTOINCREMENT` 表，所以不会丢 `sqlite_sequence`；看板里也没有触发器和视图。
+  - 重建的表里没有 `AUTOINCREMENT` 表，所以不会丢 `sqlite_sequence`；黑板里也没有触发器和视图。
   - rowid 会重新编号，但没有哪个存下来的值引用这些表的 rowid。
   - 失败时整体回滚，有测试（`test_failed_conversion_rolls_back_all_rows_and_ddl`）。
 - **安装与备份：** 安装的 `converting` 阶段、备份校验里对 schema 26 的试转换，都和 25 → 26 那一次的做法一致。转换之后失败、或在转换中断后恢复，都从备份还原，有测试（`tests/python/install/test_schema_upgrade_install.py`）。
@@ -82,14 +82,14 @@
 - 在合成预览里删掉一个宏任务之后再读它的删除预览，会得到 `deletionState: "deleted"`；新的控制台解析器（`apps/console/src/macro-task-deletion.ts:93`）会把它当作无效回复拒绝。
 - 测试仍是绿的，因为它测的是预览自己的旧模型，和真实服务已经分道。浏览器检查（`apps/console/browser/macro-delete.check.ts`）用的是自己拦截的路由，没有经过这条路径，所以也抓不到。
 
-### 3. 升级可能拒绝真实看板上 0.46.0 之前写下的消息（应修，推断，未在真实看板上核对）
+### 3. 升级可能拒绝真实黑板上 0.46.0 之前写下的消息（应修，推断，未在真实黑板上核对）
 
 - `src/hey_my_buddy/blackboard/store/upgrade.py:28-30`：只要有 `messages.correlation_id IS NOT inquiry_id` 的行，升级就拒绝。
 - 0.46.0 之前，公开的 CLI 操作 `message` 接受调用方给的 `correlationId`（见 `99f4df34^` 的 `docs/reference/cli.md:173` 与 `store.message_post`），那时写下的行，`correlation_id` 可以不等于 `inquiry_id`。
 
-**失败情形：** 日常看板上只要有一条这样的行，备份校验的试转换就抛 `ValueError`，安装在备份这一步回滚为 `UPGRADE_ROLLED_BACK`。看板不受损，但升级装不上，代码里也没有出路。`body_bytes` 那一条检查与历史写入者一致：`bounded_text` 一直用的是 UTF-8 字节数。`acceptance_verdict` 那一条与 0.48.0 的写入者一致。
+**失败情形：** 日常黑板上只要有一条这样的行，备份校验的试转换就抛 `ValueError`，安装在备份这一步回滚为 `UPGRADE_ROLLED_BACK`。黑板不受损，但升级装不上，代码里也没有出路。`body_bytes` 那一条检查与历史写入者一致：`bounded_text` 一直用的是 UTF-8 字节数。`acceptance_verdict` 那一条与 0.48.0 的写入者一致。
 
-**建议：** 安装之前在日常看板的只读副本上数一下：
+**建议：** 安装之前在日常黑板的只读副本上数一下：
 
 ```sql
 SELECT COUNT(*) FROM messages WHERE correlation_id IS NOT inquiry_id OR body_bytes != length(CAST(body AS BLOB));
@@ -129,7 +129,7 @@ SELECT COUNT(*) FROM tasks WHERE acceptance_verdict IS NOT CASE WHEN accepted_at
 - `src/hey_my_buddy/blackboard/store/backup.py:268-270` 重新加回了 `Database(trial).initialize()`，而且 schema 27 的备份也会走到。2fcc50fd 当时有意删掉了它，理由是“只对备份看板直接检查一次”。
 - 对 schema 27 的备份，它重复的是几行之前刚做过的 `integrity_check` 与 `foreign_key_check`。对 schema 26 的备份，同一份副本要做 4 次完整性检查：`_verify` 一次，`upgrade` 前后各一次，`initialize` 一次。
 - `initialize` 额外做的只有 `_load_secret`。
-- 完整性检查的耗时随看板变大而增长，安装与回滚还原时都会走这条路径。
+- 完整性检查的耗时随黑板变大而增长，安装与回滚还原时都会走这条路径。
 
 ### 9. 推导出来的公开字段成了冗余的接口（小事，超出这一批的范围，可以记入待办）
 
@@ -142,9 +142,9 @@ SELECT COUNT(*) FROM tasks WHERE acceptance_verdict IS NOT CASE WHEN accepted_at
 - `test_upgrade_fixture.py` 只核对了还在删除中的记录被原样保留，没有在升级之后真的把这次删除做完。我在 R1 里复现了它能做完，名下的命令与事件都清干净了。
 - 建议把 R1 的步骤做成测试，原生会话的删除替换为空操作。这样，将来有人在升级里误删或误留这类命令时，测试能当场抓住。
 
-## 样板看板
+## 样板黑板
 
-这一步转换或删除的每一种形式，样板看板里都有存量：
+这一步转换或删除的每一种形式，样板黑板里都有存量：
 
 - **已完成与删除中的删除记录：** 各 1 条，删除记录 2 条。
 - **关联到已删除记录的命令与 `macro_task.deleted` 事件：** 都有。
@@ -154,9 +154,9 @@ SELECT COUNT(*) FROM tasks WHERE acceptance_verdict IS NOT CASE WHEN accepted_at
   - `tasks.spec_canonical_json`、`acceptance_verdict`、`commands.created_at`、`resource_claims.released_at`（已释放的有 3 行），以及 `messages` 的两列，都由公开操作写下。
 - **测试抓得到的回归：**
   - 升级之后，测试把每张保留表的行与升级前按谓词过滤的集合逐行比对。多删或少删已完成删除名下的命令、事件或记录，都会失败。
-  - 结构与新建的看板逐条比对 `sqlite_master`。
-- **样板的不足：** 只有 1 条消息，而且是 0.48.0 的写入者写的，没有 0.46.0 之前那种 `correlation_id ≠ inquiry_id` 的存量，所以抓不到发现 3 所说的风险。这是样板的本性：它是从升级基点生成的。所以这一项只能在日常看板的副本上核对。
+  - 结构与新建的黑板逐条比对 `sqlite_master`。
+- **样板的不足：** 只有 1 条消息，而且是 0.48.0 的写入者写的，没有 0.46.0 之前那种 `correlation_id ≠ inquiry_id` 的存量，所以抓不到发现 3 所说的风险。这是样板的本性：它是从升级基点生成的。所以这一项只能在日常黑板的副本上核对。
 
 ## 结论
 
-没有发现阻塞。删除路径的三段中断都能接着做完，守卫还在；升级的换算、顺序与回滚都对；死表、死列与旧的回放路径在源码里删干净了。需要处理的是三件应修：公开文档的残留与 AGENTS.md 的“没有待做的升级”（发现 1），合成预览和钉着它的测试仍是旧契约（发现 2），以及安装之前要在日常看板副本上核对升级会不会拒绝 0.46.0 之前写下的消息（发现 3）。其余发现都是小事。
+没有发现阻塞。删除路径的三段中断都能接着做完，守卫还在；升级的换算、顺序与回滚都对；死表、死列与旧的回放路径在源码里删干净了。需要处理的是三件应修：公开文档的残留与 AGENTS.md 的“没有待做的升级”（发现 1），合成预览和钉着它的测试仍是旧契约（发现 2），以及安装之前要在日常黑板副本上核对升级会不会拒绝 0.46.0 之前写下的消息（发现 3）。其余发现都是小事。

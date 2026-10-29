@@ -9,12 +9,12 @@
 **A2（中）：契约字符串相同而方法签名或跨边界的事实格式变了时，安装照样报告成功，执行卡在“不知道”而不是明确失败。** 版本规矩被违反、签名又变了时，新服务连旧执行的 `ExecutionLive` 被 C-Two 拒绝，记为“不知道”；旧执行连新服务同样被拒，得到 `SERVICE_UNAVAILABLE`，交回执的循环没有上限（`receipts.py:25-50`），永远不退出，回合做完了也结不了账，直到有人要求停止、服务按身份结束它，结果丢失。安装的核对（`upgrade.py:356-375`）只看运行时身份、稳定、schema、容量与源码泄漏，不看接回是否成功，这是任务定下的范围；但守着这条规矩的只有 `tests/python/protocol/test_contract_version.py`，它只核对字符串是不是“中间号版本、末位为 0”，没有任何检查在签名变了而 `CONTRACT_VERSION` 没变时失败。回执、`execution-start.json`、`execution-live.json` 这些由新服务读、由旧执行写的文件格式（例如 `src/hey_my_buddy/protocol/execution.py:155` 要求回执的键集合完全相同）也只靠这条规矩。复现：在一个只改末位的私有运行时里给 `BuddyControl` 的某个方法改签名，执行在跑时装，安装返回 upgraded，执行的尝试一直是 unknown。建议 Host 定：要么检查套件把三个契约的方法签名做成摘要，钉在 `CONTRACT_VERSION` 旁边，变了而版本没动就失败；要么安装在核对之后报告仍为“不知道”的执行数。前者只是一个测试，代价更小。
 
 **站得住的部分。** 下面这些原来的守卫在契约相同的路上可以去掉，或者仍由别处守着：
-- 空闲要求与 `retire_workers`：它们守的是转换、离线备份与 0.39.0 Worker 池的退役。契约相同时不转换、不备份；0.39.0 的看板是 schema 22，而契约相同的路要求看板 schema 等于新包的（`upgrade.py:96-99`），所以在版本号还没改成 0.40 之前把本源码装到 0.39.0 上，会以 `UNSUPPORTED_SCHEMA` 拒绝，不会走到没有退役 Worker 的切换。`legacyWorkerCleanup` 也只在契约不同时置为真（`upgrade.py:592, 666`）。
-- 备份预检、离线备份与失败时还原看板：契约相同时看板不被安装改动，回滚只换回运行时（`upgrade.py:624` 与 `:704-714` 的还原都在 `contract_changed` 之下），安装之后写下的东西保留，这是对的；不做备份也就不需要备份清单的预检。
-- 数据指纹与完整性检查：执行在跑时看板本来就在变，指纹没法比；`PRAGMA integrity_check` 与外键检查守的是要被转换和备份的看板，契约相同的安装不碰看板，不需要。新服务启动时是否改写数据，只能靠版本规矩，这是第 10 条的取舍。
+- 空闲要求与 `retire_workers`：它们守的是转换、离线备份与 0.39.0 Worker 池的退役。契约相同时不转换、不备份；0.39.0 的黑板是 schema 22，而契约相同的路要求黑板 schema 等于新包的（`upgrade.py:96-99`），所以在版本号还没改成 0.40 之前把本源码装到 0.39.0 上，会以 `UNSUPPORTED_SCHEMA` 拒绝，不会走到没有退役 Worker 的切换。`legacyWorkerCleanup` 也只在契约不同时置为真（`upgrade.py:592, 666`）。
+- 备份预检、离线备份与失败时还原黑板：契约相同时黑板不被安装改动，回滚只换回运行时（`upgrade.py:624` 与 `:704-714` 的还原都在 `contract_changed` 之下），安装之后写下的东西保留，这是对的；不做备份也就不需要备份清单的预检。
+- 数据指纹与完整性检查：执行在跑时黑板本来就在变，指纹没法比；`PRAGMA integrity_check` 与外键检查守的是要被转换和备份的黑板，契约相同的安装不碰黑板，不需要。新服务启动时是否改写数据，只能靠版本规矩，这是第 10 条的取舍。
 - 安装途中准入新的工作：日志写下之前准入的执行由旧服务起、新服务接回；日志在的时候准入被 `src/hey_my_buddy/blackboard/store/store.py:687-688` 拦住，所以回滚时不会留下用目标运行时起的执行。它本身没有问题，问题在 A1：拦准入的同一把围栏也拦了执行。
 - 契约相同而 schema 不同：在运行时准备之前拒绝（`upgrade.py:502`），由 `install()` 在动 skill 路径之前也拒绝（`src/hey_my_buddy/install/skill_install.py:166-168`），都有测试。
-- 新服务起来之后核对失败：先 `restart` 新服务（执行保留，`src/hey_my_buddy/blackboard/service/daemon.py:203-213`），实际取得两把所有权锁之后再起旧运行时并核对（`upgrade.py:621-631`），不还原看板，不把超时或进程号当成已停。
+- 新服务起来之后核对失败：先 `restart` 新服务（执行保留，`src/hey_my_buddy/blackboard/service/daemon.py:203-213`），实际取得两把所有权锁之后再起旧运行时并核对（`upgrade.py:621-631`），不还原黑板，不把超时或进程号当成已停。
 - 日志中断后恢复：日志带 `contractChanged`，恢复按写下日志时选定的那条路走，契约相同时不查空闲、不还原，取锁之后起旧运行时并核对（`upgrade.py:697-716`）；预检阶段中断时确认或重新起旧服务（`:680-696`）。读不到 `contractChanged` 的旧日志会以 `KeyError` 失败，这符合 0.x 不留兼容的规矩。
 - 接不回来的执行：没有另做，沿用第 4 条的“不知道”与按身份停止，冻结执行的用例覆盖了。
 
@@ -32,7 +32,7 @@
 
 **C1：没有人用的备份令牌。** 契约不同时仍生成 `backup_token`、只把它的哈希写进日志（`upgrade.py:537-539`），明文随即丢掉；服务的 `backup` 里比对 `upgradeToken` 的分支（`service.py:424-434`）因此永远不会放行。这次改动把它包进了条件里，而不是删掉。应当连同 `secrets`、`hashlib` 的引入和服务一侧的令牌分支一起删掉，日志在时的在线备份直接拒绝即可。
 
-**C2：契约相同时同一个 schema 读了最多七次。** `install()` 在 `skill_install.py:166-168`、`:181-183`、`:210-212` 各调一次 `install_preflight`，`upgrade()` 又在 `upgrade.py:502`、`:519`、`:553`、`:579` 各调一次 `preflight`。只有安装自己会转换 schema，而它在 `upgrade.lock` 之下做，这几次之间看板的 schema 不会变。空闲那条路上重复的 `idle_snapshot` 有它的理由（检查之间可能准入新的工作），照抄到契约相同的路上就只是在边界之内重复检查。保留 `install()` 在动路径之前的一次和 `upgrade()` 在准备运行时之前的一次就够了。同一段里契约来源也有三种写法：`contract_changed` 取自 `health_before`（`:501`），`:519` 用 `attached`，`:553`、`:579` 又回到 `health_before`；因为前面核对过 `serviceId` 相同，值一样，但读起来像三个来源。
+**C2：契约相同时同一个 schema 读了最多七次。** `install()` 在 `skill_install.py:166-168`、`:181-183`、`:210-212` 各调一次 `install_preflight`，`upgrade()` 又在 `upgrade.py:502`、`:519`、`:553`、`:579` 各调一次 `preflight`。只有安装自己会转换 schema，而它在 `upgrade.lock` 之下做，这几次之间黑板的 schema 不会变。空闲那条路上重复的 `idle_snapshot` 有它的理由（检查之间可能准入新的工作），照抄到契约相同的路上就只是在边界之内重复检查。保留 `install()` 在动路径之前的一次和 `upgrade()` 在准备运行时之前的一次就够了。同一段里契约来源也有三种写法：`contract_changed` 取自 `health_before`（`:501`），`:519` 用 `attached`，`:553`、`:579` 又回到 `health_before`；因为前面核对过 `serviceId` 相同，值一样，但读起来像三个来源。
 
 **C3：没有服务时用正则读旧运行时的源码来知道它的契约。** `install_preflight`（`upgrade.py:109-113`）在没有 `control.json` 时打开旧运行时的 `contracts.py`，用正则取 `CONTRACT_VERSION`；匹配不到会以 `AttributeError` 而不是 `BoardError` 失败。这是第二种得知一个已经有记录的事实的办法：已安装 skill 的标记本来就记着 `contract`，而且安装核对过它与运行时同一代（`upgrade.py:440-450`）。建议改读记录下来的事实，不读源码。
 

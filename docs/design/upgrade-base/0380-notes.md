@@ -12,9 +12,9 @@
 
 删除 `tests/python/blackboard/store/test_upgrade_fixture.py` 中 4 条仅为旧换算存在的测试：`test_lead_relationship_converts_authority_and_preserves_opaque_actor_text` 测旧 Lead、actor、回执和中断证据换算；`test_unsettled_legacy_attempt_refuses_conversion_without_consuming_base` 测旧 `attempt_legacy_starts` 阻止换算；`test_unknown_actor_refuses_conversion_atomically` 和 `test_malformed_product_actor_refuses_conversion_atomically` 测旧 actor 输入拒绝及事务原子性。原 `test_old_submission_digest_is_cleared_and_replay_is_explicitly_refused` 保留重放语义，改为 `test_unavailable_submission_digest_refuses_replay_and_new_submissions_replay`：直接构造 schema 21 允许的空指纹存量，验证相同及不同输入都拒绝重放，且新请求仍可重放；删去它对旧换算清空指纹及回执的断言。
 
-保留样板来源与摘要验证、Host seal、私有路径重绑定和历史不变测试；`test_schema_upgrade_preserves_stock_and_matches_fresh_structure` 继续通过完整安装协调器验证备份、运行时切换、新建看板结构比对和历史保留，改为比较所有表的指纹及请求指纹原值，不再排除旧换算重写的表。`test_current_core` 的 meta 写入清单删除已不存在的迁移写入者。两个安装测试删除准备阶段的旧迁移调用，原同 schema 连续升级、故障回退、历史文件与归档保留、私有服务读取历史的验证仍在。`test_upgrade_refuses_older_or_unknown_schema` 新增 schema 20 拒绝用例，备份测试新增 `test_verify_refuses_consumed_upgrade_schema`，验证旧基点不能再通过清单校验。
+保留样板来源与摘要验证、Host seal、私有路径重绑定和历史不变测试；`test_schema_upgrade_preserves_stock_and_matches_fresh_structure` 继续通过完整安装协调器验证备份、运行时切换、新建黑板结构比对和历史保留，改为比较所有表的指纹及请求指纹原值，不再排除旧换算重写的表。`test_current_core` 的 meta 写入清单删除已不存在的迁移写入者。两个安装测试删除准备阶段的旧迁移调用，原同 schema 连续升级、故障回退、历史文件与归档保留、私有服务读取历史的验证仍在。`test_upgrade_refuses_older_or_unknown_schema` 新增 schema 20 拒绝用例，备份测试新增 `test_verify_refuses_consumed_upgrade_schema`，验证旧基点不能再通过清单校验。
 
-逐项判断后保留的通用部分包括备份生成、原子发布、预检和恢复，升级锁与 admission fence，停机与空闲检查，升级日志写入、清除和恢复，故障回退，skill 的校验、发布和恢复，运行时物化、选择、切换、启动后验证及保留清理。同 schema 看板继续原样保留；没有新增开关、空迁移函数或兼容入口。旧归档文件不被修改或删除，当前备份入口只接受当前 schema。
+逐项判断后保留的通用部分包括备份生成、原子发布、预检和恢复，升级锁与 admission fence，停机与空闲检查，升级日志写入、清除和恢复，故障回退，skill 的校验、发布和恢复，运行时物化、选择、切换、启动后验证及保留清理。同 schema 黑板继续原样保留；没有新增开关、空迁移函数或兼容入口。旧归档文件不被修改或删除，当前备份入口只接受当前 schema。
 
 挪基点之后，专为 schema 20 换算后存量保留的形式是 `workflow_runs.request_fingerprint` 可为 NULL；`WorkflowCoordinator._require_replayable_submission` 及 `submit` 的正常重复请求与并发冲突恢复调用点，继续以 `SUBMISSION_REPLAY_UNAVAILABLE` 拒绝这些旧请求，并要求新 requestId。上述保留的重放测试覆盖这一形式。已保存的空指纹产品回执通过普通 JSON 读取返回，没有新增或保留专用换算器。Lead 的空 host、结构化 actor、integrator 和删除旧中断证据后的字段均是 schema 21 的正常形式，当前新写入也使用，不能作为只为旧存量存在的代码删除；冻结 turn 的缺失 routing/sharedStash 观察属于独立的历史证据边界，本次没有改动。
 

@@ -11,12 +11,19 @@ The product that provides the blackboard, execution processes, adapters, CLI, co
 _Avoid_: Buddy
 
 **黑板 / blackboard**:
-The single shared record of micro tasks, turns, requests, results and decisions, together with the mechanical rules that admit, queue and fence work on it. It makes no judgment about the work and never directs a buddy.
-_Avoid_: Buddy, Buddy service
+The single shared record of micro tasks, turns, requests, results and decisions, together with the mechanical rules that admit, queue and fence work on it. It makes no judgment about the work and never directs a buddy. English code and records call one blackboard's stored record a board (`board.sqlite3`); Chinese text calls it 黑板 as well.
+_Avoid_: Buddy, Buddy service; 看板 (for a blackboard or what it stores)
 
 **状态目录 / state directory**:
 The private directory where one blackboard keeps its data on disk. It lies under the user's home by default; `HMB_STATE_DIR` selects another one.
 _Avoid_: 状态根 / state root
+
+**控制台 / console**:
+The blackboard's private local entry for the user: a web application that shows what the blackboard records and lets the user act on it only through the blackboard's own operations. Larger to smaller: 黑板 / blackboard, then 控制台 / console, then 界面 / page.
+
+**界面 / page**:
+One part of the console that the user looks at and acts on, such as the macro task page or the Buddy page; the console's own labels name its pages.
+_Avoid_: 看板 (not the same word as page; it named both a page and a stored blackboard)
 
 ### Buddies and roles
 

@@ -1,6 +1,6 @@
 # ADR-021 L14 harness 改名说明
 
-基点为 `fa1706e8`；版本保持 0.34.1，schema 保持 19。本说明记录这个微任务的源码改动与私有测试结果，交 Host 验收；没有安装到日常环境，没有调用真实模型，没有访问日常服务、Worker、看板、用户自己的 harness 配置或凭据。
+基点为 `fa1706e8`；版本保持 0.34.1，schema 保持 19。本说明记录这个微任务的源码改动与私有测试结果，交 Host 验收；没有安装到日常环境，没有调用真实模型，没有访问日常服务、Worker、黑板、用户自己的 harness 配置或凭据。
 
 完整 Python 首轮在 234 个文件中有 11 个失败文件；逐个修正后，用指定解释器和检查入口对每个失败文件单独重跑一次，11 个均退出 0，私有根均已移除。最终完整 Python 检查通过（234 个文件、3870 项，跳过 0 项），退出 0，私有测试根已移除；日志为 tmp/python-full-verified.log。前端最终测试通过（78 个文件、1088 项），浏览器检查通过（96 项），构建通过。
 
@@ -39,7 +39,7 @@
 
 ## 存储与边界
 
-新看板的 buddies、catalog_current、catalog_pending、model_service_notes、model_service_concurrency、model_facts、harness_account_reads、harness_health、harness_quota_observations、quota_current、router_dispatches 使用 harness 列；attempts 冻结的 model_adapter 改为 model_harness；tasks、attempts、workers 的执行连接件 adapter 列保留。
+新黑板的 buddies、catalog_current、catalog_pending、model_service_notes、model_service_concurrency、model_facts、harness_account_reads、harness_health、harness_quota_observations、quota_current、router_dispatches 使用 harness 列；attempts 冻结的 model_adapter 改为 model_harness；tasks、attempts、workers 的执行连接件 adapter 列保留。
 
 提交与继续的原生身份使用 harness/provider/model/effort；不可通过原生 adapter 字段继续提交 buddy，也没有保留旧命令 adapters 的别名。command/external 的连接件参数、Worker 注册和认领仍使用 adapter。原始原生规格只保留 harness 身份；Worker 执行投影从任务的连接件列给出 adapter，原生运行与命令/外部任务分别有其字段语义，未增加双读或兼容路径。目标摘要的原生字段改为 harness；连接件提交事件仍叫 adapter，并由所选 harness 或显式连接件给出值。
 

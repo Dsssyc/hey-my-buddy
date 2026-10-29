@@ -15,18 +15,18 @@
 | 封存 | 封存内容来自已停止的 Worker 留下的受管内容；越界改动不成为合法结果；固定 ref、patch 与记录相互绑定；中断重放完成原封存 | 入口身份与固定输入、读到的字节；发布引用前的现场；引用自己的现值及 CAS 结果 |
 | 续接 | 使用指定封存或已获准的部分输入；原物理检出和预留关系不被换成另一个；未确认停止不启动下一回合；取消、接管和覆盖使旧准备失效 | 新操作入口的身份/固定输入、恢复输入的精确文件；激活前的现场；前后数据库中的所有权、预留和 revision |
 | 验收比对 | Host 接受的是指定的当前固定产物；真实目标确有这些路径的内容、模式或删除；调整与 Host 自己的新增路径有明确证据 | 产物/patch/ref/对象的绑定；目标身份、所选 ref 的固定 commit、前后树、逐路径结果和祖先关系 |
-| 回收计划 | 明确说出哪个物理检出可删、为何不可删、什么留下；计划本身不删除 | 当前归属、登记与锁、附着分支、未封存改动、固定封存，以及看板上的停止/依赖/验收证据 |
-| 回收执行 | 过期、换主、出现依赖或现场变化的计划不授权删除；计划不是现场的替代品 | 当前看板资格；删除前重新取得的完整 Git 证明 |
+| 回收计划 | 明确说出哪个物理检出可删、为何不可删、什么留下；计划本身不删除 | 当前归属、登记与锁、附着分支、未封存改动、固定封存，以及黑板上的停止/依赖/验收证据 |
+| 回收执行 | 过期、换主、出现依赖或现场变化的计划不授权删除；计划不是现场的替代品 | 当前黑板资格；删除前重新取得的完整 Git 证明 |
 | 回收移除 | 经完整证明的产品回收只删这个微任务拥有的原物理检出；源检出、借用检出、兄弟检出、输出、ref 与 branch 留下；失败保留原错误并尝试重锁；只有原路径确实消失才算完成 | 紧邻 unlock/remove 的身份、登记、锁、detached 状态与内容证明；失败后的原路径与登记。低级 remove helper 的受信调用前提另见第3节，它自身不补出内容证明 |
 | 存储回收 | 已登记、历史记录仍引用、持有状态未知或原分配无法证明的内容留下；孤立分配只删 checkout；回执重放不重删 | 计划时的库存；执行时的新库存；原 allocation 锁内的证明；writer fence 内的历史引用、记录和物理身份 |
 | scope 观察与恢复 | 证据说的是读到的失败现场；restore 只恢复选中路径并留下合法改动；adopt 只提升 Host 指定的现场；abandon 先保留失败内容，再恢复获准输入；后来改动不被无声覆盖 | 失败现场的内容与 index；Host 提供的指纹；恢复前的路径 CAS/index；放弃前的完整现场；恢复后的结果 |
 | stash 观察 | 只给出开始与封存两个时点的事实；读不到是 unknown，不是空；不推断消失原因、不恢复、不据此判失败 | 各时点的新 common-dir、stash ref 是否存在及完整 reflog（展示另有截断上限） |
 
-保证有具体的时点。读取几万个文件和 Git 的 unlock/remove 都不是原子操作；本设计不能保证外部进程在最后一读之后绝不写入，也不能保证多文件在同一个物理瞬间被冻结。必须保留逐文件打开前后属性检查、不跟随 symlink 的路径操作、Git 自己的锁/CAS，以及看板的 owner/revision/停止证据；把有限的读取放到最有用的时点，并说明余下窗口。
+保证有具体的时点。读取几万个文件和 Git 的 unlock/remove 都不是原子操作；本设计不能保证外部进程在最后一读之后绝不写入，也不能保证多文件在同一个物理瞬间被冻结。必须保留逐文件打开前后属性检查、不跟随 symlink 的路径操作、Git 自己的锁/CAS，以及黑板的 owner/revision/停止证据；把有限的读取放到最有用的时点，并说明余下窗口。
 
 ## 2. 真正的边界
 
-用户可以随时改自己的源检出。Worker 在回合进行时可改执行检出；停止证据排除了这个受管子进程继续写，不能排除用户或别的 Git 进程。兄弟 worktree 可改共享 refs、stash 和对象可达性。看板的 reservation、allocation 文件锁和数据库 writer fence 只分别约束配合它们的参与者；它们不冻结外部 Git。
+用户可以随时改自己的源检出。Worker 在回合进行时可改执行检出；停止证据排除了这个受管子进程继续写，不能排除用户或别的 Git 进程。兄弟 worktree 可改共享 refs、stash 和对象可达性。黑板的 reservation、allocation 文件锁和数据库 writer fence 只分别约束配合它们的参与者；它们不冻结外部 Git。
 
 一次操作从接收外部参数/持久记录开始，到返回或发布这次操作的结果结束。操作里已经由 Git 回答的仓库位置、对象格式、固定 OID 的树/父信息、完整 entry map，以普通局部参数传下去；函数调用、进入内部 helper、创建临时 index、由自己刚刚生成的记录进入完成函数，都不是第二个边界。下一次 prepare、verify、seal、continue、accept、plan 或 apply 则重新读取，不增加跨操作缓存、持久状态、配置开关或第二套 Git 实现。
 
@@ -91,7 +91,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src "$PYTHON" -m hey_my_buddy.cli.checks \
 
 ### 3.3 每次操作的实测与目标
 
-主例取 `test_cleanup_removes_only_the_registered_worktree_and_is_idempotent` 的唯一微任务：测试内 224 次中夹具/直接 Git 8 次，产品 216 次。它用合成停止/回合证明替代真实 harness，经过真实准备、封存、目标比对、看板验收和回收；没有经过 native executor 的独立 prepare verify 或累计 patch 收集。因此它是明确的代表流程，不是所有 harness、所有回合数的上限。旧待办的“一百八十来次”是折算；同样本轮的 not-required 单轮例实际产品 186 次，目标 67 次。
+主例取 `test_cleanup_removes_only_the_registered_worktree_and_is_idempotent` 的唯一微任务：测试内 224 次中夹具/直接 Git 8 次，产品 216 次。它用合成停止/回合证明替代真实 harness，经过真实准备、封存、目标比对、黑板验收和回收；没有经过 native executor 的独立 prepare verify 或累计 patch 收集。因此它是明确的代表流程，不是所有 harness、所有回合数的上限。旧待办的“一百八十来次”是折算；同样本轮的 not-required 单轮例实际产品 186 次，目标 67 次。
 
 | 操作/场景 | 当前命令序列与次数（实测） | 设计边界序列与次数（推算） |
 | --- | --- | --- |
@@ -100,7 +100,7 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src "$PYTHON" -m hey_my_buddy.cli.checks \
 | 主例第一次封存，一个 tracked 改动 | 输入 verify 7；入口 O×2+对象存储=12；初始两树 2；T3；末端 O5；commit-tree/D 2；两 P6；完成 tree 1，共 38 | 入口 L/R/commit 头 3；O3+batch-check+fast-import=5；同 inputTree 的初始 map 1；T3；commit-tree/D 2；发布前 O3；两 P3，共 20 |
 | 主例目标比对，一个路径、beforeCommit | A16；目标 L4；before/after commit/tree 4；目标 interval E2；source 存在/祖先 2；目标 path 1；before 祖先 1，共 30 | A4；目标 L1；before/after ref 解析 2；目标 commit 头/存在性 batch 1；interval raw E1；目标路径 batch 1；两 merge-base 2，共 12。没有 before interval 则 25→9；adjusted 仍两次完整独立比对 |
 | 主例回收计划，内容与 seal 相同 | L4；登记 1；保留 refs 2；A16；O×2+batch-check=11；初始两树 2；T3，共 39 | L1；登记 1；含保留 refs 的 A4；O3，共 9。指纹与已验证 seal 相等直接证明无未封存改动，不写 blob、不构树；不等时另取封存 entry map 诊断，不授权删除 |
-| 主例回收执行的完整证明 | 同上 39，发生在 applying 之前 | 同上 9，移动到 applying 后、原 allocation 锁内、紧邻删除；看板 precheck 和 applying 回执边界保留。路径仍存在时实际删除还要满足原 expiresAt，即使状态已是 applying；该检查不发 Git |
+| 主例回收执行的完整证明 | 同上 39，发生在 applying 之前 | 同上 9，移动到 applying 后、原 allocation 锁内、紧邻删除；黑板 precheck 和 applying 回执边界保留。路径仍存在时实际删除还要满足原 expiresAt，即使状态已是 applying；该检查不发 Git |
 | 主例移除 | 第二次 L4/登记1+unlock/remove2，共 7 | 与上一行合在同一次删除前现场证明里，只再发 unlock/remove 2；不是省掉删除边界 |
 | 主例 stash 两个空观察 | 2+2=4 | 2+2=4，两个时点均留 |
 | 未封存孤立 worktree 的计划证明 | outer L4；登记1；保留 refs2；verify 的 L/ref/tree7+O×2=10；四 refs8；ignored others1，共 33 | L1；登记1；refs inventory1；固定头1；O3；ignored others1，共 8 |

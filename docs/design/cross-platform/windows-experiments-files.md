@@ -138,7 +138,7 @@ SQLite 实验显式设置 WAL，读回 `['wal']`，建表、插入、提交后�
 
 所有自建读者、写者与加载解释器子进程均由探针显式关闭或终止并等待。证据取回且摘要核对完成后，在远端按可执行文件路径或命令行与实验根的关系枚举，输出 `RELATED PROCESSES BEFORE CLEANUP 0`，再执行 `Remove-Item -LiteralPath <实验根> -Recurse -Force`，返回 `WORK ROOT EXISTS False`，外层退出 0。新开一次独立 SSH 查询，再次输出 `WORK ROOT EXISTS False`、`RELATED PROCESSES 0`、退出 0。完整命令、退出码和输出在 `tmp/windows-files/cleanup.*` 与 `cleanup-verify.*`。
 
-清理结论只覆盖本轮实验根和已登记的实验进程；没有启动或重启日常服务，没有访问日常看板，没有调用模型、真实 harness 或更改登录状态。本文没有运行仓库完整检查套件；交付校验针对原始证据、实验退出码、文档内容和写入范围。
+清理结论只覆盖本轮实验根和已登记的实验进程；没有启动或重启日常服务，没有访问日常黑板，没有调用模型、真实 harness 或更改登录状态。本文没有运行仓库完整检查套件；交付校验针对原始证据、实验退出码、文档内容和写入范围。
 
 ## 需要开发者安排的实验
 

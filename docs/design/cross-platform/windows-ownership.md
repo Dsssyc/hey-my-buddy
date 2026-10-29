@@ -4,7 +4,7 @@
 
 支持范围为 Windows 11 的 x64 与 ARM64（ARM64 由开发者 2026-10-23 加入，见[计划](plan.md)）、本地 NTFS、同一 Windows 会话、Python `>=3.12,<3.13`；阶段 B 一度把下限提到 3.12.4，只为 Windows 上 `mkdir(0o700)` 的受保护 ACL，第 2 节不再用它，下限随精简回到 3.12。Windows 系统服务、网络盘、FAT/exFAT 不在首发范围。三系统共用任务身份、事实发布、结果接收及最终结算；Windows 的 ACL、Job、会话与文件共享行为在系统边界实现。Linux/macOS 脱离进程组的后代留在另一批，本批不宣称解决。
 
-ADR-031 第 13 条已经定为开发流程约束：开发使用真实数据只经导出工具取得已验收微任务，用完即删。产品不增加状态目录身份，不为看板副本增加接回、停止或结算围栏，也不实现目录文件 ID 的读取或副本验收。下面的 Windows 会话核对服务于 `Local\` Job 的定位，与状态目录无关。
+ADR-031 第 13 条已经定为开发流程约束：开发使用真实数据只经导出工具取得已验收微任务，用完即删。产品不增加状态目录身份，不为黑板副本增加接回、停止或结算围栏，也不实现目录文件 ID 的读取或副本验收。下面的 Windows 会话核对服务于 `Local\` Job 的定位，与状态目录无关。
 
 ## 1. 已有证据与本批的起点
 
@@ -22,7 +22,7 @@ Host 提供的第十六轮 run `39579709581` 状态是 Windows 的 302 个测试
 
 ## 2. 私有目录与文件：继承 profile 的 ACL，边界上查一次
 
-私有状态指状态目录里的看板、令牌、凭据、控制文件、会话，以及安装的私有文件（active 指针、启动设置、安装日志、锁与备份）。私有规则防得住的只有同一台机器上的其他普通账户：本账户和它起的进程（包括 Worker）本来就能读，SYSTEM 与管理员也挡不住。Windows 给每个账户的 profile 目录（`C:\Users\<name>`）配的 ACL 只有本账户、SYSTEM 与 Administrators，其他普通账户进不去；状态目录默认在 `%LOCALAPPDATA%` 之下，继承这张 ACL 就满足要求。这一节 2026-10-22 由开发者定，取代阶段 B 的逐次句柄校验（第 9 节）。
+私有状态指状态目录里的黑板、令牌、凭据、控制文件、会话，以及安装的私有文件（active 指针、启动设置、安装日志、锁与备份）。私有规则防得住的只有同一台机器上的其他普通账户：本账户和它起的进程（包括 Worker）本来就能读，SYSTEM 与管理员也挡不住。Windows 给每个账户的 profile 目录（`C:\Users\<name>`）配的 ACL 只有本账户、SYSTEM 与 Administrators，其他普通账户进不去；状态目录默认在 `%LOCALAPPDATA%` 之下，继承这张 ACL 就满足要求。这一节 2026-10-22 由开发者定，取代阶段 B 的逐次句柄校验（第 9 节）。
 
 Windows 上的私有目录与文件照常创建，继承上层的 ACL，不传 0o700。Python 3.12.4 起，`mkdir(0o700)` 在 Windows 上写一张受保护、不点名用户的 ACL（SYSTEM、Administrators、OWNER RIGHTS），访问随属主走：提权终端建出的对象属主是 Administrators，同一账户的普通终端打不开（[桌面实验记录](windows-experiments-desktop.md)）。继承来的 profile ACL 明确写着本账户，提权与普通终端都能用，不需要改令牌的默认属主。POSIX 照旧逐级以 0700 新建。
 
@@ -118,7 +118,7 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 ## 7. 阶段 A 的补充实验与桌面协助
 
-阶段 A 已完成上述两份模型无关实验，相关结论逐项并入本文；剩余实验如下，不包含目录身份或电源操作。每项在新的独立实验根运行，记录源码、Python/CLI/工具版本、令牌、会话、完整身份、Job flags/成员、原始输出、错误码及最后清场。显式安装探针 Python 使用私有根及 uv 的 `--no-bin --no-registry`，不触碰日常服务、看板和环境。只用模型无关替身及版本命令，不调用模型。
+阶段 A 已完成上述两份模型无关实验，相关结论逐项并入本文；剩余实验如下，不包含目录身份或电源操作。每项在新的独立实验根运行，记录源码、Python/CLI/工具版本、令牌、会话、完整身份、Job flags/成员、原始输出、错误码及最后清场。显式安装探针 Python 使用私有根及 uv 的 `--no-bin --no-registry`，不触碰日常服务、黑板和环境。只用模型无关替身及版本命令，不调用模型。
 
 1. 桌面普通令牌与交替提权：开发者同一用户打开普通及管理员 PowerShell，分别记录 TokenElevation、TokenOwner 和组，特别记录普通令牌 Administrators 的 deny-only 属性；固定 Python 3.12.13，在宽继承父目录和默认父目录逐级用 0700 建根，读回每级 owner/DACL/继承。先测原样提权创建后普通访问，再测提权进程先把令牌默认属主设为当前用户的政策；普通建根后管理员创建子目录、凭据及 SQLite/WAL/SHM，普通窗口重新访问，再反向重复，另测 WAL/SHM 重建。覆盖默认状态目录及 PowerShell 先建目录的入口。若这一政策使两种令牌均可用就按此落地；若设置被拒，就采用第 2 节在提权启动边界拒绝的分支，不加主体、不自动修既有 ACL。已完成（[桌面实验记录](windows-experiments-desktop.md)）：提权进程把默认属主设为当前用户之后，目录、凭据、SQLite 及其 WAL/SHM 在两种令牌间可交替访问和重建；不设时普通令牌打不开管理员属主的对象。阶段 B 按这一政策落地；2026-10-22 起改为 Windows 上不用 0o700、继承 profile 的 ACL，两种令牌都直接可用，不再改默认属主（第 2 节）。
 
@@ -140,7 +140,7 @@ Defender 实时扫描在阶段 A 关闭，1000 次串行无重试发布全成功
 
 阶段 B2（精简，2026-10-22 开发者定）：照第 2 节删去私有路径逐次固定祖先、逐次 ACL 校验、私有路径的名称比对、提权进程改默认属主（连同 `PRIVATE_OWNER_SETUP_FAILED`）与 Windows 上的 0o700；状态根在安装与冷启动时查一次；Python 下限回到 `>=3.12,<3.13`。句柄层留给工作树与第 3 节的发布。阶段 C 后续的顺带项 1、2（安装发布路径进了私有边界、整条路径比对）随之不再成立。不改消息、事实或存储形式。已完成，合入 `42cf38b9`（[验收记录](../../acceptance/cross-platform/phase-b2.md)），删守卫的差异另有一次独立审查，Windows 原生行为与阶段 C 后续一起独立复跑过；审查留下的八条线索记为下一批的顺带项。
 
-阶段 C：已完成，合入 `516c6d5d`，测试挂起修复合入 `e1e4d1d6`；Windows 带读者换代的后续也已完成，合入 `0dc799a5`（[验收记录](../../acceptance/cross-platform/phase-c-followup.md)），原生行为已随 B2 独立复跑（[B2 验收记录](../../acceptance/cross-platform/phase-b2.md)）。共用 `private_files.py:publish_bytes` 及三系统唯一备份 journal 是现状，不再依赖 B 才算完成。其实现没有改跨进程事实或看板存储形式，不因此开升级或移动 CONTRACT_VERSION；测试修复本身不移动版本。这里只留 Windows 带读者换代后续：依赖 B 的句柄边界和补项 5，通过实验门槛后改 `windows_files.py`、`private_files.py` 的可变文件换代及失败清理，复跑 private publication、native journal、`test_backup_publication.py`、upgrade 恢复的相应中断用例。事实形式不变，单独安装移动末号，不因换 API 开升级。
+阶段 C：已完成，合入 `516c6d5d`，测试挂起修复合入 `e1e4d1d6`；Windows 带读者换代的后续也已完成，合入 `0dc799a5`（[验收记录](../../acceptance/cross-platform/phase-c-followup.md)），原生行为已随 B2 独立复跑（[B2 验收记录](../../acceptance/cross-platform/phase-b2.md)）。共用 `private_files.py:publish_bytes` 及三系统唯一备份 journal 是现状，不再依赖 B 才算完成。其实现没有改跨进程事实或黑板存储形式，不因此开升级或移动 CONTRACT_VERSION；测试修复本身不移动版本。这里只留 Windows 带读者换代后续：依赖 B 的句柄边界和补项 5，通过实验门槛后改 `windows_files.py`、`private_files.py` 的可变文件换代及失败清理，复跑 private publication、native journal、`test_backup_publication.py`、upgrade 恢复的相应中断用例。事实形式不变，单独安装移动末号，不因换 API 开升级。
 
 阶段 D：修复 Windows 服务重启及同契约安装会杀执行的现存缺陷，完成独立服务启动、真实身份、根句柄归属及会话接回。依赖 B、C 的既有发布及 Windows 换代后续、补项 2 与补项 6 的跨会话部分（补项 3 已完成）；改 transport、install 的 launcher/runtime/upgrade:start、protocol/windows_process.py、owned_process、process_controller、process_identity、execution、buddy/runtime/execution.py、调度/interruption 和 store/db。保留已存在的 kill-on-close，补 183 拒绝、复制给被创建进程的唯一长期句柄、临时停止句柄和名字缺席停止判断；删除 Windows BootIdentifier 读取、记录及比较，不加长期观察句柄。服务在执行进程之外做发现时，`buddy/harnesses/discovery.py:probe` 不走 owned_popen，而是普通 Popen 加 CREATE_NEW_PROCESS_GROUP，在 Windows 上不进任何 Job，后代不受管（2026-10-21 Windows 复跑时观察到，当时无残留）；阶段 D 让这些探针同样在 kill-on-close、禁止脱离的 Job 里运行，结束时终止并观察全空，与执行用同一条停止证据。验收真实链显式/无标志脱离矩阵、服务重启与同契约安装保活、执行强杀、先后崩溃、最后句柄关闭后的错误 2 和全成员缺席、重启后结算继续调度、marker 前及跨会话/查询失败 unknown。扩充 Windows process、process identity、execution recovery、transport 冷启动、安装回滚与执行围栏测试。
 
@@ -154,7 +154,7 @@ E 的 ACK 语义、保留回执的交接规则和新增接收表均改变契约/
 
 阶段 G：Host 整合、独立审查与安装前演练。依赖 B、C 后续、D、E、F 分别验收和对应原生实验；独立审查检查是否仍有重复机制或代价不相称，不将设计批准或 Worker 完成当作验收。最终源码在三系统按 AGENTS.md 跑完整 Python 检查，分别保存退出码和 teardown；Windows 11 桌面/Defender/真实启动链证据单列。私有安装分别演练同契约服务重启保活和变契约的空闲、备份、失败回滚；旧版本发出的安装请求只用该版本接受的字段。G 不新增契约或存储形式，文档/证据本身不移动版本。日常安装由 Host 另行安排。
 
-升级基线为 0.51.0、schema 28，待做的 28 → 29 升级开在 0.53.0，D 与 E 改的形式都追加进这一次升级；升级后的 fixture 与新建板比较。首次契约变更安装要求空闲。真实看板里没有 Windows 身份的存量，D 照新约束重建身份表，旧形式的 Windows 行使升级失败，不为它设计转换与清理，样板也不补 Windows 存量（2026-10-24，见 [D2 执行计划](windows-d2-plan.md)）；E 加入它处理的全部存量。sealed snapshot、回执及其摘要绑定内容原样保留，新封存明确形式。升级同步删除触及表内无读者或可推导的重复数据；接收表的固定路径不存第二份，meta 仍只放 schema 和 secret。若升级执行时尚有无法确认停止的旧执行，安装不得越过空闲条件。
+升级基线为 0.51.0、schema 28，待做的 28 → 29 升级开在 0.53.0，D 与 E 改的形式都追加进这一次升级；升级后的 fixture 与新建板比较。首次契约变更安装要求空闲。真实黑板里没有 Windows 身份的存量，D 照新约束重建身份表，旧形式的 Windows 行使升级失败，不为它设计转换与清理，样板也不补 Windows 存量（2026-10-24，见 [D2 执行计划](windows-d2-plan.md)）；E 加入它处理的全部存量。sealed snapshot、回执及其摘要绑定内容原样保留，新封存明确形式。升级同步删除触及表内无读者或可推导的重复数据；接收表的固定路径不存第二份，meta 仍只放 schema 和 secret。若升级执行时尚有无法确认停止的旧执行，安装不得越过空闲条件。
 
 需要 Host 修改 ADR-031：第 1 条补“原生工作停止后交回执，收到已接收回应退出，服务取得完整边界的停止证据后最终结算”；第 4 条保留长调用这一种失联通知，注明根 Job 唯一长期句柄由服务创建的进程持有（服务在恢复它之后复制进去），服务仅在创建窗口和接回/停止操作中短暂持有；第 5 条将 Windows 身份写为执行根（服务创建的进程）的 PID、原始 FILETIME 与 Job，删除 Windows BootIdentifier，不记会话号（第 4、5 条已于 2026-10-24 按 D2 执行计划改好，见第 9 节）；第 7 条明确 ACK 只表示可靠接收，并写入根 Job 独占新建、事先 kill-on-close、禁止脱离的前提下，按原名得到错误 2 加根完整身份缺席即为停止证据（同一个 Windows 会话是前提，不记录也不核对），临时打开的非空 Job 则终止并观察全空。第 10 条契约/升级和执行挺过同契约安装的规则、第 13 条开发流程决定不改。AGENTS.md 及 ADR-010 的“身份缺席即证明结束”原则保持不变；architecture、operations/workers 随实现写清 Windows 新身份、接收结算、busy 和恢复规则。本文不越出范围编辑这些文件。ADR-031 的这几条已于 2026-10-22 照此修改。第 4、5 条在 2026-10-24 又按 [D2 执行计划](windows-d2-plan.md) 改定：长期句柄由服务创建的进程持有，身份不含会话号（见第 9 节）。
 

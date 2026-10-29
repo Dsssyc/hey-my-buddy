@@ -42,7 +42,7 @@
 
 使用 Host 提供的只读冻结 Python，运行前清掉 AGENTS.md 列出的 10 个 BUDDY/环境变量，未使用 uv 或安装依赖。第一次协议测试 28 条通过，新增事实路径的 9 条测试通过；完整受影响文件里发现被取代的旧断言后已同步替换。R 的子进程源路径问题由夹具修正后，目录成员未知的角色边界回归通过。
 
-一次额外命令误包含了 test_claude_worker 及其导入的继承测试，六个 Claude 模块合计 180 条通过，但其中包含私有 daemon/Worker 和共享内存测试，超出了本任务“不启动任何服务与 Worker”的限制；测试命令已退出，夹具使用私有临时状态并按其 finally 和 cleanup 关闭子进程，未读取日常看板或启动已安装服务。此项明确作为执行偏差交给 Host；不以它替代 Host 要求的真实回合或完整检查。后续命令限于受影响的 P、N、R 三个文件，不再次运行 daemon/Worker 测试。
+一次额外命令误包含了 test_claude_worker 及其导入的继承测试，六个 Claude 模块合计 180 条通过，但其中包含私有 daemon/Worker 和共享内存测试，超出了本任务“不启动任何服务与 Worker”的限制；测试命令已退出，夹具使用私有临时状态并按其 finally 和 cleanup 关闭子进程，未读取日常黑板或启动已安装服务。此项明确作为执行偏差交给 Host；不以它替代 Host 要求的真实回合或完整检查。后续命令限于受影响的 P、N、R 三个文件，不再次运行 daemon/Worker 测试。
 
 上一回合最后的聚焦验证使用绝对 PYTHONPATH，三个文件合计 132 条测试通过，退出码为 0，用时 45.753 秒；这记录的是打回前的候选，不能证明本轮修改。下面保留该命令供 Host 复核，Worker 本轮不执行其中的 R 控制器测试。真实 Claude Code、付费模型回合、全仓检查及 Host 故障注入未执行。
 
@@ -98,6 +98,6 @@ PY
 
 删除 `test_unknown_terminal_remains_refused_pending_shared_contract` 的未完成处置断言，替换为未知字段形状、明确错误、成功、停止未确认及来源导入检查。新增组合夹具同时产生两个未知分类、未知目录和未知终态，实际 read/write 运行经共用结果编码与解码后验证快速、审阅及 Worker 投影的唯一位置、分类总数、未证实项和样本不进入摘要；快速结果只验证共用投影，Claude 仍声明不支持原生 no-tool 运行，没有放松这项能力拒绝。未知终态的角色检查验证没有 rawAnswer、没有 Worker 交付调用或输出文件，仍保留模型启动、最后消息、流结束与停止事实。首轮共用出口检查有一条旧 Mock 夹具没有 observations 返回值，错误栈定位后只补齐该夹具，未增加运行时回退。
 
-最终源码逐文件独立进程验证通过：`buddy.harnesses.claude.test_native_run` 74 条，11.378 秒，退出码 0；`buddy.harnesses.claude.test_claude_protocol` 28 条，0.132 秒，退出码 0，共 102 条，没有跳过。使用 Host 指定的只读冻结解释器，启动前清掉 AGENTS.md 列出的 10 个变量，再由 `cli.checks.child_environment` 为每个文件建立独立的私有 HOME、harness 配置根、状态根、运行时根与临时根，PYTHONPATH 指向本检出的源码。只运行管道、私有假 Claude 子进程及内存 endpoint 夹具，没有启动 hey-my-buddy 服务、Worker 或真实 harness，没有安装依赖、读日常看板或账户配置、发起模型调用。`git diff --check` 通过。
+最终源码逐文件独立进程验证通过：`buddy.harnesses.claude.test_native_run` 74 条，11.378 秒，退出码 0；`buddy.harnesses.claude.test_claude_protocol` 28 条，0.132 秒，退出码 0，共 102 条，没有跳过。使用 Host 指定的只读冻结解释器，启动前清掉 AGENTS.md 列出的 10 个变量，再由 `cli.checks.child_environment` 为每个文件建立独立的私有 HOME、harness 配置根、状态根、运行时根与临时根，PYTHONPATH 指向本检出的源码。只运行管道、私有假 Claude 子进程及内存 endpoint 夹具，没有启动 hey-my-buddy 服务、Worker 或真实 harness，没有安装依赖、读日常黑板或账户配置、发起模型调用。`git diff --check` 通过。
 
 留给 Host 的环境受限检查为 `buddy.harnesses.claude.test_claude` 全文件（角色控制器使用 C-Two 服务及共享内存），其中受终态行为影响的既有回归包括 `ClaudeAdapterTests.test_duplicate_or_malformed_native_results_are_rejected`，成功与错误对照为 `test_completed_turn_uses_the_preallocated_session_and_never_resumes`；上一片交接的 `test_model_and_effort_absence_in_readable_catalog_refuses_before_model_start` 也仍需 Host 验证。`buddy.harnesses.claude.test_claude_worker` 的 daemon/Worker 检查本轮未运行，由 Host 的完整检查覆盖。全仓检查、真实 Claude 回合、故障注入及安装后行为均未验证，最终验收由 Host 完成；本轮没有修改角色层、目录聚合、前端、分支或标签，也没有提交。

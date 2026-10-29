@@ -14,7 +14,7 @@
 
 初次大文件 SCP 中途断开，第一次克隆因 bundle 尚不完整而失败；Python 下载的 SSH 连接也曾断开。后续分块传输成功，完整性校验和最终克隆成功，不能把早期失败当作成功安装的证据。保留 `01-setup.json`、`01b-transfer-inspect.json`、`02-python-install.json`、`04-recovery.json`、`transfer-summary.txt`、`transfer-retry-summary.txt`、各 `bundle.part*.transfer.json` 和最终 `18-join-setup.json`。
 
-原始远端回执与私有服务 stdout/stderr 已回收到 `tmp/windows-process/raw-results.zip`，143 项，SHA-256 为 `7b7e4e541e6efc0f644583019d567c25c4d74a9e34063ad703d2a7c52b7a475d`；展开在 `tmp/windows-process/remote-raw/`。私有看板、控制 token、依赖树没有收入这个压缩包。局部摘录以下均省略实际文件系统路径；完整原始输出保留原样供 Host 检查。
+原始远端回执与私有服务 stdout/stderr 已回收到 `tmp/windows-process/raw-results.zip`，143 项，SHA-256 为 `7b7e4e541e6efc0f644583019d567c25c4d74a9e34063ad703d2a7c52b7a475d`；展开在 `tmp/windows-process/remote-raw/`。私有黑板、控制 token、依赖树没有收入这个压缩包。局部摘录以下均省略实际文件系统路径；完整原始输出保留原样供 Host 检查。
 
 ## 先隔离 venv 启动链的影响
 
@@ -155,4 +155,4 @@ exit /b %errorlevel%
 
 另有前一轮已知网络约束偏差：内部只读脚本审查误用了 Microsoft Learn 网页工具查询，超出“网络只用于锁定依赖和 Windows SSH”的范围，发现后停止了该审查。没有采用网页内容作为实验结论；本续轮没有网页查询或委派其他代理。初次 Python 安装的默认外部副作用与该网络偏差仍保留记录，不因卸载成功而抹去。
 
-当前检出的写入仅为本文及被忽略的 `tmp/windows-process/`；续轮的远端变更是开发者授权的指定私有 Python 的 uv 卸载和实验目录删除，其外部状态差异及 Host 核实结果如实列于上文。本轮没有运行产品检查套件、修改分支/标签、推送、stash 或改日常看板。产品设计与实现、真实 harness 回合、桌面和电源实验均未实施；后续桌面、不同会话及电源实验的步骤已另列，本次实验交付与远端清场已经完成。
+当前检出的写入仅为本文及被忽略的 `tmp/windows-process/`；续轮的远端变更是开发者授权的指定私有 Python 的 uv 卸载和实验目录删除，其外部状态差异及 Host 核实结果如实列于上文。本轮没有运行产品检查套件、修改分支/标签、推送、stash 或改日常黑板。产品设计与实现、真实 harness 回合、桌面和电源实验均未实施；后续桌面、不同会话及电源实验的步骤已另列，本次实验交付与远端清场已经完成。

@@ -1,8 +1,8 @@
 # schema 26 存储冗余清点
 
-本清点针对提交 `908384a54a3555de14287bf15faada1f4856bcfa` 的 schema 26，仅阅读产品源码，不读取日常看板、不调用模型或真实 harness。判据为 AGENTS.md 的存储规则和 ADR-028 第 7 条的 2026-10-20 修订；本文不是升级实现计划。
+本清点针对提交 `908384a54a3555de14287bf15faada1f4856bcfa` 的 schema 26，仅阅读产品源码，不读取日常黑板、不调用模型或真实 harness。判据为 AGENTS.md 的存储规则和 ADR-028 第 7 条的 2026-10-20 修订；本文不是升级实现计划。
 
-验证：按项目检查运行器执行 `uv run --frozen python -m hey_my_buddy.cli.checks tests/python/cli/test_repository_hygiene.py`，5 项测试通过、0 跳过，退出码 0，私有测试根已清除。运行前清除继承的运行时/agent 凭据/虚拟环境变量，并设置 `UV_OFFLINE=1`；新文档另做未跟踪文件的个人路径检查，因为规定的 hygiene 用例只枚举 Git 已跟踪文件。未运行产品模型、真实 harness、日常服务或日常看板操作。
+验证：按项目检查运行器执行 `uv run --frozen python -m hey_my_buddy.cli.checks tests/python/cli/test_repository_hygiene.py`，5 项测试通过、0 跳过，退出码 0，私有测试根已清除。运行前清除继承的运行时/agent 凭据/虚拟环境变量，并设置 `UV_OFFLINE=1`；新文档另做未跟踪文件的个人路径检查，因为规定的 hygiene 用例只枚举 Git 已跟踪文件。未运行产品模型、真实 harness、日常服务或日常黑板操作。
 
 核对方法：按 `db.py` 的显式 CREATE TABLE 建立 57 表、571 列的清单，以仓库 `src/hey_my_buddy` 为产品 Python 范围，并追到 `apps/console/src` 的非测试消费者；测试、fixture 及 probes 不算产品读写者。先按表名/列名检索 SQL，再检查 SELECT * 之后的 row 取值、序列化、调用可到达性与动态 SQL 包装。整体 API 返回是实际读者；仅存储回收的字符串/JSON 泛扫单列记为引用保护，不充当领域语义消费。下文短路径均相对 `src/hey_my_buddy/blackboard`，`protocol/`、`buddy/` 则相对包根；各节给出缩写的完整文件与函数。负向结论只针对当前产品代码，未知对象键域与历史存量差异逐项标明，不从测试人工构造反推产品支持。
 
@@ -1813,7 +1813,7 @@ JSON：`efforts_json` 是努力档位字符串数组，顶层没有对象键；�
 
 `attempts_router_binding_unique/attempts_router_outcome_binding_unique` 看似含重复主键，实际被复合外键引用，不列冗余。所有 partial UNIQUE（active attempt、reservation writer、auto continuation、active credential、提醒去重）都承载约束，不能按少见查询删除。其余显式索引的作用在各表节列出；本次没有在日常库执行 EXPLAIN/量测。
 
-只读 fixture 交叉核对：把仓库 `tests/fixtures/upgrade-base/board.sql` 载入 `:memory:`，不调用 `load_fixture`、旧源码或任何产品服务；metadata.sourceCommit 为 `d9e8df5d039708654f098015fbc8fc76f9fbd11d`。查询只统计行数和差异数，不取内容、令牌或路径。meta 恰为 `capability_secret/created_at/schema_version`。spec 副本 6 行、run spec/fingerprint 4 行、run manifest 镜像 4 行、credential 镜像 3 行、artifact.source_task_id 14 行、Host 空槽 2 行、acceptance 等价 6 行，所述差异数均为 0；1 行 integration 为 not-required。children/suggestions/model_facts/artifacts/attempt_activity/attempt_reminders 无 stock；cleanup 有 2 行但无 applied result；这组空结果不证明历史形态已覆盖。按 AGENTS.md，未来实际触及这些未覆盖的旧形式时必须在同次修改扩展 fixture 生成器，本次没有权限改生成器或测试。日常看板没有读取，也没有用此 fixture 声称真实库存全部相等。
+只读 fixture 交叉核对：把仓库 `tests/fixtures/upgrade-base/board.sql` 载入 `:memory:`，不调用 `load_fixture`、旧源码或任何产品服务；metadata.sourceCommit 为 `d9e8df5d039708654f098015fbc8fc76f9fbd11d`。查询只统计行数和差异数，不取内容、令牌或路径。meta 恰为 `capability_secret/created_at/schema_version`。spec 副本 6 行、run spec/fingerprint 4 行、run manifest 镜像 4 行、credential 镜像 3 行、artifact.source_task_id 14 行、Host 空槽 2 行、acceptance 等价 6 行，所述差异数均为 0；1 行 integration 为 not-required。children/suggestions/model_facts/artifacts/attempt_activity/attempt_reminders 无 stock；cleanup 有 2 行但无 applied result；这组空结果不证明历史形态已覆盖。按 AGENTS.md，未来实际触及这些未覆盖的旧形式时必须在同次修改扩展 fixture 生成器，本次没有权限改生成器或测试。日常黑板没有读取，也没有用此 fixture 声称真实库存全部相等。
 
 ## 看似冗余但要留的
 

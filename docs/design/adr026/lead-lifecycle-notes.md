@@ -18,7 +18,7 @@ Lead 的 `task_wait` 与 `events_wait` 权限已移除，`message_wait` 保留�
 
 泳道所需事实来自已有的微任务、回合、尝试、归属、续接、请求和事件记录：回合及尝试给出执行起止和每次用量，等待回合结果、叫醒续接和事件给出等名下工作的起止，Host 请求、交付、验收或结论事件给出 Host 边界的起止，叫醒记录指回具体事件。归属绑定 Lead 的微任务及创建回合，不依赖当前 Host；换手事件保留前后 Host，既有回合输入仍固定各自的 buddy。测试只读取这些存储记录还原区段、触发原因与名下回合用量，没有为泳道新增存储。
 
-schema 仍为 20；`workflow_runs` 的新状态、`workflow_turns` 的新结果值、续接种类与触发事件列及唯一约束都并入 19→20 的待做升级。升级重建续接表，把旧 `authorized_by` 的手动与自动续接转换为 `kind=manual/helper` 并删除旧列，新建与升级后的表都只存 `kind`，读取结果也只给出这个字段；样板看板升级后的结构继续与新建看板比较。
+schema 仍为 20；`workflow_runs` 的新状态、`workflow_turns` 的新结果值、续接种类与触发事件列及唯一约束都并入 19→20 的待做升级。升级重建续接表，把旧 `authorized_by` 的手动与自动续接转换为 `kind=manual/helper` 并删除旧列，新建与升级后的表都只存 `kind`，读取结果也只给出这个字段；样板黑板升级后的结构继续与新建黑板比较。
 
 Python 按任务指定的解释器与检查运行器执行，进程数用默认值：一次检查覆盖 `tests/python/blackboard/tasks/`、`tests/python/blackboard/store/`、整个 `tests/python/buddy/`、`tests/python/cli/` 与 `tests/python/protocol/`，共 162 个文件，首轮 158 个文件的 2,861 项通过，4 个文件失败。失败文件随后各自通过：`test_storage_orphans.py` 的夹具补上续接种类后 35 项通过；`cli/test_cli.py` 把 Lead 的 `await` 改为应被拒绝的断言后 23 项通过；`test_workflow_worker.py` 单独重跑仍因自动 Worker 抢先认领而失败，诊断为 `not-queued`，用测试专属 capability 隔开手工认领后 7 项通过；`test_worker_runtime.py` 首轮拉取构建依赖超时，单独重跑 4 项通过。所有检查运行器均退出并移除各自的私有根。
 

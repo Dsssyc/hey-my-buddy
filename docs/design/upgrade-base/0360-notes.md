@@ -30,9 +30,9 @@
 
 `test_installed_upgrade_restores_schema19_backup_when_conversion_fails` 只测试被删除的换算调用失败时恢复 schema 19；当前 schema 切换失败后的恢复测试仍保留在 `tests/python/install/`。
 
-保留并调整了样板的源码、schema、历史哈希与私有路径绑定测试，以及 `test_schema_upgrade_preserves_stock_and_matches_fresh_structure`：基点与当前 schema 同为 20，不再期待数据被换算，改为核对数据指纹和数据库字节完全相同，继续检查备份、历史文件、设置、偏好、任务与新建看板结构。`test_current_core.py` 只移除了已经不存在的换算模块在 `meta` 写入者白名单中的条目；`test_upgrade_archive.py` 与 `test_upgrade_service.py` 保留全部测试，只删除准备阶段的换算导入和调用；`test_upgrade.py` 的不支持 schema 测试新增了对已用掉的 schema 19 的拒绝核对。
+保留并调整了样板的源码、schema、历史哈希与私有路径绑定测试，以及 `test_schema_upgrade_preserves_stock_and_matches_fresh_structure`：基点与当前 schema 同为 20，不再期待数据被换算，改为核对数据指纹和数据库字节完全相同，继续检查备份、历史文件、设置、偏好、任务与新建黑板结构。`test_current_core.py` 只移除了已经不存在的换算模块在 `meta` 写入者白名单中的条目；`test_upgrade_archive.py` 与 `test_upgrade_service.py` 保留全部测试，只删除准备阶段的换算导入和调用；`test_upgrade.py` 的不支持 schema 测试新增了对已用掉的 schema 19 的拒绝核对。
 
-判断后保留的通用部分包括：备份的预检、白名单与发布恢复；安装的锁、重复空闲检查和实际停止证据；升级日志、失败原因和恢复流程；skill 的暂存、发布、回退和一致性校验；运行时身份校验、切换、恢复与回收；同 schema 看板和历史文件的保留；`verify_started` 对 schema、表清单、数据指纹、运行参数及源码泄漏的验证。升级日志的 `expected` 快照仍供通用的启动验证与中断恢复使用，没有随换算分支删除。
+判断后保留的通用部分包括：备份的预检、白名单与发布恢复；安装的锁、重复空闲检查和实际停止证据；升级日志、失败原因和恢复流程；skill 的暂存、发布、回退和一致性校验；运行时身份校验、切换、恢复与回收；同 schema 黑板和历史文件的保留；`verify_started` 对 schema、表清单、数据指纹、运行参数及源码泄漏的验证。升级日志的 `expected` 快照仍供通用的启动验证与中断恢复使用，没有随换算分支删除。
 
 移走基点后，仍只为来自 schema 19 的存量保留的内容有：`blackboard/store/db.py` 的 `attempt_legacy_starts` 表及说明；`blackboard/tasks/interruption.py` 的 `LEGACY_BOOT_MARGIN_SECONDS`、`legacy_boot_evidence`，以及 `_snapshot` 对该表的读取、`_evidence` 在没有完整身份时使用显式存量时刻的分支、恢复过程对 `legacy_start` 的传递和 `_settle` 写入的 `interruptionEvidence.legacyStartedAt`；`protocol/process_identity.py` 的 `boot_started_at` 当前生产调用点只有上述存量规则。这些内容没有删除或改变含义：只有显式标记的执行开始于当前开机一小时以前时，规则才给出 `boot-changed`；否则仍然未知。下一次改变存储形式时须同时处理表中存量和已存回执的形状。
 

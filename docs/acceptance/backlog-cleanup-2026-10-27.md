@@ -37,7 +37,7 @@
 | 路由与额度 | 续接被拒之后，Host 要再发一次继续才会重建 | [step3-group-c](reliability-and-step3/step3-group-c.md) |
 | 路由与额度 | 日常状态目录里留着旧的 Codex 私有主目录 | [acceptance](schema-29/acceptance.md) |
 | 路由与额度 | Codex 作 Router 时，无工具的快速调用在 0.30.0 上不可用 | [batch4-host-review](adr030/batch4-host-review.md) |
-| 路由与额度 | 看板副本上起的服务，停止时会强杀原服务的执行 | 开发者撤销了复制日常看板起服务的做法；真实数据只经 `tools/export_board_sample.py` 的只读样本（AGENTS.md） |
+| 路由与额度 | 黑板副本上起的服务，停止时会强杀原服务的执行 | 开发者撤销了复制日常黑板起服务的做法；真实数据只经 `tools/export_board_sample.py` 的只读样本（AGENTS.md） |
 | 委派与 Worker | 停止来源的覆盖规则只点名了 console 与 service | `blackboard/tasks/workflow.py` 的 `_request_attempt_stop` 改按 `WRAP_UP_INITIATORS` 判定 |
 | 委派与 Worker | 同一个现有检出上，两个只读微任务共享不了 | [workspace-read-sharing](workspace-read-sharing.md) |
 | 委派与 Worker | `health` 与控制台看不出一个 Worker 一直在崩溃 | [adr031](adr031/adr031.md) |
@@ -48,5 +48,5 @@
 | 委派与 Worker | Codex 与 Claude Code 的 Worker 不能接收问询 | [in-turn-inquiry](adr031/in-turn-inquiry.md) |
 | 委派与 Worker | `execution-submit` 的去留：审计结果（2026-10-17） | [execution-submit-0.45.0](adr007/execution-submit-0.45.0.md) |
 | 委派与 Worker | 契约版本钉了两处 | 契约版本只钉一处（`tests/python/blackboard/store/test_current_core.py`） |
-| 委派与 Worker | 问询在日常看板上第一次用就没有送到 | [live-channel-0.43.0](live-channel-0.43.0.md) |
+| 委派与 Worker | 问询在日常黑板上第一次用就没有送到 | [live-channel-0.43.0](live-channel-0.43.0.md) |
 | 委派与 Worker | 完整检查不包含前端测试 | [complete-check-and-dispatch-flake](release/complete-check-and-dispatch-flake.md) |

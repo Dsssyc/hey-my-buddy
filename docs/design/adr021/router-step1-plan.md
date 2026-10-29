@@ -17,7 +17,7 @@ Router 选 buddy 时，能看到三类程序事实：
 10-20 定的第一步是“价格与按 buddy 的本机结果统计”。Host 建议把价格挪到第 24 条（模型的对应关系）那一步去做，理由如下：
 
 - 第 24 条定了产品不维护别名表，价格只能靠精确匹配对上公开条目。
-- 日常看板上已启用的提供方里，只有 `openai` 与 `anthropic` 的名字和 models.dev 对得上；`deepseek-official`、`zai-api`、`bigmodel-api-2` 都对不上。这几个恰好是按量计费、价格最要紧的。
+- 日常黑板上已启用的提供方里，只有 `openai` 与 `anthropic` 的名字和 models.dev 对得上；`deepseek-official`、`zai-api`、`bigmodel-api-2` 都对不上。这几个恰好是按量计费、价格最要紧的。
 - 对得上的 Codex 与 Claude Code 走的是订阅额度，公开单价对它们只是相对贵贱的参考。
 
 所以价格单独先做，Router 看到的多半是“未知”。等第 24 条的对应关系（画像面给建议、用户确认或手改）一起做，价格才真正可用。第一步先给计费方式：订阅、按量，或者不知道。这个事实已经有了（`protocol/billing.py` 的 `for_provider`，取自 harness 的原生信息），只是现在只有控制台在读。
@@ -31,7 +31,7 @@ Router 选 buddy 时，能看到三类程序事实：
 - **Router 的输入。** `blackboard/routing/decision.py` 的 `_create`（242–383）组装并冻结输入。每个候选只带身份、能力、上下文长度、描述与可用状态（`_buddy_input`，166–185）。没有计费、负载、统计与预期时长；`route_workflow`（385–410）的请求里也没有预期时长。`blackboard/routing/router.py` 的 `render_prompt`（112–119）只把 buddies、preferences、annotations、policyFacts 与 task 交给模型。
 - **Router 的说明与答案。** 说明在 `router.py` 28–51 与 `buddy/roles/texts/router.txt`。答案的结构与校验在 `router.py` 60–109，依据只有 `annotation`、`preference` 与审阅模式下的 `file`。执行进程里校验一次（`buddy/roles/router.py` 170–175），发布时再校验一次（`decision.py` `_publish_select`，956–1026）。
 - **结算。** 只有验收（`workflow.py` `_accept_record`，4050–4334）与记录结论（`_conclude_record`，4580–4636）是终局。失败与取消的微任务还可以续做。审阅不通过会在续做时清掉 `tasks.review_rejected_at`，所以要从续做记录（`workflow_continuations`）里数返工。
-- **每个回合是谁做的。** 四元组在 `workflow_turns.input_json` 的 `$.context.buddy`：日常看板 905 个回合全都有，推理强度也在里面。`attempts` 只冻结了 harness、提供方与模型，没有推理强度。
+- **每个回合是谁做的。** 四元组在 `workflow_turns.input_json` 的 `$.context.buddy`：日常黑板 905 个回合全都有，推理强度也在里面。`attempts` 只冻结了 harness、提供方与模型，没有推理强度。
 - **集成时 Host 改了什么。** `workflow_integrations.verification_json` 记着 `differingPaths`、`missingPaths` 与 `hostPaths`，三者都为空就是原样接收；不需要集成的验收记的是 `{}`。
 - **基础设施失败。** 提供方拒绝的分类在 `protocol/usage.py`（70–86、253–297）：overloaded、quota-exceeded、rate-limited。但没有一处把基础设施失败和能力失败分开：终止原因 `harness-error` 把两者都包在里面。
 - **负载。** 在跑的执行按模型服务计数在 `store.py` `_model_active_counts`（706–721），上限在 `_effective_model_limit` 与 `model_service_concurrency`。排队的微任务在 `tasks.state='queued'`，路由定了之后 `workflow_runs.buddy_json` 里就有四元组；`_queued_model_services`（766–780）只给出有哪些服务，不给每个服务的数量。预期时长在 `tasks.expected_seconds`，开始时间在 `attempts.started_at`。路由现在完全不读这些。
@@ -85,7 +85,7 @@ Router 选 buddy 时，能看到三类程序事实：
 
 - **输入**：本计划；ADR-021 第 1、6、9、24 条；AGENTS.md 的不变量与 0.x 规矩。
 - **产出**：
-  1. 一个模块，从现有记录推出两样东西：按同型 buddy 的统计（口径照上文）与按模型服务的负载。基础设施失败在其中一处判定。用合成的看板做测试，口径里的每一种情形各有一例。
+  1. 一个模块，从现有记录推出两样东西：按同型 buddy 的统计（口径照上文）与按模型服务的负载。基础设施失败在其中一处判定。用合成的黑板做测试，口径里的每一种情形各有一例。
   2. Router 的输入、说明与答案照上文改，`CONTRACT_VERSION` 改为 0.55.0。测试覆盖：渲染进提示的内容；答案里“统计”依据的校验；发布时的复核。
   3. **顺带**：修 `_turn_buddy`，回合的 buddy 只从一处读，统计与时间轴共用；补上时间轴显示推理强度的测试。
   4. **顺带，有条件**：待办“Router 任务的工作目录是一个没人创建的路径”（`decision.py`）。不改存储形式就能做干净，就一起做；要改存储形式，就不做，交回时说明。
@@ -100,18 +100,18 @@ R1 合入之后，日常的 Router（还是 0.54.1）又把控制台微任务给
   - 取 harness 自报、已归一的用量（`attempts.result_json` 的 `$.result.tokenUsage`，见 `protocol/usage.py`）。
   - 每个样本把它以“能力的证据”结束的回合的用量加起来。只有这些回合都报了完整用量（`completeness` 为 `complete`）的样本才算进来。
   - 交给 Router 的是：算进来的样本数，以及输入、缓存输入、输出三项 token 的中位数。没有算进来的样本就写不知道。
-  - 日常看板上 ZCode 报的用量都是 partial，所以 GLM 的用量会是不知道。这是如实的结果，不去估。
+  - 日常黑板上 ZCode 报的用量都是 partial，所以 GLM 的用量会是不知道。这是如实的结果，不去估。
 - **Router 的说明**：加一句“推理强度越高，越费额度、越慢；只在任务需要时才选高的”；并说明用量统计就是成本的证据。
 - **顺带**：
   - 选择的原则只留在调用说明里，Router 的角色文本 `router.txt` 只说三个面各做什么，去掉重复；
   - 修好 `tests/probes/router_fast.py`：先 `prepare` 再 `start`。
-- **检查**：受影响的测试；在合成看板上覆盖三种情形：完整用量、partial 用量、没有用量。
+- **检查**：受影响的测试；在合成黑板上覆盖三种情形：完整用量、partial 用量、没有用量。
 
 ## Host 验收
 
-- 读完差异。按口径逐条核对统计的推导；挑三五个日常看板上的真实微任务，用只读查询算出统计，与模块的结果对照。
+- 读完差异。按口径逐条核对统计的推导；挑三五个日常黑板上的真实微任务，用只读查询算出统计，与模块的结果对照。
 - 在私有服务上，用真实的 Router buddy 走两次路由，各先问开发者：一次候选的模型服务有满的，一次都空着。看它的理由是否引用负载与统计。
-- 改的是契约，不是存储形式：安装 0.55.0 需要看板空闲。开始之前告诉开发者。
+- 改的是契约，不是存储形式：安装 0.55.0 需要黑板空闲。开始之前告诉开发者。
 
 ## 不在这一步
 

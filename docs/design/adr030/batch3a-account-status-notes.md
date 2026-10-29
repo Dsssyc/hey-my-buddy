@@ -24,7 +24,7 @@
 - `buddy.harnesses.claude.test_claude_worker.ClaudeWorkerTests`：`test_governed_worker_seals_only_a_proven_claude_result`、`test_quota_failure_is_persisted_as_harness_error_without_a_capability_sample`。
 - `buddy.harnesses.claude.test_claude_tool_evidence.RunnerReceiptTests`。
 
-Host 无模型复核：在最终检出根目录清掉 AGENTS.md 列出的继承运行时与凭据变量，以任务指定只读解释器设置 `BUDDY_VERIFY_PYTHON`，将占位符换成真实 CLI，运行下方产品发现；只到 initialize，确认原生停止后返回，检查 `accountStatus: confirmed`。不读写日常看板。
+Host 无模型复核：在最终检出根目录清掉 AGENTS.md 列出的继承运行时与凭据变量，以任务指定只读解释器设置 `BUDDY_VERIFY_PYTHON`，将占位符换成真实 CLI，运行下方产品发现；只到 initialize，确认原生停止后返回，检查 `accountStatus: confirmed`。不读写日常黑板。
 
 ```sh
 PYTHONPATH=src BUDDY_DEV_SOURCE=1 BUDDY_CLAUDE_CLI="<real-Claude-Code>" "$BUDDY_VERIFY_PYTHON" -c 'from hey_my_buddy.buddy.harnesses.claude.adapter import ClaudeAdapter; print(ClaudeAdapter().discover_models()["discoveries"])'
