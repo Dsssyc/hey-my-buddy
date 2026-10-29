@@ -197,7 +197,7 @@
 
 **环境变量白名单与 Claude Code “不得限制自带的登录方式”的关系没有核对。** 来自 2026-10-13 对各家官方条款的[调研](../research/2026-10-13-harness-terms-and-orchestration.md)：只靠 shell 里的环境变量给 Claude Code 提供 API key 的用户，这个变量到不了 Worker 的进程。随代理的设置（ADR-030 批次 5）一起看。那份调研的其余几项开发者已于同日定下：不在 README 里特意说明；Claude 的标志保留，收到申诉再撤；同时跑多个 Worker 的风险提示加在控制台的并行设置处，改前端时做。
 
-**另外三个执行方法也只剩检查套件在用。** 2026-10-17 验收关掉 `execution-submit` 的那一批时发现：`execution-cancel`、`execution-retry` 与 `execution-acknowledge` 管的命令执行，从 0.45.0 起 Host 建不出来；它们对微任务的执行一律拒绝（`MICRO_TASK_REQUIRED`），重试与确认也拒绝路由计算，取消对路由计算是否有用没有核对。建议：像 `execution-submit` 一样先审计用处与依赖；如果只剩检查套件在用，测试改到存储层，三个方法连同它们的控制操作一起删掉，契约随之再动一次。待开发者定。
+**另外三个执行方法也只剩检查套件在用。** 2026-10-17 验收关掉 `execution-submit` 的那一批时发现：`execution-cancel`、`execution-retry` 与 `execution-acknowledge` 管的命令执行，从 0.45.0 起 Host 建不出来；它们对微任务的执行一律拒绝（`MICRO_TASK_REQUIRED`），重试与确认也拒绝路由计算，取消对路由计算是否有用没有核对。建议：像 `execution-submit` 一样先审计用处与依赖；如果只剩检查套件在用，测试改到存储层，三个方法连同它们的控制操作一起删掉，契约随之再动一次。待开发者定。2026-10-29 补充（微任务“维护不受调用预算约束” `690401d4` 与它的 Opus 独立审查 `004b4aa1`，Host 核对过源码）：`execution-cancel` 背后的 `task_cancel` 有了产品里的用处，控制台停止维护就走它，限于维护面的执行。删 CLI 的三个方法时，这个操作要留给控制台。另有一处先前就有的缺口：`guard_task_control` 只拦有 `workflow_runs` 行的任务，所以持服务令牌的 Host 经 `execution-cancel` 能取消任何微任务正在进行的路由决定，也能取消用户的维护。按同一条原则（各方只控制自己发起的执行），随这一条一起收口。
 
 **存储层不经微任务提交的那一支，留着命令行那条路的痕迹。** 同一次验收发现：`BoardStore.task_submit` 不带微任务的那一支，从 0.45.0 起只有检查套件在用，可它的 `owner` 默认值仍是 `cli`，仍拒绝编程 harness（这是给 Host 的命令行准备的边界检查）；`blackboard/tasks/workflow.py` 还提到已经退役的 `external` 适配器；`tests/python/protocol/test_rpc_config.py` 自己抄了一份内部提交的写法，没有用 `tests/python/support.py` 的。随下一批服务端的改动顺带收拾。
 
