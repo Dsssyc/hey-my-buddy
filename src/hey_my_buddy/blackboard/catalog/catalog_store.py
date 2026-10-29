@@ -11,6 +11,21 @@ from ...errors import BoardError
 from ...protocol.reasons import reason
 
 
+def _response(facts, payload):
+    return {'discoveryId': facts['discoveryId'], 'observationId': facts['observationId'],
+            'duplicate': facts['duplicate'],
+            'catalog': {**payload, 'discoveryId': facts['discoveryId'],
+                        'observationId': facts['observationId'], 'discoveredAt': facts['discoveredAt']},
+            'buddies': CatalogView(payload).proposed_buddies(),
+            'appliedHarnesses': facts['appliedHarnesses'], 'staleHarnesses': facts['staleHarnesses']}
+
+
+def _stored_response(db, facts):
+    row = db.execute('SELECT payload_json FROM evaluation_catalog WHERE discovery_id=?',
+                     (facts['discoveryId'],)).fetchone()
+    return _response(facts, canonical_payload(json.loads(row['payload_json'])))
+
+
 def begin(evaluation, request_id=None, *, harnesses=None):
     request_id = request_id or 'catalog-' + str(uuid.uuid4())
     with evaluation.db.write() as db:
@@ -22,16 +37,21 @@ def begin(evaluation, request_id=None, *, harnesses=None):
             db.execute('INSERT INTO catalog_observations(request_id,harnesses_json) VALUES(?,?)',
                        (request_id, canonical_json(records)))
             row = db.execute('SELECT * FROM catalog_observations WHERE request_id=?', (request_id,)).fetchone()
-        return {'observationId': row['observation_id'], 'response': json.loads(row['response_json']) if row['response_json'] else None,
+        return {'observationId': row['observation_id'], 'response': _stored_response(db, json.loads(row['response_json'])) if row['response_json'] else None,
                 'harnesses': json.loads(row['harnesses_json'])}
 
 
 def current(db):
     providers, results = [], []
-    for row in db.execute('SELECT c.*, d.payload_json, o.response_json FROM catalog_current c LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id LEFT JOIN catalog_observations o ON o.observation_id=c.observation_id ORDER BY c.harness'):
+    for row in db.execute('SELECT c.*, d.payload_json, observed.payload_json AS observed_payload_json'
+                          ' FROM catalog_current c'
+                          ' LEFT JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id'
+                          ' LEFT JOIN catalog_observations o ON o.observation_id=c.observation_id'
+                          " LEFT JOIN evaluation_catalog observed ON observed.discovery_id=json_extract(o.response_json,'$.discoveryId')"
+                          ' ORDER BY c.harness'):
         from .catalog import catalog_account_status
-        observed = json.loads(row['response_json']) if row['response_json'] else {}
-        discovery = next((item for item in observed.get('catalog', {}).get('discoveries', [])
+        observed = canonical_payload(json.loads(row['observed_payload_json'])) if row['observed_payload_json'] else {}
+        discovery = next((item for item in observed.get('discoveries', [])
                           if item['harness'] == row['harness']), {})
         results.append({'harness': row['harness'], 'status': row['status'],
                         'accountStatus': catalog_account_status(db, row['harness']),
@@ -77,10 +97,10 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
         if observation is None:
             raise BoardError('NOT_FOUND', 'Unknown catalog observation')
         if observation['response_json']:
-            response = json.loads(observation['response_json'])
-            if response['discoveryId'] != discovery_id:
+            facts = json.loads(observation['response_json'])
+            if facts['discoveryId'] != discovery_id:
                 raise BoardError('CONFLICT', 'This observation already recorded a different discovery')
-            return {**response, 'duplicate': True}
+            return {**_stored_response(db, facts), 'duplicate': True}
         now = evaluation._now()
         duplicate = db.execute('SELECT 1 FROM evaluation_catalog WHERE discovery_id=?', (discovery_id,)).fetchone() is not None
         db.execute('INSERT OR IGNORE INTO evaluation_catalog(discovery_id,payload_json) VALUES(?,?)', (discovery_id, canonical_json(payload)))
@@ -236,8 +256,10 @@ def record(evaluation, discovered, observation_id=None, *, health_generation=Non
                 table_changed = True
         pending_after = [tuple(row) for row in db.execute('SELECT * FROM catalog_pending ORDER BY harness,provider,model')]
         table_changed = table_changed or pending_before != pending_after
-        response = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate, 'catalog': {**payload, 'discoveryId': discovery_id, 'observationId': observation_id, 'discoveredAt': now}, 'buddies': CatalogView(payload).proposed_buddies(), 'appliedHarnesses': applied, 'staleHarnesses': stale}
-        db.execute('UPDATE catalog_observations SET response_json=? WHERE observation_id=?', (canonical_json(response), observation_id))
+        facts = {'discoveryId': discovery_id, 'observationId': observation_id, 'duplicate': duplicate,
+                 'discoveredAt': now, 'appliedHarnesses': applied, 'staleHarnesses': stale}
+        db.execute('UPDATE catalog_observations SET response_json=? WHERE observation_id=?', (canonical_json(facts), observation_id))
+        response = _response(facts, payload)
         for transition in transitions:
             kind = transition.pop('kind')
             evaluation.board._append_event(db, kind, payload=transition)

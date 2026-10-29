@@ -26,6 +26,7 @@ def supported_schema(value: str | None) -> int:
 def upgrade_state(state: Path) -> dict:
     """Run every required step in one transaction, preserving the source on failure."""
     with closing(sqlite3.connect(Path(state) / "board.sqlite3")) as connection:
+        # Steps require sqlite3.Row: the frozen 30 → 31 step reads columns by name.
         connection.row_factory = sqlite3.Row
         # SQLite's rebuild sequence disables foreign keys before BEGIN; the
         # complete chain is checked before committing and enforcement resumes.

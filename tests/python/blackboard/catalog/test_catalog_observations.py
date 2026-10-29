@@ -65,6 +65,18 @@ class CatalogObservationTests(BoardTestCase):
                     self.assertEqual(result['catalog']['source'], 'current-native-observations')
                     self.assertEqual(result['catalog']['discoveries'][0]['reason'], cause)
 
+    def test_current_discovery_content_comes_from_latest_observation_with_retained_models(self):
+        trusted = catalog()
+        trusted['discoveries'][0]['content'] = 'Earlier confirmed reading'
+        self.record(trusted)
+        unknown = catalog(status='unknown', models=())
+        unknown['discoveries'][0]['content'] = 'Latest native diagnostic'
+        self.record(unknown)
+        with self.e.db.read() as db:
+            current = catalog_store.current(db)
+        self.assertEqual(current.metadata()['discoveries'][0]['content'], 'Latest native diagnostic')
+        self.assertIsNotNone(current.lookup('dsh', 'fixture', 'alpha'))
+
     def table_facts(self):
         with self.e.db.read() as db:
             return (db.execute('SELECT COUNT(*) FROM events').fetchone()[0],
@@ -96,8 +108,30 @@ class CatalogObservationTests(BoardTestCase):
             current = db.execute("SELECT read_at,account_status,updated_at FROM catalog_current WHERE harness='dsh'").fetchone()
             self.assertEqual((current['read_at'], current['account_status'], current['updated_at']),
                              (self.clock.value, 'confirmed', self.clock.value))
-            self.assertEqual(json.loads(db.execute('SELECT response_json FROM catalog_observations WHERE observation_id=?',
-                                        (second['observationId'],)).fetchone()[0])['catalog']['discoveredAt'], self.clock.value)
+            stored = json.loads(db.execute('SELECT response_json FROM catalog_observations WHERE observation_id=?',
+                                          (second['observationId'],)).fetchone()[0])
+            self.assertEqual(stored, {'discoveryId': second['discoveryId'], 'observationId': second['observationId'],
+                                      'duplicate': True, 'discoveredAt': self.clock.value,
+                                      'appliedHarnesses': ['dsh'], 'staleHarnesses': []})
+        self.assertEqual(second['catalog']['discoveredAt'], self.clock.value)
+
+    def test_replay_rebuilds_catalog_and_proposals_with_current_normalization(self):
+        payload = catalog_rules.canonical_payload(catalog())
+        observation = catalog_store.begin(self.e, 'replay-current-form')['observationId']
+        recorded = self.e.record_catalog(payload, observation)
+        current = deepcopy(payload)
+        current['providers'][0]['models'][0]['name'] = 'Current normalized name'
+        with patch.object(catalog_store, 'canonical_payload', return_value=current):
+            replay = self.e.record_catalog(payload, observation)
+            begun = catalog_store.begin(self.e, 'replay-current-form')['response']
+        self.assertEqual(replay, {**begun, 'duplicate': True})
+        self.assertEqual(begun['catalog']['providers'], current['providers'])
+        self.assertEqual(begun['buddies'], catalog_rules.CatalogView(current).proposed_buddies())
+        self.assertEqual(begun['catalog']['discoveredAt'], recorded['catalog']['discoveredAt'])
+        with self.e.db.read() as db:
+            stored = json.loads(db.execute('SELECT payload_json FROM evaluation_catalog WHERE discovery_id=?',
+                                           (recorded['discoveryId'],)).fetchone()[0])
+        self.assertEqual(stored, payload)
 
     def test_provenance_and_discovery_identity_alone_do_not_change_buddy_facts(self):
         first = self.record(catalog())

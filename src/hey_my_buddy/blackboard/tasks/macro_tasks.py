@@ -867,8 +867,9 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     # replaced by a later Router in the same decision.
     record = connection.execute(
         "SELECT d.decision_id, d.status, d.buddy_id, d.reason_code, d.reason_params_json, d.note,"
-        " r.selected_json, r.output_json, r.requested_json"
+        " r.selected_json, r.output_json, r.requested_json, dispatch.round AS routing_round"
         f" FROM ({micro_task.ROUTING_TASKS_SQL}) routing"
+        " JOIN router_dispatches dispatch ON dispatch.task_id=routing.task_id"
         " JOIN decision_requests r ON r.decision_id=routing.decision_id"
         " JOIN evaluation_decisions d ON d.decision_id=routing.decision_id"
         " WHERE routing.task_id=?", (decision_task_id,)
@@ -876,7 +877,7 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
     output = json.loads(record["output_json"]) if record and record["output_json"] else {}
     output = output if isinstance(output, dict) else {}
     usage = output.get("usage") if isinstance(output.get("usage"), dict) else {}
-    round_facts = router_sequence.request_snapshot(connection, record["decision_id"])["facts"] if record else {}
+    round_facts = router_sequence.request_snapshot(connection, record["decision_id"], record["routing_round"])["facts"] if record else {}
     routing = {
         **router.routing_facts({**json.loads(record["requested_json"]),
                                 **round_facts}
@@ -885,7 +886,6 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
         "reason": reason_from_json(record["reason_code"], record["reason_params_json"]) if record else None,
         "note": record["note"] if record else None,
         "policyCheck": output.get("policyCheck"),
-        "budget": round_facts.get("budget"),
         "usage": {key: usage.get(key) for key in ("elapsedMs", "toolCalls")},
     }
     abstention = bool(record and record["reason_code"] == "router-abstained")
@@ -901,10 +901,10 @@ def _routing_spans(connection, decision_task_id: str, owner_run_id: str) -> list
         error = receipt.get("error")
         span_routing = routing
         if isinstance(attempt_output, dict) and 'routingMode' in attempt_output:
-            span_routing = {**routing, **router.routing_facts(attempt_output)}
+            span_routing = {**routing, **router.routing_facts(attempt_output, include_budget=False)}
             if attempt_output.get('code') == 'router-review-unavailable':
                 span_routing.update(selectedBuddy=None,
-                                    policyCheck=None, budget=attempt_output.get('budget'), usage=None)
+                                    policyCheck=None, usage=None)
         spans.append(_span(
             "routing", f"routing:{attempt['attempt_id']}", owner_run_id,
             attempt["started_at"] or attempt["created_at"], attempt["finished_at"] if state == "finished" and not uncertain else None,

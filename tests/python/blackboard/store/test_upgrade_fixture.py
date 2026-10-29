@@ -265,9 +265,8 @@ class UpgradeFixtureTests(unittest.TestCase):
                         self.assertIsNone(new[3])
                         continue
                     expected = json.loads(old[3])
-                    del expected['catalog']['providerVersion']
-                    for provider in expected['catalog']['providers']:
-                        del provider['packageName'], provider['packageVersion']
+                    expected['discoveredAt'] = expected['catalog']['discoveredAt']
+                    del expected['catalog'], expected['buddies']
                     self.assertEqual(json.loads(new[3]), expected)
             elif name == 'router_settings':
                 self.assertEqual([row[:len(original[0])] for row in actual], original)
@@ -329,6 +328,9 @@ class UpgradeFixtureTests(unittest.TestCase):
         replay = board.call('model_catalog_refresh', {'requestId': request_id})
         self.assertTrue(replay['duplicate'])
         self.assertEqual(replay['discoveryId'], legacy_id)
+        normalized = catalog.canonical_payload(json.loads(original[legacy_id]))
+        self.assertEqual(replay['catalog']['providers'], normalized['providers'])
+        self.assertEqual(replay['buddies'], catalog.CatalogView(normalized).proposed_buddies())
         assert_current_form(replay)
         unknown = {'source': 'fixture:native-unknown', 'providers': [], 'discoveries': [
             {'harness': 'codex', 'status': 'unknown', 'accountStatus': 'unknown',
@@ -368,6 +370,42 @@ class UpgradeFixtureTests(unittest.TestCase):
         for (raw,) in connection.execute('SELECT response_json FROM catalog_observations WHERE response_json IS NOT NULL'):
             assert_current_form(json.loads(raw))
         self.assertEqual(catalog.identities_from_payload(rows[legacy_id], 'codex'), {('openai', 'fixture-alpha', 'high')})
+
+    def test_routing_budget_views_match_for_pre_upgrade_and_new_micro_tasks(self):
+        from support import FakeClock, InProcessBoard
+
+        fixture, connection = self.restored('budget-projections', migrate=False)
+        run_id = fixture['stockIds']['helperParent']
+        decision_id = connection.execute('SELECT current_routing_id FROM workflow_runs WHERE run_id=?',
+                                         (run_id,)).fetchone()[0]
+        frozen = [tuple(row) for row in connection.execute('SELECT rowid,* FROM router_requests ORDER BY rowid')]
+        legacy_budget = json.loads(connection.execute('SELECT snapshot_json FROM router_requests WHERE decision_id=?',
+                                                       (decision_id,)).fetchone()[0])['facts']['budget']
+        self.assertEqual(legacy_budget, {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64, 'bytesRead': 2097152})
+        upgrade_state(fixture['state'])
+        board = InProcessBoard(fixture['state'], clock=FakeClock('2026-01-01T00:03:00.000Z'))
+        self.addCleanup(board.close)
+        old = board.call('workflow_get', {'runId': run_id, 'routingHistory': {}})
+        # The floor pins alpha, which would select it without calling a Router.
+        with board.store.db.write() as db:
+            db.execute("DELETE FROM evaluation_preferences WHERE mode='pin'")
+        new = board.call('workflow_submit', {'requestId': 'budget-after-upgrade', 'hostId': 'fixture-host',
+                                            'task': 'Compare current routing budget views',
+                                            'cwd': str(fixture['fixtureRoot'] / 'repository'),
+                                            'executionWorkspace': {'kind': 'worktree', 'access': 'write'}})
+        new = board.call('workflow_get', {'runId': new['runId'], 'routingHistory': {}})
+        expected = {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64}
+        for view in (old, new):
+            self.assertEqual(view['routing']['budget'], expected, view['routing'])
+            self.assertEqual(view['routingHistory']['entries'][0]['budget'], expected)
+            decision = board.call('selection_get', {'decisionId': view['routing']['decisionId']})['decision']
+            self.assertEqual(decision['budget'], expected)
+        timeline = board.call('macro_task_timeline', {'macroTaskId': old['macroTaskId']})
+        spans = [span for span in timeline['spans'] if span['kind'] == 'routing' and span['decisionId'] == decision_id]
+        self.assertTrue(spans)
+        self.assertTrue(all(span['routing']['budget'] == expected for span in spans))
+        self.assertEqual([tuple(row) for row in connection.execute('SELECT rowid,* FROM router_requests ORDER BY rowid')
+                          if row['decision_id'] != new['routing']['decisionId']], frozen)
 
     def test_failed_second_column_addition_rolls_back_the_whole_upgrade(self):
         fixture, connection = self.restored('failed-upgrade', migrate=False)
