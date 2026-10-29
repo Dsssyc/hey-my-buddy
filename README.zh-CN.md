@@ -31,6 +31,11 @@
 - **看得见谁在做什么。** 本机私有的控制台把每个宏任务画成一条时间线，显示每个 buddy 的负载与你的设置。
 - **用你自己的账户与套餐。** Worker 用你自己的 harness 账户登录，hey-my-buddy 从不保存也不转交你的凭据。见[账户与条款](docs/terms.zh-CN.md)。
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/console-timeline-zh-dark.png">
+  <img alt="控制台里的宏任务详情" src="docs/assets/console-timeline-zh-light.png" width="100%">
+</picture>
+
 ## 怎样工作
 
 <picture>

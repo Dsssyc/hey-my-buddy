@@ -31,6 +31,11 @@
 - **See who is doing what.** A private local console shows each macro task as a timeline, every buddy's load and your settings.
 - **Your accounts, your plans.** Workers sign in with your own harness accounts; hey-my-buddy never keeps or forwards your credentials. See [accounts and terms](docs/terms.md).
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/console-timeline-en-dark.png">
+  <img alt="Macro task detail in the console" src="docs/assets/console-timeline-en-light.png" width="100%">
+</picture>
+
 ## How it works
 
 <picture>
