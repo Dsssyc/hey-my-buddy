@@ -558,7 +558,6 @@ class RunnerReceiptTests(unittest.TestCase):
         session = receipt["nativeIdentity"]["sessionId"]
         uuid.UUID(session, version=4)
         self.assertEqual(receipt["usage"]["toolCalls"], 2)
-        self.assertIsNone(receipt["usage"]["bytesRead"])
         self.assertIsInstance(receipt["usage"]["elapsedMs"], int)
         evidence = receipt["toolEvidence"]
         self.assertEqual(evidence["version"], 2)

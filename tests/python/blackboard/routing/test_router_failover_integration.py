@@ -57,7 +57,7 @@ class FailoverTests(RouterDispatchTestCase):
     def answer(self, claim, *, buddy_id=B, tools=0, **receipt_options):
         doc = claim["decisionInput"]
         return {**claim_tool_receipt(claim, tools, state_dir=self.board_.directory, **receipt_options), "status": "ok", "operation": "select",
-                "usage": {"elapsedMs": 100, "toolCalls": tools, "bytesRead": None},
+                "usage": {"elapsedMs": 100, "toolCalls": tools},
                 "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                 "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                       "manifestSha256": (doc.get("executionWorkspace") or {}).get("manifestSha256")},
@@ -241,7 +241,6 @@ class FailoverTests(RouterDispatchTestCase):
         result = self.report(second, self.failure(second, "provider-error"), status="failed")
         self.assertEqual(result["decision"]["status"], "needs-host")
         self.assertEqual(len(self.tasks()), 2)
-
         self.assertEqual([e[1]["buddyId"] for e in self.outcomes()], [A, B])
         self.assertEqual(self.snapshot_of(request["decisionId"]), frozen)
         self.assertEqual(self.dispatch_of(request["runId"]), before)
@@ -579,7 +578,6 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(result["decision"]["outcome"], "answered")
         with self.board_.store.db.read() as db:
             row = self.board_.store.decisions._row(db, request["decisionId"])
-            self.assertIsNone(json.loads(row["output_json"])["usage"]["bytesRead"])
         self.assertEqual(len(self.tasks()), 1)
 
     def test_model_started_false_does_not_substitute_for_spawn_or_native_stop_proof(self):

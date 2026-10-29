@@ -34,8 +34,7 @@ def self_identity_for_endpoint() -> dict:
     if os.name == "nt":
         return {"pid": pid, "startedAt": started_at,
                 "jobName": "Local\\HeyMyBuddy-00000000-0000-4000-8000-000000000001"}
-    return {"bootId": boot_id(), "pid": pid, "startedAt": started_at,
-            "processGroupId": pid, "jobName": None}
+    return {"bootId": boot_id(), "pid": pid, "startedAt": started_at, "jobName": None}
 
 
 class ExecutionEndpointTests(unittest.TestCase):
@@ -280,7 +279,7 @@ class ExecutionEndpointTests(unittest.TestCase):
                 identity = {"pid": 301, "startedAt": 1339247086400000000}
             else:
                 identity = {"bootId": "linux:00000000-0000-4000-8000-000000000001",
-                            "pid": 301, "startedAt": 105, "processGroupId": 301, "jobName": None}
+                            "pid": 301, "startedAt": 105, "jobName": None}
 
             def launched(**_kwargs):
                 evidence = state / "attempts/task-3/attempt-3"

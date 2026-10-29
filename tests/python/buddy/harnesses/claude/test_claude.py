@@ -672,7 +672,6 @@ class ClaudeAdapterTests(ClaudeFixtureCase):
         raw = result.result["rawAnswer"]
         answer = json.loads(raw) if isinstance(raw, str) else raw
         self.assertEqual(answer["buddyId"], "legal")
-        self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertEqual(result.result["correctionCount"], 0)
         self.assertFalse(native_path(context.turn_output_file()).exists())
         # The unified receipt: a quiet tool-free stream still binds the frozen

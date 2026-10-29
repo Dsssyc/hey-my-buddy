@@ -54,7 +54,7 @@ class NativeProcessJournalTests(unittest.TestCase):
                 for entry in evidence["identities"]:
                     keys = {"pid", "startedAt", "jobName"}
                     if os.name != "nt":
-                        keys |= {"bootId", "processGroupId"}
+                        keys.add("bootId")
                     self.assertEqual(set(entry), keys)
                     self.assertEqual(identity.inspect_process_identity(entry), "alive")
             finally:

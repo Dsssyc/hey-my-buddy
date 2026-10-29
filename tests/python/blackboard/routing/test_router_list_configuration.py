@@ -59,8 +59,7 @@ class RouterListConfigurationTests(BoardTestCase):
             "routerBuddyIds": [], "routerRetryIntervalSeconds": 600,
             "defaultRoutingMode": "fast", "routingBudget": "standard",
             "maintenanceBuddyId": None, "maintenanceIntervalSeconds": 3600,
-            "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24,
-                                    "bytesRead": 524288},
+            "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24},
         })
         self.assertNotIn("configurationError", snapshot)
         stored = self.stored()

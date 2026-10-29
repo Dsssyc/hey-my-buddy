@@ -433,7 +433,7 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
             constraints: dict, *,
             attempt_id: str,
             user_outcome: str = "none",
-            elapsed_ms: int = 180000, tool_calls: int = 3, bytes_read: int = 32768,
+            elapsed_ms: int = 180000, tool_calls: int = 3,
             mode: str = "review",
             program_reason: dict | None = None) -> dict:
     """One recorded routing decision, shaped like ``workflow._routing_view``."""
@@ -449,16 +449,15 @@ def routing(decision_id: str, task_id: str, status: str, selected: dict | None, 
                             "userPreference": user_outcome},
             # Illustrative fixture values only; these are not runtime defaults.
             "budget": ({"timeoutSeconds": 60} if mode == "fast" else
-                       {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24,
-                        "bytesRead": 524288}),
-            "usage": {"elapsedMs": elapsed_ms, "toolCalls": tool_calls, "bytesRead": None if mode == "fast" else bytes_read}}
+                       {"preset": "standard", "timeoutSeconds": 300, "toolCalls": 24}),
+            "usage": {"elapsedMs": elapsed_ms, "toolCalls": tool_calls}}
 
 
 ROUTING_A1 = routing("preview-decision-a1", "preview-run-a1-router", "completed", CFG_FLASH,
                      "合成预览：选择 DeepSeek Flash；符合委派偏好，偏离用户偏好以缩短路由等待。",
                      {}, attempt_id="att-router-a1", user_outcome="alternative",
                      mode="fast",
-                     elapsed_ms=60000, tool_calls=0, bytes_read=0)
+                     elapsed_ms=60000, tool_calls=0)
 ROUTING_A1.update(routerBuddyIds=["dsh:deepseek-official:deepseek-flash:max"],
                   routerIdentities=[CFG_FLASH], routerBuddyId="dsh:deepseek-official:deepseek-flash:max",
                   routerBuddy=CFG_FLASH, domainNodeId="preview-domain-ui",
@@ -471,7 +470,7 @@ ROUTING_A3 = routing("preview-decision-a3", "preview-run-a3-router", "cancelled"
                      attempt_id="att-router-a3", program_reason=reason("decision-cancelled"))
 ROUTING_A2_ABSTENTION = routing("preview-decision-a2-abstention", "preview-run-a2-router-abstention",
                                "needs-host", None, "合成预览：证据不足，主动放弃选择并等待 Host。",
-                               {"harness": "claude"}, elapsed_ms=60000, tool_calls=2, bytes_read=16384,
+                               {"harness": "claude"}, elapsed_ms=60000, tool_calls=2,
                                attempt_id="att-router-a2-abstention", program_reason=reason("router-abstained"))
 ROUTING_A4 = routing("preview-decision-a4", "preview-run-a4-router", "needs-host", None,
                      "合成预览：所有候选均在冷却，等待 Host 决定。", {"harness": "dsh", "provider": "deepseek-official"},
@@ -489,7 +488,7 @@ ROUTING_A4["routingBasis"] = {
 }
 ROUTING_B9 = routing("preview-decision-b9-reassign", "preview-run-b9-router-reassign", "completed", CFG_FLASH,
                      "合成预览：前一 buddy 在模型开始前被额度拒绝，重新路由到 DSH。", {},
-                     attempt_id="att-router-b9-reassign", mode="fast", elapsed_ms=15000, tool_calls=0, bytes_read=0)
+                     attempt_id="att-router-b9-reassign", mode="fast", elapsed_ms=15000, tool_calls=0)
 
 
 def decision_result(record: dict) -> dict:
@@ -2420,7 +2419,7 @@ def console_snapshot(scenario: str, assets_ready: bool, state: PreviewState | No
                           "maintenanceBuddyId": "dsh:deepseek-official:deepseek-flash:max",
                           "maintenanceIntervalSeconds": 3600,
                           "routingBudgetLimits": {"preset": "standard", "timeoutSeconds": 300,
-                                                  "toolCalls": 24, "bytesRead": 524288}},
+                                                  "toolCalls": 24}},
         "buddies": buddies,
         "modelServiceConcurrency": concurrency_rows(),
         "harnesses": harness_rows(state),

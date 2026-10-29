@@ -396,7 +396,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     "else:\n"
                     "    process_record = {'bootId': process_identity.boot_id(), 'pid': os.getpid(),\n"
                     "        'startedAt': process_identity.process_start(os.getpid(), include_exited=True),\n"
-                    "        'processGroupId': os.getpgrp(), 'jobName': None}\n"
+                    "        'jobName': None}\n"
                     f"fsync_json(marker, {{'taskId': {task_id!r}, 'attemptId': {attempt_id!r}, "
                     "'generation': 1, 'processIdentity': process_record})\n"
                     "if os.name == 'nt':\n"

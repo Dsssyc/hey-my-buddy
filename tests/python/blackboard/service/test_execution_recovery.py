@@ -212,7 +212,7 @@ class PrivateExecutionRecoveryTests(BoardTestCase):
                 self.assertEqual(process_start(identity["pid"], include_exited=False), identity["startedAt"])
                 psutil.Process(identity["pid"]).kill()
             else:
-                os.killpg(identity["processGroupId"], signal.SIGKILL)
+                os.killpg(identity["pid"], signal.SIGKILL)
             with self.daemon(env={"HMB_MAX_CONCURRENT": "1"}):
                 finished = wait_for(lambda: self._finished(run_id), timeout=35)
                 self.assertIsNotNone(finished, self.client().get(runId=run_id))
@@ -588,7 +588,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
         actor = {"attemptId": claim["attempt"]["attemptId"],
                  "generation": claim["attempt"]["generation"], "nonce": claim["nonce"]}
         identity = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
-                    "startedAt": 123250000, "processGroupId": 123, "jobName": None}
+                    "startedAt": 123250000, "jobName": None}
         self.board_.call("execution_progress", {**actor, "processIdentity": identity})
         with patch("hey_my_buddy.protocol.process_identity.inspect_process_identity", return_value="alive"):
             self.board_.store.reconcile_startup()
@@ -597,7 +597,7 @@ class ReconnectedRouterContractTests(RouterDispatchTestCase):
         self.assertEqual(self.client.get(runId=claim["task"]["taskId"])["attemptState"], "uncertain")
         self.board_.store.execution_connection(actor["attemptId"], connected=True)
         output = {**claim_tool_receipt(claim, 0, state_dir=self.directory), "status": "ok", "operation": "select",
-                  "usage": {"elapsedMs": 100, "toolCalls": 0, "bytesRead": None},
+                  "usage": {"elapsedMs": 100, "toolCalls": 0},
                   "stopEvidence": {"shutdownConfirmed": True, "native": {"shutdownConfirmed": True}},
                   "inputVerification": {"unchanged": True, "snapshotSha256": "private-fixture-copy",
                                         "manifestSha256": (claim["decisionInput"].get("executionWorkspace") or {}).get("manifestSha256")},

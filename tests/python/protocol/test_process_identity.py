@@ -20,7 +20,7 @@ from hey_my_buddy.protocol.process_members import ProcessMember
 
 
 RECORD = {"bootId": "linux:00000000-0000-4000-8000-000000000001", "pid": 301,
-          "startedAt": 105, "processGroupId": 301, "jobName": None}
+          "startedAt": 105, "jobName": None}
 #: A Windows root carries no boot identifier: the raw kernel FILETIME integer
 #: plus the exclusively created Job is the complete identity.
 WINDOWS_RECORD = {"pid": 301, "startedAt": 1339247086400000000,
@@ -69,10 +69,9 @@ class ProcessIdentityTests(unittest.TestCase):
         self.assertIs(identity.validate_process_identity(RECORD), RECORD)
         self.assertIs(identity.validate_process_identity(WINDOWS_RECORD), WINDOWS_RECORD)
         for value in ({**RECORD, "worker": {}}, {**RECORD, "pid": True},
-                      {**RECORD, "startedAt": 10.5}, {**RECORD, "processGroupId": None},
+                      {**RECORD, "startedAt": 10.5}, {**RECORD, "jobName": WINDOWS_RECORD["jobName"]},
                       {**WINDOWS_RECORD, "bootId": "windows:00000000-0000-4000-8000-000000000001"},
-                      {**WINDOWS_RECORD, "processGroupId": None},
-                      {**WINDOWS_RECORD, "bootId": None, "processGroupId": None},
+                      {**WINDOWS_RECORD, "bootId": None},
                       {**WINDOWS_RECORD, "jobName": None},
                       {**WINDOWS_RECORD, "pid": True},
                       {**WINDOWS_RECORD, "startedAt": 10.5},
@@ -276,7 +275,15 @@ class ProcessIdentityTests(unittest.TestCase):
              mock.patch.object(identity.os, "getpgid", side_effect=AssertionError("process group read")):
             record = identity.capture_process_identity(handle)
         getsid.assert_called_once_with(301)
-        self.assertEqual(record["processGroupId"], 301)  # The persisted field remains unchanged.
+        self.assertEqual(record, {"bootId": "linux:00000000-0000-0000-0000-000000000001",
+                                  "pid": 301, "startedAt": 815, "jobName": None})
+
+    @unittest.skipIf(os.name == "nt", "POSIX session identity")
+    def test_capture_refuses_a_root_that_does_not_lead_its_session(self):
+        handle = SimpleNamespace(pid=301, process_started_at=815, session_id=302, job=None)
+        with mock.patch.object(identity, "boot_id", return_value=RECORD["bootId"]), \
+             self.assertRaisesRegex(OSError, "does not lead its own session"):
+            identity.capture_process_identity(handle)
 
     @unittest.skipIf(os.name == "nt", "POSIX process group test")
     def test_real_owned_process_identity_and_orphan_stop(self):
@@ -308,7 +315,6 @@ class ProcessIdentityTests(unittest.TestCase):
             self.assertEqual(record["pid"], process.pid)
             self.assertIsInstance(record["startedAt"], int)
             self.assertGreater(record["startedAt"], 0)
-            self.assertEqual(record["processGroupId"], process.pid)
             self.assertIsNone(record["jobName"])
             self.assertEqual(identity.process_start(process.pid, include_exited=True), record["startedAt"])
             self.assertIsNone(identity.process_start(process.pid, include_exited=False))

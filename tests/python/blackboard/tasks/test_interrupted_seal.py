@@ -17,7 +17,7 @@ from hey_my_buddy.private_dirs import attempt_root
 
 
 IDENTITY = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
-            "startedAt": 123250000, "processGroupId": 123, "jobName": None}
+            "startedAt": 123250000, "jobName": None}
 
 
 class InterruptedSealTests(RealWorkspaceTestCase):
@@ -152,8 +152,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
 
 class CommandJournalTests(BoardTestCase):
     def test_stopped_command_controller_waits_for_its_recorded_child(self):
-        native = {**IDENTITY, "pid": 124, "startedAt": 123260000,
-                  "processGroupId": 124}
+        native = {**IDENTITY, "pid": 124, "startedAt": 123260000}
         attempt = {"adapter": "command", "model_harness": None, "task_id": "task-command",
                    "attempt_id": "attempt-command", "generation": 1, "identity_confirmed_at": "acknowledged"}
         board = SimpleNamespace(directory=self.directory)

@@ -947,7 +947,7 @@ class RoutingSpanTests(WorkflowTestCase):
                   'evidence': [], 'policyCheck': {'ignored': True}},
                   'policyCheck': {'taskPreference': {'ruleIndex': 2, 'outcome': 'matched'}, 'userPreference': 'alternative'},
                   'budget': {'preset': 'quick', 'toolCalls': 8},
-                  'usage': {'elapsedMs': 120, 'toolCalls': 3, 'bytesRead': None},
+                  'usage': {'elapsedMs': 120, 'toolCalls': 3},
                   'stopEvidence': {'shutdownConfirmed': True}}
         self.decision(board, task_id, output=output, selected=selected)
         before = self.spans(board, task_id)[0]
@@ -981,7 +981,7 @@ class RoutingSpanTests(WorkflowTestCase):
                          'routerRetryIntervalSeconds': None, 'routingBudget': None,
                          'routerBuddyId': None, 'routerBuddy': None, 'routerProblem': None, 'routingMode': None,
                          'selectedBuddy': None, 'reason': None, 'note': None, 'policyCheck': None,
-                         'budget': None, 'usage': {'elapsedMs': None, 'toolCalls': None, 'bytesRead': None}})
+                         'budget': None, 'usage': {'elapsedMs': None, 'toolCalls': None}})
         self.decision(board, task_id)
         span = self.spans(board, task_id)[0]
         self.assertEqual(span['decisionId'], 'recorded-decision')

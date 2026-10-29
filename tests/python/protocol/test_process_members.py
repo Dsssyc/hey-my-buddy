@@ -272,7 +272,7 @@ class RealSessionTests(unittest.TestCase):
                 member = json.loads(ready.read_text())
                 records.extend([root, member])
                 self.assertEqual(psutil.Process(root["pid"]).ppid(), 1)
-                record = dict(root, bootId=boot_id(), processGroupId=root["pid"], jobName=None)
+                record = dict(root, bootId=boot_id(), jobName=None)
                 source = process_identity._SystemSource()
                 def send(pid, sig):
                     os.kill(pid, sig)

@@ -18,9 +18,9 @@ MAX_NOTE = 2000
 MAX_REFERENCES = 32
 # Provisional values, pending separately authorized native measurements.
 BUDGETS = {
-    "brief": {"timeoutSeconds": 60, "toolCalls": 8, "bytesRead": 131072},
-    "standard": {"timeoutSeconds": 300, "toolCalls": 24, "bytesRead": 524288},
-    "deep": {"timeoutSeconds": 600, "toolCalls": 64, "bytesRead": 2097152},
+    "brief": {"timeoutSeconds": 60, "toolCalls": 8},
+    "standard": {"timeoutSeconds": 300, "toolCalls": 24},
+    "deep": {"timeoutSeconds": 600, "toolCalls": 64},
 }
 DEFAULT_PRESET = "standard"
 FAST_BUDGET = {"timeoutSeconds": 60}

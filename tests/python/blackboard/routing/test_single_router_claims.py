@@ -206,7 +206,7 @@ class SingleRouterClaimTests(DecisionTestCase):
         request = self.request(board)
         claim = self.claim_route(board, request)['claim']
         answer = stopped_answer(claim, state_dir=board.directory)
-        answer['usage'] = {'elapsedMs': 300000, 'toolCalls': 24, 'bytesRead': None}
+        answer['usage'] = {'elapsedMs': 300000, 'toolCalls': 24}
         answer.update(claim_tool_receipt(claim, 24, state_dir=board.directory))
         self.report(board, claim, answer)
         self.assertEqual(self.decision(board, request['decisionId'])['status'], 'completed')

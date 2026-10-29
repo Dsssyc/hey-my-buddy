@@ -158,7 +158,7 @@ class ResolutionTests(CurrentRouterTestCase):
             review = router.current_router(db, now=T0)
         self.assertEqual(review.buddy_id, A)
         self.assertEqual(review.facts["budget"],
-                         {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8, "bytesRead": 131072})
+                         {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8})
 
     def test_ineligible_items_are_skipped_in_order_with_reasons(self):
         self.add_buddy(A, enabled=0)

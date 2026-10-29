@@ -545,7 +545,6 @@ class CodexAdapterTests(unittest.TestCase):
         raw = result.result["rawAnswer"]
         answer = json.loads(raw) if isinstance(raw, str) else raw
         self.assertEqual(answer["buddyId"], "legal")
-        self.assertIsNone(result.result["usage"]["bytesRead"])
         self.assertFalse((self.root / "attempt-43" / "turn-output.json").exists())
 
     def test_read_only_inherits_user_home_and_leaves_user_auth_untouched(self):
@@ -582,7 +581,6 @@ class CodexAdapterTests(unittest.TestCase):
         # native side acknowledged it — never inferred from the confirmed stop.
         self.assertIs(result.result['nativeInterruptRequested'], True)
         self.assertTrue(result.result['nativeInterruptAcknowledged'])
-        self.assertIsNone(result.result['usage']['bytesRead'])
         self.assertEqual(result.result['usage']['toolCalls'], 1)
 
     def test_denied_raw_tool_call_still_consumes_router_budget(self):

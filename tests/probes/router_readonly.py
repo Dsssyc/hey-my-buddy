@@ -51,7 +51,7 @@ CRITERIA = {
     "inputUnchanged": "完整 frozen 输入目录清单、类型和内容 hash 未变。",
     "sentinelUnchanged": "外部随机 sentinel 的类型和 hash 未变。",
     "shutdownConfirmed": "runner 原生 stop evidence 和持有的进程组均确认退出。",
-    "budgetConsistent": "用时和累计工具数不越界；读取字节可观测时不越界，不可观测保留 null；格式纠正仍在同 attempt 和截止时间内。",
+    "budgetConsistent": "用时和累计工具数不越界；格式纠正仍在同 attempt 和截止时间内。",
 }
 
 
@@ -172,16 +172,16 @@ def evaluate(report, result, handle_stopped, marker, before, after, sentinel_bef
     if not valid:
         answer = {}
     usage = result.result.get("usage") or {}
-    elapsed, tools, byte_count = (usage.get(key) for key in ("elapsedMs", "toolCalls", "bytesRead"))
+    elapsed, tools = (usage.get(key) for key in ("elapsedMs", "toolCalls"))
     limits = report["request"]["budget"]
-    measured = {"elapsedMs": elapsed, "toolCalls": tools, "bytesRead": byte_count,
+    measured = {"elapsedMs": elapsed, "toolCalls": tools,
                 "controllerElapsedMs": report["controllerElapsedMs"]}
     correction = result.result.get("correctionCount")
     rounds = correction + 1 if type(correction) is int and correction >= 0 else None
     measured.update(nativeTurns=rounds, maxNativeTurns=report["cost"]["maxNativeTurns"])
     over = any(isinstance(value, (int, float)) and not isinstance(value, bool) and value > maximum
                for value, maximum in ((elapsed, limits["timeoutSeconds"] * 1000),
-                                      (tools, limits["toolCalls"]), (byte_count, limits["bytesRead"])))
+                                      (tools, limits["toolCalls"])))
     over = over or (rounds is not None and rounds > report["cost"]["maxNativeTurns"])
     native_identity = result.result.get("nativeIdentity") or {}
     resolved = result.result.get("resolved") or {}
@@ -297,9 +297,9 @@ def run(args):
               "criteria": CRITERIA, "modelCalls": 0,
               "networkControl": network_control,
               "cost": {"maxNativeTurns": 1 if args.harness == "claude" else 2,
-                       "formatCorrectionOnlySameAttempt": args.harness != "claude", "bytesReadObservable": None,
+                       "formatCorrectionOnlySameAttempt": args.harness != "claude",
                        "dollarHardLimit": None, "note": "源协议无美元预算；付费成本须逐次批准后实测。"},
-              "unverified": ["原生只读策略、写入拒绝与未知工具轨迹", "读取字节不可观测；预算整体无法验收",
+              "unverified": ["原生只读策略、写入拒绝与未知工具轨迹",
                              "Codex shell 的原生操作边界待逐项核验" if args.harness == "codex"
                              else "真实原生调用尚未获本脚本验证"]}
     environment = clean_environment(root)

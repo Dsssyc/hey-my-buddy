@@ -114,7 +114,7 @@ export function row(overrides: Partial<TimelineRow> = {}): TimelineRow {
 export function timeline(overrides: Partial<MacroTaskTimeline> = {}): MacroTaskTimeline {
   const spans = [
     span("q1", "queue", at("10:00"), at("10:01")),
-    span("r1", "routing", at("10:01"), at("10:02"), { attemptId: "att-r1", decisionId: "decision-1", routing: { routingMode: "fast", selectedBuddy: tb(CODEX), reason: null, note: REASON, usage: { elapsedMs: 14000, toolCalls: 0, bytesRead: null } } }),
+    span("r1", "routing", at("10:01"), at("10:02"), { attemptId: "att-r1", decisionId: "decision-1", routing: { routingMode: "fast", selectedBuddy: tb(CODEX), reason: null, note: REASON, usage: { elapsedMs: 14000, toolCalls: 0 } } }),
     span("e1", "execution", at("10:02"), at("10:30"), { turnIndex: 1, attemptId: "att-1", turnId: "turn-1", buddy: tb(CODEX), shutdownConfirmed: true, resultStatus: "ok" }),
     span("h1", "host", at("10:30"), at("10:40"), { state: "approved", requestId: "req-1", requestKind: "assistance", summary: "需要读取样例目录" }),
     span("q2", "queue", at("10:41"), at("10:42")),

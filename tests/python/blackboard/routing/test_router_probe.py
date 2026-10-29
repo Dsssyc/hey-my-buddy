@@ -252,7 +252,7 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertFalse(report["probeChecksPassed"])
                 self.assertEqual(report["status"], "prepared")
                 self.assertEqual(report["request"]["budget"],
-                                 {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8, "bytesRead": 131072})
+                                 {"preset": "brief", "timeoutSeconds": 60, "toolCalls": 8})
                 self.assertEqual(report["inputHashesBefore"], report["inputHashesAfter"])
                 self.assertEqual(report["sentinelBefore"], report["sentinelAfter"])
                 assert_private_path(self, self.root, 0o700)
@@ -288,7 +288,7 @@ class RouterProbeTests(unittest.TestCase):
                 self.assertEqual(report["checks"][name]["status"], "unverified")
             for name in ("internalRead", "inputUnchanged", "sentinelUnchanged", "shutdownConfirmed"):
                 self.assertEqual(report["checks"][name]["status"], "passed")
-            self.assertIsNone(report["checks"]["budgetConsistent"]["evidence"]["bytesRead"])
+
             self.assertEqual(report["cost"]["maxNativeTurns"], 1 if harness == "claude" else 2)
             _harness, context, request = native.registered_start.call_args.args
             self.assertIsNone(context.turn)
@@ -405,11 +405,11 @@ class RouterProbeTests(unittest.TestCase):
         self.assertEqual(report["result"]["result"]["nativePolicy"]["account"], "[REDACTED]")
 
     def test_presets_follow_router_contract_and_root_cannot_be_reused(self):
-        for preset, expected in (("standard", (300, 24, 524288)), ("deep", (600, 64, 2097152))):
+        for preset, expected in (("standard", (300, 24)), ("deep", (600, 64))):
             self.root = Path(self.temporary.name) / preset
             report = probe.run(self.args(preset=preset))
             limits = report["request"]["budget"]
-            self.assertEqual(tuple(limits[key] for key in ("timeoutSeconds", "toolCalls", "bytesRead")), expected)
+            self.assertEqual(tuple(limits[key] for key in ("timeoutSeconds", "toolCalls")), expected)
             with self.assertRaises(ValueError):
                 probe.run(self.args())
 

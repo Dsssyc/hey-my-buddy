@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 from threading import Event
 from types import SimpleNamespace
+from admission import admit_execution
 from hey_my_buddy.protocol import service_process
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 from hey_my_buddy.blackboard.store import backup
@@ -535,6 +536,25 @@ class UpgradeTests(BoardTestCase):
         board = self.board()
         with mock.patch.object(backup, 'database_snapshot', side_effect=AssertionError('full scan during preflight')):
             self.assertEqual(upgrade.preflight(board.directory, contract_changed=True), {'schema': SCHEMA_VERSION})
+
+    def test_contract_cutover_requires_finished_execution_materials_to_be_cleaned(self):
+        board = self.board()
+        board.submit_execution(requestId='pending-cleanup', task='completed work', cwd=str(self.workdir()),
+                               adapter='command', argv=['echo', 'done'])
+        claim = admit_execution(board.client(), 'n' * 32)['claim']
+        attempt_id = claim['attempt']['attemptId']
+        board.call('execution_result', {'attemptId': attempt_id, 'generation': claim['attempt']['generation'],
+                                       'nonce': 'n' * 32, 'status': 'ok', 'shutdownConfirmed': True})
+        with board.store.db.read() as connection:
+            row = board.store._attempt_row(connection, attempt_id)
+            self.assertEqual((row['execution_state'], row['shutdown_confirmed'], row['cleanup_pending']),
+                             ('finished', 1, 1))
+        with self.assertRaises(BoardError) as caught:
+            upgrade.preflight(board.directory, contract_changed=True)
+        self.assertEqual(caught.exception.code, 'UPGRADE_NOT_IDLE')
+        self.assertEqual(caught.exception.details['unresolvedAttempts'], [attempt_id])
+        board.store.complete_execution_cleanup(attempt_id)
+        self.assertEqual(upgrade.preflight(board.directory, contract_changed=True), {'schema': SCHEMA_VERSION})
 
     def test_upgrade_journal_fences_admission_without_cancellation(self):
         board=self.board()

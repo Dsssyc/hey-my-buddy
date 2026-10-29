@@ -487,7 +487,7 @@ class Execution:
                     "status": "failed",
                     "result": ({"status": "error", "code": error.code,
                                 "usage": {"elapsedMs": round((time.monotonic() - started_at) * 1000),
-                                          "toolCalls": None, "bytesRead": None}}
+                                          "toolCalls": None}}
                                if isinstance(error, BoardError) and not holder.get("started") else None),
                     "error": f"execution failure: {error!r}",
                     "exitCode": None,

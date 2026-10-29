@@ -62,7 +62,6 @@ export default {
     standard: "Standard",
     deep: "Deep",
     toolCalls: "{{n}} tool calls",
-    bytes: "{{n}} bytes",
   },
   retry: {
     name: "Retry interval",
