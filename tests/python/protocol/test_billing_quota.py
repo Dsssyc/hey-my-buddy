@@ -8,7 +8,7 @@ from pathlib import Path
 import sys
 from unittest.mock import patch
 
-from hey_my_buddy.protocol.billing import claude_status, codex_account, native_provider, zcode_access
+from hey_my_buddy.protocol.billing import claude_status, codex_account, dsh_provider, native_provider, zcode_access
 from hey_my_buddy.blackboard.service.harness_health import HarnessHealth
 from support import BoardTestCase
 
@@ -35,6 +35,10 @@ class BillingTests(BoardTestCase):
         self.assertEqual(zcode_access("zhipu-coding-plan-api-key", stamp())["kind"], "subscription")
         self.assertEqual(zcode_access("api-key", stamp())["kind"], "metered")
         self.assertEqual(zcode_access("oauth", stamp())["kind"], "unknown")
+        self.assertEqual(dsh_provider("deepseek-official", stamp())["kind"], "metered")
+        for provider in ("deepseek-flash", "custom-gateway", "", None):
+            self.assertEqual(dsh_provider(provider, stamp())["kind"], "unknown")
+        self.assertEqual(dsh_provider("deepseek-official", stamp())["source"], "dsh/provider-identity")
 
     def test_native_provider_spelling_and_unknown_gateway_funding_are_preserved(self):
         for provider in ("bedrock", "vertex", "foundry", "custom-gateway", "firstParty"):

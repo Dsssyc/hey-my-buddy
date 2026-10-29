@@ -42,6 +42,16 @@ def zcode_access(access: object, observed_at: str) -> dict:
                 "zcode/provider-access", observed_at)
 
 
+def dsh_provider(provider: object, observed_at: str) -> dict:
+    """The session's own model selector names the provider, and only the
+    official DeepSeek API identity is known to be token-billed. DSH CLI
+    0.2.1-rc.2's ACP handshake reports no authentication method
+    (``authMethods`` is empty) and no account or balance field, so any other
+    provider identity's funding is not established."""
+    return fact("metered" if provider == "deepseek-official" else UNKNOWN,
+                "dsh/provider-identity", observed_at)
+
+
 def for_provider(connection, harness: str, provider: str) -> dict:
     """Only native metadata for this exact buddy may establish a label."""
     from ..blackboard.service.harness_health import read_health

@@ -65,12 +65,11 @@ def read_health(connection, harness):
     record = json.loads(row['record_json'])
     billing = record.get('billingByProvider') or {}
     if harness == "dsh":
-        from ...protocol.billing import fact
+        from ...protocol.billing import dsh_provider
         catalog = connection.execute("SELECT d.payload_json,c.updated_at FROM catalog_current c JOIN evaluation_catalog d ON d.discovery_id=c.discovery_id WHERE c.harness='dsh' AND c.status='complete'").fetchone()
         if catalog:
             entries = json.loads(catalog["payload_json"])["providers"]
-            billing = {entry["provider"]: fact("metered" if entry.get("packageName") == "@deepseek-ai/dsh-llm-deepseek" else "unknown",
-                                                "dsh/deepseek-api-key", catalog["updated_at"])
+            billing = {entry["provider"]: dsh_provider(entry["provider"], catalog["updated_at"])
                        for entry in entries if entry.get("harness") == harness}
     status = row['status']
     record = {**record, "billingByProvider": billing, "providers": providers(connection, harness), 'harness': harness,
