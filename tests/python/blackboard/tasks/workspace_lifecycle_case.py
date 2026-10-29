@@ -118,7 +118,10 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         (checkout / "tracked.txt").write_text(output, encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, submitted["runId"],
                                      claimed["claim"]["attempt"]["attemptId"])
-        self.finish_turn(board, claimed, seal, disposition=disposition)
+        # Enrichment belongs to the receipt; callers also need the physical seal
+        # unchanged when checking a replay of output.json after restart.
+        result_seal = dict(seal, cumulativePatch=workspace_module.cumulative_patch(manifest, seal, manifest["inputCommit"]))
+        self.finish_turn(board, claimed, result_seal, disposition=disposition)
         view = self.view(board, submitted["runId"])
         artifact = next(row for row in view["artifacts"] if row["kind"] == "output")
         return submitted, claimed, manifest, checkout, seal, view, artifact
@@ -328,6 +331,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         (checkout / "second.txt").write_text("second turn output\n", encoding="utf-8", newline="\n")
         second_seal = workspace_module.seal(self.directory, second_manifest, run_id,
                                             second["claim"]["attempt"]["attemptId"])
+        second_seal["cumulativePatch"] = workspace_module.cumulative_patch(
+            second_manifest, second_seal, first_manifest["inputCommit"])
         self.finish_turn(board, second, second_seal, nonce="q" * 16)
         delivered = self.view(board, run_id)
         self.assertEqual(delivered["state"], "delivered")

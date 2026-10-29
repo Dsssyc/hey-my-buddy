@@ -760,12 +760,16 @@ class ReminderReturnTests(unittest.TestCase):
 
 class ResultPathCountTests(unittest.TestCase):
     def test_await_preserves_service_path_totals(self):
-        patch = {"path": "/private/cumulative.patch", "changedPaths": [f"file-{index}" for index in range(32)],
-                 "changedPathsCount": 2000, "changedPathsTruncated": True}
-        full = {"workflowState": "delivered", "shutdownConfirmed": False,
-                "result": {"workspaceSeal": {"cumulativePatch": patch}}}
-        view = blocking._micro_task_result_view(full, "run")
-        self.assertEqual(view["artifacts"][0]["cumulativePatch"], patch)
+        for key in ("workspaceSeal", "partialWorkspaceSeal"):
+            for path in ("/private/output.patch", "/private/cumulative.patch"):
+                with self.subTest(seal=key, path=path):
+                    patch = {"path": path, "changedPaths": [f"file-{index}" for index in range(32)],
+                             "changedPathsCount": 2000, "changedPathsTruncated": True}
+                    full = {"workflowState": "delivered", "shutdownConfirmed": False,
+                            "result": {key: {"diffPath": "/private/output.patch", "cumulativePatch": patch}}}
+                    view = blocking._micro_task_result_view(full, "run")
+                    self.assertEqual(view["artifacts"][0]["cumulativePatch"], patch)
+                    self.assertEqual(view["artifacts"][0]["diffPath"], "/private/output.patch")
 
 
 if __name__ == "__main__":

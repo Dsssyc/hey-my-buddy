@@ -1242,7 +1242,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
 
 
 def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> dict:
-    """Freeze a whole-micro-task patch using immutable Git objects, independent of checkout edits."""
+    """Freeze a whole-micro-task patch, reusing the sealed diff when its base matches."""
     with _errors():
         _validate_manifest(manifest)
         if original_commit == manifest.get("inputCommit"):
@@ -1250,10 +1250,8 @@ def cumulative_patch(manifest: dict, artifact: dict, original_commit: str) -> di
             data = _read(Path(artifact["diffPath"]))
             if data is None or _sha(data) != artifact["diffSha256"]:
                 raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The final output patch changed")
-            path = Path(artifact["diffPath"]).with_name("cumulative-" + original_commit + ".patch")
-            _write_once(path, data)
-            return {"baseCommit": original_commit, "outputCommit": artifact["commit"], "path": str(path),
-                    "sha256": _sha(data), "changedPaths": list(artifact["changedPaths"])}
+            return {"baseCommit": original_commit, "outputCommit": artifact["commit"], "path": artifact["diffPath"],
+                    "sha256": artifact["diffSha256"], "changedPaths": list(artifact["changedPaths"])}
         repository, changed = _artifact_binding(manifest, manifest, artifact)
         base = _commit(repository, original_commit)
         data = _diff(repository, base, artifact["commit"])

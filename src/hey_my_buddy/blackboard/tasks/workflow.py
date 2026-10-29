@@ -5379,6 +5379,7 @@ class WorkflowCoordinator:
                 retention["outputPatches"].append(cumulative["path"])
             if isinstance(pinned.get("ref"), str):
                 retention["fixedRefs"].append(pinned["ref"])
+        retention["outputPatches"] = list(dict.fromkeys(retention["outputPatches"]))
         return reasons, evidence, retention
 
     def cleanup_plan(self, params: dict, *, console_authority: dict | None = None,

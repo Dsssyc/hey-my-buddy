@@ -45,17 +45,29 @@ class DeletionWorkspaceTests(unittest.TestCase):
         self.assertFalse(directory.exists())
 
     def test_deletes_checkout_refs_and_sealed_record_then_replays(self):
-        manifest = self.prepare()
-        directory = self.state / "workspaces" / manifest["workspaceId"]
-        checkout = Path(manifest["checkoutRoot"])
-        (checkout / "src/file.txt").write_text("result\n", encoding="utf-8", newline="\n")
-        output = workspace.seal(self.state, manifest, "task-1", "attempt-1")
-        self.assertEqual(self.delete(manifest, [output]), [])
-        self.assertFalse(directory.exists())
-        self.assertFalse(checkout.exists())
-        self.assertFalse(self.git("for-each-ref", "--format=%(refname)",
-                                  f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
-        self.assertEqual(self.delete(manifest, [output]), [])
+        for separate in (False, True):
+            with self.subTest(separate=separate):
+                manifest = self.prepare(request=f"delete-patches-{separate}")
+                directory = self.state / "workspaces" / manifest["workspaceId"]
+                checkout = Path(manifest["checkoutRoot"])
+                (checkout / "src/file.txt").write_text("result\n", encoding="utf-8", newline="\n")
+                output = workspace.seal(self.state, manifest, "task-1", "attempt-1")
+                output["cumulativePatch"] = workspace.cumulative_patch(manifest, output, manifest["inputCommit"])
+                if separate:
+                    # An existing seal retains the older two-file form.
+                    legacy = Path(output["diffPath"]).with_name(f"cumulative-{manifest['inputCommit']}.patch")
+                    native_path(legacy).write_bytes(native_path(Path(output["diffPath"])).read_bytes())
+                    output["cumulativePatch"]["path"] = str(legacy)
+                patches = {Path(output["diffPath"]), Path(output["cumulativePatch"]["path"])}
+                self.assertEqual(len(patches), 2 if separate else 1)
+                self.assertTrue(all(native_path(path).is_file() for path in patches))
+                self.assertEqual(self.delete(manifest, [output]), [])
+                self.assertFalse(directory.exists())
+                self.assertFalse(checkout.exists())
+                self.assertTrue(all(not native_path(path).exists() for path in patches))
+                self.assertFalse(self.git("for-each-ref", "--format=%(refname)",
+                                          f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
+                self.assertEqual(self.delete(manifest, [output]), [])
 
     def test_changed_lock_and_unsealed_file_preserve_checkout_and_refs(self):
         manifest = self.prepare()

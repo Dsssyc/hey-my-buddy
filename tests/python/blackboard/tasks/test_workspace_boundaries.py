@@ -64,7 +64,31 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         with patch.object(workspace, "_git", side_effect=AssertionError("unexpected Git read")):
             cumulative = workspace.cumulative_patch(manifest, sealed, manifest["inputCommit"])
         self.assertEqual(cumulative["changedPaths"], ["src/file.txt"])
-        self.assertEqual(native_path(Path(cumulative["path"])).read_bytes(), native_path(Path(sealed["diffPath"])).read_bytes())
+        self.assertEqual(cumulative["path"], sealed["diffPath"])
+        self.assertEqual(cumulative["sha256"], sealed["diffSha256"])
+        self.assertEqual(cumulative["baseCommit"], manifest["inputCommit"])
+        self.assertEqual(cumulative["outputCommit"], sealed["commit"])
+        self.assertEqual(list(native_path(Path(sealed["diffPath"]).parent).glob("*.patch")),
+                         [native_path(Path(sealed["diffPath"]))])
+
+    def test_new_cumulative_patch_keeps_existing_sealed_files_unchanged(self):
+        manifest = self.prepare()
+        native_path(Path(manifest["path"]) / "src/file.txt").write_text("output\n", encoding="utf-8", newline="\n")
+        sealed = self.seal(manifest)
+        legacy_path = Path(sealed["diffPath"]).with_name(f"cumulative-{manifest['inputCommit']}.patch")
+        native_path(legacy_path).write_bytes(native_path(Path(sealed["diffPath"])).read_bytes())
+        sealed["cumulativePatch"] = {
+            "baseCommit": manifest["inputCommit"], "outputCommit": sealed["commit"],
+            "path": str(legacy_path), "sha256": sealed["diffSha256"], "changedPaths": sealed["changedPaths"],
+        }
+        record = workspace._json(sealed)
+        files = {path: path.read_bytes() for path in native_path(legacy_path.parent).iterdir() if path.is_file()}
+        fresh = workspace.seal(self.state, manifest, "micro-task", "new-attempt")
+        cumulative = workspace.cumulative_patch(manifest, fresh, manifest["inputCommit"])
+        self.assertEqual(cumulative["path"], fresh["diffPath"])
+        self.assertEqual(workspace._json(sealed), record)
+        self.assertEqual({path: path.read_bytes() for path in native_path(legacy_path.parent).iterdir()
+                          if path.is_file()}, files)
 
     def test_missing_staged_commit_rejects_turn_start_when_input_still_exists(self):
         source = self.repo / "src/file.txt"
