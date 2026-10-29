@@ -1,6 +1,6 @@
 # Macro tasks and micro task timelines
 
-Macro tasks supply archival grouping and timeline reads under the [macro task contract](../decisions/012-claude-code-distribution-and-evidence-routing.md); the current schema is 31, and the installer converts a board of the upgrade base (schema 30) in its one explicit upgrade. Group metadata supplies no scheduler, dependency graph, execution permission, result ledger or model-routing input. Settled groups can be deleted through the console's preview and confirmation operations.
+Macro tasks supply archival grouping and timeline reads under the [macro task contract](../decisions/012-claude-code-distribution-and-evidence-routing.md); the current schema is 32, and the installer runs the migration chain from the board's own schema, supported from the upgrade floor (schema 30). Group metadata supplies no scheduler, dependency graph, execution permission, result ledger or model-routing input. Settled groups can be deleted through the console's preview and confirmation operations.
 
 ## Submission metadata
 
@@ -69,9 +69,9 @@ The preview helper `tests/probes/macro_task_console_preview.py` serves synthetic
 
 ## Schema and verification
 
-Startup accepts schema 31 only and no conversion runs at startup ([operations](operations.md#backup-upgrade-and-storage-contract)); the pending upgrade converts a board of the upgrade base (schema 30) during installation, and a board of any other schema remains an archive with no conversion entrypoint in this source.
+Startup accepts schema 32 only and no conversion runs at startup ([operations](operations.md#backup-upgrade-and-storage-contract)); installation upgrades schema 30 or 31 through the remaining steps. A board below the upgrade floor is refused with instructions to install release 0.54.1 first; a newer schema is refused.
 
-The check suite restores the fixture board written by the upgrade base, runs the pending upgrade when there is one, and compares the result with a new board that carries the same settings.
+The check suite restores the fixture board written by the upgrade floor, runs the complete chain, and compares the result with a new board that carries the same settings. Forms introduced after the floor are added by fixed SQL at the step that first supports them, with their writer provenance beside the fixture.
 
 ## 0.15.1 presentation and metadata
 

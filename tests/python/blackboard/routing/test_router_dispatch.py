@@ -266,9 +266,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
         with self.board_.store.db.write() as db:
             for index in (1, 2):
                 db.execute(
-                    "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
-                    "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
-                    " VALUES(?,?,?,?,'digest',1,'dsh','/work',60,'running',1,?,?)",
+                    "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,?,json_set(?,'$.expectedSeconds',60),'digest',1,'dsh','/work','running',1,?,?)",
                     (f"busy-{index}", f"busy-{index}", "host", "{}", T0, T0))
                 db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'nonce','executing','dsh','dsh','other',?,?,?,?)", (f'att-busy-{index}', f'busy-{index}', f'model-{index}', T0, T0, T0))
         blocked = self.claim("cap")
@@ -288,9 +286,7 @@ class PreclaimAdvanceTests(RouterDispatchTestCase):
                                           task_id=None, attempt_id=None, outcome="no_answer",
                                           code="timeout", phase="runtime", facts={"routerIndex": 0}, now=T0)
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
-                "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
-                " VALUES('retry-1','retry','host','{}','digest',1,'dsh','/work',60,'running',1,?,?)",
+                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES('retry-1','retry','host',json_set('{}','$.expectedSeconds',60),'digest',1,'dsh','/work','running',1,?,?)",
                 (T0, T0))
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES('att-retry','retry-1',1,'nonce','executing','dsh','dsh','fixture','alpha',?,?,?)", (T0, T0, T0))
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at)"
@@ -391,10 +387,7 @@ class WorkflowWiringTests(RouterDispatchTestCase):
         """One micro task admitted through the coordinator's workflow entry."""
         with self.board_.store.db.write() as db:
             db.execute(
-                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
-                "fingerprint_version,adapter,cwd,expected_seconds,state,queue_reason,revision,created_at,updated_at)"
-                " VALUES(?,?,'host',?,'digest',1,'unresolved','/work',60,'queued',"
-                "'awaiting-model-selection',1,?,?)",
+                "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,queue_reason,revision,created_at,updated_at) VALUES(?,?,'host',json_set(?,'$.expectedSeconds',60),'digest',1,'unresolved','/work','queued','awaiting-model-selection',1,?,?)",
                 (run_id, run_id, canonical_json({"task": "do the thing"}), T0, T0))
             db.execute(
                 "INSERT INTO workflow_runs(run_id,host_id,source_host_id,control_verifier,"

@@ -1,7 +1,8 @@
 """Ended-turn classification, per-micro-task samples and cumulative writes.
 
-Settlement and maintenance use the same sample extractor as the one pending
-upgrade. Only those write paths read the outcome history.
+Settlement, maintenance and disposable sample export read outcome history through
+this sample extractor.
+Installed upgrades carry their own frozen backfill.
 """
 from __future__ import annotations
 
@@ -193,7 +194,6 @@ def accumulate_infrastructure(connection, buddy, receipt, finished_at, *, new_ro
         "INSERT INTO buddy_infrastructure_failures(harness,provider,model,effort,count,last_at) VALUES(?,?,?,?,1,?)"
         " ON CONFLICT(harness,provider,model,effort) DO UPDATE SET count=count+1,last_at=excluded.last_at",
         (*key(buddy, IDENTITY), latest))
-
 
 def backfill(connection):
     for row in connection.execute("SELECT run_id FROM workflow_runs WHERE state IN ('accepted','concluded')").fetchall():

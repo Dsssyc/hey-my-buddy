@@ -74,7 +74,7 @@
     }
   },
   "fixture": {
-    "path": "tests/fixtures/upgrade-base",
+    "path": "tests/fixtures/upgrade-floor",
     "sha256": {
       "board.sql": "df3c47f4ec6370c825f7079133e12ba23245c571def3689e286cf559fa4395a6",
       "catalog.json": "4a60053082f545089f75271d7f0039aa9612ae06b5f328bfab7947521a22b19b",

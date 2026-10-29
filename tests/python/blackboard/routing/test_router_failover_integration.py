@@ -616,9 +616,7 @@ class FailoverTests(RouterDispatchTestCase):
 
     def busy_attempt(self, db, number, *, provider="busy", model="busy", buddy_id=None):
         task_id, attempt_id = f"busy-{number}", f"busy-attempt-{number}"
-        db.execute("INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,"
-                   "fingerprint_version,adapter,cwd,expected_seconds,state,revision,created_at,updated_at)"
-                   " VALUES(?,?,'host','{}','digest',1,'dsh','/work',60,'running',1,?,?)", (task_id, task_id, T0, T0))
+        db.execute("INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,'host',json_set('{}','$.expectedSeconds',60),'digest',1,'dsh','/work','running',1,?,?)", (task_id, task_id, T0, T0))
         db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,model_harness,model_provider,model_model,started_at,created_at,updated_at) VALUES(?,?,1,'verifier','executing','dsh','dsh',?,?,?,?,?)", (attempt_id, task_id, provider, model, T0, T0, T0))
         if buddy_id:
             db.execute("INSERT INTO evaluation_decisions(decision_id,status,created_at) VALUES(?,'running',?)", (task_id, T0))

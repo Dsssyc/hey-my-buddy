@@ -1,4 +1,4 @@
-"""The pending schema 30 → 31 upgrade, run only by the stopped-board installer."""
+"""The upgrade-floor-to-current chain, run only by the stopped-board installer."""
 from __future__ import annotations
 
 from contextlib import closing
@@ -6,33 +6,46 @@ from pathlib import Path
 import sqlite3
 
 from ...errors import BoardError
-from ..routing.statistics import backfill
-from .db import DOMAIN_EVALUATION_SCHEMA, ROUTER_MAINTENANCE_COLUMNS, SCHEMA_VERSION, STATISTICS_SCHEMA
+from . import schema_30_31, schema_31_32
+from .db import SCHEMA_VERSION
 
-UPGRADE_BASE_SCHEMA = 30
+UPGRADE_FLOOR_SCHEMA = 30
+UPGRADE_FLOOR_RELEASE = "0.54.1"
+STEPS = {30: schema_30_31.upgrade, 31: schema_31_32.upgrade}
+
+
+def supported_schema(value: str | None) -> int:
+    """Validate a board's stored marker at the installation boundary."""
+    if value not in {str(version) for version in range(UPGRADE_FLOOR_SCHEMA, SCHEMA_VERSION + 1)}:
+        raise BoardError("UNSUPPORTED_SCHEMA",
+                         f"Upgrade requires schema {UPGRADE_FLOOR_SCHEMA} through {SCHEMA_VERSION}; "
+                         f"for a board below the upgrade floor, install release {UPGRADE_FLOOR_RELEASE} first")
+    return int(value)
 
 
 def upgrade_state(state: Path) -> dict:
-    """Add domain evaluation storage and accumulate retained outcome history atomically."""
+    """Run every required step in one transaction, preserving the source on failure."""
     with closing(sqlite3.connect(Path(state) / "board.sqlite3")) as connection:
         connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys=ON")
+        # SQLite's rebuild sequence disables foreign keys before BEGIN; the
+        # complete chain is checked before committing and enforcement resumes.
+        connection.execute("PRAGMA foreign_keys=OFF")
         connection.execute("BEGIN IMMEDIATE")
         try:
             version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-            if version is None or version[0] != str(UPGRADE_BASE_SCHEMA):
-                raise BoardError("UNSUPPORTED_SCHEMA", f"Pending upgrade requires schema {UPGRADE_BASE_SCHEMA}")
-            for ddl in (DOMAIN_EVALUATION_SCHEMA + STATISTICS_SCHEMA).split(";"):
-                if ddl.strip():
-                    connection.execute(ddl)
-            for column in ROUTER_MAINTENANCE_COLUMNS:
-                connection.execute("ALTER TABLE router_settings ADD COLUMN " + column)
-            backfill(connection)
-            if [row[0] for row in connection.execute("PRAGMA integrity_check")] != ["ok"] or connection.execute("PRAGMA foreign_key_check").fetchall():
-                raise BoardError("UPGRADE_INVALID_BOARD", "The upgraded board failed integrity checks")
-            connection.execute("UPDATE meta SET value=? WHERE key='schema_version'", (str(SCHEMA_VERSION),))
+            source = supported_schema(version[0] if version is not None else None)
+            if source == SCHEMA_VERSION:
+                raise BoardError("UNSUPPORTED_SCHEMA", f"The board already has schema {SCHEMA_VERSION}")
+            for version in range(source, SCHEMA_VERSION):
+                STEPS[version](connection)
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise BoardError("UPGRADE_INVALID_BOARD", "The upgraded board failed its foreign key check")
+            if [row[0] for row in connection.execute("PRAGMA integrity_check")] != ["ok"]:
+                raise BoardError("UPGRADE_INVALID_BOARD", "The upgraded board failed its integrity check")
             connection.commit()
         except BaseException:
             connection.rollback()
             raise
-    return {"sourceSchema": UPGRADE_BASE_SCHEMA, "targetSchema": SCHEMA_VERSION}
+        finally:
+            connection.execute("PRAGMA foreign_keys=ON")
+    return {"sourceSchema": source, "targetSchema": SCHEMA_VERSION}

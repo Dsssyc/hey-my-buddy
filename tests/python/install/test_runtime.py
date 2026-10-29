@@ -394,6 +394,9 @@ class RuntimeMaterializationTests(unittest.TestCase):
             return run(command, **options)
 
         self.enterContext(patch.object(runtime.subprocess, "run", side_effect=run_fake_uv))
+        # This class materializes its synthetic project. Its leak checks must
+        # use that source, even when the private roots live inside the checkout.
+        self.enterContext(patch.object(runtime, "project_root", return_value=self.root))
         write_assets(self.root)
         write_manifest(self.root)
 
@@ -826,7 +829,7 @@ class RuntimeMaterializationTests(unittest.TestCase):
         target = self.materialize()
         record = runtime.read_ready(target)
         pyvenv = Path(record["environment"]) / "pyvenv.cfg"
-        pyvenv.write_text(pyvenv.read_text(encoding='utf-8') + f"project = {REAL_ROOT}\n", encoding="utf-8", newline="\n")
+        pyvenv.write_text(pyvenv.read_text(encoding='utf-8') + f"project = {self.root}\n", encoding="utf-8", newline="\n")
         leaks = runtime.source_leaks({**record, "runtimeDir": str(target)})
         self.assertTrue(any("references the project source tree" in leak for leak in leaks), leaks)
 

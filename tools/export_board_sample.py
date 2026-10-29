@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.store.db import DB_FILE, SCHEMA_VERSION, SECRET_KEY, initialize_defaults
-from hey_my_buddy.blackboard.store.upgrade import UPGRADE_BASE_SCHEMA
+from hey_my_buddy.blackboard.store.upgrade import UPGRADE_FLOOR_SCHEMA
 from hey_my_buddy.blackboard.routing.statistics import backfill
 from hey_my_buddy.blackboard.tasks.macro_tasks import RUN_GROUPS_SQL
 from hey_my_buddy.state_root import get_state_dir
@@ -113,8 +113,8 @@ def _select(connection) -> tuple[dict[str, list[dict]], list[tuple[str, str, str
 
 def _source_schema(connection) -> tuple[str, list[tuple[str, str]]]:
     version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
-    if version is None or version[0] not in (str(UPGRADE_BASE_SCHEMA), str(SCHEMA_VERSION)):
-        raise ValueError(f"Source must use schema {UPGRADE_BASE_SCHEMA} or {SCHEMA_VERSION}")
+    if version is None or version[0] not in {str(v) for v in range(UPGRADE_FLOOR_SCHEMA, SCHEMA_VERSION + 1)}:
+        raise ValueError(f"Source must use schema {UPGRADE_FLOOR_SCHEMA} through {SCHEMA_VERSION}")
     definitions = [(row['type'], row['sql']) for row in connection.execute(
         "SELECT type,sql FROM sqlite_master WHERE type IN ('table','index') "
         "AND sql IS NOT NULL AND name NOT LIKE 'sqlite_%' "
@@ -205,7 +205,8 @@ def export_sample(source: Path, output: Path) -> Path:
                         columns = ','.join(f'"{key}"' for key in row)
                         writer.execute(f'INSERT INTO "{table}" ({columns}) VALUES '
                                        f'({",".join("?" for _ in row)})', tuple(row.values()))
-                if version == str(SCHEMA_VERSION):
+                if int(version) >= 31:
+                    # Cumulative statistics were introduced in schema 31.
                     # This is a new private board containing only the selected
                     # history. Its cumulative facts describe that same history;
                     # no source-wide statistics or maintenance records escape.

@@ -470,12 +470,12 @@ class BoardStore:
             "cwd": row["cwd"],
             "task": spec.get("task"),
             "spec": spec,
-            **({"routerBudgetSeconds": row["router_budget_seconds"]} if row["adapter"] == "decision"
-               else {"expectedSeconds": row["expected_seconds"]}),
+            **({"routerBudgetSeconds": spec.get("routerBudgetSeconds")} if row["adapter"] == "decision"
+               else {"expectedSeconds": spec["expectedSeconds"]}),
             "inputFingerprint": row["input_fingerprint"],
             "fingerprintVersion": row["fingerprint_version"],
-            "requiredCapabilities": json.loads(row["required_capabilities"]),
-            "exclusiveResources": json.loads(row["exclusive_resources"]),
+            "requiredCapabilities": spec.get("requiredCapabilities", []),
+            "exclusiveResources": spec.get("exclusiveResources", []),
             "state": row["state"],
             "queueReason": row["queue_reason"],
             "revision": row["revision"],
@@ -1017,9 +1017,9 @@ class BoardStore:
                 blocker = self._admission_blocker(connection, spec)
                 connection.execute(
                     "INSERT INTO tasks(task_id, request_id, owner, spec_json, input_fingerprint,"
-                    " fingerprint_version, adapter, required_capabilities, cwd, exclusive_resources, expected_seconds,"
+                    " fingerprint_version, adapter, cwd,"
                     " state, queue_reason, revision, created_at, updated_at)"
-                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         task_id,
                         request_id,
@@ -1028,10 +1028,7 @@ class BoardStore:
                         fingerprint,
                         schemas.FINGERPRINT_VERSION_CURRENT,
                         spec.get("harness") or spec.get("adapter") or "unresolved",
-                        canonical_json(spec.get("requiredCapabilities", [])),
                         spec["cwd"],
-                        canonical_json(spec.get("exclusiveResources", [])),
-                        spec["expectedSeconds"],
                         "queued",
                         blocker or "awaiting-execution",
                         1,
@@ -1665,7 +1662,7 @@ class BoardStore:
                 supported = set(adapter_capabilities(task["adapter"]))
                 if task["adapter"] in schemas.CODING_HARNESSES:
                     supported.update((f"execution:{task['adapter']}", f"effort:{spec['effort']}"))
-                if not set(json.loads(task["required_capabilities"])).issubset(supported):
+                if not set(spec.get("requiredCapabilities", [])).issubset(supported):
                     blocker = "capability-mismatch"
                     self._set_queue_reason(connection, task, blocker)
                     continue

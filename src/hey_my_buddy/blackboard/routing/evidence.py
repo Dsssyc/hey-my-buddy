@@ -121,20 +121,22 @@ def _loads(store, connection, services, *, now):
     remaining = defaultdict(list)
     for row in connection.execute(
         "SELECT a.model_harness,a.model_provider,a.model_model,a.started_at,a.created_at,"
-        " COALESCE(w.expected_seconds,t.expected_seconds,t.router_budget_seconds) AS duration"
+        " COALESCE(w.expected_seconds,json_extract(t.spec_json,'$.expectedSeconds'),json_extract(t.spec_json,'$.routerBudgetSeconds')) AS duration"
         " FROM (SELECT * FROM attempts WHERE " + store.UNRESOLVED_SQL + ") a"
         " JOIN tasks t ON t.task_id=a.task_id"
         " LEFT JOIN workflow_turns w ON w.attempt_id=a.attempt_id WHERE a.model_model IS NOT NULL"
     ):
         service = (row["model_harness"], row["model_provider"], row["model_model"])
         elapsed = (_time(now) - _time(row["started_at"] or row["created_at"])).total_seconds()
-        remaining[service].append(row["duration"] - elapsed)
+        remaining[service].append(row["duration"] - elapsed if row["duration"] is not None else None)
     queued = defaultdict(list)
     for row in connection.execute(
         "SELECT t.adapter AS harness," + store._QUEUED_MODEL_SERVICE_PROVIDER + " AS provider,"
-        + store._QUEUED_MODEL_SERVICE_MODEL + " AS model,d.harness AS router_harness,"
-        " d.provider AS router_provider,d.model AS router_model,"
-        " COALESCE(t.expected_seconds,t.router_budget_seconds) AS duration"
+        + store._QUEUED_MODEL_SERVICE_MODEL + " AS model,"
+        " COALESCE(d.harness,json_extract(t.spec_json,'$.decision.document.buddy.harness')) AS router_harness,"
+        " COALESCE(d.provider,json_extract(t.spec_json,'$.decision.document.buddy.provider')) AS router_provider,"
+        " COALESCE(d.model,json_extract(t.spec_json,'$.decision.document.buddy.model')) AS router_model,"
+        " COALESCE(json_extract(t.spec_json,'$.expectedSeconds'),json_extract(t.spec_json,'$.routerBudgetSeconds')) AS duration"
         " FROM tasks t LEFT JOIN workflow_runs r ON r.run_id=t.task_id"
         " LEFT JOIN router_dispatches d ON d.task_id=t.task_id WHERE t.state='queued'"
         " ORDER BY t.created_at,t.task_id"
@@ -146,8 +148,9 @@ def _loads(store, connection, services, *, now):
     for capacity in store.model_capacity_rows(connection, services):
         service = _key(capacity, ("harness", "provider", "model"))
         running = remaining[service]
-        overdue = sum(seconds <= 0 for seconds in running)
-        slots = [max(0, seconds) for seconds in running]
+        overdue = sum(seconds is not None and seconds <= 0 for seconds in running)
+        unknown = None in running or None in queued[service]
+        slots = [max(0, seconds) if seconds is not None else 0 for seconds in running]
         slots.extend([0] * max(0, capacity["limit"] - len(slots)))
         heapq.heapify(slots)
         # A limit lowered below occupancy requires those excess attempts to
@@ -155,10 +158,10 @@ def _loads(store, connection, services, *, now):
         for _ in range(max(0, len(slots) - capacity["limit"])):
             heapq.heappop(slots)
         for duration in queued[service]:
-            heapq.heapreplace(slots, slots[0] + duration)
+            heapq.heapreplace(slots, slots[0] + (duration if duration is not None else 0))
         loads[service] = {"active": capacity["active"], "limit": capacity["limit"],
                           "queued": len(queued[service]),
-                          "wait": {"seconds": slots[0], "atLeast": overdue > 0, "overdue": overdue}}
+                          "wait": {"seconds": slots[0], "atLeast": overdue > 0 or unknown, "overdue": overdue}}
     return loads
 
 

@@ -381,7 +381,7 @@ class RoutingEvidenceTests(WorkflowTestCase):
             # Admission order is 100,10,30. Force storage order to 30,10,100:
             # parallel slots give different wait estimates for those orders.
             for index, (run, seconds) in enumerate(zip(runs, (100, 10, 30))):
-                db.execute("UPDATE tasks SET rowid=?,expected_seconds=? WHERE task_id=?",
+                db.execute("UPDATE tasks SET rowid=?,spec_json=json_set(spec_json,'$.expectedSeconds',?) WHERE task_id=?",
                            (100 - index, seconds, run["runId"]))
         self.assertEqual(self.facts()[0]["load"], {"active": 0, "limit": 2, "queued": 3,
                          "wait": {"seconds": 40, "atLeast": False, "overdue": 0}})
