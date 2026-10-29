@@ -16,6 +16,7 @@ import time
 import uuid
 
 from hey_my_buddy.blackboard.routing import router, selection_policy
+from hey_my_buddy.blackboard.routing.evidence import _empty_statistics, _statistics_fact
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.roles.turn_io import private_json
@@ -35,7 +36,12 @@ def parser():
 
 
 def packet(args):
-    buddies = [{**buddy, 'buddyId': ':'.join(buddy.values()), 'enabled': True, 'available': True}
+    # This board-free probe has synthetic empty statistics and an empty queue.
+    buddies = [{**buddy, 'buddyId': ':'.join(buddy.values()), 'enabled': True, 'available': True,
+                'statistics': {'overall': _statistics_fact(_empty_statistics()),
+                               'byDomain': {}, 'byDomainTaskType': {}},
+                'load': {'active': 0, 'limit': 2, 'queued': 0,
+                         'wait': {'seconds': 0, 'atLeast': False, 'overdue': 0}}}
                 for buddy in (
                     {'harness': 'dsh', 'provider': 'deepseek-official', 'model': 'deepseek-flash', 'effort': 'off'},
                     {'harness': 'codex', 'provider': 'openai', 'model': 'gpt-6-sol', 'effort': 'high'})]

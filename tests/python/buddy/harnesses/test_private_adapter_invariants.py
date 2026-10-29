@@ -36,6 +36,7 @@ from hey_my_buddy.buddy.roles import run_execution
 from hey_my_buddy.buddy.roles.controller import FastPreparation, ReviewPreparation, start_router_preparation
 import buddy.harnesses.codex.test_no_tool_codex as codex_fast_tests
 from buddy.harnesses.fixture_selection import select_fixture
+from blackboard.routing.test_router_prompt import candidate as router_candidate
 import buddy.harnesses.zcode.test_no_tool_zcode as zcode_fast_tests
 import buddy.harnesses.dsh.test_dsh_role_wiring as dsh_coding_tests
 import buddy.harnesses.claude.test_claude as claude_tests
@@ -315,7 +316,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                     Path(env["HMB_STATE_DIR"]) / "attempts/task/attempt", {}, env,
                     session_record_path=str(fixture.root / "session-attempt.jsonl"),
                     decision_input={"domainNodes": [], "buddy": {"harness": name, **spec},
-                        "buddies": [{"buddyId": "legal"}], "routingMode": "fast",
+                        "buddies": [router_candidate()], "routingMode": "fast",
                         "task": "Select", "outputSchema": router.answer_schema(["legal"]),
                         "budget": {"timeoutSeconds": 60}})
                 decision_adapter = DecisionAdapter()
@@ -364,7 +365,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 claim = {"task": {"taskId": task_id, "spec": {
                     "adapter": "decision", "cwd": str(fixture.cwd), "routerBudgetSeconds": 5}},
                     "attempt": {"taskId": task_id, "attemptId": attempt_id, "generation": 1},
-                    "decisionInput": {"domainNodes": [], "buddy": buddy, "buddies": [{"buddyId": "legal"}],
+                    "decisionInput": {"domainNodes": [], "buddy": buddy, "buddies": [router_candidate()],
                         "routingMode": "fast", "task": "Select", "requestId": task_id,
                         "outputSchema": router.answer_schema(["legal"]),
                         "budget": {"timeoutSeconds": 5}}}

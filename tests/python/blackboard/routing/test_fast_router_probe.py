@@ -30,6 +30,10 @@ class FastRouterProbeTests(unittest.TestCase):
         self.assertNotIn('executionWorkspace', document)
         self.assertNotIn('evidence', document)
         self.assertEqual(document['budget'], {'timeoutSeconds': 60})
+        prompt = probe.router.render_prompt(document)
+        self.assertIn('"firstPassRateInterval":null', prompt)
+        self.assertIn('"failureRateInterval":null', prompt)
+        self.assertIn('"resultTime":{"atLeast":false,"missingMedianDelivery":true,"seconds":null}', prompt)
 
     def test_execute_refuses_a_second_call_with_the_same_packet(self):
         self.args.execute = True

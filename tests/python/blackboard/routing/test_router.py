@@ -89,7 +89,10 @@ class RouterContractTests(unittest.TestCase):
         self.assertFalse(result.shutdown_confirmed)
 
     def test_prompt_prefix_stays_stable_and_excludes_display_metadata(self):
-        doc = {"buddies": [{"buddyId": "legal"}], "task": "first", "title": "display-only"}
+        stats = {"samples": 0, "firstPasses": 0, "failures": 0, "medianDeliverySeconds": None}
+        doc = {"buddies": [{"buddyId": "legal", "load": {"wait": {"seconds": 0, "atLeast": False}},
+                            "statistics": {"overall": stats, "byDomain": {}, "byDomainTaskType": {}}}],
+               "task": "first", "title": "display-only"}
         first = router.render_prompt(doc)
         second = router.render_prompt({**doc, "task": "second", "macroTask": "private display label"})
         self.assertEqual(first.split('\n\n')[:2], second.split('\n\n')[:2])
@@ -100,11 +103,12 @@ class RouterContractTests(unittest.TestCase):
         facts = {"billing": {"kind": "subscription", "source": "native", "observedAt": "now"},
                  "load": {"active": 2, "limit": 2, "queued": 1,
                           "wait": {"seconds": 300, "atLeast": True, "overdue": 1}},
-                 "statistics": {"samples": 4, "successes": 3, "failures": 1,
+                 "statistics": {"overall": {"samples": 4, "successes": 3, "failures": 1,
                                 "firstPasses": 2, "firstPassRate": 0.5, "failureRate": 0.25,
                                 "reworkRounds": 1, "medianDeliverySeconds": 120,
                                 "usage": {"samples": 2, "medianInputTokens": 100,
                                           "medianCachedInputTokens": 40, "medianOutputTokens": 10}},
+                                "byDomain": {}, "byDomainTaskType": {}},
                  "infrastructureFailures": {"count": 1, "lastAt": "now"}}
         prompt = router.render_prompt({"routingMode": "fast", "task": "fix parser",
                                        "expectedSeconds": 600, "buddies": [{"buddyId": "legal", **facts}]})
