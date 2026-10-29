@@ -47,7 +47,7 @@
 - CONTEXT.md：加“升级下限 / upgrade floor”，“升级基点”列入避免。
 - ADR-021 那一条，补一句 2026-10-29 的补充。
 - `docs/reference/operations.md` 里安装与升级的契约。
-- 安装的转换阶段、备份校验里的试转换，以及 `tools/export_board_sample.py`：它现在只认基点与当前两个版本，改为认下限到当前之间的每一个版本。
+- 安装的转换阶段、备份校验可接受的 schema（它不跑升级，只核对副本）以及 `tools/export_board_sample.py`：它们现在只认基点与当前两个版本，改为认下限到当前之间的每一个版本。
 
 ## 微任务
 
