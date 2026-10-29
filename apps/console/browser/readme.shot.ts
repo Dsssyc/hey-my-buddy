@@ -41,6 +41,10 @@ for (const language of ["en", "zh"] as const) {
       test(`${theme} real console timeline`, async ({ page }) => {
         await page.clock.setFixedTime(new Date("2026-09-27T10:00:00.000Z"));
         await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+        // A name column the user dragged wider, stored as the product stores it:
+        // the row's second line (state · buddy · effort) needs more than the
+        // default 272 px once model names are written in full.
+        await page.addInitScript(() => localStorage.setItem("hey-my-buddy.console.view.timeline-name-width", "360"));
         const reading = page.waitForResponse(response => new URL(response.url()).pathname === `/api/macro-tasks/${macro}/timeline`);
         await open(page, `${baseURL}#tasks/${macro}`);
         const timeline = await (await reading).json();
@@ -73,6 +77,13 @@ for (const language of ["en", "zh"] as const) {
         await expectNoSidewaysScroll(page);
         await page.evaluate(() => document.fonts.ready);
         await settle(page);
+        // The capture shows every row fully: no title, fix tag or second line
+        // may be clipped in the name column.
+        const clipped = await page.locator("[data-slot=timeline-row-name]:visible").evaluateAll(
+          cells => cells.flatMap(cell => Array.from(cell.querySelectorAll<HTMLElement>("span")))
+            .filter(span => span.clientWidth > 0 && span.scrollWidth > span.clientWidth + 1)
+            .map(span => span.textContent));
+        expect(clipped).toEqual([]);
         // Move the pointer off the content as a user would; leave every element
         // and every product animation intact. Capture only after paints settle.
         await page.mouse.move(0, 0);

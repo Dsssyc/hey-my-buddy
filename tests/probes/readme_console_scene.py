@@ -9,6 +9,12 @@ def configure(p: ModuleType, language: str) -> None:
     def text(en: str, zh: str) -> str:
         return zh if language == "zh" else en
 
+    # This showcase carries its own current-model set; the other scenarios
+    # keep sharing the preview's CFG_* buddies.
+    codex = {"harness": "codex", "provider": "openai", "model": "gpt-6.1-sol", "effort": "high"}
+    glm = {"harness": "zcode", "provider": "zai", "model": "glm-5.3", "effort": "high"}
+    flash = {"harness": "dsh", "provider": "deepseek-official", "model": "deepseek-flash", "effort": "max"}
+    claude = {"harness": "claude", "provider": "anthropic", "model": "claude-opus-5-5", "effort": "high"}
     p.HOST_A = "host-atlas"
     p.COOLING_UNTIL = p.instant(10, 30)
     p.PROJECTS = {
@@ -75,10 +81,10 @@ def configure(p: ModuleType, language: str) -> None:
                 attempt_id=latest["attemptId"], integration_id=integration["integrationId"]),
         ]
 
-    lead = task(lead_id, "Coordinate the rollout", "协调功能交付", p.instant(9, 5), buddy=p.CFG_CODEX,
+    lead = task(lead_id, "Coordinate the rollout", "协调功能交付", p.instant(9, 5), buddy=codex,
                 state="executing", status="running", category="active", delegation_authority=True,
                 shutdown_confirmed=False)
-    execution(lead, p.instant(9, 5, 30), None, p.CFG_CODEX)
+    execution(lead, p.instant(9, 5, 30), None, codex)
     lead["expectedSeconds"] = 7200
     lead["attempts"][0]["expectedSeconds"] = 7200
     lead["activity"] = {"phase": "thinking", "observedAt": p.instant(9, 59), "eventSeq": 50,
@@ -87,23 +93,23 @@ def configure(p: ModuleType, language: str) -> None:
     dispatch(lead)
 
     schema = task("readme-schema", "Define the index schema", "定义索引结构", p.instant(9, 6),
-                  buddy=p.CFG_FLASH, owner=True)
+                  buddy=flash, owner=True)
     dispatch(schema, lead_actor)
-    decision = p.routing("readme-route-schema", "readme-router", "completed", p.CFG_FLASH,
+    decision = p.routing("readme-route-schema", "readme-router", "completed", flash,
                          text("Select a buddy for the index schema.", "为索引结构选择 buddy。"), {},
                          attempt_id="att-readme-router", mode="fast", elapsed_ms=60000, tool_calls=0)
     schema["routing"] = decision
     schema["spans"] += [p.span("routing:att-readme-router", "routing", p.instant(9, 6), p.instant(9, 7),
                               "finished", attempt_id="att-readme-router", confirmed=True,
                               disposition="completed", decision_task="readme-router", routing_record=decision)]
-    execution(schema, p.instant(9, 7), p.instant(9, 18), p.CFG_FLASH)
+    execution(schema, p.instant(9, 7), p.instant(9, 18), flash)
     accept(schema, p.instant(9, 19), lead_actor)
 
     tokenizer = task("readme-tokenizer", "Handle multilingual tokens", "处理多语言分词", p.instant(9, 7),
-                     buddy=p.CFG_CLAUDE, owner=True, continuation_count=1, result=True)
+                     buddy=claude, owner=True, continuation_count=1, result=True)
     dispatch(tokenizer, lead_actor)
     tokenizer["spans"].append(p.span("queue:readme-tokenizer", "queue", p.instant(9, 7), p.instant(9, 9), "admitted"))
-    first = execution(tokenizer, p.instant(9, 9), p.instant(9, 15), p.CFG_GLM)
+    first = execution(tokenizer, p.instant(9, 9), p.instant(9, 15), glm)
     original = p.artifact("readme-tokenizer-v1", first, p.digest("tokenizer-v1")[:40],
                           "~/artifacts/tokenizer-v1.diff", ["src/tokenizer.py"])
     tokenizer["artifacts"].append(original)
@@ -112,7 +118,7 @@ def configure(p: ModuleType, language: str) -> None:
     tokenizer["markers"].append(p.marker(p.instant(9, 16), "reject", actor=lead_actor,
         eventKind="workflow.review_rejected", artifact_id=original["artifactId"], attempt_id=first,
         verdict="rejected", note=text("Include mixed-script words.", "补上混合文字的分词。")))
-    second = execution(tokenizer, p.instant(9, 17), p.instant(9, 25), p.CFG_CLAUDE)
+    second = execution(tokenizer, p.instant(9, 17), p.instant(9, 25), claude)
     tokenizer["artifacts"].append(p.artifact("readme-tokenizer-v2", second, p.digest("tokenizer-v2")[:40],
         "~/artifacts/tokenizer-v2.diff", ["src/tokenizer.py"]))
     tokenizer["continuations"].append(p.continuation("readme-tokenizer-next", second,
@@ -123,23 +129,23 @@ def configure(p: ModuleType, language: str) -> None:
     accept(tokenizer, p.instant(9, 27), lead_actor)
 
     ranking = task("readme-ranking", "Benchmark fuzzy ranking", "评测容错排序", p.instant(8, 12),
-                   buddy=p.CFG_GLM, state="concluded", status="concluded", category="ended", result=True)
+                   buddy=glm, state="concluded", status="concluded", category="ended", result=True)
     dispatch(ranking)
     failure = text("The sample corpus could not be decoded.", "样例语料解码失败。")
-    aid = execution(ranking, p.instant(8, 13), p.instant(8, 24), p.CFG_GLM, error=failure)
+    aid = execution(ranking, p.instant(8, 13), p.instant(8, 24), glm, error=failure)
     ranking["hostConclusion"] = p.host_conclusion("readme-ranking-conclusion", attempt_id=aid,
         execution_status="failed", note=failure, artifact_id=None, actor=host, created_at=p.instant(8, 26), run_revision=3)
     ranking["updatedAt"] = p.instant(8, 26)
     ranking["markers"].append(p.marker(p.instant(8, 26), "conclude", actor=host, attempt_id=aid))
 
     samples = task("readme-samples", "Validate the sample corpus", "核对样例语料", p.instant(8, 17),
-                   buddy=p.CFG_CODEX, result=True, continuation_count=1)
+                   buddy=codex, result=True, continuation_count=1)
     dispatch(samples)
-    execution(samples, p.instant(8, 18), p.instant(8, 22), p.CFG_CODEX, disposition="assistance")
+    execution(samples, p.instant(8, 18), p.instant(8, 22), codex, disposition="assistance")
     samples["spans"].append(p.span("host:readme-corpus", "host", p.instant(8, 22), p.instant(8, 30),
         "approved", request_id="readme-corpus", request_kind="assistance",
         summary=text("Confirm the public sample licence.", "确认公开样例的许可。")))
-    aid = execution(samples, p.instant(8, 31), p.instant(8, 38), p.CFG_CODEX)
+    aid = execution(samples, p.instant(8, 31), p.instant(8, 38), codex)
     samples["continuations"].append(p.continuation("readme-corpus-next", aid,
         text("Use the public CC0 corpus.", "使用公开的 CC0 语料。"), request_id="readme-corpus", created=p.instant(8, 30)))
     samples["markers"] += [p.marker(p.instant(8, 30), "decide", actor=host, request_id="readme-corpus", decision="approve"),
@@ -147,18 +153,18 @@ def configure(p: ModuleType, language: str) -> None:
     accept(samples, p.instant(8, 39))
 
     fix = task("readme-corpus-fix", "Fix corpus decoding", "修正语料解码", p.instant(9, 7),
-               buddy=p.CFG_FLASH, result=True)
+               buddy=flash, result=True)
     dispatch(fix)
-    aid = execution(fix, p.instant(9, 8), p.instant(9, 24), p.CFG_FLASH)
+    aid = execution(fix, p.instant(9, 8), p.instant(9, 24), flash)
     art = p.artifact("readme-corpus-output", aid, p.digest("corpus-output")[:40],
                      "~/artifacts/corpus.diff", ["src/corpus.py"])
     fix["artifacts"].append(art)
     accept(fix, p.instant(9, 25))
 
     docs = task("readme-guide", "Write the migration guide", "编写迁移指南", p.instant(9, 20),
-                buddy=p.CFG_CLAUDE, state="awaiting-host", category="host", result=True)
+                buddy=claude, state="awaiting-host", category="host", result=True)
     dispatch(docs)
-    execution(docs, p.instant(9, 21), p.instant(9, 33), p.CFG_CLAUDE, disposition="assistance")
+    execution(docs, p.instant(9, 21), p.instant(9, 33), claude, disposition="assistance")
     question = text("Confirm the default index location.", "确认默认的索引位置。")
     docs["activeRequest"] = {**p.ACTIVE_REQUEST, "requestId": "readme-guide-location", "createdAt": p.instant(9, 33),
         "summary": question, "attempted": text("Checked the configuration examples.", "已核对配置示例。"),
@@ -167,9 +173,9 @@ def configure(p: ModuleType, language: str) -> None:
         request_id="readme-guide-location", request_kind="assistance", summary=question))
 
     live = task("preview-run-a3", "Run the search regression", "运行搜索回归", p.instant(9, 34),
-                buddy=p.CFG_CODEX, state="executing", status="running", category="active", shutdown_confirmed=False)
+                buddy=codex, state="executing", status="running", category="active", shutdown_confirmed=False)
     dispatch(live)
-    aid = execution(live, p.instant(9, 35), None, p.CFG_CODEX)
+    aid = execution(live, p.instant(9, 35), None, codex)
     live["expectedSeconds"] = 600
     live["attempts"][0]["expectedSeconds"] = 600
     live["activity"] = {"phase": "thinking", "observedAt": p.instant(9, 40), "eventSeq": 40,
@@ -180,16 +186,16 @@ def configure(p: ModuleType, language: str) -> None:
         created=p.instant(9, 56), state="delivered", delivered=p.instant(9, 56, 2)))
 
     queued = task("readme-package", "Package the release candidate", "打包发布候选", p.instant(9, 55),
-                  buddy=p.CFG_GLM, state="executing", status="queued", category="active")
+                  buddy=glm, state="executing", status="queued", category="active")
     dispatch(queued)
     queued["spans"].append(p.span("queue:readme-package", "queue", p.instant(9, 55), None, "queued"))
 
     router = p.run("readme-router", project="alpha", title=text("Choose the schema buddy", "选择索引结构 buddy"),
         title_source="title", task_text=decision["note"], created=p.instant(9, 6), updated=p.instant(9, 7),
-        state="finished", status="completed", category="ended", buddy=p.ROUTER_BUDDY,
+        state="finished", status="completed", category="ended", buddy=codex,
         parent=schema["runId"], group=p.MACRO_A, micro_task=False, adapter="decision", routing=decision,
         router_budget_seconds=60, attempts=[p.attempt("att-readme-router", 1, "finished", True,
-            p.instant(9, 6), p.instant(9, 7), p.ROUTER_BUDDY, result=p.decision_result(decision))])
+            p.instant(9, 6), p.instant(9, 7), codex, result=p.decision_result(decision))])
     rows.append(router)
     for group, en, zh, state, status, category, hour in [
         (p.MACRO_B, "Review the quickstart", "评审快速入门", "delivered", "completed", "review", 9),
@@ -198,9 +204,9 @@ def configure(p: ModuleType, language: str) -> None:
     ]:
         entry = p.run(f"readme-side-{hour}", project="beta" if group == p.MACRO_B else "alpha", group=group,
             title=text(en, zh), title_source="title", task_text=text(en, zh), created=p.instant(hour, 0),
-            updated=p.instant(hour, 20), state=state, status=status, category=category, buddy=p.CFG_FLASH,
+            updated=p.instant(hour, 20), state=state, status=status, category=category, buddy=flash,
             result=True, accepted=p.instant(hour, 21) if state == "accepted" else None)
-        execution(entry, p.instant(hour, 1), p.instant(hour, 20), p.CFG_FLASH,
+        execution(entry, p.instant(hour, 1), p.instant(hour, 20), flash,
                   error=text("Size budget exceeded.", "超出体积预算。") if state == "failed" else None)
         dispatch(entry)
         if state == "accepted":
