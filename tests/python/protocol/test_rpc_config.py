@@ -1,4 +1,4 @@
-"""Private published C-Two 0.10.0 RPC, non-pool accounting and control capacity.
+"""Private published C-Two RPC, non-pool accounting and control capacity.
 
 Every native process selects its endpoint before local I/O: a test-owned state/ipc
 directory on POSIX, the native user-scoped pipe domain on Windows. Memory
@@ -471,11 +471,12 @@ class IsolatedTransportTests(unittest.TestCase):
         self.assertEqual(reply["sha256"], hashlib.sha256(b"0755-parent").hexdigest())
 
     def test_maximum_legal_payload_round_trips_and_over_limit_fails_explicitly(self):
+        import c_two as cc
         server = self.probe()
         for size in (4096, MAX_MESSAGE_BYTES):
             legal = server.call("echo", f"bytes:{size}")
             self.assertTrue(legal["ok"], legal)
-            self.assertEqual(legal["version"], "0.10.0")
+            self.assertEqual(legal["version"], cc.__version__)
             self.assertEqual(legal["bytes"], size)
             self.assertEqual(legal["sha256"], hashlib.sha256(b"x" * size).hexdigest())
         skeleton = encode_message({"token": "t", "pad": ""})

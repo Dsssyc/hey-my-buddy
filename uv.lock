@@ -13,16 +13,16 @@ wheels = [
 
 [[package]]
 name = "c-two"
-version = "0.10.0"
+version = "0.10.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2e/e3/374b8dd982d1d302d6b32cec52b77e8f54e1c52489743a5da435e9da6a89/c_two-0.10.0.tar.gz", hash = "sha256:749755ad38741ab7c6158dd6684984ada66b5be0c5da048500fba59dd1f74693", size = 1275109, upload-time = "2026-10-30T06:55:58.173Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b3/ee/cffe5ea3afc20e43c19fb276eab2008ff58562df40844601babe8adaeeb9/c_two-0.10.1.tar.gz", hash = "sha256:ae8cbb383b1b160e26396b57f4d29fd472ff8a11524d4318e512bfbc87a800bf", size = 1275363, upload-time = "2026-10-30T15:35:42.791Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/31/53/ae0f6ff8823e1943104435e5bc3e2e3016ba1d627e1f5f43ecbdf9fd5233/c_two-0.10.0-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:f2de8d193426a38995319819f29ef920c67f97d8347dfa96ccbc516b547a04a5", size = 4613903, upload-time = "2026-10-30T06:55:18.482Z" },
-    { url = "https://files.pythonhosted.org/packages/04/f0/eb704cc2b47172c1be353974b714da290262eaa2695a4028f0663212b6b3/c_two-0.10.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:1ade3ad72b05c522d41b5149be320fec91fdc37123d7c5e734bdad275dab8eee", size = 4487848, upload-time = "2026-10-30T06:55:20Z" },
-    { url = "https://files.pythonhosted.org/packages/7e/7e/0f862adeba5b99ca5c2bea58e616df0f1a20fe12c4da2854e7d0df023aa4/c_two-0.10.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:debaef8a8cfd4dff056c478a38a742475e0bb92553c0b052ed0cc2b0c98064da", size = 5609120, upload-time = "2026-10-30T06:55:21.554Z" },
-    { url = "https://files.pythonhosted.org/packages/15/88/4d52afb87d6107b1df77832470a656aafe8d5ffdf327f4c904fcd55dc02e/c_two-0.10.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:88a206a7c2b777e4721665ca435fc4f6478a237fea9d333cf9777985103c6cd5", size = 5521787, upload-time = "2026-10-30T06:55:22.989Z" },
-    { url = "https://files.pythonhosted.org/packages/a2/b4/60c98cc9e3cd9584b90ccfa6bffba0d1ffb06f0d84a3139acb8274e50041/c_two-0.10.0-cp312-cp312-win_amd64.whl", hash = "sha256:85db32144f8b1e9e887876ac6b091b3c04a04aca11fe7e13c7b25b1f28dcc858", size = 4553368, upload-time = "2026-10-30T06:55:24.735Z" },
-    { url = "https://files.pythonhosted.org/packages/c8/80/20c1910cc6aa6012fbf28eb7d212f6799d5714903714f1536185237e419b/c_two-0.10.0-cp312-cp312-win_arm64.whl", hash = "sha256:0b71e5687fd8569044eaf253a0bc10d64f9e8dd6a8865c402c5204bca1afdd4f", size = 4355139, upload-time = "2026-10-30T06:55:26.311Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/f6/cca8d6af477aad5eea978df190937c91a069854ec6ef15a8ec99508b99a0/c_two-0.10.1-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:14d07ddb88f4609c5bd808e6ba52ccc455f6aa26dc504b21d0e6fa28e9bafeb2", size = 4614165, upload-time = "2026-10-30T15:34:50.84Z" },
+    { url = "https://files.pythonhosted.org/packages/64/b9/b9608b1ce2a67796a91b2a76fb83760fa3c9b4f8783b2f6b32d3dc017f28/c_two-0.10.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:85e0e8ff5896ffda6af3f13df9bbf21586cd4ebdc8619494cd9e0b0f5726a370", size = 4488068, upload-time = "2026-10-30T15:34:52.952Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/ac/2219b152fc2183bc63ffea6876c4a646fe257ff756cff70277720c610843/c_two-0.10.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:916c409b14bd00e3a187b99b25867b3f5b33b66f649b16ff097e666ce38a1f37", size = 5608476, upload-time = "2026-10-30T15:34:54.972Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/b6/67a38cfcc88544bd4f48e453c83c885d10a11601ce5ccd77868768359534/c_two-0.10.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:5dac1fa8d9f03a06211ea7fdaa084b422ec403407715f357bf36ddc249e8da59", size = 5521974, upload-time = "2026-10-30T15:34:57.094Z" },
+    { url = "https://files.pythonhosted.org/packages/63/b4/c6f4245768e5494ef4db236ef9192bb31f59bf3b2009a2d8830ca880d712/c_two-0.10.1-cp312-cp312-win_amd64.whl", hash = "sha256:48f9512f970516484feec9cf2c3d3a0c5d2b8bae6603e96767272e683e327e7e", size = 4553534, upload-time = "2026-10-30T15:34:59.295Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/d6/ef5326aa94572739eba70eb22a4e3b793d37edd7b9d4e13f307189fa008a/c_two-0.10.1-cp312-cp312-win_arm64.whl", hash = "sha256:4a32ac677f6ad2ed998c0baad6c0e90976f01f3bfd8a4d5995b4b5793aeffebc", size = 4355894, upload-time = "2026-10-30T15:35:01.542Z" },
 ]
 
 [[package]]
@@ -54,7 +54,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "c-two", specifier = "==0.10.0" },
+    { name = "c-two", specifier = "==0.10.1" },
     { name = "portalocker", specifier = ">=3,<4" },
     { name = "psutil", specifier = ">=7,<8" },
     { name = "pydantic", specifier = ">=2,<3" },
