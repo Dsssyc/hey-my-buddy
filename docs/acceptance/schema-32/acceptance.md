@@ -2,6 +2,8 @@
 
 2026-10-29 至 10-30，整合 Host。[执行计划](../../design/schema-32/plan.md)的实现，依据是 AGENTS.md 的存储规则，以及 2026-10-29 改成的迁移链（AGENTS.md、术语表的“升级下限 / upgrade floor”、ADR-021 工作分解那一条的补充，`bad89c7b`；[调研](../../research/2026-10-29-schema-upgrade-chains.md)）。五个微任务依次扩展同一步 31 → 32，都在宏任务“存储批次：schema 31 → 32”里。
 
+0.58.0 装上的树还包括之后的“采用 C-Two 0.10.0”那一批；最终树上的完整检查与五次安装演练记在[那份记录](../release/c-two-0100.md)里。
+
 ## 微任务
 
 1. **迁移链，维护不设时限**（`cb8231d8`，Codex CLI gpt-6.1-sol / max，合入 `37e3fc97`）。
