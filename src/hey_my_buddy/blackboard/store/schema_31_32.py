@@ -1,4 +1,4 @@
-"""Schema 31 → 32: remove derived task/execution facts and unused catalog metadata.
+"""Schema 31 → 32: prune task/execution facts, catalog metadata and cleanup expiry.
 
 No sealed content or spec is rewritten. Rebuild in SQLite's documented order;
 the caller holds the transaction with foreign keys disabled until its check.
@@ -74,6 +74,15 @@ TASK_COLUMNS = (
 
 
 def upgrade(connection):
+    # Internal cleanup command ids had no caller: the allocation journal is
+    # the idempotency key. Retire their receipts and the superseded admission
+    # facts before deleting planned/blocked rows. Started/completed journals stay.
+    connection.execute("DELETE FROM commands WHERE kind IN ('workflow.cleanup_plan','workflow.cleanup_apply')")
+    connection.execute("DELETE FROM events WHERE json_extract(payload_json,'$.planId') IN"
+                       " (SELECT plan_id FROM workspace_cleanup_plans WHERE state IN ('planned','blocked'))")
+    connection.execute("DELETE FROM workspace_cleanup_plans WHERE state IN ('planned','blocked')")
+    connection.execute("ALTER TABLE workspace_cleanup_plans DROP COLUMN expires_at")
+    connection.execute("ALTER TABLE workspace_cleanup_plans DROP COLUMN command_id")
     connection.execute(TASKS_DDL)
     columns = ','.join(('rowid', *TASK_COLUMNS))
     connection.execute(f"INSERT INTO tasks_next({columns}) SELECT {columns} FROM tasks")

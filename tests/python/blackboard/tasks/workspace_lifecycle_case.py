@@ -5,6 +5,7 @@ template and the same submit/claim/seal/finish/accept/reclaim helpers; this
 module holds them once so each themed suite carries only its own tests.
 """
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 from admission import admit_board
 import json
 import os
@@ -258,7 +259,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         view = self.view(board, run_id)
         artifact = next(row for row in view["artifacts"] if row["kind"] == "output")
         target = self.target_with_artifact(artifact)
-        accepted = self.accept(board, view, artifact, target=target, keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept(board, view, artifact, target=target)
         self.assertEqual(accepted["state"], "accepted")
         verification = accepted["integration"]["verification"]
         self.assertEqual(verification["matchingPaths"], [path[:500] for path in expected[:32]])
@@ -295,8 +297,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.register(board)
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(board, request_id=request_id)
         target = self.target_with_artifact(artifact)
-        accepted = self.accept(board, view, artifact, target=target, reason="verified before cleanup",
-                               keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept(board, view, artifact, target=target, reason="verified before cleanup")
         self.assertEqual(accepted["state"], "accepted")
         return board, submitted, manifest, checkout, artifact, self.view(board, submitted["runId"])
 
@@ -338,8 +340,9 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(delivered["state"], "delivered")
         final = next(row for row in delivered["artifacts"] if row["kind"] == "output")
         target = self.target_with_artifact(final, previous=(first_artifact,))
-        accepted = self.accept(board, delivered, final, target=target,
-                               reason="verified the sealed second stage", keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept(board, delivered, final, target=target,
+                                   reason="verified the sealed second stage")
         self.assertEqual(accepted["state"], "accepted")
         return board, submitted, first_manifest, second_manifest, final, self.view(board, run_id)
 
@@ -415,8 +418,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         accepted = self.accept(board, delivered, artifact, target=target)
         self.assertEqual(accepted['state'], 'accepted')
         self.assertFalse(checkout.exists())
-        self.assertFalse(native_path(native).exists())
-        self.assertFalse(native_path(successful_root).exists())
+        self.assertTrue(native_path(native).exists())
+        self.assertTrue(native_path(successful_root).exists())
         self.assertFalse(native_path(credential).exists())
         self.assertEqual([native_path(Path(ref)).read_text(encoding="utf-8") for ref in recorded['evidenceRefs']], ['failure evidence'] * 2)
         with board.store.db.write() as connection:
@@ -424,31 +427,16 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                                                    (attempt['attemptId'],)).fetchone()['result_json'])
             self.assertEqual(stored['result'], recorded)
             connection.execute("UPDATE tasks SET accepted_at='2000-01-01T00:00:00Z' WHERE task_id=?", (run_id,))
-        self.assert_storage_reclaims_evidence(board, run_id, failed_root.parent.parent)
+        self.assert_service_reclaims_evidence(board, run_id, failed_root.parent.parent)
 
-    def assert_storage_reclaims_evidence(self, board, run_id, root):
-        board.console.close()
-        board.store.db.close()
-        # Exercise the existing inventory and guarded deletion through a real private daemon.
-        with self.daemon():
-            endpoint = transport._read_endpoint(self.directory)
-            service = SimpleNamespace(call=lambda operation, params: transport._request(
-                endpoint, operation, params, state_dir=self.directory))
-            planned = service.call('storage_plan', {})
-            candidate = next(row for row in planned['candidates'] if row['path'] == str(root))
-            self.assertEqual(candidate['runId'], run_id)
-            self.assertEqual(candidate['reasons'], [])
-            self.assertTrue(candidate['eligible'], candidate)
-            result = service.call('storage_apply', {
-                'planId': planned['planId'], 'commandId': 'remove-failed-evidence', 'confirm': True,
-            })
-            self.assertTrue(result['complete'], result)
-            self.assertTrue(any(row['path'] == str(root) for row in result['removed']), result)
-            self.assertFalse(root.exists())
-            after = service.call('storage_plan', {})
-            self.assertFalse(any(row['path'] == str(root) for row in after['candidates']))
+    def assert_service_reclaims_evidence(self, board, run_id, root):
+        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_native
+        reclaim_native(board.store)
+        self.assertFalse(root.exists())
+        with mock.patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
+            report = board.call('storage_plan', {})
+        self.assertFalse(any(row['path'] == str(root) for row in report['candidates']))
 
-    # -- Host control over an independently allocated helper ------------------
     def root_with_helper_worktree(self, *, request_id="helper-target"):
         """A root worktree run plus a helper that owns a separate isolated worktree.
 

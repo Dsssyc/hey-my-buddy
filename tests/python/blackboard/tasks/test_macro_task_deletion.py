@@ -574,10 +574,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_routes SET state='resolved' WHERE decision_id='pending-decision'")
             db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,path,kind,"
-                       "state,evidence_json,retention_json,created_at,expires_at)"
-                       " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                       "state,evidence_json,retention_json,created_at)"
+                       " VALUES(?,?,?,?,?,?,?,?,?,?)",
                        ("applying-plan", run["runId"], "workspace", "checkout", "private", "worktree",
-                        "applying", "{}", "{}", now, now))
+                        "applying", "{}", "{}", now))
         self.assert_code("MACRO_TASK_BUSY", macro_task_deletion.preview, board.store, target)
         self.assert_code("MACRO_TASK_BUSY", macro_task_deletion.delete, board.store, target, 1)
         with board.store.db.read() as db:
@@ -812,10 +812,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             now = board.store.now()
             with board.store.db.write() as db:
                 db.execute('INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,path,kind,'
-                           'state,evidence_json,retention_json,created_at,expires_at)'
-                           ' VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                           'state,evidence_json,retention_json,created_at)'
+                           ' VALUES(?,?,?,?,?,?,?,?,?,?)',
                            ('held-plan',run['runId'],'ws-'+'a'*32,'checkout',str(directory/'checkout'),'worktree',
-                            'applying','{}','{}',now,now))
+                            'applying','{}','{}',now))
             self.assert_code('MACRO_TASK_BUSY',macro_task_deletion.delete,board.store,run['macroTaskId'],1)
         with board.store.db.read() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM macro_task_deletions').fetchone()[0],0)

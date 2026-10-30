@@ -5,6 +5,7 @@ One ``accept`` must verify the exact final artifact against its recorded target
 history, and a target that moved under the review is refused.
 """
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 import os
 from pathlib import Path
 from unittest import mock
@@ -209,7 +210,8 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         delivered = self.view(board, run_id)
         final = next(row for row in delivered["artifacts"] if row["kind"] == "output")
         target = self.target_with_artifact(final, previous=(first_artifact,))
-        accepted = self.accept(board, delivered, final, target=target, keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept(board, delivered, final, target=target)
         self.assertEqual(accepted["state"], "accepted")
         with self.assertRaises(BoardError) as blocked:
             self.reclaim(board, self.view(board, run_id))
@@ -371,11 +373,12 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         resolved = next(row for row in delivered["artifacts"] if row["kind"] == "resolved-output")
         # Both the initial proof and the resumed comparison must retain the
         # adopted paths as authorized, including those outside the write scope.
-        accepted = board.call("workflow_accept", {
-            "runId": submitted["runId"], "artifactId": resolved["artifactId"],
-            "note": "reviewed the adopted site", "notRequired": "the adopted site needs no separate target",
-            "keepCheckout": True, **self.control(delivered),
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": submitted["runId"], "artifactId": resolved["artifactId"],
+                "note": "reviewed the adopted site", "notRequired": "the adopted site needs no separate target",
+                 **self.control(delivered),
+            })
         self.assertEqual(accepted["state"], "accepted")
         self.interrupt_reclaim(board, self.view(board, submitted["runId"]), checkout,
                                missing=("tracked.txt",), remove_git=True)
@@ -511,7 +514,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                                target={"path": target["path"], "before": before, "ref": target["after"]})
         self.assertEqual(accepted["state"], "accepted")
 
-    def test_a_takeover_between_review_and_reclaim_blocks_only_the_removal(self):
+    def test_a_takeover_between_review_and_reclaim_keeps_terminal_reclamation(self):
         board = self.board()
         self.register(board)
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
@@ -520,7 +523,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         generation = {"done": False}
         nonlocal_taken = {"control": None}
 
-        def taking_over_plan(coordinator, params, *, console_authority=None, _lead_conclusion=False):
+        def taking_over_plan(coordinator, params):
             if not generation["done"]:
                 # Exactly the documented window: the acceptance is committed, the
                 # automatic reclaim has not planned its removal yet, and another
@@ -534,14 +537,13 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
                     **current_control,
                 })
                 nonlocal_taken["control"] = dict(taken["control"])
-            return real_plan(params, console_authority=console_authority, _lead_conclusion=_lead_conclusion)
+            return real_plan(params)
 
         with mock.patch.object(workflow_module.WorkflowCoordinator, "cleanup_plan", taking_over_plan):
             accepted = self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
         self.assertEqual(accepted["state"], "accepted")
-        self.assertFalse(accepted["reclaim"]["removed"])
-        self.assertIn("STALE_GENERATION", accepted["reclaim"]["reasons"])
-        self.assertTrue(checkout.exists())
+        self.assertTrue(accepted["reclaim"]["removed"])
+        self.assertFalse(checkout.exists())
         taken_control = nonlocal_taken["control"]
         # The old owner cannot even retry; the new owner's reclaim completes it.
         old_control = dict(self.controls[submitted["runId"]])

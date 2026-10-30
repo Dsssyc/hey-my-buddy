@@ -113,7 +113,66 @@ def generate_in_canonical_slot(args, root, work):
     interpreter = [str(args.python.absolute())] if args.python else ["uv", "run", "--no-sync", "--project", str(source), "python"]
     run([*interpreter, str(Path(__file__).resolve()),
          "--populate", "--work-dir", str(work), "--output-dir", str(args.output_dir.resolve()),
-         *(["--python", str(args.python.absolute())] if args.python else [])], cwd=root, env=env)
+         *(["--python", str(args.python.absolute())] if args.python else []),
+         *(["--cleanup-stock-for", str(args.cleanup_stock_for.resolve())] if args.cleanup_stock_for else [])], cwd=root, env=env)
+
+
+def bind_cleanup_stock(fixed_sql, written_sql, journal):
+    """Derive the new floor-written row's identities from the fixed floor rows."""
+    with ExitStack() as stack:
+        fixed = sqlite3.connect(':memory:')
+        written = sqlite3.connect(':memory:')
+        stack.callback(fixed.close)
+        stack.callback(written.close)
+        fixed.row_factory = written.row_factory = sqlite3.Row
+        fixed.executescript(fixed_sql)
+        written.executescript(written_sql)
+        bindings = {}
+        def compare(old, new):
+            if isinstance(old, dict) and isinstance(new, dict):
+                for key in old.keys() & new.keys():
+                    compare(old[key], new[key])
+            elif isinstance(old, list) and isinstance(new, list):
+                for before, after in zip(old, new):
+                    compare(before, after)
+            elif isinstance(old, str) and isinstance(new, str) and old != new:
+                if new in bindings and bindings[new] != old:
+                    raise ValueError('Ambiguous floor identity binding')
+                bindings[new] = old
+        for (table,) in fixed.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"):
+            before = list(fixed.execute(f'SELECT rowid,* FROM "{table}" ORDER BY rowid'))
+            after = list(written.execute(f'SELECT rowid,* FROM "{table}" ORDER BY rowid'))
+            if len(before) != len(after):
+                raise ValueError('Floor writer changed stock row counts')
+            for old, new in zip(before, after):
+                for name in old.keys():
+                    left, right = old[name], new[name]
+                    if name.endswith('_json') and isinstance(left, str) and isinstance(right, str):
+                        compare(json.loads(left), json.loads(right))
+                    else:
+                        compare(left, right)
+        def bind(value):
+            if isinstance(value, dict):
+                return {key: bind(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [bind(item) for item in value]
+            if isinstance(value, str):
+                if value in bindings:
+                    return bindings[value]
+                return re.sub(r'ws-[0-9a-f]{32}|[0-9a-f]{64}', lambda match: bindings.get(match[0], match[0]), value)
+            return value
+        values = []
+        for name, value in journal.items():
+            if name.endswith('_json') and isinstance(value, str):
+                value = json_text(bind(json.loads(value)))
+            else:
+                value = bind(value)
+            values.append(fixed.execute('SELECT quote(?)', (value,)).fetchone()[0])
+        columns = ','.join('"' + name + '"' for name in journal)
+        return ('-- Interrupted journal from the 0.54.1 floor writers; identities rebound to the fixed floor stock.\n'
+                '-- This scenario precedes the independent in-progress macro deletion. Sealed content stays untouched.\n'
+                'DELETE FROM macro_task_deletions;\n'
+                f'INSERT INTO workspace_cleanup_plans({columns}) VALUES({",".join(values)});\n')
 
 
 def populate(args):
@@ -1002,6 +1061,59 @@ def populate(args):
         metadata["generatorSha256"] = digest(Path(__file__).read_bytes())
         (output / "metadata.json").write_bytes(
             (json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        # Export an interrupted journal through the same released writers,
+        # after the immutable floor stock above has already been captured.
+        # This supplementary scenario precedes the retained deletion mark.
+        # The original exported board still contains that independent stock.
+        with store.db.write() as connection:
+            connection.execute("DELETE FROM macro_task_deletions")
+        future = "2026-01-03T00:00:00.000Z"
+        with patch.object(store.workflow, "now", return_value=future):
+            current_adopted = call("workflow_get", {"runId": adopted["runId"]})
+            started_plan = internal_call("cleanup_plan", {
+                "runId": adopted["runId"], "commandId": "supplement-started-plan",
+                "expectedRevision": current_adopted["revision"], **adopted["control"]})
+            with patch.object(workspace, "cleanup_remove", side_effect=RuntimeError("fixture interrupted before removal")):
+                try:
+                    internal_call("cleanup_apply", {
+                        "runId": adopted["runId"], "commandId": "supplement-started-apply",
+                        "expectedRevision": started_plan["targetRevision"],
+                        "planId": started_plan["plan"]["planId"], "confirmPath": started_plan["plan"]["path"],
+                        **adopted["control"]})
+                except RuntimeError as error:
+                    assert str(error) == "fixture interrupted before removal"
+                else:
+                    raise AssertionError("The floor writer did not enter its interrupted removal")
+        with store.db.read() as connection:
+            journal = connection.execute("SELECT * FROM workspace_cleanup_plans WHERE plan_id=?",
+                                         (started_plan["plan"]["planId"],)).fetchone()
+            assert journal["state"] == "applying"
+            columns = ",".join('"' + name + '"' for name in journal.keys())
+            values = ",".join(connection.execute("SELECT quote(?)", (value,)).fetchone()[0] for value in journal)
+        supplement = ("-- Interrupted cleanup row written by 0.54.1 cleanup_plan and cleanup_apply.\n"
+                      "-- Original floor stock stays unchanged; load this row for 31 -> 32 preservation checks.\n"
+                      "DELETE FROM macro_task_deletions;\n"
+                      f"INSERT INTO workspace_cleanup_plans({columns}) VALUES({values});\n")
+        (output / "schema-31-cleanup-stock.sql").write_text(
+            supplement.replace(str(work), "<fixture-root>"), encoding="utf-8", newline="\n")
+        if args.cleanup_stock_for:
+            fixed = args.cleanup_stock_for.resolve()
+            row = {name: value.replace(str(work), "<fixture-root>") if isinstance(value, str) else value
+                   for name, value in dict(journal).items()}
+            stock = bind_cleanup_stock((fixed / "board.sql").read_text(encoding="utf-8"),
+                                       sql_path.read_text(encoding="utf-8"), row)
+            (fixed / "schema-31-cleanup-stock.sql").write_text(stock, encoding="utf-8", newline="\n")
+            fixed_metadata = json.loads((fixed / "metadata.json").read_text(encoding="utf-8"))
+            fixed_metadata.setdefault("baseGeneratorSha256", fixed_metadata["generatorSha256"])
+            fixed_metadata["generatorSha256"] = digest(Path(__file__).read_bytes())
+            fixed_metadata["cleanupStockSha256"] = digest(stock.encode("utf-8"))
+            fixed_metadata["cleanupStockBaseSha256"] = digest((fixed / "board.sql").read_bytes())
+            fixed_metadata["cleanupStockGenerationCommand"] = (
+                "python packaging/generate-upgrade-fixture.py --python <prepared-python>"
+                " --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir>"
+                " --cleanup-stock-for tests/fixtures/upgrade-floor")
+            (fixed / "metadata.json").write_text(
+                json.dumps(fixed_metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(verify(output, work / "restored.sqlite3"), ensure_ascii=False))
 
 
@@ -1217,12 +1329,18 @@ def verify(output, restored):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, default=Path("tests/fixtures/upgrade-floor"))
+    parser.add_argument("--output-dir", type=Path, help="Full generated stock destination; cleanup-only mode defaults to a work-dir sibling")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--python", type=Path, help="Use an already prepared read-only dependency interpreter")
+    parser.add_argument("--cleanup-stock-for", type=Path, help="Derive and update the interrupted journal for this fixed floor; preserve its base stock")
     parser.add_argument("--populate", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verify", action="store_true", help="Only restore and validate; no old-source imports")
     args = parser.parse_args()
+    if args.output_dir is None:
+        args.output_dir = (args.work_dir.with_name(args.work_dir.name + "-generated")
+                           if args.cleanup_stock_for and not args.verify else Path("tests/fixtures/upgrade-floor"))
+    if args.cleanup_stock_for and args.output_dir.resolve() == args.cleanup_stock_for.resolve():
+        parser.error("cleanup stock requires a separate output-dir to preserve the fixed floor payloads")
     if args.verify:
         args.work_dir.mkdir(parents=True, exist_ok=False)
         print(json.dumps(verify(args.output_dir, args.work_dir / "restored.sqlite3"), ensure_ascii=False))

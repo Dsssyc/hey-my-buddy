@@ -192,18 +192,18 @@ class BoardStore:
         row = connection.execute("SELECT COALESCE(MAX(seq), 0) AS head FROM events").fetchone()
         return int(row["head"])
 
-    def _notify(self, head: int) -> None:
+    def _notify(self, head: int, *, changed_tasks: frozenset[str] = frozenset()) -> None:
         with self._condition:
             changed = head > self._head
             if changed and self.on_change is not None:
                 with self.db.read() as connection:
-                    task_ids = frozenset(row["task_id"] for row in connection.execute(
+                    changed_tasks = changed_tasks | frozenset(row["task_id"] for row in connection.execute(
                         "SELECT DISTINCT task_id FROM events WHERE seq>? AND seq<=? AND task_id IS NOT NULL",
                         (self._head, head)))
             self._head = max(self._head, head)
             self._condition.notify_all()
-        if changed and self.on_change is not None:
-            self.on_change(task_ids)
+        if (changed or changed_tasks) and self.on_change is not None:
+            self.on_change(changed_tasks)
 
     def stop_waiters(self) -> None:
         """Release all event waits before shutting down their service transport."""
@@ -2550,6 +2550,9 @@ class BoardStore:
                     for row in connection.execute("SELECT * FROM service_issues ORDER BY stage")]
 
     def clear_service_issue(self, stage: str) -> None:
+        with self.db.read() as connection:
+            if connection.execute("SELECT 1 FROM service_issues WHERE stage=?", (stage,)).fetchone() is None:
+                return
         with self.db.write() as connection:
             removed = connection.execute("DELETE FROM service_issues WHERE stage=?", (stage,)).rowcount
             if not removed:

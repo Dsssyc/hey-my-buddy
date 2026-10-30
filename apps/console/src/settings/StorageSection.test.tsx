@@ -17,14 +17,14 @@ function plan(overrides: Partial<StoragePlan> = {}): StoragePlan {
     createdAt: "2026-09-27T12:00:00Z",
     expiresAt: new Date(Date.now() + 14 * 60_000).toISOString(),
     categories: [
-      { id: "harnesses", bytes: 3_500_000_000, reclaimableBytes: 2_900_000_000, count: 71, eligibleCount: 60, reasons: ["continuation-supported", "grace-period"] },
-      { id: "workspaces", bytes: 3_400_000_000, reclaimableBytes: 1_200_000_000, count: 9, eligibleCount: 4, reasons: [] },
-      { id: "runtimes", bytes: 2_100_000_000, reclaimableBytes: 2_100_000_000, count: 30, eligibleCount: 30, reasons: [] },
+      { id: "harnesses", bytes: 3_500_000_000, reclaimableBytes: 0, count: 71, eligibleCount: 0, reasons: ["continuation-supported", "grace-period"] },
+      { id: "workspaces", bytes: 2_200_000_000, reclaimableBytes: 0, count: 9, eligibleCount: 0, reasons: [] },
+      { id: "runtimes", bytes: 3_300_000_000, reclaimableBytes: 3_300_000_000, count: 30, eligibleCount: 30, reasons: [] },
       { id: "backup", bytes: 200_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
       { id: "durable", bytes: 213_000_000, reclaimableBytes: 0, count: 1, eligibleCount: 0, reasons: ["durable-record"] },
     ],
     candidates: [
-      { id: "c1", category: "harnesses", path: "/private/harnesses/one", bytes: 1_000_000_000, eligible: true, reasons: [] },
+      { id: "c1", category: "runtimes", path: "/private/runtimes/one", bytes: 1_000_000_000, eligible: true, reasons: [] },
     ],
     orphanProcesses: [
       { pid: 4321, kind: "daemon", stateDir: "/tmp/private-state-a", runtimeDir: "/runtime/root/76c43f9" },
@@ -37,8 +37,8 @@ function plan(overrides: Partial<StoragePlan> = {}): StoragePlan {
 function applyResult(overrides: Partial<StorageApplyResult> = {}): StorageApplyResult {
   return { planId: "plan-1", removedBytes: 2_700_000_000, complete: true,
     removed: [
-      { id: "c1", path: "/private/harnesses/one", bytes: 1_500_000_000 },
-      { id: "c2", path: "/private/harnesses/two", bytes: 1_200_000_000 },
+      { id: "c1", path: "/private/runtimes/one", bytes: 1_500_000_000 },
+      { id: "c2", path: "/private/runtimes/two", bytes: 1_200_000_000 },
     ],
     skipped: [{ id: "c3", path: "/private/runtimes/old", reasons: ["candidate-changed"] }], ...overrides };
 }
@@ -98,10 +98,10 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const table = screen.getByRole("table");
     const rows = [...table.querySelectorAll<HTMLElement>("tbody tr")].filter(row => row.querySelector("th"));
     expect(rows.map(row => row.querySelector("th")!.textContent)).toEqual([
-      "Harness 私有会话", "受管检出", "运行时", "备份", "黑板与记录",
+      "保留的 Harness 目录", "受管检出", "运行时", "备份", "黑板与记录",
     ]);
     expect(within(rows[0]!).getByText("3.3 GB")).toBeTruthy();
-    expect(within(rows[0]!).getByText("2.7 GB")).toBeTruthy();
+    expect(within(rows[0]!).getByText("0 B")).toBeTruthy();
     expect(rows[0]!.querySelector('[aria-description="3,500,000,000 字节"]')).toBeTruthy();
     expect(within(rows[0]!).getByText("71")).toBeTruthy();
     // Structurally protected categories show — with their own tooltip.
@@ -119,10 +119,10 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await checkUsage(user);
     expect(screen.getByText("future-thing")).toBeTruthy();
     expect(within(screen.getByText("future-thing").closest("tr")!).getByText("1")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Harness 私有会话：为何保留" }));
+    await user.click(screen.getByRole("button", { name: "保留的 Harness 目录：为何保留" }));
     expect(screen.getByText("仍可能续接")).toBeTruthy();
     expect(screen.getByText("宽限期未满")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Harness 私有会话：为何保留" }));
+    await user.click(screen.getByRole("button", { name: "保留的 Harness 目录：为何保留" }));
     await user.click(screen.getByRole("button", { name: "future-thing：为何保留" }));
     expect(within(screen.getByRole("table")).getByText("5 B")).toBeTruthy();
     expect(screen.getByText("never-seen-code")).toBeTruthy();
@@ -147,7 +147,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const view = render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
     await checkUsage(user);
     const clean = screen.getByRole("button", { name: "回收…" }) as HTMLButtonElement;
-    expect(clean.getAttribute("aria-description")).toContain("5.8 GB");
+    expect(clean.getAttribute("aria-description")).toContain("3.1 GB");
     await user.click(clean);
     const dialog = screen.getByRole("dialog", { name: "清理可回收数据" });
     expect(dialog.getAttribute("aria-modal")).toBe("true");
@@ -155,7 +155,8 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     const panelResult = view.container.firstElementChild as HTMLElement;
     expect(panelResult.closest('[aria-hidden="true"]')).toBeTruthy();
     expect(dialog.hasAttribute("inert")).toBe(false);
-    expect(dialog.textContent).toContain("Harness 私有会话：2.7 GB");
+    expect(dialog.textContent).not.toContain("保留的 Harness 目录：");
+    expect(dialog.textContent).not.toContain("原生目录由服务自动回收");
     expect(dialog.textContent).toContain("黑板、记录和上次升级之前的黑板不会删除。");
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     await user.tab({ shift: true });
@@ -181,7 +182,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await user.click(screen.getByRole("button", { name: "查看逐项原因" }));
     expect(screen.getByText(/\/private\/runtimes\/old：数据已变化/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看已删项目" }));
-    expect(screen.getByText(/\/private\/harnesses\/one：1\.4 GB/)).toBeTruthy();
+    expect(screen.getByText(/\/private\/runtimes\/one：1\.4 GB/)).toBeTruthy();
     const applies = f.calls.filter(call => call.operation === "storage_apply");
     expect(applies).toHaveLength(1);
     expect(applies[0]!.params).toEqual({ planId: "plan-1", commandId: expect.any(String), confirm: true });
@@ -233,7 +234,7 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     await user.click(screen.getByRole("button", { name: "检查占用" }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("记录冲突");
-    expect(screen.getByText("Harness 私有会话")).toBeTruthy();
+    expect(screen.getByText("保留的 Harness 目录")).toBeTruthy();
   });
 
   it("disables actions with a reason while the connection is interrupted", () => {

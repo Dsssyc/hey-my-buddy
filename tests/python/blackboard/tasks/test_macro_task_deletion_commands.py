@@ -1,5 +1,6 @@
 """Deletion clears receipts written by the real workflow command producers."""
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 
 from contextlib import ExitStack
 import json
@@ -99,7 +100,8 @@ class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
             "writeScope": ["docs"], "note": "Authorize reviewed follow-up",
             **self.control(delivered),
         })
-        accepted = self.accept_run(board, amended, keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept_run(board, amended)
         self.assertEqual(accepted["state"], "accepted")
 
         second = self.submit(board, request_id="commands-second", macroTaskId=first["macroTaskId"])
@@ -170,7 +172,7 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
         assert_deleted_receipts(self, board, "run:" + submitted["runId"],
                                 {"workflow.workspace_resolve", "workflow.cancel"}, set(), {submitted["runId"]})
 
-    def test_cleanup_plan_and_apply_commands_are_tombstoned(self):
+    def test_cleanup_journal_is_deleted_with_its_micro_task(self):
         board = self.board()
         submitted = self.micro_task_submit(board, request_id="commands-cleanup", scope=(".",), kind="worktree")
         run_id = submitted["runId"]
@@ -181,21 +183,21 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)
         delivered = self.view(board, run_id)
-        accepted = board.call("workflow_accept", {
-            "runId": run_id, "artifactId": delivered["finalArtifactId"],
-            "note": "Reviewed output", "notRequired": "No separate target in this fixture",
-            "keepCheckout": True, **self.control(delivered),
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": run_id, "artifactId": delivered["finalArtifactId"],
+                "note": "Reviewed output", "notRequired": "No separate target in this fixture",
+                 **self.control(delivered),
+            })
         planned = board.store.workflow.cleanup_plan({
-            "runId": run_id, "commandId": "commands-plan", "expectedRevision": accepted["revision"],
-            **self.control(accepted),
+            "runId": run_id,
         })
         board.store.workflow.cleanup_apply({
-            "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "commands-apply",
-            "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
-            **self.control(accepted),
+            "runId": run_id,
+            "planId": planned["plan"]["planId"],
+            "confirmPath": planned["plan"]["path"],
         })
         self.assertFalse(checkout.exists())
         assert_deleted_receipts(self, board, "run:" + run_id,
-                                {"workflow.accept", "workflow.cleanup_plan", "workflow.cleanup_apply"}, set(),
+                                {"workflow.accept"}, set(),
                                 {run_id})

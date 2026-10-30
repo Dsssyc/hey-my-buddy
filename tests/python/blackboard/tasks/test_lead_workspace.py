@@ -1,5 +1,6 @@
 """A Lead controls workspace decisions for its own real-Git micro tasks."""
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 from admission import admit_board, admit_store
 
 import os
@@ -34,12 +35,12 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         other = self._lead(board, "other-lead", other_repo, "other-lead-worker", buddy=other_buddy)
         return board, lead, other
 
-    def _lead(self, board, request_id: str, repo: Path, worker: str, *, buddy=BUDDY) -> dict:
+    def _lead(self, board, request_id: str, repo: Path, worker: str, *, buddy=BUDDY, kind="existing") -> dict:
         submitted = board.call("workflow_submit", {
             **buddy, "requestId": request_id, "hostId": "host",
             "task": "Review and direct the child task", "cwd": str(repo),
             "submissionToken": request_id[0] * 32, "delegationAuthority": True,
-            "executionWorkspace": {"kind": "existing", "access": "full", "accessNote": "Lead review"},
+            "executionWorkspace": {"kind": kind, "access": "full", "accessNote": "Lead review", "writeScope": ["."]},
         })
         claimed = admit_board(board, {'workerId': worker, 'claimRequestId': f'claim-{request_id}', 'nonce': worker[0] * 16, 'runId': submitted['runId']})["claim"]
         self.assertIsNotNone(claimed)
@@ -139,11 +140,12 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         seal = workspace.seal(self.directory, manifest, child["runId"], claim["attempt"]["attemptId"])
         self._finish_child(board, child, claim, seal=seal)
         view = board.call("workflow_get", {"runId": child["runId"]})
-        accepted = board.call("workflow_accept", {
-            "runId": child["runId"], "artifactId": view["finalArtifactId"],
-            "note": "Reviewed the sealed child output", "notRequired": "No integration target for this fixture",
-            "keepCheckout": True, "credential": lead["credential"],
-        })
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = board.call("workflow_accept", {
+                "runId": child["runId"], "artifactId": view["finalArtifactId"],
+                "note": "Reviewed the sealed child output", "notRequired": "No integration target for this fixture",
+                 "credential": lead["credential"],
+            })
         self.assertEqual(accepted["state"], "accepted")
         self.assertTrue(checkout.exists())
         params = {"runId": child["runId"]}
@@ -211,3 +213,33 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         self.assertFalse(checkout.exists())
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_host_conclusions").fetchone()[0], conclusions)
+
+
+    def test_running_lead_integrates_into_its_managed_checkout_without_holding_its_allocation_lock(self):
+        board = self.board(max_concurrent=4)
+        enable_fixture_buddy(board.store, BUDDY)
+        lead = self._lead(board, 'managed-lead', self.repo, 'lead-worker', kind='worktree')
+        lead_manifest = lead['claim']['turn']['input']['executionWorkspace']
+        target = Path(lead_manifest['checkoutRoot'])
+        with workspace._lock(target.parent, create=False):
+            pass
+        child = self._child(board, lead, 'managed-lead-child')
+        claim, manifest, checkout = self._claim_child(board, child)
+        (checkout / 'src' / 'feature.py').write_text('value = 2\n', encoding='utf-8')
+        sealed = workspace.seal(self.directory, manifest, child['runId'], claim['attempt']['attemptId'])
+        self._finish_child(board, child, claim, seal=sealed)
+        subprocess.run(['git', '-C', str(target), 'apply', sealed['diffPath']], env={**os.environ, **GIT_ENV}, check=True)
+        subprocess.run(['git', '-C', str(target), 'add', '.'], env={**os.environ, **GIT_ENV}, check=True)
+        subprocess.run(['git', '-C', str(target), 'commit', '-qm', 'Lead integrated child'], env={**os.environ, **GIT_ENV}, check=True)
+        view = board.call('workflow_get', {'runId': child['runId']})
+        accepted = board.call('workflow_accept', {'runId': child['runId'], 'artifactId': view['finalArtifactId'],
+            'target': {'path': str(target), 'ref': 'HEAD'}, 'note': 'Lead reviewed its integration', 'credential': lead['credential']})
+        self.assertEqual(accepted['state'], 'accepted')
+        self.assertTrue(accepted['reclaim']['removed'], accepted)
+        self.assertTrue(target.exists())
+        self.assertEqual((target / 'src' / 'feature.py').read_text(), 'value = 2\n')
+        with workspace._lock(target.parent, create=False):
+            pass
+        with board.store.db.read() as connection:
+            self.assertNotEqual(connection.execute('SELECT execution_state FROM attempts WHERE attempt_id=?',
+                (lead['claim']['attempt']['attemptId'],)).fetchone()[0], 'finished')

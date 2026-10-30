@@ -13,7 +13,7 @@ export default {
   confirmTitle: "Reclaim unused data", confirmDetail: "Each item is checked again and changed items are skipped. The blackboard, records and the pre-upgrade blackboard will be kept.",
   confirmChecked: "Plan checked at: {{time}}", confirmTotal: "Total: {{bytes}}", confirmRow: "{{category}}: {{bytes}}",
   confirmExpired: "The plan expired; close this dialog and check again", cancel: "Cancel", confirm: "Confirm reclamation",
-  categories: { "session-records": "Session records", harnesses: "Private harness sessions", workspaces: "Managed checkouts", runtimes: "Runtimes", backup: "Backups", durable: "Blackboard and records" },
+  categories: { "session-records": "Session records", harnesses: "Retained harness directories", workspaces: "Managed checkouts", runtimes: "Runtimes", backup: "Backups", durable: "Blackboard and records" },
   reasons: { "macro-task-deletion": "Retained until its macro task is deleted",
     "allocation-unproven": "Checkout allocation not proven", "conclusion-time-unproven": "Conclusion time not proven", "fixed-reference-changed": "Fixed reference changed",
     "retention-grace": "Retention grace period has not elapsed", "runtime-format-unsupported": "Unsupported runtime format",

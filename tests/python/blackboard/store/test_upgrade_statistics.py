@@ -32,6 +32,20 @@ def _buddies(connection):
         "SELECT buddy_id,harness,provider,model,effort FROM buddies ORDER BY buddy_id")]
 
 
+def _fixture_digest(name):
+    raw = (FIXTURE / name).read_bytes()
+    if name == "metadata.json":
+        # The frozen oracle captured the original floor provenance. The
+        # current generator and derived supplement have their own checked
+        # provenance; reconstruct only the original metadata scope here.
+        metadata = json.loads(raw)
+        metadata["generatorSha256"] = metadata.pop("baseGeneratorSha256")
+        for key in ("cleanupStockBaseSha256", "cleanupStockGenerationCommand", "cleanupStockSha256"):
+            metadata.pop(key)
+        raw = (json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _write_oracle():
     """One-time capture from the exact pre-change reader, without copying it here."""
     source = subprocess.run(
@@ -59,7 +73,7 @@ def _write_oracle():
                     "infrastructureFailures": infrastructure[identity],
                 }
     fixture_hashes = {
-        name: hashlib.sha256((FIXTURE / name).read_bytes()).hexdigest()
+        name: _fixture_digest(name)
         for name in ("board.sql", "catalog.json", "metadata.json",
                      "operations.json", "workspace-resources.json")
     }
@@ -136,7 +150,7 @@ class UpgradeStatisticsTests(unittest.TestCase):
         oracle = json.loads(ORACLE.read_text(encoding="utf-8"))
         self.assertEqual(oracle["format"], 1)
         for name, digest in oracle["fixture"]["sha256"].items():
-            self.assertEqual(hashlib.sha256((FIXTURE / name).read_bytes()).hexdigest(), digest)
+            self.assertEqual(_fixture_digest(name), digest)
         with tempfile.TemporaryDirectory(prefix="upgrade-statistics-") as scratch:
             fixture = load_fixture(Path(scratch) / "state")
             self.assertEqual(fixture["sourceCommit"], oracle["fixture"]["sourceCommit"])

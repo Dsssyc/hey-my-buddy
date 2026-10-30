@@ -13,7 +13,7 @@ export default {
   confirmTitle: "清理可回收数据", confirmDetail: "将逐项复核并跳过变化项目；黑板、记录和上次升级之前的黑板不会删除。",
   confirmChecked: "计划检查时间：{{time}}", confirmTotal: "合计：{{bytes}}", confirmRow: "{{category}}：{{bytes}}",
   confirmExpired: "计划已过期；请关闭并重新检查", cancel: "取消", confirm: "确认清理",
-  categories: { "session-records": "会话记录", harnesses: "Harness 私有会话", workspaces: "受管检出", runtimes: "运行时", backup: "备份", durable: "黑板与记录" },
+  categories: { "session-records": "会话记录", harnesses: "保留的 Harness 目录", workspaces: "受管检出", runtimes: "运行时", backup: "备份", durable: "黑板与记录" },
   reasons: { "macro-task-deletion": "随所属宏任务删除",
     "allocation-unproven": "检出分配未证实", "conclusion-time-unproven": "结束时间未证实", "fixed-reference-changed": "固定引用已变化",
     "retention-grace": "保留宽限期未满", "runtime-format-unsupported": "运行时格式不受支持",

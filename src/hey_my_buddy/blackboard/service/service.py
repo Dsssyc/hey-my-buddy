@@ -258,7 +258,6 @@ class BoardService(_BaseResource):
         on_restart: Callable[[dict], dict],
         console_factory: Callable[[dict], dict] | None = None,
         runtime_directory: Path | None = None,
-        on_accepted: Callable[[str], None] | None = None,
         automatic_discovery: bool = False,
         admission_lock: threading.RLock | None = None,
     ):
@@ -270,7 +269,6 @@ class BoardService(_BaseResource):
         self.on_restart = on_restart
         self.console_factory = console_factory
         self.runtime_directory = runtime_directory
-        self.on_accepted = on_accepted
         self.evaluation = store.evaluation
         self.decisions = store.decisions
         from .harness_health import HarnessHealth
@@ -756,12 +754,9 @@ class BoardService(_BaseResource):
 
     def workflow_accept(self, request_json: str) -> str:
         def handler(params: dict) -> dict:
-            result = self.store.workflow.accept(
+            return self.store.workflow.accept(
                 params, console_authority=workflow_module.console_authority_from_scope()
             )
-            if result.get("verdict") == "accepted" and self.on_accepted is not None:
-                self.on_accepted(result["runId"])
-            return result
 
         return self._guard("workflow.accept", request_json, handler)
 

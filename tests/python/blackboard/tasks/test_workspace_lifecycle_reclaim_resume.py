@@ -5,6 +5,7 @@ continues from its durable record, refuses what the record cannot prove, and
 reports the branch or registration diagnosis it found.
 """
 from __future__ import annotations
+from unittest.mock import patch as defer_reclaim
 import json
 import os
 import shutil
@@ -29,7 +30,8 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         board = self.board()
         self.register(board)
         submitted, _, manifest, checkout, _, view, artifact = self.run_worktree(board)
-        self.accept(board, view, artifact, target=self.target_with_artifact(artifact), keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
         before = self.view(board, submitted["runId"])
         with descendant_case(self, self.directory, "daemon", cwd=str(checkout)) as (handle, member):
             self.assertTrue(handle.terminate(grace_seconds=0)[0])
@@ -42,20 +44,20 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             self.assertTrue(all(set(process) == {"pid", "startedAt", "executable"} for process in processes))
             after = self.view(board, submitted["runId"])
             self.assertEqual(after["state"], before["state"])
-            self.assertEqual(after["cleanup"]["state"], "planned")
+            self.assertEqual(after["cleanup"]["state"], "blocked")
             # No applying cleanup fence may hide the concrete process reason.
             self.assertTrue(checkout.exists())
         result = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(result["removed"])
         self.assertFalse(checkout.exists())
 
-    def test_a_blocked_reclaim_needs_a_fresh_removal_for_the_same_exact_path(self):
+    def test_a_blocked_reclaim_reuses_the_journal_for_the_same_checkout(self):
         board = self.board()
         self.register(board)
-        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(board, request_id="expiry-1")
+        submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(board, request_id="blocked-1")
         target = self.target_with_artifact(artifact)
-        accepted = self.accept(board, view, artifact, target=target, reason="verified before cleanup",
-                               keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            accepted = self.accept(board, view, artifact, target=target, reason="verified before cleanup")
         self.assertEqual(accepted["state"], "accepted")
         view = self.view(board, submitted["runId"])
         (checkout / "tracked.txt").write_text("edited after the seal\n", encoding="utf-8", newline="\n")
@@ -65,13 +67,13 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         blocked = self.view(board, submitted["runId"])["cleanup"]
         self.assertEqual(blocked["state"], "blocked")
         self.assertTrue(checkout.exists())
-        # Removing the blocker runs one fresh removal authorization for the same
+        # Removing the blocker retries the current journal for the same
         # exact registered path.
         (checkout / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         applied = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(applied["removed"])
         self.assertEqual(applied["path"], manifest["checkoutRoot"])
-        self.assertNotEqual(self.view(board, submitted["runId"])["cleanup"]["planId"], blocked["planId"])
+        self.assertEqual(self.view(board, submitted["runId"])["cleanup"]["planId"], blocked["planId"])
         self.assertFalse(checkout.exists())
 
     def test_started_reclaim_recovers_after_interruption_without_removing_twice(self):
@@ -79,7 +81,8 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         board = self.board(clock=clock)
         self.register(board)
         submitted, _claim, _manifest, checkout, _seal, view, artifact = self.run_worktree(board)
-        self.accept(board, view, artifact, target=self.target_with_artifact(artifact), keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            self.accept(board, view, artifact, target=self.target_with_artifact(artifact))
         remove = workspace_module.cleanup_remove
 
         def crash_after_removal(*args, **kwargs):
@@ -257,26 +260,24 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         self.assertEqual(after["state"], "applied")
         self.assertEqual(after["revision"], before["revision"] + 1)
 
-    def test_planned_reclaim_still_refuses_owner_generation_changes(self):
+    def test_planned_reclaim_uses_terminal_facts_after_owner_generation_changes(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         planned = board.store.workflow.cleanup_plan({
-            "runId": view["runId"], "commandId": "plan-before-takeover",
-            "expectedRevision": view["revision"], **self.control(view),
+            "runId": view["runId"],
         })
         taken = board.call("workflow_takeover", {
             "runId": view["runId"], "commandId": "planned-reclaim-takeover",
             "expectedOwnerGeneration": view["ownerGeneration"], "newHostId": "host-2", **self.control(view),
         })
         current = self.view(board, view["runId"])
-        with self.assertRaises(BoardError) as refused:
-            board.store.workflow.cleanup_apply({
-                "runId": view["runId"], "commandId": "apply-after-takeover",
-                "planId": planned["plan"]["planId"], "confirmPath": str(checkout),
-                "expectedRevision": current["revision"], **taken["control"],
-            })
-        self.assertEqual(refused.exception.details["reasons"], ["review-changed"])
-        self.assertTrue(checkout.is_dir())
-        self.assertEqual(self.view(board, view["runId"])["cleanup"]["state"], "planned")
+        applied = board.store.workflow.cleanup_apply({
+            "runId": view["runId"],
+            "planId": planned["plan"]["planId"],
+            "confirmPath": str(checkout),
+        })
+        self.assertTrue(applied["removed"])
+        self.assertFalse(checkout.exists())
+        self.assertEqual(self.view(board, view["runId"])["cleanup"]["state"], "applied")
 
     def test_started_reclaim_accepts_relative_worktree_backlinks(self):
         git(self.repo, "config", "worktree.useRelativePaths", "true")
@@ -323,17 +324,16 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
     def test_a_planned_reclaim_still_refuses_missing_sealed_files(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
         planned = board.store.workflow.cleanup_plan({
-            "runId": submitted["runId"], "commandId": "plan-before-missing",
-            "expectedRevision": view["revision"], **self.control(view),
+            "runId": submitted["runId"],
         })
         self.assertEqual(planned["plan"]["state"], "planned")
         (checkout / "tracked.txt").unlink()
         with mock.patch.object(workspace_module, "cleanup_remove", side_effect=AssertionError("refused deletion")):
             with self.assertRaises(BoardError) as refused:
                 board.store.workflow.cleanup_apply({
-                    "runId": submitted["runId"], "commandId": "apply-after-missing",
-                    "planId": planned["plan"]["planId"], "confirmPath": str(checkout),
-                    "expectedRevision": planned["targetRevision"], **self.control(view),
+                    "runId": submitted["runId"],
+                    "planId": planned["plan"]["planId"],
+                    "confirmPath": str(checkout),
                 })
         self.assertEqual(refused.exception.code, "NOT_READY")
         self.assertEqual(refused.exception.details["reasons"], ["unsealed-changes"])
@@ -354,8 +354,7 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         head = git(checkout, "rev-parse", "HEAD").strip()
 
         planned = board.store.workflow.cleanup_plan({
-            "runId": run_id, "commandId": "plan-attached", "expectedRevision": view["revision"],
-            **self.control(view),
+            "runId": run_id,
         })
         plan = planned["plan"]
         self.assertEqual(plan["state"], "planned")
@@ -417,8 +416,7 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
             request_id="apply-attached")
         run_id = submitted["runId"]
         planned = board.store.workflow.cleanup_plan({
-            "runId": run_id, "commandId": "plan-before-branch", "expectedRevision": view["revision"],
-            **self.control(view),
+            "runId": run_id,
         })
         self.assertEqual(planned["plan"]["state"], "planned")
         # The branch appears between planning and applying.
@@ -429,9 +427,9 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
                                  for path in native_path(checkout).rglob("*") if path.is_file() and ".git" not in path.parts}
         with self.assertRaises(BoardError) as raised:
             board.store.workflow.cleanup_apply({
-                "runId": run_id, "planId": planned["plan"]["planId"], "commandId": "apply-attached",
-                "expectedRevision": planned["targetRevision"], "confirmPath": planned["plan"]["path"],
-                **self.control(view),
+                "runId": run_id,
+                "planId": planned["plan"]["planId"],
+                "confirmPath": planned["plan"]["path"],
             })
         self.assertEqual(raised.exception.code, "NOT_READY")
         self.assertIn("attached-branch", raised.exception.details["reasons"])

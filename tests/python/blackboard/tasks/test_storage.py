@@ -69,10 +69,11 @@ class StorageTests(BoardTestCase):
             report = storage.inspect(board.store)
         records = [row for row in report['candidates'] if row['category'] == 'session-records']
         parent = next(row for row in report['candidates'] if row['category'] == 'harnesses')
+        self.assertEqual(parent['reasons'], ['owner-unproven'])
+        self.assertEqual(parent['bytes'], native_path(other).stat().st_size)
         category = next(row for row in report['categories'] if row['id'] == 'session-records')
         self.assertEqual({row['groupId'] for row in records}, {'run:orphan', 'run:linked'})
         self.assertEqual(category['bytes'], native_path(first).stat().st_size + native_path(second).stat().st_size)
-        self.assertEqual(parent['bytes'], native_path(other).stat().st_size)
         self.assertEqual(category['reclaimableBytes'], 0)
         self.assertTrue(all(row['reasons'] == ['macro-task-deletion'] and not row['eligible'] for row in records))
         self.assertEqual(outside.read_bytes(), b'private outside content')
@@ -459,10 +460,11 @@ class StorageTests(BoardTestCase):
         self.assertFalse(any(Path(row['path']).is_relative_to(user_home) for row in candidates))
         private = next(row for row in candidates if row.get('adapter') == 'codex')
         self.assertEqual(private['bytes'], 0)
+        self.assertFalse(private['eligible'])
         private_dirs.remove_tree(private_dirs.micro_task_root(board.directory, 'codex', 'fixture-task'))
         self.assertEqual(session.read_bytes(), b'user-owned native session')
 
-    def test_all_adapters_private_micro_tasks_are_visible(self):
+    def test_native_roots_without_an_owner_remain_visible_and_protected(self):
         board = self.board()
         state = board.directory.resolve()
         for adapter in ('codex', 'claude', 'dsh', 'zcode'):
@@ -472,7 +474,7 @@ class StorageTests(BoardTestCase):
             planned = board.call('storage_plan', {})
             micro_tasks = [row for row in planned['candidates'] if row['category'] == 'harnesses']
             self.assertEqual({row['adapter'] for row in micro_tasks}, {'codex', 'claude', 'dsh', 'zcode'})
-            self.assertTrue(all(not row['eligible'] and 'owner-unproven' in row['reasons'] for row in micro_tasks))
+            self.assertTrue(all(row['reasons'] == ['owner-unproven'] and not row['eligible'] for row in micro_tasks))
             board.call('storage_apply', {'planId':planned['planId'], 'commandId':'protected-micro-tasks', 'confirm':True})
 
     def test_storage_lock_plan_receipt_and_save_reject_links_without_touching_targets(self):
@@ -737,13 +739,6 @@ class StorageTests(BoardTestCase):
                 self.assertIn('linked-path' if marked == candidate else 'runtime-format-unsupported', row['reasons'])
         self.assertEqual(ready_path.read_text(encoding="utf-8"), 'retained READY')
 
-    def test_unaccepted_unknown_shutdown_reports_both_protections(self):
-        workflow = mock.Mock()
-        workflow.shutdown_summary.return_value = {'selfConfirmed': None, 'descendantsConfirmed': None}
-        store = mock.Mock(workflow=workflow)
-        reasons = storage._zcode_reasons(store, object(), {'run_id': 'run', 'state': 'running'},
-                                         {'accepted_at': None}, 0)
-        self.assertEqual(reasons, ['continuation-supported', 'shutdown-unconfirmed'])
 
 
 class ProcessInventoryServiceTests(BoardTestCase):

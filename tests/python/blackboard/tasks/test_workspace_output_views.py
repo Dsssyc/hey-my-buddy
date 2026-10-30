@@ -114,7 +114,7 @@ class WorkspaceOutputViewTests(unittest.TestCase):
                "reasons_json": '["unsealed-changes"]',
                "evidence_json": json.dumps({"workspace": {"unsealedPaths": self.paths}}),
                "retention_json": "{}", "result_json": None, "revision": 2, "created_at": "now",
-               "applied_at": None, "expires_at": "later"}
+               "applied_at": None}
         view = WorkflowCoordinator._plan_view(row)
         self.assertEqual(len(json.loads(row["evidence_json"])["workspace"]["unsealedPaths"]), len(self.paths))
         self.assertEqual(view["evidence"]["workspace"]["unsealedPathsCount"], len(self.paths))

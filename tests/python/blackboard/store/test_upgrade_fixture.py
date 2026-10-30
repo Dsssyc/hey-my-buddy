@@ -220,6 +220,13 @@ class UpgradeFixtureTests(unittest.TestCase):
                     for name in before['tables']}
         task_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(tasks)')]]
         identity_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(attempt_process_identities)')]]
+        cleanup_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')]]
+        deleted_plans = {row['plan_id'] for row in connection.execute(
+            "SELECT * FROM workspace_cleanup_plans WHERE state IN ('planned','blocked')")}
+        retained_commands = {row['command_id'] for row in connection.execute(
+            "SELECT command_id FROM commands WHERE kind NOT IN ('workflow.cleanup_plan','workflow.cleanup_apply')")}
+        retained_events = {row['seq'] for row in connection.execute('SELECT * FROM events')
+                           if json.loads(row['payload_json']).get('planId') not in deleted_plans}
         files = {p.relative_to(native_path(state)): p.read_bytes() for p in native_path(state).rglob('*')
                  if p.is_file() and not p.name.startswith('board.sqlite3')}
         self.assertEqual(before['schema'], UPGRADE_FLOOR_SCHEMA)
@@ -257,6 +264,13 @@ class UpgradeFixtureTests(unittest.TestCase):
             elif name == 'attempt_process_identities':
                 keep = [i for i, column in enumerate(identity_columns) if column != 'process_group_id']
                 self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
+            elif name == 'workspace_cleanup_plans':
+                keep = [i for i, column in enumerate(cleanup_columns) if column not in ('expires_at','command_id')]
+                self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original if row[1] not in deleted_plans])
+            elif name == 'commands':
+                self.assertEqual(actual, [row for row in original if row[1] in retained_commands])
+            elif name == 'events':
+                self.assertEqual(actual, [row for row in original if row[1] in retained_events])
             elif name == 'catalog_observations':
                 self.assertEqual(len(actual), len(original))
                 for old, new in zip(original, actual):
@@ -585,7 +599,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         self.assertEqual({row[0] for row in connection.execute('SELECT strategy FROM workflow_integrations')},
                          {'patch', 'not-required'})
         self.assertEqual({row[0] for row in connection.execute('SELECT state FROM workspace_cleanup_plans')},
-                         {'planned', 'applied', 'blocked'})
+                         {'applied'})
         verification = json.loads(connection.execute(
             "SELECT verification_json FROM workflow_integrations WHERE strategy='patch'").fetchone()[0])
         self.assertEqual([item['path'] for item in verification['differingPaths']], ['README.md'])
@@ -797,3 +811,29 @@ class UpgradeFixtureTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 'UPGRADE_VERIFY_FAILED')
             self.assertEqual(caught.exception.details['tables'], ['commands'])
             command.assert_not_called()
+
+    def test_cleanup_expiry_is_removed_from_populated_floor_stock(self):
+        fixture, connection = self.restored('cleanup-expiry', migrate=False)
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')}
+        self.assertIn('expires_at', columns)
+        stock = [tuple(row) for row in connection.execute("SELECT plan_id,created_at FROM workspace_cleanup_plans WHERE state IN ('applying','applied') ORDER BY rowid")]
+        self.assertTrue(stock)
+        self.assertTrue(all(row[0] for row in connection.execute('SELECT expires_at FROM workspace_cleanup_plans')))
+        connection.close()
+        upgrade_state(fixture['state'])
+        upgraded = sqlite3.connect(fixture['state'] / 'board.sqlite3')
+        self.addCleanup(upgraded.close)
+        upgraded.row_factory = sqlite3.Row
+        self.assertNotIn('expires_at', {row[1] for row in upgraded.execute('PRAGMA table_info(workspace_cleanup_plans)')})
+        self.assertEqual([tuple(row) for row in upgraded.execute('SELECT plan_id,created_at FROM workspace_cleanup_plans ORDER BY rowid')], stock)
+        for row in upgraded.execute('SELECT * FROM workspace_cleanup_plans'):
+            self.assertNotIn('expiresAt', WorkflowCoordinator._plan_view(row))
+
+    def test_cleanup_stock_records_its_current_generator_and_fixed_floor(self):
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        root = Path(__file__).resolve().parents[4]
+        self.assertEqual(metadata['generatorSha256'], _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
+        self.assertEqual(metadata['baseGeneratorSha256'], 'e59f17977824876ed8d2115b81c55eaa1eee007c21f27ebe4b217eb6ef6d4313')
+        self.assertEqual(metadata['cleanupStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['cleanupStockSha256'], _sha((FIXTURE / 'schema-31-cleanup-stock.sql').read_bytes()))
+        self.assertIn('--cleanup-stock-for', metadata['cleanupStockGenerationCommand'])

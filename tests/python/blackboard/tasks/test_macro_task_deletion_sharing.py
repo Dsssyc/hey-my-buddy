@@ -1,4 +1,5 @@
 """Shared-object eligibility through real workspace admission and ownership."""
+from unittest.mock import patch as defer_reclaim
 from pathlib import Path
 
 from blackboard.tasks import workspace_lifecycle_case as lifecycle_fixtures
@@ -63,7 +64,8 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         self.finish_turn(board,claim,seal)
         view = self.view(board,owner['runId'])
         artifact = next(item for item in view['artifacts'] if item['kind']=='output')
-        self.accept(board,view,artifact,not_required=True,keepCheckout=True)
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            self.accept(board,view,artifact,not_required=True)
         borrower = self.submit_group(board,'managed-borrower',cwd=checkout)
         for operation,args in ((deletion.preview,(board.store,owner['macroTaskId'])),
                                (deletion.delete,(board.store,owner['macroTaskId'],1))):

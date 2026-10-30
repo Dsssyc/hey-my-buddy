@@ -187,7 +187,7 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
                     if row["category"] == "harnesses" and row["adapter"] == "dsh"
                     and row["path"] == str(micro_task_dir))
 
-    def test_awaiting_and_grace_micro_tasks_are_kept_and_reclaim_takes_only_the_qualified_micro_task(self):
+    def test_retained_native_roots_are_visible_and_service_reclaims_only_the_qualified_micro_task(self):
         board = self.board()
         state = board.directory.resolve()
         self.register(board)
@@ -248,16 +248,17 @@ class DshNativeStorageRulesTests(WorkflowTestCase):
             db.execute("UPDATE tasks SET accepted_at=? WHERE task_id=?",
                        ((datetime.now(timezone.utc) - timedelta(days=4)).isoformat(), run_id))
         planned = board.call("storage_plan", {})
-        row = self.micro_task_row(planned, micro_task_dir)
-        self.assertTrue(row["eligible"])
-        self.assertEqual(row["reasons"], [])
-        foreign_row = next(entry for entry in planned["candidates"]
-                           if entry["category"] == "harnesses" and entry["path"] == str(foreign_micro_task))
-        self.assertFalse(foreign_row["eligible"])
-        self.assertIn("owner-unproven", foreign_row["reasons"])
-        result = board.call("storage_apply",
-                            {"planId": planned["planId"], "commandId": "reclaim-own-micro-task", "confirm": True})
-        self.assertEqual([entry["path"] for entry in result["removed"]], [str(micro_task_dir)])
+        self.assertFalse(any(entry['path'] == str(micro_task_dir) for entry in planned['candidates']))
+        foreign_row = next(entry for entry in planned['candidates']
+                           if entry['category'] == 'harnesses' and entry['path'] == str(foreign_micro_task))
+        self.assertFalse(foreign_row['eligible'])
+        self.assertIn('owner-unproven', foreign_row['reasons'])
+        result = board.call('storage_apply',
+                            {'planId': planned['planId'], 'commandId': 'native-is-automatic', 'confirm': True})
+        self.assertFalse(result['removed'])
+        self.assertTrue(native_path(micro_task_dir).exists())
+        from hey_my_buddy.blackboard.tasks.reclamation import reclaim_native
+        reclaim_native(board.store)
         self.assertFalse(native_path(micro_task_dir).exists())
         self.assertEqual(native_path(foreign_binding).read_bytes(), b"fixture foreign binding")
 

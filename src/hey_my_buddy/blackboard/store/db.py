@@ -775,12 +775,9 @@ CREATE TABLE IF NOT EXISTS workspace_cleanup_plans (
     retention_json   TEXT NOT NULL,
     reasons_json     TEXT NOT NULL DEFAULT '[]',
     result_json      TEXT,
-    command_id       TEXT,
     revision         INTEGER NOT NULL DEFAULT 1,
     created_at       TEXT NOT NULL,
-    applied_at       TEXT,
-    expires_at       TEXT NOT NULL
-);
+    applied_at       TEXT);
 """,
     """
 CREATE INDEX IF NOT EXISTS workspace_cleanup_plans_run_idx ON workspace_cleanup_plans(run_id, state);

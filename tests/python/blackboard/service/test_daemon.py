@@ -93,51 +93,7 @@ class DaemonAdmissionTests(BoardTestCase):
         self.assertEqual(caught.exception.details["lock"], LIFETIME_LOCKS[0])
         self.assertIn("lifetime locks", caught.exception.message)
 
-    def test_workspace_cleanup_failure_is_visible_and_other_work_continues(self):
-        daemon = Daemon(self.directory / "state")
-        self.addCleanup(daemon.store.db.close)
-        daemon.store.initialize()
-        daemon.queue_workspace_cleanup("one")
-        daemon.queue_workspace_cleanup("two")
-        with patch("hey_my_buddy.blackboard.tasks.storage.cleanup_accepted_workspace",
-                   side_effect=[OSError("fixture cleanup refused"), None]) as cleanup:
-            daemon._cleanup_accepted_workspaces()
-        self.assertEqual(cleanup.call_count, 2)
-        issue = daemon.store.service_issues()[0]
-        self.assertEqual((issue["stage"], issue["code"], issue["message"]),
-                         ("workspace-cleanup", "OSError", "fixture cleanup refused"))
-        daemon._cleanup_accepted_workspaces()
-        self.assertEqual(daemon.store.service_issues(), [issue])
-        daemon.store.db.close()
-        recovered = Daemon(daemon.directory)
-        self.addCleanup(recovered.store.db.close)
-        recovered.store.initialize()
-        self.assertEqual(recovered.store.service_issues(), [issue])
-        recovered.queue_workspace_cleanup("one")
-        with patch("hey_my_buddy.blackboard.tasks.storage.cleanup_accepted_workspace", return_value={"removed": True}):
-            recovered._cleanup_accepted_workspaces()
-        self.assertEqual(recovered.store.service_issues(), [])
-        with recovered.store.db.read() as db:
-            self.assertEqual(db.execute("SELECT kind FROM events ORDER BY seq DESC LIMIT 1").fetchone()[0],
-                             "service.issue_resolved")
 
-    def test_expected_workspace_retention_is_not_a_service_issue(self):
-        daemon = Daemon(self.directory / "state")
-        self.addCleanup(daemon.store.db.close)
-        daemon.store.initialize()
-        retained = BoardError("NOT_READY", "The accepted checkout must be retained", reasons=["unsealed-changes"])
-        for previous_failure in (False, True):
-            with self.subTest(previous_failure=previous_failure):
-                if previous_failure:
-                    daemon.store.record_service_issue("workspace-cleanup", OSError("earlier cleanup failure"))
-                daemon.queue_workspace_cleanup("retained")
-                with patch("hey_my_buddy.blackboard.tasks.storage.cleanup_accepted_workspace", side_effect=retained):
-                    daemon._cleanup_accepted_workspaces()
-                self.assertEqual(daemon.store.service_issues(), [])
-        with daemon.store.db.read() as db:
-            recorded = [json.loads(row[0])["code"] for row in db.execute(
-                "SELECT payload_json FROM events WHERE kind='service.issue'")]
-        self.assertNotIn("NOT_READY", recorded)
 
     def test_cancel_failure_is_visible_and_remaining_tasks_are_cancelled(self):
         daemon = Daemon(self.directory / "state")
@@ -212,3 +168,96 @@ class DaemonAdmissionTests(BoardTestCase):
                         main()
                 self.assertIs(caught.exception, error)
         self.assertFalse((self.directory / "startup-error.json").exists())
+
+    def test_reclamation_failure_is_visible_and_does_not_drop_durable_candidates(self):
+        daemon = Daemon(self.directory / 'state')
+        self.addCleanup(daemon.store.db.close)
+        daemon.store.initialize()
+        with patch('hey_my_buddy.blackboard.tasks.reclamation.workspace_candidates', return_value=['one', 'two']), \
+             patch.object(daemon.store.workflow, '_reclaim_checkout', side_effect=[OSError('fixture cleanup refused'), {'removed': True}]) as cleanup:
+            daemon._reclaim_storage()
+        self.assertEqual(cleanup.call_count, 2)
+        issue = daemon.store.service_issues()[0]
+        self.assertEqual((issue['stage'], issue['code']), ('workspace-cleanup', 'OSError'))
+        daemon.store.db.close()
+        recovered = Daemon(daemon.directory)
+        self.addCleanup(recovered.store.db.close)
+        recovered.store.initialize()
+        self.assertEqual(recovered.store.service_issues(), [issue])
+        with patch('hey_my_buddy.blackboard.tasks.reclamation.workspace_candidates', return_value=['one', 'two']), \
+             patch.object(recovered.store.workflow, '_reclaim_checkout', return_value={'removed': True}) as cleanup:
+            recovered._reclaim_storage()
+        self.assertEqual(cleanup.call_count, 2)
+        self.assertEqual(recovered.store.service_issues(), [])
+
+    def test_maintenance_reclaims_at_startup_and_every_sixty_seconds(self):
+        daemon = Daemon(self.directory / 'state')
+        self.addCleanup(daemon.store.db.close)
+        daemon.store.initialize()
+        clock = [0]
+        daemon.stopping = Mock()
+        daemon.stopping.is_set.side_effect = lambda: clock[0] >= 64
+        def wait(seconds):
+            clock[0] += seconds
+            return False
+        daemon.stopping.wait.side_effect = wait
+        reclaimed = []
+        with patch('hey_my_buddy.blackboard.service.daemon.time.monotonic', side_effect=lambda: clock[0]), \
+             patch.object(daemon, '_reclaim_storage', side_effect=lambda: reclaimed.append(clock[0])), \
+             patch.object(daemon.store, 'recover_executions') as recover:
+            daemon._maintain()
+        self.assertEqual(reclaimed, [0, 60])
+        self.assertGreaterEqual(recover.call_count, 1)
+
+    def test_reclamation_exception_keeps_maintenance_and_execution_recovery_alive(self):
+        for failure in (BoardError('STORAGE_UNSAFE', 'fixture storage root'), OSError('fixture I/O'),
+                        RuntimeError('fixture unexpected failure')):
+            with self.subTest(failure=type(failure).__name__):
+                daemon = Daemon(self.directory / type(failure).__name__)
+                self.addCleanup(daemon.store.db.close)
+                daemon.store.initialize()
+                clock = [0]
+                daemon.stopping = Mock()
+                daemon.stopping.is_set.side_effect = lambda: clock[0] >= 20
+                def wait(seconds):
+                    clock[0] += seconds
+                    return False
+                daemon.stopping.wait.side_effect = wait
+                with patch('hey_my_buddy.blackboard.service.daemon.time.monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(daemon, '_reclaim_storage', side_effect=failure), \
+                     patch.object(daemon.store, 'recover_executions') as recover:
+                    daemon._maintain()
+                self.assertEqual(recover.call_count, 1)
+                issues = daemon.store.service_issues()
+                self.assertEqual(issues[0]['stage'], 'storage-reclamation')
+                self.assertEqual(issues[0]['message'], str(failure))
+
+    def test_busy_reclamation_bookkeeping_does_not_stop_execution_recovery(self):
+        import sqlite3
+        for operation in ('record_service_issue', 'clear_service_issue'):
+            with self.subTest(operation=operation):
+                daemon = Daemon(self.directory / operation)
+                self.addCleanup(daemon.store.db.close)
+                daemon.store.initialize()
+                clock = [0]
+                daemon.stopping = Mock()
+                daemon.stopping.is_set.side_effect = lambda: clock[0] >= 20
+                def wait(seconds):
+                    clock[0] += seconds
+                    return False
+                daemon.stopping.wait.side_effect = wait
+                reclaim = RuntimeError('reclamation failed') if operation == 'record_service_issue' else None
+                with patch('hey_my_buddy.blackboard.service.daemon.time.monotonic', side_effect=lambda: clock[0]), \
+                     patch.object(daemon, '_reclaim_storage', side_effect=reclaim), \
+                     patch.object(daemon.store, operation, side_effect=sqlite3.OperationalError('database is locked')), \
+                     patch.object(daemon.store, 'recover_executions') as recover:
+                    daemon._maintain()
+                self.assertEqual(recover.call_count, 1)
+                self.assertIn('Storage reclamation bookkeeping: OperationalError: database is locked', daemon.store.persistence_error)
+
+    def test_clearing_an_absent_service_issue_does_not_open_a_writer(self):
+        daemon = Daemon(self.directory / 'empty-service-issues')
+        self.addCleanup(daemon.store.db.close)
+        daemon.store.initialize()
+        with patch.object(daemon.store.db, 'write', side_effect=AssertionError('empty issue acquired the writer')):
+            daemon.store.clear_service_issue('storage-reclamation')

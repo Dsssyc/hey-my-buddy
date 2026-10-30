@@ -387,8 +387,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         payload = private_dirs.attempt_root(board.directory, 'codex', run['runId'], 'session-attempt') / 'other-evidence'
         native_path(payload.parent).mkdir(parents=True)
         native_path(payload).write_bytes(b'other')
-        with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)), \
-             mock.patch.object(storage, '_zcode_reasons', return_value=[]):
+        with mock.patch.object(storage, 'process_inventory', return_value=([], [], True)):
             plan = board.call('storage_plan', {})
             session = next(row for row in plan['candidates'] if row['category'] == 'session-records')
             parent = next(row for row in plan['candidates'] if row['category'] == 'harnesses')
@@ -396,6 +395,7 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
                              (path.stat().st_size, 'run:' + run['runId']))
             self.assertEqual(session['reasons'], ['macro-task-deletion'])
             self.assertEqual(parent['bytes'], len(b'other'))
-            self.assertNotIn('session-records-retained', parent['reasons'])
+            self.assertFalse(parent['eligible'])
+            self.assertIn('continuation-supported', parent['reasons'])
             board.call('storage_apply', {'planId': plan['planId'], 'commandId': 'keep-session', 'confirm': True})
         self.assertEqual(self.get(browser, route)['events'], events)

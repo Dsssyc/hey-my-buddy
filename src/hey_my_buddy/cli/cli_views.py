@@ -143,7 +143,7 @@ _CHILD_BRIEF = ("taskId", "role", "state", "integrator", "requestId")
 _CONFLICT_BRIEF = ("conflictId", "state", "observedFingerprint", "blockingPaths", "blockingPathsCount",
                    "blockingPathsTruncated", "conflictingPaths", "conflictingPathsCount",
                    "conflictingPathsTruncated", "action", "artifactId")
-_PLAN_BRIEF = ("planId", "state", "eligible", "reasons", "path", "kind", "expiresAt", "appliedAt")
+_PLAN_BRIEF = ("planId", "state", "eligible", "reasons", "path", "kind", "appliedAt")
 
 
 def _integration_brief(row: Any) -> dict:
