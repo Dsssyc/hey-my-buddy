@@ -23,6 +23,7 @@ from ..protocol.contracts import CONTRACT_VERSION
 from ..protocol.service_process import independent_service_popen
 from ..blackboard.store.db import SCHEMA_VERSION, utc_now
 from ..blackboard.store.upgrade import supported_schema, upgrade_state
+from ..blackboard.store.work import autonomous_tasks
 from ..errors import BoardError
 
 # A private C-Two 0.7.5 restart with one frozen execution released ownership
@@ -66,22 +67,11 @@ def file_lock(path: Path, *, timeout: float = 0):
 def _idle_board(connection: sqlite3.Connection) -> int:
     schema = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()
     version = supported_schema(schema[0] if schema is not None else None)
-    # A micro-task Host boundary has no autonomous next turn. A recorded or
-    # queued continuation still has work to prepare/claim, even if the run
-    # currently reports a Host boundary. Routing and helper tasks are checked
-    # independently below through the complete task inventory.
-    active = connection.execute(
-        "SELECT t.task_id,t.state FROM tasks t"
-        " WHERE t.state IN ('queued','running','cancelling','reconciliation-needed')"
-        " AND NOT (t.state='queued' AND EXISTS ("
-        " SELECT 1 FROM workflow_runs r WHERE r.run_id=t.task_id AND r.state='awaiting-host'"
-        " AND NOT EXISTS (SELECT 1 FROM workflow_continuations c WHERE c.run_id=r.run_id"
-        " AND c.state IN ('recorded','queued'))))"
-    ).fetchall()
+    active = autonomous_tasks(connection)
     unresolved = connection.execute("SELECT attempt_id FROM attempts WHERE execution_state!='finished' OR shutdown_confirmed!=1 OR cleanup_pending=1").fetchall()
     if active or unresolved:
         raise BoardError('UPGRADE_NOT_IDLE', 'Upgrade requires idle work and confirmed shutdown; no task was cancelled',
-                         active=[{'runId': row[0], 'state': row[1]} for row in active[:20]], unresolvedAttempts=[r[0] for r in unresolved[:20]])
+                         active=active[:20], unresolvedAttempts=[r[0] for r in unresolved[:20]])
     return version
 
 

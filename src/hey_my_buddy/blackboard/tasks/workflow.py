@@ -44,6 +44,7 @@ from . import micro_task
 from .request_reasons import request_reason
 from .macro_task_deletion_guard import reject_deleting_run, reject_macro_task
 from ..store.db import canonical_json, sha256_text
+from ..store.work import autonomous_tasks
 from ...errors import BoardError
 from ... import private_dirs
 
@@ -3481,17 +3482,18 @@ class WorkflowCoordinator:
     def cancel_for_service_stop(self, note: str | None) -> tuple[dict[str, int], set[str]]:
         """Internal daemon shutdown path; no request fields or caller authority enter here."""
         with self.db.write() as connection:
+            queued = {task["runId"] for task in autonomous_tasks(connection) if task["state"] == "queued"}
             unresolved = self.board.UNRESOLVED_SQL.replace("execution_state", "a.execution_state").replace(
                 "result_json", "a.result_json").replace("shutdown_confirmed", "a.shutdown_confirmed")
             candidates: dict[str, tuple[str, bool]] = {}
             for row in connection.execute(
-                "SELECT t.task_id,t.state,r.state AS workflow_state,"
+                "SELECT t.task_id,"
                 f" EXISTS(SELECT 1 FROM attempts a WHERE a.task_id=t.task_id AND ({unresolved})) AS unresolved"
                 " FROM tasks t JOIN workflow_runs r ON r.run_id=t.task_id"
                 " WHERE t.state='queued' OR EXISTS(SELECT 1 FROM attempts a"
                 f" WHERE a.task_id=t.task_id AND ({unresolved}))"
             ).fetchall():
-                if row["unresolved"] or (row["state"] == "queued" and row["workflow_state"] == "executing"):
+                if row["unresolved"] or row["task_id"] in queued:
                     candidates[row["task_id"]] = (row["task_id"], bool(row["unresolved"]))
             for row in connection.execute(
                 "SELECT t.task_id,t.state,r.run_id,"
