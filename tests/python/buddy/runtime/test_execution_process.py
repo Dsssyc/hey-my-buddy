@@ -50,20 +50,17 @@ class ExecutionEndpointTests(unittest.TestCase):
         self.assertTrue(report['shutdownConfirmed'])
         self.assertEqual(claim['decisionInput']['budget']['bytesRead'], 2097152)
 
-    def test_nonretryable_endpoint_inspection_explains_the_start_failure(self):
+    def test_absent_registered_server_credential_fails_without_polling(self):
         live = _ExecutionLive(SimpleNamespace(claim={
             "task": {"taskId": "task"}, "attempt": {"attemptId": "attempt", "generation": 1}}))
-        result = {"status": "io-error", "reason": "fixture access refused", "io_kind": "PermissionDenied",
-                  "retryable": False, "credential": None, "raw_os_error": 13}
         with mock.patch("hey_my_buddy.buddy.runtime.execution.cc.register"), \
              mock.patch("hey_my_buddy.buddy.runtime.execution.cc.server_address", return_value="ipc://fixture"), \
-             mock.patch("hey_my_buddy.buddy.runtime.execution.cc.inspect_endpoint", return_value=result), \
+             mock.patch("hey_my_buddy.buddy.runtime.execution.cc.server_credential", return_value=None) as credential, \
              self.assertRaises(BoardError) as caught:
             live.start({"pid": 123})
         self.assertEqual(caught.exception.code, "LIVE_UNAVAILABLE")
-        self.assertEqual(caught.exception.details, {key: result[key] for key in ("status", "reason", "io_kind")})
-        for value in caught.exception.details.values():
-            self.assertIn(value, str(caught.exception))
+        self.assertIn("credential is absent", caught.exception.message)
+        credential.assert_called_once_with()
 
     def test_service_claim_turn_shape_is_checked_at_process_boundary(self):
         base = {"task": {"taskId": "task", "spec": {"adapter": "command"}},
@@ -426,6 +423,9 @@ class ExecutionEndpointTests(unittest.TestCase):
             try:
                 endpoint_file = execution.directory / "execution-live.json"
                 material = json.loads(native_path(endpoint_file).read_text(encoding="utf-8"))
+                credential = launch_protocol.cc.server_credential()
+                self.assertIsNotNone(credential)
+                self.assertEqual(material["descriptor"]["endpointCredential"], credential.to_json())
                 if os.name != "nt":
                     self.assertEqual(native_path(endpoint_file).stat().st_mode & 0o777, 0o600)
                 client = read_execution_endpoint(execution.directory, execution.live.identity,
@@ -477,16 +477,14 @@ class ExecutionEndpointTests(unittest.TestCase):
                         stopped_evidence="alive")["status"], "unverified")
                     reap.assert_not_called()
                     self.assertTrue(native_path(execution.directory / "execution-live.json").exists())
+                status = "not-applicable" if os.name == "nt" else "reaped"
                 with mock.patch.object(launch_protocol.cc, "reap_endpoint",
-                                       return_value={"status": "reaped"}) as reap:
+                                       return_value={"status": status}) as reap:
                     self.assertEqual(launch_protocol.cleanup_execution_endpoint(
                         execution.directory, process_identity, state_dir=state,
                         stopped_evidence="identity-absent")["status"],
-                        "not-applicable" if os.name == "nt" else "reaped")
-                    if os.name == "nt":
-                        reap.assert_not_called()
-                    else:
-                        reap.assert_called_once()
+                        status)
+                    reap.assert_called_once()
                     self.assertFalse(native_path(execution.directory / "execution-live.json").exists())
             finally:
                 execution.live.finish()

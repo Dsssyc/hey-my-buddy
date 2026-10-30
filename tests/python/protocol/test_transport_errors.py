@@ -13,6 +13,9 @@ from c_two.error import ContractMismatch, CoreError
 from hey_my_buddy import locking
 from hey_my_buddy.protocol import transport
 
+CLEAR_SHUTDOWN = {'completed': True, 'runtime_barrier_error': None, 'route_close_error': None,
+                  'ipc_client_close_error': None, 'relay_errors': [], 'route_outcomes': []}
+
 
 def core_failure(kind: str | None) -> CoreError:
     failure = CoreError('transport', 'native connection failed')
@@ -24,6 +27,17 @@ def core_failure(kind: str | None) -> CoreError:
 
 
 class StructuredRpcFailureTests(unittest.TestCase):
+    def test_namespace_and_protocol_failures_retain_native_diagnostics(self):
+        for category, fields in (
+                ('lifecycle', {'endpoint_unverified_reason': 'unsupported-namespace-format'}),
+                ('protocol_version_mismatch', {'local_protocol_version': 14, 'peer_protocol_version': 15})):
+            with self.subTest(category=category):
+                error = CoreError(category, 'native endpoint refused')
+                for key, value in fields.items():
+                    setattr(error, key, value)
+                failure = transport.local_rpc_error(error)
+                self.assertEqual(failure.details, {'category': category, **fields})
+
     def test_connection_and_operation_map_only_the_retryable_local_causes(self):
         endpoint = {'address': 'ipc://fixture', 'token': 'fixture'}
         with tempfile.TemporaryDirectory() as temporary:
@@ -79,7 +93,7 @@ class StructuredRpcFailureTests(unittest.TestCase):
                     preflight.assert_called_once_with(directory)
 
     def test_identity_refusal_without_os_error_never_starts_or_reports_stopped(self):
-        # C-Two 0.9.0 rejects a Windows peer's identity before sending bytes.
+        # C-Two 0.10.0 rejects a Windows peer's identity before sending bytes.
         # That permission denial has no OS errno and is not an absent listener.
         failure = core_failure('permission_denied')
         failure.transport_phase = 'pre_dispatch'
@@ -167,16 +181,16 @@ class PreflightFailureTests(unittest.TestCase):
             sentinel = unrelated / 's'
             sentinel.write_text('keep', encoding='utf-8')
             runtime = Mock()
-            runtime.shutdown.return_value = {'completed': True}
+            runtime.shutdown.return_value = CLEAR_SHUTDOWN
 
-            def replace_then_fail(_address):
+            def replace_then_fail():
                 socket_directory.rename(relocated)
                 socket_directory.symlink_to(unrelated, target_is_directory=True)
                 raise FileNotFoundError(errno.ENOENT, 'path replaced')
 
-            runtime.ping_direct_ipc.side_effect = replace_then_fail
+            runtime.start.side_effect = replace_then_fail
             with patch.object(transport.tempfile, 'mkdtemp', return_value=str(socket_directory)), \
-                 patch.object(transport, 'RuntimeSession', return_value=runtime), \
+                 patch.object(transport.cc, 'Runtime', return_value=runtime), \
                  self.assertRaises(transport.ServiceError) as caught:
                 transport._cold_start_preflight(root / 'state')
             self.assertEqual(caught.exception.code, 'LAUNCH_IO_ERROR')
@@ -187,16 +201,75 @@ class PreflightFailureTests(unittest.TestCase):
             self.assertTrue(socket_directory.is_symlink())
 
     @unittest.skipIf(os.name == 'nt', 'POSIX independent native namespace')
-    def test_unconfirmed_native_probe_shutdown_keeps_its_namespace(self):
+    def test_incomplete_probe_shutdown_keeps_its_namespace(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
             runtime = Mock()
-            runtime.shutdown.return_value = {'completed': False}
-            with patch.object(transport, 'RuntimeSession', return_value=runtime), \
+            runtime.shutdown.return_value = {**CLEAR_SHUTDOWN, 'completed': False}
+            with patch.object(transport.cc, 'Runtime', return_value=runtime), \
                  self.assertRaises(transport.ServiceError) as caught:
-                transport._cold_start_preflight(root)
+                transport._cold_start_preflight(Path(temporary))
+            self.assertEqual(caught.exception.code, 'LAUNCH_IO_ERROR')
             self.assertEqual(caught.exception.details['io_operation'], 'shutdown')
             self.assertTrue(Path(caught.exception.details['path']).is_dir())
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX independent native namespace')
+    def test_completed_probe_shutdown_retires_namespace_even_with_errors(self):
+        for field, value in (
+                ('runtime_barrier_error', 'barrier refused'),
+                ('route_close_error', 'route refused'), ('ipc_client_close_error', 'client refused'),
+                ('relay_errors', ['relay refused']),
+                ('route_outcomes', [{'active_drained': False, 'close_error': None}]),
+                ('route_outcomes', [{'active_drained': True, 'close_error': 'close refused'}])):
+            with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as temporary:
+                runtime = Mock()
+                runtime.shutdown.return_value = {**CLEAR_SHUTDOWN, field: value}
+                with patch.object(transport.cc, 'Runtime', return_value=runtime):
+                    transport._cold_start_preflight(Path(temporary))
+                self.assertFalse(list(Path(temporary).glob('.launch-ipc-*')))
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX independent runtime bind')
+    def test_start_failure_retains_its_cause_and_completed_shutdown_errors(self):
+        error = core_failure('permission_denied')
+        error.io_operation = 'bind'
+        outcome = {**CLEAR_SHUTDOWN, 'runtime_barrier_error': 'same bind refusal'}
+        runtime = Mock()
+        runtime.start.side_effect = error
+        runtime.shutdown.return_value = outcome
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(transport.cc, 'Runtime', return_value=runtime), \
+                 self.assertRaises(transport.ServiceError) as caught:
+                transport._cold_start_preflight(Path(temporary))
+            self.assertEqual(caught.exception.code, 'LAUNCH_ACCESS_DENIED')
+            self.assertEqual(caught.exception.details['io_operation'], 'bind')
+            self.assertEqual(caught.exception.details['raw_os_error'], errno.EACCES)
+            self.assertEqual(caught.exception.details['shutdownOutcome'], outcome)
+            self.assertIs(caught.exception.__cause__, error)
+            self.assertFalse(list(Path(temporary).glob('.launch-ipc-*')))
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX independent runtime namespace')
+    def test_public_runtime_probe_cleans_coordination_files_and_leaves_default_domain(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = transport.cc.local_endpoint_context()
+            transport._probe_local_ipc(root)
+            after = transport.cc.local_endpoint_context()
+            self.assertEqual((after.platform, after.namespace_id, after.root),
+                             (before.platform, before.namespace_id, before.root))
+            self.assertEqual(list(root.iterdir()), [])
+
+    @unittest.skipIf(os.name == 'nt', 'POSIX independent runtime bind')
+    def test_public_runtime_bind_denial_reaches_preflight_without_retry(self):
+        runtime = Mock()
+        runtime.start.side_effect = core_failure('permission_denied')
+        runtime.shutdown.return_value = CLEAR_SHUTDOWN
+        with tempfile.TemporaryDirectory() as temporary, \
+             patch.object(transport.cc, 'Runtime', return_value=runtime), \
+             self.assertRaises(transport.ServiceError) as caught:
+            transport._cold_start_preflight(Path(temporary))
+        self.assertEqual(caught.exception.code, 'LAUNCH_ACCESS_DENIED')
+        runtime.start.assert_called_once_with()
+        runtime.set_server.assert_called_once_with(startup_timeout=transport.rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
+        runtime.shutdown.assert_called_once_with(timeout=transport.rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
 
 
 class EndpointRetirementTests(unittest.TestCase):

@@ -384,6 +384,10 @@ class UpgradeTests(BoardTestCase):
     def test_raced_admission_aborts_before_backup_and_keeps_previous_owner(self):
         board = self.board()
         state = board.directory
+        ipc = state / 'ipc'
+        ipc.mkdir(mode=0o700)
+        (ipc / 'retained-endpoint').write_bytes(b'raced execution')
+        original_inode = ipc.stat().st_ino
         root = self.directory / 'runtimes'
         previous, target = root / ('a' * 32), root / ('b' * 32)
         previous.mkdir(parents=True)
@@ -422,6 +426,9 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(journal['phase'], 'rolled-back')
         self.assertEqual(journal['failure'], reason)
         self.assertTrue(result['rollback']['workPreserved'])
+        self.assertEqual(ipc.stat().st_ino, original_inode)
+        self.assertEqual({entry.name: entry.read_bytes() for entry in ipc.iterdir()},
+                         {'retained-endpoint': b'raced execution'})
         command.assert_called_once_with(state, previous, 'restart', {'drainSeconds': 0})
         ensure_idle.assert_called_once_with(state)
         snapshot.assert_called_once_with(state)
@@ -434,6 +441,10 @@ class UpgradeTests(BoardTestCase):
     def test_changed_contract_recovery_without_backup_preserves_raced_work(self):
         state, root = self.directory / 'state', self.directory / 'runtimes'
         state.mkdir()
+        ipc = state / 'ipc'
+        ipc.mkdir(mode=0o700)
+        (ipc / 'retained-endpoint').write_bytes(b'raced execution')
+        original_inode = ipc.stat().st_ino
         previous, target = root / ('a' * 32), root / ('b' * 32)
         journal = {'phase': 'recovery-required', 'contractChanged': True, 'previous': str(previous),
                    'target': str(target), 'before': {'schema': SCHEMA_VERSION}}
@@ -457,6 +468,9 @@ class UpgradeTests(BoardTestCase):
         self.assertEqual(result, {'upgraded': False, 'recoveredJournal': True,
                                  'rollback': {'runtimeContentId': previous.name, 'workPreserved': True}})
         start.assert_called_once_with(state, previous)
+        self.assertEqual(ipc.stat().st_ino, original_inode)
+        self.assertEqual({entry.name: entry.read_bytes() for entry in ipc.iterdir()},
+                         {'retained-endpoint': b'raced execution'})
         self.assertFalse(marker.exists())
         self.assertEqual(launcher.read_private(state / 'active-runtime.json')['runtimeDir'], str(previous))
 

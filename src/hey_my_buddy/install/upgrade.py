@@ -185,6 +185,27 @@ def detach(state: Path, target: Path, *, require_idle: bool) -> None:
             ensure_idle(state)
 
 
+def _rebuild_ipc_root(state: Path) -> None:
+    """Retire a private Unix namespace under the start and idle owner fences."""
+    if os.name == 'nt':
+        return
+    state_fd = os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        info = os.fstat(state_fd)
+        if info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'IPC removal requires a private state directory', path=str(state))
+        try:
+            info = os.stat('ipc', dir_fd=state_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'IPC removal requires a private directory without links',
+                             path=str(state / 'ipc'))
+        shutil.rmtree('ipc', dir_fd=state_fd)
+    finally:
+        os.close(state_fd)
+
+
 def start(state: Path, target: Path) -> dict:
     from .launcher import entry_modules
     # Callers hold control-start.lock: the record is cleared before the spawn, so
@@ -521,6 +542,8 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                         journal['schemaUpgrade'] = migration
                     journal.update(phase='prepared', expected=expected)
                     write_journal(marker, journal)
+                    if contract_changed:
+                        _rebuild_ipc_root(state)
                 active = target
                 health = start(state, target)
                 evidence = verify_started(state, target, health, expected, contract_changed=contract_changed)
@@ -552,7 +575,9 @@ def upgrade(state: Path, *, skill_source: Path | None = None, skill_target: Path
                     if backed_up is not None:
                         with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
                              file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
+                            ensure_idle(state)
                             restore(state, Path(backed_up['path']))
+                            _rebuild_ipc_root(state)
                     # A race admitted work before the old daemon detached: preserve it
                     # and restart the previous runtime without restoring an older DB.
                     recovered = start(state, previous)
@@ -650,6 +675,7 @@ def recover(state: Path, root: Path) -> dict:
     with file_lock(state / 'control-daemon.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS), \
          file_lock(state / 'board-owner.lock', timeout=OWNER_LOCK_TIMEOUT_SECONDS):
         if contract_changed:
+            ensure_idle(state)
             saved = journal.get('backup')
             if saved is not None:
                 current = state / 'backups/current'
@@ -657,6 +683,7 @@ def recover(state: Path, root: Path) -> dict:
                     raise BoardError('UPGRADE_RECOVERY_REQUIRED', 'Journal backup path does not match this installation')
                 restore(state, current)
             before = idle_snapshot(state)
+            _rebuild_ipc_root(state)
         else:
             before = journal['before']
     health = start(state, previous)

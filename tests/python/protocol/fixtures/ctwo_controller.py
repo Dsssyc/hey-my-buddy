@@ -230,7 +230,7 @@ def execution(startup: Path):
     executor = SimulatedExecutor()
     gate = Path(os.environ["HMB_C2_STARTUP_GATE_ROOT"]) if os.environ.get("HMB_C2_STARTUP_GATE_ROOT") else None
     register = runtime.cc.register
-    inspect = runtime.cc.inspect_endpoint
+    credential = runtime.cc.server_credential
 
     def registered(*args, **kwargs):
         result = register(*args, **kwargs)
@@ -240,18 +240,22 @@ def execution(startup: Path):
                 time.sleep(.01)
         return result
 
-    def inspected(*args, **kwargs):
-        result = inspect(*args, **kwargs)
-        if gate is not None and not (gate / "startup-inspection.json").exists():
-            runtime.fsync_json(gate / "startup-inspection.json", {
-                "address": args[0], **{key: result[key] for key in ("status", "reason", "io_kind", "retryable")}})
+    def server_credential():
+        result = credential()
+        if gate is not None:
+            runtime.fsync_json(gate / "startup-credential.json", {
+                "address": runtime.cc.server_address(), "credential": result.to_json()})
+            if (gate / "pause-registration").exists():
+                (gate / "registration-paused").touch()
+                while not (gate / "namespace-release").exists():
+                    time.sleep(.01)
         return result
 
     with patch.object(role_seam, "worker_executor", lambda name: executor), \
             patch.object(inline_run, "run_harness", simulated_run), \
             patch.object(inline_run, "CTwoLiveEndpoint", OneSlowCallEndpoint), \
             patch.object(runtime.cc, "register", side_effect=registered), \
-            patch.object(runtime.cc, "inspect_endpoint", side_effect=inspected):
+            patch.object(runtime.cc, "server_credential", side_effect=server_credential):
         return runtime.main()
 
 

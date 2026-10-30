@@ -61,6 +61,9 @@ class ColdStartPreflightTests(BoardTestCase):
         self.assertEqual(error['code'], 'LAUNCH_ACCESS_DENIED', error)
         self.assertEqual(error['details']['io_operation'], 'bind', error)
         self.assertIn('Operation not permitted', error['message'])
+        outcome = error['details']['shutdownOutcome']
+        self.assertIs(outcome['completed'], True)
+        self.assertIn('Operation not permitted', outcome['runtime_barrier_error'])
         self.assertFalse((self.directory / 'board.sqlite3').exists())
         self.assertFalse((self.directory / 'control.log').exists())
         self.assertFalse((self.directory / 'control-start.lock').exists())

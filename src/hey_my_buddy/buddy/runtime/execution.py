@@ -40,7 +40,7 @@ from ...json_codec import canonical_json, decode_strict_json
 from ...protocol.stop import WRAP_UP_INITIATORS, TERMINATION_REASONS
 from ..harnesses.registry import ExecutionContext
 from ..harnesses.c_two_live import CTwoLiveEndpoint
-from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, OptionalText, Text, fail
+from ...protocol.internal_models import Hex64, InternalModel, NonNegativeInt, Text, fail
 from ..harnesses.live import (LIVE_FIELDS, MAX_REQUEST_ID, MAX_OBSERVE_LIMIT,
     MIN_TRANSPORT_TIMEOUT_MS, MAX_TRANSPORT_TIMEOUT_MS, LiveReply, LiveRequest, LiveSnapshot)
 from ..roles import controller as role_seam
@@ -88,14 +88,14 @@ class LiveEndpointDescriptor(InternalModel):
 
     The holder consumes ``endpointCredential`` through C-Two's codec. Address,
     instance and the held process PID remain independent binding checks.
-    Windows has no reap credential and uses the native default pipe domain.
+    Windows uses a kernel-managed credential in the native pipe domain.
     """
 
     address: Text(256)
     name: Text(128)
     instance_id: Hex64
     host_pid: NonNegativeInt
-    endpoint_credential: OptionalText(8192) = None
+    endpoint_credential: Text(8192)
 
 def _timeout_ms(value: Any, label: str) -> int:
     """The preserved transport window bound, checked exactly as the live seam does."""
@@ -223,19 +223,12 @@ class _ExecutionLive:
                     concurrency=cc.ConcurrencyConfig(mode=cc.ConcurrencyMode.PARALLEL))
         self._started = True
         address = cc.server_address()
-        while True:
-            inspected = cc.inspect_endpoint(address)
-            if inspected["status"] in ("present", "not-applicable"):
-                break
-            if not inspected["retryable"]:
-                details = {key: inspected[key] for key in ("status", "reason", "io_kind")}
-                raise BoardError("LIVE_UNAVAILABLE", f"Execution endpoint credential is unavailable: {details}",
-                                 **details)
-            time.sleep(.05)
-        credential = inspected["credential"]
+        credential = cc.server_credential()
+        if credential is None:
+            raise BoardError("LIVE_UNAVAILABLE", "Registered execution endpoint credential is absent")
         descriptor = LiveEndpointDescriptor(address=address, name=self.name,
             instance_id=self.instance_id, host_pid=process_identity["pid"],
-            endpoint_credential=credential.to_json() if credential is not None else None)
+            endpoint_credential=credential.to_json())
         fsync_json(self.execution.directory / execution_protocol.LIVE, {
             "identity": self.identity.to_payload(), "processIdentity": process_identity,
             "descriptor": descriptor.to_payload(), "token": self.token})

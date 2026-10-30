@@ -21,7 +21,6 @@ from typing import Any, NoReturn
 
 import c_two as cc
 from c_two.error import CCError, CoreError
-from c_two._native import RuntimeSession
 
 from . import rpc_config
 from .service_process import independent_service_popen
@@ -116,7 +115,8 @@ def local_rpc_error(error: CoreError | CCError) -> ServiceError:
     """Keep C-Two's local I/O cause visible at the Host boundary."""
     details = dict(getattr(error, 'details', None) or {})
     details.update({key: value for key in ('category', 'transport_kind', 'transport_phase',
-               'io_kind', 'raw_os_error', 'io_operation')
+               'io_kind', 'raw_os_error', 'io_operation', 'endpoint_unverified_reason',
+               'local_protocol_version', 'peer_protocol_version')
                if (value := getattr(error, key, None)) is not None})
     kind = details.get('io_kind')
     if kind == 'permission_denied':
@@ -329,23 +329,24 @@ def _attach_read_only(directory: Path) -> dict | None:
 
 def _probe_local_ipc(directory: Path) -> None:
     """Use Core's real binding path without changing the caller's Runtime."""
-    runtime = RuntimeSession()
+    runtime = cc.Runtime()
     namespace = Path(tempfile.mkdtemp(prefix='.launch-ipc-', dir=directory))
     namespace_fd = os.open(namespace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    start_error = None
     try:
-        runtime.set_local_endpoint(context=cc.local_endpoint_context(root=str(namespace)))
-        runtime.set_server_options(startup_timeout=rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
-        runtime.ensure_host_started()
-        if not runtime.ping_direct_ipc(runtime.server_address):
-            raise ServiceError('LAUNCH_IO_ERROR', 'The local IPC probe did not answer', io_operation='connect')
-    finally:
         try:
-            outcome = runtime.shutdown()
-            if not outcome['completed']:
+            runtime.set_local_endpoint(root=str(namespace))
+            runtime.set_server(startup_timeout=rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
+            runtime.start()
+        except (CoreError, CCError) as error:
+            start_error = error
+        finally:
+            outcome = runtime.shutdown(timeout=rpc_config.SERVICE_STARTUP_TIMEOUT_SECONDS)
+            if outcome['completed'] is not True:
                 raise ServiceError('LAUNCH_IO_ERROR', 'Local IPC probe shutdown is unconfirmed; temporary root preserved',
-                                   io_operation='shutdown', path=str(namespace))
-            # The independent native namespace is flat. Retire only its closed
-            # runtime's entries through the pinned directory, including its gate.
+                                   io_operation='shutdown', path=str(namespace), shutdownOutcome=outcome)
+            # This one-use namespace belongs to this process. Completed shutdown
+            # permits retiring its files even when the receipt retains a start error.
             for name in os.listdir(namespace_fd):
                 os.unlink(name, dir_fd=namespace_fd)
             opened = os.fstat(namespace_fd)
@@ -354,8 +355,15 @@ def _probe_local_ipc(directory: Path) -> None:
                 raise ServiceError('LAUNCH_IO_ERROR', 'Local IPC probe directory was replaced; path preserved',
                                    io_operation='cleanup', path=str(namespace))
             namespace.rmdir()
-        finally:
-            os.close(namespace_fd)
+        if start_error is not None:
+            failure = local_rpc_error(start_error)
+            if (any(outcome[key] for key in ('runtime_barrier_error', 'route_close_error',
+                                            'ipc_client_close_error', 'relay_errors'))
+                    or any(route['close_error'] for route in outcome['route_outcomes'])):
+                failure.details['shutdownOutcome'] = outcome
+            raise failure from start_error
+    finally:
+        os.close(namespace_fd)
 
 
 def _cold_start_preflight(directory: Path) -> None:
