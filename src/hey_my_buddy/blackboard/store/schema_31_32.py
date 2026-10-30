@@ -1,4 +1,4 @@
-"""Schema 31 → 32: prune task/execution facts, catalog metadata and cleanup expiry.
+"""Schema 31 → 32: prune facts and release terminal checkout reservations.
 
 No sealed content or spec is rewritten. Rebuild in SQLite's documented order;
 the caller holds the transaction with foreign keys disabled until its check.
@@ -74,6 +74,22 @@ TASK_COLUMNS = (
 
 
 def upgrade(connection):
+    # Both terminal writers store their timestamp atomically with their state.
+    # A missing timestamp is a broken board; abort the upgrade rather than invent
+    # an upgrade-time release and lose the time of the original Host decision.
+    reservations = connection.execute(
+        "SELECT w.reservation_id,CASE r.state WHEN 'accepted' THEN t.accepted_at"
+        " ELSE h.created_at END AS finished_at"
+        " FROM workspace_reservations w JOIN workflow_runs r ON r.run_id=w.holder_task_id"
+        " JOIN tasks t ON t.task_id=r.run_id"
+        " LEFT JOIN workflow_host_conclusions h ON h.run_id=r.run_id"
+        " WHERE w.state='held' AND r.state IN ('accepted','concluded')",
+    ).fetchall()
+    for reservation in reservations:
+        if reservation['finished_at'] is None:
+            raise ValueError('A terminal checkout reservation has no acceptance or conclusion timestamp')
+        connection.execute("UPDATE workspace_reservations SET state='released',released_at=? WHERE reservation_id=?",
+                           (reservation['finished_at'], reservation['reservation_id']))
     # Internal cleanup command ids had no caller: the allocation journal is
     # the idempotency key. Retire their receipts and the superseded admission
     # facts before deleting planned/blocked rows. Started/completed journals stay.

@@ -247,7 +247,11 @@ def allocation_plan(store, item):
     if not item['reasons'] and workspace._path_present(checkout):
         from .checkout_processes import require_idle_checkout
         try:
-            require_idle_checkout(checkout)
+            # request.json is written before the checkout is created and is
+            # immutable for this allocation. Its file time is a conservative
+            # lower bound for processes that could have entered the checkout.
+            created_at = (directory / 'request.json').stat().st_mtime
+            require_idle_checkout(checkout, first_execution_at=created_at)
         except BoardError as error:
             cause = error.details.get('reason', {})
             if (error.code != 'NOT_READY' or cause.get('code') != 'checkout.process-blockers'
@@ -380,8 +384,7 @@ class Reclamation:
             if stopping():
                 return
             try:
-                with locked(store):
-                    result = store.workflow._reclaim_checkout(run_id=run_id)
+                result = store.workflow._reclaim_checkout(run_id=run_id)
                 if result.get('removed'):
                     self._workspaces.discard(run_id)
                 if result.get('detail'):

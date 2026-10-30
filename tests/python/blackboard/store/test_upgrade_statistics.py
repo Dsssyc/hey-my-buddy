@@ -39,9 +39,8 @@ def _fixture_digest(name):
         # current generator and derived supplement have their own checked
         # provenance; reconstruct only the original metadata scope here.
         metadata = json.loads(raw)
-        metadata["generatorSha256"] = metadata.pop("baseGeneratorSha256")
-        for key in ("cleanupStockBaseSha256", "cleanupStockGenerationCommand", "cleanupStockSha256"):
-            metadata.pop(key)
+        metadata = {key: value for key, value in metadata.items()
+                    if not key.startswith(("cleanupStock", "reservationStock"))}
         raw = (json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 

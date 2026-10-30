@@ -168,7 +168,17 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
 
     def test_host_conclusion_of_lead_concludes_and_reclaims_owned_checkout(self):
         board, lead, child, checkout = self._concludable_lead_with_owned_checkout()
-        concluded = board.call("workflow_conclude", {"runId": lead["runId"], "note": "Stop this line of work", **lead["control"]})
+        reclaim = board.store.workflow._reclaim_checkout
+        released = []
+        def after_release(*, run_id):
+            with board.store.db.read() as connection:
+                self.assertEqual(connection.execute("SELECT COUNT(*) FROM workspace_reservations WHERE holder_task_id=?"
+                                                    " AND state IN ('held','transferred')", (run_id,)).fetchone()[0], 0)
+            released.append(run_id)
+            return reclaim(run_id=run_id)
+        with patch.object(board.store.workflow, '_reclaim_checkout', side_effect=after_release):
+            concluded = board.call("workflow_conclude", {"runId": lead["runId"], "note": "Stop this line of work", **lead["control"]})
+        self.assertEqual(set(released), {lead['runId'], child['runId']})
         self.assertEqual(concluded["state"], "concluded")
         current = board.call("workflow_get", {"runId": child["runId"]})
         self.assertEqual(current["state"], "concluded")

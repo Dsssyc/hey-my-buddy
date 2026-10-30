@@ -221,6 +221,12 @@ class UpgradeFixtureTests(unittest.TestCase):
         task_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(tasks)')]]
         identity_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(attempt_process_identities)')]]
         cleanup_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workspace_cleanup_plans)')]]
+        reservation_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(workspace_reservations)')]]
+        releases = dict(connection.execute(
+            "SELECT w.reservation_id,h.created_at FROM workspace_reservations w"
+            " JOIN workflow_host_conclusions h ON h.run_id=w.holder_task_id"
+            " JOIN workflow_runs r ON r.run_id=h.run_id WHERE w.state='held' AND r.state='concluded'"))
+        self.assertTrue(releases)
         deleted_plans = {row['plan_id'] for row in connection.execute(
             "SELECT * FROM workspace_cleanup_plans WHERE state IN ('planned','blocked')")}
         retained_commands = {row['command_id'] for row in connection.execute(
@@ -267,6 +273,14 @@ class UpgradeFixtureTests(unittest.TestCase):
             elif name == 'workspace_cleanup_plans':
                 keep = [i for i, column in enumerate(cleanup_columns) if column not in ('expires_at','command_id')]
                 self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original if row[1] not in deleted_plans])
+            elif name == 'workspace_reservations':
+                expected = []
+                for row in original:
+                    value = dict(zip(reservation_columns, row))
+                    if value['reservation_id'] in releases:
+                        value.update(state='released', released_at=releases[value['reservation_id']])
+                    expected.append(tuple(value.values()))
+                self.assertEqual(actual, expected)
             elif name == 'commands':
                 self.assertEqual(actual, [row for row in original if row[1] in retained_commands])
             elif name == 'events':
@@ -832,8 +846,17 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_cleanup_stock_records_its_current_generator_and_fixed_floor(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        self.assertEqual(metadata['generatorSha256'], _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
-        self.assertEqual(metadata['baseGeneratorSha256'], 'e59f17977824876ed8d2115b81c55eaa1eee007c21f27ebe4b217eb6ef6d4313')
+        self.assertEqual(metadata['generatorSha256'], 'e59f17977824876ed8d2115b81c55eaa1eee007c21f27ebe4b217eb6ef6d4313')
+        self.assertNotIn('baseGeneratorSha256', metadata)
+        self.assertEqual(metadata['cleanupStockGeneratorSha256'], _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
         self.assertEqual(metadata['cleanupStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
         self.assertEqual(metadata['cleanupStockSha256'], _sha((FIXTURE / 'schema-31-cleanup-stock.sql').read_bytes()))
         self.assertIn('--cleanup-stock-for', metadata['cleanupStockGenerationCommand'])
+
+    def test_reservation_stock_records_its_floor_writer_and_generator(self):
+        metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+        root = Path(__file__).resolve().parents[4]
+        self.assertEqual(metadata['reservationStockGeneratorSha256'], _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
+        self.assertEqual(metadata['reservationStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
+        self.assertEqual(metadata['reservationStockSha256'], _sha((FIXTURE / 'schema-30-reservation-stock.sql').read_bytes()))
+        self.assertIn('--reservation-stock-for', metadata['reservationStockGenerationCommand'])

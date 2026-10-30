@@ -114,11 +114,12 @@ def generate_in_canonical_slot(args, root, work):
     run([*interpreter, str(Path(__file__).resolve()),
          "--populate", "--work-dir", str(work), "--output-dir", str(args.output_dir.resolve()),
          *(["--python", str(args.python.absolute())] if args.python else []),
-         *(["--cleanup-stock-for", str(args.cleanup_stock_for.resolve())] if args.cleanup_stock_for else [])], cwd=root, env=env)
+         *(["--cleanup-stock-for", str(args.cleanup_stock_for.resolve())] if args.cleanup_stock_for else []),
+         *(["--reservation-stock-for", str(args.reservation_stock_for.resolve())] if args.reservation_stock_for else [])], cwd=root, env=env)
 
 
-def bind_cleanup_stock(fixed_sql, written_sql, journal):
-    """Derive the new floor-written row's identities from the fixed floor rows."""
+def bind_floor_stock(fixed_sql, written_sql, stock):
+    """Derive supplemental identities from the corresponding fixed floor rows."""
     with ExitStack() as stack:
         fixed = sqlite3.connect(':memory:')
         written = sqlite3.connect(':memory:')
@@ -161,18 +162,28 @@ def bind_cleanup_stock(fixed_sql, written_sql, journal):
                     return bindings[value]
                 return re.sub(r'ws-[0-9a-f]{32}|[0-9a-f]{64}', lambda match: bindings.get(match[0], match[0]), value)
             return value
-        values = []
-        for name, value in journal.items():
-            if name.endswith('_json') and isinstance(value, str):
-                value = json_text(bind(json.loads(value)))
-            else:
-                value = bind(value)
-            values.append(fixed.execute('SELECT quote(?)', (value,)).fetchone()[0])
-        columns = ','.join('"' + name + '"' for name in journal)
+        return {table: [{name: json_text(bind(json.loads(value)))
+                        if name.endswith('_json') and isinstance(value, str) else bind(value)
+                        for name, value in row.items()} for row in rows]
+                for table, rows in stock.items()}
+
+
+def insert_stock(connection, stock):
+    statements = []
+    for table, rows in stock.items():
+        for row in rows:
+            columns = ','.join('"' + name + '"' for name in row)
+            values = ','.join(connection.execute('SELECT quote(?)', (value,)).fetchone()[0] for value in row.values())
+            statements.append(f'INSERT INTO "{table}"({columns}) VALUES({values});')
+    return '\n'.join(statements) + '\n'
+
+
+def bind_cleanup_stock(fixed_sql, written_sql, journal):
+    stock = bind_floor_stock(fixed_sql, written_sql, {'workspace_cleanup_plans': [journal]})
+    with sqlite3.connect(':memory:') as connection:
         return ('-- Interrupted journal from the 0.54.1 floor writers; identities rebound to the fixed floor stock.\n'
                 '-- This scenario precedes the independent in-progress macro deletion. Sealed content stays untouched.\n'
-                'DELETE FROM macro_task_deletions;\n'
-                f'INSERT INTO workspace_cleanup_plans({columns}) VALUES({",".join(values)});\n')
+                'DELETE FROM macro_task_deletions;\n' + insert_stock(connection, stock))
 
 
 def populate(args):
@@ -1104,16 +1115,81 @@ def populate(args):
                                        sql_path.read_text(encoding="utf-8"), row)
             (fixed / "schema-31-cleanup-stock.sql").write_text(stock, encoding="utf-8", newline="\n")
             fixed_metadata = json.loads((fixed / "metadata.json").read_text(encoding="utf-8"))
-            fixed_metadata.setdefault("baseGeneratorSha256", fixed_metadata["generatorSha256"])
-            fixed_metadata["generatorSha256"] = digest(Path(__file__).read_bytes())
+            fixed_metadata["cleanupStockGeneratorSha256"] = digest(Path(__file__).read_bytes())
             fixed_metadata["cleanupStockSha256"] = digest(stock.encode("utf-8"))
             fixed_metadata["cleanupStockBaseSha256"] = digest((fixed / "board.sql").read_bytes())
             fixed_metadata["cleanupStockGenerationCommand"] = (
-                "python packaging/generate-upgrade-fixture.py --python <prepared-python>"
+                "python packaging/generate-upgrade-fixture.py" +
+                (" --python <prepared-python>" if args.python else " --offline" if args.offline else "") +
                 " --work-dir <new-private-tmp-dir> --output-dir <new-generated-stock-dir>"
                 " --cleanup-stock-for tests/fixtures/upgrade-floor")
             (fixed / "metadata.json").write_text(
                 json.dumps(fixed_metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        # Keep the frozen base export and its oracle intact. Generate an
+        # independent read-only conclusion with the released buggy writer and
+        # export only its new rows; no existing floor row is patched into shape.
+        with store.db.read() as connection:
+            tables = [row[0] for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            before = {table: {row['rowid']: dict(row) for row in
+                       connection.execute(f'SELECT rowid AS rowid,* FROM "{table}"')}
+                      for table in tables}
+        previous_time = clock[0]
+        clock[0] = "2026-01-04T00:00:00.000Z"
+        reader = call("workflow_submit", {
+            "requestId": "fixture-concluded-reader", "hostId": "fixture-host",
+            "submissionToken": "fixture-submission-token-concluded-reader", "task": "fixture read-only conclusion",
+            "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+            "cwd": str(work / "workspaces" / "accepted"),
+            "executionWorkspace": {"kind": "existing", "access": "read"},
+            "macroTask": {"title": "Read-only conclusion reservation stock"},
+        })
+        reader_claim = admit(nonce, reader['runId'])
+        report(reader_claim, nonce, status="failed", result={"status": "failed"})
+        clock[0] = "2026-01-04T00:01:00.000Z"
+        ended_reader = call("workflow_conclude", {
+            "runId": reader['runId'], "note": "Fixture Host ends the read-only inspection", **reader['control'],
+        })
+        with store.db.read() as connection:
+            reservation = connection.execute("SELECT state,released_at FROM workspace_reservations WHERE holder_task_id=?",
+                                             (reader['runId'],)).fetchone()
+            assert tuple(reservation) == ('held', None), tuple(reservation)
+            stock = {}
+            for table in tables:
+                rows = [dict(row) for row in connection.execute(f'SELECT rowid AS rowid,* FROM "{table}" ORDER BY rowid')]
+                assert all(row == before[table][row['rowid']] for row in rows if row['rowid'] in before[table]), table
+                added = [row for row in rows if row['rowid'] not in before[table]]
+                if added:
+                    stock[table] = added
+        clock[0] = previous_time
+        stock = {table: [{name: value.replace(str(work), "<fixture-root>") if isinstance(value, str) else value
+                          for name, value in row.items()} for row in rows] for table, rows in stock.items()}
+        if args.reservation_stock_for:
+            fixed = args.reservation_stock_for.resolve()
+            stock = bind_floor_stock((fixed / "board.sql").read_text(encoding="utf-8"),
+                                     sql_path.read_text(encoding="utf-8"), stock)
+        header = ("-- Read-only existing conclusion written by the 0.54.1 floor writers.\n"
+                  "-- The held reservation is the writer defect; load before the upgrade chain.\n")
+        with sqlite3.connect(':memory:') as connection:
+            supplement = header + insert_stock(connection, stock)
+        (output / 'schema-30-reservation-stock.sql').write_text(supplement, encoding='utf-8', newline='\n')
+        if args.reservation_stock_for:
+            (fixed / 'schema-30-reservation-stock.sql').write_text(supplement, encoding='utf-8', newline='\n')
+            fixed_metadata = json.loads((fixed / 'metadata.json').read_text(encoding='utf-8'))
+            fixed_metadata.update(
+                reservationStockGeneratorSha256=digest(Path(__file__).read_bytes()),
+                reservationStockSha256=digest(supplement.encode('utf-8')),
+                reservationStockBaseSha256=digest((fixed / 'board.sql').read_bytes()),
+                reservationStockRunId=reader['runId'],
+                reservationStockConcludedAt=ended_reader['hostConclusion']['createdAt'],
+                reservationStockGenerationCommand=(
+                    "python packaging/generate-upgrade-fixture.py" +
+                    (" --python <prepared-python>" if args.python else " --offline" if args.offline else "") +
+                    " --work-dir <new-private-tmp-dir>"
+                    " --output-dir <new-generated-stock-dir> --reservation-stock-for tests/fixtures/upgrade-floor"),
+            )
+            (fixed / 'metadata.json').write_text(
+                json.dumps(fixed_metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     print(json.dumps(verify(output, work / "restored.sqlite3"), ensure_ascii=False))
 
 
@@ -1329,18 +1405,20 @@ def verify(output, restored):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, help="Full generated stock destination; cleanup-only mode defaults to a work-dir sibling")
+    parser.add_argument("--output-dir", type=Path, help="Full generated stock destination; supplement mode defaults to a work-dir sibling")
     parser.add_argument("--offline", action="store_true")
     parser.add_argument("--python", type=Path, help="Use an already prepared read-only dependency interpreter")
     parser.add_argument("--cleanup-stock-for", type=Path, help="Derive and update the interrupted journal for this fixed floor; preserve its base stock")
+    parser.add_argument("--reservation-stock-for", type=Path, help="Derive a read-only concluded reservation for this fixed floor; preserve its base stock")
     parser.add_argument("--populate", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verify", action="store_true", help="Only restore and validate; no old-source imports")
     args = parser.parse_args()
     if args.output_dir is None:
         args.output_dir = (args.work_dir.with_name(args.work_dir.name + "-generated")
-                           if args.cleanup_stock_for and not args.verify else Path("tests/fixtures/upgrade-floor"))
-    if args.cleanup_stock_for and args.output_dir.resolve() == args.cleanup_stock_for.resolve():
-        parser.error("cleanup stock requires a separate output-dir to preserve the fixed floor payloads")
+                           if (args.cleanup_stock_for or args.reservation_stock_for) and not args.verify else Path("tests/fixtures/upgrade-floor"))
+    if any(fixed and args.output_dir.resolve() == fixed.resolve()
+           for fixed in (args.cleanup_stock_for, args.reservation_stock_for)):
+        parser.error("supplements require a separate output-dir to preserve the fixed floor payloads")
     if args.verify:
         args.work_dir.mkdir(parents=True, exist_ok=False)
         print(json.dumps(verify(args.output_dir, args.work_dir / "restored.sqlite3"), ensure_ascii=False))
