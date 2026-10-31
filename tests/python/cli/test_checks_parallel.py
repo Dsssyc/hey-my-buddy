@@ -432,10 +432,8 @@ class LeftoverProcessTests(RunnerTestCase):
         driver = self.directory / "driver.py"
         driver.write_text(textwrap.dedent(
             """
-            import ctypes, json, os, signal, site, sys, threading, time
+            import ctypes, json, os, signal, sys, threading, time
             from pathlib import Path
-            if os.name == "nt":
-                site.addsitedir(os.environ["CHECKS_FIXTURE_SITE_PACKAGES"])
             from hey_my_buddy.cli import checks
 
             if os.name == "nt":
@@ -459,9 +457,10 @@ class LeftoverProcessTests(RunnerTestCase):
         environment = {**os.environ, **self.environment()}
         environment["PYTHONPATH"] = os.pathsep.join([str(REPOSITORY / "src"), environment["PYTHONPATH"]])
         if os.name == "nt":
-            # Use one interpreter in the private console, without a venv
-            # forwarding process that can consume the console event first.
-            environment["CHECKS_FIXTURE_SITE_PACKAGES"] = sysconfig.get_path("purelib")
+            # The base interpreter avoids a venv forwarder consuming the console
+            # event. Its driver and suite children both need the locked venv
+            # dependencies used by the checks bootstrap.
+            environment["PYTHONPATH"] += os.pathsep + sysconfig.get_path("purelib")
         log = (self.directory / "driver.log").open("w", encoding="utf-8", newline="\n")
         self.addCleanup(log.close)
         trigger = self.directory / "interrupt"
