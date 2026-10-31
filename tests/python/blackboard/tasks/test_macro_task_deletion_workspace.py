@@ -112,7 +112,8 @@ class DeletionWorkspaceTests(unittest.TestCase):
     def test_a_ref_becoming_symbolic_during_delete_never_deletes_its_target_branch(self):
         manifest = self.prepare()
         worker = workspace.seal(self.state, manifest, 'task-1', 'attempt-1')
-        branch_commit = self.git('rev-parse', 'refs/heads/main')
+        branch = self.git('symbolic-ref', 'HEAD').decode().strip()
+        branch_commit = self.git('rev-parse', branch)
         original = workspace._git
         raced = False
 
@@ -120,13 +121,13 @@ class DeletionWorkspaceTests(unittest.TestCase):
             nonlocal raced
             if not raced and args[0] == 'update-ref' and '-d' in args and worker['ref'] in args:
                 raced = True
-                original(repository, 'symbolic-ref', worker['ref'], 'refs/heads/main')
+                original(repository, 'symbolic-ref', worker['ref'], branch)
             return original(repository, *args, **kwargs)
 
         with patch.object(workspace, '_git', side_effect=symbolic_before_delete):
             self.delete(manifest, [worker])
         self.assertTrue(raced)
-        self.assertEqual(self.git('rev-parse', '--verify', 'refs/heads/main'), branch_commit)
+        self.assertEqual(self.git('rev-parse', '--verify', branch), branch_commit)
 
     def test_unlocked_checkout_proof_is_read_only_and_cannot_authorize_deletion(self):
         manifest = self.prepare()

@@ -86,7 +86,7 @@ class MockWorkspace:
             # Like the real module's snapshot, every logical workspace of one
             # source repository names the same shared repository path: the stash
             # facts of a run key on it across turns and allocations.
-            "snapshot": {"repositoryPath": "mock+repo:" + self._repository_root(intent.get("cwd") or path),
+            "snapshot": {"repositoryPath": self._repository_root(intent.get("cwd") or path),
                          "includedUntracked": list(intent.get("includeUntracked", [])),
                          "executionSelectors": list(intent.get("includeUntracked", [])), "excluded": [], "staged": {}, "unstaged": {}},
         }

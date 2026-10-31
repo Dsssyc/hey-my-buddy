@@ -103,14 +103,15 @@ def configure_fixture_cleanup() -> None:
 def cleanup_fixture_tree(directory: Path) -> None:
     """A fixture's deletion failure is teardown debt, not a failed assertion.
 
-    Only transient Windows failures inside the running suite's private temp
-    root can be deferred. The enclosing runner still observes shutdown and
+    Disappeared fixture entries and transient Windows failures inside the
+    running suite's private temp root can be deferred. The runner observes shutdown and
     removes the whole root, or exits 3 with the root and evidence retained.
     """
     try:
         remove_private_test_root(directory, retry_seconds=0)
     except OSError as error:
-        if (os.name != "nt" or getattr(error, "winerror", None) not in (5, 32, 145)
+        if (not isinstance(error, FileNotFoundError)
+                and (os.name != "nt" or getattr(error, "winerror", None) not in (5, 32, 145))
                 or _fixture_temp_root is None
                 or not directory.resolve().is_relative_to(_fixture_temp_root)):
             raise

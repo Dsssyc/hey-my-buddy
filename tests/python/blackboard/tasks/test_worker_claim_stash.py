@@ -87,7 +87,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
 
     def test_collection_mirrors_the_claim_candidates_even_when_blocked(self):
         board = self.board()
-        repository = "mock+repo:" + str(self.workdir("blocked"))
+        repository = str(self.workdir("blocked"))
         self.workspace.stash_inventories[repository] = observed([entry("d" * 40, "still a candidate")])
         submitted = self.submit(board, request_id="req-1", cwd=self.workdir("blocked"))
         with board.store.db.write() as connection:
@@ -108,7 +108,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
     def test_claimable_work_reads_its_repository_before_the_claim_commits(self):
         board = self.board()
         submitted = self.submit(board, request_id="req-1", cwd=self.workdir("ready"))
-        repository = "mock+repo:" + str(self.workdir("ready"))
+        repository = str(self.workdir("ready"))
         self.workspace.stash_inventories[repository] = observed([entry("a" * 40, "ready entry")])
         pass  # Admission is owned by the service.
         claimed = self.claim(board, run_id=submitted["runId"])
@@ -120,7 +120,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
     def test_claim_freezes_all_entries_in_a_large_observation(self):
         board = self.board()
         submitted = self.submit(board, request_id="req-large", cwd=self.workdir("many-stashes"))
-        repository = "mock+repo:" + str(self.workdir("many-stashes"))
+        repository = str(self.workdir("many-stashes"))
         entries = [entry(f"{number:040x}", f"entry {number}") for number in range(69)]
         self.workspace.stash_inventories[repository] = observed(entries)
         claimed = self.claim(board, run_id=submitted["runId"])
@@ -192,7 +192,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
             self.submit(board, request_id=f"blocked-{number}", cwd=self.workdir(f"blocked-{number}"),
                         requiredCapabilities=["capability-this-worker-lacks"])
         target = self.submit(board, request_id="target", cwd=self.workdir("target"))
-        repository = "mock+repo:" + str(self.workdir("target"))
+        repository = str(self.workdir("target"))
         self.workspace.stash_inventories[repository] = observed([entry("e" * 40, "chosen run entry")])
         collect_calls = []
         real_collect = workflow_module.WorkflowCoordinator.collect_claim_stash_facts
@@ -230,7 +230,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
             self.submit(board, request_id=f"blocked-{number}", cwd=self.workdir(f"blocked-{number}"),
                         requiredCapabilities=["capability-this-worker-lacks"])
         target = self.submit(board, request_id="retry-same", cwd=self.workdir("same"))
-        repository = "mock+repo:" + str(self.workdir("same"))
+        repository = str(self.workdir("same"))
         self.workspace.stash_inventories[repository] = observed([entry("e" * 40, "same repo entry")])
         pass  # Admission is owned by the service.
         pass  # Admission is owned by the service.
@@ -304,7 +304,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
         eligible_a = self.submit(board, request_id="eligible-a", cwd=self.workdir("eligible-a"))
         eligible_b = self.submit(board, request_id="eligible-b", cwd=self.workdir("eligible-b"))
         for key, commit in (("eligible-a", "a" * 40), ("eligible-b", "b" * 40)):
-            self.workspace.stash_inventories["mock+repo:" + str(self.workdir(key))] = observed([entry(commit, key)])
+            self.workspace.stash_inventories[str(self.workdir(key))] = observed([entry(commit, key)])
         pass  # Admission is owned by the service.
         collect_calls = []
         real_collect = workflow_module.WorkflowCoordinator.collect_claim_stash_facts
@@ -346,8 +346,8 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
         board = self.board()
         first = self.submit(board, request_id="req-1", cwd=self.workdir("first"))
         second = self.submit(board, request_id="req-2", cwd=self.workdir("second"))
-        repository_one = "mock+repo:" + str(self.workdir("first"))
-        repository_two = "mock+repo:" + str(self.workdir("second"))
+        repository_one = str(self.workdir("first"))
+        repository_two = str(self.workdir("second"))
         self.workspace.stash_inventories[repository_one] = observed([entry("1" * 40, "first repo entry")])
         self.workspace.stash_inventories[repository_two] = observed([entry("2" * 40, "second repo entry")])
         pass  # Admission is owned by the service.
