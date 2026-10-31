@@ -104,7 +104,7 @@ export default {
       REVISION_CONFLICT: "The micro task count changed. Read the scope again and confirm.",
       MACRO_TASK_NOT_SETTLED: "Some micro tasks are unsettled. Read again to see how to settle each one.",
       MACRO_TASK_BUSY: "A checkout is being reclaimed. Wait for it to finish and read again.",
-      WORKSPACE_BUSY: "A checkout is in use. Read again later.",
+      WORKSPACE_BUSY: "Another operation is using a checkout. Retry deletion shortly.",
       MACRO_TASK_STORAGE_IN_USE: "Other micro tasks still hold this storage. Settle those dependencies first.",
       MACRO_TASK_HARNESS_UNAVAILABLE: "A harness with stored sessions is unavailable. Restore it before deleting.",
       NOT_FOUND: "This macro task was not found. Read the list again.",

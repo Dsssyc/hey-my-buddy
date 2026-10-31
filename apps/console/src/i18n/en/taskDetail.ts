@@ -8,11 +8,11 @@ export default {
   retry: "Retry",
   unknown: "Unknown",
   unrecorded: "Not recorded",
-  untitled: "Untitled micro task",
+  untitled: "Unnamed micro task",
   title: { fromTask: "{{title}} (taken from the first line of the task)" },
   refresh: { label: "Read again", verified: "Verified {{time}}", unverified: "Verification time not recorded" },
   header: { started: "Started", elapsed: "Elapsed", turns: "Turns" },
-  state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
+  state: { stopping: "Stopping", running: "Running", unknown: "Stop not confirmed", queued: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", failedHost: "Failed, waiting for Host", cancelledHost: "Cancelled, waiting for Host", failedLead: "Failed, waiting for Lead", cancelledLead: "Cancelled, waiting for Lead", review: "Awaiting acceptance", accepted: "Accepted", done: "Done", ended: "Ended", failed: "Failed" },
   wait: { queue: "Queued", host: "Waiting for Host", lead: "Waiting for Lead", acceptance: "Awaiting acceptance" },
   strip: { label: "The steps of this micro task", position: "Step {{current}} / {{total}}", previous: "Previous step", next: "Next step", focusItem: "Select {{item}} in the step strip · {{time}}", truncated: "The read is incomplete and has no row for this micro task; only the delegation is listed." },
   step: {

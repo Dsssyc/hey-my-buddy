@@ -83,7 +83,8 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
       const zh = locale === "zh-CN";
       const stop = zh ? "Lead 停止" : "Stopped by Lead";
       const stopping = zh ? "正在停止" : "Stopping";
-      expect(data.macroTask.state).toBe("active");
+      expect(data.macroTask.state).toBe("host");
+      expect(data.macroTask.counts.host).toBe(1);
       await expect(page.locator("[data-slot=macro-stop-state]")).toHaveText(stopping);
       await expect(page.locator("[data-slot=macro-overview-counts]")).toContainText(zh ? "进行中" : "Running");
       const live = await page.locator('[data-slot=task-work]').evaluate(node => getComputedStyle(node).color);
@@ -115,7 +116,8 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["light", 
         await expect(pane).toContainText(stop);
         await expect(pane).toContainText(lead!);
         await expectTextUncut(pane.locator("h3, dt, dd, p"));
-        await expect(page.locator("[data-slot=detail-status]")).toHaveText(id === "preview-run-b8" ? stopping : zh ? "已结束" : "Ended");
+        await expect(page.locator("[data-slot=detail-status]")).toHaveText(id === "preview-run-b8" ? stopping : zh ? "已取消，等待 Lead" : "Cancelled, waiting for Lead");
+        await expect(page.locator("[data-slot=detail-status] [data-slot=state-mark]")).toHaveAttribute("data-kind", id === "preview-run-b8" ? "live" : "hand");
         if (id === "preview-run-b8") await expect(page.locator("[data-slot=detail-status]")).toHaveCSS("color", live);
         await expectNoSidewaysScroll(page);
         await settle(page);

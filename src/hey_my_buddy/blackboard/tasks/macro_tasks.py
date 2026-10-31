@@ -106,10 +106,11 @@ HOST_MARKERS = {
 
 
 #: The console top bar's pending count: distinct micro-task-tree roots with an
-#: awaiting-host run, except trees owned by a Lead. It reuses the same lineage
+#: awaiting-host run or a stopped failed/cancelled root, except Lead-owned trees.
+#: It reuses the same Host predicate and lineage
 #: walk as the history relation (``micro_task.RELATION_SQL``) and stays a bounded
 #: aggregate over the whole board instead of decorating the latest task page.
-PENDING_ROOTS_SQL = """
+PENDING_ROOTS_SQL = f"""
 WITH RECURSIVE lineage(task_id, root_run_id) AS (
     SELECT child_task_id, child_task_id FROM workflow_children
     UNION ALL
@@ -125,21 +126,20 @@ roots AS (
 )
 SELECT COUNT(DISTINCT COALESCE(roots.root_run_id, tasks.task_id)) AS pending
   FROM tasks
-  JOIN workflow_runs awaiting ON awaiting.run_id = tasks.task_id AND awaiting.state = 'awaiting-host'
+  JOIN workflow_runs awaiting ON awaiting.run_id = tasks.task_id
   LEFT JOIN roots ON roots.task_id = tasks.task_id
- WHERE NOT EXISTS (
-       SELECT 1 FROM workflow_lead_tasks owned
-        WHERE owned.owned_run_id = COALESCE(roots.root_run_id, tasks.task_id)
- )
+  LEFT JOIN workflow_children child ON child.child_task_id=tasks.task_id
+ WHERE {micro_task.host_filter_sql(run_state='awaiting.state', task_state='tasks.state',
+                                  parent_run_id='child.parent_run_id',
+                                  root_run_id='COALESCE(roots.root_run_id, tasks.task_id)')}
 """
 
 
 def pending_root_count(store) -> int:
-    """Micro task roots with at least one run awaiting its Host, board-wide.
+    """Distinct roots awaiting their Host, including stopped root outcomes.
 
-    The console's old client-side count deduplicated the latest snapshot page
-    by ``lineage.rootRunId || runId``; this is the same semantics computed
-    over every run, so it stays correct past any page boundary.
+    Keep this as a board-wide aggregate: no decorated history or task payloads
+    are needed to apply the same predicate as the Host filter.
     """
     with store.db.read() as connection:
         return int(connection.execute(PENDING_ROOTS_SQL).fetchone()["pending"])
@@ -306,10 +306,12 @@ def _state(row) -> str:
     run_state, state = row["run_state"], row["state"]
     if run_state == "awaiting-host" and row["root_lead_run_id"] is None:
         return "host"
-    if state in ("queued", "running", "cancelling", "reconciliation-needed") or run_state in (
+    if state in micro_task.ACTIVE_TASK_STATES or run_state in (
         "executing", "waiting-helpers", "waiting-owned", "awaiting-host"
     ):
         return "active"
+    if run_state in micro_task.UNCONCLUDED_RESULT_STATES and row["child_parent_run_id"] is None:
+        return "host" if row["root_lead_run_id"] is None else "active"
     if (
         row["accepted_at"] is None
         and state in ("completed", "failed", "cancelled")
@@ -508,9 +510,7 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         counts["awaitingHost"] += int(row["run_state"] == "awaiting-host")
         counts[_state(row)] += 1
         counts["accepted"] += int(row["child_parent_run_id"] is None and row["run_state"] == "accepted")
-        counts["failed"] += int(row["child_parent_run_id"] is None and (
-            row["run_state"] == "failed" or row["task_id"] in failed_conclusions
-        ))
+        counts["failed"] += int(row["child_parent_run_id"] is None and row["task_id"] in failed_conclusions)
         counts["helpers" if row["child_parent_run_id"] is not None else "roots"] += 1
     state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group_id.startswith("macro-"):

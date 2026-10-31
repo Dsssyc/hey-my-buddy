@@ -76,34 +76,44 @@ export function outcomeLabel(span: TimelineSpan, outcome: SpanOutcome): string {
 
 const ROW_STATE_STYLE: Record<string, { tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string }> = {
   executing: { tone: "green", glyph: "▸", glyphClass: "running" },
+  running: { tone: "green", glyph: "▸", glyphClass: "running" },
   "awaiting-host": { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "waiting-owned": { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "waiting-helpers": { tone: "green", glyph: "▸", glyphClass: "running" },
   delivered: { tone: "neutral", glyph: "✓", glyphClass: "muted" },
   accepted: { tone: "neutral", glyph: "✓", glyphClass: "ok" },
-  cancelled: { tone: "neutral", glyph: "⊘", glyphClass: "muted" },
+  cancelled: { tone: "amber", glyph: "◆", glyphClass: "warn" },
   cancelling: { tone: "green", glyph: "▸", glyphClass: "running" },
-  failed: { tone: "red", glyph: "✕", glyphClass: "bad" },
+  failed: { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "reconciliation-needed": { tone: "amber", glyph: "?", glyphClass: "warn" },
 };
 
 const STATE_LABELS: Record<string, string> = {
   get queued() { return i18n.t("console:queued"); }, get running() { return i18n.t("console:executing"); }, get cancelling() { return i18n.t("console:cancelling"); }, get completed() { return i18n.t("console:executionCompleted"); },
-  get cancelled() { return i18n.t("console:cancelled"); }, get failed() { return i18n.t("console:executionFailed"); }, get "reconciliation-needed"() { return i18n.t("console:awaitingReconciliation"); },
+  get "reconciliation-needed"() { return i18n.t("console:awaitingReconciliation"); },
   get executing() { return i18n.t("console:executing"); }, get "awaiting-host"() { return i18n.t("console:waitingForHost"); }, get "waiting-helpers"() { return i18n.t("console:helpersRunning"); },
   get "waiting-owned"() { return i18n.t("console:waitingForOwnedMicroTasks"); },
   get delivered() { return i18n.t("console:awaitingAcceptance"); }, get accepted() { return i18n.t("console:accepted"); }, get concluded() { return i18n.t("console:ended"); },
 };
 
-/** Settled terminal states: nobody needs to do anything, so the row's state word is its left edge alone. */
-const SETTLED_STATES = new Set(["accepted", "concluded", "cancelled", "completed"]);
+/** Settled terminal states need no Host action. */
+const SETTLED_STATES = new Set(["accepted", "concluded", "completed"]);
 
 export function rowStateInfo(row: TimelineRow, rows: readonly TimelineRow[] = []): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string; settled: boolean } {
   const key = row.status === "cancelling" || row.state === "cancelled" && rows.some(owned => owned.rootLeadRunId === row.runId && !owned.shutdownConfirmed)
-    ? "cancelling" : row.state || row.status;
+    ? "cancelling"
+    : (row.state === "failed" || row.state === "cancelled") && ["queued", "running", "reconciliation-needed"].includes(row.status)
+      ? row.status : row.state || row.status;
   const style = ROW_STATE_STYLE[key];
+  if (row.kind === "helper" && (key === "failed" || key === "cancelled")) {
+    return key === "failed"
+      ? { label: i18n.t("console:executionFailed"), tone: "red", glyph: "✕", glyphClass: "bad", settled: false }
+      : { label: i18n.t("console:cancelled"), tone: "neutral", glyph: "⊘", glyphClass: "muted", settled: true };
+  }
   return {
-    label: key === "cancelling" ? i18n.t("tasks:stopping") : key === "awaiting-host" && row.rootLeadRunId ? i18n.t("console:waitingForLead") : STATE_LABELS[key] || key || i18n.t("console:unknown"),
+    label: key === "cancelling" ? i18n.t("tasks:stopping")
+      : key === "failed" || key === "cancelled" ? i18n.t(`taskDetail:state.${key}${row.rootLeadRunId ? "Lead" : "Host"}`)
+      : key === "awaiting-host" && row.rootLeadRunId ? i18n.t("console:waitingForLead") : STATE_LABELS[key] || key || i18n.t("console:unknown"),
     tone: style?.tone ?? "neutral",
     glyph: style?.glyph ?? "■",
     glyphClass: style?.glyphClass ?? "muted",

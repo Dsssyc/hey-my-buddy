@@ -104,7 +104,10 @@ export function MacroTaskDeleteDialog({ summary, open, returnFocus, onClose, ...
           </>)}
           {busy && <p role="status" className="pt-3 text-foreground state-breathe">{t("deletion.submitting")}</p>}
           {unresolved && <p role="status" className="pt-3 text-hand">{t(phase === "unknown" ? "deletion.unknown" : "deletion.incomplete")}</p>}
-          {failure && phase !== "submitting" && <p className="pt-2 text-xs text-ink2">{failure.reason.code === "macro-task-deletion.physical-failed" ? t("deletion.physicalFailure", { kind: t(`deletion.objects.${failure.objectKind}`), code: failure.reason.params.errorCode }) : reasonText(failure.reason)}</p>}
+          {failure && phase !== "submitting" && <p className="pt-2 text-xs text-ink2">{failure.reason.code === "macro-task-deletion.physical-failed"
+            ? failure.reason.params.errorCode === "WORKSPACE_BUSY" ? t("deletion.errors.WORKSPACE_BUSY")
+              : t("deletion.physicalFailure", { kind: t(`deletion.objects.${failure.objectKind}`), code: failure.reason.params.errorCode })
+            : reasonText(failure.reason)}</p>}
           {error && <p role="alert" className="pt-3 text-fail">{error}</p>}
           {!deletion.writable && <p role="alert" className="pt-3 text-fail">{t("deletion.unavailable")}</p>}
         </div>

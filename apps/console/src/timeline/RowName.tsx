@@ -44,9 +44,11 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
   const repairTitle = row.fixes ? displayTitle(row.fixesTitleSource!, row.fixesTitle!).fullText : null;
   const repair = row.fixes ? t("fixes", { title: repairTitle }) : null;
   const titleText = useFadingText(title.text);
-  const tone = row.status === "queued" ? null : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
-    : state.tone === "green" || row.category === "active" ? "live" : isFailedRow(row) ? "fail" : "past";
+  const tone = row.status === "queued" ? null : state.tone === "green" ? "live"
+    : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
+    : row.category === "active" ? "live" : isFailedRow(row) ? "fail" : "past";
   const mark = tone === "live" ? "live" : null;
+  const showState = !state.settled || row.kind === "helper" && row.state === "cancelled";
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
     tabIndex={tabIndex} aria-current={list && current ? "true" : undefined} aria-label={[ariaPrefix, title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick}
     onPointerEnter={onEnter} onPointerLeave={onLeave} onFocus={onFocus} onBlur={onBlur}
@@ -66,7 +68,7 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
       {fresh && <span aria-label={t("newMicroTask")} className="size-1.5 shrink-0 rounded-full bg-hand-mark"/>}
       {!list && mark && <span data-slot="row-state" data-kind={mark} className="ml-auto flex size-5 shrink-0 items-center justify-center" aria-hidden="true"><StateMark kind={mark} className="size-2.5"/></span>}
     </span>
-    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{!state.settled && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" ? "text-ink state-breathe" : !current && "text-ink3")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}{buddyLabel(row.buddy, buddies)}</span>
+    <span className={cn("block w-full truncate text-xs", current ? "text-ink3" : "text-ink4")}>{showState && <span className={cn("mr-1.5", tone === "hand" ? "text-hand" : mark === "live" ? "text-ink state-breathe" : !current && "text-ink3")}>{state.label}</span>}{row.buddy?.harness && <span aria-hidden="true" className="mr-1 inline-flex translate-y-[2px] items-center [&_img]:size-3.5 [&_[data-slot=harness-logo]]:size-3.5 [&>span]:size-3.5"><HarnessLogo harness={row.buddy.harness}/></span>}{ariaPrefix && <span>{ariaPrefix} · </span>}{buddyLabel(row.buddy, buddies)}</span>
   </button>;
   const tuple = row.buddy ? [row.buddy.harness, row.buddy.provider, row.buddy.model, row.buddy.effort].map(value => value ?? t("unknown")).join(" / ") : null;
   const wholeTitle = titleText.hint !== undefined || title.clipped;
