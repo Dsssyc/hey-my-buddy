@@ -8,7 +8,6 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from temporary import TemporaryDirectory
 from unittest.mock import patch
 
 from hey_my_buddy.blackboard.tasks import workspace
@@ -18,7 +17,7 @@ from hey_my_buddy.paths import native_path
 
 class WorkspaceReviewTests(unittest.TestCase):
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="hey-my-buddy-workspace-review-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-review-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.repo = self.root / "repo"

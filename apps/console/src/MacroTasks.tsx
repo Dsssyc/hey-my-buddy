@@ -140,7 +140,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const deletionOpening = useRef(false);
   const [deleteTarget, setDeleteTarget] = useState<MacroTaskSummary | null>(null);
   const [deletedIds, setDeletedIds] = useState<Set<string>>(() => new Set());
-  const [deletionNotice, setDeletionNotice] = useState<{ macroTaskId: string; title: string | null; skipped: number; refreshFailed: boolean } | null>(null);
+  const [deletionNotice, setDeletionNotice] = useState<{ macroTaskId: string; title: string | null; refreshFailed: boolean } | null>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
   const live = useRef(false), selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -196,12 +196,12 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const stopEntry = selected ? stop.entries.get(selected) : undefined;
   const stopState = stopStatus(stopEntry, timeline.timeline);
 
-  const deleted = (macroTaskId: string, skipped: number, summary: MacroTaskSummary) => {
+  const deleted = (macroTaskId: string, summary: MacroTaskSummary) => {
     if (!live.current) return;
     const title = summary.titleSource === "none" ? null : displayTitle(summary.titleSource, summary.title).text;
     setDeletedIds(previous => new Set(previous).add(macroTaskId));
     setDeleteTarget(previous => previous?.macroTaskId === macroTaskId ? null : previous);
-    setDeletionNotice({ macroTaskId, title, skipped, refreshFailed: false });
+    setDeletionNotice({ macroTaskId, title, refreshFailed: false });
     list.reset();
     if (selectedRef.current === macroTaskId) {
       go(TASKS_ROOT, "replace");
@@ -279,8 +279,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   return <>
     <div className="flex h-full min-h-0 flex-col">
       {deletionNotice && <div ref={noticeRef} tabIndex={-1} data-slot="macro-delete-result" className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-card px-4 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-6">
-        <p role="status" className="min-w-0 flex-1 wrap-anywhere">{t(deletionNotice.skipped ? "macroHeader:deletion.skipped" : "macroHeader:deletion.deleted", { title: deletionNotice.title ?? t("macroHeader:unnamed"), n: formatNumber(deletionNotice.skipped) })}</p>
-        {deletionNotice.skipped > 0 && <a href="#settings" className="text-foreground underline">{t("macroHeader:deletion.storage")}</a>}
+        <p role="status" className="min-w-0 flex-1 wrap-anywhere">{t("macroHeader:deletion.deleted", { title: deletionNotice.title ?? t("macroHeader:unnamed") })}</p>
         {(deletionNotice.refreshFailed || list.error) && <p role="alert" className="text-fail">{t("macroHeader:deletion.refreshFailed")}</p>}
         <Button variant="ghost" size="sm" onClick={() => setDeletionNotice(null)}>{t("macroHeader:deletion.dismiss")}</Button>
       </div>}
@@ -298,7 +297,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     {deleteTarget && <MacroTaskDeleteDialog key={deleteTarget.macroTaskId} summary={deleteTarget}
       open={active && selected === deleteTarget.macroTaskId} returnFocus={menuButtonRef}
       api={api} snapshot={snapshot} authority={authority} writesAvailable={writesAvailable && !connectionError}
-      onClose={() => setDeleteTarget(null)} onDeleted={(id, skipped) => deleted(id, skipped, deleteTarget)}/>}
+      onClose={() => setDeleteTarget(null)} onDeleted={id => deleted(id, deleteTarget)}/>}
 
   </>;
 }

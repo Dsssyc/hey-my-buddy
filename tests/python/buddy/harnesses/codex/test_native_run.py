@@ -19,7 +19,6 @@ import os
 import subprocess
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -102,7 +101,7 @@ class SeamCase(unittest.TestCase):
         developer_source = mock.patch.dict(os.environ, {"HMB_DEV_SOURCE": "1"})
         developer_source.start()
         self.addCleanup(developer_source.stop)
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-seam-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-seam-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -1792,7 +1791,7 @@ class DiscoveryBoundaryTests(unittest.TestCase):
     """Private commands and the actual public probe/owned-creation boundaries."""
 
     def setUp(self):
-        temporary = TemporaryDirectory(prefix='hey-my-buddy-codex-discovery-boundary-',
+        temporary = tempfile.TemporaryDirectory(prefix='hey-my-buddy-codex-discovery-boundary-',
                                                 dir=os.environ.get('HMB_CHECKS_TMPDIR', tempfile.gettempdir()))
         self.addCleanup(temporary.cleanup)
         self.base = Path(temporary.name)

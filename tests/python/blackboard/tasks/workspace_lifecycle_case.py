@@ -526,18 +526,21 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         return board, submitted, manifest, checkout, artifact
 
     def interrupt_reclaim(self, board, view, checkout, *, missing=(), remove_git=False):
-        real_git = workspace_module._git
+        real_remove = private_dirs.remove_tree
 
-        def interrupted_git(root, *args, **kwargs):
-            if args[:2] == ("worktree", "remove"):
+        def interrupted_remove(path, **kwargs):
+            if Path(path) == checkout:
+                # Exercise the retained applying form with its original Git
+                # identity and a missing lock as well as partial file removal.
+                git(self.repo, "worktree", "unlock", str(checkout))
                 for path in missing:
                     (checkout / path).unlink()
                 if remove_git:
                     (checkout / ".git").unlink()
-                raise RuntimeError("lost after unlock, during removal")
-            return real_git(root, *args, **kwargs)
+                raise RuntimeError("lost during physical removal")
+            return real_remove(path, **kwargs)
 
-        with mock.patch.object(workspace_module, "_git", side_effect=interrupted_git):
+        with mock.patch.object(private_dirs, "remove_tree", side_effect=interrupted_remove):
             with self.assertRaises(RuntimeError):
                 self.reclaim(board, view)
         self.assertEqual(self.view(board, view["runId"])["cleanup"]["state"], "applying")

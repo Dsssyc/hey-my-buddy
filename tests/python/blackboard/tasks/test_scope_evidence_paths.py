@@ -3,14 +3,14 @@ import json
 from pathlib import Path
 import unittest
 
-from temporary import TemporaryDirectory
+import tempfile
 from hey_my_buddy.paths import native_path
 from hey_my_buddy.blackboard.tasks import workspace
 
 
 class ScopeEvidencePathTests(unittest.TestCase):
     def test_deep_scope_evidence_can_be_created_and_read_back(self):
-        with TemporaryDirectory(prefix='scope-evidence-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='scope-evidence-') as temporary:
             allocation = Path(temporary).resolve() / ('a' * 70) / ('b' * 70)
             output = allocation / 'outputs' / workspace._sha(workspace._json(['task-1', 'attempt-1']))
             native_path(output).mkdir(parents=True)

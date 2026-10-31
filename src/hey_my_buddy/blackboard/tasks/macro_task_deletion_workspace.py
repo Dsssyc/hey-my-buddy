@@ -236,15 +236,15 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                 from .checkout_processes import require_idle_checkout
                 require_idle_checkout(checkout, first_execution_at=first_execution_times.get(
                     (manifest["repositoryId"], manifest["checkoutId"])))
-                # Macro deletion proves physical ownership; the user's
-                # deletion also covers committed and unsealed task content.
-                proof = workspace.deletion_inspect(state, manifest)
-                if proof["reasons"]:
-                    skipped.extend(_skip("checkout", str(checkout), reason, identifier)
-                                   for reason in proof["reasons"])
-                    checkout_retained = True
-                else:
-                    workspace.cleanup_remove(state, manifest, proof=proof)
+            # A missing checkout may still have its original registration.
+            # Complete that same proven boundary before refs or records leave.
+            proof = workspace.deletion_inspect(state, manifest)
+            if proof["reasons"]:
+                skipped.extend(_skip("checkout", str(checkout), reason, identifier)
+                               for reason in proof["reasons"])
+                checkout_retained = True
+            else:
+                workspace.cleanup_remove(state, manifest, proof=proof)
             if checkout_retained or workspace._path_present(checkout):
                 skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
                 blocked[(manifest["repositoryId"], manifest["checkoutId"])] = _SKIP_CODES["DEPENDENCY_RETAINED"]

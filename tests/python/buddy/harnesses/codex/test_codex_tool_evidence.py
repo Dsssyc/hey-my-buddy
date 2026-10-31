@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from buddy.harnesses.fixture_selection import select_fixture
@@ -55,7 +54,7 @@ class CodexToolEventProjectionTests(unittest.TestCase):
     """The projector's facts over real typed and raw frame shapes."""
 
     def test_collector_uses_its_explicit_state_root(self):
-        with TemporaryDirectory(prefix="codex-evidence-root-") as directory:
+        with tempfile.TemporaryDirectory(prefix="codex-evidence-root-") as directory:
             state_dir = Path(directory) / "state"
             self.assertNotEqual(state_dir, Path(os.environ["HMB_STATE_DIR"]))
             projector = CodexToolEventProjector(dict(BINDING), state_dir=state_dir)
@@ -409,7 +408,7 @@ class CodexReviewToolEvidenceTests(unittest.TestCase):
     """The review controller projects unified evidence over the fixture stream."""
 
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-tool-evidence-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-tool-evidence-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)

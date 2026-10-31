@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import shutil
 import unittest
-from temporary import TemporaryDirectory
+import tempfile
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -19,7 +19,7 @@ class WorkspaceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        temporary = TemporaryDirectory(prefix="hey-my-buddy-workspace-repository-")
+        temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-repository-")
         cls.addClassCleanup(temporary.cleanup)
         fixture = cls(methodName="runTest")
         fixture.repo = Path(temporary.name) / "repo"
@@ -28,7 +28,7 @@ class WorkspaceTests(unittest.TestCase):
         cls._repository_template = fixture.repo
 
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-workspace-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.repo = self.root / "repo"

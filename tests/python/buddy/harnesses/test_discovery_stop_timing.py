@@ -11,7 +11,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from temporary import TemporaryDirectory
+import tempfile
 from hey_my_buddy.buddy.harnesses import discovery
 from hey_my_buddy.protocol.process_handle import ProcessHandle
 from hey_my_buddy.protocol.process_start import process_start
@@ -49,7 +49,7 @@ os._exit(exit_code)
 class DiscoveryStopTimingTests(unittest.TestCase):
     @contextmanager
     def fixture(self, mode="group", *, exit_code=0):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             script = root / "probe.py"
             script.write_text(_FIXTURE, encoding="utf-8", newline="\n")

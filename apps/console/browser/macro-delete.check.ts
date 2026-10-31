@@ -8,10 +8,10 @@ const authoredTitle = "未加载的作者标题 / original author title";
 const taskTitle = "任务首行内容 / original task line";
 const words = {
   "zh-CN": { more: "更多", action: "删除宏任务…", cancel: "取消", confirm: "删除", retry: "重试删除", acknowledge: "知道了",
-    blocked: `还不能删除「${title}」`, heading: `删除「${title}」`, scope: "删除范围与拦截原因", review: "由 Host 验收、打回或给出结论", unknown: "停止未确认", deleted: `已删除「${title}」。`, unnamed: "未命名",
+    blocked: `还不能删除「${title}」`, heading: `删除「${title}」`, scope: "删除范围与拦截原因", review: "由 Host 验收、打回或给出结论", unknown: "停止未确认", deleted: `已删除「${title}」。`, retained: "会话记录未能删除（macro-task-deletion.owner-unproven）。请重试同一个删除请求。", unnamed: "未命名",
     knownScope: ["14 份，共 6.2 MB", "11 个，共 48.0 MB", "3 个检出，12 个引用"], mixedScope: ["0 份，共 0 B", "数量未知，体积未知", "0 个检出，引用数量未知"] },
   "en-US": { more: "More", action: "Delete macro task…", cancel: "Cancel", confirm: "Delete", retry: "Retry deletion", acknowledge: "Got it",
-    blocked: `Cannot delete “${title}” yet`, heading: `Delete “${title}”`, scope: "Deletion scope and blocking reasons", review: "The Host must accept, return, or provide a conclusion", unknown: "Stop unconfirmed", deleted: `Deleted “${title}”.`, unnamed: "Unnamed",
+    blocked: `Cannot delete “${title}” yet`, heading: `Delete “${title}”`, scope: "Deletion scope and blocking reasons", review: "The Host must accept, return, or provide a conclusion", unknown: "Stop unconfirmed", deleted: `Deleted “${title}”.`, retained: "Could not delete session records (macro-task-deletion.owner-unproven). Retry the same deletion request.", unnamed: "Unnamed",
     knownScope: ["14; total 6.2 MB", "11; total 48.0 MB", "Checkouts: 3; Git refs: 12"], mixedScope: ["0; total 0 B", "Count unknown; Size unknown", "Checkouts: 0; Git ref count unknown"] },
 };
 
@@ -54,7 +54,7 @@ async function deletionFixture(page: Page, blocked = false, scope: MacroTaskDele
     const receipt = { deletionId: "del-browser-fixture", macroTaskId: timeline.macroTask.macroTaskId,
       microTaskCount: 73, duplicate: deleteAttempts > 1 };
     if (deleteAttempts === 1) return route.fulfill({ json: { ok: true, result: { ...receipt, state: "deleting", deletedAt: null,
-      reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } }, objectKind: "native-session" } } });
+      reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "macro-task-deletion.owner-unproven" } }, objectKind: "session-records" } } });
     deleted = true;
     await route.fulfill({ json: { ok: true, result: { ...receipt, state: "deleted", deletedAt: "2026-10-18T08:00:00Z" } } });
   });
@@ -95,6 +95,9 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       dialog = page.getByRole("dialog", { name: w.heading, exact: true });
       await dialog.getByRole("button", { name: w.confirm, exact: true }).click();
       await expect(dialog.getByRole("button", { name: w.retry, exact: true })).toBeVisible();
+      await expect(dialog.getByText(w.retained, { exact: true })).toBeVisible();
+      await expect(page).toHaveURL(/#tasks\/macro-1$/);
+      await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(1);
       await expectTextUncut(dialog.locator("h2, p, button"));
       await dialog.getByRole("button", { name: w.retry, exact: true }).click();
       await expect(dialog).toHaveCount(0);

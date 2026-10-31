@@ -82,11 +82,9 @@ export default {
     unknown: "The deletion result is unconfirmed. Retrying checks or resumes deletion of the same macro task.",
     unavailable: "Writes are unavailable. Restore the connection or authorize this browser again.",
     deleted: "Deleted “{{title}}”.",
-    skipped: "Deleted “{{title}}”. Storage items left in place after checks: {{n}}.",
-    storage: "View storage",
     dismiss: "Dismiss deletion result",
     refreshFailed: "Could not refresh the list or the detail. Read again; deletion is complete.",
-    objects: { "native-session": "native sessions", workspace: "managed checkouts", "private-root": "private directories", "cli-file": "control files" },
+    objects: { "native-session": "native sessions", workspace: "managed checkouts", "private-root": "private directories", "session-records": "session records", "cli-file": "control files" },
     blockers: {
       queued: { state: "Queued", resolution: "Wait for it to finish, or stop the macro task from More" },
       routing: { state: "Routing", resolution: "Wait for routing to finish, or stop the macro task from More" },

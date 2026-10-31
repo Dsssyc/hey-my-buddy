@@ -16,7 +16,7 @@ import importlib.util
 import json
 import os
 import sys
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -50,7 +50,7 @@ class DshRoleCase(unittest.TestCase):
     """One private root; the micro task attempt runs through the shared executor."""
 
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-dsh-role-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-dsh-role-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         from hey_my_buddy.protocol.rpc_config import configure_client

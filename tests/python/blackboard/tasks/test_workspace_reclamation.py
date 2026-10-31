@@ -7,6 +7,138 @@ from hey_my_buddy.blackboard.tasks import workspace
 
 
 class ReclamationTests(LifecycleTestCase):
+    def deferred_checkout(self):
+        from unittest.mock import patch
+        board = self.board()
+        _, _, manifest, checkout, _, view, artifact = self.run_worktree(board)
+        with patch.object(board.store.workflow, '_reclaim_checkout', return_value={
+                'removed': False, 'reasons': ['fixture-deferred']}):
+            self.accept(board, view, artifact, not_required=True)
+        return board, manifest, checkout, view
+
+    def test_partial_physical_deletion_retains_git_identity_and_reports_each_blocked_retry(self):
+        import errno
+        from unittest.mock import patch
+        from hey_my_buddy import private_dirs
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        from hey_my_buddy.paths import native_path
+        board, manifest, checkout, view = self.deferred_checkout()
+        original = private_dirs.remove_tree
+
+        def occupied(path, **kwargs):
+            if Path(path) == checkout:
+                native_path(checkout / '.git').unlink()
+                native_path(checkout / 'src/feature.py').unlink()
+                native_path(checkout / 'src').rmdir()
+                raise PermissionError(errno.EACCES, 'fixture occupied file', str(checkout / 'tracked.txt'))
+            return original(path, **kwargs)
+
+        maintenance = Reclamation(board.store)
+        with patch.object(private_dirs, 'remove_tree', side_effect=occupied):
+            maintenance.run()
+        self.assertEqual(self.view(board, view['runId'])['cleanup']['state'], 'applying')
+        self.assertEqual(workspace._worktree_record(self.repo, checkout)['locked'],
+                         'hey-my-buddy:' + manifest['workspaceId'])
+        self.assertEqual({path.name for path in checkout.iterdir()}, {'tracked.txt'})
+        self.assertEqual(board.store.service_issues()[0]['stage'], 'workspace-cleanup')
+        git(self.repo, 'worktree', 'unlock', str(checkout))
+        git(self.repo, 'worktree', 'lock', '--reason', 'foreign-owner', str(checkout))
+        maintenance.run()
+        issues = board.store.service_issues()
+        self.assertEqual(issues[0]['stage'], 'workspace-cleanup')
+        self.assertIn('lock-mismatch', issues[0]['message'])
+        self.assertIn(view['runId'], issues[0]['message'])
+        head = board.store.head()
+        maintenance.run()
+        self.assertEqual(board.store.head(), head)
+        git(self.repo, 'worktree', 'unlock', str(checkout))
+        git(self.repo, 'worktree', 'lock', '--reason', 'hey-my-buddy:' + manifest['workspaceId'], str(checkout))
+        maintenance.run()
+        self.assertFalse(checkout.exists())
+        self.assertIsNone(workspace._worktree_record(self.repo, checkout))
+        self.assertEqual(self.view(board, view['runId'])['cleanup']['state'], 'applied')
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_removed_checkout_keeps_applying_until_its_git_registration_is_removed(self):
+        from unittest.mock import patch
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        from hey_my_buddy.errors import BoardError
+        board, manifest, checkout, view = self.deferred_checkout()
+        original = workspace._git
+
+        def fail_registration(path, *args, **kwargs):
+            if args[:2] == ('worktree', 'remove'):
+                raise BoardError('WORKSPACE_GIT_ERROR', 'fixture registration deletion refused')
+            return original(path, *args, **kwargs)
+
+        maintenance = Reclamation(board.store)
+        with patch.object(workspace, '_git', side_effect=fail_registration):
+            maintenance.run()
+        self.assertFalse(checkout.exists())
+        self.assertEqual(workspace._worktree_record(self.repo, checkout)['locked'],
+                         'hey-my-buddy:' + manifest['workspaceId'])
+        self.assertEqual(self.view(board, view['runId'])['cleanup']['state'], 'applying')
+        self.assertEqual(board.store.service_issues()[0]['stage'], 'workspace-cleanup')
+        maintenance.run()
+        self.assertIsNone(workspace._worktree_record(self.repo, checkout))
+        current = self.view(board, view['runId'])['cleanup']
+        self.assertEqual(current['state'], 'applied')
+        self.assertTrue(current['result']['alreadyRemoved'])
+        self.assertEqual(board.store.service_issues(), [])
+
+    def test_reclamation_preserves_a_readonly_cache_object_outside_the_checkout(self):
+        import os
+        import stat
+        from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
+        from hey_my_buddy.paths import native_path
+        (self.repo / '.gitignore').write_text('.cache/\n', encoding='utf-8', newline='\n')
+        git(self.repo, 'add', '.gitignore')
+        git(self.repo, 'commit', '-qm', 'Ignore local cache')
+        board, _, checkout, view = self.deferred_checkout()
+        outside = self.directory / 'cache-object'
+        outside.write_bytes(b'immutable cached payload')
+        cached = checkout / '.cache/object'
+        native_path(cached.parent).mkdir()
+        os.link(outside, native_path(cached))
+        outside.chmod(stat.S_IREAD)
+        before = outside.stat()
+        try:
+            Reclamation(board.store).run()
+            self.assertFalse(checkout.exists(), self.view(board, view['runId'])['cleanup'])
+            after = outside.stat()
+            self.assertEqual(after.st_mode, before.st_mode)
+            self.assertEqual(getattr(after, 'st_file_attributes', None), getattr(before, 'st_file_attributes', None))
+            self.assertEqual(after.st_ino, before.st_ino)
+            self.assertEqual(after.st_nlink, 1)
+            self.assertEqual(outside.read_bytes(), b'immutable cached payload')
+        finally:
+            outside.chmod(stat.S_IREAD | stat.S_IWRITE)
+
+    def test_macro_deletion_retries_git_registration_after_checkout_removal(self):
+        from unittest.mock import patch
+        from hey_my_buddy.errors import BoardError
+        board = self.board()
+        submitted, _, manifest, checkout, _, view, _ = self.run_worktree(board, disposition='attention')
+        board.call('workflow_cancel', {'runId': view['runId'], **self.control(view)})
+        target = 'run:' + submitted['runId']
+        params = {'macroTaskId': target, 'microTaskCount': 1, 'confirm': True}
+        original = workspace._git
+
+        def fail_registration(path, *args, **kwargs):
+            if args[:2] == ('worktree', 'remove'):
+                raise BoardError('WORKSPACE_GIT_ERROR', 'fixture registration deletion refused')
+            return original(path, *args, **kwargs)
+
+        with patch.object(workspace, '_git', side_effect=fail_registration):
+            blocked = board.console_call('macro_task_delete', params)
+        self.assertEqual(blocked['state'], 'deleting')
+        self.assertFalse(checkout.exists())
+        self.assertIsNotNone(workspace._worktree_record(self.repo, checkout))
+        completed = board.console_call('macro_task_delete', params)
+        self.assertEqual((completed['state'], completed['deletionId']), ('deleted', blocked['deletionId']))
+        self.assertIsNone(workspace._worktree_record(self.repo, checkout))
+        self.assertFalse((board.directory / 'workspaces' / manifest['workspaceId']).exists())
+
     def test_continue_prepared_then_cancelled_uses_the_conclusion_seal(self):
         board = self.board()
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(
@@ -406,7 +538,7 @@ class ReclamationTests(LifecycleTestCase):
         self.assertFalse(any(row['runId'] == submitted['runId'] for row in terminal['candidates'] if row.get('runId') and row['category'] == 'workspaces'))
         self.assertTrue(checkout.exists())
 
-    def test_macro_deletion_removes_worker_commits_and_retains_unproven_ownership_for_inventory(self):
+    def test_macro_deletion_removes_worker_commits_only_after_ownership_is_proven(self):
         from unittest.mock import patch
         for proven in (True, False):
             with self.subTest(proven=proven):
@@ -424,10 +556,11 @@ class ReclamationTests(LifecycleTestCase):
                 deleted = board.console_call('macro_task_delete', {
                     'macroTaskId': target, 'microTaskCount': preview['microTaskCount'], 'confirm': True,
                 })
-                self.assertEqual(deleted['state'], 'deleted')
+                self.assertEqual(deleted['state'], 'deleted' if proven else 'deleting')
                 with board.store.db.read() as connection:
-                    self.assertIsNone(connection.execute('SELECT 1 FROM workflow_runs WHERE run_id=?',
-                                                         (submitted['runId'],)).fetchone())
+                    retained = connection.execute('SELECT 1 FROM workflow_runs WHERE run_id=?',
+                                                  (submitted['runId'],)).fetchone()
+                    self.assertEqual(retained is not None, not proven)
                 directory = board.directory / 'workspaces' / manifest['workspaceId']
                 refs = git(self.repo, 'for-each-ref', '--format=%(refname)',
                            'refs/hey-my-buddy/workspaces/' + manifest['workspaceId'] + '/').strip()
@@ -437,12 +570,14 @@ class ReclamationTests(LifecycleTestCase):
                 else:
                     self.assertTrue(directory.exists())
                     self.assertTrue(refs)
-                    self.assertIn('macro-task-deletion.lock-mismatch', [item['reason']['code'] for item in deleted['skipped']])
-                    with patch('hey_my_buddy.blackboard.tasks.storage.process_inventory', return_value=([], [], True)):
-                        inventory = board.call('storage_plan', {})
-                    orphan = next(row for row in inventory['candidates'] if row['path'] == str(checkout))
-                    self.assertTrue(orphan['orphan'])
-                    self.assertFalse(orphan['eligible'])
+                    self.assertEqual(deleted['reason']['params']['errorCode'], 'macro-task-deletion.lock-mismatch')
+                    git(checkout, 'worktree', 'unlock', str(checkout))
+                    git(checkout, 'worktree', 'lock', '--reason', 'hey-my-buddy:' + manifest['workspaceId'], str(checkout))
+                    retried = board.console_call('macro_task_delete', {
+                        'macroTaskId': target, 'microTaskCount': preview['microTaskCount'], 'confirm': True,
+                    })
+                    self.assertEqual((retried['state'], retried['deletionId']), ('deleted', deleted['deletionId']))
+                    self.assertFalse(directory.exists())
 
     def test_unregistered_allocation_retained_by_an_independent_integration_is_not_deleted(self):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
@@ -534,7 +669,7 @@ class ReclamationTests(LifecycleTestCase):
             reclamation.Reclamation(board.store).run(stopping=stopped.is_set)
         self.assertEqual(cleanup.call_count, 1)
 
-    def test_task_deletion_invalidates_cached_allocation_ownership_without_a_retained_event(self):
+    def test_incomplete_task_deletion_retains_cached_ownership_until_retry_finishes(self):
         from hey_my_buddy.blackboard.tasks import reclamation
         board = self.board()
         submitted = self.submit(board, request_id='cached-owner', kind='worktree')
@@ -551,13 +686,18 @@ class ReclamationTests(LifecycleTestCase):
         target = 'run:' + submitted['runId']
         preview = board.console_call('macro_task_deletion_preview', {'macroTaskId': target})
         deleted = board.console_call('macro_task_delete', {'macroTaskId': target, 'microTaskCount': preview['microTaskCount'], 'confirm': True})
-        self.assertEqual(deleted['state'], 'deleted')
+        self.assertEqual(deleted['state'], 'deleting')
         self.assertTrue(directory.exists())
         maintenance.run()
         self.assertEqual(board.store.service_issues(), [])
         (directory / 'request.json').write_bytes(original)
         maintenance.run()
+        self.assertTrue(directory.exists())
+        finished = board.console_call('macro_task_delete', {'macroTaskId': target, 'microTaskCount': preview['microTaskCount'], 'confirm': True})
+        self.assertEqual((finished['state'], finished['deletionId']), ('deleted', deleted['deletionId']))
+        maintenance.run()
         self.assertFalse(directory.exists())
+        self.assertEqual(board.store.service_issues(), [])
 
     def test_native_reclamation_and_macro_deletion_share_the_storage_lock(self):
         from hey_my_buddy import private_dirs

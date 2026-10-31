@@ -549,19 +549,23 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     connection.execute('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id)'
                                        ' VALUES(?,?,?)',('del-'+uuid.uuid4().hex,kind,identifier))
                     deletion = _record(connection,target)
-        skipped = []
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
                                 ('private-root',_delete_private_roots),
                                 ('session-records',lambda store, scope: _delete_session_group(store, target)),
                                 ('cli-file',_delete_cli_files)):
             try:
-                skipped.extend(operation(store,scope))
+                skipped = operation(store,scope)
             except (BoardError,OSError) as error:
                 return {**_summary(deletion,scope,duplicate=duplicate),
                         'reason':(error.details['reason'] if isinstance(error, BoardError)
                                   and error.code == 'NOT_READY' and 'reason' in error.details
                                   else reason('macro-task-deletion.physical-failed',
                                               errorCode=error.code if isinstance(error,BoardError) else 'IO_ERROR')),
+                        'objectKind':phase}
+            if skipped:
+                return {**_summary(deletion,scope,duplicate=duplicate),
+                        'reason':reason('macro-task-deletion.physical-failed',
+                                        errorCode=skipped[0]['reason']['code']),
                         'objectKind':phase}
         with store.db.write() as connection:
             current = _record(connection,target)
@@ -572,6 +576,4 @@ def delete(store, target: str, micro_task_count: int) -> dict:
             head = _delete_rows(store,connection,scope,current)
             result = {**_summary(current,scope,duplicate=duplicate), 'state':'deleted', 'deletedAt':store.now()}
         store._notify(head, changed_tasks=frozenset(scope.tasks))
-        if skipped:
-            result['skipped'] = skipped
         return result

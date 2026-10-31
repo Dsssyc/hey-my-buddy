@@ -6,7 +6,7 @@ attempt-private session path; the directory is not a configuration home.
 from __future__ import annotations
 
 import math
-from temporary import TemporaryDirectory
+import tempfile
 import threading
 import time
 import unittest
@@ -23,7 +23,7 @@ from buddy.harnesses.dsh.test_native_run import NativeRunCase
 class DshWorkspaceDefaultTests(unittest.TestCase):
     def test_the_removed_workspace_switch_is_rejected_on_submission(self):
         from hey_my_buddy.errors import BoardError
-        with TemporaryDirectory(prefix="hey-my-buddy-dsh-spec-") as root:
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-dsh-spec-") as root:
             common = {"requestId": "dsh-default", "task": "bounded task", "cwd": root}
             # Every DSH run is execution-private now: the grouping switch is an
             # unknown submit field whatever harness or value carries it.

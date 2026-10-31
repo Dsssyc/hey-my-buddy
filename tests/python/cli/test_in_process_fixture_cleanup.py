@@ -1,13 +1,13 @@
 """Reopened fixtures keep their shared SQLite file until every owner is closed."""
 from support import BoardTestCase
 from pathlib import Path
-from temporary import TemporaryDirectory
+import tempfile
 from hey_my_buddy.paths import native_path
 
 
 class InProcessFixtureCleanupTests(BoardTestCase):
     def test_temporary_cleanup_removes_a_tree_beyond_the_windows_path_limit(self):
-        temporary = TemporaryDirectory(dir=self.directory)
+        temporary = tempfile.TemporaryDirectory(dir=self.directory)
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
         leaf = root / ("x" * 120) / ("y" * 120) / "evidence.txt"

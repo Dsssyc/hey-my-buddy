@@ -135,7 +135,7 @@ describe("macro task deletion confirmation", () => {
     fireEvent.pointerDown(document.querySelector("[data-slot=dialog-overlay]")!);
     expect(f.onClose).not.toHaveBeenCalled();
     await act(async () => pending.resolve(receipt()));
-    expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0);
+    expect(f.onDeleted).toHaveBeenCalledWith("macro-1");
   });
 
   it("retries the identical confirmed scope after a physical failure", async () => {
@@ -149,7 +149,7 @@ describe("macro task deletion confirmation", () => {
     f.command.mockResolvedValueOnce(receipt({ duplicate: true }));
     await f.user.click(screen.getByRole("button", { name: "重试删除" }));
     expect(f.command.mock.calls[2]).toEqual(f.command.mock.calls[1]);
-    expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0);
+    expect(f.onDeleted).toHaveBeenCalledWith("macro-1");
   });
 
   it.each(["zh", "en"])("explains a busy workspace on either deletion reply path in %s", async language => {
@@ -275,7 +275,7 @@ describe("macro task deletion confirmation", () => {
     await screen.findByText(/删除结果尚未确认/);
     f.command.mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
     await f.user.click(screen.getByRole("button", { name: "重试删除" }));
-    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
+    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1"));
   });
 
   it("treats NOT_FOUND on the first deletion attempt as completed", async () => {
@@ -283,13 +283,13 @@ describe("macro task deletion confirmation", () => {
     await screen.findByRole("button", { name: "删除" });
     f.command.mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
     await confirm();
-    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
+    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1"));
   });
 
   it("treats NOT_FOUND while reading the deletion preview as completed", async () => {
     const command = vi.fn().mockRejectedValueOnce(new ApiError("NOT_FOUND", "gone"));
     const f = dialogHarness({ api: { command } as unknown as ConsoleApi });
-    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0));
+    await waitFor(() => expect(f.onDeleted).toHaveBeenCalledWith("macro-1"));
   });
 
   it("ignores a preview completing after its confirmation has been cancelled", async () => {
@@ -362,17 +362,19 @@ describe("macro task deletion workspace integration", () => {
     await waitFor(() => expect(window.location.hash).toBe("#tasks/macro-2"));
   });
 
-  it("returns to the empty list after deleting the last item and reports retained storage", async () => {
+  it("retains the selected macro task for a skipped physical object and completes only after retry", async () => {
     const f = workspaceHarness();
     await openDelete();
-    f.command.mockImplementationOnce(async () => {
-      f.setRows([]);
-      return receipt({ skipped: [{ objectKind: "private-root", path: "/synthetic/retained", reason: { code: "macro-task-deletion.owner-unproven", params: {} } }] });
-    });
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, objectKind: "session-records",
+      reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "macro-task-deletion.owner-unproven" } } }));
     await confirm();
+    await screen.findByText("删除未完成，已开始的删除可以重试。");
+    expect(screen.getByText(/会话记录未能删除/)).toBeTruthy();
+    expect(window.location.hash).toBe("#tasks/macro-1");
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    f.command.mockImplementationOnce(async () => { f.setRows([]); return receipt(); });
+    await f.user.click(screen.getByRole("button", { name: "重试删除" }));
     await waitFor(() => expect(window.location.hash).toBe("#tasks"));
-    await screen.findByText(/1 项存储内容按检查结果留在原处/);
-    expect(screen.getByRole("link", { name: "查看存储" }).getAttribute("href")).toBe("#settings");
     expect(await screen.findByRole("heading", { name: "还没有宏任务" })).toBeTruthy();
     expect(document.activeElement).toBe(document.querySelector("[data-slot=macro-delete-result]"));
   });

@@ -8,7 +8,7 @@ import os
 import plistlib
 import signal
 import sys
-from temporary import TemporaryDirectory
+import tempfile
 import time
 from types import SimpleNamespace
 import unittest
@@ -59,7 +59,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                                   ({"loggedIn": True, "apiProvider": "firstParty"}, "anthropic"),
                                   ({"loggedIn": True, "apiProvider": "firstParty", "authMethod": "api_key"}, "anthropic"),
                                   ({"loggedIn": True}, "unknown")):
-            with self.subTest(provider=provider), TemporaryDirectory() as directory:
+            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as directory:
                 home = Path(directory)
                 cli = self.plain_file(home / "claude", "import sys\nprint('claude 2.1.0' if sys.argv[1:] == ['--version'] else "
                                       + repr(json.dumps(account)) + ")\n")
@@ -78,7 +78,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
         return path
 
     def test_snapshot_only_fingerprints_candidates_and_manager_records(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             bin_dir = home / "bin"
             bin_dir.mkdir()
@@ -99,7 +99,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertNotIn("OPENAI_API_KEY", str(snapshot))
 
     def test_position_scan_uses_stat_without_opening_candidate_files(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             bin_dir = home / 'bin'
             bin_dir.mkdir()
@@ -118,7 +118,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertTrue(all(set(value) == {'realPath', 'size', 'mtimeNs'} for value in fingerprints))
 
     def test_manual_failure_falls_through_and_manager_version_wins(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             bad = self.plain_file(home / "bad/codex", "import sys\nprint(\"private-output\")\nsys.exit(3)\n")
             nvm = home / ".nvm/versions/node/v24.1.0/bin" / self.candidate_name("codex")
@@ -141,7 +141,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX symlink setup")
     def test_node_companion_is_found_beside_launcher_symlink(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             bin_dir = home / "bin"
             bin_dir.mkdir()
@@ -164,7 +164,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertTrue(any(call.args[0][:1] == [str(node)] for call in probe.call_args_list))
 
     def test_failed_login_and_overflow_keep_output_private(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             cli = self.plain_file(home / "codex", "import sys\nprint(\"codex 1.0.0\" if sys.argv[1:] == [\"--version\"] else \"Not logged in private-account\")\n")
             with patch.object(discovery, "_home", return_value=home), patch.object(
@@ -245,7 +245,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 self.assertIsNotNone(fixture.process.returncode)
 
     def test_snapshot_hash_changes_when_default_record_changes(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             record = home / ".nvm/alias/default"
             record.parent.mkdir(parents=True)
@@ -264,7 +264,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
 
     def test_large_manager_record_uses_one_read_for_version_and_full_content_fingerprint(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             record = home / '.nvm/alias/default'
             record.parent.mkdir(parents=True)
@@ -297,7 +297,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertNotEqual(current['sha256'], fingerprint['sha256'])
 
     def test_location_fingerprint_ignores_empty_paths_but_tracks_present_order_and_file_changes(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             a, b, empty = (home / name for name in ('a', 'b', 'empty'))
             a.mkdir()
@@ -329,7 +329,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                 self.assertEqual(missing, fingerprint(a, b))
 
     def test_empty_paths_do_not_consume_candidate_limit(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             cli = home / 'bin' / self.candidate_name('codex')
             cli.parent.mkdir()
@@ -352,7 +352,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertEqual(result['status'], 'ready')
 
     def test_cli_scan_changes_when_adjacent_node_changes(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             cli = home / "bin" / self.candidate_name("codex")
             node = home / "bin" / self.candidate_name("node")
@@ -369,7 +369,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
 
     def test_claude_login_check_and_dsh_missing_without_native_cli(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             claude = self.plain_file(home / "claude", "import sys\nprint(\"claude 2.1.0\" if sys.argv[1:] == [\"--version\"] else \'{\"loggedIn\":true,\"apiProvider\":\"anthropic\"}\')\n")
             node = self.plain_file(home / "bin" / self.candidate_name("node"), "import sys\nprint(\"v24.2.0\" if sys.argv[1:] == [\"--version\"] else \"checked\")\n")
@@ -385,7 +385,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertEqual(node_result["status"], "ready")
 
     def test_native_dsh_cli_requires_its_own_version_handshake(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             dsh = self.plain_file(home / "dsh", 'print("dsh 1.2.0")\n')
             with patch.object(discovery, "_home", return_value=home), patch.object(
@@ -396,7 +396,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertEqual(result["executable"], str(dsh))
 
     def test_dsh_version_probe_preserves_the_users_native_home_and_environment(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             daily = root / "daily-dsh"
             daily.mkdir()
@@ -433,7 +433,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
     def test_dsh_version_probe_retains_its_directory_when_stop_is_unknown(self):
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
 
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             private = root / "probe"
             private.mkdir()
@@ -460,7 +460,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                     os.killpg(pid, 0)
 
     def test_partial_manager_defaults_match_installed_versions_and_direct_root(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             defaults = {
                 home / ".nvm/alias/default": "lts/iron",
@@ -505,7 +505,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "Symlink creation needs extra Windows privileges")
     def test_nvm_alias_can_follow_user_configured_symlink(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             alias = home / ".nvm/alias"
             alias.mkdir(parents=True)
@@ -535,7 +535,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(result["candidates"]), discovery._MAX_DIAGNOSTICS)
 
     def test_manual_ready_skips_lower_priority_and_unknown_version_is_allowed(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             cli = self.plain_file(home / "manual/zcode", 'print("release next: private detail")\n')
             marker = home / "lower-ran"
@@ -551,7 +551,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertNotIn("private detail", str(result))
 
     def test_probe_timeout_reaps_child_group_and_scan_has_total_deadline(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             child = 'import time; time.sleep(10)'
             cli = self.plain_file(home / "zcode", f'import subprocess, sys, time\nsubprocess.Popen([sys.executable, "-c", {child!r}], stdout=sys.stdout)\ntime.sleep(10)\n')
@@ -591,7 +591,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                         os.kill(pid, 0)
 
     def test_total_deadline_covers_multiple_candidates(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             manual = self.plain_file(home / "manual/zcode", "import time\ntime.sleep(10)\n")
             lower = self.plain_file(home / "common" / self.candidate_name('zcode'), "import time\ntime.sleep(10)\n")
@@ -609,7 +609,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
             self.assertIn(len(result["candidates"]), (1, 2))
 
     def test_a_later_unknown_node_scan_is_not_replaced_by_an_earlier_failure(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             launcher = self.plain_file(root / 'codex.js', 'print("fixture")\n')
             node = self.plain_file(root / self.candidate_name('node'), 'print("fixture")\n')
@@ -638,14 +638,14 @@ class HarnessDiscoveryTests(unittest.TestCase):
         self.assertNotIn("LC_SECRET_TOKEN", result)
         self.assertNotIn("OPENAI_API_KEY", result)
         self.assertNotIn("ANTHROPIC_BASE_URL", result)
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             cli = Path(directory) / "codex"
             cli.write_text("stub", encoding="utf-8", newline="\n")
             path = discovery.native_environment({"PATH": ""}, command=[str(cli)])["PATH"]
             self.assertEqual(path, str(cli.parent))
 
     def test_plain_powershell_file_is_not_a_discovery_candidate(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "claude.ps1").write_text("Write-Output never-run", encoding="utf-8", newline="\n")
             with patch.object(discovery, "_home", return_value=root), \
@@ -656,7 +656,7 @@ class HarnessDiscoveryTests(unittest.TestCase):
                          [candidate["path"] for candidate in snapshot["candidates"]])
 
     def test_native_environment_is_allowlisted_and_command_prepends_bins(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             cli = Path(directory) / "codex"
             cli.write_text("stub", encoding="utf-8", newline="\n")
             result = discovery.native_environment({"PATH": "/usr/bin", "HOME": "/home/user",
@@ -707,7 +707,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                     self.assertEqual(discovery._variants(directory, 'codex'), expected)
             with patch.dict(os.environ, {}, clear=True):
                 self.assertEqual(discovery._variants(directory, 'codex'), expected)
-        with TemporaryDirectory() as root:
+        with tempfile.TemporaryDirectory() as root:
             for name in ('codex.ps1', 'codex.bat', 'codex.com', 'codex'):
                 (Path(root) / name).write_text('ignored', encoding="utf-8", newline="\n")
             with patch.object(discovery, '_variants',
@@ -735,7 +735,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                     discovery._native_command(root / ('node' + suffix))
 
     def test_windows_manual_script_is_rejected_before_probe(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in ('codex.cmd', 'codex.bat', 'codex.ps1', 'codex.com', 'codex'):
                 entry = root / name
@@ -760,7 +760,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                     self.assertIsNone(discovery._script_launch(Path('/fixture/cli' + suffix)))
 
     def test_shim_file_change_invalidates_location_fingerprint_without_parsing(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shim = root / 'codex.cmd'
             shim.write_text('first shim', encoding="utf-8", newline="\n")
@@ -776,7 +776,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
             self.assertNotEqual(discovery.location_fingerprint(first), discovery.location_fingerprint(second))
 
     def test_windows_shim_prefers_adjacent_native_node_then_path_node(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             shim = root / 'codex.cmd'
             target = root / 'lib/cli.js'
@@ -842,7 +842,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                                                           '%APPDATA%/literal'])
 
     def test_native_path_prefix_is_only_executed_program(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             node = root / 'node/bin/node.exe'
             js = root / 'package/bin/codex.js'
@@ -858,7 +858,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == 'nt', 'POSIX Node entry paths')
     def test_posix_node_argv_preserves_the_selected_entry_path(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = root / 'package/cli.js'
             script.parent.mkdir()
@@ -878,7 +878,7 @@ class WindowsEntryBoundaryTests(unittest.TestCase):
                         self.assertEqual(command, ['/fixture/node', str(entry)])
 
     def test_npm_shim_extracts_only_one_existing_quoted_node_target(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             target = root / 'lib/cli.js'
             target.parent.mkdir()
@@ -946,7 +946,7 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
 
     def test_macos_recognizes_bundle_id_at_top_level_in_both_roots(self):
         entry = discovery._discovery_spec("codex").apps["darwin"]
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             roots = (Path(directory) / "system", Path(directory) / "user")
             expected = []
             for root in roots:
@@ -997,7 +997,7 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
     def test_windows_uninstall_reads_both_hives_and_registry_views(self):
         entry = discovery._discovery_spec("dsh").apps["win32"]
         key = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{entry.identity}"
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             locations = [Path(directory) / str(index) for index in range(4)]
             identities = [(hive, key, 1 | view) for hive in ("user", "machine") for view in (256, 512)]
             registry = self.registry({identity: {"InstallLocation": str(path)}
@@ -1017,7 +1017,7 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
         name = "OpenAI.Codex_26.1016.6573.0_x64__2p2nqsd0c76g0"
         children = ("OpenAI.Codex_1.0_x64__other", name,
                     "Other.App_1.0_x64__2p2nqsd0c76g0", "malformed")
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             location = Path(directory) / "Package"
             registry = self.registry({("user", key, 1): {},
                                       ("user", key + "\\" + name, 1): {"PackageRootFolder": str(location)}},
@@ -1043,7 +1043,7 @@ class RegisteredAppDiscoveryTests(unittest.TestCase):
             windows.assert_not_called()
 
     def test_cli_candidates_precede_apps_and_first_source_keeps_duplicates(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manual, manager, common, registry, caller, app = [root / part for part in
                                                             ("manual", "manager", "common", "registry", "caller", "app")]
@@ -1073,7 +1073,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         self.assertIs(getattr(caught.exception, "discovery_shutdown_confirmed", None), True)
 
     def test_candidate_preparation_failure_proves_no_probe_created(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'codex'
             path.write_text('plain fixture', encoding="utf-8", newline="\n")
             candidate = {'path': str(path), 'source': 'manual', 'fingerprint': {}, 'exists': True}
@@ -1147,7 +1147,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
         self.assertEqual(reason, 'shutdown-unverified')
 
     def probe_exception(self, stopped, *, eof=True, scan=False):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             cli = HarnessDiscoveryTests().plain_file(Path(directory) / 'cli', 'import time\ntime.sleep(20)\n')
             selector = discovery.selectors.DefaultSelector()
             select = selector.select
@@ -1187,7 +1187,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == 'nt', 'POSIX private probe')
     def test_normal_exit_without_group_stop_evidence_is_unverified(self):
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             cli = HarnessDiscoveryTests().plain_file(Path(directory) / 'cli', 'print("fixture 1.0")\n')
             terminate = ProcessHandle.terminate
             def unobserved(handle, **kwargs):
@@ -1213,7 +1213,7 @@ class ProbeStopEvidenceTests(unittest.TestCase):
 
     def test_dsh_probe_exception_keeps_actual_stop(self):
         from hey_my_buddy.buddy.harnesses.base import ProcessHandle
-        with TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             cli = HarnessDiscoveryTests().plain_file(root / 'dsh', 'print("dsh 1.0")\n')
             for stopped in (True, False):

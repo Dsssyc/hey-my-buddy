@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from temporary import TemporaryDirectory
 import unittest
 from pathlib import Path
 from buddy.harnesses.fixture_selection import select_fixture
@@ -31,7 +30,7 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["buddyId
 
 class NoToolCodexTests(unittest.TestCase):
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-no-tool-codex-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-no-tool-codex-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)

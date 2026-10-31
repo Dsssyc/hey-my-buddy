@@ -77,6 +77,41 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         self.assertEqual(deleted["deletionId"], blocked["deletionId"])
         self.assertEqual(deleted["state"], "deleted")
 
+    def test_skipped_physical_stage_retains_rows_and_mark_until_retry(self):
+        from hey_my_buddy.protocol.reasons import reason
+        board = self.board()
+        for stage, phase in (("_delete_sessions", "native-session"),
+                             ("_delete_workspaces", "workspace"),
+                             ("_delete_private_roots", "private-root"),
+                             ("_delete_session_group", "session-records"),
+                             ("_delete_cli_files", "cli-file")):
+            with self.subTest(stage=stage):
+                run = self.closed(board, "skipped-" + phase, macro_task="Skipped physical phase")
+                target = run["macroTaskId"]
+                skipped = [{"reason": reason("macro-task-deletion.owner-unproven")}]
+                stack, calls = self.without_physical_io()
+                with stack, patch.object(macro_task_deletion, stage, return_value=skipped):
+                    blocked = macro_task_deletion.delete(board.store, target, 1)
+                self.assertEqual((blocked["state"], blocked["deletedAt"], blocked["objectKind"]),
+                                 ("deleting", None, phase))
+                self.assertEqual(blocked["reason"], reason("macro-task-deletion.physical-failed",
+                                                          errorCode="macro-task-deletion.owner-unproven"))
+                self.assertEqual(calls, list(PHYSICAL_STAGES[:PHYSICAL_STAGES.index(stage)])
+                                 if stage in PHYSICAL_STAGES else list(PHYSICAL_STAGES[:3]))
+                with board.store.db.read() as db:
+                    self.assertIsNotNone(db.execute("SELECT 1 FROM macro_tasks WHERE macro_task_id=?",
+                                                    (target,)).fetchone())
+                    self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?",
+                                                    (run["runId"],)).fetchone())
+                    mark = db.execute("SELECT deletion_id FROM macro_task_deletions WHERE target_id=?",
+                                      (target,)).fetchone()
+                    self.assertEqual(mark["deletion_id"], blocked["deletionId"])
+                self.assertEqual(macro_task_deletion.preview(board.store, target)["deletionState"], "deleting")
+                with self.without_physical_io()[0]:
+                    completed = macro_task_deletion.delete(board.store, target, 1)
+                self.assertEqual((completed["state"], completed["duplicate"], completed["deletionId"]),
+                                 ("deleted", True, blocked["deletionId"]))
+
     def test_preview_and_delete_use_entire_group_and_leave_other_group_untouched(self):
         board = self.board()
         first = self.closed(board, "first", macro_task="Disposable group")

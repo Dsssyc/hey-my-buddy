@@ -119,9 +119,19 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         group.symlink_to(outside, target_is_directory=True)
         with patch.object(deletion, '_delete_workspaces', return_value=[]):
             result = deletion.delete(board.store, run['macroTaskId'], 1)
-        self.assertEqual(result['state'], 'deleted')
-        self.assertEqual(result['skipped'][0]['objectKind'], 'session-records')
+        self.assertEqual((result['state'], result['objectKind']), ('deleting', 'session-records'))
+        self.assertEqual(result['reason']['params']['errorCode'], 'macro-task-deletion.owner-unproven')
+        with board.store.db.read() as db:
+            self.assertIsNotNone(db.execute('SELECT 1 FROM workflow_runs WHERE run_id=?',
+                                            (run['runId'],)).fetchone())
+            self.assertIsNotNone(db.execute('SELECT 1 FROM macro_task_deletions WHERE target_id=?',
+                                            (run['macroTaskId'],)).fetchone())
+        self.assertTrue(group.is_symlink())
         self.assertEqual((outside / 'valuable').read_text(encoding="utf-8"), 'untouched')
+        group.unlink()
+        with patch.object(deletion, '_delete_workspaces', return_value=[]):
+            completed = deletion.delete(board.store, run['macroTaskId'], 1)
+        self.assertEqual((completed['state'], completed['deletionId']), ('deleted', result['deletionId']))
 
     def test_private_root_partial_removal_retries_from_real_files(self):
         board = self.board()

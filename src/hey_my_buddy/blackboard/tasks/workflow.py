@@ -4704,6 +4704,8 @@ class WorkflowCoordinator:
             if error.code == "NOT_READY":
                 result.update({key: value for key, value in error.details.items()
                                if key in ("attachedBranch", "reason") or key.startswith("unsealedPaths")})
+                if planned is not None and planned["plan"]["state"] == "applying":
+                    result["detail"] = error.message + ": " + ", ".join(result["reasons"])
             elif error.code != 'WORKSPACE_BUSY':
                 result["detail"] = error.message
             return result
@@ -5516,13 +5518,11 @@ class WorkflowCoordinator:
             self.board._notify(head)
             if reasons:
                 raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons, **details)
-            removed = None
-            if workspace_module()._path_present(path):
-                removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained,
-                                                             resume=resume, proof=inspection)
+            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained,
+                                                       resume=resume, proof=inspection)
             with self.db.write() as connection:
                 run_row = self._run_row(connection, run_id)
-                already_removed = removed is None or bool(removed["alreadyRemoved"])
+                already_removed = bool(removed["alreadyRemoved"])
                 connection.execute(
                     "UPDATE workspace_cleanup_plans SET state='applied',applied_at=?,result_json=?,revision=revision+1"
                     " WHERE plan_id=? AND state='applying'",

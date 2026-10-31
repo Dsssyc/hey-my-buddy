@@ -30,26 +30,18 @@ export type MacroTaskDeletionPreview = {
 };
 export type ConfirmedMacroTaskDeletion = { macroTaskId: string; microTaskCount: number; confirm: true };
 
-const skippedCodes = ["ref-unproven", "ref-changed", "owner-unproven", "repository-changed", "repository-missing", "dependency-retained",
-  "not-a-managed-worktree", "unsafe-path", "checkout-missing", "identity-changed", "unregistered-checkout",
-  "lock-mismatch", "attached-branch", "unsealed-changes", "unsealed-handoff", "sealed-output-invalid"];
-type DeletionSkippedReason = { code: string; params: Record<string, never> };
-// Both shapes are emitted by the current engine: workspaces and private files.
-export type DeletionSkipped =
-  | { kind: "ref" | "allocation" | "checkout"; path: string; workspaceId: string | null; reason: DeletionSkippedReason }
-  | { objectKind: "private-root" | "cli-file"; path: string; reason: DeletionSkippedReason };
 type DeletionReceipt = {
   deletionId: string; macroTaskId: string; microTaskCount: number; duplicate: boolean;
 };
 export type MacroTaskDeletionResult = DeletionReceipt & (
-  | { state: "deleted"; deletedAt: string; skipped?: DeletionSkipped[] }
+  | { state: "deleted"; deletedAt: string }
   | { state: "deleting"; deletedAt: null;
       reason: { code: "macro-task-deletion.physical-failed"; params: { errorCode: string } }
         | { code: "checkout.process-blockers"; params: {
             processes: { pid: number; startedAt: number; executable: string }[];
             unreadableProcesses: { pid: number; startedAt: number; executable: string }[] } }
         | { code: "checkout.process-scan-failed"; params: Record<string, never> };
-      objectKind: "native-session" | "workspace" | "private-root" | "cli-file" }
+      objectKind: "native-session" | "workspace" | "private-root" | "session-records" | "cli-file" }
 );
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -98,15 +90,6 @@ export function parseMacroTaskDeletionPreview(macroTaskId: string, value: unknow
   return value as MacroTaskDeletionPreview;
 }
 
-function skipped(value: unknown): boolean {
-  if (!record(value) || !text(value.path) || !emptyReason(value.reason, skippedCodes)) return false;
-  return "kind" in value
-    ? keys(value, ["kind", "path", "workspaceId", "reason"])
-      && ["ref", "allocation", "checkout"].includes(value.kind as string)
-      && (value.workspaceId === null || text(value.workspaceId))
-    : keys(value, ["objectKind", "path", "reason"]) && ["private-root", "cli-file"].includes(value.objectKind as string);
-}
-
 function processIdentities(value: unknown): boolean {
   return Array.isArray(value)
     && value.every(process => record(process) && keys(process, ["pid", "startedAt", "executable"])
@@ -127,12 +110,11 @@ export function parseMacroTaskDeletionResult(confirmed: ConfirmedMacroTaskDeleti
   if (!record(value) || !text(value.deletionId) || value.macroTaskId !== confirmed.macroTaskId
     || value.microTaskCount !== confirmed.microTaskCount || typeof value.duplicate !== "boolean") invalid();
   if (value.state === "deleted") {
-    if (!keys(value, required, ["skipped"]) || !text(value.deletedAt) || !Number.isFinite(Date.parse(value.deletedAt))
-      || value.skipped !== undefined && (!Array.isArray(value.skipped) || !value.skipped.every(skipped))) invalid();
+    if (!keys(value, required) || !text(value.deletedAt) || !Number.isFinite(Date.parse(value.deletedAt))) invalid();
   } else if (value.state === "deleting") {
     const reason = value.reason;
     if (!keys(value, [...required, "reason", "objectKind"]) || value.deletedAt !== null
-      || !["native-session", "workspace", "private-root", "cli-file"].includes(value.objectKind as string)
+      || !["native-session", "workspace", "private-root", "session-records", "cli-file"].includes(value.objectKind as string)
       || !physicalFailureReason(reason)) invalid();
   } else invalid();
   return value as MacroTaskDeletionResult;

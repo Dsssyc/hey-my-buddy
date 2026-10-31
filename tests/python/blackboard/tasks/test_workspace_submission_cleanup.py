@@ -503,7 +503,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertFalse((self.allocation() / 'checkout').exists())
         self.assert_no_registration(board)
 
-    def test_failed_git_remove_restores_allocation_lock_and_keeps_admission_error(self):
+    def test_failed_git_registration_removal_keeps_allocation_identity_and_admission_error(self):
         board = self.board()
         original_git = workspace._git
         def removal_failure(root, *args, **kwargs):
@@ -521,7 +521,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertIs(caught.exception, error)
         directory = self.allocation()
         manifest = captured['manifest']
-        self.assertTrue((directory / 'checkout').exists())
+        self.assertFalse((directory / 'checkout').exists())
         self.assertTrue((directory / 'manifest.json').exists())
         self.assertTrue((directory / 'input.json').exists())
         self.assertTrue((directory / 'request.json').exists())
@@ -529,14 +529,15 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         record = workspace._worktree_record(self.repo, directory / 'checkout')
         self.assertEqual(record['locked'], 'hey-my-buddy:' + manifest['workspaceId'])
         self.assertEqual(record['HEAD'], manifest['inputCommit'])
-        self.assertEqual(workspace.inspect(str(directory / 'checkout'))['checkoutId'], manifest['checkoutId'])
-        self.assertTrue(workspace.cleanup_inspect(self.directory, manifest)['eligible'])
+        _, git_dir = workspace._cleanup_registration(self.repo / '.git', directory / 'checkout', manifest)
+        self.assertEqual(workspace._identity(git_dir), manifest['checkoutId'])
+        self.assertTrue(workspace.deletion_inspect(self.directory, manifest)['eligible'])
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         Reclamation(board.store).run()
         self.assertTrue(directory.exists())
-        self.assertTrue((directory / 'checkout').exists())
+        self.assertFalse((directory / 'checkout').exists())
         planned = storage.inspect(board.store)
-        retained = next(row for row in planned['candidates'] if row['path'] == str(directory / 'checkout'))
+        retained = next(row for row in planned['candidates'] if row['path'] == str(directory))
         self.assertIn('additional-evidence', retained['reasons'])
         self.assertFalse(retained['eligible'])
         self.assert_no_registration(board)

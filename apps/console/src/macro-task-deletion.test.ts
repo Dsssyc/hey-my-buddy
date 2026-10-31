@@ -71,20 +71,17 @@ describe("macro task deletion boundary", () => {
     const partial = { ...receipt, state: "deleting", deletedAt: null, objectKind: "native-session",
       reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } } };
     expect(parseMacroTaskDeletionResult(confirmed, partial)).toEqual(partial);
-    const skipped = [
-      { kind: "ref", path: "refs/synthetic/retained", workspaceId: "ws-fixture", reason: { code: "macro-task-deletion.ref-changed", params: {} } },
-      { kind: "allocation", path: "/synthetic/allocation", workspaceId: "ws-changed", reason: { code: "macro-task-deletion.repository-changed", params: {} } },
-      { kind: "ref", path: "/synthetic/missing-repository/.git", workspaceId: "ws-missing", reason: { code: "macro-task-deletion.repository-missing", params: {} } },
-      { objectKind: "private-root", path: "/synthetic/retained", reason: { code: "macro-task-deletion.owner-unproven", params: {} } },
-    ];
-    expect(parseMacroTaskDeletionResult(confirmed, { ...receipt, duplicate: true, skipped })).toEqual({ ...receipt, duplicate: true, skipped });
+    for (const objectKind of ["workspace", "private-root", "session-records", "cli-file"]) {
+      const retained = { ...partial, objectKind, reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "macro-task-deletion.owner-unproven" } } };
+      expect(parseMacroTaskDeletionResult(confirmed, retained)).toEqual(retained);
+    }
   });
 
   it("never accepts another scope or an incomplete acknowledgement as deletion", () => {
     for (const value of [null, { ...receipt, macroTaskId: "macro-other" }, { ...receipt, microTaskCount: 4 },
       { ...receipt, deletedAt: null }, { ...receipt, deletedAt: "yesterday" }, { ...receipt, state: "deleting" },
       { ...receipt, duplicate: undefined }, { ...receipt, reasonCode: "physical-failed" },
-      { ...receipt, skipped: [{}] },
+      { ...receipt, skipped: [] }, { ...receipt, skipped: [{ objectKind: "private-root", path: "/synthetic/retained", reason: { code: "macro-task-deletion.owner-unproven", params: {} } }] },
     ]) expect(() => parseMacroTaskDeletionResult(confirmed, value)).toThrow();
   });
 

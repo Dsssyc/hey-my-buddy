@@ -13,7 +13,6 @@ import json
 import math
 import os
 import tempfile
-from temporary import TemporaryDirectory
 import time
 import unittest
 from pathlib import Path
@@ -38,7 +37,7 @@ class CodexAdapterTests(unittest.TestCase):
         developer_source = mock.patch.dict(os.environ, {'HMB_DEV_SOURCE': '1'})
         developer_source.start()
         self.addCleanup(developer_source.stop)
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-codex-test-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-codex-test-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)

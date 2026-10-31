@@ -17,7 +17,7 @@ import json
 import os
 import subprocess
 import sys
-from temporary import TemporaryDirectory
+import tempfile
 import threading
 import time
 import unittest
@@ -156,7 +156,7 @@ def answer_receipt(inquiry_id: str, answer: str, config: dict, *, sha: str = "b"
 
 class BridgeQueueTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-inquiry-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-inquiry-")
         self.addCleanup(self.temporary.cleanup)
         self.harness = BridgeHarness(Path(self.temporary.name))
         self.addCleanup(self.harness.close)
@@ -630,7 +630,7 @@ class JournalBarrierTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-journal-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-journal-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.journal = self.root / "inquiry.results.jsonl"
@@ -786,7 +786,7 @@ class JournalBarrierTests(unittest.TestCase):
 
 class FinishToolTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-finish-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-finish-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.attention = self.root / "attention.json"
