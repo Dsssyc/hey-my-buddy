@@ -125,6 +125,27 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(fetched["macroTaskId"], submitted["macroTaskId"])
         self.assertEqual(fetched["title"], submitted["title"])
 
+    def test_get_brief_cuts_the_task_head_while_full_output_keeps_the_whole_text(self):
+        long_task = "Continue the specification work. " * 80  # 2640 characters
+        self.assertGreater(len(long_task), 2000)
+        code, submitted, _ = self.cli("submit", {
+            **BUDDY, "requestId": "views-long-task", "hostId": "host-1", "task": long_task, "cwd": str(self.repo),
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
+        })
+        self.assertEqual(code, 0, submitted)
+        self.assertNotIn("microTask", submitted)
+        run_id = submitted["runId"]
+        code, brief, _ = self.cli("get", {"runId": run_id})
+        self.assertEqual(code, 0, brief)
+        self.assertEqual(brief["microTask"]["task"], long_task[:2000])
+        self.assertTrue(brief["microTask"]["taskTruncated"])
+        self.assertEqual(brief["microTask"]["taskBytes"], len(long_task.encode("utf-8")))
+        code, full, _ = self.cli("get", {"runId": run_id, "output": "full"})
+        self.assertEqual(code, 0, full)
+        self.assertEqual(full["microTask"]["task"], long_task)
+        self.assertFalse(full["microTask"]["taskTruncated"])
+        self.assertEqual(full["microTask"]["taskBytes"], len(long_task.encode("utf-8")))
+
     def test_get_brief_preserves_turn_outcome_truncation(self):
         submitted, service_view = self.delivered()
         truncated = {"decisions": {"droppedItems": 7, "shortenedItems": 0}}
@@ -156,7 +177,11 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(brief["currentTurn"]["summary"], service_view["currentTurn"]["summary"])
         self.assertEqual(brief["workspace"]["path"], service_view["workspace"]["path"])
         self.assertEqual(brief["scope"]["scopeVersion"], service_view["scope"]["scopeVersion"])
-        for omitted in ("microTask", "executionWorkspace", "task", "turns", "requests", "taskId", "requestFingerprint"):
+        self.assertEqual(
+            brief["microTask"],
+            {"task": PACKET, "taskTruncated": False, "taskBytes": len(PACKET.encode("utf-8"))},
+        )
+        for omitted in ("executionWorkspace", "task", "turns", "requests", "taskId", "requestFingerprint"):
             self.assertNotIn(omitted, brief)
         code, full, _ = self.cli("get", {"runId": run_id, "output": "full"})
         self.assertEqual(code, 0, full)
