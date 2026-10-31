@@ -73,6 +73,30 @@ describe("recorded row state", () => {
       }
     } finally { await i18n.changeLanguage("zh"); }
   });
+  it("keeps failed and cancelled helpers terminal regardless of their root's owner", async () => {
+    try {
+      for (const language of ["zh", "en"] as const) {
+        await i18n.changeLanguage(language);
+        for (const rootLeadRunId of [null, "lead"]) {
+          expect(rowStateInfo({ kind: "helper", state: "failed", rootLeadRunId } as TimelineRow)).toMatchObject({
+            label: language === "zh" ? "执行失败" : "Execution failed", tone: "red", glyph: "✕", settled: false,
+          });
+          expect(rowStateInfo({ kind: "helper", state: "cancelled", rootLeadRunId } as TimelineRow)).toMatchObject({
+            label: language === "zh" ? "已取消" : "Cancelled", tone: "neutral", settled: true,
+          });
+        }
+      }
+    } finally { await i18n.changeLanguage("zh"); }
+  });
+  it("uses the execution's active state before a root's failed or cancelled result", () => {
+    for (const state of ["failed", "cancelled"]) {
+      for (const status of ["queued", "running", "cancelling", "reconciliation-needed"]) {
+        const row = rowStateInfo({ kind: "micro-task", state, status, category: "active" } as TimelineRow);
+        expect(row.label).not.toContain("等待 Host");
+        expect(row.settled).toBe(false);
+      }
+    }
+  });
 });
 
 describe("0.16 acceptance wait (P1.8)", () => {

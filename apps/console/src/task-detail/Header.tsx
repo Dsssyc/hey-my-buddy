@@ -17,18 +17,24 @@ export function DetailBack({ onBack }: { onBack: () => void }) {
   return <Hint text={t("back")}><Button variant="ghost" size="icon-sm" data-slot="detail-back" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true"/></Button></Hint>;
 }
 
-export type StateWord = { key: "running" | "stopping" | "queued" | "host" | "lead" | "failedHost" | "cancelledHost" | "failedLead" | "cancelledLead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
+export type StateWord = { key: "running" | "stopping" | "unknown" | "queued" | "host" | "lead" | "failedHost" | "cancelledHost" | "failedLead" | "cancelledLead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
 
 /** The one word a micro task's state has, and the mark that goes with it. */
 export function stateWord(task: Task, lead: boolean, workflowState: string | null = task.workflow?.state ?? null, conclusionStatus: string | null = null): StateWord {
   if (taskStatus(task) === "cancelling") return { key: "stopping", mark: "live" };
   if (task.state === "queued") return { key: "queued", mark: "idle" };
+  if (workflowState === "failed" || workflowState === "cancelled") {
+    if (task.state === "running") return { key: "running", mark: "live" };
+    if (task.state === "reconciliation-needed") return { key: "unknown", mark: "live" };
+  }
   switch (workflowState) {
     case "awaiting-host": return { key: lead ? "lead" : "host", mark: "hand" };
     case "delivered": return { key: "review", mark: "hand" };
     case "accepted": return { key: "accepted", mark: "done" };
-    case "failed": return { key: lead ? "failedLead" : "failedHost", mark: "hand" };
-    case "cancelled": return { key: lead ? "cancelledLead" : "cancelledHost", mark: "hand" };
+    case "failed": return task.lineage?.kind === "helper" ? { key: "failed", mark: "fail" }
+      : { key: lead ? "failedLead" : "failedHost", mark: "hand" };
+    case "cancelled": return task.lineage?.kind === "helper" ? { key: "ended", mark: "idle" }
+      : { key: lead ? "cancelledLead" : "cancelledHost", mark: "hand" };
     case "concluded": return conclusionStatus === "failed" ? { key: "failed", mark: "fail" } : { key: "ended", mark: "idle" };
     case "executing": case "waiting-helpers": case "waiting-owned": return { key: "running", mark: "live" };
     default: break;

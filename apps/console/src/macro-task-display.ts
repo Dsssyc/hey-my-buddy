@@ -76,6 +76,7 @@ export function outcomeLabel(span: TimelineSpan, outcome: SpanOutcome): string {
 
 const ROW_STATE_STYLE: Record<string, { tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string }> = {
   executing: { tone: "green", glyph: "▸", glyphClass: "running" },
+  running: { tone: "green", glyph: "▸", glyphClass: "running" },
   "awaiting-host": { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "waiting-owned": { tone: "amber", glyph: "◆", glyphClass: "warn" },
   "waiting-helpers": { tone: "green", glyph: "▸", glyphClass: "running" },
@@ -95,13 +96,20 @@ const STATE_LABELS: Record<string, string> = {
   get delivered() { return i18n.t("console:awaitingAcceptance"); }, get accepted() { return i18n.t("console:accepted"); }, get concluded() { return i18n.t("console:ended"); },
 };
 
-/** Settled terminal states: nobody needs to do anything, so the row's state word is its left edge alone. */
+/** Settled terminal states need no Host action. */
 const SETTLED_STATES = new Set(["accepted", "concluded", "completed"]);
 
 export function rowStateInfo(row: TimelineRow, rows: readonly TimelineRow[] = []): { label: string; tone: "green" | "amber" | "red" | "neutral"; glyph: string; glyphClass: string; settled: boolean } {
   const key = row.status === "cancelling" || row.state === "cancelled" && rows.some(owned => owned.rootLeadRunId === row.runId && !owned.shutdownConfirmed)
-    ? "cancelling" : row.state || row.status;
+    ? "cancelling"
+    : (row.state === "failed" || row.state === "cancelled") && ["queued", "running", "reconciliation-needed"].includes(row.status)
+      ? row.status : row.state || row.status;
   const style = ROW_STATE_STYLE[key];
+  if (row.kind === "helper" && (key === "failed" || key === "cancelled")) {
+    return key === "failed"
+      ? { label: i18n.t("console:executionFailed"), tone: "red", glyph: "✕", glyphClass: "bad", settled: false }
+      : { label: i18n.t("console:cancelled"), tone: "neutral", glyph: "⊘", glyphClass: "muted", settled: true };
+  }
   return {
     label: key === "cancelling" ? i18n.t("tasks:stopping")
       : key === "failed" || key === "cancelled" ? i18n.t(`taskDetail:state.${key}${row.rootLeadRunId ? "Lead" : "Host"}`)

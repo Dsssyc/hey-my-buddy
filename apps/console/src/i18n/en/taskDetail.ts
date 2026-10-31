@@ -8,7 +8,7 @@ export default {
   retry: "Retry",
   unknown: "Unknown",
   unrecorded: "Not recorded",
-  untitled: "Untitled micro task",
+  untitled: "Unnamed micro task",
   title: { fromTask: "{{title}} (taken from the first line of the task)" },
   refresh: { label: "Read again", verified: "Verified {{time}}", unverified: "Verification time not recorded" },
   header: { started: "Started", elapsed: "Elapsed", turns: "Turns" },

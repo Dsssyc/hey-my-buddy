@@ -71,19 +71,35 @@ QUERY_COLUMNS = (
     "effective_model",
 )
 
+ACTIVE_TASK_STATES = ("queued", "running", "cancelling", "reconciliation-needed")
+UNCONCLUDED_RESULT_STATES = ("failed", "cancelled")
+_ACTIVE_TASK_SQL = ",".join(map(repr, ACTIVE_TASK_STATES))
+_RESULT_SQL = ",".join(map(repr, UNCONCLUDED_RESULT_STATES))
+
+
+def host_filter_sql(*, run_state="run_state", task_state="state",
+                    parent_run_id="child_parent_run_id", root_run_id="root_run_id") -> str:
+    """Host waits for history and the slim snapshot, without reading payloads."""
+    return (
+        f"(({run_state}='awaiting-host' OR ({parent_run_id} IS NULL"
+        f" AND {run_state} IN ({_RESULT_SQL}) AND {task_state} NOT IN ({_ACTIVE_TASK_SQL})))"
+        " AND NOT EXISTS (SELECT 1 FROM workflow_lead_tasks lead_tree"
+        f" WHERE lead_tree.owned_run_id={root_run_id}))"
+    )
+
+
 #: ``filter`` semantics, applied in SQL before any LIMIT:
 FILTER_SQL = {
     "all": None,
     # Open work, including Lead-owned runs waiting for the Lead to resume them.
     "active": (
-        "(state IN ('queued','running','cancelling','reconciliation-needed')"
-        " OR run_state IN ('executing','awaiting-host','failed','cancelled','waiting-helpers','waiting-owned'))"
+        f"(state IN ({_ACTIVE_TASK_SQL})"
+        " OR run_state IN ('executing','awaiting-host','waiting-helpers','waiting-owned')"
+        f" OR (child_parent_run_id IS NULL AND run_state IN ({_RESULT_SQL})))"
     ),
     # A Lead-owned tree is active for its Lead, including helper descendants
     # parked on their own Host boundary. The tree root carries that ownership.
-    "host": ("(run_state IN ('awaiting-host','failed','cancelled') AND NOT EXISTS ("
-             "SELECT 1 FROM workflow_lead_tasks lead_tree "
-             "WHERE lead_tree.owned_run_id = root_run_id))"),
+    "host": host_filter_sql(),
     # A terminal result that is still unaccepted: the same condition the console's
     # review gate uses (delivered run or plain task, durable result, confirmed stop).
     # Micro-task review_ready also proves stop for every owned child and router.

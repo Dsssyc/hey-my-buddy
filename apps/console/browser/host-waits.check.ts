@@ -24,7 +24,8 @@ for (const { locale, width, theme } of [
     const counts = entry.locator("[data-slot=macro-entry-counts]");
     await expect(counts.locator('[data-kind="hand"]')).toHaveCount(1);
     await expect(counts.locator('[data-kind="fail"]')).toHaveCount(1);
-    await expect(counts.locator('.sr-only')).toHaveText(zh ? ["等待接手 2", "失败 1", "已验收 1"] : ["Waiting on someone 2", "Failed 1", "Accepted 1"]);
+    await expect(counts.locator('.sr-only')).toHaveText(zh ? ["等待接手 2", "失败 1", "已验收 2", "已结束 2"] : ["Waiting on someone 2", "Failed 1", "Accepted 2", "Ended 2"]);
+    await expect(page.getByRole("link", { name: zh ? /^任务 5 / : /^Tasks 5 / })).toBeVisible();
     await settle(page);
     await page.screenshot({ path: `${captures}/${name}-list.png`, animations: "disabled" });
 
@@ -35,7 +36,7 @@ for (const { locale, width, theme } of [
     await expect(host.locator("dt")).toHaveText(zh ? "等待 Host" : "Waiting for Host");
     await expect(host.locator('[data-kind="hand"]')).toHaveCount(1);
     await expect(header.locator("[data-slot=macro-overview-count-failed] dd")).toHaveText("1");
-    await expect(header.locator("[data-slot=macro-overview-count-ended]")).toHaveCount(0);
+    await expect(header.locator("[data-slot=macro-overview-count-ended] dd")).toHaveText("2");
     await settle(page);
     await expectTextUncut(header.locator("[data-slot=macro-overview-counts] dt, [data-slot=macro-overview-counts] dd"));
     await page.screenshot({ path: `${captures}/${name}-macro.png`, animations: "disabled" });
@@ -66,5 +67,35 @@ for (const { locale, width, theme } of [
       if (run === "preview-run-d2") await page.screenshot({ path: `${captures}/${name}-detail.png`, animations: "disabled" });
     }
 
+  });
+  test("keeps failed and cancelled helpers terminal after their root is accepted", async ({ page }) => {
+    const zh = locale === "zh-CN";
+    await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+    await open(page, `#tasks/${macro}`);
+    const failed = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-d5-h1"]:visible');
+    const cancelled = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-d5-h2"]:visible');
+    await expect(failed).toHaveAccessibleName(new RegExp(zh ? "执行失败" : "Execution failed"));
+    await expect(failed).toHaveAttribute("data-state-tone", "fail");
+    await expect(cancelled).toHaveAccessibleName(new RegExp(zh ? "已取消" : "Cancelled"));
+    await expect(cancelled).toHaveAttribute("data-state-tone", "past");
+    await expect(cancelled.getByText(zh ? "已取消" : "Cancelled", { exact: true })).toBeVisible();
+    await expect(cancelled.getByText(zh ? "已取消" : "Cancelled", { exact: true })).not.toHaveClass(/text-hand|text-fail/);
+    await expect(page.locator('[data-key="span:execution:att-d5h1-1"] [data-slot=execution-failed]')).toBeVisible();
+    if (zh) {
+      await mkdir(captures, { recursive: true });
+      await expect(page.locator(`[data-macro-task-id="${macro}"] [data-slot=macro-entry]`)).toBeVisible();
+      await settle(page);
+      await page.screenshot({ path: `${captures}/${locale}-${width}-${theme}-helpers.png`, animations: "disabled" });
+    }
+    for (const [run, label, mark] of [
+      ["preview-run-d5-h1", zh ? "失败" : "Failed", "fail"],
+      ["preview-run-d5-h2", zh ? "已结束" : "Ended", "idle"],
+    ]) {
+      await page.goto(`#tasks/${macro}/${run}`);
+      const status = page.locator("[data-slot=detail-status]");
+      await expect(status).toHaveText(label);
+      await expect(status.locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", mark);
+      await expect(status).not.toHaveClass(/text-hand/);
+    }
   });
 });

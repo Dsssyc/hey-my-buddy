@@ -203,7 +203,8 @@ EMIT_LAYOUT = {
                "workflow-preview-run-b4.json", "workflow-preview-run-b5.json",
                "workflow-preview-run-b6.json", "workflow-preview-run-b7.json", "workflow-preview-run-b8.json",
                "workflow-preview-run-b9.json", "workflow-preview-run-d1.json", "workflow-preview-run-d2.json",
-               "workflow-preview-run-d3.json", "workflow-preview-run-d4.json"),
+               "workflow-preview-run-d3.json", "workflow-preview-run-d4.json",
+               "workflow-preview-run-d5-h1.json", "workflow-preview-run-d5-h2.json", "workflow-preview-run-d5.json"),
     "truncated": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "error": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "incompatible": ("snapshot-legacy-single-router.json", "snapshot-missing-session.json",
@@ -1170,6 +1171,43 @@ def build_runs() -> dict[str, dict]:
             markers=[marker(instant(1, 18), "dispatch", actor=host_actor(HOST_A)),
                      marker(instant(1, 24), "conclude", actor=host_actor(HOST_A), state="failed")]),
     ]
+    # An accepted ordinary root does not leave terminal helpers for the Host.
+    runs.extend([
+        run("preview-run-d5", project="alpha", group=MACRO_C, title="已验收的根与终态 helper", title_source="title",
+            task_text="核对 helper 失败或取消后由根收回工作，根已验收。",
+            created=instant(1, 25), updated=instant(1, 36), state="accepted", status="completed",
+            category="ended", buddy=CFG_CODEX, accepted=instant(1, 36), result=True,
+            spans=[span("execution:att-d5-1", "execution", instant(1, 25), instant(1, 35), "finished",
+                        attempt_id="att-d5-1", buddy=CFG_CODEX, confirmed=True, generation=1, turn_index=1)],
+            attempts=[attempt("att-d5-1", 1, "finished", True, instant(1, 25), instant(1, 35), CFG_CODEX,
+                              result="合成预览：已处理 helper 结果并完成根微任务。")],
+            artifacts=[artifact("art-d5", "att-d5-1", digest("d5-output")[:40],
+                                "/synthetic-preview/diffs/d5.diff", ["synthetic/helper-result.txt"])],
+            markers=[marker(instant(1, 25), "dispatch", actor=host_actor(HOST_A)),
+                     marker(instant(1, 36), "accept", actor=host_actor(HOST_A), verdict="accepted")]),
+        run("preview-run-d5-h1", project="alpha", group=MACRO_C, parent="preview-run-d5",
+            title="失败后交还给根的 helper", title_source="title", task_text="保留失败的 helper 结果，交由根继续处理。",
+            created=instant(1, 26), updated=instant(1, 30), state="failed", status="failed",
+            category="ended", buddy=CFG_GLM, result=True,
+            spans=[span("execution:att-d5h1-1", "execution", instant(1, 27), instant(1, 30), "finished",
+                        attempt_id="att-d5h1-1", buddy=CFG_GLM, confirmed=True, generation=1, turn_index=1,
+                        result_status="failed", error="Synthetic helper failure")],
+            attempts=[attempt("att-d5h1-1", 1, "finished", True, instant(1, 27), instant(1, 30), CFG_GLM,
+                              result="合成预览：helper 执行失败，检出已交还根。", error="Synthetic helper failure",
+                              result_status="failed", turn_state="failed")],
+            markers=[marker(instant(1, 26), "dispatch", actor=host_actor(HOST_A))]),
+        run("preview-run-d5-h2", project="alpha", group=MACRO_C, parent="preview-run-d5",
+            title="取消后交还给根的 helper", title_source="title", task_text="保留取消的 helper 结果，交由根继续处理。",
+            created=instant(1, 26, 30), updated=instant(1, 31), state="cancelled", status="cancelled",
+            category="ended", buddy=CFG_GLM, result=True,
+            spans=[span("execution:att-d5h2-1", "execution", instant(1, 28), instant(1, 31), "finished",
+                        attempt_id="att-d5h2-1", buddy=CFG_GLM, confirmed=True, generation=1, turn_index=1,
+                        result_status="cancelled")],
+            attempts=[attempt("att-d5h2-1", 1, "finished", True, instant(1, 28), instant(1, 31), CFG_GLM,
+                              result="合成预览：helper 已取消，检出已交还根。", result_status="cancelled",
+                              termination_reason="wrap-up", turn_state="failed")],
+            markers=[marker(instant(1, 26, 30), "dispatch", actor=host_actor(HOST_A))]),
+    ])
     # Internal routing rows: real task history, never macro task rows.
     for owner, record in (("preview-run-a1", ROUTING_A1), ("preview-run-a2", ROUTING_A2),
                           ("preview-run-a3", ROUTING_A3), ("preview-run-a2", ROUTING_A2_ABSTENTION),
@@ -1241,8 +1279,13 @@ def index_runs(runs: list[dict]) -> dict:
         while by_id[root]["parentRunId"] is not None:
             root = by_id[root]["parentRunId"]
         entry["rootRunId"] = root
-        if entry["kind"] not in ("decision", "execution") and entry["state"] in ("awaiting-host", "failed", "cancelled"):
-            entry["category"] = "active" if by_id[root]["leadOwner"] else "host"
+        if entry["kind"] not in ("decision", "execution"):
+            if entry["state"] == "awaiting-host":
+                entry["category"] = "active" if by_id[root]["leadOwner"] else "host"
+            elif entry["status"] in ("queued", "running", "cancelling", "reconciliation-needed"):
+                entry["category"] = "active"
+            elif entry["state"] in ("failed", "cancelled"):
+                entry["category"] = "ended" if entry["parentRunId"] else "active" if by_id[root]["leadOwner"] else "host"
         entry["requestId"] = entry.get("requestId") or f"request-{entry['runId']}"
         entry["cwd"] = f"/synthetic-preview/checkouts/{entry['runId']}"
         project = PROJECTS[entry["project"]] if entry["project"] else None
@@ -1252,7 +1295,7 @@ def index_runs(runs: list[dict]) -> dict:
             "currentHostId": entry["currentHostId"] if entry["kind"] != "execution" else None,
             "parentRunId": entry["parentRunId"],
             "rootRunId": root if entry["kind"] != "execution" else None,
-            "rootLeadRunId": entry["leadOwner"][0] if entry["leadOwner"] else None,
+            "rootLeadRunId": by_id[root]["leadOwner"][0] if by_id[root]["leadOwner"] else None,
             "leadOwnership": ({"leadRunId": entry["leadOwner"][0], "leadTurnId": entry["leadOwner"][1],
                                "createdAt": entry["createdAt"]} if entry["leadOwner"] else None),
             "delegationAuthority": entry["delegationAuthority"],
@@ -2161,7 +2204,8 @@ def matches(entry: dict, applied: dict) -> bool:
         return entry["category"] == "host"
     if name == "active":
         return entry["status"] in ("queued", "running", "cancelling", "reconciliation-needed") or \
-            entry["state"] in ("executing", "awaiting-host", "failed", "cancelled", "waiting-helpers", "waiting-owned")
+            entry["state"] in ("executing", "awaiting-host", "waiting-helpers", "waiting-owned") or \
+            entry["parentRunId"] is None and entry["state"] in ("failed", "cancelled")
     return entry["category"] == "review"
 
 
@@ -2359,11 +2403,11 @@ def pending_root_count(state: PreviewState | None = None) -> int:
     """The slim snapshot's board-wide awaiting-Host root count.
 
     Mirrors ``macro_tasks.pending_root_count`` over the synthetic runs: one
-    distinct lineage root per micro task run whose state awaits its Host,
+    distinct lineage root per Host wait, including stopped root outcomes,
     deduplicated by ``rootRunId`` exactly like the service computes it.
     """
     roots = {entry["lineage"]["rootRunId"] for entry in FIXTURES["runs"].values()
-             if entry["kind"] in ("micro-task", "helper") and entry["state"] == "awaiting-host"
+             if entry["kind"] in ("micro-task", "helper") and entry["category"] == "host"
              and (state is None or entry["runId"] not in state.removed_runs)}
     return len(roots)
 
@@ -3613,7 +3657,8 @@ def emit_fixture_files() -> list[dict]:
     workflows = {"normal": ("preview-run-a1", "preview-run-a2", "preview-run-a4", "preview-run-b1", "preview-run-b1-h1",
                             "preview-run-b2", "preview-run-b3", "preview-run-b4", "preview-run-b5",
                             "preview-run-b6", "preview-run-b7", "preview-run-b8", "preview-run-b9", "preview-run-b10",
-                            "preview-run-d1", "preview-run-d2", "preview-run-d3", "preview-run-d4"),
+                            "preview-run-d1", "preview-run-d2", "preview-run-d3", "preview-run-d4",
+                            "preview-run-d5", "preview-run-d5-h1", "preview-run-d5-h2"),
                  "truncated": ("preview-run-a1",),
                  "error": ("preview-run-a1",)}
     for scenario in EMIT_SCENARIOS:
