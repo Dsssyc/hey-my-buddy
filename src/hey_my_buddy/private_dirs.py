@@ -187,7 +187,11 @@ def remove_tree(path: Path, *, keep: frozenset[Path] = frozenset()) -> bool:
                 else:
                     native_path(child).unlink()
         if not retained:
-            native_path(directory).rmdir()
+            if os.name == 'nt':
+                from .windows_files import remove_directory
+                remove_directory(directory)
+            else:
+                native_path(directory).rmdir()
         return not retained
 
     return descend(path)

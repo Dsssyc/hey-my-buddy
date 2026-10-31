@@ -234,15 +234,34 @@ def open_regular_fd(path, flags, mode=0o600, *, delete=False, api=None):
 
 def unlink_regular_file(path, *, api=None):
     """Remove one ordinary file name without changing other hardlinks' attributes."""
+    _remove_entry(path, directory=False, api=api)
+
+
+def remove_directory(path, *, api=None):
+    """Remove an empty ordinary directory, including its read-only attribute."""
+    _remove_entry(path, directory=True, api=api)
+
+
+def _remove_entry(path, *, directory, api):
     api = api if api is not None else WindowsFileAPI()
-    handle = api._open(path, DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
     try:
-        attributes, _ = api.info(handle)
-        if attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) or api.file_type(handle) != FILE_TYPE_DISK:
-            raise BoardError('PRIVATE_PATH_UNSAFE', 'Path is not an ordinary file', path=str(path))
-        # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE.
-        flags = wintypes.DWORD(0x1 | 0x2 | 0x10)
-        if not api.kernel.SetFileInformationByHandle(int(handle), 21, ctypes.byref(flags), ctypes.sizeof(flags)):
-            raise api._os_error(ctypes.get_last_error())
-    finally:
-        api.close(handle)
+        handle = api._open(path, DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
+        try:
+            attributes, _ = api.info(handle)
+            if (bool(attributes & FILE_ATTRIBUTE_DIRECTORY) != directory
+                    or attributes & FILE_ATTRIBUTE_REPARSE_POINT or api.file_type(handle) != FILE_TYPE_DISK):
+                raise BoardError('PRIVATE_PATH_UNSAFE',
+                                 'Path is not an ordinary directory' if directory else 'Path is not an ordinary file',
+                                 path=str(path))
+            # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE.
+            flags = wintypes.DWORD(0x1 | 0x2 | 0x10)
+            if not api.kernel.SetFileInformationByHandle(int(handle), 21, ctypes.byref(flags), ctypes.sizeof(flags)):
+                raise api._os_error(ctypes.get_last_error())
+        finally:
+            api.close(handle)
+    except OSError as error:
+        # Handle-only Win32 failures do not carry the name being operated on.
+        # Preserve the native category and error numbers, adding that known name.
+        if error.filename is None:
+            error.filename = os.fspath(path)
+        raise

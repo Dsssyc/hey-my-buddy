@@ -281,8 +281,50 @@ class HandleBoundaryTests(unittest.TestCase):
             with self.assertRaises(PermissionError) as raised:
                 files.unlink_regular_file(r'C:\folder\leaf', api=api)
         self.assertEqual(raised.exception.winerror, 32)
+        self.assertEqual(raised.exception.filename, r'C:\folder\leaf')
+        self.assertEqual(raised.exception.errno, errno.EACCES)
         self.assertTrue(handle.closed)
         self.assertTrue(self.native.CreateFile.call_args.args[2] & files.FILE_SHARE_DELETE)
+
+    def test_unlink_open_error_keeps_the_target_path(self):
+        api = files.WindowsFileAPI()
+        self.native.CreateFile.side_effect = FakeWinError(5)
+        with self.assertRaises(PermissionError) as raised:
+            files.unlink_regular_file(r'C:\folder\unreadable', api=api)
+        self.assertEqual(raised.exception.filename, r'C:\folder\unreadable')
+        self.assertEqual(raised.exception.errno, errno.EACCES)
+        self.assertEqual(raised.exception.winerror, 5)
+
+    def test_directory_deletion_uses_a_no_follow_handle_and_ignores_readonly(self):
+        api = mock.Mock()
+        api._open.return_value = 321
+        api.info.return_value = (files.FILE_ATTRIBUTE_DIRECTORY | 1, 0)
+        api.file_type.return_value = files.FILE_TYPE_DISK
+
+        def remove(handle, kind, buffer, size):
+            self.assertEqual((handle, kind, size), (321, 21, ctypes.sizeof(files.wintypes.DWORD)))
+            self.assertEqual(ctypes.cast(buffer, ctypes.POINTER(files.wintypes.DWORD)).contents.value, 0x13)
+            return True
+
+        api.kernel.SetFileInformationByHandle.side_effect = remove
+        files.remove_directory(r'C:\folder\readonly', api=api)
+        api._open.assert_called_once_with(r'C:\folder\readonly', files.DELETE | files.FILE_READ_ATTRIBUTES,
+                                          files.OPEN_EXISTING, share_delete=True)
+        api.close.assert_called_once_with(321)
+
+    def test_directory_deletion_refuses_files_reparse_points_and_non_disk_handles(self):
+        for attributes, kind in ((files.FILE_ATTRIBUTE_NORMAL, files.FILE_TYPE_DISK),
+                                 (files.FILE_ATTRIBUTE_DIRECTORY | files.FILE_ATTRIBUTE_REPARSE_POINT, files.FILE_TYPE_DISK),
+                                 (files.FILE_ATTRIBUTE_DIRECTORY, 2)):
+            with self.subTest(attributes=attributes, kind=kind):
+                api = mock.Mock()
+                api._open.return_value = 123
+                api.info.return_value = (attributes, 0)
+                api.file_type.return_value = kind
+                with self.assertRaises(BoardError):
+                    files.remove_directory('directory', api=api)
+                api.kernel.SetFileInformationByHandle.assert_not_called()
+                api.close.assert_called_once_with(123)
 
     def test_private_open_refuses_parent_traversal_and_truncation_before_opening(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -338,6 +380,28 @@ class LauncherTransferTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'nt', 'native Windows ACL/handle evidence')
 class NativePrivateFilesTests(unittest.TestCase):
+    def test_readonly_directory_removal_covers_empty_roots_and_nested_content(self):
+        import win32con, win32file
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            for nested in (False, True):
+                with self.subTest(nested=nested):
+                    root = base / str(nested)
+                    root.mkdir()
+                    directories = [root]
+                    if nested:
+                        child = root / 'nested'
+                        child.mkdir()
+                        (child / 'leaf').write_bytes(b'owned private content')
+                        directories.append(child)
+                    for directory in directories:
+                        native = str(native_path(directory))
+                        attributes = win32file.GetFileAttributes(native)
+                        win32file.SetFileAttributes(native, attributes | win32con.FILE_ATTRIBUTE_READONLY)
+                        self.assertTrue(win32file.GetFileAttributes(native) & win32con.FILE_ATTRIBUTE_READONLY)
+                    self.assertTrue(private_dirs.remove_tree(root))
+                    self.assertFalse(root.exists())
+
 
     def test_long_resolve_checks_links_and_returns_ordinary_paths(self):
         temporary = private_dirs.make_temporary_dir(prefix='resolve-', directory=Path(tempfile.gettempdir()))
