@@ -79,6 +79,7 @@ SANITIZED_VARIABLES = (
 DAEMON_LOCK_NAMES = ("control-start.lock", "control-daemon.lock", "board-owner.lock")
 EVIDENCE_FILE_NAME = "teardown-evidence.json"
 CREATOR_FILE_NAME = "creator.pid"
+FIXTURE_CLEANUP_DEFERRED = "hey_my_buddy.cli.checks: fixture cleanup deferred: "
 
 # These handles belong to this runner, never to a later --sweep process. In
 # particular, reopening a vanished, non-kill-on-close Job proves nothing.
@@ -115,7 +116,7 @@ def cleanup_fixture_tree(directory: Path) -> None:
                 or _fixture_temp_root is None
                 or not directory.resolve().is_relative_to(_fixture_temp_root)):
             raise
-        print(f"hey_my_buddy.cli.checks: fixture cleanup deferred: {directory}: {error}", file=sys.stderr)
+        print(f"{FIXTURE_CLEANUP_DEFERRED}{directory}: {error}", file=sys.stderr)
 
 
 class _SuiteWindowsAPI(WindowsAPI):
@@ -599,6 +600,13 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
     python_files = len(modules)
     print(f"hey_my_buddy.cli.checks: python tests run: {ran_total} (skipped {skipped_total}) "
           f"in {python_files - len(python_failed) - len(uncounted)} of {python_files} files")
+    deferred = [(outcome.label, line.split(FIXTURE_CLEANUP_DEFERRED, 1)[1])
+                for outcome in python_outcomes for line in outcome.stderr.splitlines()
+                if FIXTURE_CLEANUP_DEFERRED in line]
+    if deferred:
+        print(f"hey_my_buddy.cli.checks: fixture cleanup deferred {len(deferred)} time(s):")
+        for label, detail in deferred:
+            print(f"  {label}: {detail}")
     failures = []
     if never_ran:
         failures.append(f"{len(never_ran)} suite(s) never ran: {', '.join(never_ran)}")

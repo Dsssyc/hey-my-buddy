@@ -362,6 +362,38 @@ class FocusedChecksTests(unittest.TestCase):
         self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
                       output.splitlines()[-1])
 
+    def test_deferred_windows_fixture_cleanup_is_summarized_after_final_removal_and_failure(self):
+        for winerror, fails, expected_code in ((5, False, 0), (32, True, 1)):
+            with self.subTest(winerror=winerror, fails=fails):
+                name = f"test_deferred_cleanup_{winerror}"
+                (self.top / f"{name}.py").write_text(
+                    "import os, tempfile, unittest\nfrom pathlib import Path\nfrom unittest.mock import patch\n"
+                    "from hey_my_buddy.cli import checks\n"
+                    "class Case(unittest.TestCase):\n"
+                    "    def test_fixture_cleanup(self):\n"
+                    f"        error = OSError('fixture WinError {winerror}')\n"
+                    f"        error.winerror = {winerror}\n"
+                    "        with patch.object(checks, 'os', wraps=os) as windows, "
+                    "patch.object(checks, 'remove_private_test_root', side_effect=error):\n"
+                    "            windows.name = 'nt'\n"
+                    "            with tempfile.TemporaryDirectory() as scratch:\n"
+                    "                Path(scratch, 'evidence').write_bytes(b'fixture')\n"
+                    + ("        self.fail('fixture assertion')\n" if fails else ""),
+                    encoding="utf-8", newline="\n",
+                )
+                code, output, errors = self.invoke(["--jobs", "1", f"tests/python/{name}.py"])
+                self.assertEqual(code, expected_code, errors + output)
+                self.assertIn("fixture cleanup deferred 1 time(s):", output)
+                self.assertIn(f"  {name}: ", output)
+                self.assertIn(f"fixture WinError {winerror}", output)
+                self.assertIn("private root removed", output.splitlines()[-1])
+                self.assertEqual(list(self.temporary.iterdir()), [])
+                if fails:
+                    self.assertIn("fixture assertion", output)
+                    self.assertIn("tests failed:", output.splitlines()[-1])
+                else:
+                    self.assertIn("tests passed; private root removed; exit 0", output.splitlines()[-1])
+
     def test_blocked_fixture_deletion_preserves_passing_result_and_teardown_evidence(self):
         (self.top / "test_blocked_cleanup.py").write_text(
             "import os, tempfile, unittest\nfrom pathlib import Path\nfrom unittest.mock import patch\n"
@@ -394,6 +426,9 @@ class FocusedChecksTests(unittest.TestCase):
         evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
         self.assertEqual(evidence["cleanupError"], "OSError: fixture delete-pending entry")
         self.assertIn("test_blocked_cleanup ok", output)
+        self.assertIn("fixture cleanup deferred 1 time(s):", output)
+        self.assertIn("  test_blocked_cleanup: ", output)
+        self.assertIn("fixture delete-pending entry", output)
         self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
                       output.splitlines()[-1])
 
