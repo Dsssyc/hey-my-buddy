@@ -57,7 +57,7 @@ class UpgradeChainTests(unittest.TestCase):
         self.state.mkdir()
         self.db = sqlite3.connect(self.state / 'board.sqlite3')
         self.addCleanup(self.db.close)
-        self.db.executescript((FIXTURE / 'board.sql').read_text())
+        self.db.executescript((FIXTURE / 'board.sql').read_text(encoding='utf-8'))
         self.db.row_factory = sqlite3.Row
 
     def schema31(self):

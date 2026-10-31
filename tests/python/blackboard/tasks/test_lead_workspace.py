@@ -235,7 +235,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
             pass
         child = self._child(board, lead, 'managed-lead-child')
         claim, manifest, checkout = self._claim_child(board, child)
-        (checkout / 'src' / 'feature.py').write_text('value = 2\n', encoding='utf-8')
+        (checkout / 'src' / 'feature.py').write_text('value = 2\n', encoding='utf-8', newline='\n')
         sealed = workspace.seal(self.directory, manifest, child['runId'], claim['attempt']['attemptId'])
         self._finish_child(board, child, claim, seal=sealed)
         subprocess.run(['git', '-C', str(target), 'apply', sealed['diffPath']], env={**os.environ, **GIT_ENV}, check=True)
@@ -247,7 +247,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         self.assertEqual(accepted['state'], 'accepted')
         self.assertTrue(accepted['reclaim']['removed'], accepted)
         self.assertTrue(target.exists())
-        self.assertEqual((target / 'src' / 'feature.py').read_text(), 'value = 2\n')
+        self.assertEqual((target / 'src' / 'feature.py').read_text(encoding='utf-8'), 'value = 2\n')
         with workspace._lock(target.parent, create=False):
             pass
         with board.store.db.read() as connection:

@@ -60,5 +60,6 @@ class TimelineConclusionTests(WorkflowTestCase):
         self.assertIsNotNone(node, "Node 24 and console dependencies are required for the writer-to-renderer regression")
         result = subprocess.run([node, str(ROOT / "apps/console/node_modules/vitest/vitest.mjs"), "run",
                                  "src/timeline/failure.test.tsx", "--maxWorkers=1"],
-                                cwd=ROOT / "apps/console", env=environment, capture_output=True, text=True, timeout=120)
+                                cwd=ROOT / "apps/console", env=environment, capture_output=True, text=True,
+                                encoding="utf-8", timeout=120)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)

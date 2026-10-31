@@ -42,7 +42,7 @@ class AdmissionTests(unittest.TestCase):
         rows = {102: ProcessMember(102, 11, 1, 101, True)}
         observer, signals = self.observer(rows, {102: 11})
         self.assertEqual(observer.observe(), "unknown")
-        observer.signal(signal.SIGKILL)
+        observer.signal(signal.SIGTERM)
         self.assertEqual(signals, [])
         rows.clear()
         self.assertEqual(observer.observe(), "empty")
@@ -59,8 +59,8 @@ class AdmissionTests(unittest.TestCase):
         rows[103] = ProcessMember(103, 12, 1, 101, True)
         starts[103] = 12
         self.assertEqual(observer.observe(), "unknown")
-        observer.signal(signal.SIGKILL)
-        self.assertEqual(signals, [(102, signal.SIGKILL)])
+        observer.signal(signal.SIGTERM)
+        self.assertEqual(signals, [(102, signal.SIGTERM)])
         del rows[103], starts[103]
         self.assertEqual(observer.observe(), "alive")
 
@@ -72,11 +72,11 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(observer.observe(), "alive")
         del rows[101], starts[101]
         rows[102] = replace(rows[102], parent=1)
-        observer.signal(signal.SIGKILL)
-        self.assertEqual(signals, [(102, signal.SIGKILL)])
+        observer.signal(signal.SIGTERM)
+        self.assertEqual(signals, [(102, signal.SIGTERM)])
         starts[102] = 12
         rows[102] = replace(rows[102], started_at=12)
-        observer.signal(signal.SIGKILL)
+        observer.signal(signal.SIGTERM)
         self.assertEqual(len(signals), 1)
 
     def test_root_changes_during_scan_does_not_admit_members(self):
@@ -92,7 +92,7 @@ class AdmissionTests(unittest.TestCase):
         observer, signals = self.observer(rows, {101: 10})
         observer.observe()
         with patch.object(observer, "creation", return_value=20):
-            observer.signal(signal.SIGKILL)
+            observer.signal(signal.SIGTERM)
         self.assertEqual(signals, [])
 
     def test_pinned_zombie_root_still_proves_a_child_edge_without_its_table_row(self):
@@ -141,8 +141,8 @@ class AdmissionTests(unittest.TestCase):
         with patch.object(observer, "snapshot", side_effect=OSError):
             with self.assertRaises(OSError):
                 observer.observe()
-            observer.signal(signal.SIGKILL)
-        self.assertEqual(signals, [(102, signal.SIGKILL), (101, signal.SIGKILL)])
+            observer.signal(signal.SIGTERM)
+        self.assertEqual(signals, [(102, signal.SIGTERM), (101, signal.SIGTERM)])
 
 
 @unittest.skipIf(os.name == "nt", "POSIX descendant/session boundary")

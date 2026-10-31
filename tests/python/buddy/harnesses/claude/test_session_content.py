@@ -37,7 +37,7 @@ class ProjectorTests(unittest.TestCase):
 
     def test_recorded_native_block_frames_keep_reasoning_and_all_inter_tool_body(self):
         fixture = json.loads((Path(__file__).with_name("fixtures") /
-                              "session-content-claude.json").read_text())
+                              "session-content-claude.json").read_text(encoding="utf-8"))
         self.projector.start_prompt(fixture["sessionId"], "probe prompt")
         for frame in fixture["events"]:
             self.projector.observe_frame(frame)

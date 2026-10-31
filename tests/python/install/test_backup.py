@@ -62,7 +62,7 @@ class BackupTests(BoardTestCase):
     def test_schema31_backup_keeps_raw_form_without_running_a_migration(self):
         from hey_my_buddy.blackboard.store import schema_30_31
         fixture = load_fixture(self.directory)
-        with sqlite3.connect(fixture['state'] / 'board.sqlite3') as connection:
+        with closing(sqlite3.connect(fixture['state'] / 'board.sqlite3')) as connection, connection:
             connection.row_factory = sqlite3.Row
             schema_30_31.upgrade(connection)
         before = (self.directory / 'board.sqlite3').read_bytes()
