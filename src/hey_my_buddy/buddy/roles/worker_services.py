@@ -105,7 +105,7 @@ FINISH_DESCRIPTION = (
     "Conclude the owning Buddy root turn with completed, assistance or attention. Include all six fields: "
     "disposition, summary, remaining, decisions, artifacts, request. For completed, request must be null. "
     "Correct validation errors and retry; stop after one successful receipt, once your work and internal "
-    "subagents have settled. A completed outcome is refused while a Host inquiry is still unanswered. "
+    "subagents have settled. "
     "A refused call returns a signed JSON refusal envelope whose detail names the correction; read it, fix "
     "the call and retry in this same turn. This tool does not dispatch other tasks."
 )
@@ -118,7 +118,7 @@ CHECKPOINT_DESCRIPTION = (
     "hey_my_buddy_answer_inquiry using its exact inquiryId."
 )
 ANSWER_DESCRIPTION = (
-    "Answer one Host inquiry delivered in this turn or exposed by hey_my_buddy_checkpoint, using its exact inquiryId and a bounded answer. "
+    "Answer one Host inquiry delivered in this turn, using its exact inquiryId and a bounded answer. "
     "Returns a signed tentative receipt; the recorded answer only becomes authoritative after the owning "
     "controller verifies it against this root turn's own tool evidence. A first accepted answer for an "
     "inquiry cannot be replaced."
@@ -143,6 +143,11 @@ def micro_task_prompt(task_text: str, turn_input: dict, finish_tool: str, *,
         f"does not block it. Checkpointing is voluntary and never on a timer, and no input is ever injected into "
         "your turn."
     ) if checkpoint_tool and answer_tool else ""
+    if answer_tool and checkpoint_tool is None:
+        inquiry = (f"Host inquiries arrive as inputs to this running root turn. Answer each using {answer_tool} "
+                   "with its exact inquiryId, then continue the assigned work. Questions do not open or extend "
+                   "a turn; a question outside its answer window is unavailable. Unanswered questions do not "
+                   "block finishing this turn.")
     return worker_prompt(task_text, turn_input, credential_file=credential_file, delivery=(
         "This is a Buddy root turn for a micro task. Complete the authorized task using the available coding tools and internal subagents. Follow the frozen Host input and its allocated workspace. Allocated workspaces share Git stash, branches and tags with the owner's repository: do not use git stash or create, switch, move or delete branches or tags; leave changes in the workspace or commit on the current detached HEAD.",
         f"Only the root may conclude this Buddy turn. After your work and internal subagents settle, obtain one successful receipt from {finish_tool} with the complete structured outcome. Include all six fields: disposition, summary, remaining, decisions, artifacts, request. Completed requires request: null. Use assistance for bounded help or attention for a Host decision. If a native permission or user-input request was refused, you must conclude with attention instead of completed. If a session tool refuses your call — including with a signed JSON refusal envelope naming the correction — correct the arguments and retry in this same turn. Plain final text is not a recorded outcome. After a successful finish receipt, do not start more tools; end the native turn.",
@@ -316,16 +321,21 @@ def _finish_receipt(arguments: dict, configuration: dict) -> dict:
     return {"content": [{"type": "text", "text": canonical_json(receipt)}]}
 
 
-def session_tools(*, delegation_authority: bool = False) -> list[dict]:
-    """The three session tools this role exposes inside one native root turn."""
-    return [
-        {"name": "hey_my_buddy_checkpoint", "inputSchema": CHECKPOINT_SCHEMA, "description": CHECKPOINT_DESCRIPTION},
+def session_tools(*, delegation_authority: bool = False, checkpoint: bool = True) -> list[dict]:
+    """Role tools selected for the harness's actual inquiry delivery path."""
+    tools = [
         {"name": "hey_my_buddy_answer_inquiry", "inputSchema": ANSWER_SCHEMA, "description": ANSWER_DESCRIPTION},
         {"name": "hey_my_buddy_finish_turn", "inputSchema": outcome_schema_for(
             delegation_authority=delegation_authority), "description": FINISH_DESCRIPTION + (
+                " A completed outcome is refused while a Host inquiry is still unanswered."
+                if checkpoint else "") + (
                 " A Lead may use waiting with request: null after handing off owned work; the board will open a later turn."
                 if delegation_authority else "")},
     ]
+    if checkpoint:
+        tools.insert(0, {"name": "hey_my_buddy_checkpoint", "inputSchema": CHECKPOINT_SCHEMA,
+                         "description": CHECKPOINT_DESCRIPTION})
+    return tools
 
 
 def call_session_tool(name: object, arguments: object, configuration: dict) -> dict | None:
@@ -356,7 +366,8 @@ def call_session_tool(name: object, arguments: object, configuration: dict) -> d
             # as silently completed work. The root is still live and can issue
             # the attention receipt in this same turn.
             return _refusal(configuration, "hey_my_buddy_finish_turn", "attention-outstanding", ATTENTION_REFUSAL)
-        if arguments["disposition"] in ("completed", "waiting"):
+        if (arguments["disposition"] in ("completed", "waiting")
+                and ("toolNames" not in configuration or "hey_my_buddy_checkpoint" in configuration["toolNames"])):
             refusal = inquiry_refusal(pending_inquiries(configuration) or [])
             if refusal:
                 # Same contract as a refused native approval: the root is still

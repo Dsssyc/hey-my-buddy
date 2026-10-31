@@ -63,5 +63,7 @@
 | 2026-10-31 | [ZCode 0.17.0 与 DSH 0.2.1-rc.2 能不能在回合进行中送入输入](2026-10-31-zcode-dsh-in-turn-input.md) | 待办“问 ZCode 的 Worker”；ADR-023 |
 | 2026-10-31 | [公开资料与社区里，ZCode、DSH 与 ACP 怎样在回合进行中送入输入](2026-10-31-in-turn-input-public-sources.md) | 待办“问 ZCode 的 Worker”；ADR-023；续查同日上一份 |
 | 2026-10-31 | [DSH 0.2.1-rc.2 在进程边界上提供哪些接口，哪一个能在回合中送入输入](2026-10-31-dsh-boundary-surfaces.md) | 待办“问 ZCode 的 Worker”；ADR-006 2026-10-31 的那一段；ADR-023 与 ADR-030；续查同日的两份 |
+| 2026-10-31 | [ZCode 0.17.0 的入队父行、队列读取与自动执行](2026-10-31-zcode-queue-initialization.md) | ADR-006 实时问询执行前提；续查空会话外键与 v4 队列 |
+| 2026-10-31 | [ZCode 私有会话关闭自动执行后的真实问询验证](2026-10-31-zcode-private-inquiry-live.md) | ADR-006 开发者选 A；一次获批的 GLM-5.3-Flash / low 原生根回合 |
 
 2026-10-11 之前的四份是从各自的决定里移过来的，当时没有按上面的写法记录读到哪里为止，这一点在各份记录里照实写明。

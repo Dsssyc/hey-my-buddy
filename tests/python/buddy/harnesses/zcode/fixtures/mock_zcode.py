@@ -3,12 +3,12 @@
 
 It also implements the documented reverse-RPC interactive requests and the v4
 command surface, so the controller's attention handling is exercised with no
-model and no network. The ``inquiry-*`` cases drive the cooperative checkpoint
-channel: the fixture plays the root model calling the real ``hey_my_buddy_checkpoint``
-and ``hey_my_buddy_answer_inquiry`` tools, including child-relay, forged-receipt and
-finish-refusal choreography.
+model and no network. The ``inquiry-*`` cases receive v4 guide input and use
+the real ``hey_my_buddy_answer_inquiry`` tool, including child-relay, forged
+receipt, late-answer and held-queue choreography.
 """
 import json
+from inquiry_queue import InquiryQueue
 import hashlib
 import os
 import subprocess
@@ -46,10 +46,15 @@ commands = []
 methods = []
 completed = False
 completion_lock = threading.Lock()
+send_lock = threading.RLock()
+event_lock = threading.RLock()
+guides_ready = threading.Event()
+guides = []
 
 
 def send(value):
-    print(json.dumps(value), flush=True)
+    with send_lock:
+        print(json.dumps(value), flush=True)
 
 
 def wait_file(name, timeout=20.0):
@@ -89,9 +94,27 @@ def snapshot():
 
 def event(kind, payload, *, root=None, turn=None):
     global sequence
-    sequence += 1
-    send({"method": "session/event", "params": {"type": kind, "sessionId": root or session_id, "turnId": turn or turn_id,
-          "seq": sequence, "eventId": "event-" + str(sequence), "payload": payload}})
+    with event_lock:
+        sequence += 1
+        send({"method": "session/event", "params": {"type": kind, "sessionId": root or session_id, "turnId": turn or turn_id,
+              "seq": sequence, "eventId": "event-" + str(sequence), "payload": payload}})
+
+
+def received_guide(params, item):
+    question = json.loads(params["payload"]["text"].split("\n", 1)[1])
+    guides.append({**question, "commandId": params["commandId"], "pendingInputId": item["queueItemId"]})
+    event("turn.steerQueued", {"inputId": params["commandId"], "pendingInputId": item["queueItemId"],
+        "targetTurnId": turn_id, "delivery": "guide"})
+    guides_ready.set()
+
+
+def record_command(params):
+    commands.append(dict(params))
+    record_commands()
+
+
+inquiry_queue = InquiryQueue(send, lambda: session_id, received_guide, record_command,
+                            lying_delete=case == "inquiry-delete-stale", reject_hold=case == "inquiry-hold-rejected")
 
 
 def mcp_call(tool, arguments):
@@ -168,16 +191,6 @@ def finish(disposition="completed"):
     return mcp_call("hey_my_buddy_finish_turn", outcome_for(disposition))
 
 
-def checkpoint_and_answer(*, prefix="fixture answer for"):
-    """The compliant root flow: pick up queued questions, answer each, then finish."""
-    content, error = native_tool_call("hey_my_buddy_checkpoint", {}, call_id="call-checkpoint-root")
-    if content is None:
-        return content, error
-    for item in json.loads(content)["inquiries"]:
-        native_tool_call("hey_my_buddy_answer_inquiry", {"inquiryId": item["inquiryId"], "answer": f"{prefix} {item['inquiryId']}"},
-                         call_id="call-answer-" + item["inquiryId"])
-    return content, None
-
 
 def settle_turn(result_type="success"):
     event("turn.completed", {"inputId": prompt_input_id, "resultType": result_type, "response": "fixture final text is not the outcome"})
@@ -223,105 +236,48 @@ def complete_turn():
 
 
 def inquiry_turn():
-    """Cooperative inquiry choreography after the test released the live turn.
-
-    The test queues its Host question through the bridge socket before creating
-    the release file, so by the time this runs the journal holds the committed
-    question the root is expected to pick up.
-    """
+    """The root receives native guide input; it never calls a checkpoint."""
     global completed
     with completion_lock:
         completed = True
-    relay = {"source": "subagent", "childSessionId": "sess-child", "childToolCallId": "child-ckpt"}
-    if case == "inquiry-live":
-        checkpoint_and_answer()
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
-        settle_turn()
-        return
-    if case == "inquiry-refusal-wrapped":
-        # The incident's native-wrapper shape on the inquiry path: the MCP
-        # isError finish refusal (a signed tool-refusal envelope) arrives as a
-        # successful tool result; the compliant root still checkpoints, answers
-        # and retries the finish in this same turn.
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first", error_as_result=True)
-        checkpoint_and_answer()
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
-        settle_turn()
-        return
-    if case == "inquiry-finish-refused":
-        # A completed finish is refused while the question is unanswered; the
-        # compliant root then checkpoints, answers and retries the finish.
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first")
-        checkpoint_and_answer()
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
-        settle_turn()
-        return
-    if case == "inquiry-answer-refused":
-        # The root answers with an unknown inquiryId first: the session tool
-        # refuses through its signed envelope, delivered inside the native
-        # wrapper's successful result; the compliant root then answers with
-        # the exact id it checkpointed and completes the turn.
-        content, error = native_tool_call("hey_my_buddy_checkpoint", {}, call_id="call-checkpoint-root")
-        if content is None:
-            return content, error
-        listed = json.loads(content)["inquiries"]
-        native_tool_call("hey_my_buddy_answer_inquiry",
-                         {"inquiryId": "never-queued", "answer": "wrong id"},
-                         call_id="call-answer-wrong", error_as_result=True)
-        for item in listed:
-            native_tool_call("hey_my_buddy_answer_inquiry",
-                             {"inquiryId": item["inquiryId"], "answer": f"fixture answer for {item['inquiryId']}"},
-                             call_id="call-answer-" + item["inquiryId"])
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
-        settle_turn()
-        return
-    if case == "inquiry-unanswered":
-        # Assistance stays legal with a pending question; settlement then marks
-        # the unanswered entry unavailable without waking anything.
-        native_tool_call("hey_my_buddy_checkpoint", {}, call_id="call-checkpoint-root")
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("assistance"), call_id="call-finish-final")
+    if case == "inquiry-hold-rejected":
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for(), call_id="call-finish-final")
         settle_turn()
         return
     if case == "inquiry-late":
-        # The finish receipt is already accepted when the Host question arrives;
-        # the turn settles and the late question honestly becomes unavailable.
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for(), call_id="call-finish-final")
         native_path(log_dir / "finish-accepted").touch()
         wait_file("late-asked")
         settle_turn()
         return
-    if case == "inquiry-child":
-        # A child relay tries to observe and answer first; its tool evidence can
-        # never count, and the root's own answer is the recorded one.
-        native_tool_call("hey_my_buddy_checkpoint", {}, call_id="child-ckpt", root="sess-child", turn="turn-child", relay=relay)
-        native_tool_call("hey_my_buddy_answer_inquiry", {"inquiryId": "q-child", "answer": "child answer must not count"},
-                         call_id="child-answer", root="sess-child", turn="turn-child", relay=relay)
-        checkpoint_and_answer()
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-final")
-        settle_turn()
-        return
-    if case == "inquiry-forged":
-        # A native result claims checkpoint success for a receipt whose binding
-        # was changed after the bridge signed it; the controller must fail the
-        # turn instead of importing the forged delivery.
-        def forge(content):
-            receipt = json.loads(content)
-            receipt["inquiries"] = [{"inquiryId": "q-forged", "question": "never committed here",
-                                     "questionSha256": "f" * 64, "state": "queued",
-                                     "askedAt": "2026-01-01T00:00:00Z"}]
-            return json.dumps(receipt)
-
-        native_tool_call("hey_my_buddy_checkpoint", {}, call_id="call-checkpoint-forged", tamper=forge)
-        return
-    if case == "inquiry-live-blocked":
-        # The root never checkpoints; the completed finish is refused with the
-        # question, and the root honestly settles on assistance instead.
-        first = native_tool_call("hey_my_buddy_finish_turn", outcome_for("completed"), call_id="call-finish-first")
-        native_path(log_dir / "finish-refusal.json").write_text(first[1] or "", encoding="utf-8", newline="\n")
-        native_tool_call("hey_my_buddy_finish_turn", outcome_for("assistance"), call_id="call-finish-final")
-        settle_turn()
-        return
-    complete_turn()
+    if not guides_ready.wait(15):
+        raise RuntimeError("the native guide did not arrive")
+    for item in list(guides):
+        if case not in ("inquiry-fallback", "inquiry-delete-stale"):
+            inquiry_queue.drain(item["commandId"])
+            event("turn.steerDrained", {"pendingInputIds": [item["pendingInputId"]], "targetTurnId": turn_id,
+                "injectedMessageIds": ["msg-guide"], "drainedInputs": [{"pendingInputId": item["pendingInputId"],
+                    "messageId": "msg-guide", "text": item["question"],
+                    "intent": {"sourceCommandId": item["commandId"]}}]})
+        if case == "inquiry-late-answer":
+            native_tool_call("hey_my_buddy_finish_turn", outcome_for(), call_id="call-finish-final")
+        if case == "inquiry-child":
+            native_tool_call("hey_my_buddy_answer_inquiry", {"inquiryId": item["inquiryId"], "answer": "child"},
+                call_id="child-answer", root="sess-child", turn="turn-child", relay={"source": "subagent"})
+        if case == "inquiry-answer-refused":
+            native_tool_call("hey_my_buddy_answer_inquiry", {"inquiryId": "never-queued", "answer": "wrong"},
+                call_id="wrong-answer", error_as_result=True)
+        if case not in ("inquiry-unanswered", "inquiry-fallback", "inquiry-delete-stale"):
+            def tamper(content):
+                receipt = json.loads(content)
+                receipt["answer"] = "changed after signing"
+                return json.dumps(receipt)
+            native_tool_call("hey_my_buddy_answer_inquiry", {"inquiryId": item["inquiryId"],
+                "answer": "fixture answer for " + item["inquiryId"]}, call_id="call-answer-" + item["inquiryId"],
+                tamper=tamper if case == "inquiry-forged" else None)
+    if case != "inquiry-late-answer":
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for(), call_id="call-finish-final")
+    settle_turn()
 
 
 def refusal_turn():
@@ -559,10 +515,12 @@ def handle_message(message):
             # Stay live until the test releases the turn, bounded so a broken
             # test can never hang the suite. No question may end or restart
             # this turn, and exactly one session/send was admitted.
-            if wait_file("release-turn"):
-                inquiry_turn()
-            else:
-                settle_turn("error_during_execution")
+            def released_turn():
+                if wait_file("release-turn"):
+                    inquiry_turn()
+                else:
+                    settle_turn("error_during_execution")
+            threading.Thread(target=released_turn, daemon=True).start()
             return
         if case in ("live", "live-activity"):
             # Stay live until the test releases the turn, bounded so a broken test
@@ -598,13 +556,7 @@ def handle_message(message):
                 return
         complete_turn()
         return
-    elif method == "v4/command":
-        # The controller must never send one: questions are delivered
-        # cooperatively through the session's own MCP tools, never injected.
-        commands.append({"type": params.get("type"), "payload": params.get("payload"), "commandId": params.get("commandId"),
-                         "sessionId": params.get("sessionId"), "clientId": params.get("clientId"), "issuedAt": params.get("issuedAt")})
-        record_commands()
-        send({"id": request_id, "error": {"code": -32601, "message": "no client command is used by this adapter"}})
+    elif method.startswith("v4/") and inquiry_queue.handle(method, params, request_id):
         return
     elif method == "session/messages" and case in ("turn-failed-quota", "turn-failed-quota-after-output"):
         result = {"messages": []}

@@ -5,8 +5,8 @@ the attention/inquiry completion refusals into the role layer. These tests pin
 that boundary itself: the rules take the native, fully qualified tool names as
 arguments, importing the role module pulls in no harness package, and the
 finish boundary keeps its exact order — an invalid outcome is corrected before
-an outstanding attention request is named, and a pending inquiry blocks only a
-``completed`` disposition. The signed-envelope mint↔verify interplay with a
+an outstanding attention request is named, and cooperative inquiries block
+``completed``/``waiting`` while realtime inquiries do not. The signed-envelope mint↔verify interplay with a
 real native verifier stays in the ZCode suites; here the signatures are checked
 by recomputing the one shared HMAC rule.
 """
@@ -134,6 +134,17 @@ class MicroTaskPromptTests(unittest.TestCase):
                 self.assertEqual("waiting" in finish["inputSchema"]["properties"]["disposition"]["enum"],
                                  authorized)
 
+    def test_mcp_finish_description_uses_the_actually_mounted_checkpoint_mode(self):
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        guard = "A completed outcome is refused while a Host inquiry is still unanswered."
+        for checkpoint in (False, True):
+            with self.subTest(checkpoint=checkpoint):
+                names = [tool["name"] for tool in worker_services.session_tools(checkpoint=checkpoint)]
+                response = session_mcp.respond(message, {"toolNames": names})
+                self.assertEqual([tool["name"] for tool in response["result"]["tools"]], names)
+                finish = response["result"]["tools"][-1]
+                self.assertEqual(guard in finish["description"], checkpoint)
+
     def test_the_prompt_assembles_role_scope_finish_contract_task_and_input_in_order(self):
         prompt = worker_services.micro_task_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__hey_my_buddy_finish_turn")
         sections = prompt.split("\n\n")
@@ -163,6 +174,15 @@ class MicroTaskPromptTests(unittest.TestCase):
         # ("review"/"reviewer" are ordinary words of the frozen hints).
         for harness_word in ("zcode", "ZCode", "codex", "Claude", "claude", "dsh", "DSH"):
             self.assertNotIn(harness_word, both.split("task text")[0])
+
+    def test_realtime_tool_manifest_and_prompt_expose_answer_without_checkpoint(self):
+        tools = worker_services.session_tools(checkpoint=False)
+        self.assertEqual([tool["name"] for tool in tools], ["hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"])
+        self.assertNotIn("A completed outcome is refused while a Host inquiry is still unanswered.", tools[-1]["description"])
+        prompt = worker_services.micro_task_prompt("task", {}, "finish", answer_tool="answer")
+        self.assertIn("Host inquiries arrive as inputs to this running root turn", prompt)
+        self.assertIn("Unanswered questions do not block finishing", prompt)
+        self.assertNotIn("hey_my_buddy_checkpoint", prompt)
 
 
 class RoleBoundaryTests(unittest.TestCase):
@@ -202,9 +222,22 @@ class RoleBoundaryTests(unittest.TestCase):
                                               "artifacts", "request"])
         self.assertEqual(schema["properties"]["disposition"]["enum"], ["completed", "assistance", "attention"])
         self.assertIn("does not dispatch other tasks", tools["hey_my_buddy_finish_turn"]["description"])
+        self.assertIn("A completed outcome is refused while a Host inquiry is still unanswered.",
+                      tools["hey_my_buddy_finish_turn"]["description"])
 
 
 class FinishBoundaryTests(WorkerServicesCase):
+    def test_realtime_unanswered_questions_allow_completed_and_waiting_but_attention_still_blocks(self):
+        self.queue()
+        self.configuration.update(delegationAuthority=True,
+                                  toolNames=[tool["name"] for tool in worker_services.session_tools(checkpoint=False)])
+        for disposition in ("completed", "waiting"):
+            with self.subTest(disposition=disposition):
+                self.assertEqual(self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)))["outcome"]["disposition"], disposition)
+        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8")
+        self.assertEqual(self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome("completed")),
+                                       "hey_my_buddy_finish_turn")["reason"], "attention-outstanding")
+
     def test_waiting_finish_requires_delegation_authority_and_null_request(self):
         waiting = self.outcome("waiting")
         refused = self.envelope(self.call("hey_my_buddy_finish_turn", waiting), "hey_my_buddy_finish_turn")

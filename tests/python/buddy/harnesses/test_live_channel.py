@@ -92,7 +92,7 @@ class CapabilityTests(unittest.TestCase):
     def test_each_harness_declares_its_existing_facilities_only(self):
         # DSH questions arrive at the session's cooperative checkpoint.
         expected = {"codex": "realtime", "claude": "realtime",
-                    "zcode": "cooperative-checkpoint", "dsh": "cooperative-checkpoint"}
+                    "zcode": "realtime", "dsh": "cooperative-checkpoint"}
         for harness, delivery in expected.items():
             capabilities = lv.EXISTING_CAPABILITIES[harness]
             self.assertEqual(capabilities.inquiry_delivery, delivery, harness)

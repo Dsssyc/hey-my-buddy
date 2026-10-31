@@ -392,7 +392,8 @@ class InquiryBridge:
                           **({"checkpointTool": self.checkpoint_tool} if self.checkpoint_tool is not None else {}),
                           "delivery": self.delivery_mode},
             "attention": attention,
-            "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials", "immediateDelivery"],
+            "unavailable": ["nativeReasoning", "toolArguments", "toolOutput", "providerCredentials"]
+                           + (["immediateDelivery"] if self.delivery_mode != "realtime" else []),
             "journal": {"enabled": True, "truncated": self.truncated, "entries": len(entries)},
             "capability": "inquiry",
             "deliveryMode": self.delivery_mode,

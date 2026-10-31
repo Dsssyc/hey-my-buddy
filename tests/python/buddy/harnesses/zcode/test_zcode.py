@@ -205,15 +205,14 @@ class ZcodeAdapterTests(ZcodeFixtureCase):
         self.assertFalse(any("provider" in x["location"] or "bridge" in x["location"] for x in outcome.artifacts))
         # Observation and the cooperative inquiry channel are declared
         # capabilities backed by this attempt's private bridge: questions queue
-        # for delivery at the root's own checkpoint inside the one admitted
-        # native turn, never through an injected send. The session facts stay
+        # for realtime delivery inside the one admitted native turn. The session facts stay
         # separate from the Git workspace facts.
         self.assertIn("observe", self.description.capabilities)
         self.assertIn("inquiry", self.description.capabilities)
         self.assertTrue(outcome.result["inquiry"]["mounted"], outcome.result["inquiry"])
         self.assertFalse({"supported", "requestedDelivery", "startsNewTurn", "extendsDeadline"}
                          & outcome.result["inquiry"].keys())
-        self.assertEqual(outcome.result["inquiry"]["deliveryMode"], "cooperative-checkpoint")
+        self.assertEqual(outcome.result["inquiry"]["deliveryMode"], "realtime")
         self.assertEqual(outcome.result["inquiry"]["answered"], 0)
         native = outcome.result["nativeSession"]
         self.assertEqual(native["sessionId"], turn["sessionId"])

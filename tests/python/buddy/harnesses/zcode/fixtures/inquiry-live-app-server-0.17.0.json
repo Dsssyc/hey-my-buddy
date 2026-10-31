@@ -1,0 +1,321 @@
+{
+  "answer": {
+    "answer": "LIME-0f45a7b401f1",
+    "inquiryId": "approved-guide-A",
+    "questionSha256": "9f49ceef691e705bd4cc3baf4c3cc41021dabc11a7e80566452d43a43333c75d"
+  },
+  "checks": {
+    "autoDrainDisabled": true,
+    "guideDrainedInRoot": true,
+    "heldAfterRootEnd": true,
+    "modelAnsweredThroughTool": true,
+    "oneRootOnly": true,
+    "removedAfterCasDelete": true
+  },
+  "commands": [
+    {
+      "request": {
+        "baseLogEpoch": "baseLogEpoch-3",
+        "baseRevision": 0,
+        "clientId": "inquiry_probe_efad90ba",
+        "commandId": "commandId-4",
+        "issuedAt": 1,
+        "payload": {
+          "autoDrain": false
+        },
+        "sessionId": "sessionId-5",
+        "type": "setAutoDrain"
+      },
+      "response": {
+        "commandId": "commandId-4",
+        "revisionAtDecision": 0,
+        "status": "accepted"
+      }
+    },
+    {
+      "request": {
+        "clientId": "inquiry_probe_efad90ba",
+        "commandId": "commandId-6",
+        "issuedAt": 1,
+        "payload": {
+          "requestedDelivery": "guide",
+          "text": "Host inquiry. Answer using mcp__inquiry_probe_efad90ba__hey_my_buddy_answer_inquiry. {\"inquiryId\": \"approved-guide-A\", \"question\": \"Report the exact marker LIME-0f45a7b401f1 and continue.\"}"
+        },
+        "sessionId": "sessionId-5",
+        "type": "sendText"
+      },
+      "response": {
+        "commandId": "commandId-6",
+        "result": {
+          "delivery": "queue",
+          "inputId": "commandId-6",
+          "type": "inputAccepted"
+        },
+        "revisionAtDecision": 10,
+        "status": "accepted"
+      }
+    },
+    {
+      "request": {
+        "clientId": "inquiry_probe_efad90ba",
+        "commandId": "commandId-7",
+        "issuedAt": 1,
+        "payload": {
+          "requestedDelivery": "queue",
+          "text": "Retained inquiry C: do not start another turn."
+        },
+        "sessionId": "sessionId-5",
+        "type": "sendText"
+      },
+      "response": {
+        "commandId": "commandId-7",
+        "result": {
+          "delivery": "queue",
+          "inputId": "commandId-7",
+          "type": "inputAccepted"
+        },
+        "revisionAtDecision": 11,
+        "status": "accepted"
+      }
+    },
+    {
+      "request": {
+        "baseLogEpoch": "baseLogEpoch-3",
+        "baseRevision": 25,
+        "clientId": "inquiry_probe_efad90ba",
+        "commandId": "commandId-8",
+        "issuedAt": 1,
+        "payload": {
+          "queueItemId": "queueItemId-9"
+        },
+        "sessionId": "sessionId-5",
+        "type": "deleteQueueItem"
+      },
+      "response": {
+        "commandId": "commandId-8",
+        "revisionAtDecision": 25,
+        "status": "accepted"
+      }
+    }
+  ],
+  "events": [
+    {
+      "payload": {
+        "inputId": "inputId-10"
+      },
+      "seq": 3,
+      "sessionId": "sessionId-5",
+      "turnId": "turnId-11",
+      "type": "turn.started"
+    },
+    {
+      "payload": {
+        "delivery": "guide",
+        "inputId": "commandId-6",
+        "pendingInputId": "input-1",
+        "targetTurnId": "turnId-11"
+      },
+      "seq": 17,
+      "sessionId": "sessionId-5",
+      "turnId": "turnId-11",
+      "type": "turn.steerQueued"
+    },
+    {
+      "payload": {
+        "delivery": "queue",
+        "inputId": "commandId-7",
+        "pendingInputId": "queueItemId-9",
+        "targetTurnId": "turnId-11"
+      },
+      "seq": 18,
+      "sessionId": "sessionId-5",
+      "turnId": "turnId-11",
+      "type": "turn.steerQueued"
+    },
+    {
+      "payload": {
+        "drainedInputs": [
+          {
+            "delivery": "guide",
+            "intent": {
+              "admissionSeq": 2,
+              "admittedAt": 1793441044804,
+              "admittedDelivery": "guide",
+              "clientId": "inquiry_probe_efad90ba",
+              "kind": "sendText",
+              "mode": "yolo",
+              "modelSelection": {
+                "modelId": "GLM-5.3-Flash",
+                "options": {
+                  "reasoningLevel": "low"
+                },
+                "providerId": "native-provider"
+              },
+              "planEnabled": false,
+              "queueItemId": "input-1",
+              "queuePosition": 0,
+              "requestedDelivery": "guide",
+              "sourceCommandId": "commandId-6",
+              "text": "Host inquiry. Answer using mcp__inquiry_probe_efad90ba__hey_my_buddy_answer_inquiry. {\"inquiryId\": \"approved-guide-A\", \"question\": \"Report the exact marker LIME-0f45a7b401f1 and continue.\"}"
+            },
+            "messageId": "input-2",
+            "pendingInputId": "input-1",
+            "text": "Host inquiry. Answer using mcp__inquiry_probe_efad90ba__hey_my_buddy_answer_inquiry. {\"inquiryId\": \"approved-guide-A\", \"question\": \"Report the exact marker LIME-0f45a7b401f1 and continue.\"}"
+          }
+        ],
+        "injectedMessageIds": [
+          "input-2"
+        ],
+        "pendingInputIds": [
+          "input-1"
+        ],
+        "targetTurnId": "turnId-11"
+      },
+      "seq": 23,
+      "sessionId": "sessionId-5",
+      "turnId": "turnId-11",
+      "type": "turn.steerDrained"
+    },
+    {
+      "payload": {
+        "inputId": "inputId-10",
+        "resultType": "success"
+      },
+      "seq": 42,
+      "sessionId": "sessionId-5",
+      "turnId": "turnId-11",
+      "type": "turn.completed"
+    }
+  ],
+  "harnessVersion": "0.17.0",
+  "paidRunRequested": true,
+  "phase": "verified-one-root",
+  "resolved": {
+    "effort": "low",
+    "model": "GLM-5.3-Flash",
+    "provider": "native-provider"
+  },
+  "rootStarts": [
+    "turnId-11"
+  ],
+  "shutdownConfirmed": true,
+  "shutdownEscalated": false,
+  "snapshots": [
+    {
+      "control": {
+        "activeWorks": [],
+        "apiRetry": null,
+        "canStop": false,
+        "lastError": null,
+        "phase": "draft",
+        "sessionEnded": false,
+        "stopState": "idle",
+        "stopTargetKind": "unknown"
+      },
+      "logEpoch": "baseLogEpoch-3",
+      "queue": {
+        "autoDrain": true,
+        "items": []
+      },
+      "revision": 0
+    },
+    {
+      "control": {
+        "activeWorks": [],
+        "apiRetry": null,
+        "canStop": false,
+        "lastError": null,
+        "phase": "draft",
+        "sessionEnded": false,
+        "stopState": "idle",
+        "stopTargetKind": "unknown"
+      },
+      "logEpoch": "baseLogEpoch-3",
+      "queue": {
+        "autoDrain": false,
+        "items": [],
+        "pauseReason": "manual"
+      },
+      "revision": 1
+    },
+    {
+      "control": {
+        "activeWorks": [],
+        "apiRetry": null,
+        "canStop": false,
+        "lastError": null,
+        "phase": "completedSuccess",
+        "sessionEnded": true,
+        "stopState": "idle",
+        "stopTargetKind": "unknown"
+      },
+      "logEpoch": "baseLogEpoch-3",
+      "queue": {
+        "autoDrain": false,
+        "items": [
+          {
+            "admittedAt": 1793441044810,
+            "attachments": [],
+            "clientId": "inquiry_probe_efad90ba",
+            "delivery": {
+              "admitted": "queue",
+              "requested": "queue"
+            },
+            "dispatch": {
+              "state": "queued"
+            },
+            "kind": "sendText",
+            "mode": "yolo",
+            "modelSelection": {
+              "modelId": "GLM-5.3-Flash",
+              "options": {
+                "reasoningLevel": "low"
+              },
+              "providerId": "native-provider"
+            },
+            "order": {
+              "admissionSeq": 3,
+              "queuePosition": 0
+            },
+            "planEnabled": false,
+            "queueItemId": "queueItemId-9",
+            "sourceCommandId": "commandId-7",
+            "steer": {
+              "state": "notRequested"
+            },
+            "text": "Retained inquiry C: do not start another turn."
+          }
+        ],
+        "pauseReason": "manual"
+      },
+      "revision": 25
+    },
+    {
+      "control": {
+        "activeWorks": [],
+        "apiRetry": null,
+        "canStop": false,
+        "lastError": null,
+        "phase": "completedSuccess",
+        "sessionEnded": true,
+        "stopState": "idle",
+        "stopTargetKind": "unknown"
+      },
+      "logEpoch": "baseLogEpoch-3",
+      "queue": {
+        "autoDrain": false,
+        "items": [],
+        "pauseReason": "manual"
+      },
+      "revision": 26
+    }
+  ],
+  "source": {
+    "form": "ZCode app-bundled CLI app-server",
+    "version": "0.17.0",
+    "recordedAt": "2026-10-31",
+    "probe": "tests/probes/zcode_realtime_inquiry_live.py --run-approved-once",
+    "normalization": "Native identifiers and provider name normalized; probe markers retained. Provider credentials and headers were never captured.",
+    "approval": "One root, developer approval 2026-10-31 A; not retried."
+  }
+}

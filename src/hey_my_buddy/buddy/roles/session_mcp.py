@@ -40,7 +40,8 @@ def respond(message: dict, configuration: dict) -> dict | None:
         result = {"protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
                   "serverInfo": {"name": "hey-my-buddy", "version": "1"}}
     elif method == "tools/list":
-        tools = worker_services.session_tools(delegation_authority=configuration.get("delegationAuthority") is True)
+        tools = worker_services.session_tools(delegation_authority=configuration.get("delegationAuthority") is True,
+            checkpoint="toolNames" not in configuration or "hey_my_buddy_checkpoint" in configuration["toolNames"])
         if "toolNames" in configuration:
             tools = [tool for tool in tools if tool["name"] in configuration["toolNames"]]
         result = {"tools": tools}

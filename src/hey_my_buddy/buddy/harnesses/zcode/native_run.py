@@ -95,6 +95,7 @@ from ..run_contract import (
 )
 from .config import cli_command, launch, load_runtime_preferences, provider_access_types, provider_paths
 from ..inquiry_bridge import InquiryBridge
+from .inquiry import NativeInquiry
 from ..session_receipts import ReceiptError
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher, MAX_SESSION_ID
@@ -272,7 +273,6 @@ class SessionServiceMount:
 
     server_name: str
     finish_tool: str
-    checkpoint_tool: str | None
     answer_tool: str | None
     bare_tools: tuple[str, ...]
     bridge: dict
@@ -330,11 +330,11 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
         raise BoardError("INVALID_ARGUMENT",
                          "the completion tool must be one of this run's mounted session tools")
     finish_tool = qualified[completion_tool]
-    inquiry_names = tuple(qualified[name] for name in inquiry_tools) \
-        if inquiry is not None else ()
+    inquiry_names = {name: qualified[name] for name in inquiry_tools} if inquiry is not None else {}
     has_inquiry = inquiry is not None
     bridge = {"identity": dict(identity), "inputSha256": input_sha256, "key": secrets.token_hex(32),
-              "attentionPath": str(attention_path), "delegationAuthority": delegation_authority}
+              "attentionPath": str(attention_path), "delegationAuthority": delegation_authority,
+              "toolNames": [tool["name"] for tool in session_tools]}
     if has_inquiry:
         # The MCP tools only read this journal; every record in it is written
         # by the driver after root-turn evidence verified.
@@ -348,8 +348,7 @@ def prepare_session_service(*, invocation_root: Path, identity: dict, input_sha2
     input_id = "hey-my-buddy-" + hashlib.sha256(canonical_json(identity).encode()).hexdigest()
     return SessionServiceMount(
         server_name=server_name, finish_tool=finish_tool,
-        checkpoint_tool=inquiry_names[0] if len(inquiry_names) > 0 else None,
-        answer_tool=inquiry_names[1] if len(inquiry_names) > 1 else None,
+        answer_tool=inquiry_names.get("hey_my_buddy_answer_inquiry"),
         bare_tools=tuple(tool["name"] for tool in session_tools),
         bridge=bridge, mcp_servers=tuple(mcp), input_id=input_id, bridge_config_path=str(bridge_path),
         tool_contracts=tuple({"name": tool["name"], "inputSchema": tool["inputSchema"]}
@@ -375,7 +374,7 @@ def make_inquiry_bridge(*, identity: dict, journal_path: str,
                         live: CTwoLiveEndpoint | None = None) -> InquiryBridge:
     return InquiryBridge(identity=identity, journal_path=journal_path,
                          attention_path=attention_path, live=live, error_factory=NativeError,
-                         event_metadata=_inquiry_event_metadata)
+                         event_metadata=_inquiry_event_metadata, delivery_mode="realtime", checkpoint_tool=None)
 
 
 def check_preparation(spec: dict, environment: dict) -> None:
@@ -400,7 +399,7 @@ def prepare_services(*, invocation_root: Path, identity: dict, input_sha256: str
     return BoundSessionServices(
         description=SessionService(
             tool_names=tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools)),
-        completion_tool=mount.finish_tool, checkpoint_tool=mount.checkpoint_tool,
+        completion_tool=mount.finish_tool, checkpoint_tool=None,
         answer_tool=mount.answer_tool,
         services=SessionServices(mount=mount, validate_outcome=validate_outcome, inquiry=inquiry,
                                  native_stderr=native_stderr))
@@ -982,6 +981,7 @@ class _CarrierOutcome:
     attempt_usage: ZcodeAttemptUsage | None = None
     usage_rounds: list[ZcodeAttemptUsage] = dataclasses.field(default_factory=list)
     inquiry_bridge: InquiryBridge | None = None
+    inquiry_driver: NativeInquiry | None = None
     attention_recorder: AttentionRecorder | None = None
     binding_path: Path | None = None
     binding_save_failed: bool = False
@@ -1077,6 +1077,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             if feedback_due[0]:
                 feedback_due[0] = False
                 notify()
+            if outcome.inquiry_driver is not None:
+                outcome.inquiry_driver.poll()
 
         def unknown_sink(label: str) -> None:
             facts.note_unknown(label)
@@ -1154,7 +1156,8 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
                 "during-model" if state.root_model_activity or has_output or has_text else "before-model")
         if (completion_carrier and state.status == "ok" and state.shutdown
                 and state.exit_code == 0 and outcome.record is not None
-                and outcome.binding_path is not None and outcome.session_id is not None):
+                and outcome.binding_path is not None and outcome.session_id is not None
+                and not outcome.binding_save_failed):
             try:
                 expected = {"taskId": request.identity.task_id, "sessionId": outcome.session_id,
                             "cwd": request.cwd, "buddy": outcome.resolved}
@@ -1334,6 +1337,8 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         tools.observe(message)
         outcome.evidence.observe(message, ordinal)
         _project_session(session, state, message)
+        if outcome.inquiry_driver is not None:
+            outcome.inquiry_driver.observe(message, ordinal)
         if outcome.evidence.turn_id is not None:
             # The trusted root identity comes only from this verified
             # canonical turn start, never from the observed events;
@@ -1357,9 +1362,8 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
     def bind_worker_session(opened_session: str) -> None:
         outcome.evidence = RootTurnEvidence(
             opened_session, mount.input_id, mount.finish_tool, mount.bridge,
-            checkpoint_name=mount.checkpoint_tool, answer_name=mount.answer_tool,
-            on_delivery=(lambda receipt, call_id: outcome.inquiry_bridge.deliver_inquiries(receipt, call_id)),
-            on_answer=(lambda receipt, call_id: outcome.inquiry_bridge.record_answer(receipt, call_id)),
+            answer_name=mount.answer_tool,
+            on_answer=outcome.inquiry_bridge.record_answer if outcome.inquiry_bridge is not None else None,
             validate_outcome=services.validate_outcome,
             mounted_tools=mount.bare_tools, on_unknown=connection.on_unknown)
         outcome.projection.session_id = opened_session
@@ -1367,6 +1371,9 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         connection.observe = observe
         outcome.projection.phase = "waiting-model"
         publish_activity()
+        outcome.inquiry_driver = NativeInquiry(connection, outcome.evidence, outcome.inquiry_bridge,
+                                               mount.answer_tool, session)
+        outcome.inquiry_driver.hold_queue()
         # Read the pre-model cursor through every page. Without a complete
         # baseline, no message is attributed to this turn.
         outcome.attempt_usage.capture_baseline(connection)
@@ -1381,13 +1388,18 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
         if outcome.inquiry_bridge is not None:
             outcome.inquiry_bridge.activate(opened_session)
 
-    outcome.session_id, outcome.resolved = _admit_root_input(
-        connection, snapshot=snapshot, request=request, spec=buddy_spec(request),
-        input_id=mount.input_id, input_text=request.input_text,
-        previous=previous, mode=mode, require_interactive=True,
-        settled=lambda: bool(outcome.evidence is not None and outcome.evidence.settled_ordinal),
-        classifier=classifier, state=state, session=session, on_configured=note_configured,
-        before_send=bind_worker_session, after_admit=after_admit)
+    try:
+        outcome.session_id, outcome.resolved = _admit_root_input(
+            connection, snapshot=snapshot, request=request, spec=buddy_spec(request),
+            input_id=mount.input_id, input_text=request.input_text,
+            previous=previous, mode=mode, require_interactive=True,
+            settled=lambda: bool(outcome.evidence is not None and outcome.evidence.settled_ordinal),
+            classifier=classifier, state=state, session=session, on_configured=note_configured,
+            before_send=bind_worker_session, after_admit=after_admit)
+    finally:
+        # Cleanup RPCs still dispatch root evidence. A real native failure here
+        # must reach _run's normal error handling and owned-process shutdown.
+        _clear_inquiry_queue(outcome)
     # The settlement read is paged; RPC rejection or timeout leaves usage
     # unknown, while errors from native observers continue to propagate.
     outcome.attempt_usage.capture_final(connection)
@@ -1416,6 +1428,15 @@ def _micro_task_turn(*, connection: NativeConnection, request: RunRequest, servi
     outcome.record = {"outcome": outcome.verified_outcome, "provenance": None}
     outcome.evidence.close_ordinal = connection.ordinal
     outcome.record["provenance"] = outcome.evidence.provenance()
+
+
+def _clear_inquiry_queue(outcome: _CarrierOutcome) -> None:
+    if outcome.inquiry_driver is not None and not outcome.inquiry_driver.clear_held():
+        outcome.binding_save_failed = True
+        if outcome.binding_path is not None:
+            # A resumed session already has a binding from its predecessor.
+            # Remove only this owned, previously verified mutable binding.
+            outcome.binding_path.unlink(missing_ok=True)
 
 
 def _stop_collection(*, spawn: _Spawn | None, deadline: float, cancel: CancelFlag,

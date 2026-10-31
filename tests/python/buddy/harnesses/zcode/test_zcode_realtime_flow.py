@@ -1,19 +1,9 @@
-"""End-to-end cooperative ZCode inquiry flows against the real runner and fixture.
+"""Native realtime inquiry flows through the adapter, C-Two and journal.
 
-Every test here drives the real adapter, controller, native fixture and the
-run's in-process live endpoint: the test process is the holder,
-queues a Host question through ``request_local`` while the turn
-is live, and reads the durable journal through the attempt-private
-``resultsPath`` the integrated inquiry entry publishes. The fixture's root
-model picks the question up through the real ``hey_my_buddy_checkpoint`` tool,
-answers through the real ``hey_my_buddy_answer_inquiry`` tool, and only the
-controller's verified root-turn evidence moves journal state. The flows cover
-the finish-refusal retry, settlement races, child relays, forged receipts,
-cancellation and the unchanged single native ``session/send``.
-
-The retired raw-socket bridge — including its Host ``discard`` operation — is
-gone with its backend; the two old withdrawal flows are mapped in
-``docs/acceptance/adr025/step5-native-fixture-migration.md``.
+The fixture accepts guide commands, emits root-bound steer events and answers
+through the real session tool. Tests cover late answers, held withdrawal,
+unanswered settlement, concurrent private owners, forged/child evidence and
+cancellation, while the original session/send remains single.
 """
 from __future__ import annotations
 
@@ -21,15 +11,19 @@ import json
 import os
 import time
 from pathlib import Path
+from unittest import mock
 
 from buddy.harnesses.zcode.test_zcode import ZcodeFixtureCase
+from buddy.harnesses.session_record_support import updates
+from hey_my_buddy.buddy.harnesses.zcode.inquiry import NativeInquiry
+from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError
 
 from hey_my_buddy.protocol.inquiry_journal import read_inquiry_journal, merged_inquiry_records, normalize_inquiry_record
 from hey_my_buddy.private_dirs import context_root
 from hey_my_buddy.paths import native_path
 
 
-class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
+class ZcodeRealtimeFlowTests(ZcodeFixtureCase):
     def setUp(self):
         if self._testMethodName in {
             'test_private_fixture_states_keep_concurrent_inquiry_bridges_separate',
@@ -50,10 +44,10 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
             self.assertNotEqual(first['ipcRoot'], second['ipcRoot'])
 
     def test_private_fixture_states_keep_concurrent_inquiry_bridges_separate(self):
-        from buddy.harnesses.zcode.fixtures.checkpoint_domain import CheckpointDomain
+        from buddy.harnesses.zcode.fixtures.inquiry_domain import InquiryDomain
 
-        own = CheckpointDomain(self, 'inquiry-live')
-        peer = CheckpointDomain(self, 'inquiry-live')
+        own = InquiryDomain(self, 'inquiry-live')
+        peer = InquiryDomain(self, 'inquiry-live')
         # Both admitted turns must still be live before any inquiry/release.
         for domain in (own, peer):
             self.assertTrue(domain.command({'op': 'live'})['live'])
@@ -100,7 +94,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
-        channel, asked = self.ask(handle, "q-1", "Reply with exactly: checkpoint-ok")
+        channel, asked = self.ask(handle, "q-1", "Reply with exactly: inquiry-ok")
         self.release(context)
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
@@ -115,17 +109,23 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
                           identity.invocation_id, identity.turn_id),
                          ("micro-task-1", context.attempt_id, 1, handle.role_run_identity.invocation_id, "turn-1"))
         self.assertEqual(identity.input_sha256, handle.role_run_identity.input_sha256)
-        # Exactly one admitted native input, and no injected command ever.
+        # One original input; a guide command carries the Host question.
         self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
-        self.assertNotIn("v4/command", self.native_log(context, "methods.jsonl"))
-        self.assertEqual(self.native_log(context, "commands.jsonl"), "")
+        commands = [json.loads(line) for line in self.native_log(context, "commands.jsonl").splitlines()]
+        self.assertEqual([c["type"] for c in commands], ["setAutoDrain", "sendText"])
+        inputs = [event for event in updates(native_path(context.session_record_path))
+                  if event["sessionUpdate"] == "user_message_chunk"]
+        self.assertEqual(len(inputs), 2, "the Host input must appear once in the root session record")
+        self.assertIn('"inquiryId": "q-1"', inputs[1]["content"]["text"])
+        self.assertIn("Reply with exactly: inquiry-ok", inputs[1]["content"]["text"])
+        self.assertEqual(inputs[1]["_meta"]["nativeItemId"], commands[1]["commandId"])
         # The journal carries the verified ordered transitions with root evidence.
         records = self.inquiry_records(context, "q-1")
         states = [record["state"] for record in records]
         self.assertEqual(states, ["queued", "delivered", "answered"], records)
-        self.assertEqual(records[0]["question"], "Reply with exactly: checkpoint-ok")
+        self.assertEqual(records[0]["question"], "Reply with exactly: inquiry-ok")
         self.assertEqual(records[0]["questionSha256"], asked.native_correlation.value["questionSha256"])
-        self.assertEqual(records[1]["toolCallId"], "call-checkpoint-root")
+        self.assertEqual(records[1]["nativeCorrelation"]["method"], "v4/command")
         self.assertEqual(records[2]["answer"]["text"], "fixture answer for q-1")
         self.assertEqual(records[2]["answer"]["toolCallId"], "call-answer-q-1")
         self.assertEqual(records[2]["answer"]["via"], "tool:hey_my_buddy_answer_inquiry")
@@ -141,41 +141,93 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertEqual(answer["text"], "fixture answer for q-1")
         self.assertEqual(answer["toolCallId"], "call-answer-q-1")
 
-    def test_a_completed_finish_is_refused_with_the_question_then_retries_after_answering(self):
-        context = self.context("inquiry-finish-refused", timeout=40)
+    def test_a_late_answer_after_finish_preserves_the_completed_result(self):
+        context = self.context("inquiry-late-answer", timeout=40)
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         self.ask(handle, "q-1", "What color is the sky?")
         self.release(context)
-        self.assertIsNotNone(handle.wait(40), "controller did not exit")
+        self.assertIsNotNone(handle.wait(40))
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        turn = outcome.result["turn"]
-        self.assertEqual(turn["outcome"]["disposition"], "completed")
-        self.assertEqual(turn["provenance"]["toolCallId"], "call-finish-final")
-        records = self.inquiry_records(context, "q-1")
-        self.assertEqual([record["state"] for record in records], ["queued", "delivered", "answered"])
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+        self.assertEqual(outcome.result["turn"]["provenance"]["toolCallId"], "call-finish-final")
+        self.assertEqual(self.inquiry_records(context, "q-1")[-1]["state"], "answered")
 
-    def test_a_pending_question_blocks_completed_but_not_assistance(self):
-        context = self.context("inquiry-live-blocked", timeout=40)
+    def test_rejected_queue_preparation_keeps_work_and_settles_the_unsent_question(self):
+        context = self.context("inquiry-hold-rejected", timeout=40)
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.own_handle(handle)
+        self.ask(handle, "q-1", "This question cannot enter the native queue.")
+        self.release(context)
+        self.assertIsNotNone(handle.wait(40))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+        self.assertEqual(outcome.result["inquiry"]["error"], "native-queue-hold-failed")
+        self.assertEqual([r["state"] for r in self.inquiry_records(context, "q-1")], ["queued", "unavailable"])
+        commands = [json.loads(line) for line in self.native_log(context, "commands.jsonl").splitlines()]
+        self.assertEqual([c["type"] for c in commands], ["setAutoDrain"])
+        self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
+        self.assertTrue(outcome.shutdown_confirmed)
+
+
+    def test_a_held_fallback_is_deleted_without_blocking_completed(self):
+        context = self.context("inquiry-fallback", timeout=40)
         self.adapter.prepare(context)
         handle = self.adapter.start(context)
         self.own_handle(handle)
         self.ask(handle, "q-1", "Should we continue?")
         self.release(context)
-        self.assertIsNotNone(handle.wait(40), "controller did not exit")
-        refusal = self.native_log(context, "finish-refusal.json")
-        self.assertIsNotNone(refusal, "the fixture did not record the finish refusal")
-        self.assertIn("Should we continue?", refusal)
-        self.assertIn("q-1", refusal)
+        self.assertIsNotNone(handle.wait(40))
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
-        records = self.inquiry_records(context, "q-1")
-        self.assertEqual(records[0]["state"], "queued")
-        self.assertEqual(records[-1]["state"], "unavailable")
-        self.assertEqual(outcome.result["inquiry"]["refused"], 1)
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+        self.assertEqual([r["state"] for r in self.inquiry_records(context, "q-1")], ["queued", "unavailable"])
+        commands = [json.loads(line) for line in self.native_log(context, "commands.jsonl").splitlines()]
+        self.assertEqual([c["type"] for c in commands], ["setAutoDrain", "sendText", "deleteQueueItem"])
+        self.assertFalse(commands[0]["payload"]["autoDrain"])
+        self.assertTrue(outcome.result["nativeSession"]["resumable"])
+
+    def test_a_failed_withdrawal_keeps_work_and_removes_an_existing_resume_binding(self):
+        first = self.context("ok", timeout=40)
+        _, finished = self.execute(first)
+        previous = finished.result["turn"]["sessionId"]
+        context = self.context("inquiry-delete-stale", index=2, previous=previous, timeout=40)
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.own_handle(handle)
+        self.ask(handle, "q-1", "This item will survive the delete ack.")
+        self.release(context)
+        self.assertIsNotNone(handle.wait(40))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+        self.assertFalse(outcome.result["nativeSession"]["resumable"])
+        self.assertFalse(outcome.result["nativeSession"]["bindingPresent"])
+        self.assertTrue(outcome.shutdown_confirmed)
+
+    def test_a_native_failure_observed_during_cleanup_still_stops_the_owned_process(self):
+        original = NativeInquiry.snapshot
+        def snapshot(driver):
+            if driver.evidence.completed_ordinal:
+                raise NativeError("wrong-native-turn", "second root during cleanup")
+            return original(driver)
+        context = self.context("inquiry-fallback", timeout=40)
+        self.adapter.prepare(context)
+        with mock.patch.object(NativeInquiry, "snapshot", snapshot):
+            handle = self.adapter.start(context)
+            self.own_handle(handle)
+            self.ask(handle, "q-1", "This queue read encounters a bad native root.")
+            self.release(context)
+            self.assertIsNotNone(handle.wait(40))
+            outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "failed", outcome.to_report())
+        self.assertEqual(outcome.result["code"], "wrong-native-turn")
+        self.assertTrue(outcome.shutdown_confirmed)
+
 
     def test_an_unanswered_delivered_question_settles_unavailable(self):
         context = self.context("inquiry-unanswered", timeout=40)
@@ -187,7 +239,7 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         self.assertIsNotNone(handle.wait(40), "controller did not exit")
         outcome = self.adapter.collect(handle, context)
         self.assertEqual(outcome.status, "ok", outcome.to_report())
-        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "assistance")
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
         records = self.inquiry_records(context, "q-1")
         self.assertEqual([record["state"] for record in records], ["queued", "delivered", "unavailable"])
         self.assertNotIn("reason", records[-1])
@@ -229,16 +281,16 @@ class ZcodeCheckpointFlowTests(ZcodeFixtureCase):
         answered = [record for record in records if record["state"] == "answered"]
         self.assertEqual(len(delivered), 1, records)
         self.assertEqual(len(answered), 1, records)
-        self.assertEqual(delivered[0]["toolCallId"], "call-checkpoint-root")
+        self.assertEqual(delivered[0]["nativeCorrelation"]["method"], "v4/command")
         self.assertEqual(answered[0]["answer"]["toolCallId"], "call-answer-q-1")
         self.assertNotIn("child", json.dumps(answered[0]["answer"]))
         # The child's own answer text never reached the journal.
         self.assertNotIn("child answer must not count", json.dumps(records))
 
     def test_concurrent_private_attempts_keep_late_questions_bound(self):
-        from buddy.harnesses.zcode.fixtures.checkpoint_domain import CheckpointDomain
+        from buddy.harnesses.zcode.fixtures.inquiry_domain import InquiryDomain
 
-        attempts = [CheckpointDomain(self, 'inquiry-late') for _ in range(2)]
+        attempts = [InquiryDomain(self, 'inquiry-late') for _ in range(2)]
         # Both endpoints are alive before either finishes. A question must reach
         # its own authenticated channel and journal even with another suite live.
         for domain in attempts:

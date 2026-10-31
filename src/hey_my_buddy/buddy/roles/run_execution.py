@@ -369,12 +369,16 @@ def worker_request(control: dict, module):
     format = worker_format(control["harness"])
     permission = turn_input["executionWorkspace"]["access"]
     if format is None:
+        from ..harnesses.live import EXISTING_CAPABILITIES
+        checkpoint = EXISTING_CAPABILITIES[control["harness"]].inquiry_delivery == "cooperative-checkpoint"
+        tools = worker_services.session_tools(delegation_authority=delegation_authority, checkpoint=checkpoint)
         binding = module.prepare_services(
             invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=attention_path,
-            session_tools=worker_services.session_tools(delegation_authority=delegation_authority),
+            session_tools=tools,
             completion_tool="hey_my_buddy_finish_turn",
-            inquiry=inquiry, inquiry_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry"),
+            inquiry=inquiry, inquiry_tools=tuple(tool["name"] for tool in tools
+                if tool["name"] in ("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry")),
             validate_outcome=partial(validate_outcome, delegation_authority=delegation_authority),
             delegation_authority=delegation_authority,
             native_stderr=str(invocation_root / "native-stderr.log"))

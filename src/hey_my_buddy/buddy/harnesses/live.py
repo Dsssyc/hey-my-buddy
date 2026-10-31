@@ -51,12 +51,12 @@ class LiveCapabilities(InternalModel):
     inquiry_delivery: InquiryDeliveryMode
 
 
-#: Codex CLI and Claude Code CLI accept input during the active turn; ZCode
-#: and DSH deliver questions at their session's cooperative checkpoint.
+#: Codex, Claude Code and ZCode CLI accept input during the active turn;
+#: DSH delivers at its session's cooperative checkpoint.
 EXISTING_CAPABILITIES = {
     "codex": LiveCapabilities(inquiry_delivery="realtime"),
     "claude": LiveCapabilities(inquiry_delivery="realtime"),
-    "zcode": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
+    "zcode": LiveCapabilities(inquiry_delivery="realtime"),
     "dsh": LiveCapabilities(inquiry_delivery="cooperative-checkpoint"),
 }
 

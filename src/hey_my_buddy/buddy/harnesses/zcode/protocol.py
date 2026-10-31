@@ -43,10 +43,10 @@ _WINDOWS_PIPE = os.name == "nt"
 _FACT_RPC_METHODS = frozenset({
     "runtime/capabilities", "session/close", "session/create", "session/messages",
     "session/resume", "session/send", "session/setModel", "session/setThoughtLevel",
-    "session/subscribe",
+    "session/subscribe", "v4/command", "v4/conversation/subscribe", "v4/conversation/unsubscribe",
 })
 NATIVE_EVENT_TYPES = frozenset({
-    "turn.started", "turn.completed", "turn.failed", "tool.updated",
+    "turn.started", "turn.completed", "turn.failed", "turn.steerQueued", "turn.steerDrained", "tool.updated",
     "message.upserted", "message.removed", "part.started", "part.delta",
     "part.upserted", "part.removed", "model.streaming", "permission.requested",
     "userInput.requested", "session.created", "session.resumed", "session.updated",
@@ -54,7 +54,7 @@ NATIVE_EVENT_TYPES = frozenset({
 })
 NATIVE_NOTIFICATION_METHODS = frozenset({
     "startup/storageState", "process/mcpTelemetry", "process/mcpResourceSamples", "process/resourceSample",
-    "session/event", "state.updated", "computer-use/operation-event", "v4/telemetry/event",
+    "session/event", "state.updated", "computer-use/operation-event", "v4/telemetry/event", "v4/conversation/frame",
 })
 
 
@@ -69,11 +69,6 @@ class NativeRpcError(NativeError):
     """A failure raised by the current RPC, rather than by an observer."""
 
 
-#: How this adapter carries Host questions, stated once and reported verbatim.
-#: The native protocol still has no turn-bound in-turn input: ``session/send``
-#: has no delivery/expectedTurn fields and rejects a send during an active
-#: prompt, and the v4 sendText guide can only defer unbound input or start a
-#: new turn. The cooperative channel never injects questions mid-turn.
 
 
 class ActivityProjection:
@@ -774,25 +769,19 @@ class NativeConnection:
 class RootTurnEvidence:
     """Only signed results in the explicitly admitted root turn can count.
 
-    Besides the finish tool this tracker owns the inquiry channel's authority:
-    a question only becomes ``delivered`` when a ``hey_my_buddy_checkpoint`` result in
-    this root session and native turn succeeded untruncated with a signed
-    receipt, and an answer only counts when a ``hey_my_buddy_answer_inquiry`` result
-    in the same turn carried a signed receipt the controller re-verified against
-    the bridge's committed state. Child sessions, relayed sources, agent and
-    background calls are excluded exactly like finish evidence.
+    Answers require successful, untruncated root tool evidence and a signed
+    attempt-bound receipt. Native inquiry delivery is tracked by inquiry.py.
+    Child, relayed and background calls never become root evidence.
     """
 
     def __init__(self, session_id: str, input_id: str, tool_name: str, bridge: dict, *,
-                 checkpoint_name: str | None = None, answer_name: str | None = None,
-                 on_delivery: Callable[[dict, str], None] | None = None,
+                 answer_name: str | None = None,
                  on_answer: Callable[[dict, str], None] | None = None,
                  validate_outcome: Callable[[object], str | None],
                  mounted_tools: tuple[str, ...] | list[str],
                  on_unknown: Callable[[str], None] | None = None):
         self.session_id, self.input_id, self.tool_name, self.bridge = session_id, input_id, tool_name, bridge
-        self.checkpoint_name, self.answer_name = checkpoint_name, answer_name
-        self.on_delivery, self.on_answer = on_delivery, on_answer
+        self.answer_name, self.on_answer = answer_name, on_answer
         self.validate_outcome = validate_outcome
         self.on_unknown = on_unknown or (lambda _label: None)
         #: The bare session tools this run actually mounted — a required,
@@ -813,7 +802,6 @@ class RootTurnEvidence:
         self.last_seq = -1
         self.start_seq = self.call_seq = self.result_seq = self.end_seq = -1
         self.completed_ordinal = self.settled_ordinal = self.close_ordinal = 0
-        self.checkpoint_calls: dict[str, dict] = {}
         self.answer_calls: dict[str, dict] = {}
 
     def observe(self, message: dict, ordinal: int) -> None:
@@ -846,8 +834,7 @@ class RootTurnEvidence:
                 if kind == "turn.completed":
                     raise NativeError("invalid-provenance", "the native root completion has no input identity")
                 if kind == "tool.updated" and (self.call_id is not None or any(
-                        call["result"] is None for calls in (self.checkpoint_calls, self.answer_calls)
-                        for call in calls.values())):
+                        call["result"] is None for call in self.answer_calls.values())):
                     raise NativeError("invalid-provenance", "the native root tool update has no call evidence")
             return
         if p.get("type") == "turn.started":
@@ -875,21 +862,18 @@ class RootTurnEvidence:
         kind = data.get("kind")
         tool_call_id = data.get("toolCallId")
         if kind == "scheduled":
-            if self.call_id is not None:
-                raise NativeError("duplicate-finish", "the root scheduled another tool after its finish call")
             name = data.get("toolName")
+            if self.call_id is not None and not (self.answer_name is not None and name == self.answer_name):
+                raise NativeError("duplicate-finish", "the root scheduled another tool after its finish call")
             if name == self.tool_name:
                 if not isinstance(tool_call_id, str) or not tool_call_id:
                     raise NativeError("invalid-provenance", "the root finish call has no identity")
                 self.call_id, self.call_seq = tool_call_id, seq
-            elif name == self.checkpoint_name and self.checkpoint_name is not None:
-                if not isinstance(tool_call_id, str) or not tool_call_id or tool_call_id in self.checkpoint_calls:
-                    raise NativeError("invalid-provenance", "the root checkpoint call has no usable identity")
-                self.checkpoint_calls[tool_call_id] = {"seq": seq, "result": None}
             elif name == self.answer_name and self.answer_name is not None:
                 if not isinstance(tool_call_id, str) or not tool_call_id or tool_call_id in self.answer_calls:
                     raise NativeError("invalid-provenance", "the root answer call has no usable identity")
-                self.answer_calls[tool_call_id] = {"seq": seq, "result": None}
+                self.answer_calls[tool_call_id] = {"seq": seq, "result": None,
+                                                  "late": self.call_id is not None or self.finish_failed}
             return
         if self.call_id is not None and tool_call_id == self.call_id:
             if kind == "error":
@@ -920,13 +904,8 @@ class RootTurnEvidence:
                 self.verified_delivery_calls.add(tool_call_id)
                 self.result_seq = seq
             return
-        if kind in ("result", "error") and tool_call_id in self.checkpoint_calls:
-            self._inquiry_result(self.checkpoint_calls, data, kind,
-                                 "inquiry-checkpoint", tool_call_id)
-            return
         if kind in ("result", "error") and tool_call_id in self.answer_calls:
-            self._inquiry_result(self.answer_calls, data, kind,
-                                 "inquiry-answer", tool_call_id)
+            self._answer_result(data, kind, tool_call_id)
             return
 
     def verified_delivery(self) -> frozenset[tuple[str, str]]:
@@ -939,20 +918,9 @@ class RootTurnEvidence:
         identity = canonical_json({"sessionId": self.session_id, "turnId": self.turn_id})
         return frozenset((identity, call_id) for call_id in self.verified_delivery_calls)
 
-    def _inquiry_result(self, calls: dict[str, dict], data: dict, kind: str,
-                        receipt_kind: str, tool_call_id: str) -> None:
-        """Import one checkpoint/answer tool result under root-turn authority.
-
-        An ordinary tool error keeps the turn alive for a corrected retry, exactly
-        like a failed finish, and so does a verified signed tool-refusal envelope
-        arriving inside a native wrapper result marked successful. A successful
-        result must otherwise carry a signed receipt the controller re-verifies;
-        the bridge callback then applies the state change or raises for a forged,
-        stale or conflicting binding. A duplicate terminal result for one retained
-        call identity is a protocol violation. The verified receipt itself is
-        handed to its callback and never retained, so an unlimited turn cannot
-        accumulate checkpoint question text.
-        """
+    def _answer_result(self, data: dict, kind: str, tool_call_id: str) -> None:
+        """Verify a root answer, including one scheduled after finish."""
+        calls, receipt_kind = self.answer_calls, "inquiry-answer"
         call = calls[tool_call_id]
         if call["result"] is not None:
             raise NativeError("invalid-provenance", f"the native {receipt_kind} call produced a duplicate terminal result")
@@ -963,7 +931,7 @@ class RootTurnEvidence:
         if result.get("truncated") is not False:
             raise NativeError("invalid-inquiry-receipt", f"the native {receipt_kind} result was truncated")
         content = result.get("content")
-        native_name = self.checkpoint_name if receipt_kind == "inquiry-checkpoint" else self.answer_name
+        native_name = self.answer_name
         if refusal_shaped(content):
             # Verified for either native success marker before any retryable
             # ordinary-error path, exactly like the finish tool: a forged or
@@ -981,7 +949,7 @@ class RootTurnEvidence:
         receipt = verify_inquiry_receipt(content, self.bridge, receipt_kind)
         call["result"] = "receipt-verified"
         self.verified_delivery_calls.add(tool_call_id)
-        callback = self.on_delivery if receipt_kind == "inquiry-checkpoint" else self.on_answer
+        callback = self.on_answer
         if callback is not None:
             callback(receipt, tool_call_id)
 
