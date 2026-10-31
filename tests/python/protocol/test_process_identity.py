@@ -105,6 +105,7 @@ class ProcessIdentityTests(unittest.TestCase):
         self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "unknown")
         self.assertEqual(source.signals, [])
 
+    @unittest.skipIf(os.name == "nt", "POSIX session hard stop signals SIGKILL")
     def test_reaped_root_with_newly_seen_session_members_is_unknown(self):
         source = Source(started_at=None)
         source.snapshot = lambda: {302: ProcessMember(302, 106, 1, 301, True)}
@@ -119,6 +120,7 @@ class ProcessIdentityTests(unittest.TestCase):
         self.assertEqual(identity.stop_orphan_process(RECORD, source=source), "orphan-stopped")
         self.assertEqual(source.signals, [(301, signal.SIGTERM)])
 
+    @unittest.skipIf(os.name == "nt", "POSIX stop escalation signals SIGKILL")
     def test_failed_scan_keeps_verified_root_stoppable_but_never_confirms(self):
         source = Source()
         def send(pid, sig):
@@ -132,7 +134,8 @@ class ProcessIdentityTests(unittest.TestCase):
         self.assertEqual(source.signals, [(301, signal.SIGTERM), (301, signal.SIGKILL)])
 
     def test_denied_process_group_and_job_observations_remain_unknown(self):
-        for record, method in ((RECORD, 'creation_time'), (RECORD, 'snapshot'), (WINDOWS_RECORD, 'open_job')):
+        posix_cases = ((RECORD, 'creation_time'), (RECORD, 'snapshot')) if os.name != "nt" else ()
+        for record, method in (*posix_cases, (WINDOWS_RECORD, 'open_job')):
             for failure in (PermissionError('kernel denied'), OSError('query failed')):
                 with self.subTest(method=method, error=type(failure).__name__):
                     source = Source(started_at=record['startedAt'])
@@ -142,20 +145,20 @@ class ProcessIdentityTests(unittest.TestCase):
                     self.assertEqual(source.signals, [(301, signal.SIGTERM)] if method == 'snapshot' else [])
 
     def test_hard_stop_reverifies_identity_including_reuse_and_observation_failure(self):
-        for failure in ("reused", "group-unreadable", "boot-changed", "absent"):
-            source = Source()
-            if failure == "reused":
-                source.start += 1
-            elif failure == "group-unreadable":
-                source.snapshot = mock.Mock(side_effect=PermissionError)
-            elif failure == "boot-changed":
-                source.boot = "linux:00000000-0000-4000-8000-000000000002"
-            else:
-                source.start, source.group = None, False
-            with self.subTest(failure=failure):
-                identity.kill_verified_process_session(RECORD, source=source)
-                self.assertEqual(source.signals, [(301, signal.SIGKILL)] if failure == "group-unreadable" else [])
         if os.name != "nt":
+            for failure in ("reused", "group-unreadable", "boot-changed", "absent"):
+                source = Source()
+                if failure == "reused":
+                    source.start += 1
+                elif failure == "group-unreadable":
+                    source.snapshot = mock.Mock(side_effect=PermissionError)
+                elif failure == "boot-changed":
+                    source.boot = "linux:00000000-0000-4000-8000-000000000002"
+                else:
+                    source.start, source.group = None, False
+                with self.subTest(failure=failure):
+                    identity.kill_verified_process_session(RECORD, source=source)
+                    self.assertEqual(source.signals, [(301, signal.SIGKILL)] if failure == "group-unreadable" else [])
             source = Source()
             identity.kill_verified_process_session(RECORD, source=source)
             self.assertEqual(source.signals, [(301, signal.SIGKILL)])

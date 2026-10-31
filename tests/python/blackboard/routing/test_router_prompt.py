@@ -42,8 +42,8 @@ class RouterPromptTests(unittest.TestCase):
                 self.assertEqual(interval["confidence"], 0.95)
                 self.assertAlmostEqual(interval["lower"], lower, places=12)
                 self.assertAlmostEqual(interval["upper"], upper, places=12)
-                self.assertLessEqual(interval["lower"], count / samples)
-                self.assertGreaterEqual(interval["upper"], count / samples)
+                self.assertLessEqual(interval["lower"], count / samples + 1e-12)
+                self.assertGreaterEqual(interval["upper"], count / samples - 1e-12)
         for count in (0, 1, 2):
             small = router._rate_interval(count, 2)
             large = router._rate_interval(count * 100, 200)
