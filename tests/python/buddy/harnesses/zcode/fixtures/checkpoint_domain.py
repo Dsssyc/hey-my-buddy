@@ -238,4 +238,8 @@ def serve():
 
 
 if __name__ == "__main__":
+    # This owner is a fresh interpreter outside the test-file bootstrap.
+    from hey_my_buddy.cli.checks import configure_fixture_cleanup
+
+    configure_fixture_cleanup()
     serve()
