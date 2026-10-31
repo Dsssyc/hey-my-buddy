@@ -428,7 +428,7 @@ def _delete_cli_files(store, scope):
             return isinstance(document,dict) and all(document.get(key) == value for key,value in binding.items())
 
         controls = store.directory / 'controls'
-        if controls.is_dir() and not private_dirs.linked(controls):
+        if controls.is_dir():
             files = list(controls.iterdir())
             for run_id in scope.runs:
                 pattern = re.compile(re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\Z')
@@ -445,7 +445,7 @@ def _delete_cli_files(store, scope):
         for task in scope.task_rows:
             path = submission_file_path(store.directory,task['request_id'])
             remove(path)
-            if submissions.is_dir() and not private_dirs.linked(submissions):
+            if submissions.is_dir():
                 for temporary in submissions.glob('.' + path.stem + '.*.tmp'):
                     if temporary_matches(temporary,requestId=task['request_id']):
                         remove(temporary)

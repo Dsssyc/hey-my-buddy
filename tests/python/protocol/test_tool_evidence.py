@@ -4,7 +4,6 @@ The check runner supplies a private state directory. No board or model call is
 needed: the collector writes digest-bound call summaries for the judge to read.
 """
 import os
-from contextlib import ExitStack
 from pathlib import Path
 import tempfile
 import unittest
@@ -525,8 +524,7 @@ class JudgeToolEvidenceTests(unittest.TestCase):
 
 class ExplicitStateRootTests(unittest.TestCase):
     def test_collection_without_an_environment_root_only_writes_the_explicit_private_root(self):
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory, ExitStack() as cleanup:
-            cleanup.callback(private_dirs.remove_tree, Path(directory))
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory:
             root = Path(directory)
             state_dir = root / "selected"
             with mock.patch.dict(os.environ), mock.patch(
@@ -542,8 +540,7 @@ class ExplicitStateRootTests(unittest.TestCase):
             self.assertEqual(len(list(native_path(state_dir).rglob("*.jsonl"))), 1)
 
     def test_another_state_root_cannot_adopt_a_valid_evidence_reference(self):
-        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory, ExitStack() as cleanup:
-            cleanup.callback(private_dirs.remove_tree, Path(directory))
+        with tempfile.TemporaryDirectory(prefix="hey-my-buddy-tool-root-") as directory:
             selected = Path(directory) / "selected"
             other = Path(directory) / "other"
             collector = tool_evidence.ToolEventEvidence(BINDING, state_dir=selected)

@@ -23,6 +23,12 @@ class DeletionFileTests(BoardTestCase):
         path.write_text(json.dumps(document), encoding="utf-8", newline="\n")
         return path
 
+    def link_cli_directory(self, board, name):
+        directory = board.directory / name
+        relocated = self.directory / ('relocated-' + name)
+        directory.rename(relocated)
+        directory.symlink_to(relocated, target_is_directory=True)
+
     def test_private_roots_follow_adapter_bindings_and_leave_legacy_roots_and_links(self):
         board = self.board()
         scope = self.scope()
@@ -78,6 +84,45 @@ class DeletionFileTests(BoardTestCase):
         self.assertEqual(len(skipped),1)
         self.assertTrue(control.is_symlink())
         self.assertEqual(json.loads(user.read_text(encoding="utf-8")),{'keep':True})
+
+    def test_cli_bound_files_are_removed_through_linked_private_parents(self):
+        board = self.board()
+        control = self.file(control_file_path(board.directory, 'owned', 9), {})
+        temporary = self.file(control.with_name('.owned.g9.json.test.tmp'),
+                              {'runId': 'owned', 'ownerGeneration': 9})
+        submission = self.file(submission_file_path(board.directory, 'owned-request'), {})
+        partial = self.file(submission.with_name('.' + submission.stem + '.test.tmp'),
+                            {'requestId': 'owned-request'})
+        other = self.file(control_file_path(board.directory, 'other', 1), {'keep': True})
+        unbound = self.file(submission.with_name('.' + submission.stem + '.wrong.tmp'),
+                            {'requestId': 'other-request'})
+        for name in ('controls', 'submissions'):
+            self.link_cli_directory(board, name)
+
+        self.assertEqual(deletion._delete_cli_files(board.store, self.scope()), [])
+
+        self.assertTrue(all(not path.exists() for path in (control, temporary, submission, partial)))
+        self.assertTrue(all(path.exists() for path in (other, unbound)))
+        self.assertTrue(all((board.directory / name).is_symlink() for name in ('controls', 'submissions')))
+
+    def test_cli_linked_leaves_under_linked_private_parents_are_retained_and_reported(self):
+        board = self.board()
+        target = self.file(self.directory / 'user-file', {'keep': True})
+        leaves = (control_file_path(board.directory, 'owned', 1),
+                  submission_file_path(board.directory, 'owned-request'))
+        for leaf in leaves:
+            leaf.parent.mkdir()
+            leaf.symlink_to(target)
+        for name in ('controls', 'submissions'):
+            self.link_cli_directory(board, name)
+
+        skipped = deletion._delete_cli_files(board.store, self.scope())
+
+        self.assertEqual([item['path'] for item in skipped], list(map(str, leaves)))
+        self.assertEqual([item['reason']['code'] for item in skipped],
+                         ['macro-task-deletion.owner-unproven'] * len(leaves))
+        self.assertTrue(all(leaf.is_symlink() for leaf in leaves))
+        self.assertEqual(json.loads(target.read_text(encoding='utf-8')), {'keep': True})
 
 
 
