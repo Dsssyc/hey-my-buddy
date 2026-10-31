@@ -254,6 +254,36 @@ class HandleBoundaryTests(unittest.TestCase):
             files.DELETE | files.GENERIC_WRITE, files.CREATE_NEW, share_delete=True)
         api.close.assert_not_called()
 
+    def test_unlink_refuses_directory_reparse_and_non_disk_handles(self):
+        for attributes, kind in ((files.FILE_ATTRIBUTE_DIRECTORY, files.FILE_TYPE_DISK),
+                                 (files.FILE_ATTRIBUTE_REPARSE_POINT, files.FILE_TYPE_DISK),
+                                 (files.FILE_ATTRIBUTE_NORMAL, 2)):
+            with self.subTest(attributes=attributes, kind=kind):
+                api = mock.Mock()
+                api._open.return_value = 123
+                api.info.return_value = (attributes, 0)
+                api.file_type.return_value = kind
+                with self.assertRaises(BoardError):
+                    files.unlink_regular_file('leaf', api=api)
+                api.kernel.SetFileInformationByHandle.assert_not_called()
+                api.close.assert_called_once_with(123)
+
+    def test_unlink_propagates_delete_denial_and_always_closes_its_handle(self):
+        api = files.WindowsFileAPI()
+        api.kernel = mock.Mock()
+        handle = FakeHandle(321)
+        self.native.CreateFile.return_value = handle
+        self.native.GetFileInformationByHandleEx.return_value = {
+            'FileAttributes': files.FILE_ATTRIBUTE_NORMAL, 'ReparseTag': 0}
+        self.native.GetFileType.return_value = files.FILE_TYPE_DISK
+        api.kernel.SetFileInformationByHandle.return_value = False
+        with mock.patch.object(ctypes, 'get_last_error', return_value=32, create=True):
+            with self.assertRaises(PermissionError) as raised:
+                files.unlink_regular_file(r'C:\folder\leaf', api=api)
+        self.assertEqual(raised.exception.winerror, 32)
+        self.assertTrue(handle.closed)
+        self.assertTrue(self.native.CreateFile.call_args.args[2] & files.FILE_SHARE_DELETE)
+
     def test_private_open_refuses_parent_traversal_and_truncation_before_opening(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

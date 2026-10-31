@@ -230,3 +230,19 @@ def open_regular_fd(path, flags, mode=0o600, *, delete=False, api=None):
     except BaseException:
         api.close(handle)
         raise
+
+
+def unlink_regular_file(path, *, api=None):
+    """Remove one ordinary file name without changing other hardlinks' attributes."""
+    api = api if api is not None else WindowsFileAPI()
+    handle = api._open(path, DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
+    try:
+        attributes, _ = api.info(handle)
+        if attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) or api.file_type(handle) != FILE_TYPE_DISK:
+            raise BoardError('PRIVATE_PATH_UNSAFE', 'Path is not an ordinary file', path=str(path))
+        # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE.
+        flags = wintypes.DWORD(0x1 | 0x2 | 0x10)
+        if not api.kernel.SetFileInformationByHandle(int(handle), 21, ctypes.byref(flags), ctypes.sizeof(flags)):
+            raise api._os_error(ctypes.get_last_error())
+    finally:
+        api.close(handle)

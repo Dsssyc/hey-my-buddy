@@ -875,7 +875,8 @@ def remove_private_test_root(directory: Path, *, retry_seconds: float = 60) -> N
                 break
         else:
             raise error
-        _delete_readonly_test_leaf(path)
+        from ..windows_files import unlink_regular_file
+        unlink_regular_file(path)
 
     deadline = time.monotonic() + retry_seconds
     while True:
@@ -889,23 +890,6 @@ def remove_private_test_root(directory: Path, *, retry_seconds: float = 60) -> N
             if remaining <= 0:
                 raise
             time.sleep(min(0.1, remaining))
-
-
-def _delete_readonly_test_leaf(path: Path) -> None:
-    """Delete this private test link, preserving every other hardlink's attributes."""
-    import ctypes
-    from ctypes import wintypes
-    from ..windows_files import WindowsFileAPI, DELETE, FILE_READ_ATTRIBUTES, OPEN_EXISTING
-
-    api = WindowsFileAPI()
-    handle = api._open(path, DELETE | FILE_READ_ATTRIBUTES, OPEN_EXISTING, share_delete=True)
-    try:
-        # FileDispositionInfoEx: DELETE | POSIX_SEMANTICS | IGNORE_READONLY_ATTRIBUTE.
-        flags = wintypes.DWORD(0x1 | 0x2 | 0x10)
-        if not api.kernel.SetFileInformationByHandle(int(handle), 21, ctypes.byref(flags), ctypes.sizeof(flags)):
-            raise ctypes.WinError(ctypes.get_last_error())
-    finally:
-        api.close(handle)
 
 
 def _write_evidence(root: Path, evidence: dict) -> Path:

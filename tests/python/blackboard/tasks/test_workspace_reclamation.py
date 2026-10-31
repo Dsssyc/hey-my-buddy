@@ -104,7 +104,7 @@ class ReclamationTests(LifecycleTestCase):
         before = outside.stat()
         try:
             Reclamation(board.store).run()
-            self.assertFalse(checkout.exists(), self.view(board, view['runId'])['cleanup'])
+            self.assertFalse(checkout.exists(), board.store.service_issues())
             after = outside.stat()
             self.assertEqual(after.st_mode, before.st_mode)
             self.assertEqual(getattr(after, 'st_file_attributes', None), getattr(before, 'st_file_attributes', None))
