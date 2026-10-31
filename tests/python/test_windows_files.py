@@ -385,11 +385,14 @@ class NativePrivateFilesTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / 'occupied'
             root.mkdir()
-            handle = win32file.CreateFile(str(native_path(root)), files.FILE_READ_ATTRIBUTES,
+            handle = win32file.CreateFile(str(native_path(root)), win32con.GENERIC_READ,
                                           win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
                                           None, win32con.OPEN_EXISTING,
                                           win32con.FILE_FLAG_BACKUP_SEMANTICS, None)
             try:
+                with self.assertRaises(PermissionError) as classic:
+                    native_path(root).rmdir()
+                self.assertEqual(classic.exception.winerror, 32)
                 with self.assertRaises(PermissionError) as caught:
                     private_dirs.remove_tree(root)
                 self.assertEqual(caught.exception.winerror, 32)
