@@ -12,6 +12,74 @@ from hey_my_buddy.paths import native_path
 
 
 class DeletionAdmissionTests(LifecycleTestCase):
+    def test_new_macro_task_cannot_borrow_checkout_after_owner_deletion_is_marked(self):
+        board = self.board()
+        owner = board.call("workflow_submit", {
+            **BUDDY, "requestId": "deleting-managed-owner", "hostId": "host-1",
+            "task": "Own the managed checkout", "cwd": str(self.repo),
+            "submissionToken": "a" * 32, "macroTask": {"title": "Deleting owner"},
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
+        })
+        self.controls[owner["runId"]] = owner["control"]
+        claimed = self.claim(board, owner["runId"])
+        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        checkout = Path(manifest["path"])
+        (checkout / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
+        seal = workspace.seal(self.directory, manifest, owner["runId"],
+                              claimed["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, claimed, seal)
+        view = self.view(board, owner["runId"])
+        artifact = next(item for item in view["artifacts"] if item["kind"] == "output")
+        with patch.object(board.store.workflow, "_reclaim_checkout",
+                          return_value={"removed": False, "reasons": ["fixture-retained"]}):
+            self.accept(board, view, artifact, not_required=True)
+
+        with patch.object(deletion, "_delete_workspaces", side_effect=OSError("fixture physical failure")):
+            interrupted = deletion.delete(board.store, owner["macroTaskId"], 1)
+        self.assertEqual(interrupted["state"], "deleting")
+        self.assertTrue(checkout.is_dir())
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute(
+                "SELECT 1 FROM macro_task_deletions WHERE target_id=?", (owner["macroTaskId"],),
+            ).fetchone())
+
+        def assert_refused(suffix, cwd):
+            request_id = "deleting-managed-borrower-" + suffix
+            with self.subTest(cwd=cwd), self.assertRaises(BoardError) as caught:
+                board.call("workflow_submit", {
+                    **BUDDY, "requestId": request_id, "hostId": "host-2",
+                    "task": "Borrow the deleting managed checkout", "cwd": str(cwd),
+                    "submissionToken": "b" * 32, "macroTask": {"title": "Independent borrower"},
+                    "executionWorkspace": {"kind": "existing", "access": "write", "writeScope": ["."]},
+                })
+            self.assertEqual(caught.exception.code, "PREPARATION_CONFLICT")
+            with board.store.db.read() as connection:
+                self.assertIsNone(connection.execute(
+                    "SELECT 1 FROM tasks WHERE request_id=?", (request_id,),
+                ).fetchone())
+
+        for suffix, cwd in (("root", checkout), ("child", checkout / "src"),
+                            ("normalized", checkout / "src" / "..")):
+            assert_refused(suffix, cwd)
+
+        (checkout / ".git").unlink()
+        self.git("-C", str(checkout), "init", "-q", "-b", "main")
+        self.git("-C", str(checkout), "config", "user.email", "buddy@example.invalid")
+        self.git("-C", str(checkout), "config", "user.name", "Buddy Test")
+        self.git("-C", str(checkout), "add", ".")
+        self.git("-C", str(checkout), "commit", "-qm", "replacement repository")
+        self.assertNotEqual(workspace.inspect(str(checkout))["repositoryId"], manifest["repositoryId"])
+        assert_refused("replacement-repository", checkout)
+
+        nested = checkout / "src"
+        self.git("-C", str(nested), "init", "-q", "-b", "main")
+        self.git("-C", str(nested), "config", "user.email", "buddy@example.invalid")
+        self.git("-C", str(nested), "config", "user.name", "Buddy Test")
+        self.git("-C", str(nested), "add", ".")
+        self.git("-C", str(nested), "commit", "-qm", "nested repository")
+        self.assertNotEqual(workspace.inspect(str(nested))["repositoryId"], manifest["repositoryId"])
+        assert_refused("nested-repository", nested)
+
     def failed_run(self, *, conflict=False):
         board = self.board()
         submitted = board.call("workflow_submit", {

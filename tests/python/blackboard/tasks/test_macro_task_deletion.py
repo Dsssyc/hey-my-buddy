@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
+import errno
 import hashlib
 import json
 from pathlib import Path
@@ -67,7 +68,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                 side_effect=BoardError("NOT_READY", "process blocker", reason=cause)):
             blocked = macro_task_deletion.delete(board.store, target, 1)
         self.assertEqual(blocked["state"], "deleting")
-        self.assertEqual(blocked["reason"], cause)
+        self.assertEqual(blocked["failures"][0]["reason"], cause)
         with board.store.db.read() as db:
             self.assertIsNotNone(db.execute("SELECT 1 FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
             self.assertIsNotNone(db.execute("SELECT 1 FROM macro_task_deletions WHERE target_id=?", (target,)).fetchone())
@@ -88,14 +89,17 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             with self.subTest(stage=stage):
                 run = self.closed(board, "skipped-" + phase, macro_task="Skipped physical phase")
                 target = run["macroTaskId"]
-                skipped = [{"reason": reason("macro-task-deletion.owner-unproven")}]
+                skipped = [{"path": str(self.directory / (phase + "-one")),
+                            "reason": reason("macro-task-deletion.owner-unproven")},
+                           {"path": str(self.directory / (phase + "-two")),
+                            "reason": reason("macro-task-deletion.identity-changed")}]
                 stack, calls = self.without_physical_io()
                 with stack, patch.object(macro_task_deletion, stage, return_value=skipped):
                     blocked = macro_task_deletion.delete(board.store, target, 1)
-                self.assertEqual((blocked["state"], blocked["deletedAt"], blocked["objectKind"]),
-                                 ("deleting", None, phase))
-                self.assertEqual(blocked["reason"], reason("macro-task-deletion.physical-failed",
-                                                          errorCode="macro-task-deletion.owner-unproven"))
+                self.assertEqual((blocked["state"], blocked["deletedAt"]), ("deleting", None))
+                self.assertEqual(blocked["failures"], [
+                    {"objectKind": phase, "path": item["path"], "reason": item["reason"], "error": None}
+                    for item in skipped])
                 self.assertEqual(calls, list(PHYSICAL_STAGES[:PHYSICAL_STAGES.index(stage)])
                                  if stage in PHYSICAL_STAGES else list(PHYSICAL_STAGES[:3]))
                 with board.store.db.read() as db:
@@ -111,6 +115,41 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                     completed = macro_task_deletion.delete(board.store, target, 1)
                 self.assertEqual((completed["state"], completed["duplicate"], completed["deletionId"]),
                                  ("deleted", True, blocked["deletionId"]))
+
+    def test_os_error_retains_its_path_message_and_error_numbers(self):
+        board = self.board()
+        run = self.closed(board, "os-error", macro_task="Occupied private file")
+        path = str(self.directory / "occupied-private-file")
+        error = PermissionError(errno.EACCES, "file held open", path)
+        error.winerror = 32
+        with self.without_physical_io()[0], patch.object(macro_task_deletion, "_delete_private_roots",
+                                                       side_effect=error):
+            result = macro_task_deletion.delete(board.store, run["macroTaskId"], 1)
+        self.assertEqual(result["state"], "deleting")
+        self.assertEqual(result["failures"], [{"objectKind": "private-root", "path": path,
+            "reason": {"code": "macro-task-deletion.physical-failed", "params": {"errorCode": "IO_ERROR"}},
+            "error": {"message": str(error), "errno": errno.EACCES, "winerror": 32}}])
+
+    def test_started_deletion_preview_does_not_repeat_premark_gates(self):
+        from hey_my_buddy.protocol.reasons import reason
+        board = self.board()
+        run = self.closed(board, "started-preview", macro_task="Already started")
+        skipped = [{"path": str(self.directory / "retained"),
+                    "reason": reason("macro-task-deletion.owner-unproven")}]
+        with self.without_physical_io()[0], patch.object(macro_task_deletion, "_delete_workspaces",
+                                                       return_value=skipped):
+            result = macro_task_deletion.delete(board.store, run["macroTaskId"], 1)
+        self.assertEqual(result["state"], "deleting")
+        with ExitStack() as stack:
+            for gate in ("_busy", "_storage_in_use", "_unavailable_harnesses", "_blockers", "_scope_summary"):
+                stack.enter_context(patch.object(macro_task_deletion, gate,
+                                                side_effect=AssertionError("premark gate was repeated")))
+            stack.enter_context(patch.object(macro_task_deletion.worker_sessions, "deletable_sessions",
+                                            side_effect=PermissionError(13, "native receipt unavailable")))
+            preview = macro_task_deletion.preview(board.store, run["macroTaskId"])
+        self.assertEqual((preview["deletionState"], preview["microTaskCount"], preview["blockerTotal"],
+                          preview["blockers"]), ("deleting", 1, 0, []))
+        self.assertEqual(preview["scope"]["sessions"], {"count": None, "bytes": None})
 
     def test_preview_and_delete_use_entire_group_and_leave_other_group_untouched(self):
         board = self.board()
@@ -672,22 +711,21 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                 raise OSError("offline adapter interruption")
             return {session_id: "already-gone"}
         with ExitStack() as stack:
-            inventory = stack.enter_context(patch.object(worker_sessions,"deletable_sessions",
-                                                          wraps=worker_sessions.deletable_sessions))
             stack.enter_context(patch.object(harness_registry, "adapter",
                                              side_effect=lambda harness: SimpleNamespace(delete_sessions=delete_native)))
             for stage in PHYSICAL_STAGES[1:]:
                 stack.enter_context(patch.object(macro_task_deletion, stage, return_value=[]))
             interrupted = macro_task_deletion.delete(board.store, target, 1)
-            self.assertEqual((interrupted["state"], interrupted["reason"], interrupted["objectKind"]),
-                             ("deleting", {"code": "macro-task-deletion.physical-failed", "params": {"errorCode": "IO_ERROR"}}, "native-session"))
+            self.assertEqual(interrupted["state"], "deleting")
+            self.assertEqual(interrupted["failures"], [{"objectKind": "native-session", "path": None,
+                "reason": {"code": "macro-task-deletion.physical-failed", "params": {"errorCode": "IO_ERROR"}},
+                "error": {"message": "offline adapter interruption", "errno": None, "winerror": None}}])
             with board.store.db.read() as db:
                 self.assertIsNotNone(db.execute("SELECT 1 FROM attempts WHERE attempt_id='native-attempt-1'").fetchone())
             completed = macro_task_deletion.delete(board.store, target, 1)
         self.assertEqual(completed["state"], "deleted")
         self.assertEqual(completed["deletionId"], interrupted["deletionId"])
         self.assertEqual(calls, [[session_id], [session_id]])
-        self.assertEqual(inventory.call_count,2)
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM events WHERE kind='macro_task.deleted'").fetchone()[0], 0)
 

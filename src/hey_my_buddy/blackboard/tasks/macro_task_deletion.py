@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 import json
+import os
 from pathlib import Path
 import re
 import uuid
@@ -18,6 +19,7 @@ from ...home import control_file_path, submission_file_path
 from ...protocol import schemas
 from ...protocol.reasons import reason
 from . import micro_task, storage, worker_sessions
+from .macro_task_deletion_progress import collect_skipped
 from ..service.harness_health import read_health
 from ..store.db import canonical_json
 
@@ -199,6 +201,7 @@ def _storage_in_use(store, connection, scope):
     allocations = [workspace.resolve_allocation(store.directory,m,scope.manifests)
                    for m in scope.manifests if m.get('kind') == 'worktree']
     checkouts = {(a['repositoryId'],a['checkoutId']) for a in allocations if a is not None}
+    checkout_paths = {a['path'] for a in allocations if a is not None}
     holders = {}
 
     def retain(kind, owner):
@@ -216,11 +219,16 @@ def _storage_in_use(store, connection, scope):
         wid = f"json_extract({valid},'{prefix}.workspaceId')"
         rid = f"json_extract({valid},'{prefix}.repositoryId')"
         cid = f"json_extract({valid},'{prefix}.checkoutId')"
+        root = f"json_extract({valid},'{prefix}.checkoutRoot')"
         predicates = [f'{wid} IN (SELECT value FROM json_each(?))']
         args = [_ids(workspace_ids)]
         for repository_id,checkout_id in sorted(checkouts):
             predicates.append(f'({rid}=? AND {cid}=?)')
             args.extend((repository_id,checkout_id))
+        for checkout_path in sorted(checkout_paths):
+            descendant = checkout_path + os.sep
+            predicates.append(f'({root}=? OR substr({root},1,?)=?)')
+            args.extend((checkout_path,len(descendant),descendant))
         query = f'SELECT {owner} AS owner FROM {table} WHERE (' + ' OR '.join(predicates) + ')'
         for row in connection.execute(query,args):
             retain('workspace',row['owner'])
@@ -248,6 +256,13 @@ def _unavailable_harnesses(connection, scope):
     return unavailable
 
 
+def _require_unused_storage(store, connection, scope, target):
+    shared = _storage_in_use(store, connection, scope)
+    if shared:
+        raise BoardError('MACRO_TASK_STORAGE_IN_USE', 'Storage is retained by another micro task',
+                         macroTaskId=target, objects=shared)
+
+
 def _busy(connection, scope):
     return any(row['state'] == 'applying' for row in _rows(connection, 'workspace_cleanup_plans', 'run_id', scope.runs))
 
@@ -260,7 +275,7 @@ def _summary(row, scope, *, duplicate):
 def _scope_summary(store, scope):
     """Project retained identities and current refs, without reading native stores or Git sizes."""
     from . import workspace
-    from .macro_task_deletion_workspace import _expected_refs, _refs, _repository_skip
+    from .macro_task_deletion_workspace import _expected_refs, _refs, _repository_current
 
     allocations = [workspace.resolve_allocation(store.directory, manifest, scope.manifests)
                    for manifest in scope.manifests if manifest['kind'] == 'worktree']
@@ -284,7 +299,7 @@ def _scope_summary(store, scope):
             refs_known = False
     if refs_known:
         for identifier, manifest in manifests.items():
-            if _repository_skip(manifest, 'ref', identifier) is not None:
+            if not _repository_current(manifest):
                 refs_known = False
                 break
             actual = _refs(Path(manifest['snapshot']['repositoryPath']), identifier)
@@ -307,23 +322,29 @@ def preview(store, target: str) -> dict:
     with store.db.read() as connection:
         deletion = _record(connection, target)
         scope = _collect(connection, target)
-        if _busy(connection, scope):
+        if deletion is None and _busy(connection, scope):
             raise BoardError('MACRO_TASK_BUSY', 'A workspace cleanup is applying', macroTaskId=target)
-        scope.sessions = worker_sessions.deletable_sessions(store,scope.tasks,connection=connection)
-        shared = _storage_in_use(store,connection,scope)
-        if shared:
-            raise BoardError('MACRO_TASK_STORAGE_IN_USE', 'Storage is retained by another micro task', macroTaskId=target, objects=shared)
-        unavailable = _unavailable_harnesses(connection, scope)
-        if unavailable:
-            raise BoardError('MACRO_TASK_HARNESS_UNAVAILABLE', 'A harness with stored sessions is unavailable',
-                             macroTaskId=target, harnesses=unavailable)
-        blockers = _blockers(store, connection, scope)
+        if deletion is None:
+            scope.sessions = worker_sessions.deletable_sessions(store,scope.tasks,connection=connection)
+            shared = _storage_in_use(store,connection,scope)
+            if shared:
+                raise BoardError('MACRO_TASK_STORAGE_IN_USE', 'Storage is retained by another micro task', macroTaskId=target, objects=shared)
+            unavailable = _unavailable_harnesses(connection, scope)
+            if unavailable:
+                raise BoardError('MACRO_TASK_HARNESS_UNAVAILABLE', 'A harness with stored sessions is unavailable',
+                                 macroTaskId=target, harnesses=unavailable)
+            blockers = _blockers(store, connection, scope)
+            summary = _scope_summary(store, scope)
+        else:
+            blockers = []
+            summary = {'artifacts': {'count': len(scope.artifacts), 'bytes': None if scope.artifacts else 0},
+                       'sessions': {'count': None, 'bytes': None}, 'checkouts': None, 'gitRefs': None}
         concluded = {r['run_id'] for r in _rows(connection, 'workflow_host_conclusions', 'run_id', scope.runs)}
         tasks = {r['task_id']:r for r in scope.task_rows}
         failures = sum(r['state'] in ('failed','cancelled') and not tasks[r['run_id']]['accepted_at']
                        and r['run_id'] not in concluded for r in scope.run_rows)
         return {'macroTaskId':target, 'microTaskCount':len(scope.runs), 'unconcludedFailureCount':failures,
-                'scope': _scope_summary(store, scope),
+                'scope': summary,
                 'blockerTotal':len(blockers), 'blockers':blockers[:50],
                 'backupRetention':'until-backup-rotation', 'deletionState':'deleting' if deletion else None}
 
@@ -356,29 +377,29 @@ def _remove_owned_tree(path, *, object_kind='private-root'):
 
 
 def _delete_private_roots(store, scope):
-    skipped = []
-    adapters = {task_id:set() for task_id in scope.tasks}
-    for row in scope.task_rows + scope.attempt_rows:
-        if row['adapter'] in private_dirs.ADAPTERS:
-            adapters[row['task_id']].add(row['adapter'])
-        if 'model_harness' in row.keys() and row['model_harness'] in private_dirs.ADAPTERS:
-            adapters[row['task_id']].add(row['model_harness'])
-    with store.db.read() as connection:
-        for row in _rows(connection, 'router_dispatches', 'task_id', scope.tasks):
-            adapters[row['task_id']].add(row['harness'])
-        for row in _rows(connection,'workflow_turns','run_id',scope.runs):
-            buddy = json.loads(row['input_json']).get('buddy')
-            if buddy and buddy['harness'] in private_dirs.ADAPTERS:
-                adapters[row['run_id']].add(buddy['harness'])
-        for row in scope.run_rows:
-            if row['buddy_json']:
-                adapters[row['run_id']].add(json.loads(row['buddy_json'])['harness'])
-    for task_id, harnesses in adapters.items():
-        for harness in harnesses:
-            root = private_dirs.micro_task_root(store.directory, harness, task_id)
-            skipped.extend(_remove_owned_tree(root))
-        skipped.extend(_remove_owned_tree(store.directory / 'attempts' / task_id))
-    return skipped
+    with collect_skipped() as skipped:
+        adapters = {task_id:set() for task_id in scope.tasks}
+        for row in scope.task_rows + scope.attempt_rows:
+            if row['adapter'] in private_dirs.ADAPTERS:
+                adapters[row['task_id']].add(row['adapter'])
+            if 'model_harness' in row.keys() and row['model_harness'] in private_dirs.ADAPTERS:
+                adapters[row['task_id']].add(row['model_harness'])
+        with store.db.read() as connection:
+            for row in _rows(connection, 'router_dispatches', 'task_id', scope.tasks):
+                adapters[row['task_id']].add(row['harness'])
+            for row in _rows(connection,'workflow_turns','run_id',scope.runs):
+                buddy = json.loads(row['input_json']).get('buddy')
+                if buddy and buddy['harness'] in private_dirs.ADAPTERS:
+                    adapters[row['run_id']].add(buddy['harness'])
+            for row in scope.run_rows:
+                if row['buddy_json']:
+                    adapters[row['run_id']].add(json.loads(row['buddy_json'])['harness'])
+        for task_id, harnesses in adapters.items():
+            for harness in harnesses:
+                root = private_dirs.micro_task_root(store.directory, harness, task_id)
+                skipped.extend(_remove_owned_tree(root))
+            skipped.extend(_remove_owned_tree(store.directory / 'attempts' / task_id))
+        return skipped
 
 
 def _delete_session_group(store, target):
@@ -386,49 +407,49 @@ def _delete_session_group(store, target):
 
 
 def _delete_cli_files(store, scope):
-    skipped = []
+    with collect_skipped() as skipped:
 
-    def safe_file(path):
-        return not private_dirs.linked(path) and (not path.exists() or path.is_file())
+        def safe_file(path):
+            return not private_dirs.linked(path) and (not path.exists() or path.is_file())
 
-    def remove(path):
-        if not safe_file(path):
-            skipped.append({'objectKind':'cli-file','path':str(path),'reason':reason('macro-task-deletion.owner-unproven')})
-        else:
-            path.unlink(missing_ok=True)
+        def remove(path):
+            if not safe_file(path):
+                skipped.append({'objectKind':'cli-file','path':str(path),'reason':reason('macro-task-deletion.owner-unproven')})
+            else:
+                path.unlink(missing_ok=True)
 
-    def temporary_matches(path, **binding):
-        if not safe_file(path):
-            return False
-        try:
-            document = json.loads(private_files.read_text(path))
-        except (ValueError, BoardError):
-            return False
-        return isinstance(document,dict) and all(document.get(key) == value for key,value in binding.items())
+        def temporary_matches(path, **binding):
+            if not safe_file(path):
+                return False
+            try:
+                document = json.loads(private_files.read_text(path))
+            except (ValueError, BoardError):
+                return False
+            return isinstance(document,dict) and all(document.get(key) == value for key,value in binding.items())
 
-    controls = store.directory / 'controls'
-    if controls.is_dir() and not private_dirs.linked(controls):
-        files = list(controls.iterdir())
-        for run_id in scope.runs:
-            pattern = re.compile(re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\Z')
-            temporary = re.compile(r'\.' + re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\..+\.tmp\Z')
-            for path in files:
-                match = pattern.fullmatch(path.name)
-                if match:
-                    remove(control_file_path(store.directory,run_id,int(match[1])))
-                else:
-                    match = temporary.fullmatch(path.name)
-                    if match and temporary_matches(path,runId=run_id,ownerGeneration=int(match[1])):
-                        remove(path)
-    submissions = store.directory / 'submissions'
-    for task in scope.task_rows:
-        path = submission_file_path(store.directory,task['request_id'])
-        remove(path)
-        if submissions.is_dir() and not private_dirs.linked(submissions):
-            for temporary in submissions.glob('.' + path.stem + '.*.tmp'):
-                if temporary_matches(temporary,requestId=task['request_id']):
-                    remove(temporary)
-    return skipped
+        controls = store.directory / 'controls'
+        if controls.is_dir() and not private_dirs.linked(controls):
+            files = list(controls.iterdir())
+            for run_id in scope.runs:
+                pattern = re.compile(re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\Z')
+                temporary = re.compile(r'\.' + re.escape(run_id) + r'\.g([1-9][0-9]*)\.json\..+\.tmp\Z')
+                for path in files:
+                    match = pattern.fullmatch(path.name)
+                    if match:
+                        remove(control_file_path(store.directory,run_id,int(match[1])))
+                    else:
+                        match = temporary.fullmatch(path.name)
+                        if match and temporary_matches(path,runId=run_id,ownerGeneration=int(match[1])):
+                            remove(path)
+        submissions = store.directory / 'submissions'
+        for task in scope.task_rows:
+            path = submission_file_path(store.directory,task['request_id'])
+            remove(path)
+            if submissions.is_dir() and not private_dirs.linked(submissions):
+                for temporary in submissions.glob('.' + path.stem + '.*.tmp'):
+                    if temporary_matches(temporary,requestId=task['request_id']):
+                        remove(temporary)
+        return skipped
 
 
 def _delete_rows(store, connection, scope, deletion):
@@ -512,6 +533,30 @@ def _delete_rows(store, connection, scope, deletion):
     return store._head_of(connection)
 
 
+def _physical_failure(error, phase):
+    os_error = error if isinstance(error, OSError) else error.__cause__
+    if not isinstance(os_error, OSError):
+        os_error = None
+    path = os_error.filename if os_error is not None else None
+    if isinstance(error, BoardError):
+        path = path if path is not None else error.details.get('path')
+        cause = (error.details['reason'] if error.code == 'NOT_READY' and 'reason' in error.details
+                 else reason('macro-task-deletion.physical-failed', errorCode=error.code))
+        message = error.message
+    else:
+        cause = reason('macro-task-deletion.physical-failed', errorCode='IO_ERROR')
+        message = str(error)
+    return {'objectKind': phase, 'path': os.fsdecode(path) if path is not None else None,
+            'reason': cause, 'error': {'message': message,
+                'errno': os_error.errno if os_error is not None else None,
+                'winerror': getattr(os_error, 'winerror', None)}}
+
+
+def _skipped_failures(skipped, phase):
+    return [{'objectKind': phase, 'path': item['path'], 'reason': item['reason'], 'error': None}
+            for item in skipped]
+
+
 def delete(store, target: str, micro_task_count: int) -> dict:
     """Fence a confirmed complete set, delete owned content, then remove its rows."""
     if isinstance(micro_task_count,bool) or not isinstance(micro_task_count,int) or micro_task_count < 0:
@@ -548,9 +593,7 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     if blockers:
                         raise BoardError('MACRO_TASK_NOT_SETTLED','The macro task is not settled',macroTaskId=target,
                                          blockerTotal=len(blockers),blockers=blockers[:50])
-                    shared = _storage_in_use(store,connection,scope)
-                    if shared:
-                        raise BoardError('MACRO_TASK_STORAGE_IN_USE','Storage is retained by another micro task',macroTaskId=target,objects=shared)
+                    _require_unused_storage(store, connection, scope, target)
                     unavailable = _unavailable_harnesses(connection,scope)
                     if unavailable:
                         raise BoardError('MACRO_TASK_HARNESS_UNAVAILABLE','A harness with stored sessions is unavailable',
@@ -559,6 +602,8 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                     connection.execute('INSERT INTO macro_task_deletions(deletion_id,target_kind,target_id)'
                                        ' VALUES(?,?,?)',('del-'+uuid.uuid4().hex,kind,identifier))
                     deletion = _record(connection,target)
+                else:
+                    _require_unused_storage(store, connection, scope, target)
         for phase,operation in (('native-session',_delete_sessions),('workspace',_delete_workspaces),
                                 ('private-root',_delete_private_roots),
                                 ('session-records',lambda store, scope: _delete_session_group(store, target)),
@@ -567,22 +612,19 @@ def delete(store, target: str, micro_task_count: int) -> dict:
                 skipped = operation(store,scope)
             except (BoardError,OSError) as error:
                 return {**_summary(deletion,scope,duplicate=duplicate),
-                        'reason':(error.details['reason'] if isinstance(error, BoardError)
-                                  and error.code == 'NOT_READY' and 'reason' in error.details
-                                  else reason('macro-task-deletion.physical-failed',
-                                              errorCode=error.code if isinstance(error,BoardError) else 'IO_ERROR')),
-                        'objectKind':phase}
+                        'failures': [*_skipped_failures(getattr(error, 'deletion_skipped', ()), phase),
+                                     _physical_failure(error, phase)]}
             if skipped:
                 return {**_summary(deletion,scope,duplicate=duplicate),
-                        'reason':reason('macro-task-deletion.physical-failed',
-                                        errorCode=skipped[0]['reason']['code']),
-                        'objectKind':phase}
+                        'failures': _skipped_failures(skipped, phase)}
         with store.db.write() as connection:
             current = _record(connection,target)
             assert current is not None
             current_scope = _collect(connection,target)
             assert (current_scope.runs,current_scope.tasks,current_scope.attempts,current_scope.decisions) == (
                     scope.runs,scope.tasks,scope.attempts,scope.decisions), 'Deletion scope grew after its fence'
+            current_scope.sessions = scope.sessions
+            _require_unused_storage(store, connection, current_scope, target)
             head = _delete_rows(store,connection,scope,current)
             result = {**_summary(current,scope,duplicate=duplicate), 'state':'deleted', 'deletedAt':store.now()}
         store._notify(head, changed_tasks=frozenset(scope.tasks))

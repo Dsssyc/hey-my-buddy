@@ -42,7 +42,7 @@ from . import fixes as task_fixes
 from . import host_conclusions
 from . import micro_task
 from .request_reasons import request_reason
-from .macro_task_deletion_guard import reject_deleting_run, reject_macro_task
+from .macro_task_deletion_guard import reject_deleting_checkout, reject_deleting_run, reject_macro_task
 from ..store.db import canonical_json, sha256_text
 from ..store.work import autonomous_tasks
 from ...errors import BoardError
@@ -1091,6 +1091,7 @@ class WorkflowCoordinator:
     def _check_reservations(self, connection, *, manifest, access, holder_task_id=None, transfer_from=None):
         """Check ownership before preparation and again at the atomic claim point."""
         checkout_id = manifest.get("checkoutId")
+        reject_deleting_checkout(connection, manifest, self.board.directory)
         # Reservation admission is the one atomic claim point for a checkout. A cleanup
         # plan in ``applying`` has already passed its inspection but its removal has not
         # finished, so no new writer may take the checkout across that boundary; the

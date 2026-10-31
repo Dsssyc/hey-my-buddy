@@ -1,5 +1,7 @@
 import i18n from "i18next";
 import { ApiError } from "./api";
+import { isReason } from "./reason";
+import type { Reason } from "./reason";
 
 const blockerCodes = ["queued", "routing", "running", "awaiting-host", "review", "stop-unconfirmed"] as const;
 export type DeletionBlockerKind = typeof blockerCodes[number];
@@ -35,14 +37,14 @@ type DeletionReceipt = {
 };
 export type MacroTaskDeletionResult = DeletionReceipt & (
   | { state: "deleted"; deletedAt: string }
-  | { state: "deleting"; deletedAt: null;
-      reason: { code: "macro-task-deletion.physical-failed"; params: { errorCode: string } }
-        | { code: "checkout.process-blockers"; params: {
-            processes: { pid: number; startedAt: number; executable: string }[];
-            unreadableProcesses: { pid: number; startedAt: number; executable: string }[] } }
-        | { code: "checkout.process-scan-failed"; params: Record<string, never> };
-      objectKind: "native-session" | "workspace" | "private-root" | "session-records" | "cli-file" }
+  | { state: "deleting"; deletedAt: null; failures: DeletionFailure[] }
 );
+export type DeletionFailure = {
+  objectKind: "native-session" | "workspace" | "private-root" | "session-records" | "cli-file";
+  path: string | null;
+  reason: Reason;
+  error: { message: string; errno: number | null; winerror: number | null } | null;
+};
 
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -90,19 +92,15 @@ export function parseMacroTaskDeletionPreview(macroTaskId: string, value: unknow
   return value as MacroTaskDeletionPreview;
 }
 
-function processIdentities(value: unknown): boolean {
-  return Array.isArray(value)
-    && value.every(process => record(process) && keys(process, ["pid", "startedAt", "executable"])
-      && count(process.pid) && process.pid > 0 && count(process.startedAt) && process.startedAt > 0 && text(process.executable));
-}
-
-function physicalFailureReason(value: unknown): boolean {
-  if (!record(value) || !keys(value, ["code", "params"]) || !record(value.params)) return false;
-  if (value.code === "checkout.process-scan-failed") return keys(value.params, []);
-  if (value.code === "macro-task-deletion.physical-failed") return keys(value.params, ["errorCode"]) && text(value.params.errorCode);
-  if (value.code === "checkout.process-blockers") return keys(value.params, ["processes", "unreadableProcesses"])
-    && processIdentities(value.params.processes) && processIdentities(value.params.unreadableProcesses);
-  return false;
+function failure(value: unknown): boolean {
+  if (!record(value) || !keys(value, ["objectKind", "path", "reason", "error"])
+    || !["native-session", "workspace", "private-root", "session-records", "cli-file"].includes(value.objectKind as string)
+    || !(value.path === null || typeof value.path === "string") || !isReason(value.reason)) return false;
+  const error = value.error;
+  return error === null || record(error) && keys(error, ["message", "errno", "winerror"])
+    && typeof error.message === "string"
+    && (error.errno === null || Number.isSafeInteger(error.errno))
+    && (error.winerror === null || Number.isSafeInteger(error.winerror));
 }
 
 export function parseMacroTaskDeletionResult(confirmed: ConfirmedMacroTaskDeletion, value: unknown): MacroTaskDeletionResult {
@@ -112,10 +110,8 @@ export function parseMacroTaskDeletionResult(confirmed: ConfirmedMacroTaskDeleti
   if (value.state === "deleted") {
     if (!keys(value, required) || !text(value.deletedAt) || !Number.isFinite(Date.parse(value.deletedAt))) invalid();
   } else if (value.state === "deleting") {
-    const reason = value.reason;
-    if (!keys(value, [...required, "reason", "objectKind"]) || value.deletedAt !== null
-      || !["native-session", "workspace", "private-root", "session-records", "cli-file"].includes(value.objectKind as string)
-      || !physicalFailureReason(reason)) invalid();
+    if (!keys(value, [...required, "failures"]) || value.deletedAt !== null
+      || !Array.isArray(value.failures) || value.failures.length === 0 || !value.failures.every(failure)) invalid();
   } else invalid();
   return value as MacroTaskDeletionResult;
 }

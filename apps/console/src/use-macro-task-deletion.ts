@@ -80,7 +80,7 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
     } else if (state.phase !== "unknown" && state.phase !== "incomplete") return;
     const confirmed = confirmation.current!;
     submitting.current = true;
-    setState({ ...state, phase: "submitting", errorCode: null });
+    setState({ ...state, phase: "submitting", errorCode: null, result: null });
     let result: MacroTaskDeletionResult;
     try {
       const { api, snapshot } = current.current;
@@ -96,7 +96,7 @@ export function useMacroTaskDeletion(macroTaskId: string, client: MacroTaskDelet
       }
       const unresolved = state.phase === "unknown" || state.phase === "incomplete";
       setState({ ...state, phase: uncertainResponse(error) ? "unknown" : unresolved ? state.phase : "failed",
-        errorCode: error instanceof ApiError ? error.code : "NETWORK" });
+        errorCode: error instanceof ApiError ? error.code : "NETWORK", result: null });
       return;
     } finally {
       submitting.current = false;

@@ -8,17 +8,17 @@ const authoredTitle = "未加载的作者标题 / original author title";
 const taskTitle = "任务首行内容 / original task line";
 const words = {
   "zh-CN": { more: "更多", action: "删除宏任务…", cancel: "取消", confirm: "删除", retry: "重试删除", acknowledge: "知道了",
-    blocked: `还不能删除「${title}」`, heading: `删除「${title}」`, scope: "删除范围与拦截原因", review: "由 Host 验收、打回或给出结论", unknown: "停止未确认", deleted: `已删除「${title}」。`, retained: "会话记录未能删除（macro-task-deletion.owner-unproven）。请重试同一个删除请求。", unnamed: "未命名",
+    blocked: `还不能删除「${title}」`, heading: `删除「${title}」`, scope: "删除范围与拦截原因", review: "由 Host 验收、打回或给出结论", unknown: "停止未确认", deleted: `已删除「${title}」。`, retained: "无法证明检出的归属。", started: "删除已开始。可重试同一个删除请求以继续清理。", unnamed: "未命名",
     knownScope: ["14 份，共 6.2 MB", "11 个，共 48.0 MB", "3 个检出，12 个引用"], mixedScope: ["0 份，共 0 B", "数量未知，体积未知", "0 个检出，引用数量未知"] },
   "en-US": { more: "More", action: "Delete macro task…", cancel: "Cancel", confirm: "Delete", retry: "Retry deletion", acknowledge: "Got it",
-    blocked: `Cannot delete “${title}” yet`, heading: `Delete “${title}”`, scope: "Deletion scope and blocking reasons", review: "The Host must accept, return, or provide a conclusion", unknown: "Stop unconfirmed", deleted: `Deleted “${title}”.`, retained: "Could not delete session records (macro-task-deletion.owner-unproven). Retry the same deletion request.", unnamed: "Unnamed",
+    blocked: `Cannot delete “${title}” yet`, heading: `Delete “${title}”`, scope: "Deletion scope and blocking reasons", review: "The Host must accept, return, or provide a conclusion", unknown: "Stop unconfirmed", deleted: `Deleted “${title}”.`, retained: "Checkout ownership could not be proven.", started: "Deletion has started. Retry the same request to continue cleanup.", unnamed: "Unnamed",
     knownScope: ["14; total 6.2 MB", "11; total 48.0 MB", "Checkouts: 3; Git refs: 12"], mixedScope: ["0; total 0 B", "Count unknown; Size unknown", "Checkouts: 0; Git ref count unknown"] },
 };
 
 /** Browser-only fixtures mirror the engine's current replies; no board is opened. */
 async function deletionFixture(page: Page, blocked = false, scope: MacroTaskDeletionPreview["scope"] = {
   artifacts: { count: 14, bytes: 6_500_000 }, sessions: { count: 11, bytes: 50_331_648 }, checkouts: 3, gitRefs: 12,
-}) {
+}, alreadyDeleting = false, firstDeleteGate?: Promise<void>) {
   const timeline = macroTaskTimelineFixture();
   timeline.macroTask.title = title;
   let deleted = false;
@@ -45,7 +45,7 @@ async function deletionFixture(page: Page, blocked = false, scope: MacroTaskDele
           : { ...entry, title: `${index % 3 === 0 ? authoredTitle : taskTitle} ${index}`, titleSource: index % 3 === 0 ? "title" : "task" };
       }) : [];
       const preview: MacroTaskDeletionPreview = { macroTaskId: timeline.macroTask.macroTaskId, microTaskCount: 73,
-        unconcludedFailureCount: 2, scope, blockerTotal: blocked ? 51 : 0, blockers, backupRetention: "until-backup-rotation", deletionState: null };
+        unconcludedFailureCount: 2, scope, blockerTotal: blocked ? 51 : 0, blockers, backupRetention: "until-backup-rotation", deletionState: alreadyDeleting ? "deleting" : null };
       return route.fulfill({ json: { ok: true, result: preview } });
     }
     expect(body.params).toEqual({ macroTaskId: timeline.macroTask.macroTaskId, microTaskCount: 73, confirm: true });
@@ -53,8 +53,14 @@ async function deletionFixture(page: Page, blocked = false, scope: MacroTaskDele
     ++deleteAttempts;
     const receipt = { deletionId: "del-browser-fixture", macroTaskId: timeline.macroTask.macroTaskId,
       microTaskCount: 73, duplicate: deleteAttempts > 1 };
-    if (deleteAttempts === 1) return route.fulfill({ json: { ok: true, result: { ...receipt, state: "deleting", deletedAt: null,
-      reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "macro-task-deletion.owner-unproven" } }, objectKind: "session-records" } } });
+    if (deleteAttempts === 1) {
+      if (firstDeleteGate) await firstDeleteGate;
+      return route.fulfill({ json: { ok: true, result: { ...receipt, state: "deleting", deletedAt: null, failures: [
+        { objectKind: "session-records", path: "/synthetic/private/session-records", reason: { code: "macro-task-deletion.owner-unproven", params: {} }, error: null },
+        { objectKind: "native-session", path: "/synthetic/private/native-session", reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } },
+          error: { message: "Permission denied", errno: 13, winerror: null } },
+      ] } } });
+    }
     deleted = true;
     await route.fulfill({ json: { ok: true, result: { ...receipt, state: "deleted", deletedAt: "2026-10-18T08:00:00Z" } } });
   });
@@ -96,6 +102,8 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       await dialog.getByRole("button", { name: w.confirm, exact: true }).click();
       await expect(dialog.getByRole("button", { name: w.retry, exact: true })).toBeVisible();
       await expect(dialog.getByText(w.retained, { exact: true })).toBeVisible();
+      await expect(dialog.getByText("/synthetic/private/native-session", { exact: true })).toBeVisible();
+      await expect(dialog.getByText(/Permission denied/)).toBeVisible();
       await expect(page).toHaveURL(/#tasks\/macro-1$/);
       await expect(page.locator("[data-slot=macro-entry]")).toHaveCount(1);
       await expectTextUncut(dialog.locator("h2, p, button"));
@@ -156,6 +164,54 @@ for (const locale of ["zh-CN", "en-US"] as const) for (const width of [1280, 760
       if (locale === "zh-CN" && width !== 760) await page.screenshot({ path: testInfo.outputPath(`batch3-delete-blocked-${width}-${theme}.png`) });
       await dialog.getByRole("button", { name: w.acknowledge, exact: true }).click();
       expect(commands.every(command => command.operation === "macro_task_deletion_preview")).toBe(true);
+    });
+  });
+}
+
+for (const { locale, width, theme } of [
+  { locale: "zh-CN", width: 1280, theme: "light" },
+  { locale: "en-US", width: 390, theme: "dark" },
+] as const) {
+  test.describe(`macro deletion feedback ${locale} ${width}px ${theme}`, () => {
+    test.use({ locale, viewport: { width, height: 800 }, colorScheme: theme });
+    test("shows submitting and every retained failure", async ({ page }, testInfo) => {
+      const w = words[locale];
+      let releaseFirstDelete!: () => void;
+      const firstDeleteGate = new Promise<void>(resolve => { releaseFirstDelete = resolve; });
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await deletionFixture(page, false, undefined, false, firstDeleteGate);
+      await open(page, "#tasks/macro-1");
+      await page.getByRole("button", { name: w.more, exact: true }).click();
+      await page.getByRole("button", { name: w.action, exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: w.heading, exact: true });
+      await dialog.getByRole("button", { name: w.confirm, exact: true }).click();
+      try {
+        await expect(dialog.getByRole("status")).toContainText(locale === "zh-CN" ? "正在删除" : "Deleting");
+        await expectTextUncut(dialog.locator("h2, p, button"));
+        await page.screenshot({ path: testInfo.outputPath(`delete-submitting-${locale}-${width}-${theme}.png`) });
+      } finally {
+        releaseFirstDelete();
+      }
+      await expect(dialog.getByRole("button", { name: w.retry, exact: true })).toBeVisible();
+      await expect(dialog.locator("[data-slot=macro-delete-failures] > li")).toHaveCount(2);
+      await expect(dialog.getByText(w.retained, { exact: true })).toBeVisible();
+      await expect(dialog.getByText(/Permission denied/)).toBeVisible();
+      await expectTextUncut(dialog.locator("h2, p, button"));
+      await expectNoSidewaysScroll(page);
+      await page.screenshot({ path: testInfo.outputPath(`delete-failed-${locale}-${width}-${theme}.png`) });
+    });
+
+    test("resumes a deletion already started", async ({ page }) => {
+      const w = words[locale];
+      await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
+      await deletionFixture(page, false, undefined, true);
+      await open(page, "#tasks/macro-1");
+      await page.getByRole("button", { name: w.more, exact: true }).click();
+      await page.getByRole("button", { name: w.action, exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: w.heading, exact: true });
+      await expect(dialog.getByText(w.started, { exact: true })).toBeVisible();
+      await expect(dialog.getByRole("button", { name: w.retry, exact: true })).toBeVisible();
+      await expectNoSidewaysScroll(page);
     });
   });
 }

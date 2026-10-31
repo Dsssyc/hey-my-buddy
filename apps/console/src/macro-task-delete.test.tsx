@@ -138,13 +138,19 @@ describe("macro task deletion confirmation", () => {
     expect(f.onDeleted).toHaveBeenCalledWith("macro-1");
   });
 
-  it("retries the identical confirmed scope after a physical failure", async () => {
+  it("shows every failed object and diagnostic, then replays the same confirmed scope", async () => {
     const f = dialogHarness();
     await screen.findByRole("button", { name: "删除" });
-    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, objectKind: "native-session",
-      reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } } }));
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "native-session", path: "/synthetic/native", reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } },
+        error: { message: "Permission denied", errno: 13, winerror: null } },
+      { objectKind: "workspace", path: "/synthetic/checkout", reason: { code: "macro-task-deletion.lock-mismatch", params: {} }, error: null },
+    ] }));
     await confirm();
-    expect(await screen.findByText(/原生会话未能删除/)).toBeTruthy();
+    expect(await screen.findByText("/synthetic/native")).toBeTruthy();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.querySelectorAll("[data-slot=macro-delete-failures] > li")).toHaveLength(2);
+    for (const text of ["原生会话", "Permission denied", "errno 13", "/synthetic/checkout", "检出锁与登记不符", "仅重复请求不会解决"]) expect(dialog.textContent).toContain(text);
     expect(f.onDeleted).not.toHaveBeenCalled();
     f.command.mockResolvedValueOnce(receipt({ duplicate: true }));
     await f.user.click(screen.getByRole("button", { name: "重试删除" }));
@@ -159,15 +165,38 @@ describe("macro task deletion confirmation", () => {
     for (const physical of [false, true]) {
       const f = dialogHarness();
       const confirm = await screen.findByRole("button", { name: language === "zh" ? "删除" : "Delete" });
-      if (physical) f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, objectKind: "workspace",
-        reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_BUSY" } } }));
+      if (physical) f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+        { objectKind: "workspace", path: null, reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_BUSY" } }, error: null },
+      ] }));
       else f.command.mockRejectedValueOnce(new ApiError("WORKSPACE_BUSY", "Another operation is preparing or sealing this workspace"));
       await f.user.click(confirm);
-      expect(await screen.findByText(message)).toBeTruthy();
-      expect(screen.getByRole("dialog").textContent).not.toMatch(/WORKSPACE_BUSY|preparing or sealing/);
+      if (physical) {
+        expect(await screen.findByText(language === "zh" ? "等待占用检出的进程退出后重试。"
+          : "Wait for the processes using the checkout to exit, then retry.")).toBeTruthy();
+        expect(screen.getByRole("dialog").textContent).toContain("WORKSPACE_BUSY");
+      } else {
+        expect(await screen.findByText(message)).toBeTruthy();
+        expect(screen.getByRole("dialog").textContent).not.toMatch(/WORKSPACE_BUSY|preparing or sealing/);
+      }
       expect(f.onDeleted).not.toHaveBeenCalled();
       cleanup();
     }
+  });
+
+  it("replaces earlier physical failures with the current retry refusal", async () => {
+    const f = dialogHarness();
+    await screen.findByRole("button", { name: "删除" });
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "workspace", path: "/synthetic/old-checkout", reason: { code: "macro-task-deletion.lock-mismatch", params: {} }, error: null },
+    ] }));
+    await confirm();
+    await screen.findByText("/synthetic/old-checkout");
+    f.command.mockRejectedValueOnce(new ApiError("WORKSPACE_BUSY", "new refusal"));
+    await f.user.click(screen.getByRole("button", { name: "重试删除" }));
+    expect(await screen.findByText("检出正在处理另一项操作，请稍后重试删除。")).toBeTruthy();
+    expect(screen.queryByText("/synthetic/old-checkout")).toBeNull();
+    expect(screen.queryByText("检出锁与登记不符")).toBeNull();
+    expect(f.onDeleted).not.toHaveBeenCalled();
   });
 
   it.each([new ApiError("NETWORK", "raw transport text"), new ApiError("INVALID_RESPONSE", "raw reply text")])(
@@ -262,6 +291,8 @@ describe("macro task deletion confirmation", () => {
   it("resumes a deletion already started in another browser", async () => {
     const command = vi.fn().mockResolvedValueOnce(preview({ deletionState: "deleting" })).mockResolvedValueOnce(receipt({ duplicate: true }));
     const f = dialogHarness({ api: { command } as unknown as ConsoleApi });
+    expect(await screen.findByText("删除已开始。可重试同一个删除请求以继续清理。")).toBeTruthy();
+    expect(screen.queryByText(/删除回复无效/)).toBeNull();
     await f.user.click(await screen.findByRole("button", { name: "重试删除" }));
     expect(command).toHaveBeenLastCalledWith("macro_task_delete", { macroTaskId: "macro-1", microTaskCount: 73, confirm: true }, "synthetic-csrf");
     expect(f.onDeleted).toHaveBeenCalledOnce();
@@ -365,11 +396,12 @@ describe("macro task deletion workspace integration", () => {
   it("retains the selected macro task for a skipped physical object and completes only after retry", async () => {
     const f = workspaceHarness();
     await openDelete();
-    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, objectKind: "session-records",
-      reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "macro-task-deletion.owner-unproven" } } }));
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "session-records", path: "/synthetic/records", reason: { code: "macro-task-deletion.owner-unproven", params: {} }, error: null },
+    ] }));
     await confirm();
-    await screen.findByText("删除未完成，已开始的删除可以重试。");
-    expect(screen.getByText(/会话记录未能删除/)).toBeTruthy();
+    await screen.findByText("删除已开始，以下对象仍未清理。请先查看各项原因。");
+    expect(screen.getByText("无法证明检出的归属。")).toBeTruthy();
     expect(window.location.hash).toBe("#tasks/macro-1");
     expect(screen.getByRole("dialog")).toBeTruthy();
     f.command.mockImplementationOnce(async () => { f.setRows([]); return receipt(); });

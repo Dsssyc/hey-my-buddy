@@ -570,7 +570,7 @@ class ReclamationTests(LifecycleTestCase):
                 else:
                     self.assertTrue(directory.exists())
                     self.assertTrue(refs)
-                    self.assertEqual(deleted['reason']['params']['errorCode'], 'macro-task-deletion.lock-mismatch')
+                    self.assertEqual(deleted['failures'][0]['reason']['code'], 'macro-task-deletion.lock-mismatch')
                     git(checkout, 'worktree', 'unlock', str(checkout))
                     git(checkout, 'worktree', 'lock', '--reason', 'hey-my-buddy:' + manifest['workspaceId'], str(checkout))
                     retried = board.console_call('macro_task_delete', {

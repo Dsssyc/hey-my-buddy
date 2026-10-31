@@ -1996,7 +1996,12 @@ def allocation_lock_directory(state_dir, workspace_id: str | None) -> Path | Non
     """
     if not _workspace_identifier(workspace_id):
         return None
-    directory = Path(state_dir).resolve() / "workspaces" / workspace_id
+    parent = Path(state_dir).resolve() / "workspaces"
+    if private_dirs.linked(parent):
+        return None
+    directory = parent / workspace_id
+    if private_dirs.linked(directory):
+        return None
     lock_path = directory / ".lock"
     return directory if directory.is_dir() and lock_path.is_file() else None
 
@@ -2085,6 +2090,8 @@ def _resolve_allocation(state_dir, manifest, retained=None, *, missing=False):
     """Resolve a live allocation, or a frozen one whose directory is absent."""
     with _errors():
         state_dir = Path(state_dir).resolve()
+        if private_dirs.linked(state_dir / "workspaces"):
+            return None
         checkout_root = manifest["checkoutRoot"]
         for candidate in _allocation_candidates(manifest, retained):
             if candidate.get("kind") != "worktree":
@@ -2357,7 +2364,8 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
                 result["reasons"].append("identity-changed")
         try:
             _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed,
-                           result, state_dir=state_dir, allowed=tuple(allowed or ()), observation=restored)
+                           result, state_dir=state_dir, allowed=tuple(allowed or ()), observation=restored,
+                           resume=resume)
         except BoardError:
             # The registered owner of this exact path may complete the same removal
             # while its eligibility is still being proven. The checkout then holds no
@@ -2372,7 +2380,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         return result
 
 
-def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, state_dir, allowed=(), observation=None) -> None:
+def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, state_dir, allowed=(), observation=None, resume=False) -> None:
     """Fill one cleanup view with the worktree, seal and unsealed-change proof.
 
     ``allowed`` carries the exact paths earlier Host decisions already promoted on
@@ -2447,13 +2455,25 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         return
     unsealed = []
     try:
-        entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation,
-                                                                           allowed_paths=allowed)
         sealed_entries = _entries(repository, sealed["tree"])
+        # A resumed removal may already have deleted an excluded file that was
+        # present unchanged at the seal. It has no content in the sealed tree to
+        # restore. Only that absent path is removal progress; surviving changes
+        # and newly appearing paths still need the ordinary output proof.
+        removed_excluded = set()
+        if resume and manifest["kind"] == "existing":
+            excluded = manifest["snapshot"]["excludedEntries"]
+            candidates = (excluded.keys() - observation["untracked"].keys()
+                          - set(snapshot.get("excludedChangedPaths") or [])
+                          - sealed_entries.keys())
+            removed_excluded = {path for path in candidates if not _path_present(checkout_root / path)}
+        entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation,
+                                                                           allowed_paths=(*allowed, *removed_excluded))
         unsealed = sorted(path for path in entries_now.keys() | sealed_entries.keys()
                           if entries_now.get(path) != sealed_entries.get(path))
-        if sorted(excluded_changes) != sorted(snapshot.get("excludedChangedPaths") or []):
-            unsealed = sorted(set(unsealed) | set(excluded_changes) | set(snapshot.get("excludedChangedPaths") or []))
+        remaining_excluded = set(excluded_changes) - removed_excluded
+        if remaining_excluded != set(snapshot.get("excludedChangedPaths") or []):
+            unsealed = sorted(set(unsealed) | remaining_excluded | set(snapshot.get("excludedChangedPaths") or []))
     except BoardError as error:
         if error.code == "WORKSPACE_UNSUPPORTED":
             result["reasons"].append("unsealed-changes")
