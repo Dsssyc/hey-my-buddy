@@ -41,6 +41,8 @@ Worker 汇报（`workflow.resultSummary`、时间轴行的 `summary`）永不进
 
 “已完成”只由已记录的验收计数推出，不看 Worker 自述。状态始终是“图形 + 文字”，颜色只作为冗余提示。修改点集中在 `objective-display.ts` 的 `CATEGORY_LABEL`、`COUNT_ORDER`，以及 `ObjectiveList.tsx` 的筛选按钮；“已完成”需要一个读取 `counts` 的小函数，而不是只看 `state`。
 
+**2026-10-31（开发者定）：没结束的失败与取消算“等待 Host”。** 失败或被取消、还没被 Host 结束的微任务仍占着检出与记录，等 Host 续做或结束。所以列表、计数、筛选与详情头都把它和 `awaiting-host` 一样算作“等待 Host”，不再归入“已结束”；只有已被结束的失败，才算以失败结束。控制台不提供结束操作：续做还是结束由 Host 判断，用户不介入宏任务的流程。
+
 ### 0.3 模型名显示
 
 图例、时间轴行副标题、检查器“配置”字段以及委派详情使用同一个格式化函数，格式为“友好名 · effort”，原始 `adapter / provider / model / effort` 放在提示框里。友好名按以下顺序确定：快照 `profiles` 中 adapter、provider、model 完全相同的配置，取其 `profileName()`（`profile-display.ts`）；否则按固定映射把已知原生 id 写成产品名（如 `claude-opus-5-5` → Claude Opus 5.5，`claude-sonnet-5` → Claude Sonnet 5，`glm-5.3` → GLM-5.3）；都不匹配时原样显示 model id。effort 用 `effortText()`；`default` 或空值时省略“ · effort”。例：“Claude Opus 5.5 · high”“GLM-5.3 · max”。未记录配置显示“配置未记录”。颜色分配仍以 `configurationKey()` 为准，改名不得改变已分配颜色。
