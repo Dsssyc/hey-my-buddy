@@ -3,13 +3,14 @@ import json
 
 
 class InquiryQueue:
-    def __init__(self, send, session_id, on_guide=None, on_command=None, *, lying_delete=False):
+    def __init__(self, send, session_id, on_guide=None, on_command=None, *, lying_delete=False, reject_hold=False):
         self.send, self.session_id = send, session_id
         self.on_guide, self.on_command = on_guide, on_command
         self.items = []
         self.auto_drain = True
         self.revision = self.serial = 0
         self.lying_delete = lying_delete
+        self.reject_hold = reject_hold
 
     def drain(self, command_id):
         self.items = [item for item in self.items if item["sourceCommandId"] != command_id]
@@ -37,6 +38,9 @@ class InquiryQueue:
                 assert params["baseRevision"] == self.revision
                 assert params["baseLogEpoch"] == "fixture-epoch"
             if kind == "setAutoDrain":
+                if self.reject_hold:
+                    self.send({"id": request_id, "result": {**result, "status": "rejected"}})
+                    return True
                 self.auto_drain = params["payload"]["autoDrain"]
                 self.revision += 1
             elif kind == "deleteQueueItem":

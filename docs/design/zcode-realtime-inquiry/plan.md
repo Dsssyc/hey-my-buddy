@@ -18,7 +18,7 @@
 
 在原始 inputId 对应的根 turn.started 已绑定、根未结束且 finish 未 scheduled 时，发 v4/command 的 sendText，requestedDelivery 固定 guide，正文包含精确 inquiryId、问题和本次挂载的回答工具名。准入门看 RootTurnEvidence，不依赖晚关闭的 bridge.active。sendText 不带不需要的 CAS 或 expectedHeldQueueItemIds；不要添加会被丢弃的 expectedTurnId。
 
-私有会话创建和原生续接均在发原始任务前用 v4 快照 CAS 设 autoDrain=false 并确认。只作用于此运行模块已经拥有的私有 session；不改变用户设置。读取用 v4/conversation/subscribe 的 conversation/<sessionId>；订阅 ack 与 v4/conversation/frame 对账，revision/logEpoch 从同一快照取。订阅及必要的 wire 解码仍在原生连接上，不把 v4/commands/query 当队列读取。
+私有会话创建和原生续接均在发原始任务前用 v4 快照 CAS 设 autoDrain=false 并确认。只作用于此运行模块已经拥有的私有 session；不改变用户设置。setAutoDrain 被拒、v4 快照无效或该 RPC 被拒时，把原生错误码记在现有 inquiry.error，本次不再送题；问题保持 queued，随原有回合结束结算为 unavailable，Worker 工作继续。取消、总时限和根回合协议错误仍按原规则处理。读取用 v4/conversation/subscribe 的 conversation/<sessionId>；订阅 ack 与 v4/conversation/frame 对账，revision/logEpoch 从同一快照取。订阅及必要的 wire 解码仍在原生连接上，不把 v4/commands/query 当队列读取。
 
 ## 3. 送达裁决、撤回与结算
 
@@ -41,7 +41,7 @@
 
 ZCode 只挂 answer 和 finish，桥配置写实际 toolNames，利用 session_mcp.py 的现有过滤；按名字绑定回答工具，删 tuple 位置假设、checkpoint 挂载/回执追踪、旧注释和专属断言，不保留别名或协作回退。ZCode 未答问询不再拦 completed/waiting，参数错误与 attention 拦截保留。DSH 仍挂 checkpoint、签名收题并拦未答 completed/waiting。
 
-共享层只改 buddy/roles/run_execution.py、worker_services.py、texts/worker.txt 和 buddy/harnesses/live.py 的实际送达声明；模式从现有能力取得，工具文字跟实际挂载一致。inquiry_bridge.py 只修 snapshot 的 immediateDelivery 常量；其状态处理、protocol/inquiry_journal.py、session_mcp.py、dsh/native_run.py 不改。桥构造明确 realtime、checkpoint_tool=None，live.py 中只有 zcode 改 realtime。
+共享层只改 buddy/roles/run_execution.py、worker_services.py、texts/worker.txt 和 buddy/harnesses/live.py 的实际送达声明；模式从现有能力取得，工具文字跟实际挂载一致。inquiry_bridge.py 只修 snapshot 的 immediateDelivery 常量；其状态处理、protocol/inquiry_journal.py、dsh/native_run.py 不改。无模型 tools/list 夹具已证实 MCP 会按默认模式重建 finish 说明，因此 session_mcp.py 只从现有 toolNames 取得 checkpoint 模式并传给工具生成器，让 DSH 保留未答拒绝说明而 ZCode 不带；不新增配置字段或事实格式。桥构造明确 realtime、checkpoint_tool=None，live.py 中只有 zcode 改 realtime。
 
 原生实现其余落点为 zcode/native_run.py、protocol.py、session_content.py。被取代的 checkpoint 测试删去或换成实时流程；有效的公共 journal、签名、身份和 DSH 用例保留到其现有公共/角色测试位置。
 
@@ -49,7 +49,7 @@ ZCode 只挂 answer 和 finish，桥配置写实际 toolNames，利用 session_m
 
 先改 docs/reference/harness-integration.md 的 Inquiry delivery，再改 cli.md、usage.md、workers.md、architecture.md 的 ZCode 问询说明；写明私有会话关 autoDrain、drained 对账、最终答复段可送不到、残留队列禁续接及实际验证边界。入口 docs/README.md 与共享 skill 按实际引用更新。原 checkpoint 验收只作历史，不能证明新路径。
 
-检查覆盖：新增 zcode/test_zcode_realtime_inquiry.py 与修改 fixtures/mock_zcode.py，测试真实录制或明确构造的应答；五种原裁决及 failed、三种 delivery、RPC 错误、重复题不重发、事件早于 ack、仅 drained 证明、错根/turn/input/子代理、finish 前后竞争、迟到回答、取消、队列 CAS 假成功、删除失败保结果并禁续接。同步调整 zcode/test_zcode_protocol.py、test_native_run.py、test_zcode_inquiry.py、test_zcode_tool_refusals.py、test_zcode_turn_io.py、test_zcode_tool_evidence.py、test_zcode_tool_projection_order.py、test_session_content.py。
+检查覆盖：新增 zcode/test_zcode_realtime_inquiry.py 与修改 fixtures/mock_zcode.py，测试真实录制或明确构造的应答；五种原裁决及 failed、三种 delivery、RPC 错误、准备通道失败不送题且完成工作、重复题不重发、事件早于 ack、仅 drained 证明、错根/turn/input/子代理、finish 前后竞争、迟到回答、取消、队列 CAS 假成功、删除失败保结果并禁续接。同步调整 zcode/test_zcode_protocol.py、test_native_run.py、test_zcode_inquiry.py、test_zcode_tool_refusals.py、test_zcode_turn_io.py、test_zcode_tool_evidence.py、test_zcode_tool_projection_order.py、test_session_content.py。
 
 共享回归为 buddy/roles/test_worker_services.py、test_role_prompts.py、test_run_execution.py，buddy/harnesses/test_live_channel.py、test_harness_conformance.py、test_inquiry_owner.py，DSH 的 test_native_run.py、test_dsh_role_wiring.py，Codex/Claude 的实时问询测试，以及 blackboard/tasks/test_inquiry.py、blackboard/store/test_inquiry_settlement.py、protocol/test_inquiry_transport.py。代码和测试路径分别以 src/hey_my_buddy/ 与 tests/python/ 为根。
 

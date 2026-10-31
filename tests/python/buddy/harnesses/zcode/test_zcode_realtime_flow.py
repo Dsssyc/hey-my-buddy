@@ -155,6 +155,24 @@ class ZcodeRealtimeFlowTests(ZcodeFixtureCase):
         self.assertEqual(outcome.result["turn"]["provenance"]["toolCallId"], "call-finish-final")
         self.assertEqual(self.inquiry_records(context, "q-1")[-1]["state"], "answered")
 
+    def test_rejected_queue_preparation_keeps_work_and_settles_the_unsent_question(self):
+        context = self.context("inquiry-hold-rejected", timeout=40)
+        self.adapter.prepare(context)
+        handle = self.adapter.start(context)
+        self.own_handle(handle)
+        self.ask(handle, "q-1", "This question cannot enter the native queue.")
+        self.release(context)
+        self.assertIsNotNone(handle.wait(40))
+        outcome = self.adapter.collect(handle, context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+        self.assertEqual(outcome.result["inquiry"]["error"], "native-queue-hold-failed")
+        self.assertEqual([r["state"] for r in self.inquiry_records(context, "q-1")], ["queued", "unavailable"])
+        commands = [json.loads(line) for line in self.native_log(context, "commands.jsonl").splitlines()]
+        self.assertEqual([c["type"] for c in commands], ["setAutoDrain"])
+        self.assertEqual(self.native_log(context, "methods.jsonl").split().count("session/send"), 1)
+        self.assertTrue(outcome.shutdown_confirmed)
+
 
     def test_a_held_fallback_is_deleted_without_blocking_completed(self):
         context = self.context("inquiry-fallback", timeout=40)

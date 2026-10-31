@@ -327,6 +327,8 @@ def session_tools(*, delegation_authority: bool = False, checkpoint: bool = True
         {"name": "hey_my_buddy_answer_inquiry", "inputSchema": ANSWER_SCHEMA, "description": ANSWER_DESCRIPTION},
         {"name": "hey_my_buddy_finish_turn", "inputSchema": outcome_schema_for(
             delegation_authority=delegation_authority), "description": FINISH_DESCRIPTION + (
+                " A completed outcome is refused while a Host inquiry is still unanswered."
+                if checkpoint else "") + (
                 " A Lead may use waiting with request: null after handing off owned work; the board will open a later turn."
                 if delegation_authority else "")},
     ]

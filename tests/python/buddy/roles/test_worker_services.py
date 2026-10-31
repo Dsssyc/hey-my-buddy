@@ -134,6 +134,17 @@ class MicroTaskPromptTests(unittest.TestCase):
                 self.assertEqual("waiting" in finish["inputSchema"]["properties"]["disposition"]["enum"],
                                  authorized)
 
+    def test_mcp_finish_description_uses_the_actually_mounted_checkpoint_mode(self):
+        message = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}
+        guard = "A completed outcome is refused while a Host inquiry is still unanswered."
+        for checkpoint in (False, True):
+            with self.subTest(checkpoint=checkpoint):
+                names = [tool["name"] for tool in worker_services.session_tools(checkpoint=checkpoint)]
+                response = session_mcp.respond(message, {"toolNames": names})
+                self.assertEqual([tool["name"] for tool in response["result"]["tools"]], names)
+                finish = response["result"]["tools"][-1]
+                self.assertEqual(guard in finish["description"], checkpoint)
+
     def test_the_prompt_assembles_role_scope_finish_contract_task_and_input_in_order(self):
         prompt = worker_services.micro_task_prompt("task text", {"resumeMode": "initial"}, "mcp__srv__hey_my_buddy_finish_turn")
         sections = prompt.split("\n\n")
@@ -167,6 +178,7 @@ class MicroTaskPromptTests(unittest.TestCase):
     def test_realtime_tool_manifest_and_prompt_expose_answer_without_checkpoint(self):
         tools = worker_services.session_tools(checkpoint=False)
         self.assertEqual([tool["name"] for tool in tools], ["hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"])
+        self.assertNotIn("A completed outcome is refused while a Host inquiry is still unanswered.", tools[-1]["description"])
         prompt = worker_services.micro_task_prompt("task", {}, "finish", answer_tool="answer")
         self.assertIn("Host inquiries arrive as inputs to this running root turn", prompt)
         self.assertIn("Unanswered questions do not block finishing", prompt)
@@ -210,6 +222,8 @@ class RoleBoundaryTests(unittest.TestCase):
                                               "artifacts", "request"])
         self.assertEqual(schema["properties"]["disposition"]["enum"], ["completed", "assistance", "attention"])
         self.assertIn("does not dispatch other tasks", tools["hey_my_buddy_finish_turn"]["description"])
+        self.assertIn("A completed outcome is refused while a Host inquiry is still unanswered.",
+                      tools["hey_my_buddy_finish_turn"]["description"])
 
 
 class FinishBoundaryTests(WorkerServicesCase):

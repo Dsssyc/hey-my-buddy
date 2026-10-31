@@ -114,7 +114,7 @@ def record_command(params):
 
 
 inquiry_queue = InquiryQueue(send, lambda: session_id, received_guide, record_command,
-                            lying_delete=case == "inquiry-delete-stale")
+                            lying_delete=case == "inquiry-delete-stale", reject_hold=case == "inquiry-hold-rejected")
 
 
 def mcp_call(tool, arguments):
@@ -240,6 +240,10 @@ def inquiry_turn():
     global completed
     with completion_lock:
         completed = True
+    if case == "inquiry-hold-rejected":
+        native_tool_call("hey_my_buddy_finish_turn", outcome_for(), call_id="call-finish-final")
+        settle_turn()
+        return
     if case == "inquiry-late":
         native_tool_call("hey_my_buddy_finish_turn", outcome_for(), call_id="call-finish-final")
         native_path(log_dir / "finish-accepted").touch()

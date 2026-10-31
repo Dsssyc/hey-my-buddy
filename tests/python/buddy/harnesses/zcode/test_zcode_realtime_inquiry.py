@@ -89,6 +89,7 @@ class RealtimeInquiryTests(unittest.TestCase):
                                         finish_failed=False, completed_ordinal=0)
         self.driver = NativeInquiry(self.peer, self.evidence, self.bridge, "mcp__test__hey_my_buddy_answer_inquiry")
         self.peer.driver = self.driver
+        self.driver.hold_queue()
 
     def ask(self, inquiry="q"):
         self.assertTrue(self.bridge._ask({"inquiryId": inquiry, "question": "Status?"}, _owner_response)["ok"])
@@ -123,6 +124,26 @@ class RealtimeInquiryTests(unittest.TestCase):
         self.peer.failure = NativeError("native-turn-failed", "root failed")
         with self.assertRaises(NativeError):
             self.driver.poll()
+
+    def test_preparation_failures_disable_sending_and_preserve_the_failure_fact(self):
+        self.ask()
+        for error in (NativeError("native-queue-hold-failed", "rejected"),
+                      NativeError("invalid-inquiry-snapshot", "invalid wire"),
+                      NativeRpcError("native-rpc-error", "unsupported command")):
+            with self.subTest(code=error.code), mock.patch.object(self.driver, "snapshot", side_effect=error):
+                self.driver.hold_queue()
+                self.driver.poll()
+                self.assertFalse(self.driver.sent)
+                self.assertEqual(self.bridge.entries["q"]["state"], "queued")
+                self.assertEqual(self.bridge.report()["error"], error.code)
+
+    def test_preparation_still_propagates_cancellation_deadlines_and_native_root_failures(self):
+        for error in (NativeError("cancelled", "cancelled"), NativeRpcError("timeout", "deadline"),
+                      NativeError("wrong-native-turn", "wrong root")):
+            with self.subTest(code=error.code), mock.patch.object(self.driver, "snapshot", side_effect=error):
+                with self.assertRaises(NativeError) as raised:
+                    self.driver.hold_queue()
+                self.assertIs(raised.exception, error)
 
     def test_recorded_drained_event_proves_delivery_without_queued_event(self):
         record = json.loads(FIXTURE.read_text())
@@ -238,7 +259,7 @@ class RealtimeInquiryTests(unittest.TestCase):
 
     def test_fragmented_snapshot_and_corruption(self):
         self.peer.fragment = True
-        self.assertEqual(self.driver.snapshot()["revision"], 1)
+        self.assertEqual(self.driver.snapshot()["revision"], self.peer.revision)
         self.peer.corrupt = True
         with self.assertRaisesRegex(NativeError, "checksum"):
             self.driver.snapshot()

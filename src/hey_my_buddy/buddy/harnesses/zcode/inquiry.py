@@ -30,6 +30,7 @@ class NativeInquiry:
         self._snapshots = {}
         self._fragments = None
         self.cleared = None
+        self.queue_held = False
 
     def command(self, kind, payload, snapshot=None, *, command_id=None):
         envelope = {"commandId": command_id or str(uuid.uuid4()), "clientId": self.client_id,
@@ -123,10 +124,21 @@ class NativeInquiry:
             self._snapshots.clear()
 
     def hold_queue(self):
-        snapshot = self.snapshot()
-        result = self.command("setAutoDrain", {"autoDrain": False}, snapshot)
-        if result.get("status") not in ("accepted", "noop") or self.snapshot()["queue"]["autoDrain"] is not False:
-            raise NativeError("native-queue-hold-failed", "ZCode did not hold this private session's queue")
+        self.queue_held = False
+        try:
+            snapshot = self.snapshot()
+            result = self.command("setAutoDrain", {"autoDrain": False}, snapshot)
+            if result.get("status") not in ("accepted", "noop") or self.snapshot()["queue"]["autoDrain"] is not False:
+                raise NativeError("native-queue-hold-failed", "ZCode did not hold this private session's queue")
+        except NativeError as error:
+            # A rejected or changed optional v4 surface disables inquiries,
+            # while the Worker's original input remains runnable.
+            if error.code not in ("native-queue-hold-failed", "invalid-inquiry-snapshot", "native-rpc-error"):
+                raise
+            if self.bridge is not None:
+                self.bridge.error = error.code
+        else:
+            self.queue_held = True
 
     def _record_input(self, command_id):
         if command_id not in self.recorded:
@@ -176,7 +188,7 @@ class NativeInquiry:
                         "pendingInputId": pending, "eventSeq": params["seq"]})
 
     def poll(self):
-        if (self.bridge is None or self._polling or self._reading or not self.evidence.turn_id
+        if (self.bridge is None or not self.queue_held or self._polling or self._reading or not self.evidence.turn_id
                 or self.evidence.call_id is not None or self.evidence.finish_failed or self.evidence.completed_ordinal):
             return
         if self.bridge.error and self.bridge.error.startswith("journal-unavailable"):
