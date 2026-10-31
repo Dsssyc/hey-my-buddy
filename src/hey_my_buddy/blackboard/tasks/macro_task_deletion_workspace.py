@@ -94,21 +94,53 @@ def _artifact_refs(artifact: dict, manifests: dict[str, dict]) -> dict[str, str]
     return {ref: commit, prefix + "retained/" + retained_family + suffix: commit}
 
 
-def _refs(repository: Path, identifier: str) -> dict[str, str]:
+def _expected_refs(by_id: dict[str, dict], artifacts: list[dict]) -> dict[str, dict[str, str]]:
+    """Bind explicit snapshots and their equivalent physical output names once."""
+    expected = {identifier: _fixed_refs(manifest) for identifier, manifest in by_id.items()}
+    paired_outputs = []
+    for artifact in artifacts:
+        if not isinstance(artifact, dict):
+            continue
+        bound = _artifact_refs(artifact, by_id)
+        for ref, oid in bound.items():
+            identifier = artifact["workspaceId"]
+            previous = expected[identifier].setdefault(ref, oid)
+            if previous != oid:
+                raise BoardError("WORKSPACE_CONFLICT", "Conflicting retained artifact references", ref=ref)
+        if bound and artifact.get("kind") in (None, "host-output"):
+            paired_outputs.append(artifact)
+    # Publication deduplicates equal Worker/Host snapshots, although their
+    # physical seal names differ. A counterpart is bound only to that same
+    # commit; a separately published output keeps its own explicit binding.
+    for artifact in paired_outputs:
+        identifier = artifact["workspaceId"]
+        record_id = workspace._sha(workspace._json([artifact["taskId"], artifact["attemptId"]]))
+        suffix = record_id + ("" if artifact.get("kind") == "host-output" else "-host")
+        prefix = _PREFIX + identifier + "/"
+        for ref in (prefix + "outputs/" + suffix, prefix + "retained/output-" + suffix):
+            expected[identifier].setdefault(ref, artifact["commit"])
+    return expected
+
+
+def _refs(repository: Path, identifier: str) -> dict[str, str | None]:
     prefix = _PREFIX + identifier + "/"
-    output = workspace._git(repository, "for-each-ref", "--format=%(refname)%00%(objectname)", prefix)
+    output = workspace._git(repository, "for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)", prefix)
     refs = {}
     for line in output.splitlines():
-        ref, separator, oid = line.partition(b"\0")
+        parts = line.split(b"\0")
+        if len(parts) != 3:
+            raise BoardError("WORKSPACE_GIT_ERROR", "Invalid workspace reference inventory")
+        ref, oid, symbolic = parts
         try:
             name = ref.decode("utf-8", errors="strict")
             value = oid.decode("ascii", errors="strict")
         except UnicodeError as error:
             raise BoardError("WORKSPACE_GIT_ERROR", "Invalid workspace reference inventory") from error
-        if (not separator or not name.startswith(prefix)
-                or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value) is None):
+        if (not name.startswith(prefix)
+                or not symbolic and re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", value) is None):
             raise BoardError("WORKSPACE_GIT_ERROR", "Invalid workspace reference inventory")
-        refs[name] = value
+        # A symbolic entry is observed, but is never a proven ordinary ref.
+        refs[name] = None if symbolic else value
     return refs
 
 
@@ -116,24 +148,22 @@ def _delete_refs(repository: Path, identifier: str, expected: dict[str, str]) ->
     skipped = []
     for ref, actual in _refs(repository, identifier).items():
         bound = expected.get(ref)
-        if bound is None:
+        if bound is None or actual is None:
             skipped.append(_skip("ref", ref, "REF_UNPROVEN", identifier))
             continue
         if actual != bound:
             skipped.append(_skip("ref", ref, "REF_CHANGED", identifier))
             continue
-        if workspace._line(repository, "symbolic-ref", "--quiet", ref, allowed=(0, 1)):
-            skipped.append(_skip("ref", ref, "REF_UNPROVEN", identifier))
-            continue
         # A competing update can win after enumeration. Distinguish that
         # identity change from an actual Git failure without deleting its value.
+        # Never follow a ref that becomes symbolic after this observation.
         try:
-            workspace._git(repository, "update-ref", "-d", ref, bound)
+            workspace._git(repository, "update-ref", "--no-deref", "-d", ref, bound)
         except BoardError:
-            current = _refs(repository,identifier).get(ref)
-            if current == bound:
+            current = _refs(repository,identifier)
+            if current.get(ref) == bound:
                 raise
-            if current is not None:
+            if ref in current:
                 skipped.append(_skip("ref",ref,"REF_CHANGED",identifier))
     return skipped
 
@@ -192,15 +222,7 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
         if identifier in by_id and by_id[identifier] != manifest:
             raise BoardError("WORKSPACE_CONFLICT", "Conflicting retained workspace manifests")
         by_id[identifier] = manifest
-    expected = {identifier: _fixed_refs(manifest) for identifier, manifest in by_id.items()}
-    for artifact in artifacts:
-        if not isinstance(artifact, dict):
-            continue
-        for ref, oid in _artifact_refs(artifact, by_id).items():
-            identifier = artifact["workspaceId"]
-            previous = expected[identifier].setdefault(ref, oid)
-            if previous != oid:
-                raise BoardError("WORKSPACE_CONFLICT", "Conflicting retained artifact references", ref=ref)
+    expected = _expected_refs(by_id, artifacts)
 
     # A later turn may prepare another logical manifest for the same checkout.
     # Its refs must remain available until the physical checkout is proved and

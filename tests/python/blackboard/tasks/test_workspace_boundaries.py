@@ -246,20 +246,20 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertFalse(removed["alreadyRemoved"])
         self.assertFalse(checkout.exists())
 
-    def test_failed_partial_remove_relocks_without_a_gitfile_and_can_resume(self):
+    def test_failed_partial_tree_remove_keeps_its_lock_without_a_gitfile_and_can_resume(self):
         manifest = self.prepare()
         checkout = Path(manifest["path"])
-        real_git = workspace._git
+        real_remove = workspace.private_dirs.remove_tree
 
-        def failed_remove(root, *args, **kwargs):
-            if args[:2] == ("worktree", "remove"):
+        def failed_remove(path, **kwargs):
+            if Path(path) == checkout:
                 (checkout / ".git").unlink()
                 (checkout / "src/file.txt").unlink()
-                raise BoardError("WORKSPACE_GIT_ERROR", "injected partial deletion")
-            return real_git(root, *args, **kwargs)
+                raise PermissionError("injected partial deletion")
+            return real_remove(path, **kwargs)
 
-        with patch.object(workspace, "_git", side_effect=failed_remove):
-            error = self.assert_error("WORKSPACE_GIT_ERROR", workspace.cleanup_remove, self.state, manifest)
+        with patch.object(workspace.private_dirs, "remove_tree", side_effect=failed_remove):
+            error = self.assert_error("WORKSPACE_IO_ERROR", workspace.cleanup_remove, self.state, manifest)
         self.assertNotIn("relockError", error.details)
         self.assertEqual(workspace._worktree_record(self.repo, checkout)["locked"],
                          "hey-my-buddy:" + manifest["workspaceId"])

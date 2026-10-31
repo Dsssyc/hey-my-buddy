@@ -1,4 +1,4 @@
-"""Read-only deletion scope and titles from retained board facts, offline."""
+"""Read-only deletion scope from retained board and current Git facts, offline."""
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -84,6 +84,34 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
             'artifacts': {'count': 3, 'bytes': None}, 'sessions': {'count': 0, 'bytes': 0}, 'checkouts': 1, 'gitRefs': 6})
         self.assertEqual(self.dump(board), before)
 
+    def test_snapshot_dedup_counts_only_existing_worker_and_host_refs(self):
+        board = self.board()
+        for paired in (False, True):
+            with self.subTest(paired=paired):
+                run = self.create(board, request_id='paired-' + str(paired))
+                with board.store.db.read() as connection:
+                    manifest = deletion._collect(connection, 'run:' + run['runId']).manifests[0]
+                worker = workspace.seal(board.directory, manifest, run['runId'], 'equal-snapshot')
+                with board.store.db.write() as connection:
+                    first = board.store.workflow._pin_artifact(
+                        connection, run_id=run['runId'], kind='output', manifest=worker,
+                        attempt_id=None, turn_id=None, now=board.store.now())
+                if paired:
+                    host = workspace.host_seal(board.directory, manifest, run['runId'], 'equal-snapshot')
+                    self.assertEqual(worker['snapshotSha256'], host['snapshotSha256'])
+                    with board.store.db.write() as connection:
+                        second = board.store.workflow._pin_artifact(
+                            connection, run_id=run['runId'], kind='partial-output', manifest=host,
+                            attempt_id=None, turn_id=None, now=board.store.now())
+                    self.assertEqual(first, second)
+                before = self.dump(board)
+                count = deletion.preview(board.store, 'run:' + run['runId'])['scope']['gitRefs']
+                actual = self.git('for-each-ref', '--format=%(refname)',
+                                  f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/")
+                self.assertEqual(count, 8 if paired else 6)
+                self.assertEqual(count, len(actual.splitlines()))
+                self.assertEqual(self.dump(board), before)
+
     def test_unproven_allocation_makes_whole_checkout_count_unknown(self):
         board = self.board()
         first = self.create(board, macroTask={'title': 'Incomplete allocations'})
@@ -118,6 +146,23 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
                                                                      if key != 'manifestSha256'}))
         workspace._validate_manifest(conflicting)
         collected.manifests.append(conflicting)
+        self.assertIsNone(deletion._scope_summary(board.store, collected)['gitRefs'])
+
+    def test_conflicting_output_commits_make_the_reference_count_unknown(self):
+        board = self.board()
+        run = self.create(board)
+        with board.store.db.read() as connection:
+            collected = deletion._collect(connection, 'run:' + run['runId'])
+        manifest = collected.manifests[0]
+        checkout = Path(manifest['checkoutRoot'])
+        native_path(checkout / 'src/file.txt').write_text('changed output\n', encoding='utf-8', newline='\n')
+        output = workspace.seal(board.directory, manifest, run['runId'], 'conflicting-output')
+        conflicting = json.loads(json.dumps(output))
+        for document in (conflicting, conflicting['snapshot']):
+            document['commit'] = manifest['inputCommit']
+            document['tree'] = manifest['inputTree']
+        conflicting['snapshotSha256'] = workspace._sha(workspace._json(conflicting['snapshot']))
+        collected.artifacts.extend([output, conflicting])
         self.assertIsNone(deletion._scope_summary(board.store, collected)['gitRefs'])
 
     def test_session_count_uses_distinct_native_identities_without_native_reads(self):

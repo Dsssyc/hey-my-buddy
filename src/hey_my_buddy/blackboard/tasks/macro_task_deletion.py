@@ -8,6 +8,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 import json
+from pathlib import Path
 import re
 import uuid
 
@@ -257,9 +258,9 @@ def _summary(row, scope, *, duplicate):
 
 
 def _scope_summary(store, scope):
-    """Project retained identities, without inspecting native stores or Git sizes."""
+    """Project retained identities and current refs, without reading native stores or Git sizes."""
     from . import workspace
-    from .macro_task_deletion_workspace import _artifact_refs, _fixed_refs
+    from .macro_task_deletion_workspace import _expected_refs, _refs, _repository_skip
 
     allocations = [workspace.resolve_allocation(store.directory, manifest, scope.manifests)
                    for manifest in scope.manifests if manifest['kind'] == 'worktree']
@@ -274,14 +275,23 @@ def _scope_summary(store, scope):
         if previous != manifest:
             refs_known = False
             continue
-        for ref, commit in _fixed_refs(manifest).items():
-            refs[(manifest['repositoryId'], ref)] = commit
     if refs_known:
-        for artifact in scope.artifacts:
-            for ref, commit in _artifact_refs(artifact, manifests).items():
-                key = (manifests[artifact['workspaceId']]['repositoryId'], ref)
-                if refs.setdefault(key, commit) != commit:
-                    refs_known = False
+        try:
+            expected = _expected_refs(manifests, scope.artifacts)
+        except BoardError as error:
+            if error.code != 'WORKSPACE_CONFLICT':
+                raise
+            refs_known = False
+    if refs_known:
+        for identifier, manifest in manifests.items():
+            if _repository_skip(manifest, 'ref', identifier) is not None:
+                refs_known = False
+                break
+            actual = _refs(Path(manifest['snapshot']['repositoryPath']), identifier)
+            if any(commit is None or expected[identifier].get(ref) != commit for ref, commit in actual.items()):
+                refs_known = False
+                break
+            refs.update(((manifest['repositoryId'], ref), commit) for ref, commit in actual.items())
 
     sessions = {(session['harness'], session['sessionId']) for session in scope.sessions}
     # Artifacts bind Git snapshots, whose objects may be shared with the user's

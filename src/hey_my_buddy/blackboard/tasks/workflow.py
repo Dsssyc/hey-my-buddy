@@ -5518,8 +5518,15 @@ class WorkflowCoordinator:
             self.board._notify(head)
             if reasons:
                 raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons, **details)
+            # An absent allocation has no live manifest or .lock. Its frozen
+            # plan may authorize removal of the original Git registration only.
+            allocation_directory = self.board.directory / "workspaces" / plan["workspace_id"]
+            planned_allocation = (json.loads(plan["evidence_json"])["workspace"]["allocation"]
+                                  if inspection is None and not workspace_module()._path_present(allocation_directory)
+                                  else None)
             removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained,
-                                                       resume=resume, proof=inspection)
+                                                       resume=resume, proof=inspection,
+                                                       missing_allocation=planned_allocation)
             with self.db.write() as connection:
                 run_row = self._run_row(connection, run_id)
                 already_removed = bool(removed["alreadyRemoved"])

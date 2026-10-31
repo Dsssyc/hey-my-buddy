@@ -79,6 +79,55 @@ class DeletionWorkspaceTests(unittest.TestCase):
         self.assertIn("macro-task-deletion.lock-mismatch", [item["reason"]["code"] for item in skipped])
         self.assertTrue(checkout.exists())
 
+    def test_equal_worker_and_host_snapshots_remove_both_physical_ref_names(self):
+        manifest = self.prepare()
+        worker = workspace.seal(self.state, manifest, 'task-1', 'attempt-1')
+        host = workspace.host_seal(self.state, manifest, 'task-1', 'attempt-1')
+        self.assertEqual(worker['snapshotSha256'], host['snapshotSha256'])
+        # Artifact publication deduplicates these equal snapshots. Only the
+        # Worker's record remains in SQLite, while both physical seals exist.
+        self.assertEqual(self.delete(manifest, [worker]), [])
+        self.assertFalse((self.state / 'workspaces' / manifest['workspaceId']).exists())
+        self.assertFalse(self.git('for-each-ref', '--format=%(refname)',
+                                  f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"))
+
+    def test_distinct_worker_and_host_outputs_keep_their_explicit_ref_bindings(self):
+        manifest = self.prepare()
+        worker = workspace.seal(self.state, manifest, 'task-1', 'attempt-1')
+        (Path(manifest['checkoutRoot']) / 'src/file.txt').write_text('Host change\n', encoding='utf-8', newline='\n')
+        host = workspace.host_seal(self.state, manifest, 'task-1', 'attempt-1')
+        self.assertNotEqual(worker['snapshotSha256'], host['snapshotSha256'])
+        self.assertEqual(self.delete(manifest, [worker, host]), [])
+
+    def test_unpublished_distinct_host_output_retains_its_different_commit(self):
+        manifest = self.prepare()
+        worker = workspace.seal(self.state, manifest, 'task-1', 'attempt-1')
+        (Path(manifest['checkoutRoot']) / 'src/file.txt').write_text('Unpublished Host change\n', encoding='utf-8', newline='\n')
+        host = workspace.host_seal(self.state, manifest, 'task-1', 'attempt-1')
+        skipped = self.delete(manifest, [worker])
+        self.assertIn('macro-task-deletion.ref-changed', [item['reason']['code'] for item in skipped])
+        self.assertEqual(self.git('rev-parse', host['ref']).decode().strip(), host['commit'])
+        self.assertTrue((self.state / 'workspaces' / manifest['workspaceId']).exists())
+
+    def test_a_ref_becoming_symbolic_during_delete_never_deletes_its_target_branch(self):
+        manifest = self.prepare()
+        worker = workspace.seal(self.state, manifest, 'task-1', 'attempt-1')
+        branch_commit = self.git('rev-parse', 'refs/heads/main')
+        original = workspace._git
+        raced = False
+
+        def symbolic_before_delete(repository, *args, **kwargs):
+            nonlocal raced
+            if not raced and args[0] == 'update-ref' and '-d' in args and worker['ref'] in args:
+                raced = True
+                original(repository, 'symbolic-ref', worker['ref'], 'refs/heads/main')
+            return original(repository, *args, **kwargs)
+
+        with patch.object(workspace, '_git', side_effect=symbolic_before_delete):
+            self.delete(manifest, [worker])
+        self.assertTrue(raced)
+        self.assertEqual(self.git('rev-parse', '--verify', 'refs/heads/main'), branch_commit)
+
     def test_unlocked_checkout_proof_is_read_only_and_cannot_authorize_deletion(self):
         manifest = self.prepare()
         checkout = Path(manifest['checkoutRoot'])
@@ -187,14 +236,18 @@ class DeletionWorkspaceTests(unittest.TestCase):
         original = workspace._git
         for oid in (b"\xff", b"not-an-oid"):
             with self.subTest(oid=oid):
+                intercepted = False
                 def malformed(root, *args, **kwargs):
-                    if args[:2] == ("for-each-ref", "--format=%(refname)%00%(objectname)"):
+                    nonlocal intercepted
+                    if args[:2] == ("for-each-ref", "--format=%(refname)%00%(objectname)%00%(symref)"):
+                        intercepted = True
                         return (b"refs/hey-my-buddy/workspaces/" + manifest["workspaceId"].encode()
-                                + b"/bad\x00" + oid + b"\n")
+                                + b"/bad\x00" + oid + b"\x00\n")
                     return original(root, *args, **kwargs)
                 with patch.object(workspace, "_git", side_effect=malformed):
                     with self.assertRaises(BoardError) as caught:
                         self.delete(manifest)
+                self.assertTrue(intercepted)
                 self.assertEqual(caught.exception.code, "WORKSPACE_GIT_ERROR")
         self.assertTrue((self.state / "workspaces" / manifest["workspaceId"]).exists())
 
@@ -488,8 +541,11 @@ class DeletionWorkspaceTests(unittest.TestCase):
                     self.git('commit','-qm','competing ref update')
                     replacement = self.git('rev-parse','HEAD').decode().strip()
                 original = workspace._git
+                raced = False
                 def race(root,*args,**kwargs):
-                    if args[:3] == ('update-ref','-d',ref):
+                    nonlocal raced
+                    if args[:4] == ('update-ref','--no-deref','-d',ref):
+                        raced = True
                         if changed:
                             original(root,'update-ref',ref,replacement)
                         else:
@@ -498,6 +554,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                     return original(root,*args,**kwargs)
                 with patch.object(workspace,'_git',side_effect=race):
                     skipped = self.delete(manifest)
+                self.assertTrue(raced)
                 if changed:
                     self.assertIn('macro-task-deletion.ref-changed',[item['reason']['code'] for item in skipped])
                     self.assertEqual(self.git('rev-parse',ref).decode().strip(),replacement)
