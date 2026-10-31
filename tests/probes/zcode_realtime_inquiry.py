@@ -93,12 +93,11 @@ def main() -> int:
         connection.observe = lambda message, ordinal: captures.append({"event": message})
         try:
             connection.call("runtime/capabilities", {})
-            created = connection.call("v4/command", {"commandId": str(uuid.uuid4()),
-                "clientId": "hmb-private-inquiry-probe", "sessionId": None,
-                "type": "createSession", "payload": {"workspaceId": str(root / "work"),
-                    "permissionScope": "session"}, "issuedAt": int(time.time() * 1000)})
+            created = connection.call("session/create", {"workspace": {
+                "workspacePath": str(root / "work"), "workspaceKey": str(root / "work")},
+                "mode": "build"})
             summary["sessionCreation"] = created.get("result", created)
-            session_id = created["result"]["result"]["sessionId"]
+            session_id = created["result"]["session"]["sessionId"]
             connection.call("session/setModel", {"sessionId": session_id,
                 "model": {"providerId": "private-probe", "modelId": "GLM-5.3-Flash",
                           "options": {"reasoningLevel": "low"}},
@@ -124,6 +123,12 @@ def main() -> int:
                                 return payload["snapshot"]
                     connection.pump()
 
+            summary["before"] = read_queue()
+            summary["setAutoDrain"] = connection.call("v4/command", {
+                "commandId": str(uuid.uuid4()), "clientId": "hmb-private-inquiry-probe",
+                "sessionId": session_id, "type": "setAutoDrain", "payload": {"autoDrain": False},
+                "baseRevision": summary["before"]["revision"],
+                "baseLogEpoch": summary["before"]["logEpoch"], "issuedAt": int(time.time() * 1000)})
             summary["before"] = read_queue()
             for kind in ("sendText", "deleteQueueItem"):
                 connection.call("v4/command", {"commandId": str(uuid.uuid4()),
@@ -166,7 +171,7 @@ def main() -> int:
                 (root / "summary.json").write_text(json.dumps(summary, indent=2))
                 print(json.dumps({"output": str(root.relative_to(ROOT)),
                     **{key: value for key, value in summary.items() if key not in
-                       ("before", "afterIdle")}}))
+                       ("before", "afterIdle", "sessionCreation")}}))
     if not summary["shutdownConfirmed"] or summary["rootStarts"]:
         return 1
     return 0 if summary["preconditionsConfirmed"] else 2

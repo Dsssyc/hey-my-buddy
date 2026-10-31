@@ -175,7 +175,7 @@ class MockNativeCase(ZcodeFixtureCase):
         mount = prepare_session_service(
             invocation_root=invocation, identity=identity, input_sha256=input_hash(turn_input),
             attention_path=self.base / "attention.json",
-            session_tools=worker_services.session_tools(), completion_tool="hey_my_buddy_finish_turn")
+            session_tools=worker_services.session_tools(checkpoint=False), completion_tool="hey_my_buddy_finish_turn")
         prompt = worker_services.micro_task_prompt("fixture task", turn_input, mount.finish_tool,
                                                  checkpoint_tool=None, answer_tool=None)
         request = RunRequest(
@@ -1159,7 +1159,7 @@ class ProducerContractTests(NativeRunCase):
         channel = bind_live_channel(identity, credentials=credentials, journal_path=str(journal),
                                     activity_path=temp / "activity.json")
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveCapabilities, LiveRequest
-        self.assertEqual(LiveCapabilities.model_validate_json(channel.capabilities_local()).inquiry_delivery, "cooperative-checkpoint")
+        self.assertEqual(LiveCapabilities.model_validate_json(channel.capabilities_local()).inquiry_delivery, "realtime")
         reply = fixture_request(channel, LiveRequest(identity=identity, request_id="q-1", kind="inquiry",
                                             payload=InquiryPayload(question_id="i-1",
                                                                    question="is the binding real?")),
@@ -1446,7 +1446,7 @@ class ProducerContractTests(NativeRunCase):
         self.assertIs(entry.truncated, False)
         # The queued record's delivery dict survives later records.
         self.assertIsNotNone(entry.delivery)
-        self.assertEqual(entry.delivery.value["admittedDelivery"], "cooperative-checkpoint")
+        self.assertEqual(entry.delivery.value["admittedDelivery"], "realtime")
         # The journal fact: available, the reader's own deduplicated count and
         # no rejections for this bound journal.
         self.assertIsNotNone(snapshot.journal)
@@ -1484,14 +1484,13 @@ class ProducerContractTests(NativeRunCase):
         self.assertIs(observation.ready, True)
         self.assertEqual(observation.session_id, "sess-live")
         self.assertEqual(observation.agent_status, "running")
-        self.assertEqual(observation.delivery_mode, "cooperative-checkpoint")
+        self.assertEqual(observation.delivery_mode, "realtime")
         self.assertEqual(observation.reply_tool.value["name"], "hey_my_buddy_answer_inquiry")
         self.assertEqual(observation.journal.value["enabled"], True)
         self.assertEqual(observation.recent_activity[0].kind, "k" * 80)
         self.assertEqual(observation.recent_activity[0].tool_name, "t" * 120)
         self.assertEqual(observation.unavailable,
-                         ("nativeReasoning", "toolArguments", "toolOutput", "providerCredentials",
-                          "immediateDelivery"))
+                         ("nativeReasoning", "toolArguments", "toolOutput", "providerCredentials"))
         # The producing bridge's truncations are upper bounds: a kind one
         # character longer is refused by the strict model, and the read is
         # reported as an unavailable observation, never reshaped into

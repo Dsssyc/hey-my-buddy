@@ -20,7 +20,7 @@ from hey_my_buddy.buddy.harnesses import inquiry_bridge as ib
 from hey_my_buddy.buddy.harnesses import live as lv
 from hey_my_buddy.buddy.harnesses.run_contract import RunIdentity
 from hey_my_buddy.buddy.harnesses.session_receipts import ReceiptError
-from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError, RootTurnEvidence
+from hey_my_buddy.buddy.harnesses.dsh.protocol import NativeError, RootTurnEvidence
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.errors import BoardError
@@ -77,7 +77,7 @@ def records(path: Path) -> list[dict]:
 
 
 class NativeReceiptFixture:
-    """Feed actual session MCP receipts into the native root evidence owner."""
+    """Feed cooperative MCP receipts through DSH's retained native owner."""
 
     def __init__(self, bridge: ib.InquiryBridge):
         self.bridge = bridge
@@ -86,7 +86,7 @@ class NativeReceiptFixture:
                        "key": "b" * 64,
                        "inquiryJournalPath": str(bridge.journal_path),
                        "attentionPath": str(bridge.attention_path)}
-        self.evidence = RootTurnEvidence("native-session-owner", RUN.invocation_id,
+        self.evidence = RootTurnEvidence("native-session-owner",
             "mcp__buddy_fixture__hey_my_buddy_finish_turn", self.config,
             checkpoint_name="mcp__buddy_fixture__hey_my_buddy_checkpoint",
             answer_name="mcp__buddy_fixture__hey_my_buddy_answer_inquiry",
@@ -94,13 +94,10 @@ class NativeReceiptFixture:
             validate_outcome=turn_io.validate_outcome,
             mounted_tools=("hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry",
                            "hey_my_buddy_finish_turn"))
-        self.event("turn.started", {"inputId": RUN.invocation_id})
-
-    def event(self, kind: str, payload: dict) -> None:
+    def event(self, update: dict, *, child=False) -> None:
         self.ordinal += 1
-        message = {"method": "session/event", "params": {
-            "sessionId": "native-session-owner", "turnId": "native-root-turn",
-            "seq": self.ordinal, "type": kind, "payload": payload}}
+        message = {"method": "session/update", "params": {
+            "sessionId": "native-child" if child else "native-session-owner", "update": update}}
         self.evidence.observe(message, self.ordinal)
         self.bridge.note_event(message, "running")
 
@@ -115,17 +112,13 @@ class NativeReceiptFixture:
         text = response["content"][0]["text"]
         call_id = f"call-{tool}-{self.ordinal}"
         tool_name = "mcp__buddy_fixture__" + tool
-        self.event("tool.updated", {"kind": "scheduled", "toolName": tool_name,
-                                    "toolCallId": call_id})
+        self.event({"sessionUpdate": "tool_call", "title": tool_name, "toolCallId": call_id}, child=child)
         if tampered:
             changed = json.loads(text)
             changed["signature"] = "f" * 64
             text = json.dumps(changed)
-        payload = {"kind": "result", "toolCallId": call_id,
-                   "result": {"success": True, "truncated": False, "content": text}}
-        if child:
-            payload["childSessionId"] = "native-child"
-        self.event("tool.updated", payload)
+        self.event({"sessionUpdate": "tool_call_update", "status": "completed", "toolCallId": call_id,
+                    "content": [{"type": "content", "content": {"type": "text", "text": text}}]}, child=child)
         return call_id
 
 

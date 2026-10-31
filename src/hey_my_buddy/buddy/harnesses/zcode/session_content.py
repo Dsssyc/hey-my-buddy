@@ -35,6 +35,12 @@ class ZcodeSessionProjector:
     def start_prompt(self, session_id: str, input_id: str, input_text: str, invocation_id: str) -> None:
         self.prompts[session_id] = (input_id, input_text, invocation_id)
 
+    def record_input(self, session_id: str, turn_id: str, input_id: str, text: str) -> None:
+        """Record a Host input after the native event bound it to this root."""
+        root = self.roots[(session_id, turn_id)]
+        self.record.append(MessageChunk(session_update="user_message_chunk", content=TextContent(text=text),
+            meta=NativeMeta(native_item_id=input_id, content_segment=root + "/inquiry/" + input_id)))
+
     def observe_notification(self, message: dict) -> None:
         if not isinstance(message, dict) or message.get("method") != "session/event":
             return

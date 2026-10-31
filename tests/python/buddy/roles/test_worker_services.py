@@ -5,8 +5,8 @@ the attention/inquiry completion refusals into the role layer. These tests pin
 that boundary itself: the rules take the native, fully qualified tool names as
 arguments, importing the role module pulls in no harness package, and the
 finish boundary keeps its exact order — an invalid outcome is corrected before
-an outstanding attention request is named, and a pending inquiry blocks only a
-``completed`` disposition. The signed-envelope mint↔verify interplay with a
+an outstanding attention request is named, and cooperative inquiries block
+``completed``/``waiting`` while realtime inquiries do not. The signed-envelope mint↔verify interplay with a
 real native verifier stays in the ZCode suites; here the signatures are checked
 by recomputing the one shared HMAC rule.
 """
@@ -164,6 +164,14 @@ class MicroTaskPromptTests(unittest.TestCase):
         for harness_word in ("zcode", "ZCode", "codex", "Claude", "claude", "dsh", "DSH"):
             self.assertNotIn(harness_word, both.split("task text")[0])
 
+    def test_realtime_tool_manifest_and_prompt_expose_answer_without_checkpoint(self):
+        tools = worker_services.session_tools(checkpoint=False)
+        self.assertEqual([tool["name"] for tool in tools], ["hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"])
+        prompt = worker_services.micro_task_prompt("task", {}, "finish", answer_tool="answer")
+        self.assertIn("Host inquiries arrive as inputs to this running root turn", prompt)
+        self.assertIn("Unanswered questions do not block finishing", prompt)
+        self.assertNotIn("hey_my_buddy_checkpoint", prompt)
+
 
 class RoleBoundaryTests(unittest.TestCase):
     def test_importing_the_role_module_imports_no_harness_package(self):
@@ -205,6 +213,17 @@ class RoleBoundaryTests(unittest.TestCase):
 
 
 class FinishBoundaryTests(WorkerServicesCase):
+    def test_realtime_unanswered_questions_allow_completed_and_waiting_but_attention_still_blocks(self):
+        self.queue()
+        self.configuration.update(delegationAuthority=True,
+                                  toolNames=[tool["name"] for tool in worker_services.session_tools(checkpoint=False)])
+        for disposition in ("completed", "waiting"):
+            with self.subTest(disposition=disposition):
+                self.assertEqual(self.receipt(self.call("hey_my_buddy_finish_turn", self.outcome(disposition)))["outcome"]["disposition"], disposition)
+        self.attention.write_text(json.dumps({"version": 1, "requests": [{"method": "interaction/x"}]}), encoding="utf-8")
+        self.assertEqual(self.envelope(self.call("hey_my_buddy_finish_turn", self.outcome("completed")),
+                                       "hey_my_buddy_finish_turn")["reason"], "attention-outstanding")
+
     def test_waiting_finish_requires_delegation_authority_and_null_request(self):
         waiting = self.outcome("waiting")
         refused = self.envelope(self.call("hey_my_buddy_finish_turn", waiting), "hey_my_buddy_finish_turn")

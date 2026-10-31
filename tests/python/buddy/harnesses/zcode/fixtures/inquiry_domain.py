@@ -1,4 +1,4 @@
-"""Private process owners for the two concurrent checkpoint scenarios.
+"""Private process owners for the two concurrent inquiry scenarios.
 
 Only JSON fixture commands cross the parent pipe. Each child reuses the real
 ZcodeFixtureCase, registered Worker executor and native mock in its own domain.
@@ -17,7 +17,7 @@ import threading
 import traceback
 
 
-class CheckpointDomain:
+class InquiryDomain:
     """The parent owns this Popen; the child owns its controller/native group."""
 
     def __init__(self, test, case):
@@ -42,7 +42,7 @@ class CheckpointDomain:
         try:
             reply = exchange(self.process, value, timeout=timeout)
         except Exception as error:
-            raise AssertionError(f"checkpoint owner pipe failed: {error}; "
+            raise AssertionError(f"inquiry owner pipe failed: {error}; "
                                  f"{(self.root / 'owner.log').read_text(encoding="utf-8")}") from error
         if not reply.get("ok"):
             raise AssertionError(reply)
@@ -57,12 +57,12 @@ class CheckpointDomain:
                 reply = self.command({"op": "stop"}, timeout=30)
                 evidence.update(reply)
                 if not reply.get("cleanupConfirmed"):
-                    raise AssertionError(f"checkpoint child shutdown unconfirmed: {reply}")
+                    raise AssertionError(f"inquiry child shutdown unconfirmed: {reply}")
             self.process.stdin.close()  # EOF lets the child's reader stop and join.
             code = self.process.wait(timeout=10)
             evidence["ownerExitCode"] = code
             if code != 0:
-                raise AssertionError(f"checkpoint owner exit {code}: "
+                raise AssertionError(f"inquiry owner exit {code}: "
                                      f"{(self.root / 'owner.log').read_text(encoding="utf-8")}")
         except Exception:
             if self.process.poll() is None:
@@ -77,7 +77,7 @@ class CheckpointDomain:
             join_exchanges(self.process)
             # Keep stop facts outside the normal TemporaryDirectory cleanup.
             # A missing native receipt stays unknown even when the owner exits.
-            audit = Path(os.environ["TMPDIR"]) / "checkpoint-domain-processes.jsonl"
+            audit = Path(os.environ["TMPDIR"]) / "inquiry-domain-processes.jsonl"
             with audit.open("a", encoding="utf-8", newline="\n") as stream:
                 stream.write(json.dumps(evidence) + "\n")
             if not self.process.stdin.closed:
@@ -91,7 +91,7 @@ def read_commands(commands):
     try:
         while raw := sys.stdin.buffer.readline(64 * 1024 + 2):
             if len(raw) > 64 * 1024 or not raw.endswith(b"\n"):
-                raise ValueError("checkpoint command exceeds its bound or is incomplete")
+                raise ValueError("inquiry command exceeds its bound or is incomplete")
             commands.put(json.loads(raw))
     except Exception as error:
         commands.put(error)
@@ -104,7 +104,7 @@ def read_command(commands, timeout=60):
     try:
         command = commands.get(timeout=timeout)
     except queue.Empty as error:
-        raise TimeoutError("checkpoint owner command deadline expired") from error
+        raise TimeoutError("inquiry owner command deadline expired") from error
     if isinstance(command, Exception):
         raise command
     return command
@@ -235,7 +235,7 @@ def serve():
         cleanup()
         reader.join(5)
         if reader.is_alive():
-            raise TimeoutError("checkpoint command reader did not stop after parent EOF")
+            raise TimeoutError("inquiry command reader did not stop after parent EOF")
 
 
 if __name__ == "__main__":

@@ -51,26 +51,6 @@ class ZcodeToolRefusalFlowTests(ZcodeFixtureCase):
         methods = self.native_log(context, "methods.jsonl")
         self.assertEqual(methods.split().count("session/send"), 1)
 
-    def test_pending_inquiry_refusal_then_checkpoint_answer_and_finish(self):
-        # A completed finish is refused with the pending question through the
-        # wrapper-success envelope path; the root then checkpoints, answers and
-        # retries the finish inside the same native turn. The question itself
-        # travels through this holder's real C-Two channel of the live run.
-        context = self.context("inquiry-refusal-wrapped", timeout=40)
-        self.adapter.prepare(context)
-        handle = self.adapter.start(context)
-        self.own_handle(handle)
-        self.ask(handle, "q-1", "Unblock the refusal retry?")
-        self.release(context)
-        self.assertIsNotNone(handle.wait(40), "controller did not exit")
-        outcome = self.adapter.collect(handle, context)
-        self.assertEqual(outcome.status, "ok", outcome.to_report())
-        turn = outcome.result["turn"]
-        self.assertEqual(turn["outcome"]["disposition"], "completed")
-        self.assertEqual(turn["provenance"]["toolCallId"], "call-finish-final")
-        self.assertEqual(outcome.result["inquiry"]["answered"], 1)
-        states = [record["state"] for record in self.inquiry_records(context, "q-1")]
-        self.assertEqual(states, ["queued", "delivered", "answered"])
 
     def test_an_answer_refusal_recovers_in_the_same_turn_through_the_run(self):
         # The root answers with an unknown inquiryId first: the answer session
