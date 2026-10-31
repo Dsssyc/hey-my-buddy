@@ -4,6 +4,8 @@
 
 状态：已在 0.6 实现并接入。本文件最初是 2026-09-22 的技术可行性研究记录；下面的第一至第九节作为历史依据与实测证据保留，不再描述当前行为。当前行为以源码和 [architecture.md](../reference/architecture.md)、[workers.md](../reference/workers.md)、[workflow.md](../reference/workflow.md) 为准。 2026-10-12：只接受密钥类供应方的做法已被 [ADR-030](030-harness-layer-scope.md) 取代，实现之前源码仍是原样。
 
+**2026-10-31（开发者定）：问 ZCode 的 Worker 改为实时送达，走 app-server 上 `v4/command` 的 sendText（`requestedDelivery: "guide"`）。** 现在的协作检查点要等 Worker 自己调用检查点：一个 GLM-5.3 Worker 三个半小时里只调过一次，Host 的问题到它结束回合才被看到。两份调研（[本机安装包](../research/2026-10-31-zcode-dsh-in-turn-input.md)、[公开资料](../research/2026-10-31-in-turn-input-public-sources.md)）查明，ZCode 0.17.0 在同一个 app-server 上能把输入送进正在跑的回合。官方没有这一路的文档与稳定承诺，但我们的 ZCode 接入本来就跑在这个没有文档的 app-server 上，再用它不多出一类依赖；ADR-023 第 1 条排除的是厂商标为实验性的接口，这一路没有被这样标注。代价是 ZCode 升级时要照常重新核对。它不绑定期望的回合，所以送达以回执与回合事件为准：回执说明没有送进当前回合（排进了队列或要开新回合）时，撤回排进去的那一条，问题记为送不到，不开新回合；送进了哪个回合，以 `turn.steerQueued` 与 `turn.steerDrained` 对账。DSH 维持协作检查点：它的 ACP 忙时拒绝第二条输入，随包的 SDK 协议（`dsh --profile sdk`）把忙时的输入排到回合之后，回合中插入只在它自家界面与网关里，没有对外文档。设计与执行计划另写，实现排在 Windows 测试欠账第二批之后。
+
 ## 当前实现路线（0.6）
 
 `zcode` 是一个一等编码适配器（`src/buddy/adapters/zcode.py`），与 `dsh` 并列复用黑板既有的任务、attempt、worker、容量与回执机制。
@@ -16,11 +18,11 @@
 - 续跑：首个回合为 `resumeMode: "initial"`。已有证据确认前一回合结项、且冻结的执行配置不变时，后续回合使用 `native-session`；控制器在调用 `session/resume` 前校验私有绑定 `{taskId, sessionId, cwd, configuration}`，其中 configuration 为 provider/model/effort，必须与当前 Goal、checkout 和配置一致，并要求返回同一根会话。原生恢复请求的绑定缺失或不匹配会明确失败；没有已确认的前一会话或配置发生变化时，使用 `reconstructed-new-session`，根据固定接续输入创建新的根会话。
 - 工具边界：编码工具与内部 subagent 正常工作、不受限制；适配器注入的 MCP 只负责记录结构化结项结果。
 - 路由边界：无选择器或没有合法候选时产生持久的路由 attention，由 Host 在同一个 Goal 上用完整 `configuration` 接续或 `reroute:true` 重试；工具无关的决策选择器只支持 DSH，本项目没有 ZCode 决策助手。
-- 诚实边界：目前没有 ZCode 侧的 inquiry 桥（`inquire` 对 `zcode` 如实报告没有该能力），也还没有安装态真实提供方的 0.6 验收记录。
+- 问询：2026-09-25 起走协作检查点（[验收记录](../acceptance/zcode-checkpoint-inquiry.md)），2026-10-31 定为改走实时送达，见“状态”一节。还没有安装态真实提供方的 0.6 验收记录。
 
 本文回答一个问题：另一个编码代理 ZCode 能否像 dsh 那样接入黑板，由黑板调度、作为一个受适配器管理的执行器运行。分析基于对当时实现源码的通读和对本机 ZCode CLI 的实测；下面引用的文件路径、行号与实测环境是 2026-09-22 的 `socu/python-blackboard` 分支快照，指向源码的链接已改指当前 `src/buddy/` 布局，仅用于核对相同职责的模块。文中第五节起的接口名、环境变量名与代码骨架是当时的研究性示意，不是当前代码。
 
-以下第一至第九节保留原始测量与当时的判断作为历史依据；其中“OAuth 免登录可直接复用”“没有 per-run 模型覆盖”的结论已被 0.6 的 API-key 接入与原生 app-server 实现取代，见上节。ZCode 侧的 inquiry 桥仍未实现。
+以下第一至第九节保留原始测量与当时的判断作为历史依据；其中“OAuth 免登录可直接复用”“没有 per-run 模型覆盖”的结论已被 0.6 的 API-key 接入与原生 app-server 实现取代，见上节。ZCode 侧的 inquiry 桥后来在 2026-09-25 以协作检查点实现。
 
 结论先行：可以接入，且有两条独立的路。路径 A 不改任何代码，当天即可用 `command` 适配器或 `external` 适配器把 ZCode 任务跑起来，但映射粗、能力受限。路径 B 照 `DshAdapter` 的样子新增一个一等的 `zcode` 适配器，改动面小且每一处都有现成先例；真正需要新做的工作只有 inquiry 桥和 per-run model/effort 覆盖两块，首版可以诚实放弃。ZCode 已具备硬前提：一个可无头调用、单 JSON 输出、以 cwd 为界的 CLI（已实测跑通，见第三节）。
 
