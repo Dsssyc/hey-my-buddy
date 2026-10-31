@@ -160,7 +160,7 @@
 <rect x="1029.0" y="595.0" width="16.1" height="16.1" fill="#5b6a62" stroke="none" stroke-width="1"/>
 <text x="1052" y="608" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="start">黑板封存这一刻的检出</text>
 <path d="M1030.0 629.7 L1034.9 634.2 L1044.0 624.1" fill="none" stroke="#5b6a62" stroke-width="3.15" stroke-linecap="round" stroke-linejoin="round"/>
-<text x="1052" y="634" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="start">Host 对照封存核对 Worker 的报告，以封存为准</text>
+<text x="1052" y="634" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="start">Host 对照任务书与封存核对 Worker 的报告，以封存为准</text>
 <path d="M1037 645.9 L1046.1 655 L1037 664.1 L1027.9 655 Z" fill="#d85a30"/>
 <text x="1052" y="660" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans CJK SC', 'Microsoft YaHei', 'Noto Sans', Helvetica, Arial, sans-serif" font-size="14" font-weight="400" fill="#1f2a24" text-anchor="start">求助、停下来问、越界改动：都等 Host 处理</text>
 <path d="M1000 542 L1000 501" fill="none" stroke="#24654d" stroke-width="2" marker-end="url(#tip)"/>

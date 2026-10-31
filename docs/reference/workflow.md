@@ -24,7 +24,7 @@ Replay the exact submission with the same request ID after an uncertain response
 
 ### Writing the brief
 
-A brief lets the Worker stop at the right moment. Name a narrow `writeScope`: the board does not seal a change outside it, so a cause that lies outside comes back to the Host, who widens the scope with `scope-amend`, instead of being worked around. Hand over the plan and the definitions the Worker must follow: where the code disagrees with them, the Worker sees the disagreement and asks, where without them it would decide alone. Say both outright: the Worker stops and asks the Host when a cause lies outside the scope or the plan disagrees with the code, and a defect inside the scope found at acceptance comes back to the same micro task with `continue`. This costs the Host a few more answers and surfaces a wrong decision before the Worker builds on it.
+A brief lets the Worker stop at the right moment. Name a narrow `writeScope`: the board does not seal a change outside it, so a cause that lies outside comes back to the Host, who widens the scope with `scope-amend`, instead of being worked around. Hand over the plan and the definitions the Worker must follow: where the code disagrees with them, the Worker sees the disagreement and asks, where without them it would decide alone. Say both outright: the Worker stops and asks the Host when a cause lies outside the scope or the plan disagrees with the code, and a defect inside the scope found at acceptance comes back to the same micro task with `continue`. This costs the Host a few more answers and surfaces a wrong decision before the Worker builds on it. Say which part of the macro task's goal, its `description`, the micro task serves, so the Worker sees the purpose behind the scope.
 
 ## Buddy and routing
 
@@ -169,7 +169,7 @@ Acceptance is final. A defect found after a micro task was accepted is repaired 
 
 ## Review, cancel and recover
 
-Review the final attempt's fixed artifact and its checks. Acceptance is tied to that artifact, not whichever branch or directory happens to exist later.
+Review three things against each other: the brief as the board froze it (a full `get` returns its whole text), the Worker's report, and the final attempt's fixed artifact with its checks. Acceptance is tied to that artifact, not whichever branch or directory happens to exist later.
 
 ```sh
 "$HMB" accept '{"runId":"<parent>","controlFile":"<controlFile>","artifactId":"<final-output-artifact>","note":"Inspected the fixed diff and ran the combined regression suite.","target":{"path":"/abs/target/checkout","ref":"main"}}'

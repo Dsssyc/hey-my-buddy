@@ -62,7 +62,7 @@ Delegate one independently reviewable outcome per micro task: about one module o
 
 `expectedSeconds` is the expected duration of the work, 1–86400 seconds, default 1800: the moment the Host should look again, not a deadline. Nothing is stopped when it passes, and there is no form without an expectation; the former `timeoutSeconds` is refused as an unknown parameter. `await` remains a bounded, resumable caller wait; its window does not end an active execution. Observe long work and use the Host's ordinary `cancel` command if it must stop.
 
-- micro task and why; expected inputs and outputs;
+- micro task and why, including the part of the macro task's goal it serves; expected inputs and outputs;
 - the working directory and the commands that check the work;
 - files/areas that may change, plus explicit non-goals and the expected final artifact;
 - acceptance criteria: the observable result and the checks to run;
@@ -71,12 +71,12 @@ Delegate one independently reviewable outcome per micro task: about one module o
 
 For a micro task, state the workspace intent in the packet too: which checkout or worktree, whether access is read or write, and who integrates helper output.
 
-New macro tasks may carry an optional `description` of at most 300 characters: one or two sentences in the user’s words, written at creation and excluded from Worker and Router inputs.
+New macro tasks may carry an optional `description` of at most 300 characters: the agenda's goal in one or two sentences in the user’s words, written at creation and excluded from Worker and Router inputs.
 
 ### 4. Submit the micro task once
 
 ```sh
-"$HMB" submit '{"requestId":"state-kernel-1","hostId":"codex-state-kernel","macroTask":{"title":"State kernel reliability"},"title":"Implement the agreed state transition","task":"Implement the agreed state transition in src/state.ts, add regression tests in tests/state.test.ts and run the package tests. Preserve unrelated files. Report completed only after checks.","cwd":"/abs/repo","expectedSeconds":28800,"executionWorkspace":{"kind":"worktree","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"]}}'
+"$HMB" submit '{"requestId":"state-kernel-1","hostId":"codex-state-kernel","macroTask":{"title":"State kernel reliability","description":"Every state transition is atomic and recoverable after a crash."},"title":"Implement the agreed state transition","task":"Implement the agreed state transition in src/state.ts, add regression tests in tests/state.test.ts and run the package tests. Preserve unrelated files. Report completed only after checks.","cwd":"/abs/repo","expectedSeconds":28800,"executionWorkspace":{"kind":"worktree","access":"write","base":{"kind":"working-tree"},"includeUntracked":[],"writeScope":["src/state.ts","tests/state.test.ts"]}}'
 "$HMB" get '{"runId":"<runId>"}'
 ```
 
@@ -109,11 +109,11 @@ Each continuation gets a fresh attempt and recorded resume mode: DSH and ZCode r
 ### 7. Inspect the final artifact and accept it
 
 ```sh
-"$HMB" get '{"runId":"<runId>"}'
+"$HMB" get '{"runId":"<runId>","output":"full"}'
 "$HMB" accept '{"runId":"<runId>","controlFile":"<controlFile>","artifactId":"<finalArtifactId>","note":"Inspected the integrated target diff and ran the combined regression suite.","target":{"path":"/abs/target/checkout","ref":"main"}}'
 ```
 
-Once the micro task is delivered (the `get` view reports `state: "delivered"`, exposed as `workflowState` on task and wait envelopes), `finalArtifactId` names the selected fixed output. Inspect the actual output commit/diff, changed paths, hashes and logs yourself, integrate the artifact into the target, then `accept` it with a `note` that says what you really checked. One `accept` verifies the integration against the real `target` itself, records the acceptance for that exact artifact and reclaims the managed checkout; when nothing needs integrating, give a nonempty `notRequired` reason in place of `target`. Paths that differ from the artifact are refused by name; the Host's own adjustments are confirmed with `adjusted: true` (and `hostPaths` with `beforeCommit` for changes outside the artifact's paths). The same payload replays its recorded answer and a changed one conflicts. The [CLI reference](cli.md) lists every field and the [workspace lifecycle](workspace-lifecycle.md) has a complete example.
+Once the micro task is delivered (the `get` view reports `state: "delivered"`, exposed as `workflowState` on task and wait envelopes), `finalArtifactId` names the selected fixed output. Reread the brief from that full `get`, which returns the frozen task text whole, and check the Worker's report and the actual output commit/diff, changed paths, hashes and logs against it yourself: the report answers what the brief asked, and the artifact holds what the report claims. Integrate the artifact into the target, then `accept` it with a `note` that says what you really checked. One `accept` verifies the integration against the real `target` itself, records the acceptance for that exact artifact and reclaims the managed checkout; when nothing needs integrating, give a nonempty `notRequired` reason in place of `target`. Paths that differ from the artifact are refused by name; the Host's own adjustments are confirmed with `adjusted: true` (and `hostPaths` with `beforeCommit` for changes outside the artifact's paths). The same payload replays its recorded answer and a changed one conflicts. The [CLI reference](cli.md) lists every field and the [workspace lifecycle](workspace-lifecycle.md) has a complete example.
 
 If a deliverable fails acceptance, send the concrete findings back through `continue`; the same micro task repairs them. A defect found after acceptance goes into a new micro task submitted with `fixes: "<runId>"` naming the accepted one, which stays accepted ([workflow](workflow.md#fixes)). A later acceptance note should name any material Host correction or extra verification it required; avoid implying first-pass success from the final status alone. Acceptance does not invoke an evaluation model. Choose checks that exercise the changed boundary; expand or repeat them when code changes or a failure warrants it, not merely because another inspection occurred.
 
