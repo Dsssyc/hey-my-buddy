@@ -219,9 +219,6 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
             if identifier in by_id and by_id[identifier] != manifest:
                 raise BoardError("WORKSPACE_CONFLICT", "Conflicting retained workspace manifests")
             by_id[identifier] = manifest
-        if by_id and private_dirs.linked(state / "workspaces"):
-            raise BoardError("WORKSPACE_UNSAFE", "The private workspace record parent is linked",
-                             path=str(state / "workspaces"))
         # A later turn may prepare another logical manifest for the same checkout.
         # Its refs must remain available until the physical checkout is proved and
         # removed, even when its workspace id sorts before the allocation id.

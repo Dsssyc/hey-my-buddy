@@ -1997,8 +1997,6 @@ def allocation_lock_directory(state_dir, workspace_id: str | None) -> Path | Non
     if not _workspace_identifier(workspace_id):
         return None
     parent = Path(state_dir).resolve() / "workspaces"
-    if private_dirs.linked(parent):
-        return None
     directory = parent / workspace_id
     if private_dirs.linked(directory):
         return None
@@ -2090,8 +2088,6 @@ def _resolve_allocation(state_dir, manifest, retained=None, *, missing=False):
     """Resolve a live allocation, or a frozen one whose directory is absent."""
     with _errors():
         state_dir = Path(state_dir).resolve()
-        if private_dirs.linked(state_dir / "workspaces"):
-            return None
         checkout_root = manifest["checkoutRoot"]
         for candidate in _allocation_candidates(manifest, retained):
             if candidate.get("kind") != "worktree":

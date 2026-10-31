@@ -1,4 +1,4 @@
-"""Private allocation ownership never crosses a link in the record namespace."""
+"""Private allocation deletion accepts linked ancestors and rejects linked leaves."""
 import os
 from pathlib import Path
 import subprocess
@@ -8,7 +8,6 @@ import unittest
 from blackboard.tasks import test_workspace as fixtures
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import macro_task_deletion_workspace as deletion, workspace
-from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 
 
@@ -33,22 +32,27 @@ class PrivateAllocationPathTests(unittest.TestCase):
         else:
             link.unlink()
 
-    def test_unavailable_repository_does_not_authorize_a_linked_record_parent(self):
+    def test_unavailable_repository_is_deleted_through_a_linked_record_parent(self):
         manifest = self.prepare()
         parent = self.state / 'workspaces'
-        unrelated = self.root / 'unrelated-workspaces'
-        parent.rename(unrelated)
-        valuable = unrelated / manifest['workspaceId'] / 'valuable'
-        valuable.write_bytes(b'outside the private record namespace')
-        self.link_directory(parent, unrelated)
+        relocated = self.root / 'relocated-workspaces'
+        parent.rename(relocated)
+        self.link_directory(parent, relocated)
+        directory = parent / manifest['workspaceId']
+        (directory / 'private-bytes').write_bytes(b'owned allocation content')
         retained_repository = self.root / 'moved-repository'
         self.repo.rename(retained_repository)
         try:
-            with self.assertRaises(BoardError) as caught:
-                deletion.delete_workspaces(SimpleNamespace(directory=self.state), [manifest], [])
-            self.assertEqual(caught.exception.code, 'WORKSPACE_UNSAFE')
-            self.assertEqual(valuable.read_bytes(), b'outside the private record namespace')
-            self.assertIsNone(workspace.allocation_lock_directory(self.state, manifest['workspaceId']))
+            refs_before = self.git('show-ref', cwd=retained_repository)
+            self.assertEqual(workspace.allocation_lock_directory(self.state, manifest['workspaceId']), directory)
+            self.assertEqual(workspace.resolve_allocation(self.state, manifest)['workspaceId'], manifest['workspaceId'])
+
+            skipped = deletion.delete_workspaces(SimpleNamespace(directory=self.state), [manifest], [])
+
+            self.assertEqual(skipped, [])
+            self.assertEqual(list(relocated.iterdir()), [])
+            self.assertTrue(private_dirs.linked(parent))
+            self.assertEqual(self.git('show-ref', cwd=retained_repository), refs_before)
         finally:
             self.unlink_directory(parent)
             retained_repository.rename(self.repo)
