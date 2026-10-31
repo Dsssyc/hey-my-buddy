@@ -144,7 +144,7 @@ def serve():
 
     fixture = ZcodeFixtureCase()
     # Reuse its complete setup, selecting our already-created private root.
-    with patch("buddy.harnesses.zcode.test_zcode.TemporaryDirectory",
+    with patch("buddy.harnesses.zcode.test_zcode.tempfile.TemporaryDirectory",
                return_value=temporary):
         fixture.setUp()
     fixture.addCleanup(shutdown_private_rpc)
