@@ -1,12 +1,12 @@
 # ZCode Worker 实时问询执行计划
 
-2026-10-31，基线 `3dac46de`；Host 审定后收窄。依据 [ADR-006 的当日决定](../../decisions/006-zcode-adapter-integration.md)、[本机调研](../../research/2026-10-31-zcode-dsh-in-turn-input.md)、[公开调研](../../research/2026-10-31-in-turn-input-public-sources.md) 与 [ADR-023](../../decisions/023-harness-integration-principles.md)。原生协议依据是 ZCode app 随包 CLI 0.17.0；本轮允许无模型探针及实现、受影响测试，不做真实模型回合，不写验收记录。
+2026-10-31，基线 `3dac46de`；Host 审定后收窄。依据 [ADR-006 的当日决定](../../decisions/006-zcode-adapter-integration.md)、[本机调研](../../research/2026-10-31-zcode-dsh-in-turn-input.md)、[公开调研](../../research/2026-10-31-in-turn-input-public-sources.md) 与 [ADR-023](../../decisions/023-harness-integration-principles.md)。原生协议依据是 ZCode app 随包 CLI 0.17.0；Host 允许无模型探针，前提成立才实现。续查发现与已审定回执和自动排空前提冲突的包内行为，当前停在 Host 审定边界；没有调用真实模型或付费服务，不写验收记录。
 
 ## 1. 先核实原生前提
 
-新增 `tests/probes/zcode_realtime_inquiry.py`，只用私有 HOME、配置、存储和工作目录启动已安装 app-server，阻断外网，不连日常黑板。读取快照、订阅及命令校验应答，使用明确排队的输入验证 held 队列和删除；不发会启动模型的输入。固定 sendText、deleteQueueItem、队列读取及事件的实际字段到 `tests/python/buddy/harnesses/zcode/fixtures/`，区分录制与构造应答。
+`tests/probes/zcode_realtime_inquiry.py` 使用私有 HOME、配置、存储和工作目录，阻断外网，不连日常黑板。默认探针现只用 v4 createSession（permissionScope: session，无 firstInput）初始化父行，读 v4 会话快照、校验字段并删除已知不存在的条目。空闲 queue 试投已从默认探针删除，因为一次实测仍得到 startNow 并启动原生回合；假提供方和禁止出网使它没有联系真实模型，且已确认停止。固定应答在 `tests/python/buddy/harnesses/zcode/fixtures/`，区分录制与构造应答。
 
-继续实现有两个前提：排队或 guide 回退的条目在没有显式发送时不会自动执行；`baseRevision` 可以不带，或者能从原生快照取得。探针发现不成立就停止交回，写明证据。只在协议要求时带原生 revision，不传 `expectedHeldQueueItemIds`。没有 expected-turn 绑定的事实保留；现有第二次根 `turn.started` 的 `wrong-native-turn` 检查继续承担越回合失败，不新增停止规则。
+续查依据见[父行、队列与自动执行](../../research/2026-10-31-zcode-queue-initialization.md)。父行可不调用模型建立；正常 Worker 的 session/send 在规范 turn.started 之前已持久化。队列读取用 v4/conversation/subscribe 的 conversation/<sessionId> 小快照；sendText 不要求 CAS，deleteQueueItem 则要求快照的 revision 与 logEpoch，分别作为 baseRevision、baseLogEpoch。另一前提“没有显式发送就不会自动执行”不能继续假定：默认 queue.autoDrain 为 true，宿主有自动 sendQueuedNow 路径。因此暂停实现，先由 Host 收敛该边界；不擅自加 setAutoDrain 或其他开关。没有 expected-turn 绑定的事实及现有第二根 turn.started 检查仍保留。
 
 ## 2. 送达和状态
 
@@ -16,9 +16,10 @@
 
 | 原生结果 | 黑板状态 |
 | --- | --- |
-| accepted，delivery 为 guide | 保持 queued，只有匹配本根回合及本题原生输入的 `turn.steerDrained` 才提交 delivered。 |
-| accepted，delivery 为 queue 或 startNow | 尝试撤回该条 held 输入；问题保持 queued，结束时按现有规则 unavailable。 |
-| noop、duplicate、stale、rejected | 不恢复、不重发，不凭裁决写 delivered；保持 queued，结束时 unavailable。 |
+| accepted，result.delivery 为 guide | 类型枚举允许该值，但本机尚未观测；仍须匹配本根回合及本题原生输入的 drained，不能凭回执直接写 delivered。 |
+| accepted，result.delivery 为 queue | 包内成功 steer 也回 queue，不能据此直接撤回。待 Host 根据原生事件及实际 held 条目审定新规则，当前不实施旧裁决。 |
+| accepted，result.delivery 为 startNow | 实测空闲 queue 也走到这一值；按失败边界处理，不能宣称没有开回合，不能靠事后删队列撤销已开始的执行。 |
+| noop、duplicate、stale、rejected、failed | 不恢复、不重发，不凭裁决写 delivered；保持 queued，结束时 unavailable。 |
 | JSON-RPC 错误 | 仅在问询驱动边界捕获 `NativeRpcError`，作为没送进处理，保持 queued，不拖垮执行。 |
 | 缺必要字段或无法关联 | 不声称送达，保持 queued；可能残留队列项时禁止写续接绑定。未知额外字段仍按现有规则记事实。 |
 
@@ -28,9 +29,9 @@
 
 ## 3. 撤回、finish 与结算
 
-只删除本次命令关联的队列条目：deleteQueueItem 一次，随后重读队列一次，不能把 ack 的 accepted/noop 当成删除成功。重读发现还在或无法确认时，不停执行、不清空结果，仅不写该会话的续接绑定；不得清空队列或删除其他输入。对已续接会话也要使旧绑定不能继续被选用。不要调用 sendQueuedNow、setAutoDrain 或新 session/send，也不新增重试机制。
+只删除本次命令关联的实际 held 队列条目：取 v4 快照 revision 和 logEpoch，分别带作 baseRevision 和 baseLogEpoch，deleteQueueItem 一次，随后重读队列一次，不能把 ack 的 accepted/noop 当成删除成功。重读发现还在或无法确认时，不停执行、不清空结果，仅不写该会话的续接绑定；不得清空队列或删除其他输入。对已续接会话也要使旧绑定不能继续被选用。不要调用 sendQueuedNow、setAutoDrain 或新 session/send，也不新增重试机制。
 
-发送前根已结束不发命令；命令在途时结束，继续对账已来的事件和裁决，未送达保持 queued。最终答复段的 queue/startNow 回执按上节撤回。finish scheduled 之后的准入门看 `RootTurnEvidence`，不依赖尚未关闭的 bridge.active。`RootTurnEvidence` 将 finish 后 scheduled 的回答工具记作迟到事实，不抛 duplicate-finish、不覆盖已收结果；其他非法根工具的现有检查保留。正常关闭、停止与服务结算沿用现有顺序，未答问题仍为 inquiry-queued-at-attempt-end 或 inquiry-delivered-at-attempt-end，answered 不降级。
+发送前根已结束不发命令；命令在途时结束，继续对账已来的事件和裁决，未送达保持 queued。最终答复段也不能仅凭 queue 回执判回退；实际 held 条目的认定及默认自动排空须先经 Host 收敛。finish scheduled 之后的准入门看 `RootTurnEvidence`，不依赖尚未关闭的 bridge.active。`RootTurnEvidence` 将 finish 后 scheduled 的回答工具记作迟到事实，不抛 duplicate-finish、不覆盖已收结果；其他非法根工具的现有检查保留。正常关闭、停止与服务结算沿用现有顺序，未答问题仍为 inquiry-queued-at-attempt-end 或 inquiry-delivered-at-attempt-end，answered 不降级。
 
 ## 4. 删除 ZCode 协作路径，保留 DSH
 
@@ -61,10 +62,22 @@ ZCode 只挂 answer 和 finish，桥配置写实际 toolNames，利用 `session_
 
 不另建执行通道，不改用户配置，不新增未使用开关，不恢复协作检查点回退，不新增状态、原因或重放框架。探针前提不成立就按实际证据交回 Host；前提成立才继续实现与提交，提交信息使用英文且无 AI 署名。
 
-## 本轮探针结果与交回边界
+## 首轮探针结果
 
-已按上述收窄范围运行无模型探针，CLI 实测为 0.17.0。固定应答在 `tests/python/buddy/harnesses/zcode/fixtures/inquiry-app-server-0.17.0.json`；原始输出留在 `tmp/zcode-realtime-inquiry/3e6a7e18107f460fb6b01782ac85b7ad/`。所有配置、工作目录及 SQLite 都是本探针新建的私有内容；外网被阻断，未发 session/send 或 guide，没有原生回合开始，session/close 确认且进程组停止已确认。
+原先的空 session/create 会话经 setModel 后，sendText queue 返回 failed / FOREIGN KEY constraint failed；父行与输入行均为 0。原始固定应答保留在 `tests/python/buddy/harnesses/zcode/fixtures/inquiry-app-server-0.17.0.json`，作为这次初始化差异的记录。该问题已由本轮找到的 v4 持久化入口解开，不能继续用它解释活动 Worker 的能力；当前阻塞见下节。
 
-实际顺序为 runtime/capabilities、session/create、session/setModel、session/subscribe，再做命令字段校验和显式 queue 投递。快照的 runtime.stateRevision 为 1；不带 baseRevision 的合法 sendText queue 返回 `status: failed`、`reasonCode: fault.command.executionFailed`、`message: FOREIGN KEY constraint failed`、`revisionAtDecision: 0`。去掉模型配置的先前一次探针也返回同样失败。私有原生库中的 session、session_entry、session_input 表均为 0 行；这是已观察到的初始化差异，尚未证明是 v4 失败的完整原因。session/subscribe 的快照未提供可验证的 held 队列内容。这只覆盖尚未发原始 session/send 的私有新会话，不能据此判定正在运行的 Worker 不支持 guide。
+## 续查结果与当前交回边界
 
-因此第 1 节的“排队不会自行执行”尚未得到验证，删除/重读也无法验证；baseRevision 可省略仅确认到封包校验层。探针以退出码 2 明确表示门槛未满足。依 Host 的“有不一致就停”要求，未实施实时驱动、共享代码、声明或产品文档修改，未运行实现测试。需要 Host 提供或授权核实：怎样在不调用模型的情况下，通过原生操作将既有 session/create 根会话初始化到 v4 可排队的状态，并读回/删除队列条目；不能直接向原生 SQLite 填数据冒充初始化。若必须先进入真实模型回合，须由开发者另行逐次批准，本轮不执行。
+本轮已补齐父行初始化和队列读取，固定应答为 `tests/python/buddy/harnesses/zcode/fixtures/inquiry-queue-initialization-0.17.0.json`。当前安全探针的原始输出在 `tmp/zcode-realtime-inquiry/ed37a6c6cfe240a2b0d167aeb09a97a5/`：父行 1、输入行 0、原生回合数 0，关闭与进程组停止确认，退出码 2 表示活动回合/自动排空门槛尚未通过。空闲 queue 的反例单独记录了 1 个原生回合；没有联系真实模型。
+
+需要 Host 审定的已不再是空会话外键：包内成功 guide 的回执同样是 queue，旧的“queue 就撤回”会误判；默认开启的自动 sendQueuedNow 路径又不满足“不显式发送就不执行”的前提。尚未动态验证成功模型回合结束后的自动排空时机，也未在真实活动模型回合验证 guide 回执/事件。故未改产品实现、能力声明或现行产品文档，未运行实现测试。不能用新的停止机制或擅自设置 autoDrain 来绕过这两项事实。
+
+## 待开发者批准的一次真实实验
+
+用 ZCode app 随包 CLI 0.17.0，模型固定 GLM-5.3-Flash、reasoning low；提供方由 Host 从开发者已有配置中锁定并先核对原生目录，不临时配置凭据或替换模型。保持用户 harness 配置原样，沿现有 session/create + session/send 起一个私有原始回合。本轮不执行。
+
+1. 第一次主模型请求只让模型调用一个无副作用的 Bash 门控命令，等待外部标记，最长 15 秒。在对应根 turn.started 后只读核对父行，订阅 v4 快照；在工具等待期间送入 guide A，记录实际 ack、steerQueued、steerDrained 与根回合归属。
+2. 同一等待窗口送入 queue B，读回真实条目并短暂观察；带最新 revision/logEpoch 删除一次、重读确认。另留一条只要求输出固定标记的 queue C，用来观察原回合结束后是否会自行启动。所有条目用各自的 commandId/sourceCommandId 精确关联。
+3. 释放门控命令；第二次主模型请求读取 guide A 的标记并作简短最终答复。记录原回合结束、C 是否仍 held 或出现新的根 turn.started；若出现第二根，立即结束这次探针并收集停机证据，不继续其他验证。这里只验证协议前提，结构化回答工具与实现验收仍在原计划的后续实验中。
+
+预计原回合 2 次主模型请求；若 C 自动执行，可能额外 1 次，即为批准一次实验时需要包含的风险，总计预计 2–3 次主请求。标题等原生辅助调用按开发者自己的配置另计，批准前由 Host 核对；不为减少费用关闭原生功能。若模型没有按门控流程行动、没有命中目标时机或删除未确认，按实际未覆盖交回，重跑须另批。这次实验要确定：标准 Worker 路径的父行、成功 guide 是否回 queue、drained 的根身份、非空队列读取/删除的 CAS、以及原回合结束后的自动执行行为；不把源码推导或空队列读回当成这些边界已通过。

@@ -2,9 +2,10 @@
 """Inspect installed ZCode's inquiry commands without a model or daily state.
 
 All native storage and configuration live below the checkout's ignored tmp/.
-The macOS sandbox denies outbound network. No session/send or startNow input
-is admitted; the only valid sendText explicitly requests queue. Exit 2 means
-queue admission/readback remains unresolved, rather than a passing gate.
+The macOS sandbox denies outbound network. This probe only initializes an
+empty session, reads its v4 queue and deletes a known absent item. Valid
+sendText is deliberately excluded: even queue starts a turn when idle on
+CLI 0.17.0. Exit 2 leaves the active-turn/auto-drain gate unresolved.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -91,30 +93,60 @@ def main() -> int:
         connection.observe = lambda message, ordinal: captures.append({"event": message})
         try:
             connection.call("runtime/capabilities", {})
-            created = connection.call("session/create", {"workspace": {
-                "workspacePath": str(root / "work"), "workspaceKey": str(root / "work")},
-                "mode": "build"})
-            session_id = created["result"]["session"]["sessionId"]
+            created = connection.call("v4/command", {"commandId": str(uuid.uuid4()),
+                "clientId": "hmb-private-inquiry-probe", "sessionId": None,
+                "type": "createSession", "payload": {"workspaceId": str(root / "work"),
+                    "permissionScope": "session"}, "issuedAt": int(time.time() * 1000)})
+            summary["sessionCreation"] = created.get("result", created)
+            session_id = created["result"]["result"]["sessionId"]
             connection.call("session/setModel", {"sessionId": session_id,
                 "model": {"providerId": "private-probe", "modelId": "GLM-5.3-Flash",
                           "options": {"reasoningLevel": "low"}},
                 "persistAsWorkspaceLastUsed": False})
             connection.call("session/subscribe", {"sessionId": session_id,
                 "deliveryKind": "web-remote-replayable", "includeSnapshot": True})
+
+            def read_queue():
+                reply = connection.call("v4/conversation/subscribe", {
+                    "topic": "conversation/" + session_id,
+                    "connectionId": "hmb-private-inquiry-probe",
+                    "clientMode": "web-remote-replayable"})
+                subscription = reply["result"]["ack"]["subscriptionId"]
+                while True:
+                    for item in reversed(captures):
+                        event = item.get("event", {})
+                        if event.get("method") != "v4/conversation/frame":
+                            continue
+                        params = event["params"]
+                        if params.get("subscriptionId") == subscription:
+                            payload = params["frame"]["payload"]
+                            if payload.get("kind") == "snapshot":
+                                return payload["snapshot"]
+                    connection.pump()
+
+            summary["before"] = read_queue()
             for kind in ("sendText", "deleteQueueItem"):
                 connection.call("v4/command", {"commandId": str(uuid.uuid4()),
                     "clientId": "hmb-private-inquiry-probe", "sessionId": session_id,
                     "type": kind, "payload": {}, "issuedAt": int(time.time() * 1000)})
-            queued = connection.call("v4/command", {"commandId": str(uuid.uuid4()),
-                "clientId": "hmb-private-inquiry-probe", "sessionId": session_id,
-                "type": "sendText", "payload": {"text": "private held queue probe",
-                    "requestedDelivery": "queue"}, "issuedAt": int(time.time() * 1000)})
-            summary["queueAdmission"] = queued.get("result", queued)
-            summary["blockedAt"] = (
-                "queue-admission" if queued.get("result", {}).get("status") != "accepted"
-                else "queue-readback")
-            connection.call("session/subscribe", {"sessionId": session_id,
-                "deliveryKind": "web-remote-replayable", "includeSnapshot": True})
+            summary["deleteWithoutCas"] = connection.call("v4/command", {
+                "commandId": str(uuid.uuid4()), "clientId": "hmb-private-inquiry-probe",
+                "sessionId": session_id, "type": "deleteQueueItem",
+                "payload": {"queueItemId": "private-probe-absent-item"},
+                "issuedAt": int(time.time() * 1000)})
+            summary["deleteAbsentItem"] = connection.call("v4/command", {
+                "commandId": str(uuid.uuid4()), "clientId": "hmb-private-inquiry-probe",
+                "sessionId": session_id, "type": "deleteQueueItem",
+                "payload": {"queueItemId": "private-probe-absent-item"},
+                "baseRevision": summary["before"]["revision"],
+                "baseLogEpoch": summary["before"]["logEpoch"],
+                "issuedAt": int(time.time() * 1000)})
+            until = time.monotonic() + 0.5
+            while time.monotonic() < until:
+                connection.pump()
+            summary["afterIdle"] = read_queue()
+            summary["queueAutoDrain"] = summary["afterIdle"]["queue"]["autoDrain"]
+            summary["blockedAt"] = "active-turn-and-auto-drain-semantics"
         finally:
             try:
                 if session_id and process.poll() is None:
@@ -123,12 +155,18 @@ def main() -> int:
                 summary["shutdownConfirmed"], summary["shutdownEscalated"] = halt_owned_session(
                     handle, time.monotonic() + 5)
                 process.stdout.close()
+                with sqlite3.connect(f"file:{root / 'sessions.sqlite'}?mode=ro", uri=True) as db:
+                    summary["privateNativeTableRows"] = {
+                        name: db.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
+                        for name in ("session", "session_input")}
                 (root / "captures.json").write_text(json.dumps(captures, indent=2))
                 summary["rootStarts"] = sum(
                     item.get("event", {}).get("params", {}).get("type") == "turn.started"
                     for item in captures)
                 (root / "summary.json").write_text(json.dumps(summary, indent=2))
-                print(json.dumps({"output": str(root.relative_to(ROOT)), **summary}))
+                print(json.dumps({"output": str(root.relative_to(ROOT)),
+                    **{key: value for key, value in summary.items() if key not in
+                       ("before", "afterIdle")}}))
     if not summary["shutdownConfirmed"] or summary["rootStarts"]:
         return 1
     return 0 if summary["preconditionsConfirmed"] else 2
