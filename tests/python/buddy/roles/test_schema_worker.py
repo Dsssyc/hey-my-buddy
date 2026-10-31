@@ -274,9 +274,9 @@ class SchemaWorkerTests(NativeRunCase):
         # pins the full assembled prompt, including the published Worker text.
         hashes = {
             "codex": ("b46e2bd89c8d171059f35ad52c7c97c8b98fd32bc49382da1c299b4d0d500f1a",
-                      "1ba890c4b2e8bc86e35c4f9ecbf0e7884b93daf4ecdb09f534f4df058a3bf6cf"),
+                      "59a3414a8625ef60dea822eec2f5aa8d644eaa241ba51f7c2534ababccdb82be"),
             "claude": ("ff7983882b2a1adefe1cad314fec9c009086ca2ae3fd38d33fe9fddf248f9bca",
-                       "f833736174cb8c07c6cd3a5514799ead4de7ac9f835ab5f87a8f2206d3c1c200"),
+                       "45d3db9f90721b3d584d55706065c91f8a9f731f902aa45740dfce75840ccfd2"),
         }
         for name, (schema_hash, prompt_hash) in hashes.items():
             with self.subTest(harness=name):

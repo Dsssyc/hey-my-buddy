@@ -236,7 +236,9 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         self.assertNotIn(b"synthetic-attempt-secret", request_bytes)
         self.assertNotIn("synthetic-attempt-secret", json.dumps(outcome.to_report()))
         service_names = request.session_services[0].tool_names
-        self.assertEqual(len(service_names), 3)
+        bare_names = [name.rsplit("__", 1)[-1] for name in service_names]
+        self.assertCountEqual(bare_names, ["hey_my_buddy_answer_inquiry", "hey_my_buddy_finish_turn"])
+        self.assertNotIn("hey_my_buddy_checkpoint", bare_names)
         for name in service_names:
             self.assertIn(name, request.input_text)
 
