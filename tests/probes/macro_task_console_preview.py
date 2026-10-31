@@ -1781,7 +1781,7 @@ def delete_macro_task(params: dict, state: PreviewState) -> dict:
                               if entry["runId"] in members or entry["kind"] == "decision" and entry["parentRunId"] in members)
     result = {"deletionId": f"synthetic-deletion-{group}", "macroTaskId": group,
               "microTaskCount": count, "state": "deleted", "deletedAt": OBSERVED_AT,
-              "duplicate": False, "skipped": []}
+              "duplicate": False}
     state.deleted[group] = result
     return result
 
