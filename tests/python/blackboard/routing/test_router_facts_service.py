@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from support import BoardTestCase, wait_for
+from buddy.harnesses.fixture_selection import select_fixture
 from hey_my_buddy.protocol.client import BoardClient
 
 
@@ -24,8 +25,10 @@ class RouterFactsServiceTests(BoardTestCase):
             "configuration": {"defaultRoutingMode": "fast", "routerBuddyIds": [ids[0]]},
         })
         board.close()
-        with self.daemon(env={"HMB_CODEX_CLI": str(native), "HMB_CODEX_FIXTURE_CASE": "router-facts",
-                              "HMB_CODEX_FIXTURE_STATE": str(self.directory / "native-state.json")}):
+        environment = {"HMB_CODEX_FIXTURE_CASE": "router-facts",
+                       "HMB_CODEX_FIXTURE_STATE": str(self.directory / "native-state.json")}
+        select_fixture(environment, self.directory, "codex", native)
+        with self.daemon(env=environment):
             client = BoardClient(self.directory, autostart=False)
             request = client.call("selection_request", {"requestId": "private-route", "task": "Read frozen routing facts"})
 

@@ -84,6 +84,37 @@ CREATOR_FILE_NAME = "creator.pid"
 # particular, reopening a vanished, non-kill-on-close Job proves nothing.
 _windows_suite_children: dict[Path, list[ProcessHandle]] = {}
 _windows_spawn_problems: dict[Path, list[str]] = {}
+_fixture_temp_root: Path | None = None
+
+
+class FixtureTemporaryDirectory(tempfile.TemporaryDirectory):
+    @classmethod
+    def _rmtree(cls, name, ignore_errors=False, repeated=False):
+        cleanup_fixture_tree(Path(name))
+
+
+def configure_fixture_cleanup() -> None:
+    """Leave blocked fixture files to the enclosing runner's final teardown."""
+    global _fixture_temp_root
+    _fixture_temp_root = Path(os.environ["TMPDIR"]).resolve()
+    tempfile.TemporaryDirectory = FixtureTemporaryDirectory
+
+
+def cleanup_fixture_tree(directory: Path) -> None:
+    """A fixture's deletion failure is teardown debt, not a failed assertion.
+
+    Only transient Windows failures inside the running suite's private temp
+    root can be deferred. The enclosing runner still observes shutdown and
+    removes the whole root, or exits 3 with the root and evidence retained.
+    """
+    try:
+        remove_private_test_root(directory, retry_seconds=0)
+    except OSError as error:
+        if (os.name != "nt" or getattr(error, "winerror", None) not in (5, 32, 145)
+                or _fixture_temp_root is None
+                or not directory.resolve().is_relative_to(_fixture_temp_root)):
+            raise
+        print(f"hey_my_buddy.cli.checks: fixture cleanup deferred: {directory}: {error}", file=sys.stderr)
 
 
 class _SuiteWindowsAPI(WindowsAPI):
@@ -459,6 +490,8 @@ def run_suites_parallel(root: Path, private_root: Path, jobs: int, modules: list
     # from test fixtures and third-party packages. Python writes UTF-8 to our
     # binary pipes regardless of the machine's locale.
     bootstrap = ("import runpy, sys, warnings; "
+                 "from hey_my_buddy.cli.checks import configure_fixture_cleanup; "
+                 "configure_fixture_cleanup(); "
                  "sys.stdout.reconfigure(encoding='utf-8'); "
                  "sys.stderr.reconfigure(encoding='utf-8'); "
                  "warnings.filterwarnings('error', category=EncodingWarning, "
@@ -805,20 +838,27 @@ def _log_tail(path: Path, limit: int = 4000) -> str | None:
         return None
 
 
-def remove_private_test_root(directory: Path) -> None:
+def remove_private_test_root(directory: Path, *, retry_seconds: float = 60) -> None:
     """Remove a stopped fixture without changing attributes shared by hardlinks.
 
     The caller must first close its resources and confirm its work has stopped.
     On Windows an exited process's handles, such as its working directory, may
     still be closing after shutdown is confirmed. A mapped extension can report
-    access denied (5), and an open handle a sharing violation (32). Retry both
-    for up to 60 seconds; a process that leaked still fails at the deadline.
+    access denied (5), and an open handle a sharing violation (32). A deleted
+    file held open by another component can leave a directory nonempty (145).
+    Retry these for up to 60 seconds; remaining failures reach the runner's
+    retained-root report. Fixture cleanup can defer immediately to that phase.
     Other deletion failures raise immediately, and any final failure preserves
     the remaining tree.
     """
     directory = native_path(directory)
 
     def readonly_file(operation, name, error):
+        # Python 3.12's rmtree still reports a child disappearing after scandir.
+        # Delete-pending entries can do that too; the final rmdir must still
+        # succeed before the root is considered removed.
+        if isinstance(error, FileNotFoundError) and Path(name) != directory:
+            return
         if os.name != "nt" or operation is not os.unlink or getattr(error, "winerror", None) != 5:
             raise error
         path = Path(name)
@@ -837,13 +877,13 @@ def remove_private_test_root(directory: Path) -> None:
             raise error
         _delete_readonly_test_leaf(path)
 
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + retry_seconds
     while True:
         try:
             shutil.rmtree(directory, onexc=readonly_file)
             return
         except OSError as error:
-            if os.name != "nt" or getattr(error, "winerror", None) not in (5, 32):
+            if os.name != "nt" or getattr(error, "winerror", None) not in (5, 32, 145):
                 raise
             remaining = deadline - time.monotonic()
             if remaining <= 0:

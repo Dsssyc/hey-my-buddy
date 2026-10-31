@@ -159,13 +159,11 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
             handle = state["handle"]
             if handle._members is not None:
                 handle._members.snapshot = original_snapshot
-                handle.terminate(grace_seconds=0.2)
-                handle.shutdown_confirmed()
-            else:
-                # No membership was admitted during the injected failure. The
-                # fixture owns a single child; a fresh handle reads its identity.
-                handle = ProcessHandle(state["process"], log_paths=state["paths"], stop_channel="signal")
-                handle.terminate(grace_seconds=0)
+            # The original handle owns the child on both platforms, including
+            # after construction failed. Rebuilding it would register the
+            # fixture's injected native intent a second time, outside the mock.
+            handle.terminate(grace_seconds=0.2)
+            handle.shutdown_confirmed()
         for descriptor in state["descriptors"]:
             if descriptor not in state["closed"]:
                 original_close(descriptor)
@@ -454,7 +452,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
                 self.assertEqual(evidence.exit_code, state["process"].returncode)
                 self.assertEqual(state["closed"], state["descriptors"])
 
-    def test_posix_log_close_failure_keeps_unobservable_group_unknown(self):
+    def test_log_close_failure_keeps_unobservable_members_unknown(self):
         with controller_log_close_failure(observation_blocked=True) as state:
             with self.assertRaises(OSError) as caught:
                 self.launch()
@@ -463,7 +461,9 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
             evidence = caught.exception.owned_popen_evidence
             self.assertTrue(evidence.created)
             self.assertIs(evidence.shutdown_confirmed, False)
-            self.assertIsNone(state["process"].returncode)
+            self.assertEqual(evidence.exit_code, state["process"].returncode)
+            if os.name != "nt":
+                self.assertIsNone(state["process"].returncode)
 
     def test_cleanup_observation_error_carries_created_unknown_receipt(self):
         with controller_log_close_failure(observation_raises=True) as state:

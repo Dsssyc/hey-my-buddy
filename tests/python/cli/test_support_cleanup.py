@@ -123,7 +123,7 @@ class FixtureCleanupTests(unittest.TestCase):
                       patch.object(checks, "observed_processes", return_value=(
                           [{"pid": 123}] if residue == "process" else [],
                           ["observation incomplete"] if residue == "unknown" else [], [])) as observe,
-                      patch.object(support, "remove_private_test_root") as remove):
+                      patch.object(support, "cleanup_fixture_tree") as remove):
                     native.name = "posix"
                     with self.assertRaisesRegex(AssertionError, "preserved"):
                         support.cleanup_private_tree(base, (state,))
@@ -142,7 +142,7 @@ class FixtureCleanupTests(unittest.TestCase):
                   patch.object(support, "shutdown_private_rpc") as shutdown,
                   patch.object(checks, "held_locks", return_value={"daemon": []}) as locks,
                   patch.object(checks, "observed_processes", side_effect=AssertionError("unregistered Job")),
-                  patch.object(support, "remove_private_test_root") as remove):
+                  patch.object(support, "cleanup_fixture_tree") as remove):
                 native.name = "nt"
                 support.cleanup_private_tree(base, (state,))
             stop.assert_called_once_with(state)
@@ -497,7 +497,7 @@ class FixtureCleanupTests(unittest.TestCase):
 
             # Leave the directory available for a protocol cleanup if the assertion
             # fails; the lock FDs also let us inspect ownership after deletion.
-            with patch("support.remove_private_test_root") as remove:
+            with patch("support.cleanup_fixture_tree") as remove:
                 fixture._cleanup()
                 assert_released(self, handles)
                 for fd in handles:
@@ -516,7 +516,7 @@ class FixtureCleanupTests(unittest.TestCase):
         handles = []
         directory = None
         try:
-            with patch("support.remove_private_test_root") as remove:
+            with patch("support.cleanup_fixture_tree") as remove:
                 with private_state_dir() as directory:
                     catalog = write_catalog_fixture(directory)
                     environment = _child_environment(directory, {

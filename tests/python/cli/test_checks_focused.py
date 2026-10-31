@@ -362,6 +362,41 @@ class FocusedChecksTests(unittest.TestCase):
         self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
                       output.splitlines()[-1])
 
+    def test_blocked_fixture_deletion_preserves_passing_result_and_teardown_evidence(self):
+        (self.top / "test_blocked_cleanup.py").write_text(
+            "import os, tempfile, unittest\nfrom pathlib import Path\nfrom unittest.mock import patch\n"
+            "from hey_my_buddy.cli import checks\n"
+            "class Case(unittest.TestCase):\n"
+            "    def test_fixture_passes(self):\n"
+            "        error = OSError('fixture delete-pending entry')\n"
+            "        error.winerror = 145\n"
+            "        def blocked(root, *, onexc):\n"
+            "            try:\n                raise FileNotFoundError('pending')\n"
+            "            except FileNotFoundError as missing:\n"
+            "                onexc(os.unlink, str(Path(root, 'pending')), missing)\n"
+            "            try:\n                raise error\n"
+            "            except OSError as blocked:\n                onexc(os.rmdir, str(root), blocked)\n"
+            "        with patch.object(checks, 'os', wraps=os) as windows, "
+            "patch.object(checks.shutil, 'rmtree', side_effect=blocked):\n"
+            "            windows.name = 'nt'\n"
+            "            with tempfile.TemporaryDirectory() as scratch:\n"
+            "                Path(scratch, 'evidence').write_bytes(b'fixture passed')\n"
+            "            self.assertTrue(Path(scratch, 'evidence').exists())\n",
+            encoding="utf-8", newline="\n",
+        )
+        error = OSError("fixture delete-pending entry")
+        error.winerror = 145
+        with patch.object(checks, "remove_private_test_root", side_effect=error):
+            code, output, errors = self.invoke(["--jobs", "1", "tests/python/test_blocked_cleanup.py"])
+        self.assertEqual(code, 3, errors + output)
+        retained, = self.temporary.iterdir()
+        self.assertEqual([path.read_bytes() for path in retained.rglob("evidence")], [b"fixture passed"])
+        evidence = json.loads((retained / checks.EVIDENCE_FILE_NAME).read_text(encoding="utf-8"))
+        self.assertEqual(evidence["cleanupError"], "OSError: fixture delete-pending entry")
+        self.assertIn("test_blocked_cleanup ok", output)
+        self.assertIn(f"tests passed; teardown incomplete; preserved {retained}; exit 3",
+                      output.splitlines()[-1])
+
 
 class WindowsSweepTests(unittest.TestCase):
     def test_windows_refuses_sweep_without_changing_roots_or_evidence(self):
