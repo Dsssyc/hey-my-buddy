@@ -30,32 +30,50 @@ _RUNTIME_ID = r'[0-9a-f]{32}'
 _BUILD_DIRECTORY = re.compile(r'\.(' + _RUNTIME_ID + r')\.build-.+')
 
 
-def tree_info(path: Path) -> tuple[int, str, bool]:
-    """Size and mutation fingerprint without descending into linked entries."""
+def tree_info(path: Path) -> tuple[int, str, bool, bool]:
+    """Size, mutation fingerprint, link safety and scan stability.
+
+    The measured tree belongs to other processes too: an entry that vanishes
+    between its listing and its lstat proves the tree changing under the scan.
+    Such a scan reports an approximate size and no fingerprint, because the
+    digest of a partial listing is not a mutation fingerprint of anything.
+    """
     path = private_dirs._absolute(path)
     size = 0
     digest = hashlib.sha256()
     safe = not private_dirs.linked(path)
     if not safe:
-        return 0, '', False
+        return 0, '', False, True
     if not native_path(path).exists():
-        return 0, '', safe
+        return 0, '', safe, True
     paths = []
+    changing = False
     def collect(item: Path):
+        nonlocal changing
         paths.append(item)
         if private_dirs.linked(item) or not native_path(item).is_dir():
             return
-        with os.scandir(native_path(item)) as entries:
-            children = [item / entry.name for entry in entries]
+        try:
+            with os.scandir(native_path(item)) as entries:
+                children = [item / entry.name for entry in entries]
+        except FileNotFoundError:
+            changing = True
+            return
         for child in children:
             collect(child)
     collect(path)
     for item in sorted(paths):
-        stat = native_path(item).lstat()
+        try:
+            stat = native_path(item).lstat()
+        except FileNotFoundError:
+            changing = True
+            continue
         if not private_dirs.linked(item) and native_path(item).is_file():
             size += stat.st_size
         digest.update(f'{item.relative_to(path)}:{stat.st_ino}:{stat.st_size}:{stat.st_mtime_ns}:{stat.st_mode}\n'.encode())
-    return size, digest.hexdigest(), safe
+    if changing:
+        return size, '', safe, False
+    return size, digest.hexdigest(), safe, True
 
 
 def _service_process_modules() -> dict[str, str]:
@@ -272,9 +290,11 @@ def inspect(store) -> dict:
     reported: set[psutil.Process] = set()
     now = time.time()
     def add(category, path, reasons, **metadata):
-        size, fingerprint, safe = tree_info(path)
+        size, fingerprint, safe, stable = tree_info(path)
         if not safe:
             reasons = [*reasons, 'linked-path']
+        if not stable:
+            reasons = [*reasons, 'changing']
         if not native_path(path).exists() and not private_dirs.linked(path):
             return
         row = {'id': hashlib.sha256(str(path).encode()).hexdigest()[:24], 'category': category,
@@ -594,7 +614,7 @@ def apply(store, params: dict) -> dict:
                             _, commands, known = process_inventory(store.directory.resolve())
                             if runtime_usage(original, commands, known):
                                 raise BoardError('STORAGE_CHANGED', 'Runtime usage changed')
-                        if tree_info(original)[1:] != (fresh['fingerprint'], True):
+                        if tree_info(original)[1:] != (fresh['fingerprint'], True, True):
                             raise BoardError('STORAGE_CHANGED', 'Candidate changed')
                         tomb = original.with_name('.reclaim-' + plan_id + '-' + original.name)
                         identity = native_path(original).lstat()
@@ -630,7 +650,7 @@ def _finish_pending(result: dict, receipt: Path) -> None:
         identity = native_path(original).lstat()
         if (tomb_exists or
                 (identity.st_dev != pending['device'] or identity.st_ino != pending['inode']) or
-                tree_info(original)[1:] != (pending['fingerprint'], True)):
+                tree_info(original)[1:] != (pending['fingerprint'], True, True)):
             raise BoardError('STORAGE_CHANGED', 'Pending removal no longer matches its candidate')
         os.rename(native_path(original), native_path(tomb))
         private_files.sync_directory(original.parent)

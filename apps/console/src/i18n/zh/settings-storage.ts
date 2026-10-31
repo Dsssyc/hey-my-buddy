@@ -22,6 +22,7 @@ export default {
     "pending-continuations": "有待处理的续接", "open-requests": "有未决请求", "continuation-supported": "仍可能续接",
     "process-inspection-unavailable": "进程状态无法检查", "runtime-in-use": "运行时正在使用", "runtime-identity-unproven": "运行时身份未证实",
     "retention-history-unproven": "保留期记录未证实", "retained-runtime": "保留的运行时", "owner-unproven": "归属未证实", "linked-path": "存在链接路径",
+    "changing": "统计时内容正在变化",
     "not-accepted": "微任务尚未验收", "final-artifact-missing": "最终产物缺失", "integration-missing": "整合记录缺失",
     "unresolved-conflict": "有未解决的冲突", "active-children": "有进行中的协助任务", "workspace-dependency": "检出依赖未满足",
     "durable-record": "持久记录", "current-backup": "保留的备份", "runtime-owned-by-default-state": "运行时属于默认黑板",

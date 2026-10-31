@@ -22,6 +22,7 @@ export default {
     "pending-continuations": "Pending continuations", "open-requests": "Open requests", "continuation-supported": "Continuation remains possible",
     "process-inspection-unavailable": "Process inspection unavailable", "runtime-in-use": "Runtime in use", "runtime-identity-unproven": "Runtime identity not proven",
     "retention-history-unproven": "Retention history not proven", "retained-runtime": "Retained runtime", "owner-unproven": "Ownership not proven", "linked-path": "Linked path",
+    "changing": "Contents are changing while being measured",
     "not-accepted": "Micro task not accepted", "final-artifact-missing": "Final artifact missing", "integration-missing": "Integration record missing",
     "unresolved-conflict": "Unresolved conflicts", "active-children": "Active assistance tasks", "workspace-dependency": "Checkout dependencies not met",
     "durable-record": "Durable record", "current-backup": "Retained backup", "runtime-owned-by-default-state": "Runtime belongs to the default blackboard",
