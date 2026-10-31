@@ -764,6 +764,9 @@ class MountTests(NativeRunCase):
         self.assertTrue(bridge["key"])
         self.assertEqual(request.session_services[0].tool_names,
                          tuple(f"mcp__{mount.server_name}__{name}" for name in mount.bare_tools))
+        self.assertCountEqual(mount.bare_tools, ["hey_my_buddy_checkpoint", "hey_my_buddy_answer_inquiry",
+                                                "hey_my_buddy_finish_turn"])
+        self.assertIn("hey_my_buddy_checkpoint", mount.bare_tools)
         self.assertEqual(bound.completion_tool, mount.finish_tool)
 
     def test_the_mount_names_the_shared_roles_carrier_in_its_command(self):
