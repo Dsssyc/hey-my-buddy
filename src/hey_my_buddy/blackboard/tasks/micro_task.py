@@ -77,11 +77,11 @@ FILTER_SQL = {
     # Open work, including Lead-owned runs waiting for the Lead to resume them.
     "active": (
         "(state IN ('queued','running','cancelling','reconciliation-needed')"
-        " OR run_state IN ('executing','awaiting-host','waiting-helpers','waiting-owned'))"
+        " OR run_state IN ('executing','awaiting-host','failed','cancelled','waiting-helpers','waiting-owned'))"
     ),
     # A Lead-owned tree is active for its Lead, including helper descendants
     # parked on their own Host boundary. The tree root carries that ownership.
-    "host": ("(run_state = 'awaiting-host' AND NOT EXISTS ("
+    "host": ("(run_state IN ('awaiting-host','failed','cancelled') AND NOT EXISTS ("
              "SELECT 1 FROM workflow_lead_tasks lead_tree "
              "WHERE lead_tree.owned_run_id = root_run_id))"),
     # A terminal result that is still unaccepted: the same condition the console's

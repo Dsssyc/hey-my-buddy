@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import i18n from "i18next";
 import type { TimelineRow, TimelineSpan } from "./macro-task-types";
 import { acceptanceWaitMs, buddyLabel, buddyNameParts, rowStateInfo, spanOutcome } from "./macro-task-display";
 
@@ -53,7 +54,24 @@ describe("recorded row state", () => {
     const owned = { runId: "owned", rootLeadRunId: lead.runId, state: "cancelled", status: "cancelling", shutdownConfirmed: false } as TimelineRow;
     expect(rowStateInfo(owned, [lead, owned]).label).toBe("正在停止");
     expect(rowStateInfo(lead, [lead, owned]).label).toBe("正在停止");
-    expect(rowStateInfo(lead, [lead, { ...owned, status: "cancelled", shutdownConfirmed: true }]).label).toBe("已取消");
+    expect(rowStateInfo(lead, [lead, { ...owned, status: "cancelled", shutdownConfirmed: true }]).label).toBe("已取消，等待 Host");
+  });
+  it("keeps unconcluded failures and cancellations waiting for their recorded owner in both languages", async () => {
+    try {
+      for (const language of ["zh", "en"] as const) {
+        await i18n.changeLanguage(language);
+        for (const [state, rootLeadRunId, zh, en] of [
+          ["failed", null, "失败，等待 Host", "Failed, waiting for Host"],
+          ["cancelled", null, "已取消，等待 Host", "Cancelled, waiting for Host"],
+          ["failed", "lead", "失败，等待 Lead", "Failed, waiting for Lead"],
+          ["cancelled", "lead", "已取消，等待 Lead", "Cancelled, waiting for Lead"],
+        ] as const) {
+          expect(rowStateInfo({ state, rootLeadRunId } as TimelineRow)).toMatchObject({
+            label: language === "zh" ? zh : en, tone: "amber", settled: false,
+          });
+        }
+      }
+    } finally { await i18n.changeLanguage("zh"); }
   });
 });
 

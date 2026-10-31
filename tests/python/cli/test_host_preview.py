@@ -109,7 +109,7 @@ class PreviewFixtureTest(unittest.TestCase):
             manifest = emit_fixtures(emitted)
             report_path = workspace / "report.json"
             result = subprocess.run(
-                [str(node), str(VITEST), "run", FRONTEND_TEST],
+                [str(node), str(VITEST), "run", FRONTEND_TEST, "--maxWorkers=1"],
                 cwd=str(CONSOLE),
                 env=child_environment({
                     "HMB_PREVIEW_FIXTURES": str(emitted),
@@ -225,8 +225,9 @@ class PreviewFixtureTest(unittest.TestCase):
         self.assertTrue(failed_conclusion["failed"])
         self.assertFalse(failed_conclusion["cancelled"])
         fixture = json.loads((fixtures / failed_path).read_text(encoding="utf-8"))
-        self.assertEqual("failed", fixture["task"]["state"])
-        self.assertEqual("failed", fixture["state"])
+        self.assertEqual("concluded", fixture["task"]["state"])
+        self.assertEqual("concluded", fixture["state"])
+        self.assertEqual("failed", fixture["hostConclusion"]["executionStatus"])
         self.assertIsNone(fixture["task"]["acceptedAt"])
         self.assertTrue(any(item["kind"] == "partial-output" and item.get("partial") is True
                             and item.get("verified") is False and item.get("final") is False
@@ -262,7 +263,8 @@ class PreviewFixtureTest(unittest.TestCase):
             for event in recorded["events"]:
                 self.assertFalse({"label", "summary"} & event.keys())
                 self.assertTrue({"decision", "verdict", "state", "strategy", "note"} <= event.keys())
-        self.assertEqual("failed", rows["preview-run-b2"]["state"])
+        self.assertEqual("concluded", rows["preview-run-b2"]["state"])
+        self.assertEqual("failed", rows["preview-run-b2"]["conclusionStatus"])
         self.assertEqual("preview-run-b1", rows["preview-run-b2"]["rootLeadRunId"])
         rejected = next(span for span in timeline["spans"] if span["spanId"] == "execution:att-b9-1")
         self.assertEqual("rejected", rejected["state"])
@@ -659,7 +661,7 @@ class PreviewDeletionTest(unittest.TestCase):
                     self.assertEqual("none", untitled["titleSource"])
                 elif group == self.preview.MACRO_C:
                     self.assertEqual(0, preview["blockerTotal"])
-                    self.assertEqual(1, preview["unconcludedFailureCount"])
+                    self.assertEqual(2, preview["unconcludedFailureCount"])
                     self.assertGreater(scope["artifacts"]["count"], 0)
                     self.assertEqual(16384, scope["artifacts"]["bytes"])
                     self.assertIsNone(scope["sessions"]["bytes"])
@@ -668,7 +670,7 @@ class PreviewDeletionTest(unittest.TestCase):
     def test_deletion_confirmation_and_existing_safety_boundary(self) -> None:
         with self.server() as server:
             target = self.preview.MACRO_C
-            confirmed = {"macroTaskId": target, "microTaskCount": 2, "confirm": True}
+            confirmed = {"macroTaskId": target, "microTaskCount": 4, "confirm": True}
             before = self.call(server, "/api/macro-tasks")
             for patch in ({"confirm": False}, {"confirm": 1}, {"confirm": "true"},
                           {"microTaskCount": True}, {"microTaskCount": -1}, {"microTaskCount": 1.5},
@@ -698,7 +700,7 @@ class PreviewDeletionTest(unittest.TestCase):
             target = self.preview.MACRO_C
             _, before = self.call(server, "/api/macro-tasks")
             _, snapshot_before = self.call(server, "/api/console")
-            confirmed = {"macroTaskId": target, "microTaskCount": 2, "confirm": True}
+            confirmed = {"macroTaskId": target, "microTaskCount": 4, "confirm": True}
             status, response = self.call(server, "/api/command", "macro_task_delete", confirmed)
             self.assertEqual(200, status, response)
             receipt = response["result"]
@@ -732,7 +734,7 @@ class PreviewDeletionTest(unittest.TestCase):
             for operation in ("macro_task_deletion_preview", "macro_task_delete"):
                 params = {"macroTaskId": self.preview.MACRO_C}
                 if operation == "macro_task_delete":
-                    params.update(microTaskCount=2, confirm=True)
+                    params.update(microTaskCount=4, confirm=True)
                 status, response = self.call(server, "/api/command", operation, params)
                 self.assertEqual((503, "SERVICE_UNAVAILABLE"), (status, response["error"]["code"]))
             self.assertEqual(before, self.call(server, "/api/macro-tasks"))

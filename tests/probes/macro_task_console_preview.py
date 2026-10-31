@@ -202,7 +202,8 @@ EMIT_LAYOUT = {
                "workflow-preview-run-b2.json", "workflow-preview-run-b3.json",
                "workflow-preview-run-b4.json", "workflow-preview-run-b5.json",
                "workflow-preview-run-b6.json", "workflow-preview-run-b7.json", "workflow-preview-run-b8.json",
-               "workflow-preview-run-b9.json", "workflow-preview-run-d1.json", "workflow-preview-run-d2.json"),
+               "workflow-preview-run-b9.json", "workflow-preview-run-d1.json", "workflow-preview-run-d2.json",
+               "workflow-preview-run-d3.json", "workflow-preview-run-d4.json"),
     "truncated": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "error": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "incompatible": ("snapshot-legacy-single-router.json", "snapshot-missing-session.json",
@@ -866,7 +867,7 @@ def build_runs() -> dict[str, dict]:
             hosts=(HOST_B, HOST_B),
             title="整理 macOS 与 Windows 沙箱规则差异清单", title_source="title",
             task_text="整理两个平台的沙箱规则差异清单。",
-            created=instant(3, 10), updated=instant(3, 25), state="cancelled", status="cancelled",
+            created=instant(3, 10), updated=instant(3, 25), state="concluded", status="concluded",
             category="ended", buddy=CFG_GLM, result=True,
             result_summary="整理 macOS 与 Windows 沙箱规则差异清单",
             spans=[
@@ -903,7 +904,7 @@ def build_runs() -> dict[str, dict]:
             lead_owner=("preview-run-b1", "turn-att-b1-2"),
             title="封存配额耗尽时的部分输出", title_source="title",
             task_text="排查执行器在配额耗尽后仍未封存部分输出的路径，并补齐封存记录。",
-            created=instant(6, 5), updated=instant(6, 26), state="failed", status="failed",
+            created=instant(6, 5), updated=instant(6, 26), state="concluded", status="concluded",
             category="ended", buddy=CFG_GLM, result=True,
             result_summary="合成预览：执行器配额耗尽，仅保留封存的部分输出",
             spans=[
@@ -1118,8 +1119,8 @@ def build_runs() -> dict[str, dict]:
                      marker(instant(5, 25), "reject", actor=host_actor(HOST_B), artifact_id="art-c1h", verdict="rejected")],
             artifacts=[artifact("art-c1h", "att-c1h-1", digest("c1h-output")[:40],
                                 "/synthetic-preview/diffs/c1h.diff", ["apps/console/src/task-title.ts"])]),
-        # A settled target for the entirely synthetic deletion flow. Its Lead
-        # has no owned work, and its untitled failure still needs a Host conclusion.
+        # A synthetic deletion target with open failures/cancellations and a
+        # concluded failure for comparing their state counts and detail heads.
         run("preview-run-d1", project="alpha", group=MACRO_C, title="合成删除核对已完成", title_source="title",
             task_text="只核对虚构的删除范围，不接触任何真实文件或会话。",
             created=instant(1, 0), updated=instant(1, 20), state="accepted", status="completed",
@@ -1135,11 +1136,39 @@ def build_runs() -> dict[str, dict]:
                      marker(instant(1, 20), "accept", actor=host_actor(HOST_A), verdict="accepted")]),
         run("preview-run-d2", project="alpha", group=MACRO_C, title=None, title_source="none", task_text="   ",
             created=instant(1, 15), updated=instant(1, 16), state="failed", status="failed",
-            category="ended", buddy=CFG_GLM,
+            category="host", buddy=CFG_GLM,
             attempts=[attempt("att-d2-1", 1, "finished", True, instant(1, 16), instant(1, 16), CFG_GLM,
                               error="synthetic preview: service stopped before launch",
                               release_reason=reason("service-stopped-before-launch"))],
             markers=[marker(instant(1, 15), "dispatch", actor=host_actor(HOST_A))]),
+        run("preview-run-d3", project="alpha", group=MACRO_C, title="取消后等待 Host 处理", title_source="title",
+            task_text="核对尚未由 Host 结束的取消。",
+            created=instant(1, 17), updated=instant(1, 22), state="cancelled", status="cancelled",
+            category="host", buddy=CFG_CODEX, result=True,
+            spans=[span("execution:att-d3-1", "execution", instant(1, 18), instant(1, 22), "finished",
+                        attempt_id="att-d3-1", buddy=CFG_CODEX, confirmed=True, generation=1,
+                        turn_index=1, result_status="cancelled")],
+            attempts=[attempt("att-d3-1", 1, "finished", True, instant(1, 18), instant(1, 22), CFG_CODEX,
+                              result="合成预览：已停止，等待 Host 处理。", result_status="cancelled",
+                              termination_reason="wrap-up", stop_initiator="host",
+                              cancel_requested_at=instant(1, 21), grace_deadline=instant(1, 23))],
+            cancellation={"actor": host_actor(HOST_A), "note": "停止这次核对"},
+            markers=[marker(instant(1, 17), "dispatch", actor=host_actor(HOST_A)),
+                     marker(instant(1, 21), "cancel", actor=host_actor(HOST_A), stopInitiator="host")]),
+        run("preview-run-d4", project="alpha", group=MACRO_C, title="Host 已结束的失败", title_source="title",
+            task_text="核对已由 Host 结束的失败。",
+            created=instant(1, 18), updated=instant(1, 24), state="concluded", status="concluded",
+            category="ended", buddy=CFG_GLM, result=True,
+            spans=[span("execution:att-d4-1", "execution", instant(1, 19), instant(1, 23), "finished",
+                        attempt_id="att-d4-1", buddy=CFG_GLM, confirmed=True, generation=1,
+                        turn_index=1, result_status="failed", error="Synthetic execution failure")],
+            attempts=[attempt("att-d4-1", 1, "finished", True, instant(1, 19), instant(1, 23), CFG_GLM,
+                              result="合成预览：执行失败。", error="Synthetic execution failure", result_status="failed")],
+            conclusion=host_conclusion("preview-conclusion-d4", attempt_id="att-d4-1", execution_status="failed",
+                                       note="Host 已结束这次失败。", artifact_id=None,
+                                       actor=host_actor(HOST_A), created_at=instant(1, 24), run_revision=3),
+            markers=[marker(instant(1, 18), "dispatch", actor=host_actor(HOST_A)),
+                     marker(instant(1, 24), "conclude", actor=host_actor(HOST_A), state="failed")]),
     ]
     # Internal routing rows: real task history, never macro task rows.
     for owner, record in (("preview-run-a1", ROUTING_A1), ("preview-run-a2", ROUTING_A2),
@@ -1212,6 +1241,8 @@ def index_runs(runs: list[dict]) -> dict:
         while by_id[root]["parentRunId"] is not None:
             root = by_id[root]["parentRunId"]
         entry["rootRunId"] = root
+        if entry["kind"] not in ("decision", "execution") and entry["state"] in ("awaiting-host", "failed", "cancelled"):
+            entry["category"] = "active" if by_id[root]["leadOwner"] else "host"
         entry["requestId"] = entry.get("requestId") or f"request-{entry['runId']}"
         entry["cwd"] = f"/synthetic-preview/checkouts/{entry['runId']}"
         project = PROJECTS[entry["project"]] if entry["project"] else None
@@ -2010,8 +2041,7 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
         # count through their root's acceptance, and the denominator is roots.
         if entry["parentRunId"] is None and entry["acceptedAt"] is not None:
             counts["accepted"] += 1
-        if entry["parentRunId"] is None and (entry["state"] == "failed" or
-                                              (entry["hostConclusion"] or {}).get("executionStatus") == "failed"):
+        if entry["parentRunId"] is None and (entry["hostConclusion"] or {}).get("executionStatus") == "failed":
             counts["failed"] += 1
     state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group.startswith("macro-"):
@@ -2128,10 +2158,10 @@ def matches(entry: dict, applied: dict) -> bool:
     if name == "all":
         return True
     if name == "host":
-        return entry["state"] == "awaiting-host"
+        return entry["category"] == "host"
     if name == "active":
         return entry["status"] in ("queued", "running", "cancelling", "reconciliation-needed") or \
-            entry["state"] in ("executing", "awaiting-host", "waiting-helpers")
+            entry["state"] in ("executing", "awaiting-host", "failed", "cancelled", "waiting-helpers", "waiting-owned")
     return entry["category"] == "review"
 
 
@@ -3247,8 +3277,7 @@ def validate_fixtures() -> list[str]:
             problems.append(f"{item['macroTaskId']}: accepted exceeds roots")
         expected_failed = sum(1 for run_id in FIXTURES["groups"][item["macroTaskId"]]
                               if FIXTURES["runs"][run_id]["parentRunId"] is None
-                              and (FIXTURES["runs"][run_id]["state"] == "failed" or
-                                   (FIXTURES["runs"][run_id]["hostConclusion"] or {}).get("executionStatus") == "failed"))
+                              and (FIXTURES["runs"][run_id]["hostConclusion"] or {}).get("executionStatus") == "failed")
         if item["counts"]["failed"] != expected_failed:
             problems.append(f"{item['macroTaskId']}: failed does not match failed root turns")
     if summary_a["counts"]["accepted"] != accepted_a:
@@ -3437,8 +3466,8 @@ def validate_fixtures() -> list[str]:
             problems.append(f"{run_id}: missing the {expected} Host conclusion")
     quota_failed = workflow_get({"runId": "preview-run-b2"})
     attempt_record = quota_failed["task"].get("selectedAttempt") or {}
-    if quota_failed["status"] != "failed" or QUOTA_ERROR not in (attempt_record.get("error") or ""):
-        problems.append("preview-run-b2 must stay failed and record the synthetic quota exhaustion")
+    if quota_failed["status"] != "concluded" or QUOTA_ERROR not in (attempt_record.get("error") or ""):
+        problems.append("preview-run-b2 must be concluded and record the synthetic quota exhaustion")
     if not any(item["kind"] == "partial-output" for item in quota_failed["artifacts"]):
         problems.append("preview-run-b2 must carry its sealed partial output")
     if quota_failed["task"].get("providerRejection", {}).get("rejectionPhase") != "during-model":
@@ -3584,7 +3613,7 @@ def emit_fixture_files() -> list[dict]:
     workflows = {"normal": ("preview-run-a1", "preview-run-a2", "preview-run-a4", "preview-run-b1", "preview-run-b1-h1",
                             "preview-run-b2", "preview-run-b3", "preview-run-b4", "preview-run-b5",
                             "preview-run-b6", "preview-run-b7", "preview-run-b8", "preview-run-b9", "preview-run-b10",
-                            "preview-run-d1", "preview-run-d2"),
+                            "preview-run-d1", "preview-run-d2", "preview-run-d3", "preview-run-d4"),
                  "truncated": ("preview-run-a1",),
                  "error": ("preview-run-a1",)}
     for scenario in EMIT_SCENARIOS:

@@ -102,7 +102,7 @@ export default {
       REVISION_CONFLICT: "微任务数已变化。请重新读取范围并确认。",
       MACRO_TASK_NOT_SETTLED: "还有未了结的微任务。请重新读取以查看各自怎样了结。",
       MACRO_TASK_BUSY: "检出正在回收，请等它完成后重新读取。",
-      WORKSPACE_BUSY: "检出正在使用，请稍后重新读取。",
+      WORKSPACE_BUSY: "检出正在处理另一项操作，请稍后重试删除。",
       MACRO_TASK_STORAGE_IN_USE: "存储内容仍被其他微任务持有，请先了结这些依赖。",
       MACRO_TASK_HARNESS_UNAVAILABLE: "保存会话的 harness 不可用，恢复后才能删除。",
       NOT_FOUND: "找不到这个宏任务。请重新读取列表。",

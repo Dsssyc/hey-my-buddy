@@ -501,7 +501,7 @@ class MacroTaskReadTests(WorkflowTestCase):
             with self.subTest(invalid_sort=sort), self.assertRaises(BoardError):
                 self.list_(board, sort=sort)
 
-    def test_failed_count_keeps_host_concluded_failures_and_excludes_cancelled_roots(self):
+    def test_failed_and_cancelled_wait_for_host_until_concluded(self):
         board, first, second, loose = self.grouped_board()
         group_id = first['macroTaskId']
         self.register(board)
@@ -510,10 +510,23 @@ class MacroTaskReadTests(WorkflowTestCase):
             return next(item['counts'] for item in self.list_(board)['macroTasks']
                         if item['macroTaskId'] == group_id)
 
+        def assert_host_wait(run_id):
+            summary = next(item for item in self.list_(board, filter='host')['macroTasks']
+                           if item['macroTaskId'] == group_id)
+            self.assertEqual(summary['state'], 'host')
+            self.assertEqual(summary['matchingRuns'], 1)
+            self.assertEqual(summary['counts']['host'], 1)
+            timeline = board.call('macro_task_timeline', {'macroTaskId': group_id, 'filter': 'host'})
+            self.assertEqual([row['runId'] for row in timeline['rows']], [run_id])
+            self.assertEqual(timeline['rows'][0]['category'], 'host')
+            self.assertEqual(self.list_(board)['totals']['host'], 1)
+
         self.assertEqual(counts()['failed'], 0)
         self.finish_turn(board, self.claim(board, run_id=first['runId']), runner_status='failed',
                          exit_code=1, seal=False)
-        self.assertEqual(counts()['failed'], 1)
+        self.assertEqual(counts()['failed'], 0)
+        self.assertEqual(counts()['ended'], 0)
+        assert_host_wait(first['runId'])
         failed = board.call('workflow_get', {'runId': first['runId']})
         self.assertEqual(failed['state'], 'failed')
         concluded = board.call('workflow_conclude', {
@@ -522,6 +535,9 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertEqual(concluded['state'], 'concluded')
         self.assertEqual(concluded['hostConclusion']['executionStatus'], 'failed')
         self.assertEqual(counts()['failed'], 1)
+        self.assertEqual(counts()['host'], 0)
+        self.assertEqual(counts()['ended'], 1)
+        self.assertEqual(self.list_(board, filter='host')['macroTasks'], [])
 
         claim = self.claim(board, claim_request_id='cancelled-root-claim', run_id=second['runId'])
         board.call('workflow_cancel', {
@@ -529,12 +545,24 @@ class MacroTaskReadTests(WorkflowTestCase):
             **self.controls[second['runId']],
         })
         self.finish_turn(board, claim, runner_status='cancelled')
+        assert_host_wait(second['runId'])
+        self.assertEqual(counts()['ended'], 1)
         cancelled = board.call('workflow_get', {'runId': second['runId']})
         board.call('workflow_conclude', {
             'runId': second['runId'], 'note': 'Cancellation reviewed', **self.control(cancelled),
         })
         self.assertEqual(counts()['failed'], 1)
+        self.assertEqual(counts()['host'], 0)
+        self.assertEqual(counts()['ended'], 2)
+        self.assertEqual(self.list_(board, filter='host')['macroTasks'], [])
         self.assertEqual(self.list_(board, query='standalone')['macroTasks'][0]['counts']['failed'], 0)
+
+        self.finish_turn(board, self.claim(board, run_id=loose['runId']), runner_status='failed',
+                         exit_code=1, seal=False)
+        standalone = self.list_(board, filter='host')['macroTasks']
+        self.assertEqual([item['macroTaskId'] for item in standalone], [f"run:{loose['runId']}"])
+        self.assertEqual(standalone[0]['counts']['host'], 1)
+        self.assertEqual(standalone[0]['counts']['failed'], 0)
 
     def test_filters_match_members_and_cursor_is_bound_to_them(self):
         board, first, second, loose = self.grouped_board()
@@ -769,6 +797,23 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertIsNone(rows[helper]['leadOwnership'])
         self.assertEqual(rows[root['runId']]['rootLeadRunId'], lead['runId'])
         self.assertEqual(rows[helper]['rootLeadRunId'], lead['runId'])
+
+        for state in ('failed', 'cancelled'):
+            with self.subTest(state=state):
+                with board.store.db.write() as connection:
+                    connection.execute("UPDATE workflow_runs SET state=? WHERE run_id IN (?,?)",
+                                       (state, root['runId'], helper))
+                    connection.execute("UPDATE tasks SET state=? WHERE task_id IN (?,?)",
+                                       (state, root['runId'], helper))
+                summary = board.call('macro_task_timeline', {'macroTaskId': root['macroTaskId']})['macroTask']
+                self.assertEqual(summary['state'], 'active')
+                self.assertEqual(summary['counts']['active'], 2)
+                self.assertEqual(summary['counts']['host'], 0)
+                self.assertEqual(summary['counts']['failed'], 0)
+                self.assertEqual(self.list_(board, filter='host')['macroTasks'], [])
+                active = board.call('macro_task_timeline', {'macroTaskId': root['macroTaskId'], 'filter': 'active'})
+                self.assertEqual({row['runId'] for row in active['rows']}, {root['runId'], helper})
+                self.assertEqual({row['category'] for row in active['rows']}, {'active'})
 
     def test_a_restarted_execution_that_reported_and_confirmed_its_stop_ends_definitely(self):
         board = self.board()

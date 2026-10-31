@@ -304,10 +304,10 @@ def _run_presentation(connection, run_id: str) -> tuple[str | None, str, str | N
 def _state(row) -> str:
     """One member's display state: host, active, review or ended."""
     run_state, state = row["run_state"], row["state"]
-    if run_state == "awaiting-host" and row["root_lead_run_id"] is None:
+    if run_state in ("awaiting-host", "failed", "cancelled") and row["root_lead_run_id"] is None:
         return "host"
     if state in ("queued", "running", "cancelling", "reconciliation-needed") or run_state in (
-        "executing", "waiting-helpers", "waiting-owned", "awaiting-host"
+        "executing", "waiting-helpers", "waiting-owned", "awaiting-host", "failed", "cancelled"
     ):
         return "active"
     if (
@@ -508,9 +508,7 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         counts["awaitingHost"] += int(row["run_state"] == "awaiting-host")
         counts[_state(row)] += 1
         counts["accepted"] += int(row["child_parent_run_id"] is None and row["run_state"] == "accepted")
-        counts["failed"] += int(row["child_parent_run_id"] is None and (
-            row["run_state"] == "failed" or row["task_id"] in failed_conclusions
-        ))
+        counts["failed"] += int(row["child_parent_run_id"] is None and row["task_id"] in failed_conclusions)
         counts["helpers" if row["child_parent_run_id"] is not None else "roots"] += 1
     state = next((name for name in ("host", "active", "review") if counts[name]), "ended")
     if group_id.startswith("macro-"):

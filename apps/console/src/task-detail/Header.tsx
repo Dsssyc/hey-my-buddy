@@ -17,18 +17,19 @@ export function DetailBack({ onBack }: { onBack: () => void }) {
   return <Hint text={t("back")}><Button variant="ghost" size="icon-sm" data-slot="detail-back" aria-label={t("back")} onClick={onBack}><ArrowLeft aria-hidden="true"/></Button></Hint>;
 }
 
-export type StateWord = { key: "running" | "stopping" | "queued" | "host" | "lead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
+export type StateWord = { key: "running" | "stopping" | "queued" | "host" | "lead" | "failedHost" | "cancelledHost" | "failedLead" | "cancelledLead" | "review" | "accepted" | "done" | "ended" | "failed"; mark: "live" | "hand" | "done" | "fail" | "idle" };
 
 /** The one word a micro task's state has, and the mark that goes with it. */
-export function stateWord(task: Task, lead: boolean, workflowState: string | null = task.workflow?.state ?? null): StateWord {
+export function stateWord(task: Task, lead: boolean, workflowState: string | null = task.workflow?.state ?? null, conclusionStatus: string | null = null): StateWord {
   if (taskStatus(task) === "cancelling") return { key: "stopping", mark: "live" };
   if (task.state === "queued") return { key: "queued", mark: "idle" };
   switch (workflowState) {
     case "awaiting-host": return { key: lead ? "lead" : "host", mark: "hand" };
     case "delivered": return { key: "review", mark: "hand" };
     case "accepted": return { key: "accepted", mark: "done" };
-    case "failed": return { key: "failed", mark: "fail" };
-    case "concluded": case "cancelled": return { key: "ended", mark: "idle" };
+    case "failed": return { key: lead ? "failedLead" : "failedHost", mark: "hand" };
+    case "cancelled": return { key: lead ? "cancelledLead" : "cancelledHost", mark: "hand" };
+    case "concluded": return conclusionStatus === "failed" ? { key: "failed", mark: "fail" } : { key: "ended", mark: "idle" };
     case "executing": case "waiting-helpers": case "waiting-owned": return { key: "running", mark: "live" };
     default: break;
   }
@@ -61,7 +62,7 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
   const refresh = () => { setTurning(true); onRefresh(); };
   const title = taskTitle(view.task);
   const text = title.source === "none" ? t("untitled") : title.text;
-  const word = stateWord(view.task, view.lead, workflow?.state ?? null);
+  const word = stateWord(view.task, view.lead, workflow?.state, workflow?.hostConclusion?.executionStatus ?? null);
   const reminders = view.attempt ?? { overdue: false, possiblyStuck: false };
   const start = Date.parse(view.task.createdAt);
   const [titleRef, clipped] = useTextClipped<HTMLHeadingElement>(text);
@@ -83,7 +84,7 @@ export function Header({ view, workflow, turns, endMs, nowMs, verifiedAtMs, erro
         </dl>
         <div className="flex shrink-0 items-center gap-2 @max-[650px]:ml-auto">
           <Hint text={word.key === "stopping" && workflow?.shutdown ? t("acceptance.unconfirmed", { n: workflow.shutdown.unconfirmedCount }) : undefined}>
-            <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-ink state-breathe" : word.mark === "fail" ? "text-fail" : "text-ink2")}>{t(`state.${word.key}`)}</span>
+            <span data-slot="detail-status" tabIndex={word.key === "stopping" ? 0 : undefined} className={cn("inline-flex items-center gap-1.5 text-xs whitespace-nowrap outline-none focus-visible:ring-2 focus-visible:ring-ring", word.mark === "hand" ? "text-hand" : word.mark === "live" ? "text-ink state-breathe" : word.mark === "fail" ? "text-fail" : "text-ink2")}><StateMark kind={word.mark}/>{t(`state.${word.key}`)}</span>
           </Hint>
           {reminders.overdue && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.overdue")}</span>}
           {reminders.possiblyStuck && <span className="text-xs whitespace-nowrap text-hand">{shell("reminders.possiblyStuck")}</span>}

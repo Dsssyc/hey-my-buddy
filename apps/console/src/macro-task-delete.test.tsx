@@ -152,6 +152,24 @@ describe("macro task deletion confirmation", () => {
     expect(f.onDeleted).toHaveBeenCalledWith("macro-1", 0);
   });
 
+  it.each(["zh", "en"])("explains a busy workspace on either deletion reply path in %s", async language => {
+    await i18n.changeLanguage(language);
+    const message = language === "zh" ? "检出正在处理另一项操作，请稍后重试删除。"
+      : "Another operation is using a checkout. Retry deletion shortly.";
+    for (const physical of [false, true]) {
+      const f = dialogHarness();
+      const confirm = await screen.findByRole("button", { name: language === "zh" ? "删除" : "Delete" });
+      if (physical) f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, objectKind: "workspace",
+        reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_BUSY" } } }));
+      else f.command.mockRejectedValueOnce(new ApiError("WORKSPACE_BUSY", "Another operation is preparing or sealing this workspace"));
+      await f.user.click(confirm);
+      expect(await screen.findByText(message)).toBeTruthy();
+      expect(screen.getByRole("dialog").textContent).not.toMatch(/WORKSPACE_BUSY|preparing or sealing/);
+      expect(f.onDeleted).not.toHaveBeenCalled();
+      cleanup();
+    }
+  });
+
   it.each([new ApiError("NETWORK", "raw transport text"), new ApiError("INVALID_RESPONSE", "raw reply text")])(
     "keeps a lost or malformed reply unresolved and replays its identity", async error => {
       const f = dialogHarness();
