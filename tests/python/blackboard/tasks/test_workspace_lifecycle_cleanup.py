@@ -162,7 +162,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertTrue(checkout.is_symlink())
         self.assertNotEqual(self.view(board, submitted['runId'])['cleanup']['state'], 'applied')
 
-    def test_cleanup_remove_keeps_a_real_git_failure_on_a_present_checkout(self):
+    def test_cleanup_remove_keeps_the_original_registration_after_git_removal_fails(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-git-fail")
         real_git = workspace_module._git
 
@@ -175,7 +175,13 @@ class CleanupLifecycleTests(LifecycleTestCase):
             with self.assertRaises(BoardError) as raised:
                 workspace_module.cleanup_remove(self.directory, manifest)
         self.assertEqual(raised.exception.code, "WORKSPACE_GIT_ERROR")
-        self.assertTrue(checkout.exists(), "a refused removal must never be reported as achieved")
+        self.assertFalse(checkout.exists())
+        self.assertEqual(workspace_module._worktree_record(self.repo, checkout)['locked'],
+                         'hey-my-buddy:' + manifest['workspaceId'])
+        retried = workspace_module.cleanup_remove(self.directory, manifest)
+        self.assertTrue(retried['removed'])
+        self.assertTrue(retried['alreadyRemoved'])
+        self.assertIsNone(workspace_module._worktree_record(self.repo, checkout))
 
     def test_reclaim_converges_when_another_owner_finishes_the_removal(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree(request_id="cleanup-race")

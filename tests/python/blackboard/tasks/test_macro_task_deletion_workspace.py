@@ -230,7 +230,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
             (directory / "checkout").rename(self.root / "retained-checkout")
         return manifest, directory
 
-    def test_missing_repository_removes_only_allocations_without_checkout_and_preserves_refs(self):
+    def test_missing_repository_preserves_allocation_proof_and_refs(self):
         for layout in ("checkout", "logical", "no-checkout", "refs"):
             with self.subTest(layout=layout):
                 manifest, directory = self.repository_case(layout)
@@ -248,7 +248,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                         "path": manifest["snapshot"]["repositoryPath"], "workspaceId": manifest["workspaceId"],
                         "reason": {"code": "macro-task-deletion.repository-missing", "params": {}},
                     }])
-                    self.assertEqual(directory.exists(), layout == "checkout")
+                    self.assertEqual(directory.exists(), layout != "refs")
                     self.assertFalse(deletion_workspace._tombstone(self.state, manifest["workspaceId"]).exists())
                     if layout == "checkout":
                         self.assertTrue(native_path(Path(manifest["checkoutRoot"])).exists())
@@ -321,11 +321,10 @@ class DeletionWorkspaceTests(unittest.TestCase):
                 finally:
                     retained.rename(self.repo)
 
-    def test_missing_repository_replays_interrupted_private_record_removal(self):
+    def test_missing_repository_retains_an_interrupted_tombstone_until_retry(self):
         manifest, directory = self.repository_case("logical")
         tomb = deletion_workspace._tombstone(self.state, manifest["workspaceId"])
         retained = self.root / "retained-repository"
-        self.repo.rename(retained)
         original = private_dirs.remove_tree
 
         def interrupt(path, **kwargs):
@@ -334,22 +333,25 @@ class DeletionWorkspaceTests(unittest.TestCase):
                 raise OSError("interrupted private record removal")
             return original(path, **kwargs)
 
+        with patch.object(private_dirs, "remove_tree", side_effect=interrupt):
+            with self.assertRaisesRegex(OSError, "interrupted private record removal"):
+                self.delete(manifest)
+        self.assertFalse(directory.exists())
+        self.assertTrue(tomb.exists())
+        self.repo.rename(retained)
         try:
-            with patch.object(private_dirs, "remove_tree", side_effect=interrupt):
-                with self.assertRaisesRegex(OSError, "interrupted private record removal"):
-                    self.delete(manifest)
-            self.assertFalse(directory.exists())
-            self.assertTrue(tomb.exists())
             self.assertEqual(self.delete(manifest), [{
                 "kind": "ref", "path": manifest["snapshot"]["repositoryPath"],
                 "workspaceId": manifest["workspaceId"],
                 "reason": {"code": "macro-task-deletion.repository-missing", "params": {}},
             }])
-            self.assertFalse(tomb.exists())
+            self.assertTrue(tomb.exists())
         finally:
             retained.rename(self.repo)
+        self.assertEqual(self.delete(manifest), [])
+        self.assertFalse(tomb.exists())
 
-    def test_repository_skip_preserves_checkout_and_only_reclaims_missing_repository_logical_records(self):
+    def test_repository_skip_preserves_checkout_and_shared_logical_records(self):
         for missing in (True, False):
             with self.subTest(missing=missing):
                 allocation = self.prepare(request="allocation-" + str(missing))
@@ -365,7 +367,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                     with patch.object(deletion_workspace, "_delete_refs") as delete_refs:
                         skipped = delete_workspaces(SimpleNamespace(directory=self.state), [later, allocation], [])
                     delete_refs.assert_not_called()
-                    self.assertEqual(directory.exists(), not missing)
+                    self.assertTrue(directory.exists())
                     self.assertTrue(native_path(Path(allocation["checkoutRoot"])).exists())
                     self.assertEqual({item["reason"]["code"] for item in skipped}, {
                         "macro-task-deletion.repository-missing" if missing else "macro-task-deletion.repository-changed",

@@ -85,16 +85,16 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
             'macroTaskId': target, 'microTaskCount': 1, 'confirm': True,
         })['state'], 'deleted')
 
-    def test_missing_repository_with_allocation_deletes_macro_task_records(self):
+    def test_missing_repository_with_allocation_retains_records_until_retry(self):
         self.missing_repository_deletion(layout='checkout')
 
-    def test_missing_repository_with_only_refs_deletes_macro_task_records(self):
+    def test_missing_repository_with_only_refs_retains_records_until_retry(self):
         self.missing_repository_deletion(layout='refs')
 
-    def test_missing_repository_with_logical_allocation_removes_private_records(self):
+    def test_missing_repository_with_logical_allocation_retains_records_until_retry(self):
         self.missing_repository_deletion(layout='logical')
 
-    def test_missing_repository_without_checkout_removes_private_records(self):
+    def test_missing_repository_without_checkout_retains_records_until_retry(self):
         self.missing_repository_deletion(layout='no-checkout')
 
     def missing_repository_deletion(self, *, layout):
@@ -120,26 +120,42 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
             result = self.command(browser, DELETE, {
                 'macroTaskId': run['macroTaskId'], 'microTaskCount': 1, 'confirm': True,
             })
-            self.assertEqual(result['state'], 'deleted')
-            self.assertIsNotNone(result['deletedAt'])
-            self.assertEqual(result['skipped'], [{
-                'kind': 'ref' if layout == 'refs' else 'allocation',
-                'path': manifest['snapshot']['repositoryPath'], 'workspaceId': manifest['workspaceId'],
-                'reason': {'code': 'macro-task-deletion.repository-missing', 'params': {}},
-            }])
-            self.command(browser, PREVIEW, {'macroTaskId': run['macroTaskId']}, status=404, code='NOT_FOUND')
+            self.assertEqual(result['state'], 'deleting')
+            self.assertIsNone(result['deletedAt'])
+            self.assertEqual(result['objectKind'], 'workspace')
+            self.assertEqual(result['reason'], reason('macro-task-deletion.physical-failed',
+                errorCode='macro-task-deletion.repository-missing'))
+            self.assertEqual(self.command(browser, PREVIEW, {'macroTaskId': run['macroTaskId']})['deletionState'], 'deleting')
             with board.store.db.read() as connection:
-                for table in ('macro_tasks', 'macro_task_deletions', 'workflow_runs', 'tasks',
-                              'workflow_turns', 'workflow_artifacts', 'workflow_requests',
-                              'workspace_reservations', 'commands'):
-                    self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0, table)
+                for table in ('macro_tasks', 'macro_task_deletions', 'workflow_runs', 'tasks'):
+                    self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 1, table)
                 self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
-            self.assertEqual(directory.exists(), layout == 'checkout')
+            self.assertEqual(directory.exists(), layout != 'refs')
             self.assertFalse((directory.parent / ('.deleting-' + manifest['workspaceId'])).exists())
             self.assertEqual(self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix,
                                       cwd=retained), refs)
         finally:
             retained.rename(self.repo)
+        if layout == 'refs':
+            directory.with_name('retained-' + manifest['workspaceId']).rename(directory)
+        elif layout == 'no-checkout':
+            self.repo.with_name('retained-checkout').rename(directory / 'checkout')
+        completed = self.command(browser, DELETE, {
+            'macroTaskId': run['macroTaskId'], 'microTaskCount': 1, 'confirm': True,
+        })
+        self.assertEqual((completed['state'], completed['deletionId'], completed['duplicate']),
+                         ('deleted', result['deletionId'], True))
+        self.command(browser, PREVIEW, {'macroTaskId': run['macroTaskId']}, status=404, code='NOT_FOUND')
+        self.assertFalse(directory.exists())
+        self.assertEqual(self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix), b'')
+        if layout != 'logical':
+            self.assertIsNone(workspace._worktree_record(self.repo / '.git', Path(manifest['checkoutRoot'])))
+        with board.store.db.read() as connection:
+            for table in ('macro_tasks', 'macro_task_deletions', 'workflow_runs', 'tasks',
+                          'workflow_turns', 'workflow_artifacts', 'workflow_requests',
+                          'workspace_reservations', 'commands'):
+                self.assertEqual(connection.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0], 0, table)
+            self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
 
     def test_service_host_and_worker_credentials_do_not_authorize_either_operation(self):
         board = self.board()
@@ -342,7 +358,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         self.assertEqual((completed['state'], completed['deletionId'], completed['duplicate']),
                          ('deleted', interrupted['deletionId'], True))
 
-    def test_skipped_checkout_uses_one_structured_reason_per_item(self):
+    def test_skipped_checkout_keeps_the_same_deletion_until_its_lock_is_restored(self):
         board = self.board()
         run = self.create(board, macroTask={'title': 'Retained checkout'})
         with board.store.db.read() as connection:
@@ -353,12 +369,17 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         workspace._git(checkout, 'worktree', 'unlock', str(checkout))
         workspace._git(checkout, 'worktree', 'lock', '--reason', 'foreign-owner', str(checkout))
         _, browser = self.open_console(board)
-        result = self.command(browser, DELETE, {'macroTaskId': run['macroTaskId'], 'microTaskCount': 1, 'confirm': True})
-        self.assertEqual(result['state'], 'deleted')
-        self.assertIn({'code': 'macro-task-deletion.lock-mismatch', 'params': {}},
-                      [item['reason'] for item in result['skipped']])
+        params = {'macroTaskId': run['macroTaskId'], 'microTaskCount': 1, 'confirm': True}
+        result = self.command(browser, DELETE, params)
+        self.assertEqual(result['state'], 'deleting')
+        self.assertEqual(result['objectKind'], 'workspace')
+        self.assertEqual(result['reason'], reason('macro-task-deletion.physical-failed',
+            errorCode='macro-task-deletion.lock-mismatch'))
         self.assertTrue(checkout.exists())
-        for item in result['skipped']:
-            self.assertEqual(set(item['reason']), {'code', 'params'})
-            self.assertNotIn('reasonCode', item)
-            self.assertNotIn('reasons', item)
+        self.assertEqual(self.command(browser, PREVIEW, {'macroTaskId': run['macroTaskId']})['deletionState'], 'deleting')
+        workspace._git(checkout, 'worktree', 'unlock', str(checkout))
+        workspace._git(checkout, 'worktree', 'lock', '--reason', 'hey-my-buddy:' + manifest['workspaceId'], str(checkout))
+        completed = self.command(browser, DELETE, params)
+        self.assertEqual((completed['state'], completed['deletionId'], completed['duplicate']),
+                         ('deleted', result['deletionId'], True))
+        self.assertFalse(checkout.exists())

@@ -223,10 +223,6 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                 continue
             repository_skip = _repository_skip(manifest, "allocation", str(directory))
             if repository_skip is not None:
-                if (repository_skip["reason"]["code"] == _SKIP_CODES["REPOSITORY_MISSING"]
-                        and not workspace._path_present(directory / "checkout")):
-                    # The second pass removes only this allocation's private records.
-                    continue
                 skipped.append(repository_skip)
                 blocked[(manifest["repositoryId"], manifest["checkoutId"])] = repository_skip["reason"]["code"]
                 continue
@@ -253,19 +249,13 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
     for identifier, manifest in sorted(by_id.items()):
         directory = state / "workspaces" / identifier
         blocked_reason = blocked.get((manifest["repositoryId"], manifest["checkoutId"]))
-        if blocked_reason is not None and (blocked_reason != _SKIP_CODES["REPOSITORY_MISSING"]
-                                           or manifest["kind"] != "existing"):
+        if blocked_reason is not None:
             continue
         if not directory.exists() and not directory.is_symlink():
             repository = Path(manifest["snapshot"]["repositoryPath"])
             repository_skip = _repository_skip(manifest, "ref", _PREFIX + identifier + "/")
-            if blocked_reason is not None and (repository_skip is None
-                    or repository_skip["reason"]["code"] != _SKIP_CODES["REPOSITORY_MISSING"]):
-                continue
             if repository_skip is not None:
                 skipped.append(repository_skip)
-                if repository_skip["reason"]["code"] == _SKIP_CODES["REPOSITORY_MISSING"]:
-                    _remove_tombstone(state, identifier)
                 continue
             ref_skips = _delete_refs(repository, identifier, expected[identifier])
             skipped.extend(ref_skips)
@@ -284,23 +274,17 @@ def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, fi
                 continue
             repository = Path(manifest["snapshot"]["repositoryPath"])
             repository_skip = _repository_skip(manifest, "allocation", str(directory))
-            if blocked_reason is not None and (repository_skip is None
-                    or repository_skip["reason"]["code"] != _SKIP_CODES["REPOSITORY_MISSING"]):
-                continue
             if repository_skip is not None:
                 skipped.append(repository_skip)
-                if repository_skip["reason"]["code"] != _SKIP_CODES["REPOSITORY_MISSING"]:
-                    continue
-            if manifest["kind"] == "worktree" and workspace._path_present(directory / "checkout"):
-                if repository_skip is None:
-                    skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
                 continue
-            if repository_skip is None:
-                ref_skips = _delete_refs(repository, identifier, expected[identifier])
-                skipped.extend(ref_skips)
-                if ref_skips or _refs(repository, identifier):
-                    skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
-                    continue
+            if manifest["kind"] == "worktree" and workspace._path_present(directory / "checkout"):
+                skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
+                continue
+            ref_skips = _delete_refs(repository, identifier, expected[identifier])
+            skipped.extend(ref_skips)
+            if ref_skips or _refs(repository, identifier):
+                skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
+                continue
             tomb = _tombstone(state, identifier)
             if workspace._path_present(tomb):
                 skipped.append(_skip("allocation", str(tomb), "OWNER_UNPROVEN", identifier))
