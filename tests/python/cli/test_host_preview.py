@@ -704,10 +704,9 @@ class PreviewDeletionTest(unittest.TestCase):
             status, response = self.call(server, "/api/command", "macro_task_delete", confirmed)
             self.assertEqual(200, status, response)
             receipt = response["result"]
-            self.assertEqual({"deletionId", "macroTaskId", "microTaskCount", "state", "deletedAt", "duplicate", "skipped"}, set(receipt))
+            self.assertEqual({"deletionId", "macroTaskId", "microTaskCount", "state", "deletedAt", "duplicate"}, set(receipt))
             self.assertEqual("deleted", receipt["state"])
             self.assertFalse(receipt["duplicate"])
-            self.assertEqual([], receipt["skipped"])
             _, after = self.call(server, "/api/macro-tasks")
             self.assertNotIn(target, [row["macroTaskId"] for row in after["macroTasks"]])
             self.assertEqual(before["totals"]["all"] - 1, after["totals"]["all"])

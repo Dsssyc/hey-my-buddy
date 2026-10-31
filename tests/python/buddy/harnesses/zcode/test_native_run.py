@@ -18,7 +18,6 @@ import os
 import subprocess
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -136,7 +135,7 @@ class NativeRunCase(FakeAppServerTests):
 
     def setUp(self):
         super().setUp()
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-",
                                                  dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -164,7 +163,7 @@ class MockNativeCase(ZcodeFixtureCase):
     def setUp(self):
         super().setUp()
         self.state_dir = Path(self.environment["HMB_STATE_DIR"])
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-w-",
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-seam-w-",
                                                  dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(self.temp.cleanup)
         self.base = Path(self.temp.name)
@@ -1142,7 +1141,7 @@ class ProducerContractTests(NativeRunCase):
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
         from hey_my_buddy.protocol import activity as activity_protocol
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1188,7 +1187,7 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1229,7 +1228,7 @@ class ProducerContractTests(NativeRunCase):
 
     def test_foreign_activity_and_journal_records_read_as_nothing(self):
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-f-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-f-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1257,7 +1256,7 @@ class ProducerContractTests(NativeRunCase):
     def test_journal_states_follow_the_shared_reader_semantics(self):
         """Empty is available, over-limit and unreadable keep their own reasons."""
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-j-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-j-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1301,7 +1300,7 @@ class ProducerContractTests(NativeRunCase):
         # The final effective record decides: the answer imports, the stale
         # rejection is gone, and the reader's count covers the question once.
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-sup-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-sup-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1329,7 +1328,7 @@ class ProducerContractTests(NativeRunCase):
         # leaves exactly one rejection for that id — never an accumulation of
         # every historical refusal — and no bound record is projected for it.
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-rej-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-rej-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1361,7 +1360,7 @@ class ProducerContractTests(NativeRunCase):
         # the actual canonical wire frame returned by the C-Two pager.
         from hey_my_buddy.json_codec import canonical_json
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-frame-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-frame-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1410,7 +1409,7 @@ class ProducerContractTests(NativeRunCase):
         import hashlib as _hashlib
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-s-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-s-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1458,7 +1457,7 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import LiveObservation
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-o-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-o-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1511,7 +1510,7 @@ class ProducerContractTests(NativeRunCase):
         import hashlib as _hashlib
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a2-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-a2-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)
@@ -1566,7 +1565,7 @@ class ProducerContractTests(NativeRunCase):
         from hey_my_buddy.buddy.harnesses.live import InquiryPayload, LiveRequest
         make_inquiry_bridge = fixture_inquiry_bridge
         bind_live_channel = lambda *args, **kwargs: fixture_live_channel(self, *args, **kwargs)
-        managed = TemporaryDirectory(prefix="hey-my-buddy-zcode-live-r-",
+        managed = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-live-r-",
                                               dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(managed.cleanup)
         temp = Path(managed.name)

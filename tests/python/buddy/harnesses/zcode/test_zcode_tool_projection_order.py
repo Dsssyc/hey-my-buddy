@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 import json
-from temporary import TemporaryDirectory
+import tempfile
 from pathlib import Path
 
 from hey_my_buddy.protocol import tool_evidence
@@ -18,7 +18,7 @@ ROOT = {"sessionId": "session", "turnId": "turn"}
 
 class NativeProjectionTests(unittest.TestCase):
     def setUp(self):
-        self.private = TemporaryDirectory()
+        self.private = tempfile.TemporaryDirectory()
         self.addCleanup(self.private.cleanup)
         self.state_dir = Path(self.private.name) / "state"
         self.facts = ZcodeToolFacts(BINDING, state_dir=self.state_dir)
@@ -222,7 +222,7 @@ class NativeDenialTests(unittest.TestCase):
         self.assertEqual(calls[0]['phases'], ['end', 'start'])
 
     def setUp(self):
-        self.private = TemporaryDirectory()
+        self.private = tempfile.TemporaryDirectory()
         self.addCleanup(self.private.cleanup)
         self.log_dir = Path(self.private.name)
         self.state_dir = self.log_dir / "state"

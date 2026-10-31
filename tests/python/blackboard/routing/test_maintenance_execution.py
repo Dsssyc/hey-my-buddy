@@ -13,6 +13,7 @@ from support import BoardTestCase, FakeClock
 from hey_my_buddy.blackboard.routing import router
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.buddy.roles.run_observers import MaintenanceCorrection
+from hey_my_buddy.buddy.roles.router import DecisionAdapter
 from hey_my_buddy.buddy.runtime.execution import Execution, classify_termination
 from hey_my_buddy.buddy.harnesses.base import AdapterOutcome
 from hey_my_buddy.paths import native_path
@@ -478,6 +479,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
                     native_path(execution.directory).mkdir(parents=True, mode=0o700, exist_ok=True)
                     native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700, exist_ok=True)
                     with patch.object(module, "run", side_effect=fake_run), \
+                            patch.object(DecisionAdapter, "available", return_value=(True, None)), \
                             patch.object(module, "check_preparation", return_value=None), \
                             patch.object(module, "native_evidence", return_value={}):
                         execution.run()
@@ -899,6 +901,7 @@ class MaintenanceExecutionTests(WorkflowTestCase):
             native_path(execution.directory).mkdir(parents=True, mode=0o700, exist_ok=True)
             native_path(execution.evidence_directory).mkdir(parents=True, mode=0o700, exist_ok=True)
             with patch.object(module, "run", side_effect=fake_run), \
+                    patch.object(DecisionAdapter, "available", return_value=(True, None)), \
                     patch.object(module, "check_preparation", return_value=None), \
                     patch.object(module, "native_evidence", return_value={}):
                 execution.run()

@@ -10,7 +10,7 @@ import { formatNumber } from "./i18n/format";
 import { reasonText } from "./i18n/reason";
 import { byteText } from "./settings/storage-display";
 import type { MacroTaskSummary } from "./macro-task-types";
-import type { DeletionBlocker, DeletionBlockerKind } from "./macro-task-deletion";
+import type { DeletionBlocker, DeletionBlockerKind, DeletionFailure } from "./macro-task-deletion";
 import { useMacroTaskDeletion } from "./use-macro-task-deletion";
 import type { MacroTaskDeletionClient } from "./use-macro-task-deletion";
 
@@ -48,6 +48,33 @@ function DeletionBlockers({ blockers }: { blockers: DeletionBlocker[] }) {
   </ul>;
 }
 
+function DeletionFailures({ failures }: { failures: DeletionFailure[] }) {
+  const { t } = useTranslation("macroHeader");
+  const resolution = (failure: DeletionFailure) => {
+    if (failure.reason.code === "checkout.process-blockers") return "deletion.failureResolution.busy";
+    if (failure.reason.code === "checkout.process-scan-failed") return "deletion.failureResolution.observation";
+    if (failure.reason.code === "macro-task-deletion.physical-failed") {
+      if (failure.reason.params.errorCode === "WORKSPACE_BUSY") return "deletion.failureResolution.busy";
+      return failure.reason.params.errorCode === "IO_ERROR" ? "deletion.failureResolution.os" : "deletion.failureResolution.cause";
+    }
+    if (["owner-unproven", "identity-changed", "lock-mismatch", "ref-unproven", "ref-changed", "unsafe-path",
+      "not-a-managed-worktree", "unregistered-checkout"].some(code => failure.reason.code === `macro-task-deletion.${code}`))
+      return "deletion.failureResolution.proof";
+    return "deletion.failureResolution.cause";
+  };
+  return <ul data-slot="macro-delete-failures" className="pt-2">
+    {failures.map((failure, index) => <li key={`${failure.objectKind}-${failure.path}-${index}`} className="border-t py-2.5 last:border-b">
+      <p className="font-medium">{t(`deletion.objects.${failure.objectKind}`)}</p>
+      {failure.path !== null && <p className="mt-1 wrap-anywhere font-mono text-xs text-ink2">{failure.path}</p>}
+      <p className="mt-1 text-xs leading-relaxed text-ink2">{reasonText(failure.reason)}</p>
+      {failure.error && <p className="mt-1 wrap-anywhere text-xs leading-relaxed text-ink2">{t("deletion.failureError", { message: failure.error.message })}
+        {failure.error.errno !== null && ` · errno ${failure.error.errno}`}
+        {failure.error.winerror !== null && ` · winerror ${failure.error.winerror}`}</p>}
+      <p className="mt-1 text-xs leading-relaxed text-ink3">{t(resolution(failure))}</p>
+    </li>)}
+  </ul>;
+}
+
 export function MacroTaskDeleteDialog({ summary, open, returnFocus, onClose, ...client }: MacroTaskDeletionClient & {
   summary: MacroTaskSummary;
   open: boolean;
@@ -67,7 +94,8 @@ export function MacroTaskDeleteDialog({ summary, open, returnFocus, onClose, ...
   const taskCount = new Set(preview?.blockers.map(blocker => blocker.taskId)).size;
   const errorKey = `deletion.errors.${deletion.errorCode}`;
   const error = deletion.errorCode ? t(errorKey, { defaultValue: t("deletion.errors.other", { code: deletion.errorCode }) }) : null;
-  const failure = deletion.result?.state === "deleting" ? deletion.result : null;
+  const failures = deletion.result?.state === "deleting" ? deletion.result.failures : null;
+  const started = preview?.deletionState === "deleting" && !failures;
   const contentScope = (value: { count: number | null; bytes: number | null }, kind: "artifactCount" | "sessionCount") => t("deletion.contentScope", {
     quantity: value.count === null ? t("deletion.unknownCount") : t(`deletion.${kind}`, { n: formatNumber(value.count) }),
     size: value.bytes === null ? t("deletion.unknownBytes") : t("deletion.totalBytes", { bytes: byteText(value.bytes) }),
@@ -103,11 +131,8 @@ export function MacroTaskDeleteDialog({ summary, open, returnFocus, onClose, ...
             <p className="pt-3 text-xs leading-relaxed text-ink3">{t("deletion.backup")}</p>
           </>)}
           {busy && <p role="status" className="pt-3 text-foreground state-breathe">{t("deletion.submitting")}</p>}
-          {unresolved && <p role="status" className="pt-3 text-hand">{t(phase === "unknown" ? "deletion.unknown" : "deletion.incomplete")}</p>}
-          {failure && phase !== "submitting" && <p className="pt-2 text-xs text-ink2">{failure.reason.code === "macro-task-deletion.physical-failed"
-            ? failure.reason.params.errorCode === "WORKSPACE_BUSY" ? t("deletion.errors.WORKSPACE_BUSY")
-              : t("deletion.physicalFailure", { kind: t(`deletion.objects.${failure.objectKind}`), code: failure.reason.params.errorCode })
-            : reasonText(failure.reason)}</p>}
+          {unresolved && <p role="status" className="pt-3 text-hand">{t(phase === "unknown" ? "deletion.unknown" : started ? "deletion.started" : "deletion.incomplete")}</p>}
+          {failures && phase !== "submitting" && <DeletionFailures failures={failures}/>}
           {error && <p role="alert" className="pt-3 text-fail">{error}</p>}
           {!deletion.writable && <p role="alert" className="pt-3 text-fail">{t("deletion.unavailable")}</p>}
         </div>

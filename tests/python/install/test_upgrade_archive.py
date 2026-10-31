@@ -23,11 +23,11 @@ class UpgradeCutoverTests(BoardTestCase):
     def setUp(self):
         super().setUp()
         self.state = self.directory / "state"
-        load_fixture(self.state)
+        fixture = load_fixture(self.state)
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             complete_fixture_cleanup(connection)
-        resources = json.loads((FIXTURE / 'workspace-resources.json').read_text(encoding='utf-8'))
-        self.private_files = {relative: native_path(self.state / relative).read_bytes() for relative in resources['files']}
+        self.private_files = {relative: native_path(self.state / relative).read_bytes()
+                              for relative in fixture['resourceFiles']}
         native_path(self.state / "console-settings.json").write_text('{"theme":"dark"}', encoding="utf-8", newline="\n")
         store = BoardStore(self.state)
         store.db.close()

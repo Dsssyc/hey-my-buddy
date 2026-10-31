@@ -12,7 +12,6 @@ import queue
 import subprocess
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import threading
 import traceback
 
@@ -23,7 +22,7 @@ class InquiryDomain:
     def __init__(self, test, case):
         from support import _child_environment
 
-        temporary = TemporaryDirectory(prefix="zh-", dir=Path(tempfile.gettempdir()).resolve())
+        temporary = tempfile.TemporaryDirectory(prefix="zh-", dir=Path(tempfile.gettempdir()).resolve())
         test.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.log = (self.root / "owner.log").open("wb")
@@ -112,7 +111,7 @@ def read_command(commands, timeout=60):
 
 def serve():
     # Determine every private root before importing the SDK or role modules.
-    temporary = TemporaryDirectory(prefix="zd-", dir=Path(tempfile.gettempdir()).resolve())
+    temporary = tempfile.TemporaryDirectory(prefix="zd-", dir=Path(tempfile.gettempdir()).resolve())
     root = Path(temporary.name).resolve()
     home, state, runtime = root / "home", root / "state", root / "runtime"
     for directory in (home, state, runtime, state / "ipc"):
@@ -145,7 +144,7 @@ def serve():
 
     fixture = ZcodeFixtureCase()
     # Reuse its complete setup, selecting our already-created private root.
-    with patch("buddy.harnesses.zcode.test_zcode.TemporaryDirectory",
+    with patch("buddy.harnesses.zcode.test_zcode.tempfile.TemporaryDirectory",
                return_value=temporary):
         fixture.setUp()
     fixture.addCleanup(shutdown_private_rpc)
@@ -239,4 +238,8 @@ def serve():
 
 
 if __name__ == "__main__":
+    # This owner is a fresh interpreter outside the test-file bootstrap.
+    from hey_my_buddy.cli.checks import configure_fixture_cleanup
+
+    configure_fixture_cleanup()
     serve()

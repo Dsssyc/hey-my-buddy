@@ -432,10 +432,8 @@ class LeftoverProcessTests(RunnerTestCase):
         driver = self.directory / "driver.py"
         driver.write_text(textwrap.dedent(
             """
-            import ctypes, json, os, signal, site, sys, threading, time
+            import ctypes, json, os, signal, sys, threading, time
             from pathlib import Path
-            if os.name == "nt":
-                site.addsitedir(os.environ["CHECKS_FIXTURE_SITE_PACKAGES"])
             from hey_my_buddy.cli import checks
 
             if os.name == "nt":
@@ -459,9 +457,11 @@ class LeftoverProcessTests(RunnerTestCase):
         environment = {**os.environ, **self.environment()}
         environment["PYTHONPATH"] = os.pathsep.join([str(REPOSITORY / "src"), environment["PYTHONPATH"]])
         if os.name == "nt":
-            # Use one interpreter in the private console, without a venv
-            # forwarding process that can consume the console event first.
-            environment["CHECKS_FIXTURE_SITE_PACKAGES"] = sysconfig.get_path("purelib")
+            # The base interpreter avoids a venv forwarder consuming the console
+            # event. Native site initialization, including pywin32's .pth, must
+            # run in the driver and every base-interpreter suite child.
+            self.module("sitecustomize", "import site\n"
+                        f"site.addsitedir({sysconfig.get_path('purelib')!r})\n")
         log = (self.directory / "driver.log").open("w", encoding="utf-8", newline="\n")
         self.addCleanup(log.close)
         trigger = self.directory / "interrupt"
@@ -489,7 +489,8 @@ class LeftoverProcessTests(RunnerTestCase):
             return found
 
         children = wait_until(started, timeout=60)
-        self.assertTrue(children, "the first two fixture files never started")
+        self.assertTrue(children, "the first two fixture files never started: "
+                        + (self.directory / "driver.log").read_text(encoding="utf-8")[-4000:])
         for child in children:
             self.addCleanup(self.reap, child["leftover"])
             self.addCleanup(self.reap, child["suite"])

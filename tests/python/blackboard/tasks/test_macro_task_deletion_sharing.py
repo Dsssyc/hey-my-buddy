@@ -81,3 +81,89 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         self.assertEqual(deleted['state'],'deleted',deleted)
         self.assertFalse(checkout.exists())
         self.assertEqual((self.repo/'tracked.txt').read_text(encoding="utf-8"),'base\n')
+
+    def test_nested_repository_borrower_retains_owner_checkout_before_deletion_mark(self):
+        board = self.board()
+        owner = self.submit_group(board, 'nested-managed-owner', kind='worktree')
+        claim = self.claim(board, owner['runId'])
+        manifest = claim['claim']['turn']['input']['executionWorkspace']
+        checkout = Path(manifest['checkoutRoot'])
+        (checkout / 'tracked.txt').write_text('owned sealed output\n', encoding='utf-8', newline='\n')
+        seal = workspace.seal(self.directory, manifest, owner['runId'], claim['claim']['attempt']['attemptId'])
+        self.finish_turn(board, claim, seal)
+        view = self.view(board, owner['runId'])
+        artifact = next(item for item in view['artifacts'] if item['kind'] == 'output')
+        with defer_reclaim.object(board.store.workflow, '_reclaim_checkout',
+                                  return_value={'removed': False, 'reasons': ['fixture-retained']}):
+            self.accept(board, view, artifact, not_required=True)
+
+        nested = checkout / 'src'
+        self.git('-C', str(nested), 'init', '-q', '-b', 'main')
+        self.git('-C', str(nested), 'config', 'user.email', 'buddy@example.invalid')
+        self.git('-C', str(nested), 'config', 'user.name', 'Buddy Test')
+        self.git('-C', str(nested), 'add', '.')
+        self.git('-C', str(nested), 'commit', '-qm', 'nested repository')
+        self.assertNotEqual(workspace.inspect(str(nested))['repositoryId'], manifest['repositoryId'])
+        borrower = self.submit_group(board, 'nested-managed-borrower', cwd=nested)
+
+        with board.store.db.read() as connection:
+            self.assertIsNone(connection.execute(
+                'SELECT 1 FROM macro_task_deletions WHERE target_id=?', (owner['macroTaskId'],),
+            ).fetchone())
+        for operation, args in ((deletion.preview, (board.store, owner['macroTaskId'])),
+                                (deletion.delete, (board.store, owner['macroTaskId'], 1))):
+            with self.assertRaises(BoardError) as caught:
+                operation(*args)
+            self.assertEqual(caught.exception.code, 'MACRO_TASK_STORAGE_IN_USE')
+            self.assertTrue(any(borrower['runId'] in item['holderRunIds']
+                                for item in caught.exception.details['objects']))
+        self.assertTrue(checkout.is_dir())
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute(
+                'SELECT 1 FROM workflow_runs WHERE run_id=?', (owner['runId'],),
+            ).fetchone())
+
+    def test_foreign_git_lock_keeps_macro_task_and_checkout_for_retry(self):
+        board = self.board()
+        run = self.submit_group(board, 'foreign-lock', kind='worktree')
+        claim = self.claim(board, run['runId'])
+        manifest = claim['claim']['turn']['input']['executionWorkspace']
+        checkout = Path(manifest['path'])
+        (checkout / 'tracked.txt').write_text('sealed output\n', encoding='utf-8', newline='\n')
+        seal = workspace.seal(self.directory, manifest, run['runId'], claim['claim']['attempt']['attemptId'])
+        self.finish_turn(board, claim, seal)
+        view = self.view(board, run['runId'])
+        artifact = next(item for item in view['artifacts'] if item['kind'] == 'output')
+        with defer_reclaim.object(board.store.workflow, '_reclaim_checkout',
+                                  return_value={'removed': False, 'reasons': ['fixture-retained']}):
+            self.accept(board, view, artifact, not_required=True)
+        self.git('worktree', 'unlock', str(checkout))
+        self.git('worktree', 'lock', '--reason', 'foreign-owner', str(checkout))
+
+        blocked = deletion.delete(board.store, run['macroTaskId'], 1)
+        self.assertEqual((blocked['state'], blocked['deletedAt'], blocked['failures'][0]['objectKind']),
+                         ('deleting', None, 'workspace'))
+        self.assertEqual(blocked['failures'][0]['reason']['code'], 'macro-task-deletion.lock-mismatch')
+        self.assertTrue(checkout.is_dir())
+        self.assertEqual(workspace._worktree_record(self.repo, checkout)['locked'], 'foreign-owner')
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute('SELECT 1 FROM macro_tasks WHERE macro_task_id=?',
+                                                    (run['macroTaskId'],)).fetchone())
+            self.assertIsNotNone(connection.execute('SELECT 1 FROM workflow_runs WHERE run_id=?',
+                                                    (run['runId'],)).fetchone())
+            mark = connection.execute('SELECT deletion_id FROM macro_task_deletions WHERE target_id=?',
+                                      (run['macroTaskId'],)).fetchone()
+            self.assertEqual(mark['deletion_id'], blocked['deletionId'])
+        self.assertEqual(deletion.preview(board.store, run['macroTaskId'])['deletionState'], 'deleting')
+
+        self.git('worktree', 'unlock', str(checkout))
+        self.git('worktree', 'lock', '--reason', 'hey-my-buddy:' + manifest['workspaceId'], str(checkout))
+        completed = deletion.delete(board.store, run['macroTaskId'], 1)
+        self.assertEqual((completed['state'], completed['duplicate'], completed['deletionId']),
+                         ('deleted', True, blocked['deletionId']))
+        self.assertFalse(checkout.exists())
+        with board.store.db.read() as connection:
+            self.assertIsNone(connection.execute('SELECT 1 FROM workflow_runs WHERE run_id=?',
+                                                 (run['runId'],)).fetchone())
+            self.assertIsNone(connection.execute('SELECT 1 FROM macro_task_deletions WHERE target_id=?',
+                                                 (run['macroTaskId'],)).fetchone())

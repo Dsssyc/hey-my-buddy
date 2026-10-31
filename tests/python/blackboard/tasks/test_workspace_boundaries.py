@@ -246,26 +246,80 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertFalse(removed["alreadyRemoved"])
         self.assertFalse(checkout.exists())
 
-    def test_failed_partial_remove_relocks_without_a_gitfile_and_can_resume(self):
+    def test_failed_partial_tree_remove_keeps_its_lock_without_a_gitfile_and_can_resume(self):
         manifest = self.prepare()
         checkout = Path(manifest["path"])
-        real_git = workspace._git
+        real_remove = workspace.private_dirs.remove_tree
 
-        def failed_remove(root, *args, **kwargs):
-            if args[:2] == ("worktree", "remove"):
+        def failed_remove(path, **kwargs):
+            if Path(path) == checkout:
                 (checkout / ".git").unlink()
                 (checkout / "src/file.txt").unlink()
-                raise BoardError("WORKSPACE_GIT_ERROR", "injected partial deletion")
-            return real_git(root, *args, **kwargs)
+                raise PermissionError("injected partial deletion")
+            return real_remove(path, **kwargs)
 
-        with patch.object(workspace, "_git", side_effect=failed_remove):
-            error = self.assert_error("WORKSPACE_GIT_ERROR", workspace.cleanup_remove, self.state, manifest)
+        with patch.object(workspace.private_dirs, "remove_tree", side_effect=failed_remove):
+            error = self.assert_error("WORKSPACE_IO_ERROR", workspace.cleanup_remove, self.state, manifest)
         self.assertNotIn("relockError", error.details)
         self.assertEqual(workspace._worktree_record(self.repo, checkout)["locked"],
                          "hey-my-buddy:" + manifest["workspaceId"])
         proof = workspace.cleanup_inspect(self.state, manifest, resume=True)
         self.assertTrue(proof["eligible"], proof)
         self.assertFalse(workspace.cleanup_remove(self.state, manifest, resume=True)["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+
+    def test_resumed_cleanup_accepts_deleted_sealed_excluded_file(self):
+        allocation = self.prepare("allocation")
+        checkout = Path(allocation["path"])
+        scratch = checkout / "scratch.txt"
+        scratch.write_text("excluded scratch\n", encoding="utf-8", newline="\n")
+        survivor = checkout / "survivor.txt"
+        survivor.write_text("excluded survivor\n", encoding="utf-8", newline="\n")
+        manifest = self.prepare("later", kind="existing", cwd=str(checkout),
+                                base={"kind": "working-tree", "ref": allocation["inputCommit"]})
+        self.assertIn("scratch.txt", manifest["snapshot"]["excludedEntries"])
+        sealed = self.seal(manifest)
+        self.assertEqual(sealed["snapshot"]["excludedChangedPaths"], [])
+        retained = [allocation, manifest]
+        ordinary = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained)
+        self.assertTrue(ordinary["eligible"], ordinary)
+        sealed_bytes = workspace._json(sealed)
+
+        scratch.unlink()
+        first_proof = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained)
+        self.assertEqual(first_proof["reasons"], ["unsealed-changes"])
+        self.assertEqual(first_proof["unsealedPaths"], ["scratch.txt"])
+        (checkout / "src/file.txt").unlink()
+        (checkout / ".git").unlink()
+        self.git("worktree", "unlock", str(checkout))
+        resumed = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertTrue(resumed["eligible"], resumed)
+        self.assertEqual(resumed["unsealedPaths"], [])
+        self.assertEqual(workspace._json(sealed), sealed_bytes)
+        self.assertFalse(scratch.exists())
+        survivor.write_text("changed survivor\n", encoding="utf-8", newline="\n")
+        changed = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertEqual(changed["reasons"], ["unsealed-changes"])
+        self.assertEqual(changed["unsealedPaths"], ["survivor.txt"])
+        exclude = self.repo / ".git/info/exclude"
+        before_exclude = exclude.read_bytes()
+        exclude.write_bytes(before_exclude + b"\nsurvivor.txt\n")
+        ignored = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertEqual(ignored["reasons"], ["unsealed-changes"])
+        self.assertEqual(ignored["unsealedPaths"], ["survivor.txt"])
+        self.assertEqual(survivor.read_bytes(), b"changed survivor\n")
+        exclude.write_bytes(before_exclude)
+        survivor.write_text("excluded survivor\n", encoding="utf-8", newline="\n")
+        added = checkout / "new.txt"
+        added.write_text("unsealed new file\n", encoding="utf-8", newline="\n")
+        new_file = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertEqual(new_file["reasons"], ["unsealed-changes"])
+        self.assertEqual(new_file["unsealedPaths"], ["new.txt"])
+        added.unlink()
+        resumed = workspace.cleanup_inspect(self.state, manifest, sealed=sealed, retained=retained, resume=True)
+        self.assertTrue(resumed["eligible"], resumed)
+        self.assertTrue(workspace.cleanup_remove(self.state, manifest, retained=retained,
+                                                 resume=True, proof=resumed)["removed"])
         self.assertFalse(checkout.exists())
 
     def test_cleanup_lists_all_fixed_refs_across_retained_workspaces(self):

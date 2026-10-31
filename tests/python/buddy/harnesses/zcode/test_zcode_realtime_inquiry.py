@@ -8,7 +8,7 @@ from unittest import mock
 import uuid
 import zlib
 
-from temporary import TemporaryDirectory
+import tempfile
 from hey_my_buddy.buddy.harnesses.inquiry_bridge import InquiryBridge, _owner_response
 from hey_my_buddy.buddy.harnesses.zcode.inquiry import NativeInquiry, MAX_SNAPSHOT_BYTES
 from hey_my_buddy.buddy.harnesses.zcode.protocol import NativeError, NativeRpcError
@@ -76,7 +76,7 @@ class Peer:
 
 class RealtimeInquiryTests(unittest.TestCase):
     def setUp(self):
-        self.temp = TemporaryDirectory()
+        self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         identity = {"taskId": str(uuid.uuid4()), "attemptId": str(uuid.uuid4()), "generation": 1, "turnId": str(uuid.uuid4())}
         self.bridge = InquiryBridge(identity=identity, journal_path=str(Path(self.temp.name)/"inquiries.jsonl"),

@@ -4,8 +4,11 @@ from unittest.mock import patch as defer_reclaim
 
 from contextlib import ExitStack
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
+import unittest
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
@@ -304,13 +307,14 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM commands WHERE kind IN"
                                                " ('workflow.cleanup_plan','workflow.cleanup_apply')").fetchone()[0], 0)
 
-    def test_cleanup_apply_accepts_an_already_gone_allocation(self):
+    def missing_allocation_plan(self, request_id):
         board = self.board()
-        submitted = self.micro_task_submit(board, request_id="missing-allocation", scope=(".",), kind="worktree")
+        submitted = self.micro_task_submit(board, request_id=request_id, scope=(".",), kind="worktree")
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id)
         manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
         checkout = Path(manifest["path"])
+        git_dir = Path(workspace_module.inspect(str(checkout))["gitDir"])
         (checkout / "tracked.txt").write_text("accepted output\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)
@@ -325,6 +329,13 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
             "runId": run_id,
         })
         shutil.rmtree(self.directory / "workspaces" / manifest["workspaceId"])
+        return board, run_id, manifest, checkout, git_dir, planned, accepted
+
+    def test_cleanup_apply_accepts_an_already_gone_allocation(self):
+        board, run_id, manifest, checkout, git_dir, planned, accepted = self.missing_allocation_plan(
+            "missing-allocation")
+        repository = Path(manifest["snapshot"]["repositoryPath"])
+        self.assertIsNotNone(workspace_module._worktree_record(repository, checkout))
         with board.store.db.read() as connection:
             retained = board.store.workflow._allocation_provenance(
                 connection, board.store.workflow._run_row(connection, run_id)
@@ -337,6 +348,9 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
         })
         self.assertTrue(applied["removed"])
         self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        self.assertFalse(checkout.exists())
+        self.assertFalse(git_dir.exists())
+        self.assertIsNone(workspace_module._worktree_record(repository, checkout))
         # Reusing an applied journal cannot bypass a later deletion marker.
         with board.store.db.write() as connection:
             connection.execute(
@@ -361,3 +375,93 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
             with self.assertRaises(BoardError) as caught:
                 operation()
             self.assertEqual(caught.exception.code,'TASK_DELETING')
+
+    def test_missing_allocation_refuses_a_checkout_recreated_during_registration_proof(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            "missing-allocation-race")
+        original = workspace_module._cleanup_registration
+
+        def recreate_checkout(repository, target, original_manifest):
+            registration = original(repository, target, original_manifest)
+            checkout.mkdir(parents=True)
+            (checkout / "foreign.txt").write_text("new occupant\n", encoding="utf-8")
+            return registration
+
+        with patch.object(workspace_module, "_cleanup_registration", side_effect=recreate_checkout):
+            with self.assertRaises(BoardError) as caught:
+                board.store.workflow.cleanup_apply({
+                    "runId": run_id, "planId": planned["plan"]["planId"],
+                    "confirmPath": planned["plan"]["path"],
+                })
+        self.assertEqual(caught.exception.code, "WORKSPACE_UNSAFE")
+        self.assertEqual((checkout / "foreign.txt").read_text(encoding="utf-8"), "new occupant\n")
+        self.assertTrue(git_dir.exists())
+        self.assertIsNotNone(workspace_module._worktree_record(
+            Path(manifest["snapshot"]["repositoryPath"]), checkout))
+
+    def test_missing_allocation_retries_after_a_partial_gitdir_removal(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            "missing-allocation-partial")
+        original = workspace_module.private_dirs.remove_tree
+
+        def partial_remove(path, **kwargs):
+            if Path(path) == git_dir:
+                (git_dir / "locked").unlink()
+                raise PermissionError("partial Git metadata removal")
+            return original(path, **kwargs)
+
+        with patch.object(workspace_module.private_dirs, "remove_tree", side_effect=partial_remove):
+            with self.assertRaises(BoardError) as caught:
+                board.store.workflow.cleanup_apply({
+                    "runId": run_id, "planId": planned["plan"]["planId"],
+                    "confirmPath": planned["plan"]["path"],
+                })
+        self.assertEqual(caught.exception.code, "WORKSPACE_IO_ERROR")
+        self.assertEqual(workspace_module._worktree_record(
+            Path(manifest["snapshot"]["repositoryPath"]), checkout)["locked"],
+            "hey-my-buddy:" + manifest["workspaceId"])
+        self.assertEqual(board.store.workflow.cleanup_plan({"runId": run_id})["plan"]["state"], "applying")
+        applied = board.store.workflow.cleanup_apply({
+            "runId": run_id, "planId": planned["plan"]["planId"],
+            "confirmPath": planned["plan"]["path"],
+        })
+        self.assertTrue(applied["plan"]["result"]["alreadyRemoved"])
+        self.assertFalse(git_dir.exists())
+
+    def test_missing_allocation_refuses_a_foreign_git_lock(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            "missing-allocation-lock")
+        (git_dir / "locked").write_text("foreign-owner\n", encoding="utf-8")
+        with self.assertRaises(BoardError) as caught:
+            board.store.workflow.cleanup_apply({
+                "runId": run_id, "planId": planned["plan"]["planId"],
+                "confirmPath": planned["plan"]["path"],
+            })
+        self.assertEqual(caught.exception.code, "WORKSPACE_UNSAFE")
+        self.assertTrue(git_dir.exists())
+        self.assertFalse(checkout.exists())
+        self.assertEqual(workspace_module._worktree_record(
+            Path(manifest["snapshot"]["repositoryPath"]), checkout)["locked"], "foreign-owner")
+
+    @unittest.skipUnless(os.name == 'nt', 'native Windows dangling junction')
+    def test_missing_allocation_refuses_a_dangling_junction_at_the_allocation_path(self):
+        board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(
+            'missing-allocation-junction')
+        target = self.directory / 'junction-target'
+        target.mkdir()
+        linked = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(checkout.parent), str(target)],
+                                capture_output=True, timeout=10)
+        self.assertEqual(linked.returncode, 0, (linked.stdout, linked.stderr))
+        target.rmdir()
+        self.assertTrue(checkout.parent.is_junction())
+        try:
+            with self.assertRaises(BoardError) as caught:
+                board.store.workflow.cleanup_apply({
+                    'runId': run_id, 'planId': planned['plan']['planId'],
+                    'confirmPath': planned['plan']['path'],
+                })
+            self.assertEqual(caught.exception.code, 'WORKSPACE_UNSAFE')
+            self.assertTrue(checkout.parent.is_junction())
+            self.assertTrue(git_dir.exists())
+        finally:
+            checkout.parent.rmdir()

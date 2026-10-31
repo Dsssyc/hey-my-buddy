@@ -97,7 +97,7 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         # Even after the internal admission window has lapsed, an applying reclaim
         # resumes to its recorded completion instead of deleting anything twice.
         clock.value = "2099-01-01T00:00:00.000Z"
-        with mock.patch.object(workspace_module, "cleanup_remove", side_effect=AssertionError("second deletion")):
+        with mock.patch.object(workspace_module, "_remove_worktree", side_effect=AssertionError("second deletion")):
             recovered = self.reclaim(board, self.view(board, submitted["runId"]))
         self.assertTrue(recovered["removed"])
         self.assertTrue(recovered["alreadyRemoved"])

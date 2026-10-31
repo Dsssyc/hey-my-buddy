@@ -8,7 +8,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 import uuid
 from unittest.mock import Mock, patch
@@ -177,7 +177,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
 
 class RouterProbeTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="router-probe-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="router-probe-test-")
         self.addCleanup(self.cleanup_private_root)
         self.root = Path(self.temporary.name) / "probe"
         # 连 mock --execute 都不能产生子进程/网络；因此无法触达 Buddy 服务或原生模型。

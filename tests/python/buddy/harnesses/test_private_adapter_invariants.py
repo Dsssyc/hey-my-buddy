@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from temporary import TemporaryDirectory
+import tempfile
 from types import SimpleNamespace
 import unittest
 import uuid
@@ -49,7 +49,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
     """Evidence keeps frozen bindings and publication never follows a leaf link."""
 
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="no-tool-evidence-")
+        temporary = tempfile.TemporaryDirectory(prefix="no-tool-evidence-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.cwd = self.root / "empty"

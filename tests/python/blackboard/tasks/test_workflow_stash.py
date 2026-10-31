@@ -52,7 +52,7 @@ class WorkflowStashTestCase(BoardTestCase):
 
     def repo_key(self) -> str:
         """The mock manifest's shared repository path for this case's source cwd."""
-        return "mock+repo:" + str(self.workdir())
+        return str(self.workdir())
 
     def repository_path(self, board) -> str:
         with board.store.db.read() as connection:

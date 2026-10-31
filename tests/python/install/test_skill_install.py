@@ -1,7 +1,7 @@
 """The shared package carries all platform launcher entrypoints."""
 from contextlib import chdir
 from pathlib import Path
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 import json
 import os
@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 class ClaudeLinkTests(unittest.TestCase):
     def setUp(self):
-        temporary = self.enterContext(TemporaryDirectory())
+        temporary = self.enterContext(tempfile.TemporaryDirectory())
         self.root = Path(temporary).resolve()
         self.target = self.root / 'agents/hey-my-buddy'
         self.target.mkdir(parents=True)
@@ -100,7 +100,7 @@ class ClaudeLinkTests(unittest.TestCase):
 
 class SkillPackageTests(unittest.TestCase):
     def test_build_normalizes_a_relative_destination_before_staging(self):
-        with TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             cwd = root / 'working'
             cwd.mkdir()
@@ -114,7 +114,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertNotIn('..', result.parts)
 
     def test_packaged_skill_carries_windows_and_posix_entrypoints(self):
-        with TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             skill = Path(temporary) / 'hey-my-buddy'
             skill_package.assemble(ROOT, skill)
             for name in ('hey-my-buddy', 'hey-my-buddy.cmd', 'hey-my-buddy.ps1'):
@@ -122,7 +122,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertIn('active-runtime.json', (skill / 'package/src/hey_my_buddy/install/launcher.py').read_text(encoding="utf-8"))
 
     def test_same_marker_does_not_hide_a_damaged_launcher(self):
-        with TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             source, target = Path(temporary) / 'source/hey-my-buddy', Path(temporary) / 'installed/hey-my-buddy'
             skill_package.assemble(ROOT, source)
             target.parent.mkdir()
@@ -138,7 +138,7 @@ class SkillPackageTests(unittest.TestCase):
 
     def test_deep_skill_install_and_upgrade_restore_keep_ordinary_paths(self):
         from hey_my_buddy.install import upgrade
-        with TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             home = root.joinpath(*(f'depth-{index}-' + 'x' * 38 for index in range(5)))
             target = home / skill_install.SKILL
@@ -202,7 +202,7 @@ class SkillPackageTests(unittest.TestCase):
                 'USERPROFILE': str(root / 'home'), 'LOCALAPPDATA': str(root / 'home/AppData/Local')}
 
     def test_same_marker_with_changed_content_reports_an_update(self):
-        with TemporaryDirectory(prefix='hey-my-buddy-skill-content-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='hey-my-buddy-skill-content-') as temporary:
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
             state = self._upgrade_state(root)
@@ -221,7 +221,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertEqual(result['service']['action'], 'upgrade')
 
     def test_same_marker_with_identical_content_stays_already_current(self):
-        with TemporaryDirectory(prefix='hey-my-buddy-skill-current-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='hey-my-buddy-skill-current-') as temporary:
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
             state = self._upgrade_state(root)
@@ -240,7 +240,7 @@ class SkillPackageTests(unittest.TestCase):
             self.assertTrue(skill_install._matches(source, target, skill_install._marker(source)))
 
     def test_intact_install_does_not_restart_or_materialize(self):
-        with TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state, home = root / 'state', root / 'skills'
             ensure_private_dir(state)
@@ -265,7 +265,7 @@ class SkillPackageTests(unittest.TestCase):
             upgrade.assert_not_called()
 
     def test_interrupted_install_recovers_before_attempting_the_next_generation(self):
-        with TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source, target = self._upgrade_pair(root)
             (target / 'SKILL.md').write_text('changed generation', encoding='utf-8')
@@ -300,7 +300,7 @@ class SkillPackageTests(unittest.TestCase):
         recovered = {'upgraded': True, 'recoveredJournal': True, 'skillCleanupError': 'old skill cleanup denied',
                      'runtimePruning': {'complete': False, 'error': 'STORAGE_BUSY'}}
         for intact in (True, False):
-            with self.subTest(intact=intact), TemporaryDirectory() as temporary:
+            with self.subTest(intact=intact), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 source, target = self._upgrade_pair(root)
                 if not intact:
@@ -335,7 +335,7 @@ class SkillPackageTests(unittest.TestCase):
                                  [mock.call(state), mock.call(state, skill_source=source, skill_target=target)])
 
     def test_install_rejects_a_linked_lock_before_changing_the_skill(self):
-        with TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             home = root / 'agents'
             home.mkdir()
@@ -351,7 +351,7 @@ class SkillPackageTests(unittest.TestCase):
             source.assert_not_called()
 
     def test_paths_distinguishes_missing_from_unreadable_runtime_metadata(self):
-        with TemporaryDirectory() as temporary:
+        with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state = root / 'state'
             state.mkdir()

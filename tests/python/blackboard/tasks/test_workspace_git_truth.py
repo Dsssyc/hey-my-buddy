@@ -5,7 +5,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
-from temporary import TemporaryDirectory
+import tempfile
 
 from hey_my_buddy.blackboard.tasks import workspace
 from hey_my_buddy.errors import BoardError
@@ -14,7 +14,7 @@ from hey_my_buddy.paths import native_path
 
 class WorkspaceGitTruthTests(unittest.TestCase):
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-workspace-git-truth-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-workspace-git-truth-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.repo = self.root / "repo"

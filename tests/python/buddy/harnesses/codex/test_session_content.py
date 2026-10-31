@@ -2,7 +2,7 @@
 import json
 import os
 from pathlib import Path
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -16,7 +16,7 @@ from private_acl import assert_private_path
 
 class SessionProjectionTests(unittest.TestCase):
     def setUp(self):
-        temp = TemporaryDirectory()
+        temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.state = Path(temp.name)
         self.record = SessionRecord(self.state / "attempt.jsonl", "attempt")
@@ -420,7 +420,7 @@ class SessionProjectionTests(unittest.TestCase):
 
 class SessionRecordRecoveryTests(unittest.TestCase):
     def setUp(self):
-        temp = TemporaryDirectory()
+        temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
 

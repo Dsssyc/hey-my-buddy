@@ -89,6 +89,44 @@ from hey_my_buddy.paths import native_path
 class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
     closed = engine_fixtures.MacroTaskDeletionTests.closed
 
+    def test_cli_skip_and_later_io_failure_are_both_reported_and_retryable(self):
+        board = self.board()
+        run = self.closed(board, 'mixed-cli-failure', macro_task='Mixed CLI deletion failure')
+        target = run['macroTaskId']
+        user = self.directory / 'unrelated-user-file'
+        user.write_bytes(b'keep the link target')
+        control = control_file_path(board.directory, run['runId'], 1)
+        control.parent.mkdir(exist_ok=True)
+        control.symlink_to(user)
+        submission = submission_file_path(board.directory, 'mixed-cli-failure')
+        submission.parent.mkdir(exist_ok=True)
+        submission.write_bytes(b'private submission')
+        original = Path.unlink
+
+        def unlink(path, *args, **kwargs):
+            if path == submission:
+                raise PermissionError(13, 'submission held open', str(path))
+            return original(path, *args, **kwargs)
+
+        with patch.object(deletion, '_delete_workspaces', return_value=[]), \
+                patch.object(Path, 'unlink', autospec=True, side_effect=unlink):
+            blocked = deletion.delete(board.store, target, 1)
+        self.assertEqual(blocked['state'], 'deleting')
+        self.assertEqual([item['path'] for item in blocked['failures']], [str(control), str(submission)])
+        self.assertEqual(blocked['failures'][0]['reason']['code'], 'macro-task-deletion.owner-unproven')
+        self.assertIsNone(blocked['failures'][0]['error'])
+        self.assertEqual(blocked['failures'][1]['error']['errno'], 13)
+        self.assertIn('submission held open', blocked['failures'][1]['error']['message'])
+        self.assertEqual(user.read_bytes(), b'keep the link target')
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute('SELECT 1 FROM workflow_runs WHERE run_id=?',
+                                                   (run['runId'],)).fetchone())
+        control.unlink()
+        with patch.object(deletion, '_delete_workspaces', return_value=[]):
+            completed = deletion.delete(board.store, target, 1)
+        self.assertEqual((completed['state'], completed['deletionId']), ('deleted', blocked['deletionId']))
+        self.assertEqual(user.read_bytes(), b'keep the link target')
+
     def test_session_group_removal_is_idempotent_and_finished_deletion_is_not_found(self):
         for macro in (True, False):
             with self.subTest(macro=macro):
@@ -119,9 +157,19 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         group.symlink_to(outside, target_is_directory=True)
         with patch.object(deletion, '_delete_workspaces', return_value=[]):
             result = deletion.delete(board.store, run['macroTaskId'], 1)
-        self.assertEqual(result['state'], 'deleted')
-        self.assertEqual(result['skipped'][0]['objectKind'], 'session-records')
+        self.assertEqual((result['state'], result['failures'][0]['objectKind']), ('deleting', 'session-records'))
+        self.assertEqual(result['failures'][0]['reason']['code'], 'macro-task-deletion.owner-unproven')
+        with board.store.db.read() as db:
+            self.assertIsNotNone(db.execute('SELECT 1 FROM workflow_runs WHERE run_id=?',
+                                            (run['runId'],)).fetchone())
+            self.assertIsNotNone(db.execute('SELECT 1 FROM macro_task_deletions WHERE target_id=?',
+                                            (run['macroTaskId'],)).fetchone())
+        self.assertTrue(group.is_symlink())
         self.assertEqual((outside / 'valuable').read_text(encoding="utf-8"), 'untouched')
+        group.unlink()
+        with patch.object(deletion, '_delete_workspaces', return_value=[]):
+            completed = deletion.delete(board.store, run['macroTaskId'], 1)
+        self.assertEqual((completed['state'], completed['deletionId']), ('deleted', result['deletionId']))
 
     def test_private_root_partial_removal_retries_from_real_files(self):
         board = self.board()
@@ -143,7 +191,7 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         with patch.object(deletion,'_delete_workspaces',return_value=[]), \
                 patch.object(private_dirs,'remove_tree',side_effect=interrupted):
             result = deletion.delete(board.store,run['macroTaskId'],1)
-        self.assertEqual((result['state'],result['objectKind']),('deleting','private-root'))
+        self.assertEqual((result['state'],result['failures'][0]['objectKind']),('deleting','private-root'))
         self.assertFalse(first.exists())
         self.assertTrue(remaining.exists())
         with patch.object(deletion,'_delete_workspaces',return_value=[]):
@@ -176,7 +224,7 @@ class DeletionFileRetryTests(workflow_fixtures.WorkflowTestCase):
         with patch.object(deletion,'_delete_workspaces',return_value=[]), \
                 patch.object(Path,'unlink',new=interrupted):
             result = deletion.delete(board.store,run['macroTaskId'],1)
-        self.assertEqual((result['state'],result['objectKind']),('deleting','cli-file'))
+        self.assertEqual((result['state'],result['failures'][0]['objectKind']),('deleting','cli-file'))
         self.assertEqual(sum(path.exists() for path in (first,remaining)),1)
         self.assertEqual(len(removed),1)
         self.assertTrue(submission.exists())

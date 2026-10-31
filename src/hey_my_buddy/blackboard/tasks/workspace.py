@@ -895,8 +895,12 @@ def revoke_submission(plan):
         manifest, directory = plan["manifest"], plan["directory"]
         repository = Path(manifest["snapshot"]["repositoryPath"])
         if plan["allocation"] is not None:
-            _remove_worktree(repository, Path(manifest["checkoutRoot"]), plan["allocation"], manifest,
+            _remove_worktree(repository, Path(manifest["checkoutRoot"]), manifest,
                              {"removed": True, "alreadyRemoved": True})
+        elif manifest["kind"] == "worktree":
+            # A previous attempt can have removed the checkout while its Git
+            # registration still needs the same proven deletion.
+            cleanup_remove(directory.parent.parent, manifest)
         (directory / "manifest.json").unlink()
         prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
         for suffix, commit in (("staged", manifest["snapshot"]["stagedCommit"]), ("input", manifest["inputCommit"])):
@@ -1992,7 +1996,12 @@ def allocation_lock_directory(state_dir, workspace_id: str | None) -> Path | Non
     """
     if not _workspace_identifier(workspace_id):
         return None
-    directory = Path(state_dir).resolve() / "workspaces" / workspace_id
+    parent = Path(state_dir).resolve() / "workspaces"
+    if private_dirs.linked(parent):
+        return None
+    directory = parent / workspace_id
+    if private_dirs.linked(directory):
+        return None
     lock_path = directory / ".lock"
     return directory if directory.is_dir() and lock_path.is_file() else None
 
@@ -2034,7 +2043,7 @@ def _path_present(path: Path) -> bool:
     resolves: a broken symlink left at the managed path is still an occupant that a
     later proof must refuse, not an achieved removal.
     """
-    return path.exists() or path.is_symlink()
+    return path.exists() or path.is_symlink() or path.is_junction()
 
 
 def _inside(path, root):
@@ -2077,10 +2086,12 @@ def resolve_allocation(state_dir, manifest: dict, retained=None) -> dict | None:
         return _resolve_allocation(state_dir, manifest, retained)
 
 
-def _resolve_allocation(state_dir, manifest, retained=None):
-    """Resolve ownership using the input manifest validated by the caller."""
+def _resolve_allocation(state_dir, manifest, retained=None, *, missing=False):
+    """Resolve a live allocation, or a frozen one whose directory is absent."""
     with _errors():
         state_dir = Path(state_dir).resolve()
+        if private_dirs.linked(state_dir / "workspaces"):
+            return None
         checkout_root = manifest["checkoutRoot"]
         for candidate in _allocation_candidates(manifest, retained):
             if candidate.get("kind") != "worktree":
@@ -2094,11 +2105,16 @@ def _resolve_allocation(state_dir, manifest, retained=None):
                     or not _inside(candidate.get("path"), checkout_root)):
                 continue
             directory = state_dir / "workspaces" / workspace_id
-            if not directory.is_dir():
-                continue
-            if _record(directory / "manifest.json") != candidate:
-                continue
             if str(directory / "checkout") != checkout_root:
+                continue
+            if missing:
+                # A started plan retains the original manifest after the entire
+                # allocation directory is gone. It may recover Git metadata only;
+                # no path at this location is authorized by the frozen record.
+                if _path_present(directory):
+                    continue
+                _validate_manifest(candidate)
+            elif not directory.is_dir() or _record(directory / "manifest.json") != candidate:
                 continue
             return {"workspaceId": workspace_id, "path": checkout_root, "kind": "worktree",
                     "checkoutId": candidate["checkoutId"], "repositoryId": candidate["repositoryId"],
@@ -2129,22 +2145,26 @@ def _cleanup_registration(repository, checkout_root, manifest):
         raise BoardError("WORKSPACE_UNSAFE", "The started cleanup's allocation cannot be proved",
                          reasons=[reason], path=str(checkout_root))
 
-    if checkout_root.is_symlink() or checkout_root.is_junction() or not checkout_root.is_dir():
+    present = _path_present(checkout_root)
+    if (checkout_root.is_symlink() or checkout_root.is_junction()
+            or present and not checkout_root.is_dir()):
         refuse("unsafe-path")
     if _identity(repository) != manifest["repositoryId"]:
         refuse("identity-changed")
     record = _worktree_record(repository, checkout_root)
+    git_dir = None
+    parent = repository / "worktrees"
+    if parent.is_dir():
+        for candidate in parent.iterdir():
+            if private_dirs.linked(candidate) or not candidate.is_dir():
+                continue
+            if _identity(candidate) == manifest["checkoutId"]:
+                git_dir = candidate
+                break
     if record is None:
-        if not any(checkout_root.iterdir()):
+        if git_dir is None and (not present or not any(checkout_root.iterdir())):
             return None, None
         refuse("unregistered-checkout")
-    git_dir = None
-    for candidate in (repository / "worktrees").iterdir():
-        if candidate.is_symlink() or not candidate.is_dir():
-            continue
-        if _identity(candidate) == manifest["checkoutId"]:
-            git_dir = candidate
-            break
     if git_dir is None:
         refuse("identity-changed")
     backlink = _read(git_dir / "gitdir")
@@ -2183,6 +2203,65 @@ def _cleanup_resume_registration(repository, checkout_root, allocation, manifest
         _git(repository, "worktree", "lock", "--reason", reason, str(checkout_root))
         record["locked"] = reason
     return record, git_dir
+
+
+def _require_cleanup_owner(record, checkout_root, allocation):
+    """Require the original detached registration and its allocation lock."""
+    if record is None:
+        raise BoardError("WORKSPACE_UNSAFE", "The cleanup target has no worktree registration",
+                         path=str(checkout_root))
+    if record.get("locked") != "hey-my-buddy:" + allocation["workspaceId"]:
+        raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is locked by a different allocation",
+                         path=str(checkout_root))
+    if "detached" not in record:
+        report = _attached_branch_report(checkout_root, record)
+        raise BoardError(
+            "WORKSPACE_UNSAFE",
+            "The cleanup target is registered and locked but its HEAD is attached to branch "
+            + str(report.get("branch"))
+            + "; detach it with the recorded command and retry the cleanup",
+            path=str(checkout_root), attachedBranch=report,
+        )
+
+
+def _remove_missing_registration(repository, checkout_root, manifest, allocation, removal):
+    """Remove only the original Git directory after the physical allocation vanished."""
+    directory = checkout_root.parent
+
+    def require_absent():
+        if not _path_present(directory) and not _path_present(checkout_root):
+            return
+        raise BoardError("WORKSPACE_UNSAFE", "The missing allocation path has been occupied again",
+                         path=str(checkout_root))
+
+    require_absent()
+    record, git_dir = _cleanup_registration(repository, checkout_root, manifest)
+    if record is None:
+        require_absent()
+        return removal
+    _require_cleanup_owner(record, checkout_root, allocation)
+    # Keep the original metadata bytes available if a filesystem error leaves
+    # this same directory only partly removed. A retry can then prove the same
+    # identity, backlink, lock and detached HEAD again.
+    original = {name: _read(git_dir / name) for name in ("gitdir", "locked", "HEAD", "commondir")}
+    require_absent()
+    if _identity(git_dir) != manifest["checkoutId"]:
+        raise BoardError("WORKSPACE_UNSAFE", "The missing allocation identity changed",
+                         path=str(checkout_root))
+    try:
+        private_dirs.remove_tree(git_dir)
+    except (BoardError, OSError):
+        if _path_present(git_dir) and not private_dirs.linked(git_dir) and _identity(git_dir) == manifest["checkoutId"]:
+            for name, content in original.items():
+                if content is not None and not _path_present(git_dir / name):
+                    _write_once(git_dir / name, content)
+        raise
+    record, git_dir = _cleanup_registration(repository, checkout_root, manifest)
+    require_absent()
+    if record is not None or git_dir is not None:
+        raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout or its Git registration still exists after removal",
+                         path=str(checkout_root))
+    return removal
 
 
 def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed, *, state_dir, allowed):
@@ -2285,7 +2364,8 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
                 result["reasons"].append("identity-changed")
         try:
             _cleanup_proof(Path(actual["repositoryPath"]), checkout_root, allocation, manifest, retained, sealed,
-                           result, state_dir=state_dir, allowed=tuple(allowed or ()), observation=restored)
+                           result, state_dir=state_dir, allowed=tuple(allowed or ()), observation=restored,
+                           resume=resume)
         except BoardError:
             # The registered owner of this exact path may complete the same removal
             # while its eligibility is still being proven. The checkout then holds no
@@ -2300,7 +2380,7 @@ def _cleanup_inspect(state_dir, manifest, sealed=None, retained=None, allowed=No
         return result
 
 
-def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, state_dir, allowed=(), observation=None) -> None:
+def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, sealed, result, *, state_dir, allowed=(), observation=None, resume=False) -> None:
     """Fill one cleanup view with the worktree, seal and unsealed-change proof.
 
     ``allowed`` carries the exact paths earlier Host decisions already promoted on
@@ -2375,13 +2455,25 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         return
     unsealed = []
     try:
-        entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation,
-                                                                           allowed_paths=allowed)
         sealed_entries = _entries(repository, sealed["tree"])
+        # A resumed removal may already have deleted an excluded file that was
+        # present unchanged at the seal. It has no content in the sealed tree to
+        # restore. Only that absent path is removal progress; surviving changes
+        # and newly appearing paths still need the ordinary output proof.
+        removed_excluded = set()
+        if resume and manifest["kind"] == "existing":
+            excluded = manifest["snapshot"]["excludedEntries"]
+            candidates = (excluded.keys() - observation["untracked"].keys()
+                          - set(snapshot.get("excludedChangedPaths") or [])
+                          - sealed_entries.keys())
+            removed_excluded = {path for path in candidates if not _path_present(checkout_root / path)}
+        entries_now, _changed, excluded_changes, _adopted = _output_entries(checkout_root, manifest, observation,
+                                                                           allowed_paths=(*allowed, *removed_excluded))
         unsealed = sorted(path for path in entries_now.keys() | sealed_entries.keys()
                           if entries_now.get(path) != sealed_entries.get(path))
-        if sorted(excluded_changes) != sorted(snapshot.get("excludedChangedPaths") or []):
-            unsealed = sorted(set(unsealed) | set(excluded_changes) | set(snapshot.get("excludedChangedPaths") or []))
+        remaining_excluded = set(excluded_changes) - removed_excluded
+        if remaining_excluded != set(snapshot.get("excludedChangedPaths") or []):
+            unsealed = sorted(set(unsealed) | remaining_excluded | set(snapshot.get("excludedChangedPaths") or []))
     except BoardError as error:
         if error.code == "WORKSPACE_UNSUPPORTED":
             result["reasons"].append("unsealed-changes")
@@ -2422,12 +2514,14 @@ def deletion_inspect(state_dir, manifest: dict) -> dict:
                 "allocation": allocation, "worktree": True}
 
 
-def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, proof=None) -> dict:
+def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, proof=None,
+                   missing_allocation=None) -> dict:
     """Delete exactly the registered worktree of one manifest's physical allocation.
 
     The caller has rechecked acceptance, integration, shutdown, dependency and
-    checkout working-directory evidence before its deletion fence. This function only proves that the exact path still is that
-    allocation's own locked worktree and then removes that one path; no parent
+    checkout working-directory evidence before its deletion fence. A live
+    allocation is removed only after its path and locked worktree are proved;
+    a missing allocation removes only its original Git registration. No parent
     directory, source checkout, outputs directory or Git reference is touched.
     A borrowed existing checkout, a sibling worktree and a registry entry that
     belongs to someone else are never this cleanup's business. No repository-wide
@@ -2437,14 +2531,18 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, pr
     failure: the accepted plan and the allocation record are the authorization, and
     the daemon's own sweep or a retry may complete the same deletion first. Only
     this exact allocation's path counts as gone; a Git failure with anything still
-    occupying the path stays fatal.
+    occupying the path or its original Git registration stays fatal.
     """
     with _errors():
         state_dir = Path(state_dir).resolve()
+        if missing_allocation is not None and proof is not None:
+            raise BoardError("INVALID_WORKSPACE", "A missing allocation cannot use a live checkout proof")
         if proof is None:
             _validate_manifest(manifest)
-            allocation = _resolve_allocation(state_dir, manifest, retained)
-            if allocation is None or not _inside(manifest["path"], allocation["path"]):
+            allocation = _resolve_allocation(state_dir, manifest, retained,
+                                             missing=missing_allocation is not None)
+            if (allocation is None or not _inside(manifest["path"], allocation["path"])
+                    or (missing_allocation is not None and allocation != missing_allocation)):
                 raise BoardError("WORKSPACE_UNSAFE", "Cleanup only removes a registered disposable hey-my-buddy checkout",
                                  path=manifest["checkoutRoot"])
         else:
@@ -2454,23 +2552,29 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, pr
                    "repositoryPath": manifest["snapshot"]["repositoryPath"],
                    "workspaceId": allocation["workspaceId"], "manifestWorkspaceId": manifest["workspaceId"],
                    "checkoutId": manifest["checkoutId"], "alreadyRemoved": True}
-        if not _path_present(checkout_root):
-            return removal
-        if proof is not None:
+        if missing_allocation is not None:
+            return _remove_missing_registration(Path(removal["repositoryPath"]), checkout_root,
+                                                manifest, allocation, removal)
+        present = _path_present(checkout_root)
+        if proof is not None and present:
             if not proof["worktree"]:
                 checkout_root.rmdir()
                 removal["alreadyRemoved"] = False
                 return removal
             return _remove_worktree(Path(manifest["snapshot"]["repositoryPath"]), checkout_root,
-                                    allocation, manifest, removal)
-        if resume:
+                                    manifest, removal)
+        if resume or not present:
             repository = Path(manifest["snapshot"]["repositoryPath"])
-            record, git_dir = _cleanup_resume_registration(repository, checkout_root, allocation, manifest)
+            if resume:
+                record, git_dir = _cleanup_resume_registration(repository, checkout_root, allocation, manifest)
+            else:
+                record, git_dir = _cleanup_registration(repository, checkout_root, manifest)
             if record is None:
                 # rmdir is the deletion boundary: a concurrent addition makes
                 # it fail, so no unregistered content can be removed here.
-                checkout_root.rmdir()
-                removal["alreadyRemoved"] = False
+                if present:
+                    checkout_root.rmdir()
+                    removal["alreadyRemoved"] = False
                 return removal
         else:
             actual = inspect(str(checkout_root))
@@ -2481,49 +2585,39 @@ def cleanup_remove(state_dir, manifest: dict, *, retained=None, resume=False, pr
                     raise BoardError("WORKSPACE_CHANGED", "The cleanup target identity changed", field=field)
             repository = Path(actual["repositoryPath"])
             record = _worktree_record(repository, checkout_root)
-        if record is not None and record.get("locked") == "hey-my-buddy:" + allocation["workspaceId"] and "detached" not in record:
-            # Registration and lock are exactly this allocation's; only the
-            # attached HEAD blocks the removal. Refuse with the branch, the safe
-            # detach command and the retry — never detach, delete or move any
-            # branch or reference on the board's own authority.
-            report = _attached_branch_report(checkout_root, record)
-            raise BoardError(
-                "WORKSPACE_UNSAFE",
-                "The cleanup target is registered and locked but its HEAD is attached to branch "
-                + str(report.get("branch"))
-                + "; detach it with the recorded command and retry the cleanup",
-                path=str(checkout_root), attachedBranch=report,
-            )
-        if record is None:
-            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target has no worktree registration",
-                             path=str(checkout_root))
-        if record.get("locked") != "hey-my-buddy:" + allocation["workspaceId"]:
-            raise BoardError("WORKSPACE_UNSAFE", "The cleanup target is locked by a different allocation",
-                             path=str(checkout_root))
+        _require_cleanup_owner(record, checkout_root, allocation)
         removal["repositoryPath"] = str(repository)
-        return _remove_worktree(repository, checkout_root, allocation, manifest, removal)
+        return _remove_worktree(repository, checkout_root, manifest, removal)
 
 
-def _remove_worktree(repository, checkout_root, allocation, manifest, removal):
-    """Remove the proven physical worktree and retain actual removal evidence."""
-    try:
-        _git(repository, "worktree", "unlock", str(checkout_root), allowed=(0, 1))
-        _git(repository, "worktree", "remove", "--force", str(checkout_root), allowed=(0,))
-    except BoardError as error:
-        # A failed remove must leave the allocation recoverable under its
-        # original lock. Only relock this same physical registration.
-        if _path_present(checkout_root):
-            try:
-                _cleanup_resume_registration(repository, checkout_root, allocation, manifest)
-            except BoardError as relock_error:
-                error.details["relockError"] = relock_error.payload()
-        # A concurrent owner of this same allocation completed the removal in
-        # this window; the Git refusal is about a registration that no longer
-        # names a live checkout, and the target is provably gone.
-        if _path_present(checkout_root):
-            raise
-        return removal
+def _remove_worktree(repository, checkout_root, manifest, removal):
+    """Keep the original locked registration until physical deletion completes.
+
+    Git can remove its registration even when Windows refuses a checkout file.
+    The private-tree boundary leaves that registration intact on a partial
+    deletion, so the existing applying journal can prove and resume it.
+    """
+    present = _path_present(checkout_root)
+    if present:
+        private_dirs.remove_tree(checkout_root)
     if _path_present(checkout_root):
         raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout still exists after removal", path=str(checkout_root))
-    removal["alreadyRemoved"] = False
+    removal["alreadyRemoved"] = not present
+    try:
+        # The second force removes our already-proven locked registration;
+        # there is no unlocked registration between the two deletion phases.
+        _git(repository, "worktree", "remove", "--force", "--force", str(checkout_root))
+    except BoardError as error:
+        try:
+            record, _git_dir = _cleanup_registration(repository, checkout_root, manifest)
+        except BoardError as registration_error:
+            error.details["registrationError"] = registration_error.payload()
+            raise error from registration_error
+        if _path_present(checkout_root) or record is not None:
+            raise
+        return removal
+    record, _git_dir = _cleanup_registration(repository, checkout_root, manifest)
+    if _path_present(checkout_root) or record is not None:
+        raise BoardError("WORKSPACE_IO_ERROR", "The managed checkout or its Git registration still exists after removal",
+                         path=str(checkout_root))
     return removal

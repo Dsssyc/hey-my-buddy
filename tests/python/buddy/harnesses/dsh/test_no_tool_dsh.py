@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from temporary import TemporaryDirectory
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -43,7 +43,7 @@ class DshNoToolTests(unittest.TestCase):
     """
 
     def setUp(self):
-        self.temp = TemporaryDirectory(prefix="hey-my-buddy-no-tool-dsh-")
+        self.temp = tempfile.TemporaryDirectory(prefix="hey-my-buddy-no-tool-dsh-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "state").mkdir(mode=0o700)

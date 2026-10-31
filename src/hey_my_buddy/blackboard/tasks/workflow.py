@@ -42,7 +42,7 @@ from . import fixes as task_fixes
 from . import host_conclusions
 from . import micro_task
 from .request_reasons import request_reason
-from .macro_task_deletion_guard import reject_deleting_run, reject_macro_task
+from .macro_task_deletion_guard import reject_deleting_checkout, reject_deleting_run, reject_macro_task
 from ..store.db import canonical_json, sha256_text
 from ..store.work import autonomous_tasks
 from ...errors import BoardError
@@ -1092,6 +1092,7 @@ class WorkflowCoordinator:
     def _check_reservations(self, connection, *, manifest, access, holder_task_id=None, transfer_from=None):
         """Check ownership before preparation and again at the atomic claim point."""
         checkout_id = manifest.get("checkoutId")
+        reject_deleting_checkout(connection, manifest, self.board.directory)
         # Reservation admission is the one atomic claim point for a checkout. A cleanup
         # plan in ``applying`` has already passed its inspection but its removal has not
         # finished, so no new writer may take the checkout across that boundary; the
@@ -4705,6 +4706,8 @@ class WorkflowCoordinator:
             if error.code == "NOT_READY":
                 result.update({key: value for key, value in error.details.items()
                                if key in ("attachedBranch", "reason") or key.startswith("unsealedPaths")})
+                if planned is not None and planned["plan"]["state"] == "applying":
+                    result["detail"] = error.message + ": " + ", ".join(result["reasons"])
             elif error.code != 'WORKSPACE_BUSY':
                 result["detail"] = error.message
             return result
@@ -5517,13 +5520,18 @@ class WorkflowCoordinator:
             self.board._notify(head)
             if reasons:
                 raise BoardError("NOT_READY", "This checkout is not eligible for cleanup", reasons=reasons, **details)
-            removed = None
-            if workspace_module()._path_present(path):
-                removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained,
-                                                             resume=resume, proof=inspection)
+            # An absent allocation has no live manifest or .lock. Its frozen
+            # plan may authorize removal of the original Git registration only.
+            allocation_directory = self.board.directory / "workspaces" / plan["workspace_id"]
+            planned_allocation = (json.loads(plan["evidence_json"])["workspace"]["allocation"]
+                                  if inspection is None and not workspace_module()._path_present(allocation_directory)
+                                  else None)
+            removed = workspace_module().cleanup_remove(self.board.directory, manifest, retained=retained,
+                                                       resume=resume, proof=inspection,
+                                                       missing_allocation=planned_allocation)
             with self.db.write() as connection:
                 run_row = self._run_row(connection, run_id)
-                already_removed = removed is None or bool(removed["alreadyRemoved"])
+                already_removed = bool(removed["alreadyRemoved"])
                 connection.execute(
                     "UPDATE workspace_cleanup_plans SET state='applied',applied_at=?,result_json=?,revision=revision+1"
                     " WHERE plan_id=? AND state='applying'",

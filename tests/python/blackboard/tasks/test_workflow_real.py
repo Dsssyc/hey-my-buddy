@@ -66,6 +66,9 @@ class RealWorkspaceTestCase(BoardTestCase):
         self.git("init", "-q", "-b", "main")
         self.git("config", "user.email", "buddy@example.invalid")
         self.git("config", "user.name", "Buddy Test")
+        # Both the fixture helper and the product must read the same checkout
+        # rule, even though the helper suppresses system Git configuration.
+        self.git("config", "core.autocrlf", "false")
         (self.repo / "tracked.txt").write_text("base\n", encoding="utf-8", newline="\n")
         (self.repo / "src").mkdir()
         (self.repo / "src" / "feature.py").write_text("value = 1\n", encoding="utf-8", newline="\n")

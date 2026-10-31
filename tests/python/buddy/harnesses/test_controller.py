@@ -11,7 +11,6 @@ from subprocess import PIPE
 from types import SimpleNamespace
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import time
 import unittest
 from unittest import mock
@@ -159,13 +158,11 @@ def controller_log_close_failure(*, log="stdout", receipt=None,
             handle = state["handle"]
             if handle._members is not None:
                 handle._members.snapshot = original_snapshot
-                handle.terminate(grace_seconds=0.2)
-                handle.shutdown_confirmed()
-            else:
-                # No membership was admitted during the injected failure. The
-                # fixture owns a single child; a fresh handle reads its identity.
-                handle = ProcessHandle(state["process"], log_paths=state["paths"], stop_channel="signal")
-                handle.terminate(grace_seconds=0)
+            # The original handle owns the child on both platforms, including
+            # after construction failed. Rebuilding it would register the
+            # fixture's injected native intent a second time, outside the mock.
+            handle.terminate(grace_seconds=0.2)
+            handle.shutdown_confirmed()
         for descriptor in state["descriptors"]:
             if descriptor not in state["closed"]:
                 original_close(descriptor)
@@ -197,7 +194,7 @@ class FakeHandle:
 
 class PartialLogOpenTests(unittest.TestCase):
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="controller-partial-logs-",
+        temporary = tempfile.TemporaryDirectory(prefix="controller-partial-logs-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -269,7 +266,7 @@ class PartialLogOpenTests(unittest.TestCase):
 
 class LaunchControllerTests(unittest.TestCase):
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="controller-launch-")
+        temporary = tempfile.TemporaryDirectory(prefix="controller-launch-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.log_paths = {"stdout": str(self.root / "stdout"), "stderr": str(self.root / "stderr")}
@@ -335,7 +332,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
     """The creating side proves no child, observed cleanup, or unknown ownership."""
 
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="controller-failure-",
+        temporary = tempfile.TemporaryDirectory(prefix="controller-failure-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -454,7 +451,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
                 self.assertEqual(evidence.exit_code, state["process"].returncode)
                 self.assertEqual(state["closed"], state["descriptors"])
 
-    def test_posix_log_close_failure_keeps_unobservable_group_unknown(self):
+    def test_log_close_failure_keeps_unobservable_members_unknown(self):
         with controller_log_close_failure(observation_blocked=True) as state:
             with self.assertRaises(OSError) as caught:
                 self.launch()
@@ -463,7 +460,9 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
             evidence = caught.exception.owned_popen_evidence
             self.assertTrue(evidence.created)
             self.assertIs(evidence.shutdown_confirmed, False)
-            self.assertIsNone(state["process"].returncode)
+            self.assertEqual(evidence.exit_code, state["process"].returncode)
+            if os.name != "nt":
+                self.assertIsNone(state["process"].returncode)
 
     def test_cleanup_observation_error_carries_created_unknown_receipt(self):
         with controller_log_close_failure(observation_raises=True) as state:
@@ -497,7 +496,7 @@ class LaunchFailureEvidenceTests(unittest.TestCase):
 
 class StrictReadTests(unittest.TestCase):
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="controller-read-")
+        temporary = tempfile.TemporaryDirectory(prefix="controller-read-")
         self.addCleanup(temporary.cleanup)
         self.path = Path(temporary.name) / "stdout"
 
@@ -543,7 +542,7 @@ class StrictReadTests(unittest.TestCase):
 
 class PlainEvidenceReadTests(unittest.TestCase):
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="controller-plain-")
+        temporary = tempfile.TemporaryDirectory(prefix="controller-plain-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.path = self.root / "stdout"
@@ -609,7 +608,7 @@ class StopConfirmedTests(unittest.TestCase):
 
 class RealStopTests(unittest.TestCase):
     def test_a_terminated_real_child_confirms_only_with_its_receipt(self):
-        temporary = TemporaryDirectory(prefix="controller-stop-")
+        temporary = tempfile.TemporaryDirectory(prefix="controller-stop-")
         self.addCleanup(temporary.cleanup)
         log_paths = {"stdout": str(Path(temporary.name) / "stdout"),
                      "stderr": str(Path(temporary.name) / "stderr")}
@@ -631,7 +630,7 @@ class ObservationErrorStopTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX session observation")
     def test_scan_error_before_reaping_keeps_the_attempt_unconfirmed(self):
-        with TemporaryDirectory(prefix="controller-observe-") as name:
+        with tempfile.TemporaryDirectory(prefix="controller-observe-") as name:
             logs = {"stdout": str(Path(name) / "stdout"), "stderr": str(Path(name) / "stderr")}
             handle = launch_controller(prepare=lambda: ([sys.executable, "-c", "pass"], name, dict(os.environ)),
                                        log_paths=logs, stop_channel="stdin")
@@ -654,7 +653,7 @@ class ObservationErrorStopTests(unittest.TestCase):
 
 class CollectControllerTests(unittest.TestCase):
     def setUp(self):
-        temporary = TemporaryDirectory(prefix="controller-collect-")
+        temporary = tempfile.TemporaryDirectory(prefix="controller-collect-")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
 
@@ -712,7 +711,7 @@ class RouterCollectCoercionTests(unittest.TestCase):
     """
 
     def collect_with_outer(self, value):
-        temporary = TemporaryDirectory(prefix="controller-router-")
+        temporary = tempfile.TemporaryDirectory(prefix="controller-router-")
         self.addCleanup(temporary.cleanup)
         handle = _review_handle(Path(temporary.name), value)
         return structured_call.collect(handle)
@@ -727,7 +726,7 @@ class RouterCollectCoercionTests(unittest.TestCase):
                 self.assertIs(outcome.shutdown_confirmed, confirmed)
 
     def test_a_failed_in_process_router_run_propagates_its_error(self):
-        temporary = TemporaryDirectory(prefix="controller-router-bad-")
+        temporary = tempfile.TemporaryDirectory(prefix="controller-router-bad-")
         self.addCleanup(temporary.cleanup)
         handle = _review_handle(Path(temporary.name))
         handle.result = None

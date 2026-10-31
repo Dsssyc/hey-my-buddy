@@ -66,47 +66,37 @@ describe("macro task deletion boundary", () => {
     ]) expect(() => parseMacroTaskDeletionPreview(preview.macroTaskId, value)).toThrow();
   });
 
-  it("distinguishes a completed receipt from a resumable physical failure", () => {
+  it("preserves every failed object, its reason, path and OS diagnostic", () => {
     expect(parseMacroTaskDeletionResult(confirmed, receipt)).toEqual(receipt);
-    const partial = { ...receipt, state: "deleting", deletedAt: null, objectKind: "native-session",
-      reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } } };
+    const partial = { ...receipt, state: "deleting", deletedAt: null, failures: [
+      { objectKind: "native-session", path: "/synthetic/native", reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } },
+        error: { message: "Permission denied", errno: 13, winerror: null } },
+      { objectKind: "workspace", path: "/synthetic/workspace", reason: { code: "macro-task-deletion.lock-mismatch", params: {} }, error: null },
+      { objectKind: "session-records", path: null, reason: { code: "macro-task-deletion.owner-unproven", params: {} }, error: null },
+    ] };
     expect(parseMacroTaskDeletionResult(confirmed, partial)).toEqual(partial);
-    const skipped = [
-      { kind: "ref", path: "refs/synthetic/retained", workspaceId: "ws-fixture", reason: { code: "macro-task-deletion.ref-changed", params: {} } },
-      { kind: "allocation", path: "/synthetic/allocation", workspaceId: "ws-changed", reason: { code: "macro-task-deletion.repository-changed", params: {} } },
-      { kind: "ref", path: "/synthetic/missing-repository/.git", workspaceId: "ws-missing", reason: { code: "macro-task-deletion.repository-missing", params: {} } },
-      { objectKind: "private-root", path: "/synthetic/retained", reason: { code: "macro-task-deletion.owner-unproven", params: {} } },
-    ];
-    expect(parseMacroTaskDeletionResult(confirmed, { ...receipt, duplicate: true, skipped })).toEqual({ ...receipt, duplicate: true, skipped });
   });
 
   it("never accepts another scope or an incomplete acknowledgement as deletion", () => {
     for (const value of [null, { ...receipt, macroTaskId: "macro-other" }, { ...receipt, microTaskCount: 4 },
       { ...receipt, deletedAt: null }, { ...receipt, deletedAt: "yesterday" }, { ...receipt, state: "deleting" },
       { ...receipt, duplicate: undefined }, { ...receipt, reasonCode: "physical-failed" },
-      { ...receipt, skipped: [{}] },
+      { ...receipt, skipped: [] }, { ...receipt, skipped: [{ objectKind: "private-root", path: "/synthetic/retained", reason: { code: "macro-task-deletion.owner-unproven", params: {} } }] },
+      { ...receipt, state: "deleting", deletedAt: null, failures: [] },
+      { ...receipt, state: "deleting", deletedAt: null, failures: [{ objectKind: "workspace", path: "/synthetic", reason: { code: "macro-task-deletion.owner-unproven", params: {} } }] },
+      { ...receipt, state: "deleting", deletedAt: null, failures: [{ objectKind: "workspace", path: "/synthetic", reason: { code: "macro-task-deletion.owner-unproven", params: {} }, error: null }], objectKind: "workspace" },
     ]) expect(() => parseMacroTaskDeletionResult(confirmed, value)).toThrow();
   });
 
-  it("keeps a process blocker resumable and rejects command lines or malformed identities", () => {
+  it("keeps a process blocker as its own reason and validates failure diagnostics", () => {
     const process = { pid: 321, startedAt: 456, executable: "python" };
-    const partial = { ...receipt, state: "deleting", deletedAt: null, objectKind: "workspace",
+    const failure = { objectKind: "workspace", path: "/synthetic/workspace", error: null,
       reason: { code: "checkout.process-blockers", params: { processes: [process], unreadableProcesses: [] } } };
+    const partial = { ...receipt, state: "deleting", deletedAt: null, failures: [failure] };
     expect(parseMacroTaskDeletionResult(confirmed, partial)).toEqual(partial);
-    expect(parseMacroTaskDeletionResult(confirmed, { ...partial,
-      reason: { code: "checkout.process-blockers", params: { processes: [], unreadableProcesses: [process] } } }).state).toBe("deleting");
-    expect(parseMacroTaskDeletionResult(confirmed, { ...partial,
-      reason: { code: "checkout.process-blockers", params: { processes: [process], unreadableProcesses: [process] } } }).state).toBe("deleting");
-    expect(parseMacroTaskDeletionResult(confirmed, { ...partial,
-      reason: { code: "checkout.process-scan-failed", params: {} } }).state).toBe("deleting");
-    expect(parseMacroTaskDeletionResult(confirmed, { ...partial,
-      reason: { code: "checkout.process-blockers", params: { processes: [], unreadableProcesses: [] } } }).state).toBe("deleting");
-    for (const identity of [{ ...process, pid: 0 }, { ...process, startedAt: -1 },
-      { ...process, executable: "" }, { ...process, commandLine: "private" }, { ...process, environment: {} }]) {
-      expect(() => parseMacroTaskDeletionResult(confirmed, { ...partial,
-        reason: { code: "checkout.process-blockers", params: { processes: [identity], unreadableProcesses: [] } } })).toThrow();
-      expect(() => parseMacroTaskDeletionResult(confirmed, { ...partial,
-        reason: { code: "checkout.process-blockers", params: { processes: [process], unreadableProcesses: [identity] } } })).toThrow();
+    for (const error of [{ message: "denied", errno: "13", winerror: null }, { message: "denied", errno: 13 },
+      { message: 12, errno: null, winerror: null }, { message: "denied", errno: 1.5, winerror: null }]) {
+      expect(() => parseMacroTaskDeletionResult(confirmed, { ...partial, failures: [{ ...failure, error }] })).toThrow();
     }
   });
 });

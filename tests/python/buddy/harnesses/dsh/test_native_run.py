@@ -21,7 +21,6 @@ import math
 import os
 import sys
 import tempfile
-from temporary import TemporaryDirectory
 import threading
 import time
 import unittest
@@ -77,7 +76,7 @@ class NativeRunCase(unittest.TestCase):
     """One private per-test root; the fake agent launched like the native one."""
 
     def setUp(self):
-        container = TemporaryDirectory(prefix="dsh-native-",
+        container = tempfile.TemporaryDirectory(prefix="dsh-native-",
                                                 dir=os.environ.get("HMB_CHECKS_TMPDIR", tempfile.gettempdir()))
         self.addCleanup(container.cleanup)
         self.base = Path(container.name).resolve()
@@ -1231,7 +1230,7 @@ class RoleSeamFunctionTests(unittest.TestCase):
                              "a bound record decides without a discovery scan")
 
     def test_session_facts_report_private_storage_and_the_real_binding_presence(self):
-        with TemporaryDirectory(prefix="dsh-session-facts-") as container:
+        with tempfile.TemporaryDirectory(prefix="dsh-session-facts-") as container:
             root = Path(container) / "native-root"
             root.mkdir(mode=0o700)
             facts = native_run.session_facts(root, "session-1")

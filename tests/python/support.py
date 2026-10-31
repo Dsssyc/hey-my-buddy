@@ -25,7 +25,7 @@ if str(PYTHON_ROOT) not in sys.path:
 
 from hey_my_buddy import locking  # noqa: E402
 from hey_my_buddy.protocol.client import BoardClient  # noqa: E402
-from hey_my_buddy.cli.checks import prepare_test_home, remove_private_test_root  # noqa: E402
+from hey_my_buddy.cli.checks import prepare_test_home, remove_private_test_root, cleanup_fixture_tree  # noqa: E402
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json, receipt_reference, read_execution_receipt  # noqa: E402
 from hey_my_buddy.private_dirs import attempt_root, directory_mode  # noqa: E402
 from hey_my_buddy.paths import native_path  # noqa: E402
@@ -247,7 +247,7 @@ def cleanup_private_tree(directory: Path, state_directories: tuple[Path, ...]) -
         raise AssertionError(f"Private fixture shutdown unconfirmed; preserved {directory}: "
                              f"{len(held)} lock(s), {len(processes)} process(es), {problems}; "
                              f"processEvidence={json.dumps(evidence, ensure_ascii=False)}")
-    remove_private_test_root(directory)
+    cleanup_fixture_tree(directory)
 
 
 _INHERITED_CHILD_KEYS = {
@@ -319,7 +319,7 @@ def private_state_dir(prefix: str = "hey-my-buddy-test-"):
         stop_private_service(directory)
         shutdown_private_rpc()
         assert_private_processes_gone(directory)
-        remove_private_test_root(directory)
+        cleanup_fixture_tree(directory)
 
 
 def publish_result_receipt(state_dir: Path, params: dict) -> dict:
@@ -525,7 +525,7 @@ class BoardTestCase(unittest.TestCase):
         attempt(assert_private_processes_gone, self.directory)
         if failures:
             raise ExceptionGroup(f"Test resource close failed; preserved {self.directory}", failures)
-        remove_private_test_root(self.directory)
+        cleanup_fixture_tree(self.directory)
 
     def board(self, **options) -> InProcessBoard:
         board = InProcessBoard(self.directory, **options)

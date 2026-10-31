@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from temporary import TemporaryDirectory
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -24,7 +24,7 @@ FIXTURE = Path(__file__).parent / "fixtures/mock_zcode.py"
 
 class ZcodeFixtureCase(unittest.TestCase):
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.cwd = self.root / "checkout"

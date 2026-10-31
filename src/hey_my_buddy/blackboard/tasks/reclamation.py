@@ -387,8 +387,9 @@ class Reclamation:
                 result = store.workflow._reclaim_checkout(run_id=run_id)
                 if result.get('removed'):
                     self._workspaces.discard(run_id)
-                if result.get('detail'):
-                    raise BoardError(result['reasons'][0], result['detail'])
+                if result.get('detail') and failure is None:
+                    failure = BoardError(result['reasons'][0],
+                        f"{result['detail']}; run {run_id}; plan {result.get('planId')}; path {result.get('path')}")
             except (BoardError, OSError) as error:
                 if isinstance(error, BoardError) and error.code in ('NOT_READY', 'TASK_DELETING', 'WORKSPACE_BUSY', 'STORAGE_BUSY', 'NOT_FOUND'):
                     if error.code == 'NOT_FOUND':

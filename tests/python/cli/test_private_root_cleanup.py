@@ -13,6 +13,7 @@ from unittest.mock import Mock, call, patch
 from support import BoardTestCase, InProcessBoard, private_state_dir, remove_private_test_root
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.cli import checks
+from hey_my_buddy import windows_files
 from hey_my_buddy.paths import native_path
 
 
@@ -55,7 +56,7 @@ class PrivateRootCleanupTests(unittest.TestCase):
                 self.assertEqual(outside.read_bytes(), b'git object fixture')
             finally:
                 # Exercise the same private-root deletion path on the last link.
-                checks._delete_readonly_test_leaf(outside)
+                windows_files.unlink_regular_file(outside)
 
     def windows_delete(self, root, path, error, *, attributes=stat.FILE_ATTRIBUTE_READONLY,
                        mode=stat.S_IFREG, delete_error=None, ancestor_reparse=False):
@@ -79,7 +80,7 @@ class PrivateRootCleanupTests(unittest.TestCase):
               patch.object(checks.shutil, 'rmtree', side_effect=removal),
               patch.object(Path, 'lstat', information),
               patch.object(checks.time, 'monotonic', side_effect=[100, 160]),
-              patch.object(checks, '_delete_readonly_test_leaf', side_effect=delete_error) as delete):
+              patch.object(windows_files, 'unlink_regular_file', side_effect=delete_error) as delete):
             windows.name = 'nt'
             windows.unlink = unlink
             windows.chmod = Mock(side_effect=AssertionError('shared file attributes must never change'))

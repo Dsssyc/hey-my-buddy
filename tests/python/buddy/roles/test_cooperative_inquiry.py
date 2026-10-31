@@ -3,7 +3,7 @@ import hashlib
 import json
 import unittest
 from pathlib import Path
-from temporary import TemporaryDirectory
+import tempfile
 from hey_my_buddy.buddy.roles.session_mcp import respond
 from hey_my_buddy.buddy.roles import turn_io
 from hey_my_buddy.buddy.roles.worker_services import pending_inquiries, read_inquiry_entries, attention_requests
@@ -17,7 +17,7 @@ OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1,
 
 class FinishToolTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = TemporaryDirectory(prefix="hey-my-buddy-zcode-finish-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="hey-my-buddy-zcode-finish-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.attention = self.root / "attention.json"
