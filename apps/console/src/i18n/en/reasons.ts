@@ -89,7 +89,7 @@ export default {
   "macro-task-deletion.identity-changed": "The identity of the item to delete changed.",
   "macro-task-deletion.lock-mismatch": "The checkout lock does not match its registration.",
   "macro-task-deletion.not-a-managed-worktree": "This directory is not a managed worktree.",
-  "macro-task-deletion.owner-unproven": "Checkout ownership could not be proven.",
+  "macro-task-deletion.owner-unproven": "Ownership of this object could not be proven.",
   "macro-task-deletion.physical-failed": "Physical deletion failed ({{errorCode}}).",
   "macro-task-deletion.queued": "A micro task is still queued.",
   "macro-task-deletion.ref-changed": "The Git reference changed.",

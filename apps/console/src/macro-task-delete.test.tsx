@@ -143,14 +143,14 @@ describe("macro task deletion confirmation", () => {
     await screen.findByRole("button", { name: "删除" });
     f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
       { objectKind: "native-session", path: "/synthetic/native", reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } },
-        error: { message: "Permission denied", errno: 13, winerror: null } },
+        error: { message: "Permission denied", errno: 13, winerror: 32 } },
       { objectKind: "workspace", path: "/synthetic/checkout", reason: { code: "macro-task-deletion.lock-mismatch", params: {} }, error: null },
     ] }));
     await confirm();
     expect(await screen.findByText("/synthetic/native")).toBeTruthy();
     const dialog = screen.getByRole("dialog");
     expect(dialog.querySelectorAll("[data-slot=macro-delete-failures] > li")).toHaveLength(2);
-    for (const text of ["原生会话", "Permission denied", "errno 13", "/synthetic/checkout", "检出锁与登记不符", "仅重复请求不会解决"]) expect(dialog.textContent).toContain(text);
+    for (const text of ["原生会话", "Permission denied", "errno 13", "winerror 32", "/synthetic/checkout", "检出锁与登记不符", "仅重复请求不会解决"]) expect(dialog.textContent).toContain(text);
     expect(f.onDeleted).not.toHaveBeenCalled();
     f.command.mockResolvedValueOnce(receipt({ duplicate: true }));
     await f.user.click(screen.getByRole("button", { name: "重试删除" }));
@@ -401,7 +401,7 @@ describe("macro task deletion workspace integration", () => {
     ] }));
     await confirm();
     await screen.findByText("删除已开始，以下对象仍未清理。请先查看各项原因。");
-    expect(screen.getByText("无法证明检出的归属。")).toBeTruthy();
+    expect(screen.getByText("无法证明对象的归属。")).toBeTruthy();
     expect(window.location.hash).toBe("#tasks/macro-1");
     expect(screen.getByRole("dialog")).toBeTruthy();
     f.command.mockImplementationOnce(async () => { f.setRows([]); return receipt(); });

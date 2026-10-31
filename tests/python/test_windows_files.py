@@ -380,6 +380,32 @@ class LauncherTransferTests(unittest.TestCase):
 
 @unittest.skipUnless(os.name == 'nt', 'native Windows ACL/handle evidence')
 class NativePrivateFilesTests(unittest.TestCase):
+    def test_directory_removal_respects_held_handles_and_nonempty_contents(self):
+        import win32con, win32file
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'occupied'
+            root.mkdir()
+            handle = win32file.CreateFile(str(native_path(root)), files.FILE_READ_ATTRIBUTES,
+                                          win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE,
+                                          None, win32con.OPEN_EXISTING,
+                                          win32con.FILE_FLAG_BACKUP_SEMANTICS, None)
+            try:
+                with self.assertRaises(PermissionError) as caught:
+                    private_dirs.remove_tree(root)
+                self.assertEqual(caught.exception.winerror, 32)
+                self.assertEqual(caught.exception.filename, str(root))
+                self.assertTrue(root.is_dir())
+            finally:
+                handle.Close()
+            leaf = root / 'keep'
+            leaf.write_bytes(b'not an empty directory')
+            with self.assertRaises(OSError) as caught:
+                files.remove_directory(root)
+            self.assertEqual(caught.exception.winerror, 145)
+            self.assertEqual(leaf.read_bytes(), b'not an empty directory')
+            self.assertTrue(private_dirs.remove_tree(root))
+            self.assertFalse(root.exists())
+
     def test_readonly_directory_removal_covers_empty_roots_and_nested_content(self):
         import win32con, win32file
         with tempfile.TemporaryDirectory() as temporary:

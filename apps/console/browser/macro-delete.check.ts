@@ -8,10 +8,10 @@ const authoredTitle = "未加载的作者标题 / original author title";
 const taskTitle = "任务首行内容 / original task line";
 const words = {
   "zh-CN": { more: "更多", action: "删除宏任务…", cancel: "取消", confirm: "删除", retry: "重试删除", acknowledge: "知道了",
-    blocked: `还不能删除「${title}」`, heading: `删除「${title}」`, scope: "删除范围与拦截原因", review: "由 Host 验收、打回或给出结论", unknown: "停止未确认", deleted: `已删除「${title}」。`, retained: "无法证明检出的归属。", started: "删除已开始。可重试同一个删除请求以继续清理。", unnamed: "未命名",
+    blocked: `还不能删除「${title}」`, heading: `删除「${title}」`, scope: "删除范围与拦截原因", review: "由 Host 验收、打回或给出结论", unknown: "停止未确认", deleted: `已删除「${title}」。`, retained: "无法证明对象的归属。", started: "删除已开始。可重试同一个删除请求以继续清理。", unnamed: "未命名",
     knownScope: ["14 份，共 6.2 MB", "11 个，共 48.0 MB", "3 个检出，12 个引用"], mixedScope: ["0 份，共 0 B", "数量未知，体积未知", "0 个检出，引用数量未知"] },
   "en-US": { more: "More", action: "Delete macro task…", cancel: "Cancel", confirm: "Delete", retry: "Retry deletion", acknowledge: "Got it",
-    blocked: `Cannot delete “${title}” yet`, heading: `Delete “${title}”`, scope: "Deletion scope and blocking reasons", review: "The Host must accept, return, or provide a conclusion", unknown: "Stop unconfirmed", deleted: `Deleted “${title}”.`, retained: "Checkout ownership could not be proven.", started: "Deletion has started. Retry the same request to continue cleanup.", unnamed: "Unnamed",
+    blocked: `Cannot delete “${title}” yet`, heading: `Delete “${title}”`, scope: "Deletion scope and blocking reasons", review: "The Host must accept, return, or provide a conclusion", unknown: "Stop unconfirmed", deleted: `Deleted “${title}”.`, retained: "Ownership of this object could not be proven.", started: "Deletion has started. Retry the same request to continue cleanup.", unnamed: "Unnamed",
     knownScope: ["14; total 6.2 MB", "11; total 48.0 MB", "Checkouts: 3; Git refs: 12"], mixedScope: ["0; total 0 B", "Count unknown; Size unknown", "Checkouts: 0; Git ref count unknown"] },
 };
 
