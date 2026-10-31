@@ -54,7 +54,8 @@ def load_fixture(state: Path) -> dict:
     ``state`` and ``fixtureRoot`` are Paths; ``operations`` is the rebound old
     operation log; ``bindings`` maps template-era identities/digests to restored
     ones. Other keys are the fixed metadata (including stableIds/sourceCommit).
-    Schema remains 30. Take the preservation baseline only after this returns.
+    resourceFiles lists their rebound relative paths. Schema remains 30.
+    Take the preservation baseline only after this returns.
     """
     metadata = json.loads((FIXTURE / "metadata.json").read_text(encoding="utf-8"))
     stock = {}
@@ -103,6 +104,17 @@ def load_fixture(state: Path) -> dict:
     _git(repository, "read-tree", commit)
     _git(repository, "checkout-index", "--all")
     bindings = {}
+    allocation_requests = {}
+    for relative, text in resources["files"].items():
+        matched = re.fullmatch(r"workspaces/(ws-[0-9a-f]{32})/request.json", relative)
+        if matched is not None:
+            request = json.loads(text)
+            allocation_requests[matched[1]] = request
+            # The released writer derives this identity from the state root,
+            # just as the repository and checkout identities below are local.
+            bindings[matched[1]] = "ws-" + _sha(_json(
+                [str(state), request["requestId"]], ascii_json=True).encode())[:32]
+    identity_token = r"ws-[0-9a-f]{32}|[0-9a-f]{64}"
 
     def replace(text, *, ascii_json=False, json_payload=False):
         def path(value):
@@ -119,12 +131,12 @@ def load_fixture(state: Path) -> dict:
                 root, relative = state, relative.removeprefix('/state')
             else:
                 root = fixture_root
-            relative = re.sub(r'[0-9a-f]{64}', lambda digest: bindings.get(digest[0], digest[0]), relative)
+            relative = re.sub(identity_token, lambda identity: bindings.get(identity[0], identity[0]), relative)
             return path(root.joinpath(*relative.lstrip('/').split('/')) if relative else root)
 
         # Substitute each source token once; a private directory name can itself
         # contain a placeholder or a hex digest without being interpreted again.
-        return re.sub(r"<fixture-root>(?:/[\w.-]+)*|[0-9a-f]{64}", substitute, text)
+        return re.sub(r"<fixture-root>(?:/[\w.-]+)*|" + identity_token, substitute, text)
 
     for template in resources["checkouts"].values():
         _git(repository, "worktree", "add", "--quiet", "--detach", replace(template), commit)
@@ -148,10 +160,10 @@ def load_fixture(state: Path) -> dict:
 
     # One transaction applies every fixed ref; distinct refs end exactly as the
     # per-ref loop did.
-    updates = "".join(f"update {ref} {oid}\n" for ref, oid in resources["refs"].items())
+    updates = "".join(f"update {replace(ref)} {oid}\n" for ref, oid in resources["refs"].items())
     _git(repository, "update-ref", "--stdin", data=updates.encode("utf-8"))
     for relative, text in resources["files"].items():
-        target = state / relative
+        target = state / replace(relative)
         native_path(target.parent).mkdir(parents=True, exist_ok=True)
         if target.name == "result-receipt.json":
             # fsync_json writes this envelope with whitespace and UTF-8 text;
@@ -161,6 +173,17 @@ def load_fixture(state: Path) -> dict:
             content = _json(bind(json.loads(text)), ascii_json=True) if target.suffix == ".json" else replace(text)
         native_path(target).write_bytes(content.encode("utf-8"))
         native_path(target).chmod(0o600)
+    restored_checkouts = {replace(path) for path in resources["checkouts"].values()}
+    for old in allocation_requests:
+        directory = state / "workspaces" / bindings[old]
+        # The stock omits transient lock files; restore the released writer's
+        # allocation lock alongside the rebound ownership records.
+        native_path(directory / ".lock").touch()
+        path = directory / "manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        if manifest["kind"] == "worktree" and manifest["checkoutRoot"] in restored_checkouts:
+            _git(repository, "worktree", "lock", "--reason",
+                 "hey-my-buddy:" + manifest["workspaceId"], manifest["checkoutRoot"])
     with closing(sqlite3.connect(state / "board.sqlite3")) as connection, connection:
         connection.executescript(stock["board.sql"])
         # Change values only. Never initialize with the current schema, insert a
@@ -186,4 +209,5 @@ def load_fixture(state: Path) -> dict:
                     fields = ",".join(f'"{name}"=?' for name in changes)
                     connection.execute(f'UPDATE "{table}" SET {fields} WHERE rowid=?', [*changes.values(), row[0]])
     return {**metadata, "state": state, "fixtureRoot": fixture_root,
+            "resourceFiles": [replace(relative) for relative in resources["files"]],
             "operations": bind(json.loads(stock["operations.json"])), "bindings": bindings}

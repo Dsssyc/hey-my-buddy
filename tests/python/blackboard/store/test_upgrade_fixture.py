@@ -199,6 +199,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         second, c2 = self.restored(name)
         _, m1, _ = self.sample(first, c1)
         _, m2, _ = self.sample(second, c2)
+        self.assertNotEqual(m1['workspaceId'], m2['workspaceId'])
         self.assertNotEqual(m1['repositoryId'], m2['repositoryId'])
         self.assertNotEqual(m1['checkoutId'], m2['checkoutId'])
         self.assertNotEqual(m1['manifestSha256'], m2['manifestSha256'])
