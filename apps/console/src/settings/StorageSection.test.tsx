@@ -128,6 +128,18 @@ describe("storage panel (0.16 wire-shape contract)", () => {
     expect(screen.getByText("never-seen-code")).toBeTruthy();
   });
 
+  it("translates the reason of a tree that changed while being measured", async () => {
+    const changing = plan({ categories: [
+      { id: "workspaces", bytes: 2_200_000_000, reclaimableBytes: 0, count: 9, eligibleCount: 0, reasons: ["changing"] },
+    ] });
+    const f = fixture({ planValue: changing });
+    const user = userEvent.setup();
+    render(<StorageSection api={f.api} csrfToken="csrf" connectionError="" />);
+    await checkUsage(user);
+    await user.click(screen.getByRole("button", { name: "受管检出：为何保留" }));
+    expect(screen.getByText("统计时内容正在变化")).toBeTruthy();
+  });
+
   it("lists orphan processes without any stop control", async () => {
     const f = fixture();
     const user = userEvent.setup();
