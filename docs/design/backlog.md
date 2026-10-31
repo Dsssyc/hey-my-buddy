@@ -69,6 +69,8 @@
 
 ## 安装与存储
 
+**没有任务的空壳，最后一步删不掉就成了证明不了归属的残留。**（2026-10-31 Windows 测试欠账第二批实测，Host 核对过代码） `reclamation.py` 在锁下先删 `request.json`，放锁之后 `workspace.finish_submission_revoke` 再删 `.lock` 与目录；后两步失败或进程中断，残留就成了 `allocation-unproven`，此后不再重试，问题也清掉了。随下一个存储批定持久的撤销凭据，见 [ADR-002](../decisions/002-host-directed-assistance-and-workspaces.md) 2026-10-31 的那一段。
+
 **样板黑板只覆盖一部分存储形式。** 2026-10-27 只读盘点核对、Host 复核过计数：样板黑板 `tests/fixtures/upgrade-base/board.sql` 的 55 张表里，仍有 5 张一行也没有：`artifacts`、`attempt_received_receipts`、`execution_issues`、`service_issues`、`workflow_fixes`；原先列出的 `workflow_children` 等 7 张已有存量，`model_facts` 已随剪枝删掉。原审查还指出生成器只用了 Codex，这一点没有复核。下一次改这 5 张表的存储形式时，升级在样板上测不到它们；按 AGENTS.md，改到样板缺的形式时在同一次改动里扩充生成器。
 
 **schema 32 那一批的 Opus 审查留下的三项。**（2026-10-30，审查 `c61e24c1`，Host 核对过） 下一次改到这些形式时一起做：
