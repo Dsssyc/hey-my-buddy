@@ -169,7 +169,7 @@ Acceptance is final. A defect found after a micro task was accepted is repaired 
 
 ## Review, cancel and recover
 
-Review three things against each other: the brief as the board froze it (a full `get` returns its whole text), the Worker's report, and the final attempt's fixed artifact with its checks. Acceptance is tied to that artifact, not whichever branch or directory happens to exist later.
+Review three things against each other: the brief as the board froze it together with every later Host input (continuation notes, scope amendments, and inquiries with their answers; a full `get` returns the whole brief and lists every inquiry), the Worker's report, and the final attempt's fixed artifact with its checks. Acceptance is tied to that artifact, not whichever branch or directory happens to exist later.
 
 ```sh
 "$HMB" accept '{"runId":"<parent>","controlFile":"<controlFile>","artifactId":"<final-output-artifact>","note":"Inspected the fixed diff and ran the combined regression suite.","target":{"path":"/abs/target/checkout","ref":"main"}}'
