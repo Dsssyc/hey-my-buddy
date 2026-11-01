@@ -30,9 +30,9 @@ export const BUDDY_EXTENSION_CORE_DISTANCE = 12;
 
 // Both themes come from the same tokens that the console renders. No semantic
 // hue bands: distance leaves room for individual colours near reserved hues.
-const statusLabs = [...tokens.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|brand-mark|past): (#[0-9a-f]{6});/g)]
+const semanticLabs = [...tokens.matchAll(/--(?:fail|bar-fail|hand|hand-mark|bar-hand|live|goal|brand-mark|past): (#[0-9a-f]{6});/g)]
   .map(match => rgbHexToLab(match[1]!));
-const reservedLabs = [...statusLabs, ...BUDDY_REJECTED_COLORS.map(rgbHexToLab)];
+const reservedLabs = [...semanticLabs, ...BUDDY_REJECTED_COLORS.map(rgbHexToLab)];
 const coreLabs = BUDDY_CORE_COLORS.map(rgbHexToLab);
 type Candidate = { lab: LABColor; hex: string };
 const candidates: Candidate[] = [];

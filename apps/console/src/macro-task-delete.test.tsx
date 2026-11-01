@@ -143,14 +143,18 @@ describe("macro task deletion confirmation", () => {
     await screen.findByRole("button", { name: "删除" });
     f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
       { objectKind: "native-session", path: "/synthetic/native", reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "IO_ERROR" } },
-        error: { message: "Permission denied", errno: 13, winerror: 32 } },
+        error: { message: "[Errno 13] Permission denied: '/synthetic/native'", errno: 13, winerror: 32 } },
       { objectKind: "workspace", path: "/synthetic/checkout", reason: { code: "macro-task-deletion.lock-mismatch", params: {} }, error: null },
     ] }));
     await confirm();
     expect(await screen.findByText("/synthetic/native")).toBeTruthy();
     const dialog = screen.getByRole("dialog");
     expect(dialog.querySelectorAll("[data-slot=macro-delete-failures] > li")).toHaveLength(2);
-    for (const text of ["原生会话", "Permission denied", "errno 13", "winerror 32", "/synthetic/checkout", "检出锁与登记不符", "仅重复请求不会解决"]) expect(dialog.textContent).toContain(text);
+    for (const text of ["原生会话", "Permission denied", "/synthetic/checkout", "检出锁与登记不符", "仅重复请求不会解决"]) expect(dialog.textContent).toContain(text);
+    expect(dialog.textContent).not.toContain("Errno 13");
+    expect(dialog.textContent).not.toContain("errno 13");
+    expect(dialog.textContent).not.toContain("winerror 32");
+    expect(dialog.textContent?.match(/\/synthetic\/native/g)).toHaveLength(1);
     expect(f.onDeleted).not.toHaveBeenCalled();
     f.command.mockResolvedValueOnce(receipt({ duplicate: true }));
     await f.user.click(screen.getByRole("button", { name: "重试删除" }));
@@ -194,9 +198,43 @@ describe("macro task deletion confirmation", () => {
     f.command.mockRejectedValueOnce(new ApiError("WORKSPACE_BUSY", "new refusal"));
     await f.user.click(screen.getByRole("button", { name: "重试删除" }));
     expect(await screen.findByText("检出正在处理另一项操作，请稍后重试删除。")).toBeTruthy();
+    expect(screen.getByText("删除尚未完成。请查看当前错误后重试。")).toBeTruthy();
+    expect(screen.queryByText("删除已开始，以下对象仍未清理。请先查看各项原因。")).toBeNull();
     expect(screen.queryByText("/synthetic/old-checkout")).toBeNull();
     expect(screen.queryByText("检出锁与登记不符")).toBeNull();
     expect(f.onDeleted).not.toHaveBeenCalled();
+  });
+
+  it("handles Windows system errors, Git timeouts and dependency-only failures", async () => {
+    const f = dialogHarness();
+    await screen.findByRole("button", { name: "删除" });
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "workspace", path: "C:\\checkout", reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_IO_ERROR" } },
+        error: { message: "[WinError 32] The process cannot access the file: 'C:\\checkout'", errno: null, winerror: 32 } },
+      { objectKind: "workspace", path: null, reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_GIT_UNKNOWN" } },
+        error: { message: "Git did not finish within the workspace wait limit", errno: null, winerror: null } },
+      { objectKind: "session-records", path: null, reason: { code: "macro-task-deletion.dependency-retained", params: {} }, error: null },
+    ] }));
+    await confirm();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("系统错误：The process cannot access the file");
+    expect(dialog.textContent?.match(/C:\\checkout/g)).toHaveLength(1);
+    expect(dialog.textContent).toContain("检查系统错误及文件权限；问题解除后重试。");
+    expect(dialog.textContent).toContain("Git 操作超时，稍后重试删除。");
+    expect(dialog.textContent).not.toContain("Git did not finish within the workspace wait limit");
+    const dependencies = dialog.querySelectorAll("[data-slot=macro-delete-failures] > li")[2]!;
+    expect(dependencies.querySelectorAll("p")).toHaveLength(2);
+  });
+
+  it("hides blackboard messages even when their errors carry an OS number", async () => {
+    const f = dialogHarness();
+    await screen.findByRole("button", { name: "删除" });
+    f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
+      { objectKind: "workspace", path: null, reason: { code: "macro-task-deletion.physical-failed", params: { errorCode: "WORKSPACE_IO_ERROR" } },
+        error: { message: "Internal workspace message", errno: 13, winerror: null } },
+    ] }));
+    await confirm();
+    expect(screen.getByRole("dialog").textContent).not.toContain("Internal workspace message");
   });
 
   it.each([new ApiError("NETWORK", "raw transport text"), new ApiError("INVALID_RESPONSE", "raw reply text")])(

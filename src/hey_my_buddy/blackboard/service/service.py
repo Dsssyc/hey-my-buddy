@@ -89,6 +89,7 @@ CONTROL_OPERATIONS = (
     "workflow_suggest",
     "macro_task_list",
     "macro_task_timeline",
+    "macro_task_goal_history",
     "macro_task_stop",
     "macro_task_deletion_preview",
     "macro_task_delete",
@@ -820,6 +821,12 @@ class BoardService(_BaseResource):
 
         return self._guard(
             "macro_task.timeline", request_json, lambda params: macro_tasks.macro_task_timeline(self.store, params)
+        )
+
+    def macro_task_goal_history(self, request_json: str) -> str:
+        return self._guard(
+            "macro_task.goal_history", request_json,
+            lambda params: macro_tasks.macro_task_goal_history(self.store, params),
         )
 
     def macro_task_stop(self, request_json: str) -> str:

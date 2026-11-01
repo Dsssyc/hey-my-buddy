@@ -26,7 +26,7 @@ export const tasks = {
   waiting: "Waiting on someone", failed: "Failed",
   macro: "Macro tasks", list: "Macro task list", entries: "Macro task entries", collapse: "Collapse macro task list", expand: "Expand macro task list",
   search: "Search title, project, Host or ID", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", accepted: "Accepted", ended: "Ended",
-  filterHost: "Host", filterReview: "Acceptance", standalone: "Standalone micro tasks", source: "From the first line", unnamed: "Unnamed", update: "New activity; update order", showMore: "Show more", loading: "Reading", retry: "Reconnect",
+  filterHost: "Host", filterReview: "Acceptance", standalone: "Standalone micro tasks", source: "From the first line", unnamed: "Unnamed", entryStarted: "Started", entryActivity: "Last activity", entryTime: "{{basis}}: {{time}}", update: "New activity; update order", showMore: "Show more", loading: "Reading", retry: "Reconnect",
   offline: "Disconnected", lastRead: "Showing content read at {{time}}", noMatch: "No matching macro tasks", noTasks: "No macro tasks", emptyTitle: "No macro tasks yet", emptyBody: "Delegate a task in a Host session and it will appear here.", choose: "Choose a macro task", harnesses: "Available harnesses {{n}}", buddies: "Enabled buddies {{n}}", buddy: "Buddy", stop: "Stop", more: "More", detail: "Macro task detail", unknown: "Not recorded", readonly: "This session is read only", stopping: "Stopping",
   turn: "Turn {{n}}", kind: { execution: "Execution", routing: "Route", queue: "Queue" },
   microTasks: "Micro tasks",

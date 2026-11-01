@@ -1,6 +1,6 @@
 import { cleanup, render as baseRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTaskOverview } from "./MacroTaskOverview";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { macroTaskTimelineFixture } from "./macro-task-fixtures";
@@ -20,7 +20,7 @@ describe("macro task time statistics", () => {
     timeline.macroTask.lastActivityAt = new Date(2026, 8, 26, 10, 6, 8).toISOString();
     const nowMs = new Date(2026, 8, 26, 12, 0, 0).getTime();
     expect(timeline.macroTask.counts.active).toBeGreaterThan(0);
-    const view = render(<MacroTaskOverview timeline={timeline} summary={null} nowMs={nowMs} loading={false} stale={false} onBackToList={() => {}} />);
+    const view = render(<MacroTaskOverview readGoals={vi.fn()} timeline={timeline} summary={null} nowMs={nowMs} loading={false} stale={false} onBackToList={() => {}} />);
     await userEvent.click(screen.getByRole("button", { name: title }));
     const dialog = screen.getByRole("dialog", { name: title });
     const first = dialog.querySelector('[data-slot="time-stats-body"] > :first-child')!;
@@ -32,7 +32,7 @@ describe("macro task time statistics", () => {
       .toEqual(recorded.map(value => ({ recorded: value, text: formatter.format(new Date(value)) })));
     expect(first.textContent).not.toContain(formatter.format(nowMs));
     const summary = { ...timeline.macroTask, createdAt: null, lastActivityAt: null };
-    view.rerender(<MacroTaskOverview timeline={null} summary={summary} nowMs={nowMs} loading={false} stale={false} onBackToList={() => {}} />);
+    view.rerender(<MacroTaskOverview readGoals={vi.fn()} timeline={null} summary={summary} nowMs={nowMs} loading={false} stale={false} onBackToList={() => {}} />);
     expect(first.querySelectorAll("time")).toHaveLength(0);
     expect(within(first as HTMLElement).getAllByText(missing)).toHaveLength(2);
   });
@@ -40,7 +40,7 @@ describe("macro task time statistics", () => {
   it("opens recorded metrics from elapsed time and closes with Escape", async () => {
     const timeline = macroTaskTimelineFixture();
     const { container } = render(<section className="timeline-view">
-      <MacroTaskOverview timeline={timeline} summary={null} loading={false} stale={false} onBackToList={() => {}} />
+      <MacroTaskOverview readGoals={vi.fn()} timeline={timeline} summary={null} loading={false} stale={false} onBackToList={() => {}} />
     </section>);
     const trigger = screen.getByRole("button", { name: "时间统计" });
     expect(trigger.textContent).toMatch(/\d+ 时 \d+ 分/);
@@ -63,9 +63,9 @@ describe("macro task time statistics", () => {
   it("uses the current macro task's facts after the selected task changes", async () => {
     const first = macroTaskTimelineFixture();
     const second = { ...first, macroTask: { ...first.macroTask, macroTaskId: "macro-second",
-      goal: { ...first.macroTask.goal!, body: "第二个宏任务" } } };
+      sourceHostId: "second-host" } };
     const overview = (timeline: typeof first) => <section className="timeline-view">
-      <MacroTaskOverview timeline={timeline} summary={null} loading={false} stale={false} onBackToList={() => {}} />
+      <MacroTaskOverview readGoals={vi.fn()} timeline={timeline} summary={null} loading={false} stale={false} onBackToList={() => {}} />
     </section>;
     const view = render(overview(first));
     const user = userEvent.setup();
@@ -73,13 +73,13 @@ describe("macro task time statistics", () => {
     view.rerender(overview(second));
     expect(screen.queryByRole("dialog", { name: "时间统计" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "时间统计" }));
-    expect(screen.getByRole("dialog", { name: "时间统计" }).textContent).toContain("第二个宏任务");
+    expect(screen.getByRole("dialog", { name: "时间统计" }).textContent).toContain("second-host");
   });
 
   it("dismisses on outside press and stays closed while the page is inactive", async () => {
     const timeline = macroTaskTimelineFixture();
     const overview = (active: boolean) => <><section className="timeline-view" hidden={!active}>
-      <MacroTaskOverview timeline={timeline} summary={null} loading={false} stale={false} active={active} onBackToList={() => {}} />
+      <MacroTaskOverview readGoals={vi.fn()} timeline={timeline} summary={null} loading={false} stale={false} active={active} onBackToList={() => {}} />
     </section><button>其他控件</button></>;
     const view = render(overview(true));
     const user = userEvent.setup();
@@ -97,13 +97,13 @@ describe("macro task time statistics", () => {
 
   it("updates the open panel when polling refreshes the selected task", async () => {
     const first = macroTaskTimelineFixture();
-    const view = render(<MacroTaskOverview timeline={first} summary={null} loading={false} stale={false} onBackToList={() => {}} />);
+    const view = render(<MacroTaskOverview readGoals={vi.fn()} timeline={first} summary={null} loading={false} stale={false} onBackToList={() => {}} />);
     await userEvent.setup().click(screen.getByRole("button", { name: "时间统计" }));
     const dialog = screen.getByRole("dialog", { name: "时间统计" });
     const revised = { ...first, macroTask: { ...first.macroTask,
-      goal: { ...first.macroTask.goal!, body: "轮询后的记录", revision: 2 } } };
-    view.rerender(<MacroTaskOverview timeline={revised} summary={null} loading={false} stale={false} onBackToList={() => {}} />);
+      sourceHostId: "updated-host" } };
+    view.rerender(<MacroTaskOverview readGoals={vi.fn()} timeline={revised} summary={null} loading={false} stale={false} onBackToList={() => {}} />);
     expect(screen.getByRole("dialog", { name: "时间统计" })).toBe(dialog);
-    expect(dialog.textContent).toContain("轮询后的记录");
+    expect(dialog.textContent).toContain("updated-host");
   });
 });

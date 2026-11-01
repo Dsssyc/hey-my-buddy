@@ -263,3 +263,18 @@ describe("work macro task reads", () => {
     expect(timeline.spans.every(span => typeof span.spanId === "string")).toBe(true);
   });
 });
+
+it("reads all goal revisions through the console-only endpoint and rejects malformed version facts", async () => {
+  const goal = { body: "目标\n\n完整正文。", revision: 2, createdAt: "2026-11-01T06:00:00Z" };
+  const payload = { macroTaskId: "macro-test", goals: [goal, { ...goal, revision: 1 }] };
+  const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(payload)));
+  const controller = new AbortController();
+  expect(await createApi("/private", fetcher).macroTaskGoals("macro-test", controller.signal)).toEqual(payload);
+  expect(fetcher.mock.calls[0][0]).toBe("/private/api/macro-tasks/macro-test/goals");
+  expect(fetcher.mock.calls[0][1]?.signal).toBe(controller.signal);
+  for (const broken of [{ ...payload, goals: null }, { ...payload, goals: [{ ...goal, revision: 0 }] },
+    { ...payload, goals: [{ ...goal, createdAt: "invalid" }] }, { ...payload, goals: [{ ...goal, body: 42 }] }]) {
+    const api = createApi("/private", async () => new Response(JSON.stringify(broken)));
+    await expect(api.macroTaskGoals("macro-test")).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+  }
+});

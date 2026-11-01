@@ -13,7 +13,7 @@ async function capture(page: Page, name: string) {
 for (const theme of ["dark", "light"]) test.describe(`tooltip policy ${theme}`, () => {
   test.use({ locale: "zh-CN", viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
 
-  test("delays every hover, allows clicks underneath and keeps keyboard and copy feedback immediate", async ({ page, context }) => {
+  test("delays hints, allows clicks underneath and keeps keyboard hints and inline copy feedback immediate", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
     await page.clock.install({ time: new Date("2026-10-19T12:00:00Z") });
@@ -22,7 +22,8 @@ for (const theme of ["dark", "light"]) test.describe(`tooltip policy ${theme}`, 
     await page.clock.pauseAt(new Date("2026-10-19T12:01:00Z"));
     const tooltip = page.locator('[data-slot=tooltip-content]');
     const id = page.locator('[data-slot=macro-overview-header]').getByRole("button", { name: `复制标识 ${macro}` });
-    await id.hover();
+    const title = page.locator('[data-slot=macro-overview-header] h2');
+    await title.hover();
     await page.clock.runFor(500);
     await expect(tooltip).toHaveCount(0);
     await page.clock.runFor(100);
@@ -50,28 +51,29 @@ for (const theme of ["dark", "light"]) test.describe(`tooltip policy ${theme}`, 
     await expect(tooltip).toHaveCount(0);
 
     // Opening the next tooltip also takes the full 600 ms (no skip-delay window).
-    const title = page.locator('[data-slot=macro-overview-header] h2');
-    await title.hover();
+    const menu = page.locator('[data-slot=macro-menu-button]');
+    await menu.hover();
     await page.clock.runFor(500);
     await expect(tooltip).toHaveCount(0);
     await page.clock.runFor(100);
     await expect(tooltip).toBeVisible();
-    await capture(page, `title-tooltip-${theme}`);
+    await capture(page, `menu-tooltip-${theme}`);
     await page.mouse.move(0, 0);
     await expect(tooltip).toHaveCount(0);
-    await id.focus();
+    await page.keyboard.press("Tab");
+    await title.focus();
     await expect(tooltip).toBeVisible(); // Clock has not advanced.
     await page.keyboard.press("Escape");
     await id.click();
-    await expect(page.getByRole("status", { name: "" }).filter({ hasText: "已复制" })).toBeVisible();
-    await expect(tooltip).toHaveText("已复制");
+    await expect(id.locator('[aria-live="polite"]')).toHaveText("已复制");
+    await expect(tooltip).toHaveCount(0);
 
     // The original pointer route from the ID through the top bar stays usable.
     await page.clock.runFor(2100);
     await page.mouse.move(0, 0);
     await id.hover();
     await page.clock.runFor(600);
-    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toHaveCount(0);
     const settings = page.getByRole("banner").first().getByRole("navigation").getByRole("link").last();
     const target = (await settings.boundingBox())!;
     await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 12 });

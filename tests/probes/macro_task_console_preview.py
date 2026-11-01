@@ -2964,6 +2964,13 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 with self.server.state.lock:
                     page = session_read(*session_match.groups(), params, self.server.state)
                 return self._json(200, page)
+            if path.startswith("/api/macro-tasks/") and path.endswith("/goals"):
+                identifier = path[len("/api/macro-tasks/"):-len("/goals")]
+                parse_query(query, frozenset())
+                if identifier not in MACRO_TASKS or identifier in self.server.state.deleted:
+                    return self._error(404, "NOT_FOUND", "Not found")
+                goal = MACRO_TASKS[identifier]["goal"]
+                return self._json(200, {"macroTaskId": identifier, "goals": [] if goal is None else [goal]})
             if path.startswith("/api/macro-tasks/") and path.endswith("/timeline"):
                 identifier = path[len("/api/macro-tasks/"):-len("/timeline")]
                 if not MACRO_TASK_ID.match(identifier) or identifier not in FIXTURES["groups"] or identifier in self.server.state.deleted:

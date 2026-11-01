@@ -2,8 +2,11 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "./tokens.css";
+@source "../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+:root { --radius-overlay: 6px; }
 
 /* One palette: the utilities read the tokens of tokens.css. The first group is
    what the generated components expect; the second is the design's own names. */
@@ -42,6 +45,7 @@
   --color-ink4: var(--ink4);
   --color-line2: var(--line2);
   --color-live: var(--live);
+  --color-goal: var(--goal);
   --color-selected-row: var(--selected-row);
   --color-hand: var(--hand);
   --color-hand-mark: var(--hand-mark);
@@ -58,11 +62,16 @@
   --color-brand-mark: var(--brand-mark);
   --color-bar-hand: var(--bar-hand);
   --color-bar-fail: var(--bar-fail);
-  /* Controls and floating surfaces have a small radius; containers are square. */
+  /* Controls keep their own geometry; floating surfaces use --radius-overlay. */
   --radius-sm: 2px;
   --radius-md: 4px;
   --radius-lg: 4px;
   --radius-xl: 4px;
+}
+
+/* Floating components own their shared shape, including renamed slot roots. */
+:root .overlay-surface {
+  border-radius: var(--radius-overlay);
 }
 
 @keyframes detail-refresh-turn {
@@ -145,4 +154,74 @@
     from { height: var(--radix-collapsible-content-height); opacity: 1; }
     to { height: 0; opacity: 0; }
   }
+}
+
+/* The same line expands from the goal's underline to the sheet's bottom edge. */
+@property --goal-progress {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+[data-slot="macro-overview-header"]:has(.goal-card) .goal-trigger { border-bottom-color: transparent; }
+.goal-card {
+  --goal-progress: 1;
+  transition: --goal-progress 200ms ease-out;
+  position: absolute;
+  z-index: 45;
+  top: calc(100% - 4px);
+  left: 24px;
+  right: 24px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(24rem, calc(100dvh - var(--goal-top) - 16px));
+  border: 1px solid var(--line2);
+  border-radius: var(--radius-overlay);
+  background: var(--popover-ground);
+  color: var(--ink);
+  box-shadow: 0 14px 40px rgb(0 0 0 / 30%);
+  outline: none;
+  clip-path: inset(0 0 calc((100% - 2px) * (1 - var(--goal-progress))) 0 round var(--radius-overlay));
+  transform: translateY(calc(var(--goal-start-y) * (1 - var(--goal-progress))));
+}
+.goal-card::after {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  height: 2px;
+  top: calc((100% - 2px) * var(--goal-progress));
+  left: calc(var(--goal-left) * (1 - var(--goal-progress)));
+  right: calc(var(--goal-right) * (1 - var(--goal-progress)));
+  background: var(--goal);
+}
+@starting-style { .goal-card[data-state="open"] { --goal-progress: 0; } }
+.goal-card[data-state="closed"] { --goal-progress: 0; animation: goal-close-presence 200ms; }
+/* Presence keeps the closing surface mounted while the reversible transition runs. */
+@keyframes goal-close-presence { from { opacity: 1; } to { opacity: 1; } }
+.goal-scroll {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 28px;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 0 24px 18px;
+}
+.goal-history { min-width: 0; border-left: 1px solid var(--line); padding-left: 20px; }
+.goal-version { position: relative; display: block; width: 100%; padding: 0 0 16px 18px; text-align: left; outline: none; transition: color 150ms, background-color 150ms; }
+.goal-version::before { content: ""; position: absolute; left: 4px; top: 14px; bottom: -2px; width: 1px; background: var(--line2); }
+.goal-version:last-child::before { display: none; }
+.goal-version-dot { position: absolute; left: 0; top: 5px; width: 9px; height: 9px; border: 1.5px solid var(--ink3); border-radius: 50%; background: var(--popover-ground); }
+.goal-version[data-current="true"] .goal-version-dot { background: var(--ink); border-color: var(--ink); }
+.goal-version:hover, .goal-version[aria-pressed="true"] { background: var(--selected-row); }
+.goal-version:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
+@container (width < 600px) {
+  .goal-scroll { grid-template-columns: minmax(0, 1fr) 110px; gap: 12px; }
+  .goal-history { padding-left: 10px; }
+  .goal-version time { display: block; margin-left: 0; }
+}
+@container (width < 480px) { .goal-card { left: 12px; right: 12px; } }
+@media (prefers-reduced-motion: reduce) {
+  .goal-card[data-state] { animation: none; transition: none; }
+  .goal-version { transition: none; }
 }

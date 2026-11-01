@@ -735,6 +735,9 @@ class Console:
                     return self._macro_task_read(
                         "macro_task_timeline", {"macroTaskId": identifier}, MACRO_TASK_TIMELINE_PARAMETERS
                     )
+                if relative.startswith("/api/macro-tasks/") and relative.endswith("/goals"):
+                    identifier = relative[len("/api/macro-tasks/"):-len("/goals")]
+                    return self._macro_task_read("macro_task_goal_history", {"macroTaskId": identifier}, frozenset())
                 if relative.startswith("/api/tasks/"):
                     session = re.fullmatch(r"/api/tasks/([A-Za-z0-9._:-]{1,128})/attempts/([A-Za-z0-9._:-]{1,128})/session", relative)
                     if session is not None:

@@ -1,6 +1,6 @@
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { ReactElement } from "react";
-import { cleanup, fireEvent, render as baseRender, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render as baseRender, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MacroTaskList } from "./MacroTaskList";
@@ -22,14 +22,14 @@ const row = (p: MacroTaskListProps, id = "macro-1") => p.groups.flatMap(group =>
 
 describe("macro task list", () => {
   it("retains entry rendering across loading changes and uses the latest selection action", () => {
-    const relative = vi.spyOn(formatting, "formatRelative");
+    const date = vi.spyOn(formatting, "formatDateTime");
     const p = props();
     const view = render(<MacroTaskList {...p}/>);
-    const calls = relative.mock.calls.length;
+    const calls = date.mock.calls.length;
     expect(calls).toBeGreaterThan(0);
     const select = vi.fn();
     view.rerender(<MacroTaskList {...p} loading onSelect={select}/>);
-    expect(relative).toHaveBeenCalledTimes(calls);
+    expect(date).toHaveBeenCalledTimes(calls);
     fireEvent.click(document.querySelector('[data-slot="macro-entry"]')!);
     expect(select).toHaveBeenCalledWith("macro-1");
   });
@@ -73,7 +73,8 @@ describe("macro task list", () => {
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "原文" } });
     expect(p.onQueryChange).toHaveBeenCalledWith("原文");
     const entry = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    expect(entry.querySelector("time")?.getAttribute("datetime")).toBe(row(p).lastActivityAt);
+    expect(entry.querySelector("time")).toBeNull();
+    expect(entry.getAttribute("aria-description")).toContain(`最后活动：${formatting.formatDateTime(Date.parse(row(p).lastActivityAt!))}`);
     await userEvent.click(entry);
     expect(p.onSelect).toHaveBeenCalledWith("macro-1");
   });
@@ -104,20 +105,22 @@ describe("macro task list", () => {
     expect(entries.map(entry => entry.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind") ?? null)).toEqual(["hand", "live", "fail", null]);
     expect(entries.every(entry => ![...entry.classList].some(name => name.startsWith("before:")))).toBe(true);
     expect(entries.every(entry => !entry.querySelector('[data-slot="macro-entry-counts"]'))).toBe(true);
-    expect(entries.every(entry => entry.classList.contains("h-[30px]"))).toBe(true);
+    expect(entries.every(entry => entry.classList.contains("h-8"))).toBe(true);
+    expect(entries.every(entry => entry.querySelector("time") === null)).toBe(true);
     expect(entries.every(entry => entry.querySelector('[data-slot="macro-entry-title"]')?.classList.contains("truncate"))).toBe(true);
     expect(within(entries[0]!).getByText("等待 Host", { selector: ".sr-only" })).toBeTruthy();
   });
 
-  it("marks the selected row and shows created or activity time according to sort", () => {
+  it("marks the selected row and explains the sort time with the full title", () => {
     const p = props();
     const view = render(<MacroTaskList {...p}/>);
     const entry = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    expect(entry.querySelector("time")?.getAttribute("datetime")).toBe(row(p).lastActivityAt);
+    expect(entry.getAttribute("aria-description")).toContain(`${row(p).title} · 最后活动：`);
     view.rerender(<MacroTaskList {...p} sort="created-desc" selected="macro-1"/>);
-    expect(entry.querySelector("time")?.getAttribute("datetime")).toBe(row(p).createdAt);
-    expect(entry.getAttribute("aria-pressed")).toBe("true");
-    expect(entry.classList.contains("bg-selection")).toBe(true);
+    const sorted = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
+    expect(sorted.getAttribute("aria-description")).toContain(`开始：${formatting.formatDateTime(Date.parse(row(p).createdAt!))}`);
+    expect(sorted.getAttribute("aria-pressed")).toBe("true");
+    expect(sorted.classList.contains("bg-selection")).toBe(true);
   });
 
   it("handles unnamed and nullable standalone facts", async () => {
@@ -126,9 +129,7 @@ describe("macro task list", () => {
     render(<MacroTaskList {...p}/>);
     await userEvent.click(screen.getByRole("button", { name: /独立微任务/ }));
     expect(screen.getByText("未命名")).toBeTruthy();
-    const time = document.querySelector('[data-slot="macro-entry"] time')!;
-    expect(time.hasAttribute("datetime")).toBe(false);
-    expect(time.textContent).toContain("未记录");
+    expect(document.querySelector('[data-slot="macro-entry"]')?.getAttribute("aria-description")).toContain("最后活动：未记录");
   });
 
   it("shows empty and unmatched states and retains groups after read failure", () => {
@@ -152,6 +153,25 @@ describe("macro task list", () => {
     expect(buttons.every(button => button.disabled)).toBe(true);
     await userEvent.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(p.onCollapse).toHaveBeenCalledTimes(1);
+  });
+
+  it("reveals each appended response as one batch and resets after sorting or filtering", async () => {
+    const p = props();
+    const template = row(p);
+    const rows = Array.from({ length: 24 }, (_, index) => ({ ...template, macroTaskId: `batch-${index}`, title: `标题 ${index}` }));
+    p.groups = [{ ...p.groups[0]!, macroTasks: rows.slice(0, 7), total: 24, nextCursor: "older" }];
+    const view = render(<MacroTaskList {...p}/>);
+    expect(document.querySelectorAll('[data-slot="macro-entry"]')).toHaveLength(7);
+    p.groups = [{ ...p.groups[0]!, macroTasks: rows.slice(0, 10) }];
+    view.rerender(<MacroTaskList {...p}/>);
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="macro-entry"]')).toHaveLength(10));
+    p.groups = [{ ...p.groups[0]!, macroTasks: rows }];
+    view.rerender(<MacroTaskList {...p}/>);
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="macro-entry"]')).toHaveLength(24));
+    view.rerender(<MacroTaskList {...p} sort="created-desc"/>);
+    expect(document.querySelectorAll('[data-slot="macro-entry"]')).toHaveLength(24);
+    view.rerender(<MacroTaskList {...p} sort="created-desc" filter="active"/>);
+    expect(document.querySelectorAll('[data-slot="macro-entry"]')).toHaveLength(24);
   });
 
   it("defers a reorder under the pointer or scrolling, then applies it once", () => {

@@ -45,6 +45,7 @@ _CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,512}$")
 
 LIST_PARAMETERS = frozenset({"limit", "before", "group", "hostId", "query", "filter", "sort"})
 TIMELINE_PARAMETERS = frozenset({"macroTaskId", "limit", "query", "filter"})
+GOAL_HISTORY_PARAMETERS = frozenset({"macroTaskId"})
 
 #: Group ownership follows helpers and Lead-owned runs to their outermost owner.
 RUN_GROUPS_SQL = """
@@ -192,6 +193,24 @@ def current_goal(connection, macro_task_id: str | None) -> dict | None:
         (macro_task_id,),
     ).fetchone()
     return {"body": row["body"], "revision": row["revision"], "createdAt": row["created_at"]} if row else None
+
+
+def macro_task_goal_history(store, params: dict) -> dict:
+    """Read every goal revision for one macro task, newest first."""
+    schemas.reject_unknown(params, GOAL_HISTORY_PARAMETERS, "macro_task.goal_history")
+    macro_task_id = schemas.required_string(params, "macroTaskId", max_length=126)
+    if not MACRO_TASK_PATTERN.fullmatch(macro_task_id):
+        raise BoardError("INVALID_ARGUMENT", "macroTaskId must be macro-<id>")
+    with store.db.read() as connection:
+        if connection.execute("SELECT 1 FROM macro_tasks WHERE macro_task_id=?", (macro_task_id,)).fetchone() is None:
+            raise BoardError("NOT_FOUND", "Unknown macroTaskId", macroTaskId=macro_task_id)
+        rows = connection.execute(
+            "SELECT body,revision,created_at FROM macro_task_goals"
+            " WHERE macro_task_id=? ORDER BY revision DESC", (macro_task_id,),
+        ).fetchall()
+    return {"macroTaskId": macro_task_id,
+            "goals": [{"body": row["body"], "revision": row["revision"], "createdAt": row["created_at"]}
+                      for row in rows]}
 
 
 def project(connection, macro_task_id: str) -> dict:

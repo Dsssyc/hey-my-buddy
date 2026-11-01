@@ -199,6 +199,9 @@ class BuddyControl:
     def macro_task_timeline(self, request_json: str) -> str:
         ...
 
+    def macro_task_goal_history(self, request_json: str) -> str:
+        ...
+
     def macro_task_stop(self, request_json: str) -> str:
         ...
 

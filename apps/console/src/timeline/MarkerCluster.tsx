@@ -46,7 +46,7 @@ export function MarkerCluster({ markers, x, y, hitPath, runId, taskTitle, tabKey
       <path data-slot="marker-hit" d={hitPath} fill="transparent"/>
       <ClusterMark count={markers.length} x={x} y={y} selected={selected || markers.some(marker => markerHasKey(marker, highlightedKey))} focusFrame/>
     </g></PopoverTrigger></Hint>
-    <PopoverContent collisionBoundary={boundary ?? undefined} avoidCollisions sideOffset={8} aria-label={label} className="w-72 max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) overflow-y-auto rounded-none p-1"
+    <PopoverContent collisionBoundary={boundary ?? undefined} avoidCollisions sideOffset={8} aria-label={label} className="w-72 max-w-(--radix-popover-content-available-width) max-h-(--radix-popover-content-available-height) overflow-y-auto p-1"
       onOpenAutoFocus={event => { event.preventDefault(); items.current[0]?.focus(); }}
       onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus(); }}>
       <div className="border-b px-2 py-1 text-xs text-ink3">{label}</div>
