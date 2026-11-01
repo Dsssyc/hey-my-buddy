@@ -103,7 +103,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
         self.git('-C', str(nested), 'config', 'user.name', 'Buddy Test')
         self.git('-C', str(nested), 'add', '.')
         self.git('-C', str(nested), 'commit', '-qm', 'nested repository')
-        self.assertNotEqual(workspace.inspect(str(nested))['repositoryId'], manifest['repositoryId'])
+        self.assertNotEqual(workspace.inspect(str(nested))['projectId'], manifest['projectId'])
         borrower = self.submit_group(board, 'nested-managed-borrower', cwd=nested)
 
         with board.store.db.read() as connection:

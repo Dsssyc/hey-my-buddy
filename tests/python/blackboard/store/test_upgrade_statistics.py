@@ -40,7 +40,7 @@ def _fixture_digest(name):
         # provenance; reconstruct only the original metadata scope here.
         metadata = json.loads(raw)
         metadata = {key: value for key, value in metadata.items()
-                    if not key.startswith(("cleanupStock", "reservationStock"))}
+                    if not key.startswith(("cleanupStock", "reservationStock", "deliveredStock"))}
         raw = (json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     return hashlib.sha256(raw).hexdigest()
 

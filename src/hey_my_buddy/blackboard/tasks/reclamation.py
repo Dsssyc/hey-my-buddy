@@ -20,7 +20,7 @@ def workspace_candidates(store, task_ids=None) -> list[str]:
         "SELECT r.run_id FROM workflow_runs r WHERE r.state IN ('accepted','concluded')"
         " AND json_extract(r.execution_workspace_json,'$.kind')='worktree'"
         " AND NOT EXISTS (SELECT 1 FROM workspace_cleanup_plans p WHERE p.run_id=r.run_id"
-        " AND p.checkout_id=json_extract(r.workspace_manifest_json,'$.checkoutId') AND p.state='applied')"
+        " AND p.path=json_extract(r.workspace_manifest_json,'$.checkoutRoot') AND p.state='applied')"
     )
     with store.db.read() as connection:
         if task_ids is None:
@@ -39,9 +39,8 @@ def _finished_at(connection, run):
     parent = connection.execute(
         "SELECT p.* FROM workflow_children c JOIN workflow_runs p ON p.run_id=c.parent_run_id"
         " WHERE c.child_task_id=?"
-        " AND json_extract(p.workspace_manifest_json,'$.checkoutId')=json_extract(?, '$.checkoutId')"
-        " AND json_extract(p.workspace_manifest_json,'$.repositoryId')=json_extract(?, '$.repositoryId')",
-        (run['run_id'], run['workspace_manifest_json'], run['workspace_manifest_json']),
+        " AND json_extract(p.workspace_manifest_json,'$.checkoutRoot')=json_extract(?, '$.checkoutRoot')",
+        (run['run_id'], run['workspace_manifest_json']),
     ).fetchone()
     return _finished_at(connection, parent) if parent is not None else None
 
@@ -387,11 +386,13 @@ class Reclamation:
                 result = store.workflow._reclaim_checkout(run_id=run_id)
                 if result.get('removed'):
                     self._workspaces.discard(run_id)
+                if 'repository-not-found' in result.get('reasons', ()):
+                    continue
                 if result.get('detail') and failure is None:
                     failure = BoardError(result['reasons'][0],
                         f"{result['detail']}; run {run_id}; plan {result.get('planId')}; path {result.get('path')}")
             except (BoardError, OSError) as error:
-                if isinstance(error, BoardError) and error.code in ('NOT_READY', 'TASK_DELETING', 'WORKSPACE_BUSY', 'STORAGE_BUSY', 'NOT_FOUND'):
+                if isinstance(error, BoardError) and error.code in ('NOT_READY', 'TASK_DELETING', 'WORKSPACE_BUSY', 'STORAGE_BUSY', 'NOT_FOUND', 'WORKSPACE_REPOSITORY_NOT_FOUND'):
                     if error.code == 'NOT_FOUND':
                         self._workspaces.discard(run_id)
                     continue

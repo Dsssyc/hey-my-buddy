@@ -105,8 +105,8 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         submitted, claimed, manifest, checkout, seal, view, artifact = self.run_worktree(board)
         target = self.target_with_artifact(artifact)
         # Before any acceptance, a target that never received the artifact is
-        # refused with the differing paths, and a wrong repository identity is a
-        # change refusal; the Host's own adjustments need adjusted:true and a note.
+        # refused with the differing paths; obsolete target IDs are rejected at
+        # the request boundary. Host adjustments need adjusted:true and a note.
         blank = self.directory / "blank"
         git(self.directory, "clone", "-q", str(self.repo), str(blank))
         with self.assertRaises(BoardError) as raised:
@@ -114,9 +114,12 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         self.assertEqual(raised.exception.code, "INTEGRATION_UNVERIFIED")
         self.assertIn("tracked.txt", raised.exception.details["paths"])
         with self.assertRaises(BoardError) as raised:
-            self.accept(board, view, artifact,
-                        target={"path": target["path"], "repositoryId": "0" * 64, "before": target["before"]})
-        self.assertEqual(raised.exception.code, "WORKSPACE_CHANGED")
+            board.call("workflow_accept", {
+                "runId": view["runId"], "artifactId": artifact["artifactId"], "note": "x",
+                "target": {"path": str(target["path"]), "ref": "HEAD", "repositoryId": "0" * 64},
+                **self.control(view),
+            })
+        self.assertEqual(raised.exception.code, "INVALID_ARGUMENT")
         with self.assertRaises(BoardError) as raised:
             board.call("workflow_accept", {
                 "runId": view["runId"], "artifactId": "art-not-real", "note": "x",
@@ -127,7 +130,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         integration = recorded["integration"]
         self.assertEqual(integration["state"], "verified")
         self.assertEqual(integration["target"]["path"], str(Path(target["path"]).resolve()))
-        self.assertEqual(integration["target"]["repositoryId"], workspace_module.inspect(str(target["path"]))["repositoryId"])
+        self.assertEqual(integration["target"]["projectId"], workspace_module.inspect(str(target["path"]))["projectId"])
         self.assertEqual(integration["beforeCommit"], target["before"])
         self.assertEqual(integration["afterCommit"], target["after"])
         self.assertEqual(integration["beforeTree"], git(target["path"], "rev-parse", target["before"] + "^{tree}").strip())

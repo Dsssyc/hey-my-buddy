@@ -68,7 +68,7 @@ class DeletionAdmissionTests(LifecycleTestCase):
         self.git("-C", str(checkout), "config", "user.name", "Buddy Test")
         self.git("-C", str(checkout), "add", ".")
         self.git("-C", str(checkout), "commit", "-qm", "replacement repository")
-        self.assertNotEqual(workspace.inspect(str(checkout))["repositoryId"], manifest["repositoryId"])
+        self.assertNotEqual(workspace.inspect(str(checkout))["projectId"], manifest["projectId"])
         assert_refused("replacement-repository", checkout)
 
         nested = checkout / "src"
@@ -77,7 +77,7 @@ class DeletionAdmissionTests(LifecycleTestCase):
         self.git("-C", str(nested), "config", "user.name", "Buddy Test")
         self.git("-C", str(nested), "add", ".")
         self.git("-C", str(nested), "commit", "-qm", "nested repository")
-        self.assertNotEqual(workspace.inspect(str(nested))["repositoryId"], manifest["repositoryId"])
+        self.assertNotEqual(workspace.inspect(str(nested))["projectId"], manifest["projectId"])
         assert_refused("nested-repository", nested)
 
     def failed_run(self, *, conflict=False):

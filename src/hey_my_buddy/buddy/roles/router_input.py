@@ -80,7 +80,7 @@ def prepare(manifest: dict | None, directory: Path, *, state_dir: Path, deadline
     if not isinstance(manifest, dict) or not manifest.get("inputTree"):
         raise BoardError("router-input-unavailable", "Routing requires a frozen Git input manifest")
     try:
-        workspace.verify(manifest, state_dir=state_dir, require_unchanged=True)
+        workspace.verify_frozen_input(manifest, state_dir=state_dir)
     except BoardError as error:
         code = ("router-input-unknown" if error.code == "WORKSPACE_GIT_UNKNOWN" else
                 "router-input-changed" if error.code in {"WORKSPACE_CHANGED", "WORKSPACE_MANIFEST_CHANGED", "WORKSPACE_CONFLICT"}
@@ -212,7 +212,7 @@ def verify(manifest: dict | None, root: Path, expected: str, *, state_dir: Path,
     try:
         _remaining(deadline)
         if manifest is not None:
-            workspace.verify(manifest, state_dir=state_dir, require_unchanged=True)
+            workspace.verify_frozen_input(manifest, state_dir=state_dir)
         _remaining(deadline)
         if _digest(root, deadline) != expected:
             raise BoardError("router-input-changed", "Router snapshot changed")

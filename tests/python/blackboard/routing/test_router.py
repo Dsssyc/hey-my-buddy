@@ -326,6 +326,20 @@ class RouterInputTests(unittest.TestCase):
         self.assertEqual(changed.exception.code, 'router-input-changed')
         self.assertFalse((next_attempt / 'frozen-input').exists())
 
+    def test_router_frozen_input_ignores_project_marker_but_workspace_verify_requires_it(self):
+        from hey_my_buddy.buddy.roles import router_input
+        manifest = self.prepare(kind='existing')
+        self.git('update-ref', '-d', 'refs/hey-my-buddy/project')
+        with self.assertRaises(BoardError) as refused:
+            router_input.workspace.verify(manifest, state_dir=self.state)
+        self.assertEqual(refused.exception.code, 'WORKSPACE_CHANGED')
+        attempt = self.root / 'no-project-marker'
+        attempt.mkdir()
+        mirror, fingerprint = router_input.prepare(
+            manifest, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
+        self.assertTrue(router_input.verify(
+            manifest, mirror, fingerprint, deadline=time.monotonic() + 120, state_dir=self.state)['unchanged'])
+
     def test_many_files_are_read_through_one_batch_process_and_failures_leave_no_copy(self):
         from unittest import mock
         from hey_my_buddy.buddy.roles import router_input
@@ -349,7 +363,7 @@ class RouterInputTests(unittest.TestCase):
         broken = dict(manifest, inputTree='0' * 40)
         attempt = self.root / 'broken-attempt'
         attempt.mkdir()
-        with mock.patch.object(router_input.workspace, 'verify'), self.assertRaises(BoardError):
+        with mock.patch.object(router_input.workspace, 'verify_frozen_input'), self.assertRaises(BoardError):
             router_input.prepare(broken, attempt, deadline=time.monotonic() + 120, state_dir=self.state)
         self.assertFalse((attempt / 'frozen-input').exists())
 

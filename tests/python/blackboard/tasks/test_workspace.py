@@ -79,6 +79,8 @@ class WorkspaceTests(unittest.TestCase):
 
     def legacy_full_manifest(self, manifest):
         legacy = dict(manifest, version=2, accessReason="Original Host explanation", access="full")
+        legacy["repositoryId"] = legacy.pop("projectId")
+        legacy["checkoutId"] = "0" * 64
         legacy["manifestSha256"] = workspace._sha(workspace._json({
             key: value for key, value in legacy.items() if key != "manifestSha256"}))
         directory = self.state / "workspaces" / legacy["workspaceId"]
@@ -98,13 +100,15 @@ class WorkspaceTests(unittest.TestCase):
             with self.subTest(integrator=invalid):
                 self.assert_error("INVALID_WORKSPACE", workspace._intent, self.intent(integrator=invalid))
         manifest = self.prepare(integrator={"role": "lead", "id": "lead-1"})
-        self.assertEqual(manifest["version"], 3)
+        self.assertEqual(manifest["version"], 4)
         self.assertEqual(manifest["integrator"], {"role": "lead", "id": "lead-1"})
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
 
     def test_historical_hashed_manifest_remains_readable(self):
         manifest = self.prepare()
         historical = dict(manifest, version=1, integrator="host:host-1")
+        historical["repositoryId"] = historical.pop("projectId")
+        historical["checkoutId"] = "0" * 64
         historical["manifestSha256"] = hashlib.sha256(workspace._json({
             key: value for key, value in historical.items() if key != "manifestSha256"
         })).hexdigest()
@@ -119,7 +123,7 @@ class WorkspaceTests(unittest.TestCase):
 
     def test_full_manifest_version_keeps_legacy_reason_only_in_historical_artifacts(self):
         current = self.prepare(access="full", accessNote="Host approved this access")
-        self.assertEqual(current["version"], 3)
+        self.assertEqual(current["version"], 4)
         self.assertEqual(current["access"], "full")
         self.assertNotIn("accessNote", current)
         self.assertNotIn("accessReason", current)
@@ -133,7 +137,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
                           dict(legacy, accessNote="renamed"))
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
-                          dict(current, accessReason="not in v3"))
+                          dict(current, accessReason="not in v4"))
 
     def test_old_full_manifest_allocation_can_be_deleted(self):
         current = self.prepare(access="full", accessNote="Host approved this access")
@@ -148,6 +152,8 @@ class WorkspaceTests(unittest.TestCase):
         current = self.prepare()
         directory = self.state / "workspaces" / current["workspaceId"]
         old = dict(current, version=2)
+        old["repositoryId"] = old.pop("projectId")
+        old["checkoutId"] = "0" * 64
         old["manifestSha256"] = workspace._sha(workspace._json({
             key: value for key, value in old.items() if key != "manifestSha256"}))
         (directory / "manifest.json").write_bytes(workspace._json(old))
@@ -159,14 +165,19 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.prepare(), old)
         self.assertEqual({name: (directory / name).read_bytes() for name in before}, before)
 
-    def test_incomplete_v2_request_cannot_create_a_v3_manifest(self):
+    def test_incomplete_v3_request_cannot_create_a_v4_manifest(self):
         current = self.prepare()
         directory = self.state / "workspaces" / current["workspaceId"]
         (directory / "manifest.json").unlink()
         request_path = directory / "request.json"
         request = json.loads(request_path.read_bytes())
-        request["version"] = 2
+        request["version"] = 3
         request_path.write_bytes(workspace._json(request))
+        input_path = directory / "input.json"
+        pinned = json.loads(input_path.read_bytes())
+        pinned["source"]["repositoryId"] = pinned["source"].pop("projectId")
+        pinned["source"]["checkoutId"] = "0" * 64
+        input_path.write_bytes(workspace._json(pinned))
         before = request_path.read_bytes()
         self.assert_error("WORKSPACE_CONFLICT", self.prepare)
         self.assertEqual(request_path.read_bytes(), before)
@@ -188,14 +199,16 @@ class WorkspaceTests(unittest.TestCase):
                 self.assertTrue(result.wasSuccessful(), result.errors + result.failures)
 
     def test_identity_unifies_siblings_and_distinguishes_linked_checkout(self):
+        manifest = self.prepare()
         left = workspace.inspect(str(self.repo / "src"))
         right = workspace.inspect(str(self.repo / "docs"))
         linked = self.root / "linked"
         self.git("worktree", "add", "--detach", str(linked), self.base)
         other = workspace.inspect(str(linked / "src"))
-        self.assertEqual(left["checkoutId"], right["checkoutId"])
-        self.assertNotEqual(left["checkoutId"], other["checkoutId"])
-        self.assertEqual(left["repositoryId"], other["repositoryId"])
+        self.assertEqual(left["checkoutRoot"], right["checkoutRoot"])
+        self.assertNotEqual(left["checkoutRoot"], other["checkoutRoot"])
+        self.assertEqual(left["projectId"], other["projectId"])
+        self.assertEqual(left["projectId"], manifest["projectId"])
         self.assertEqual(left["checkoutRoot"], str(self.repo))
         self.assertEqual(left["path"], str(self.repo / "src"))
 

@@ -697,7 +697,7 @@ class _Extractor:
             return tracked, local_sets, no_default
         if owner is not None:
             # The validated value itself is the named object of a direct-value
-            # validator such as ``_canonical_cwd(params.get("cwd"))``.
+            # validator such as ``canonical_cwd(params.get("cwd"))``.
             tracked[params_var] = _TrackedValue(owner)
         assignments = [child for child in ast.walk(node) if isinstance(child, (ast.Assign, ast.AnnAssign, ast.For))]
         for _ in range(3):  # alias, length and loop chains resolve over a few passes

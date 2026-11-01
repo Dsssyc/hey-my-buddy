@@ -211,3 +211,106 @@ def load_fixture(state: Path) -> dict:
     return {**metadata, "state": state, "fixtureRoot": fixture_root,
             "resourceFiles": [replace(relative) for relative in resources["files"]],
             "operations": bind(json.loads(stock["operations.json"])), "bindings": bindings}
+
+
+def load_delivered_stock(fixture: dict) -> None:
+    """Add the floor writer's delivered v3 run and its bound physical evidence."""
+    metadata = json.loads((FIXTURE / "metadata.json").read_text(encoding="utf-8"))
+    sql = (FIXTURE / "schema-30-delivered-stock.sql").read_bytes()
+    resource_bytes = (FIXTURE / "schema-30-delivered-resources.json").read_bytes()
+    if _sha(sql) != metadata["deliveredStockSqlSha256"] or _sha(resource_bytes) != metadata["deliveredStockResourcesSha256"]:
+        raise ValueError("Delivered floor supplement digest changed")
+    resources = json.loads(resource_bytes)
+    if resources["format"] != 1:
+        raise ValueError("Unsupported delivered resource format")
+    state, fixture_root = fixture["state"], fixture["fixtureRoot"]
+    bindings = dict(fixture["bindings"])
+    identity_token = r"ws-[0-9a-f]{32}|[0-9a-f]{64}"
+    for relative, content in resources["files"].items():
+        matched = re.fullmatch(r"workspaces/(ws-[0-9a-f]{32})/request.json", relative)
+        if matched is not None:
+            request = json.loads(content)
+            bindings[matched[1]] = "ws-" + _sha(_json(
+                [str(state), request["requestId"]], ascii_json=True).encode())[:32]
+
+    def replace(text, *, ascii_json=False, json_payload=False):
+        def substitute(match):
+            token = match[0]
+            if not token.startswith("<fixture-root>"):
+                return bindings.get(token, token)
+            relative = token.removeprefix("<fixture-root>")
+            if relative == "/state" or relative.startswith("/state/"):
+                root, relative = state, relative.removeprefix("/state")
+            else:
+                root = fixture_root
+            relative = re.sub(identity_token, lambda item: bindings.get(item[0], item[0]), relative)
+            path = root.joinpath(*relative.lstrip("/").split("/")) if relative else root
+            return json.dumps(str(path), ensure_ascii=ascii_json)[1:-1] if json_payload else str(path)
+
+        return re.sub(r"<fixture-root>(?:/[\w.-]+)*|" + identity_token, substitute, text)
+
+    for recipe in resources["hashBindings"]:
+        payload = replace(recipe["template"], ascii_json=recipe["asciiJson"], json_payload=True)
+        bindings[recipe["oldSha256"]] = _sha(payload.encode())
+
+    def bind(value):
+        if isinstance(value, str):
+            return replace(value)
+        if isinstance(value, list):
+            return [bind(item) for item in value]
+        if isinstance(value, dict):
+            return {bind(key): bind(item) for key, item in value.items()}
+        return value
+
+    repository = fixture_root / "repository"
+    with tempfile.TemporaryDirectory(prefix="delivered-stock-objects-") as scratch:
+        grouped = {}
+        for item in resources["gitObjects"]:
+            path = Path(scratch) / item["oid"]
+            path.write_bytes(bytes.fromhex(item["hex"]))
+            grouped.setdefault(item["type"], []).append(path)
+        for kind, paths in grouped.items():
+            listing = "".join(f"{path}\n" for path in paths)
+            actual = _git(repository, "hash-object", "-w", "-t", kind, "--stdin-paths", data=listing.encode())
+            if actual.splitlines() != [path.name for path in paths]:
+                raise ValueError("Delivered Git object changed")
+    if resources["refs"]:
+        updates = "".join(f"update {replace(ref)} {oid}\n" for ref, oid in resources["refs"].items())
+        _git(repository, "update-ref", "--stdin", data=updates.encode())
+    for relative, content in resources["files"].items():
+        target = state / replace(relative)
+        native_path(target.parent).mkdir(parents=True, exist_ok=True)
+        if target.name == "result-receipt.json":
+            text = replace(content, json_payload=True)
+        else:
+            text = _json(bind(json.loads(content)), ascii_json=True) if target.suffix == ".json" else replace(content)
+        native_path(target).write_bytes(text.encode())
+        native_path(target).chmod(0o600)
+        if target.name == "request.json":
+            native_path(target.parent / ".lock").touch()
+
+    with closing(sqlite3.connect(":memory:")) as template:
+        template.row_factory = sqlite3.Row
+        template.executescript((FIXTURE / "board.sql").read_text(encoding="utf-8"))
+        before = {name: {row[0] for row in template.execute(f'SELECT rowid FROM "{name}"')}
+                  for (name,) in template.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+        template.executescript(sql.decode("utf-8"))
+        with closing(sqlite3.connect(state / "board.sqlite3")) as connection, connection:
+            for name, rowids in before.items():
+                columns = [row[1] for row in template.execute(f'PRAGMA table_info("{name}")')]
+                fields = ",".join(("rowid", *columns))
+                insert = f'INSERT INTO "{name}"({fields}) VALUES({",".join("?" for _ in range(len(columns) + 1))})'
+                for row in template.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid'):
+                    if row[0] in rowids:
+                        continue
+                    values = []
+                    for value in row:
+                        if isinstance(value, str) and value.startswith(("{", "[")):
+                            parsed = json.loads(value)
+                            rebound = bind(parsed)
+                            value = _json(rebound) if parsed != rebound else value
+                        elif isinstance(value, str):
+                            value = replace(value)
+                        values.append(value)
+                    connection.execute(insert, values)
+    fixture["bindings"].update(bindings)

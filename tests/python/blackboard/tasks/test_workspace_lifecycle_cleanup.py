@@ -375,13 +375,13 @@ class CleanupLifecycleTests(LifecycleTestCase):
             self.assertEqual(attempts[0].code, "PREPARATION_CONFLICT")
             # Both refusals name the reclaim's own applying plan for this checkout.
             self.assertEqual(attempts[0].details["planId"], applied["planId"])
-            self.assertEqual(attempts[0].details["checkoutId"], manifest["checkoutId"])
+            self.assertEqual(attempts[0].details["checkoutRoot"], manifest["checkoutRoot"])
         self.assertFalse(checkout.exists())
         # No reservation survived either refused claim.
         with board.store.db.read() as connection:
             held = connection.execute(
-                "SELECT COUNT(*) FROM workspace_reservations WHERE checkout_id=? AND state IN ('held','transferred')",
-                (manifest["checkoutId"],),
+                "SELECT COUNT(*) FROM workspace_reservations WHERE checkout_root=? AND state IN ('held','transferred')",
+                (manifest["checkoutRoot"],),
             ).fetchone()[0]
         self.assertEqual(held, 0)
 
@@ -408,7 +408,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertNotEqual(evidence["workspaceId"], second["workspaceId"])
         self.assertEqual(evidence["kind"], "worktree")
         self.assertEqual(evidence["path"], first["checkoutRoot"])
-        self.assertEqual(evidence["checkoutId"], first["checkoutId"])
+        self.assertNotIn("checkoutId", evidence)
         self.assertEqual(evidence["evidence"]["workspace"]["manifestWorkspaceId"], second["workspaceId"])
         self.assertTrue(evidence["retention"]["artifactIds"])
         self.assertTrue(any("outputs" in ref for ref in evidence["retention"]["fixedRefs"]))
@@ -487,7 +487,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
             ).fetchone()[0])
         # The borrow is the same physical checkout under another logical workspace id.
         self.assertEqual(borrowed_manifest["kind"], "existing")
-        self.assertEqual(borrowed_manifest["checkoutId"], first["checkoutId"])
+        self.assertEqual(borrowed_manifest["checkoutRoot"], first["checkoutRoot"])
         self.assertNotEqual(borrowed_manifest["workspaceId"], first["workspaceId"])
         # A live holder keeps the allocation owner from removing the checkout.
         owner_view = self.view(board, submitted["runId"])
@@ -536,7 +536,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
                 "SELECT workspace_manifest_json FROM workflow_children WHERE child_task_id=?", (helper_id,)
             ).fetchone()[0])
         self.assertEqual(helper_manifest["kind"], "existing")
-        self.assertEqual(helper_manifest["checkoutId"], manifest["checkoutId"])
+        self.assertEqual(helper_manifest["checkoutRoot"], manifest["checkoutRoot"])
         self.assertNotEqual(helper_manifest["workspaceId"], manifest["workspaceId"])
         # A helper run that only borrowed the parent's worktree has no allocation
         # provenance of its own, even though its cwd is under state/workspaces.

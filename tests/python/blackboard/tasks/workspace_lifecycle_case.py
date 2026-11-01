@@ -18,7 +18,7 @@ from unittest import mock
 from support import BoardTestCase
 from protocol.fixtures import native_turn
 from blackboard.tasks.test_workflow_real import BUDDY, GIT_ENV, RealWorkspaceTestCase, private_environment
-import blackboard.tasks.test_workspace_identity as identity_fixtures
+import blackboard.tasks.workspace_git_fixture as git_fixtures
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
@@ -38,7 +38,7 @@ def git(path, *arguments: str) -> str:
 
 
 class LifecycleTestCase(RealWorkspaceTestCase):
-    fixed_files = identity_fixtures.WorkspaceIdentityFixture.fixed_files
+    fixed_files = git_fixtures.WorkspaceGitFixture.fixed_files
 
     @classmethod
     def setUpClass(cls):
@@ -139,9 +139,6 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         else:
             self.assertIsNotNone(target)
             target_params = {"path": str(target["path"]), "ref": target.get("ref") or "HEAD"}
-            for key in ("repositoryId", "checkoutId"):
-                if target.get(key):
-                    target_params[key] = target[key]
             params["target"] = target_params
             if target.get("before"):
                 params["beforeCommit"] = target["before"]
@@ -327,7 +324,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         second_manifest = second["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(second_manifest["kind"], "existing")
         self.assertNotEqual(second_manifest["workspaceId"], first_manifest["workspaceId"])
-        for field in ("checkoutRoot", "checkoutId", "repositoryId", "path"):
+        for field in ("checkoutRoot", "projectId", "path"):
             self.assertEqual(second_manifest[field], first_manifest[field])
         # A new-file second stage keeps the sealed patch applicable to a fresh target.
         (checkout / "second.txt").write_text("second turn output\n", encoding="utf-8", newline="\n")
@@ -464,7 +461,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
                 "SELECT workspace_manifest_json FROM workflow_children WHERE child_task_id=?", (helper_id,)
             ).fetchone()["workspace_manifest_json"])
         self.assertEqual(helper_manifest["kind"], "worktree")
-        self.assertNotEqual(helper_manifest["checkoutId"], manifest["checkoutId"])
+        self.assertNotEqual(helper_manifest["checkoutRoot"], manifest["checkoutRoot"])
         helper_claim = self.claim(board, helper_id, request_id=f"{request_id}-helper-claim", nonce="h" * 16)
         self.assertIsNotNone(helper_claim["claim"], helper_claim)
         helper_turn_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]

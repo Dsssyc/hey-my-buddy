@@ -62,8 +62,8 @@ class RestartLifecycleTests(LifecycleTestCase):
         current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
         actual = workspace_module.inspect(str(checkout))
         self.assertEqual(current["path"], original["path"])
-        self.assertEqual(current["checkoutId"], actual["checkoutId"])
-        self.assertEqual(current["checkoutId"], original["checkoutId"])
+        self.assertEqual(current["checkoutRoot"], actual["checkoutRoot"])
+        self.assertEqual(current["checkoutRoot"], original["checkoutRoot"])
         self.assertEqual(current["baseCommit"], first_seal["commit"])
         (checkout / "tracked.txt").write_text("output after reboot\n", encoding="utf-8", newline="\n")
         sealed = workspace_module.seal(self.directory, current, run_id, resumed["claim"]["attempt"]["attemptId"])
@@ -96,11 +96,10 @@ class RestartLifecycleTests(LifecycleTestCase):
         submitted, _claim, original, checkout, seal, delivered, artifact = self.run_worktree(
             board, request_id="restart-accepted")
         target = self.target_with_artifact(artifact, name="restart-target")
-        # A retained target input supplies independent directory/inode and
-        # fixed-reference proof for optional target identity fields.
+        # A retained target input supplies independent path and fixed-reference proof.
         target_run = self.submit(board, request_id="restart-target-input", cwd=target["path"], access="read")
         target_identity = workspace_module.inspect(str(target["path"]))
-        target.update({key: target_identity[key] for key in ("repositoryId", "checkoutId")})
+        target.update({key: target_identity[key] for key in ("projectId", "checkoutRoot")})
         with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
             accepted = self.accept(board, delivered, artifact, target=target)
         planned = board.store.workflow.cleanup_plan({
@@ -110,14 +109,13 @@ class RestartLifecycleTests(LifecycleTestCase):
         files = self.fixed_files()
         board = self.board()
         self.assertEqual(self.fixed_files(), files)
-        self.assertEqual(workspace_module.inspect(str(target["path"]))["checkoutId"], target["checkoutId"])
+        self.assertEqual(workspace_module.inspect(str(target["path"]))["checkoutRoot"], target["checkoutRoot"])
         target_check = workspace_module.integration_verify(
             seal, original_input=original, final_input=original,
             path=str(target["path"]), ref="HEAD", before_commit=target["before"],
-            repository_id=target["repositoryId"], checkout_id=target["checkoutId"],
         )
         self.assertTrue(target_check["verified"])
-        # A receipt-bound replay retains the user's optional target identities.
+        # A receipt-bound replay retains the target path and ref.
         with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
             repeated = self.accept(board, self.view(board, submitted["runId"]), artifact, target=target)
         self.assertEqual(repeated["state"], "accepted")
@@ -133,11 +131,11 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertTrue(native_path(Path(target["path"])).exists())
         target_view = board.call("task_get", {"runId": target_run["runId"]})["task"]
         self.assertEqual(target_view["lineage"]["project"]["id"],
-                         workspace_module.inspect(str(target["path"]))["repositoryId"])
+                         workspace_module.inspect(str(target["path"]))["projectId"])
         for path, raw in files.items():
             self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)
 
-    def test_restart_cannot_remove_a_copied_worktree_git_directory(self):
+    def test_restart_uses_git_ownership_after_a_metadata_directory_copy(self):
         board, submitted, original, checkout, _artifact, _view = self.accepted_worktree(
             request_id="restart-replaced-allocation")
         board = self.board()
@@ -149,13 +147,10 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertNotEqual(native_path(git_directory).stat().st_ino, native_path(retained).stat().st_ino)
         self.assertEqual(native_path(git_directory / "HEAD").read_bytes(), native_path(retained / "HEAD").read_bytes())
         self.assertEqual(git(checkout, "rev-parse", original["snapshot"]["inputRef"]).strip(), original["inputCommit"])
-        with self.assertRaises(BoardError):
-            workspace_module.verify(original, require_unchanged=False, state_dir=self.directory)
-        with self.assertRaises(BoardError) as unsafe:
-            workspace_module.cleanup_remove(self.directory, original)
-        self.assertEqual(unsafe.exception.code, "WORKSPACE_CHANGED")
-        self.assertTrue(checkout.exists())
-        self.assertTrue(native_path(git_directory).exists())
+        self.assertTrue(workspace_module.verify(original, require_unchanged=False, state_dir=self.directory)["valid"])
+        self.assertTrue(workspace_module.cleanup_remove(self.directory, original)["removed"])
+        self.assertFalse(checkout.exists())
+        self.assertFalse(native_path(git_directory).exists())
         self.assertTrue(retained.exists())
         self.assertNotEqual((self.view(board, submitted["runId"])["cleanup"] or {}).get("state"), "applied")
 
@@ -184,7 +179,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertIsNotNone(resumed["claim"], resumed)
         current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
         self.assertEqual(current["baseCommit"], resolved["outputCommit"])
-        self.assertEqual(current["checkoutId"], workspace_module.inspect(current["path"])["checkoutId"])
+        self.assertEqual(current["checkoutRoot"], workspace_module.inspect(current["path"])["checkoutRoot"])
         for path, raw in files.items():
             self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)
 

@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 import sqlite3
 import stat
+import sys
 from unittest.mock import patch
 
 from support import BoardTestCase
@@ -25,6 +26,21 @@ from hey_my_buddy.blackboard.store.store import BoardStore
 
 
 class CurrentCoreTests(BoardTestCase):
+    def test_frozen_schema_steps_import_only_the_standard_library(self):
+        source = Path(__file__).resolve().parents[4] / "src" / "hey_my_buddy" / "blackboard" / "store"
+        for name in ("schema_30_31.py", "schema_31_32.py", "schema_32_33.py"):
+            tree = ast.parse((source / name).read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    self.assertEqual(node.level, 0, (name, node.lineno))
+                    modules = [node.module]
+                else:
+                    continue
+                for module in modules:
+                    self.assertIn(module.split(".")[0], sys.stdlib_module_names, (name, node.lineno, module))
+
     def test_fresh_database_creates_private_file_without_changing_directory_mode(self):
         directory = self.directory / "database-mode"
         directory.mkdir(mode=0o750)
@@ -79,7 +95,7 @@ class CurrentCoreTests(BoardTestCase):
     def test_fresh_schema_has_only_current_fields_and_survives_reopen(self):
         signature = json.loads((Path(__file__).resolve().parents[2] / "protocol" / "contract_signatures.json").read_text(encoding="utf-8"))
         self.assertEqual(CONTRACT_VERSION, signature["contractVersion"])
-        self.assertEqual(SCHEMA_VERSION, 32)
+        self.assertEqual(SCHEMA_VERSION, 33)
         board = self.board()
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0], str(SCHEMA_VERSION))
@@ -125,6 +141,7 @@ class CurrentCoreTests(BoardTestCase):
             ("blackboard/store/db.py", "INSERT INTO meta(key, value) VALUES(?, ?)"),
             ("blackboard/store/schema_30_31.py", "UPDATE meta SET value='31' WHERE key='schema_version'"),
             ("blackboard/store/schema_31_32.py", "UPDATE meta SET value='32' WHERE key='schema_version'"),
+            ("blackboard/store/schema_32_33.py", "UPDATE meta SET value='33' WHERE key='schema_version'"),
         ]))
         board = self.board()
         with board.store.db.read() as connection:

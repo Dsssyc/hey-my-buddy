@@ -19,7 +19,7 @@ from typing import Iterator
 
 from ...json_codec import canonical_json  # noqa: F401 - the one shared canonical JSON
 
-SCHEMA_VERSION = 32
+SCHEMA_VERSION = 33
 DB_FILE = "board.sqlite3"
 SECRET_KEY = "capability_secret"
 CONTROL_TOKEN_VERSION = 1
@@ -639,15 +639,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS workflow_continuations_lead_pending_unique
     ON workflow_continuations(run_id) WHERE kind='lead-wakeup' AND state IN ('recorded','queued');
 """,
     # Durable workspace reservations independent of attempt capacity. The partial
-    # unique index is the relational guarantee that one checkout has at most one
+    # unique index is the relational guarantee that one checkout root has at most one
     # held writer, while readers share a concrete unchanged snapshot.
     """
 CREATE TABLE IF NOT EXISTS workspace_reservations (
     reservation_id  TEXT PRIMARY KEY,
     workspace_id    TEXT NOT NULL,
-    checkout_id     TEXT NOT NULL,
-    repository_id   TEXT,
-    path            TEXT NOT NULL,
+    checkout_root   TEXT NOT NULL,
     access          TEXT NOT NULL CHECK (access IN ('read','write')),
     holder_task_id  TEXT NOT NULL REFERENCES tasks(task_id) ON DELETE RESTRICT,
     holder_kind     TEXT NOT NULL CHECK (holder_kind IN ('parent','helper','reader')),
@@ -660,10 +658,10 @@ CREATE TABLE IF NOT EXISTS workspace_reservations (
 """,
     """
 CREATE UNIQUE INDEX IF NOT EXISTS workspace_reservations_writer_unique
-    ON workspace_reservations(checkout_id) WHERE state='held' AND access='write';
+    ON workspace_reservations(checkout_root) WHERE state='held' AND access='write';
 """,
     """
-CREATE INDEX IF NOT EXISTS workspace_reservations_checkout_idx ON workspace_reservations(checkout_id, state);
+CREATE INDEX IF NOT EXISTS workspace_reservations_checkout_idx ON workspace_reservations(checkout_root, state);
 """,
     """
 CREATE INDEX IF NOT EXISTS workspace_reservations_holder_idx ON workspace_reservations(holder_task_id, state);
@@ -737,8 +735,7 @@ CREATE TABLE IF NOT EXISTS workflow_integrations (
     binding_sha256        TEXT NOT NULL,
     target_path           TEXT NOT NULL DEFAULT '',
     target_ref            TEXT NOT NULL DEFAULT '',
-    target_repository_id  TEXT,
-    target_checkout_id    TEXT,
+    target_project_id     TEXT, -- NULL when the target was unmarked at verification
     source_commit         TEXT,
     source_tree           TEXT,
     before_commit         TEXT,
@@ -759,15 +756,13 @@ CREATE TABLE IF NOT EXISTS workflow_integrations (
 CREATE INDEX IF NOT EXISTS workflow_integrations_run_idx ON workflow_integrations(run_id, artifact_id, created_at);
 """,
     # One cleanup plan per disposable managed checkout. The plan binds the exact
-    # path, the workspace/repository identity and the evidence that permitted it;
+    # path, the project identity and the evidence that permitted it;
     # apply rechecks all of them and deletes only that registered linked worktree.
     """
 CREATE TABLE IF NOT EXISTS workspace_cleanup_plans (
     plan_id          TEXT PRIMARY KEY,
     run_id           TEXT NOT NULL REFERENCES workflow_runs(run_id) ON DELETE RESTRICT,
     workspace_id     TEXT NOT NULL,
-    checkout_id      TEXT NOT NULL,
-    repository_id    TEXT,
     path             TEXT NOT NULL,
     kind             TEXT NOT NULL,
     state            TEXT NOT NULL CHECK (state IN ('planned','applying','applied','blocked')),

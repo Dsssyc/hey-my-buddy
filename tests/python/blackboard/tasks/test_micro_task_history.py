@@ -180,7 +180,7 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "UPDATE workflow_runs SET workspace_manifest_json=json_set(workspace_manifest_json,"
-                " '$.repositoryId', 'repo:later', '$.snapshot.repositoryPath', '/later/repository')"
+                " '$.projectId', 'repo:later', '$.snapshot.repositoryPath', '/later/repository')"
                 " WHERE run_id=?", (run_id,),
             )
             connection.execute("UPDATE tasks SET cwd='/later/checkout' WHERE task_id=?", (run_id,))
@@ -349,7 +349,7 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         self.assertIsNone(metadata["parentRunId"])
         self.assertIsNone(metadata["rootRunId"])
         self.assertEqual(metadata["project"]["path"], os.path.realpath(str(self.workdir())))
-        self.assertEqual(metadata["project"]["id"], os.path.realpath(str(self.workdir())))
+        self.assertIsNone(metadata["project"]["id"])
         self.assertEqual(metadata["project"]["label"], "work")
         # The command adapter has no complete execution buddy, so none is
         # invented for it.

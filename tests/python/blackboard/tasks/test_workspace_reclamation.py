@@ -330,7 +330,7 @@ class ReclamationTests(LifecycleTestCase):
                   'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}}
         shell_id, shell = workspace._workspace_directory(board.directory, 'abandoned-shell')
         (shell / '.lock').touch()
-        (shell / 'request.json').write_bytes(workspace._json({'requestId': 'abandoned-shell', 'version': 3, 'intent': intent}))
+        (shell / 'request.json').write_bytes(workspace._json({'requestId': 'abandoned-shell', 'version': 4, 'intent': intent}))
         with workspace._lock(shell, create=False):
             Reclamation(board.store).run()
             self.assertTrue(shell.exists())
@@ -762,20 +762,29 @@ class ReclamationTests(LifecycleTestCase):
         with board.store.db.read() as connection:
             prepared = json.loads(board.store.workflow._run_row(connection, run_id)['workspace_manifest_json'])
         self.assertEqual(prepared['inputCommit'], host_seal['commit'])
-        self.assertEqual(prepared['checkoutId'], current['checkoutId'])
+        self.assertEqual(prepared['checkoutRoot'], current['checkoutRoot'])
 
-    def test_current_unstarted_journal_refreshes_its_physical_binding(self):
+    def test_cleanup_plan_keeps_one_binding_per_root_for_a_run(self):
+        from hey_my_buddy.blackboard.store.db import canonical_json
         board, submitted, manifest, checkout, _, _ = self.accepted_worktree()
         coordinator = board.store.workflow
-        plan = coordinator.cleanup_plan({'runId': submitted['runId']})['plan']
+        first = coordinator.cleanup_plan({'runId': submitted['runId']})['plan']
+        self.assertEqual(coordinator.cleanup_plan({'runId': submitted['runId']})['plan']['planId'], first['planId'])
+        replacement = workspace.prepare(board.directory, 'second-root-plan', {
+            'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
+            'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'host-1'},
+        })
         with board.store.db.write() as connection:
-            connection.execute("UPDATE workspace_cleanup_plans SET state='blocked',workspace_id='stale-id',path='stale-path' WHERE plan_id=?", (plan['planId'],))
-        refreshed = coordinator.cleanup_plan({'runId': submitted['runId']})['plan']
-        self.assertEqual(refreshed['planId'], plan['planId'])
-        self.assertEqual(refreshed['workspaceId'], manifest['workspaceId'])
-        self.assertEqual(refreshed['path'], str(checkout))
-        self.assertTrue(self.reclaim(board, self.view(board, submitted['runId']))['removed'])
-        self.assertFalse(checkout.exists())
+            connection.execute('UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?',
+                               (canonical_json(replacement), submitted['runId']))
+        second = coordinator.cleanup_plan({'runId': submitted['runId']})['plan']
+        self.assertNotEqual(second['planId'], first['planId'])
+        self.assertEqual(second['path'], replacement['checkoutRoot'])
+        with board.store.db.read() as connection:
+            paths = [row[0] for row in connection.execute(
+                'SELECT path FROM workspace_cleanup_plans WHERE run_id=? ORDER BY rowid',
+                (submitted['runId'],))]
+        self.assertEqual(paths, [str(checkout), replacement['checkoutRoot']])
 
     def test_busy_result_converges_if_a_competing_cleanup_already_committed(self):
         from unittest.mock import patch
@@ -783,8 +792,8 @@ class ReclamationTests(LifecycleTestCase):
         board, submitted, _, checkout, _, _ = self.accepted_worktree()
         coordinator = board.store.workflow
         real_apply = coordinator.cleanup_apply
-        def completed_elsewhere(params):
-            real_apply(params)
+        def completed_elsewhere(params, **kwargs):
+            real_apply(params, **kwargs)
             raise BoardError('WORKSPACE_BUSY', 'The competing operation held the lock')
         with patch.object(coordinator, 'cleanup_apply', side_effect=completed_elsewhere):
             result = self.reclaim(board, self.view(board, submitted['runId']))

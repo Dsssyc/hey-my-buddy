@@ -371,10 +371,12 @@ class ResolutionReceiptTests(RealWorkspaceTestCase):
             }),
             lambda: board.call('workflow_reclaim',{'runId':run_id,**self.control(accepted)}),
         )
-        for operation in operations:
-            with self.assertRaises(BoardError) as caught:
-                operation()
-            self.assertEqual(caught.exception.code,'TASK_DELETING')
+        with defer_reclaim.object(workspace_module, "locate_repository",
+                                  side_effect=AssertionError("Deletion fence must precede repository lookup")):
+            for operation in operations:
+                with self.assertRaises(BoardError) as caught:
+                    operation()
+                self.assertEqual(caught.exception.code,'TASK_DELETING')
 
     def test_missing_allocation_refuses_a_checkout_recreated_during_registration_proof(self):
         board, run_id, manifest, checkout, git_dir, planned, _accepted = self.missing_allocation_plan(

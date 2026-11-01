@@ -705,9 +705,9 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         view = self.routed()
         chosen = view["routing"]["routingBoundary"]["commands"]["continue"]["choices"][0]["params"]
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,checkout_id,path,kind,state,"
+            db.execute("INSERT INTO workspace_cleanup_plans(plan_id,run_id,workspace_id,path,kind,state,"
                        "evidence_json,retention_json,created_at) "
-                       "VALUES('private-cleanup',?,'workspace','checkout','/private-fixture','existing','applying',"
+                       "VALUES('private-cleanup',?,'workspace','/private-fixture','existing','applying',"
                        "'{}','{}',?)", (view["runId"], T0))
         latest = self.board_.call("workflow_get", {"runId": view["runId"]})
         for command in latest["routing"]["routingBoundary"]["commands"].values():

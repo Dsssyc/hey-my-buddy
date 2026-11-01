@@ -21,9 +21,8 @@ def first_execution_time(connection, manifest: dict) -> float | None:
     """
     value = connection.execute(
         "SELECT MIN(a.started_at) FROM workflow_turns w JOIN attempts a ON a.attempt_id=w.attempt_id"
-        " WHERE json_extract(w.input_json,'$.executionWorkspace.checkoutId')=?"
-        " AND json_extract(w.input_json,'$.executionWorkspace.repositoryId')=?",
-        (manifest['checkoutId'], manifest['repositoryId']),
+        " WHERE json_extract(w.input_json,'$.executionWorkspace.checkoutRoot')=?",
+        (manifest['checkoutRoot'],),
     ).fetchone()[0]
     return datetime.fromisoformat(value).timestamp() if value is not None else None
 

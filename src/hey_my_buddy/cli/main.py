@@ -119,6 +119,8 @@ examples:
   hey-my-buddy decide '{"runId":"<runId>","requestId":"req-1","commandId":"cmd-1","expectedRevision":1,"decision":"approve","helpers":[],"controlFile":"/path/from-submit"}'
   hey-my-buddy continue '{"runId":"<runId>","commandId":"cmd-2","expectedRevision":2,"input":"...","helperPolicy":"keep","controlFile":"..."}'
       continue may set access and accessNote for the next turn; omission keeps the current choice.
+      continue and reclaim may set an absolute cwd to locate a moved repository;
+      it does not change the micro task's allocated working directory.
   hey-my-buddy takeover '{"runId":"<runId>","commandId":"cmd-3","expectedOwnerGeneration":1,"newHostId":"host-2","controlFile":"..."}'
   hey-my-buddy cancel '{"runId":"<runId>","commandId":"cmd-4","note":"...","controlFile":"..."}'
   hey-my-buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"note":"...","controlFile":"..."}'

@@ -50,9 +50,7 @@ def reject_deleting_checkout(connection, manifest: dict, state_dir: Path) -> Non
     """Fence claims on the physical worktree allocation of a deleting run."""
     if connection.execute("SELECT 1 FROM macro_task_deletions LIMIT 1").fetchone() is None:
         return
-    checkout_root = manifest.get("checkoutRoot")
-    if not checkout_root:
-        return
+    checkout_root = manifest["checkoutRoot"]
     try:
         allocation = Path(checkout_root).relative_to(state_dir / "workspaces")
     except ValueError:
@@ -75,6 +73,6 @@ def reject_deleting_checkout(connection, manifest: dict, state_dir: Path) -> Non
             raise BoardError(
                 "PREPARATION_CONFLICT",
                 "This managed checkout belongs to a micro task being deleted",
-                checkoutId=manifest["checkoutId"], ownerRunId=owner["run_id"],
+                checkoutRoot=checkout_root, ownerRunId=owner["run_id"],
                 deletionId=deletion["deletion_id"],
             )

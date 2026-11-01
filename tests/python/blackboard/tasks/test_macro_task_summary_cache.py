@@ -359,7 +359,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.read()
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             self.sql("UPDATE macro_tasks SET project_id=? WHERE macro_task_id=?", (project, group))
-            self.sql("UPDATE workflow_artifacts SET manifest_json=json_set(manifest_json,'$.repositoryId',?) WHERE run_id=? AND kind='input'", (project, root))
+            self.sql("UPDATE workflow_artifacts SET manifest_json=json_set(manifest_json,'$.projectId',?) WHERE run_id=? AND kind='input'", (project, root))
             self.assertEqual(self.rows()[group]["project"]["id"], project)
             self.assert_recomputed(counter, [group])
             self.assertEqual(self.rows(group="project:" + project)[group]["matchingRuns"], 4)

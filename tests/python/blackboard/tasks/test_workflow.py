@@ -854,7 +854,7 @@ class WorkspaceTests(WorkflowTestCase):
         with self.assertRaises(BoardError) as raised:
             self.submit(board, request_id="req-2", cwd=str(sibling))
         self.assertEqual(raised.exception.code, "PREPARATION_CONFLICT")
-        self.assertEqual(raised.exception.details["checkoutId"], f"checkout:{os.path.realpath(root)}")
+        self.assertEqual(raised.exception.details["checkoutRoot"], os.path.realpath(root))
 
     def test_isolated_worktrees_allow_parallel_writers(self):
         board = self.board()
@@ -863,10 +863,10 @@ class WorkspaceTests(WorkflowTestCase):
         first = self.submit(board, request_id="req-1", cwd=str(source), kind="worktree")
         second = self.submit(board, request_id="req-2", cwd=str(source), kind="worktree")
         self.assertNotEqual(
-            first["workspace"]["checkoutId"],
-            second["workspace"]["checkoutId"],
+            first["workspace"]["checkoutRoot"],
+            second["workspace"]["checkoutRoot"],
         )
-        self.assertEqual(first["workspace"]["repositoryId"], second["workspace"]["repositoryId"])
+        self.assertEqual(first["workspace"]["projectId"], second["workspace"]["projectId"])
 
     def test_idempotent_submit_recovers_snapshot_before_inspecting_source(self):
         board = self.board()
@@ -2117,7 +2117,7 @@ class CancellationCascadeTests(WorkflowTestCase):
         self.assertIn((submitted["runId"], "released"), states)
         # The checkout is reusable: a new run is admitted with no leaked writer.
         again = self.submit(board, request_id="req-2", cwd=str(root))
-        self.assertEqual(again["workspace"]["checkoutId"], submitted["workspace"]["checkoutId"])
+        self.assertEqual(again["workspace"]["checkoutRoot"], submitted["workspace"]["checkoutRoot"])
 
     def test_yielded_helper_is_cancelled_after_proven_stop(self):
         board = self.board()

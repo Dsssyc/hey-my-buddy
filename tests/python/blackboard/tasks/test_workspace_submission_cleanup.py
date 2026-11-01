@@ -20,6 +20,22 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
 
     _repository_template = None
 
+    def test_revoke_missing_new_checkout_uses_the_preparation_repository_without_marker_reads(self):
+        from hey_my_buddy import private_dirs
+        intent = {"kind": "worktree", "cwd": str(self.repo), "access": "write",
+                  "base": {"kind": "working-tree"}, "writeScope": ["."],
+                  "integrator": {"role": "host", "id": "host-1"}}
+        manifest = workspace.prepare(self.directory, "revoke-missing-new-checkout", intent)
+        private_dirs.remove_tree(Path(manifest["checkoutRoot"]))
+        directory = self.directory / "workspaces" / manifest["workspaceId"]
+        with workspace._lock(directory, create=False), patch.object(
+                workspace, "read_project_id", side_effect=AssertionError("same-operation marker read")):
+            plan = workspace.submission_revoke_plan(self.directory, manifest)
+            self.assertEqual(plan["reasons"], [])
+            self.assertTrue(workspace.revoke_submission(plan)["removed"])
+        workspace.finish_submission_revoke(directory)
+        self.assertFalse(directory.exists())
+
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
@@ -54,7 +70,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
     def assert_no_registration(self, board, request='rejected'):
         with board.store.db.read() as connection:
             self.assertIsNone(connection.execute('SELECT task_id FROM tasks WHERE request_id=?', (request,)).fetchone())
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workspace_reservations WHERE path=?', (str(self.allocation(request) / 'checkout'),)).fetchone()[0], 0)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM workspace_reservations WHERE checkout_root=?', (str(self.allocation(request) / 'checkout'),)).fetchone()[0], 0)
 
     def test_service_reclamation_keeps_group_sessions_and_retains_private_evidence_for_three_days(self):
         from hey_my_buddy import private_dirs
@@ -221,7 +237,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertFalse(self.allocation().exists())
         self.assertEqual(self.git(self.repo, 'for-each-ref', 'refs/hey-my-buddy/workspaces/' + self.allocation().name), '')
 
-    def test_submission_proof_uses_checkout_identity_only_for_worktrees(self):
+    def test_submission_proof_uses_checkout_root_only_for_worktrees(self):
         board = self.board()
         for kind in ('existing', 'worktree'):
             with self.subTest(kind=kind):
@@ -232,7 +248,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 plan = workspace.submission_revoke_plan(self.directory, manifest)
                 with board.store.db.write() as connection:
                     connection.execute('INSERT INTO commands(command_id,kind,request_hash,response_json) VALUES(?,?,?,?)',
-                                       ('retained-' + kind, 'fixture', 'fixture', json.dumps({'checkoutId': manifest['checkoutId']})))
+                                       ('retained-' + kind, 'fixture', 'fixture', json.dumps({'checkoutRoot': manifest['checkoutRoot']})))
                 with board.store.db.read() as connection:
                     reasons = storage.submission_references(connection, manifest, request, plan['directory'])
                 self.assertEqual(reasons, ['commands-reference'] if kind == 'worktree' else [])
@@ -363,7 +379,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
             with self.subTest(kind=kind):
                 view = board.call('workflow_get', {'runId': parent['runId']})
                 before_refs = self.git(self.repo, 'for-each-ref')
-                before_other_refs = self.git(other, 'for-each-ref')
+                before_other_refs = self.git(other, 'for-each-ref', 'refs/heads/', 'refs/tags/', 'refs/hey-my-buddy/workspaces/')
                 before_allocations = sorted((self.directory / 'workspaces').iterdir())
                 with patch.object(board.store.workflow, '_stopped_parent', return_value=False):
                     with self.assertRaises(BoardError) as caught:
@@ -379,7 +395,8 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 self.assertTrue(all(item['removed'] for item in caught.exception.details['helperPreparationCleanup']))
                 self.assertEqual(sorted((self.directory / 'workspaces').iterdir()), before_allocations)
                 self.assertEqual(self.git(self.repo, 'for-each-ref'), before_refs)
-                self.assertEqual(self.git(other, 'for-each-ref'), before_other_refs)
+                self.assertEqual(self.git(other, 'for-each-ref', 'refs/heads/', 'refs/tags/', 'refs/hey-my-buddy/workspaces/'), before_other_refs)
+                self.assertIsNotNone(workspace.read_project_id(other / '.git'))
                 self.assertTrue((self.repo / 'tracked.txt').exists())
 
     def test_preexisting_prepared_worktree_is_preserved_on_rejection(self):
@@ -530,7 +547,9 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.assertEqual(record['locked'], 'hey-my-buddy:' + manifest['workspaceId'])
         self.assertEqual(record['HEAD'], manifest['inputCommit'])
         _, git_dir = workspace._cleanup_registration(self.repo / '.git', directory / 'checkout', manifest)
-        self.assertEqual(workspace._identity(git_dir), manifest['checkoutId'])
+        self.assertTrue(git_dir.is_dir())
+        backlink = Path((git_dir / 'gitdir').read_text(encoding='utf-8').strip())
+        self.assertEqual((git_dir / backlink).resolve(), directory / 'checkout' / '.git')
         self.assertTrue(workspace.deletion_inspect(self.directory, manifest)['eligible'])
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         Reclamation(board.store).run()
@@ -693,8 +712,8 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         with patch.object(workspace, '_lock', wraps=workspace._lock) as lock:
             with board.store.workflow._helper_preparations(helpers) as prepared:
                 self.assertEqual(len(prepared), 2)
-                self.assertEqual([item['manifest']['checkoutId'] for item in prepared],
-                                 [manifest['checkoutId'], manifest['checkoutId']])
+                self.assertEqual([item['manifest']['checkoutRoot'] for item in prepared],
+                                 [manifest['checkoutRoot'], manifest['checkoutRoot']])
                 self.assertTrue(checkout.exists())
         self.assertEqual(sum(call.args[0] == checkout.parent for call in lock.call_args_list), 1,
                          'shared helpers must acquire the original physical allocation lock only once')

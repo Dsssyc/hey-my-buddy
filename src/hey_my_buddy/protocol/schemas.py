@@ -183,7 +183,7 @@ def string_list(params: dict, name: str, *, limit: int, pattern: re.Pattern | No
     return out
 
 
-def _canonical_cwd(raw: Any) -> str:
+def canonical_cwd(raw: Any) -> str:
     if not isinstance(raw, str) or not is_absolute_path(raw):
         raise BoardError("INVALID_ARGUMENT", "cwd must be an absolute path")
     try:
@@ -240,7 +240,7 @@ def normalize_spec(params: dict) -> dict:
         )
     spec: dict[str, Any] = {
         "adapter": adapter,
-        "cwd": _canonical_cwd(params.get("cwd")),
+        "cwd": canonical_cwd(params.get("cwd")),
         "task": task_text,
         "expectedSeconds": expected_duration(params),
         "requiredCapabilities": string_list(params, "requiredCapabilities", limit=MAX_CAPABILITIES),

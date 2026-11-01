@@ -7,6 +7,7 @@ import runpy
 import sqlite3
 import subprocess
 import sys
+import zlib
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import WorkflowTestCase
@@ -41,6 +42,21 @@ class ExportBoardSampleTests(WorkflowTestCase):
         wal = DB_FILE + '-wal'
         self.assertEqual(after.get(wal, b''), before.get(wal, b''),
                          'Existing WAL bytes must not change; a new WAL must be empty')
+
+    def assert_only_upgrade_project_marker_changed(self, before, after, fixture, project_id):
+        repository = fixture['fixtureRoot'] / 'repository'
+        relative = repository.relative_to(fixture['state']).as_posix()
+        ref = relative + '/.git/refs/hey-my-buddy/project'
+        self.assertNotIn(ref, before)
+        self.assertIn(ref, after)
+        oid = after[ref].decode('ascii').strip()
+        blob = relative + '/.git/objects/' + oid[:2] + '/' + oid[2:]
+        self.assertNotIn(blob, before)
+        self.assertIn(blob, after)
+        self.assertEqual(zlib.decompress(after[blob]),
+                         b'blob ' + str(len(project_id.encode())).encode() + b'\0' + project_id.encode())
+        self.assert_source_unchanged(before, {name: value for name, value in after.items()
+                                             if name not in {ref, blob}})
 
     def source_board(self):
         board = InProcessBoard(self.directory / 'source')
@@ -243,6 +259,11 @@ class ExportBoardSampleTests(WorkflowTestCase):
         fixture = load_fixture(self.directory / 'source')
         source = fixture['state']
         with closing(sqlite3.connect(source / DB_FILE)) as connection:
+            project_ids = {row[0] for row in connection.execute(
+                "SELECT DISTINCT json_extract(workspace_manifest_json,'$.repositoryId') "
+                "FROM workflow_runs WHERE workspace_manifest_json IS NOT NULL")}
+            self.assertEqual(len(project_ids), 1)
+            project_id = project_ids.pop()
             routed = connection.execute(
                 'SELECT r.run_id FROM workflow_routes r '
                 'JOIN router_dispatches d ON d.decision_id=r.decision_id '
@@ -295,13 +316,18 @@ class ExportBoardSampleTests(WorkflowTestCase):
         current = Database(output)
         self.addCleanup(current.close)
         current.initialize()
-        self.assert_source_unchanged(before, files(source))
+        self.assert_only_upgrade_project_marker_changed(before, files(source), fixture, project_id)
 
     def test_schema31_sample_keeps_source_form_and_can_upgrade(self):
         from hey_my_buddy.blackboard.store import schema_30_31
         fixture = load_fixture(self.directory / 'source31')
         with closing(sqlite3.connect(fixture['state'] / DB_FILE)) as connection:
             connection.row_factory = sqlite3.Row
+            project_ids = {row[0] for row in connection.execute(
+                "SELECT DISTINCT json_extract(workspace_manifest_json,'$.repositoryId') "
+                "FROM workflow_runs WHERE workspace_manifest_json IS NOT NULL")}
+            self.assertEqual(len(project_ids), 1)
+            project_id = project_ids.pop()
             with connection:
                 schema_30_31.upgrade(connection)
                 connection.execute("UPDATE attempts SET execution_state='finished',shutdown_confirmed=1,cleanup_pending=0")
@@ -316,7 +342,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
         with closing(sqlite3.connect(sample / DB_FILE)) as connection:
             self.assertEqual(list(connection.execute('SELECT * FROM kind_statistics ORDER BY harness,model,effort')),
                              statistics)
-        self.assert_source_unchanged(before, files(fixture['state']))
+        self.assert_only_upgrade_project_marker_changed(before, files(fixture['state']), fixture, project_id)
 
     def test_source_service_can_commit_during_snapshot_and_destination_creation(self):
         board = self.source_board()

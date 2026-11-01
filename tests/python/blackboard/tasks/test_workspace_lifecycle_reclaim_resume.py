@@ -209,7 +209,7 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         self.assertEqual(workspace_module._worktree_record(self.repo, checkout)["locked"],
                          "hey-my-buddy:" + manifest["workspaceId"])
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "sealed output\n")
-        self.assertEqual(workspace_module.inspect(str(checkout))["checkoutId"], manifest["checkoutId"])
+        self.assertEqual(workspace_module.inspect(str(checkout))["checkoutRoot"], manifest["checkoutRoot"])
         git(self.repo, "worktree", "prune", "--expire", "now")
         self.assertIsNotNone(workspace_module._worktree_record(self.repo, checkout))
         added.unlink()
@@ -284,7 +284,8 @@ class ReclaimResumeLifecycleTests(LifecycleTestCase):
         board, submitted, manifest, checkout, artifact = self.interrupted_reclaim(
             missing=("tracked.txt",), remove_git=True)
         git_dir = next(path for path in (self.repo / ".git" / "worktrees").iterdir()
-                       if workspace_module._identity(path) == manifest["checkoutId"])
+                       if (path / "gitdir").is_file() and
+                       (path / (path / "gitdir").read_text(encoding="utf-8").strip()).resolve() == checkout / ".git")
         backlink = Path((git_dir / "gitdir").read_text(encoding="utf-8").strip())
         self.assertFalse(backlink.is_absolute())
         self.assertEqual((git_dir / backlink).resolve(), checkout / ".git")

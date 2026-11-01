@@ -57,7 +57,7 @@ class ReadSharingTests(WorkflowTestCase):
         self.assertEqual(board.call("workflow_get", {"runId": first["runId"]})["state"], "delivered")
         second = self.reader(board, "reader-two")
         manifests = self.manifests(board)
-        self.assertEqual(first["workspace"]["checkoutId"], second["workspace"]["checkoutId"])
+        self.assertEqual(first["workspace"]["checkoutRoot"], second["workspace"]["checkoutRoot"])
         self.assertNotEqual(manifests[0]["manifestSha256"], manifests[1]["manifestSha256"])
         with board.store.db.read() as connection:
             holders = connection.execute("SELECT holder_task_id, access FROM workspace_reservations WHERE state='held'").fetchall()
