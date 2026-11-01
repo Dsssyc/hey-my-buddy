@@ -58,6 +58,7 @@ SUMMARIES: dict[str, str] = {
     "accept": "Accept one delivered artifact: verify its integration, record acceptance and reclaim the checkout.",
     "conclude": "End a failed, cancelled or delivered-unaccepted micro task with an independent conclusion and terminal concluded state, then reclaim.",
     "reclaim": "Reclaim this micro task's own registered managed checkout after a blocked or kept removal.",
+    "goal-amend": "Append a macro task goal revision; expectedGoalRevision is 0 when no goal is recorded.",
     "scope-amend": "Append one authorized write-scope version for the next stage.",
     "workspace-resolve": "Settle one recorded out-of-scope failure site by restore, adopt or abandon.",
     "await": "Wait for one existing run without starting, resuming, retrying or cancelling work.",
@@ -126,6 +127,7 @@ _CONTROL_METHODS = frozenset(
         "conclude",
         "reclaim",
         "scope-amend",
+        "goal-amend",
         "workspace-resolve",
     }
 )

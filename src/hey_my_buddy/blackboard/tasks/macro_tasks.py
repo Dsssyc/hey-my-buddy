@@ -1,7 +1,7 @@
 """Human macro task metadata and bounded read projections, never execution input.
 
 A macro task groups micro tasks for browsing and archival. It owns a
-title, optional description and original source attribution: it schedules no work,
+title, revisioned goal and original source attribution: it schedules no work,
 grants no control and is never part of an execution spec, Worker turn input or
 selector packet. The timeline is derived on every read from the recorded task,
 attempt, turn, request, routing and event rows; the only stored projection is the
@@ -147,7 +147,7 @@ def pending_root_count(store) -> int:
         return int(connection.execute(PENDING_ROOTS_SQL).fetchone()["pending"])
 
 
-def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: str, manifest: dict, now: str,
+def attach_macro_task(connection, presentation: dict, *, host_id: str, manifest: dict, now: str,
                       fixed_run=None) -> str | None:
     """Run within the task's admission transaction; failed admission creates nothing."""
     project_id = manifest_project_id(manifest)
@@ -176,10 +176,36 @@ def attach_macro_task(connection, presentation: dict, *, spec: dict, host_id: st
         return None
     identifier = f"macro-{uuid.uuid4()}"
     connection.execute(
-        "INSERT INTO macro_tasks(macro_task_id,title,project_id,project_path,source_host_id,created_at,activity_at)"
-        " VALUES(?,?,?,?,?,?,?)", (identifier, presentation["macroTask"]["title"], project_id, spec["cwd"], host_id, now, now),
+        "INSERT INTO macro_tasks(macro_task_id,title,project_id,source_host_id,created_at,activity_at)"
+        " VALUES(?,?,?,?,?,?)", (identifier, presentation["macroTask"]["title"], project_id, host_id, now, now),
+    )
+    connection.execute(
+        "INSERT INTO macro_task_goals(macro_task_id,revision,body,created_at) VALUES(?,1,?,?)",
+        (identifier, presentation["macroTask"]["goal"], now),
     )
     return identifier
+
+
+def current_goal(connection, macro_task_id: str | None) -> dict | None:
+    row = connection.execute(
+        "SELECT body,revision,created_at FROM macro_task_goals WHERE macro_task_id=? ORDER BY revision DESC LIMIT 1",
+        (macro_task_id,),
+    ).fetchone()
+    return {"body": row["body"], "revision": row["revision"], "createdAt": row["created_at"]} if row else None
+
+
+def project(connection, macro_task_id: str) -> dict:
+    """The creating root owns the source directory and sealed Git provenance."""
+    row = connection.execute(
+        "SELECT m.project_id,json_extract(t.spec_json,'$.cwd') AS path,"
+        " (SELECT json_extract(a.manifest_json,'$.snapshot.repositoryPath') FROM workflow_artifacts a"
+        "  WHERE a.run_id=r.run_id AND a.kind='input' ORDER BY a.rowid LIMIT 1) AS repository_path"
+        " FROM macro_tasks m JOIN workflow_runs r ON r.macro_task_id=m.macro_task_id"
+        " JOIN tasks t ON t.task_id=r.run_id WHERE m.macro_task_id=? ORDER BY r.created_at,r.rowid LIMIT 1",
+        (macro_task_id,),
+    ).fetchone()
+    return {"id": row["project_id"], "path": row["path"],
+            "label": micro_task.project_label(row["path"], row["repository_path"])}
 
 
 def record_activity(connection, task_id: str | None, seq: int, at: str) -> None:
@@ -395,7 +421,6 @@ members AS MATERIALIZED (
 ),
 matched AS (
     SELECT group_id, MAX(base_matching) AS all_match, MAX(matching) AS selected_match,
-           MAX(project_id) AS project_id, MAX(project_repository_path) AS project_repository_path,
            MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['active']} THEN 1 ELSE 0 END) AS active_match,
            MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['host']} THEN 1 ELSE 0 END) AS host_match,
            MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_match
@@ -404,8 +429,7 @@ matched AS (
 groups AS (
     SELECT matched.group_id, COALESCE(o.activity_seq, root.activity_seq) AS activity_seq,
            COALESCE(o.created_at, root.created_at) AS created_at,
-           CASE WHEN o.macro_task_id IS NULL THEN 'standalone' ELSE 'project:' || o.project_id END AS project_group,
-           o.project_path, matched.project_repository_path
+           CASE WHEN o.macro_task_id IS NULL THEN 'standalone' ELSE 'project:' || o.project_id END AS project_group
       FROM matched
       LEFT JOIN macro_tasks o ON o.macro_task_id=matched.group_id
       LEFT JOIN workflow_runs root ON o.macro_task_id IS NULL
@@ -419,9 +443,7 @@ ordered AS (
 projects AS (
     SELECT project_group, COUNT(*) AS project_total,
            MAX(CASE WHEN ordinal=1 THEN {order_column} END) AS first_key,
-           MAX(CASE WHEN ordinal=1 THEN group_id END) AS first_group_id,
-           MAX(CASE WHEN ordinal=1 THEN project_path END) AS project_path,
-           MAX(CASE WHEN ordinal=1 THEN project_repository_path END) AS project_repository_path
+           MAX(CASE WHEN ordinal=1 THEN group_id END) AS first_group_id
       FROM ordered {project_where} GROUP BY project_group
 ),
 page AS (
@@ -437,8 +459,6 @@ stats AS (SELECT COALESCE(SUM(all_match),0) AS all_total,
 latest AS (SELECT COALESCE(MAX(activity_seq),0) AS latest FROM groups)
 SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
        projects.first_key,projects.first_group_id,
-       projects.project_path AS group_project_path,
-       projects.project_repository_path AS group_repository_path,
        page.group_id AS page_group_id,page.activity_seq,page.created_at AS page_created_at,members.*
   FROM stats CROSS JOIN latest LEFT JOIN projects ON 1=1
   LEFT JOIN page ON page.project_group=projects.project_group
@@ -463,8 +483,10 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
                 projects.setdefault(row["project_group"], row)
             if row["page_group_id"] is not None:
                 groups.setdefault(row["page_group_id"], []).append(row)
-        pages = {project_id: [item for item in groups if groups[item][0]["project_group"] == project_id][:limit]
-                 for project_id in projects}
+        grouped = {project_id: [] for project_id in projects}
+        for item, members in groups.items():
+            grouped[members[0]["project_group"]].append(item)
+        pages = {project_id: items[:limit] for project_id, items in grouped.items()}
         page = [item for project_page in pages.values() for item in project_page]
         markers, reusable = memo.dependencies(connection, {item: groups[item] for item in page})
         filters = json.dumps({key: value for key, value in applied.items() if key != "group"},
@@ -485,20 +507,16 @@ SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
         result_groups = []
         for project_id, project_row in projects.items():
             identifiers = pages[project_id]
-            project = None if project_id == "standalone" else {
-                "id": project_id.removeprefix("project:"),
-                "path": project_row["group_project_path"],
-                "label": micro_task.project_label(project_row["group_project_path"], project_row["group_repository_path"]),
-            }
-            if project is not None and identifiers:
-                project = summaries[identifiers[0]]["project"]
+            group_project = None if project_id == "standalone" else (
+                summaries[identifiers[0]]["project"] if identifiers else project(connection, project_row["first_group_id"])
+            )
             next_cursor = None
-            if len([item for item in groups if groups[item][0]["project_group"] == project_id]) > limit:
+            if len(grouped[project_id]) > limit:
                 last = identifiers[-1]
                 row = groups[last][0]
                 next_cursor = _encode_cursor(row["activity_seq" if sort_column == "activity" else "page_created_at"],
                                              last, {**applied, "group": project_id}, issued_head, sort)
-            result_groups.append({"id": project_id, "project": project,
+            result_groups.append({"id": project_id, "project": group_project,
                                   "total": int(project_row["project_total"]),
                                   "macroTasks": [summaries[item] for item in identifiers],
                                   "nextCursor": next_cursor})
@@ -563,7 +581,6 @@ SELECT h.*, ownership.group_id, conclusion.execution_status AS conclusion_status
 
 def _summary(connection, group_id: str, inputs: dict) -> dict:
     result_summary = None
-    description = None
     members, matching, failed_conclusions = inputs["members"], inputs["matching"], inputs["failed"]
     counts = {"roots": 0, "helpers": 0, "active": 0, "host": 0, "review": 0, "ended": 0, "accepted": 0,
               "failed": 0,
@@ -582,30 +599,17 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
     if group_id.startswith("macro-"):
         macro_task = connection.execute("SELECT * FROM macro_tasks WHERE macro_task_id=?", (group_id,)).fetchone()
         title, title_source = macro_task["title"], "macro-task"
-        repository_path = next((row["project_repository_path"] for row in members
-                                if row["project_repository_path"]), None)
-        project = {"id": macro_task["project_id"], "path": macro_task["project_path"],
-                   "label": micro_task.project_label(macro_task["project_path"], repository_path)}
+        group_project = project(connection, group_id)
         source_host, created_at = macro_task["source_host_id"], macro_task["created_at"]
         activity_seq, activity_at = macro_task["activity_seq"], macro_task["activity_at"]
         roots = [row["task_id"] for row in members if row["child_parent_run_id"] is None]
-        first = connection.execute("SELECT run_id FROM workflow_runs WHERE macro_task_id=? ORDER BY created_at, rowid LIMIT 1", (group_id,)).fetchone()
-        if first:
-            event = connection.execute(
-                "SELECT payload_json FROM events WHERE task_id=? AND kind='workflow.macro_task_created' ORDER BY seq LIMIT 1",
-                (first["run_id"],),
-            ).fetchone()
-            if event:
-                metadata = json.loads(event["payload_json"])
-                if metadata.get("macroTaskId") == group_id:
-                    description = metadata.get("description")
         kind = "macro-task"
     else:
         root_id = group_id[len("run:"):]
         root = next((row for row in members if row["task_id"] == root_id), None)
         title, title_source, result_summary = _run_presentation(connection, root_id)
         metadata = micro_task.metadata_from_row(root) if root is not None else {"project": None, "sourceHostId": None}
-        project, source_host = metadata["project"], metadata["sourceHostId"]
+        group_project, source_host = metadata["project"], metadata["sourceHostId"]
         created_at = root["created_at"] if root is not None else None
         run = connection.execute("SELECT activity_seq, activity_at FROM workflow_runs WHERE run_id=?", (root_id,)).fetchone()
         activity_seq, activity_at = (run["activity_seq"], run["activity_at"]) if run is not None else (0, None)
@@ -618,8 +622,7 @@ def _summary(connection, group_id: str, inputs: dict) -> dict:
         "title": title,
         "titleSource": title_source,
         "summary": result_summary,
-        "description": description,
-        "project": project,
+        "project": group_project,
         "sourceHostId": source_host,
         "currentHostIds": current_hosts,
         "createdAt": created_at,
@@ -661,7 +664,7 @@ def macro_task_timeline(store, params: dict) -> dict:
         members = inputs["executions"]
         if not members:
             raise BoardError("NOT_FOUND", "The group has no readable micro tasks", macroTaskId=group_id)
-        summary = _summary(connection, group_id, inputs)
+        summary = {**_summary(connection, group_id, inputs), "goal": current_goal(connection, group_id)}
         runs = inputs["members"]
         matching_ids = {row["task_id"] for row in runs if row["summary_matching"]}
         ordered = _tree_order(runs)

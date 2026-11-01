@@ -55,6 +55,7 @@ METHODS = [
     "conclude",
     "reclaim",
     "scope-amend",
+    "goal-amend",
     "workspace-resolve",
     "await",
     "suggest",
@@ -123,6 +124,7 @@ examples:
       it does not change the micro task's allocated working directory.
   hey-my-buddy takeover '{"runId":"<runId>","commandId":"cmd-3","expectedOwnerGeneration":1,"newHostId":"host-2","controlFile":"..."}'
   hey-my-buddy cancel '{"runId":"<runId>","commandId":"cmd-4","note":"...","controlFile":"..."}'
+  hey-my-buddy goal-amend '{"runId":"<runId>","commandId":"goal-1","expectedGoalRevision":1,"goal":"...","controlFile":"..."}'
   hey-my-buddy scope-amend '{"runId":"<runId>","commandId":"cmd-5","expectedRevision":3,"expectedScopeVersion":1,"writeScope":["src"],"note":"...","controlFile":"..."}'
   hey-my-buddy conclude '{"runId":"<runId>","note":"failed after the schema change; partial work retained","controlFile":"..."}'   hey-my-buddy reclaim '{"runId":"<runId>","controlFile":"..."}'
       conclude ends a failed, cancelled or delivered-but-unaccepted micro task: unsealed

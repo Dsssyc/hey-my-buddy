@@ -24,12 +24,14 @@ def configure(p: ModuleType, language: str) -> None:
     titles = [text("Ship offline search", "交付离线搜索"), text("Refresh the guide", "更新使用指南"),
               text("Audit export formats", "核对导出格式"), text("Trim the index", "精简搜索索引")]
     groups = (p.MACRO_A, p.MACRO_B, p.MACRO_C, p.MACRO_PALETTE)
-    p.MACRO_TASKS = {group: {"title": title, "description": None, "project": "alpha" if i != 1 else "beta",
+    p.MACRO_TASKS = {group: {"title": title, "goal": None, "project": "alpha" if i != 1 else "beta",
                            "host": p.HOST_A, "createdAt": p.instant(8 if i == 0 else 6, 0)}
                      for i, (group, title) in enumerate(zip(groups, titles))}
-    p.MACRO_TASKS[p.MACRO_A]["description"] = text(
-        "A compact index, typo-tolerant ranking and a release ready for review.",
-        "精简索引、容错排序，以及等待评审的发布候选。")
+    p.MACRO_TASKS[p.MACRO_A]["goal"] = {
+        "body": text("A compact index, typo-tolerant ranking and a release ready for review.",
+                     "精简索引、容错排序，以及等待评审的发布候选。"),
+        "revision": 1, "createdAt": p.MACRO_TASKS[p.MACRO_A]["createdAt"],
+    }
     host = p.host_actor(p.HOST_A)
     lead_id = "readme-lead"
     lead_actor = {"role": "lead", "id": lead_id}

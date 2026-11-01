@@ -7,7 +7,7 @@ import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import { task as detailTask, workflow as detailWorkflow, audit as detailAudit } from "./task-detail/task-detail.fixtures";
-import { macroTaskGroups, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { listSummary, macroTaskGroups, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { TooltipProvider } from "./components/ui/tooltip";
 
@@ -41,7 +41,7 @@ function harness(paged = false) {
     task: vi.fn(async (runId: string) => detailTask({ runId,
       lineage: { ...detailTask().lineage!, rootRunId: runId },
       workflow: { ...detailTask().workflow!, macroTaskId: timeline.macroTask.macroTaskId } })),
-    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups([timeline.macroTask], paged ? "older" : null), totals: { all: 1, active: 1, host: 0, review: 0 }, cursor: 41, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups([listSummary(timeline.macroTask)], paged ? "older" : null), totals: { all: 1, active: 1, host: 0, review: 0 }, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));

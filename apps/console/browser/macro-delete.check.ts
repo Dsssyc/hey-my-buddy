@@ -1,6 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { expectNoSidewaysScroll, expectTextUncut, expectWholeAndApart, open, settle, test } from "./preview";
-import { macroTaskTimelineFixture } from "../src/macro-task-fixtures";
+import { listSummary, macroTaskTimelineFixture } from "../src/macro-task-fixtures";
 import type { DeletionBlocker, MacroTaskDeletionPreview } from "../src/macro-task-deletion";
 
 const title = "控制台前端重建：宏任务删除、确认范围与很长的微任务名称 / deletion scope and confirmation";
@@ -26,7 +26,7 @@ async function deletionFixture(page: Page, blocked = false, scope: MacroTaskDele
   const commands: { operation: string; params: Record<string, unknown> }[] = [];
   await page.route("**/api/macro-tasks?*", async route => {
     await route.fulfill({ json: { groups: deleted ? [] : [{ id: `project:${timeline.macroTask.project!.id}`,
-      project: timeline.macroTask.project, total: 1, macroTasks: [timeline.macroTask], nextCursor: null }],
+      project: timeline.macroTask.project, total: 1, macroTasks: [listSummary(timeline.macroTask)], nextCursor: null }],
       totals: { all: deleted ? 0 : 1, active: deleted ? 0 : 1, host: 0, review: 0 }, cursor: 41, changed: false } });
   });
   await page.route("**/api/macro-tasks/*/timeline?*", route => route.fulfill({ json: timeline }));

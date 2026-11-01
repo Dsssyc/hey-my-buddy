@@ -367,7 +367,7 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
                     "submissionToken": "s" * 32,
                     "task": "Produce a verified implementation\nWith details",
                     "title": "Verified implementation",
-                    "macroTask": {"title": "Release work"},
+                    "macroTask": {"title": "Release work", 'goal': "Release work"},
                     "cwd": str(self.workdir()),
                     "executionWorkspace": {"kind": "existing", "access": "write"},
                 },

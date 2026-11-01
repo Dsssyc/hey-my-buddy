@@ -71,14 +71,13 @@ def build_packet(connection) -> dict | None:
     """The oldest 50 tasks still needing classification or a kind's reading."""
     runs = list(connection.execute(
         "SELECT r.run_id,r.title,r.state,r.created_at,r.updated_at,r.continuation_count,r.buddy_revision,"
-        " t.spec_json,t.accepted_at,m.project_id,m.project_path,c.note AS conclusion_note,"
+        " t.spec_json,t.accepted_at,r.macro_task_id,c.note AS conclusion_note,"
         " c.reason_code AS conclusion_reason,c.execution_status,c.created_at AS concluded_at,"
         " x.domain_node_id,x.task_type,"
         " (SELECT i.verification_json FROM workflow_integrations i"
         " WHERE i.run_id=r.run_id AND i.artifact_id=r.final_artifact_id"
         " ORDER BY i.created_at DESC,i.integration_id DESC LIMIT 1) AS integration_json"
         " FROM workflow_runs r JOIN tasks t ON t.task_id=r.run_id"
-        " LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id"
         " LEFT JOIN workflow_host_conclusions c ON c.run_id=r.run_id"
         " LEFT JOIN micro_task_classifications x ON x.run_id=r.run_id"
         " WHERE " + PENDING_WHERE +
@@ -128,12 +127,17 @@ def build_packet(connection) -> dict | None:
             "reasonCode": row["reason_code"], "summary": row["summary"],
             "createdAt": row["created_at"], "decidedAt": row["decided_at"],
         })
+    from ..tasks.macro_tasks import project as macro_project
+    projects = {identifier: macro_project(connection, identifier)
+                for identifier in {row["macro_task_id"] for row in runs if row["macro_task_id"] is not None}}
     micro_tasks = []
     for row in runs:
         spec = json.loads(row["spec_json"])
+        project = (projects[row["macro_task_id"]] if row["macro_task_id"] is not None
+                   else {"id": None, "path": spec["cwd"]})
         micro_tasks.append({
             "runId": row["run_id"], "title": row["title"], "task": spec.get("task"),
-            "project": {"id": row["project_id"], "path": row["project_path"] or spec.get("cwd")},
+            "project": {"id": project["id"], "path": project["path"]},
             "classification": ({"domainNodeId": row["domain_node_id"], "taskType": row["task_type"]}
                                if row["domain_node_id"] is not None else None),
             "result": {"state": row["state"], "conclusion": row["conclusion_note"],

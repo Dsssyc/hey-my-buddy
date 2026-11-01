@@ -6,6 +6,7 @@
 
 import type {
   MacroTaskGroup,
+  MacroTaskDetail,
   MacroTaskSummary,
   MacroTaskTimeline,
   TimelineBuddy,
@@ -44,7 +45,6 @@ export function macroTaskSummary(overrides: Partial<MacroTaskSummary> = {}): Mac
     kind: "macro-task",
     title: "宏任务时间轴：设计、接口与实现",
     titleSource: "macro-task",
-    description: "按用户认可的第 X 节设计宏任务时间轴。本宏任务覆盖只读接口、前端呈现与离线升级验证。",
     summary: null,
     project: project("p1", "hey-my-buddy", "~/projects/hey-my-buddy"),
     sourceHostId: "codex-desktop",
@@ -59,6 +59,16 @@ export function macroTaskSummary(overrides: Partial<MacroTaskSummary> = {}): Mac
     rootRunIds: ["r1", "r2", "r5", "r4", "r6"],
     ...overrides,
   };
+}
+
+export function macroTaskDetail(overrides: Partial<MacroTaskDetail> = {}): MacroTaskDetail {
+  return { ...macroTaskSummary(), goal: { body: "按用户认可的第 X 节设计宏任务时间轴。本宏任务覆盖只读接口、前端呈现与离线升级验证。",
+    revision: 1, createdAt: "2026-09-26T01:12:00Z" }, ...overrides };
+}
+
+export function listSummary(detail: MacroTaskDetail): MacroTaskSummary {
+  const { goal: _goal, ...summary } = detail;
+  return summary;
 }
 
 function row(runId: string, overrides: Partial<TimelineRow> = {}): TimelineRow {
@@ -170,7 +180,7 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
     event(9, "r4", "dispatch", "2026-09-26T06:38:00Z", {  }),
   ];
   return {
-    macroTask: macroTaskSummary(),
+    macroTask: macroTaskDetail(),
     observedAt: OBSERVED_AT,
     cursor: 41,
     rows, spans, events,
@@ -186,12 +196,12 @@ export function macroTaskTimelineFixture(overrides: Partial<MacroTaskTimeline> =
 export function listFixture(): MacroTaskSummary[] {
   return [
     macroTaskSummary({ macroTaskId: "macro-1", lastActivitySeq: 41, lastActivityAt: "2026-09-26T08:12:00Z", state: "active" }),
-    macroTaskSummary({ macroTaskId: "macro-2", title: "0.13 控制台入口候选版最后整理与文档", description: null, lastActivitySeq: 30,
+    macroTaskSummary({ macroTaskId: "macro-2", title: "0.13 控制台入口候选版最后整理与文档", lastActivitySeq: 30,
       lastActivityAt: "2026-09-26T04:40:00Z", state: "review",
       counts: { roots: 6, helpers: 0, accepted: 5, failed: 0, active: 0, host: 0, review: 1, ended: 5,
         stoppableRoots: 0, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } }),
     macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone", title: "修复标题回退在 CRLF 输入下的显示，补充回归测试并核对两处相关调用的输出稳定性与提示文案",
-      titleSource: "task", description: null, lastActivitySeq: 22, lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
+      titleSource: "task", lastActivitySeq: 22, lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
       sourceHostId: "codex-cli",
       counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
         stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } }),

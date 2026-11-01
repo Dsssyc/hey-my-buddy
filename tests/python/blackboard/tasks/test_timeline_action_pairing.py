@@ -6,7 +6,7 @@ from blackboard.tasks.test_workflow import WorkflowTestCase
 
 class TimelineActionPairingTests(WorkflowTestCase):
     def delivered(self, board):
-        submitted = self.submit(board, macroTask={"title": "Timeline action pairing"})
+        submitted = self.submit(board, macroTask={"title": "Timeline action pairing", 'goal': "Timeline action pairing"})
         self.finish_turn(board, self.claim(board))
         return board.call("workflow_get", {"runId": submitted["runId"]})
 

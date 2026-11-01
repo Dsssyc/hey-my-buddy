@@ -67,6 +67,7 @@ METHOD_MAP: dict[str, tuple[str, str]] = {
     "accept": ("control", "workflow_accept"),
     "conclude": ("control", "workflow_conclude"),
     "reclaim": ("control", "workflow_reclaim"),
+    "goal-amend": ("control", "workflow_goal_amend"),
     "scope-amend": ("control", "workflow_scope_amend"),
     "workspace-resolve": ("control", "workflow_workspace_resolve"),
     "suggest": ("control", "workflow_suggest"),

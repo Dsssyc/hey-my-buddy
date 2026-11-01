@@ -195,7 +195,7 @@ class SyntheticBoard:
         if not routed:
             params.update(BUDDY)
         if macro_task is not None:
-            params["macroTask"] = {"title": macro_task, "description": "Fictional benchmark; no real work."}
+            params["macroTask"] = {"title": macro_task, "goal": "Fictional benchmark; no real work."}
         if macro_task_id is not None:
             params["macroTaskId"] = macro_task_id
         view = self.call("workflow_submit", params)

@@ -115,7 +115,7 @@ class CliViewTests(RealWorkspaceTestCase):
         code, submitted, _ = self.cli("submit", {
             **BUDDY, "requestId": "views-macro-task", "hostId": "host-1",
             "task": PACKET, "title": "Implement bounded state transition", "cwd": str(self.repo),
-            "macroTask": {"title": "Ship state transition"},
+            "macroTask": {"title": "Ship state transition", 'goal': "Ship state transition"},
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
         })
         self.assertEqual(code, 0, submitted)

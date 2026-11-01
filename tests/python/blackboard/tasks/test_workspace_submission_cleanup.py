@@ -257,7 +257,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
         board = self.board()
         foreign = self.submit(board, request_id='foreign', cwd=str(self.repository('foreign')),
-                              macroTask={'title': 'other repository'}, executionWorkspace={'kind': 'existing', 'access': 'read'})
+                              macroTask={'title': 'other repository', 'goal': 'other repository'}, executionWorkspace={'kind': 'existing', 'access': 'read'})
         source_index = (self.repo / '.git/index').read_bytes()
         original = board.store.task_submit
         saved = {}

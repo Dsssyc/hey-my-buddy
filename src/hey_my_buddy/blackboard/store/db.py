@@ -535,7 +535,6 @@ CREATE TABLE IF NOT EXISTS macro_tasks (
     macro_task_id       TEXT PRIMARY KEY,
     title              TEXT NOT NULL,
     project_id         TEXT NOT NULL,
-    project_path       TEXT NOT NULL,
     source_host_id     TEXT NOT NULL,
     created_at         TEXT NOT NULL,
     activity_seq       INTEGER NOT NULL DEFAULT 0,
@@ -543,6 +542,15 @@ CREATE TABLE IF NOT EXISTS macro_tasks (
 );
 CREATE INDEX IF NOT EXISTS macro_tasks_activity_idx ON macro_tasks(activity_seq DESC, macro_task_id DESC);
 CREATE INDEX IF NOT EXISTS macro_tasks_project_idx ON macro_tasks(project_id, activity_seq DESC, macro_task_id DESC);
+""",
+    """
+CREATE TABLE IF NOT EXISTS macro_task_goals (
+    macro_task_id TEXT NOT NULL REFERENCES macro_tasks(macro_task_id) ON DELETE CASCADE,
+    revision      INTEGER NOT NULL,
+    body          TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (macro_task_id, revision)
+);
 """,
     # The logical micro task plus its Host ownership generation and prepared workspace.
     # The immutable submitted spec and fingerprint live in tasks; continuations

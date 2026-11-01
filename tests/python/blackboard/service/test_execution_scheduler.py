@@ -1312,7 +1312,7 @@ class SessionRecordGroupingTests(WorkflowTestCase):
             with self.subTest(named=named):
                 root = self.submit(board, request_id=f"session-group-{named}", kind="worktree",
                                    cwd=str(self.workdir(f"session-group-{named}")),
-                                   **({"macroTask": {"title": "Session group"}} if named else {}))
+                                   **({"macroTask": {"title": "Session group", 'goal': "Session group"}} if named else {}))
                 claim = self.claim(board, run_id=root["runId"],
                                    claim_request_id=f"session-group-claim-{named}")["claim"]
                 group = console_identity(board.store, claim["task"]["taskId"],

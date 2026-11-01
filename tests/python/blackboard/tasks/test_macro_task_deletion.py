@@ -28,7 +28,7 @@ PHYSICAL_STAGES = (
 
 class MacroTaskDeletionTests(WorkflowTestCase):
     def closed(self, board, request_id, *, macro_task=None, macro_task_id=None, project="project"):
-        extra = {"macroTask": {"title": macro_task}} if macro_task else {}
+        extra = {"macroTask": {"title": macro_task, 'goal': macro_task}} if macro_task else {}
         if macro_task_id:
             extra["macroTaskId"] = macro_task_id
         run = self.submit(board, request_id=request_id, cwd=str(self.workdir(project)), **extra)
@@ -201,7 +201,7 @@ class MacroTaskDeletionTests(WorkflowTestCase):
 
     def test_preview_caps_blocker_detail_but_not_group_count(self):
         board = self.board()
-        first = self.submit(board, request_id="queued-0", macroTask={"title": "Large group"})
+        first = self.submit(board, request_id="queued-0", macroTask={"title": "Large group", 'goal': "Large group"})
         for number in range(1, 53):
             self.submit(board, request_id=f"queued-{number}", macroTaskId=first["macroTaskId"], kind="worktree")
         # This case counts queued tasks; the workflow fixture uses synthetic

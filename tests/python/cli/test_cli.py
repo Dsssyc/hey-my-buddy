@@ -145,7 +145,7 @@ class MethodSurfaceTests(unittest.TestCase):
 
 
     def test_control_methods_are_the_current_micro_task_mutations(self):
-        self.assertEqual(cli.cli_help._CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "workspace-resolve"}))
+        self.assertEqual(cli.cli_help._CONTROL_METHODS, frozenset({"decide", "continue", "takeover", "cancel", "accept", "conclude", "reclaim", "scope-amend", "goal-amend", "workspace-resolve"}))
 
     def test_console_keeps_the_canonical_name_and_no_alternative_spellings(self):
         self.assertEqual(transport.METHOD_MAP["console"], ("control", "console"))
@@ -163,6 +163,7 @@ class MethodSurfaceTests(unittest.TestCase):
         # configuration or selection surfaces.
         for method, operation in (
             ("scope-amend", "workflow_scope_amend"),
+            ("goal-amend", "workflow_goal_amend"),
             ("workspace-resolve", "workflow_workspace_resolve"),
             ("accept", "workflow_accept"),
             ("conclude", "workflow_conclude"),

@@ -266,10 +266,12 @@ describe("storage, macro task and version response boundaries", () => {
       for (const value of values) await expect(read({ ...summary, [key]: value })).resolves.toBeDefined();
       await expect(read({ ...summary, [key]: "other" })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
-    for (const key of ["title", "description", "summary", "project", "sourceHostId", "createdAt", "lastActivityAt"]) {
+    for (const key of ["title", "summary", "project", "sourceHostId", "createdAt", "lastActivityAt"]) {
       await expect(read({ ...summary, [key]: null })).resolves.toBeDefined();
       await expect(read({ ...summary, [key]: undefined })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
+    await expect(read({ ...summary, goal: null })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
+    await expect(read({ ...summary, goal: { body: "x", revision: 1, createdAt: date } })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
   });
   it("checks execution-only timing and router identity without validating other routing data", async () => {
     const timeline = macroTaskTimelineFixture();

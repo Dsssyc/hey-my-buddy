@@ -180,6 +180,9 @@ class BuddyControl:
     def workflow_reclaim(self, request_json: str) -> str:
         ...
 
+    def workflow_goal_amend(self, request_json: str) -> str:
+        ...
+
     def workflow_scope_amend(self, request_json: str) -> str:
         ...
 

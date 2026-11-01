@@ -18,9 +18,11 @@ class MacroTaskGroupPagingTests(unittest.TestCase):
                                                 recipe=recipe, seed=614) as fixture:
                 with fixture.board.store.db.write() as connection:
                     for index, macro_id in enumerate(fixture.macros):
-                        connection.execute("UPDATE macro_tasks SET project_id=?,project_path=? WHERE macro_task_id=?",
-                                           ("standalone" if index == 0 else f"fictional-project-{index}",
-                                            f"/fictional/project-{index}", macro_id))
+                        connection.execute("UPDATE macro_tasks SET project_id=? WHERE macro_task_id=?",
+                                           ("standalone" if index == 0 else f"fictional-project-{index}", macro_id))
+                        connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.cwd',?) WHERE task_id=("
+                                           "SELECT run_id FROM workflow_runs WHERE macro_task_id=? ORDER BY created_at,rowid LIMIT 1)",
+                                           (f"/fictional/project-{index}", macro_id))
                 page = fixture.board.call("macro_task_list", {})
                 self.assertEqual(len(page["groups"]), 7)
                 self.assertEqual({group["id"] for group in page["groups"]},

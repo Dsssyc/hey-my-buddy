@@ -11,7 +11,7 @@ import { MacroTasks } from "./MacroTasks";
 import { MacroTaskDeleteDialog } from "./MacroTaskDeleteDialog";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { createAuthorityLatch } from "./console-session";
-import { macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { listSummary, macroTaskDetail, macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import type { MacroTaskSummary, MacroTaskTimeline } from "./macro-task-types";
 import type { DeletionBlocker, DeletionBlockerKind, MacroTaskDeletionPreview } from "./macro-task-deletion";
 
@@ -345,17 +345,18 @@ describe("macro task deletion confirmation", () => {
   });
 });
 
-function workspaceHarness(extraRows: MacroTaskSummary[] = []) {
+function workspaceHarness(extraRows: MacroTaskSummary[] = [], unnamed = false) {
   const snapshot = snapshotFixture();
   const timeline = macroTaskTimelineFixture();
-  let rows = [timeline.macroTask, ...extraRows];
+  if (unnamed) Object.assign(timeline.macroTask, { title: "", titleSource: "none" });
+  let rows = [listSummary(timeline.macroTask), ...extraRows];
   const command = vi.fn(async (operation: string, params: unknown): Promise<unknown> => {
     if (operation === "macro_task_deletion_preview") return preview();
     if (operation === "macro_task_delete") { rows = rows.filter(row => row.macroTaskId !== "macro-1"); return receipt(); }
     throw new Error(`Unexpected fixture operation: ${operation} ${JSON.stringify(params)}`);
   });
   const api = { command, macroTasks: vi.fn(async () => ({ groups: macroTaskGroups(rows), totals: { all: rows.length, active: rows.length, host: 0, review: 0 }, cursor: 41, changed: false })),
-    macroTaskTimeline: vi.fn(async (id: string) => ({ timeline: id === "macro-1" ? timeline : { ...timeline, macroTask: rows.find(row => row.macroTaskId === id)!, rows: [], spans: [], events: [] }, verifiedAtMs: null })) } as unknown as ConsoleApi;
+    macroTaskTimeline: vi.fn(async (id: string) => ({ timeline: id === "macro-1" ? timeline : { ...timeline, macroTask: macroTaskDetail(rows.find(row => row.macroTaskId === id)!), rows: [], spans: [], events: [] }, verifiedAtMs: null })) } as unknown as ConsoleApi;
   const refresh = vi.fn(async (): Promise<Snapshot | null> => structuredClone(snapshot));
   const onAddress = vi.fn();
   const view = render(wrap(<MacroTasks api={api} snapshot={snapshot} refresh={refresh} onAddress={onAddress}/>));
@@ -424,8 +425,7 @@ describe("macro task deletion workspace integration", () => {
   });
 
   it("keeps an unnamed deletion result localized after a language change", async () => {
-    const f = workspaceHarness();
-    Object.assign(f.timeline.macroTask, { title: "", titleSource: "none" });
+    workspaceHarness([], true);
     await openDelete();
     await confirm();
     await screen.findByText("已删除「未命名」。");
@@ -452,13 +452,13 @@ describe("macro task deletion workspace integration", () => {
     const row = { ...f.timeline.rows.find(row => row.runId === "r4")!, rootLeadRunId: null };
     const summary = macroTaskSummary({ counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 0, ended: 0,
       stoppableRoots: 1, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 }, rootRunIds: [row.runId] });
-    Object.assign(f.timeline, { macroTask: summary, rows: [row], spans: [], events: [], totals: { rows: 1, allRows: 1, events: 0, spans: 0 } } satisfies Partial<MacroTaskTimeline>);
+    Object.assign(f.timeline, { macroTask: macroTaskDetail(summary), rows: [row], spans: [], events: [], totals: { rows: 1, allRows: 1, events: 0, spans: 0 } } satisfies Partial<MacroTaskTimeline>);
     f.setRows([summary]);
     f.command.mockImplementation(async (operation: string): Promise<unknown> => {
       if (operation === "macro_task_stop") {
         const stopped = { ...summary, state: "ended" as const, counts: { ...summary.counts, active: 0, ended: 1, stoppableRoots: 0 } };
         f.timeline.rows = [{ ...row, state: "cancelled", status: "cancelled", shutdownConfirmed: true }];
-        f.timeline.macroTask = stopped;
+        f.timeline.macroTask = macroTaskDetail(stopped);
         f.setRows([stopped]);
         return { macroTaskId: "macro-1", duplicate: false, results: [{ runId: row.runId, state: "cancelled", stopped: true }] };
       }

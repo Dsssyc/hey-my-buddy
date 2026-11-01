@@ -77,7 +77,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
 
     def test_console_history_and_sessions_survive_and_source_bytes_do_not_change(self):
         board = self.source_board()
-        first, attempt = self.accepted(board, 'accepted-first', macroTask={'title': 'Sample macro'})
+        first, attempt = self.accepted(board, 'accepted-first', macroTask={'title': 'Sample macro', 'goal': 'Sample macro'})
         second, _ = self.accepted(board, 'accepted-second', macroTaskId=first['macroTaskId'])
         unaccepted = self.submit(board, request_id='not-accepted', macroTaskId=first['macroTaskId'])
         self.finish_turn(board, self.claim(board, run_id=unaccepted['runId']))

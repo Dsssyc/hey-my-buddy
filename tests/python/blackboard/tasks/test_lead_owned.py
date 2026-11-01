@@ -86,7 +86,7 @@ class LeadOwnedTests(WorkflowTestCase):
 
     def test_submit_records_run_turn_macro_and_source_in_one_admission(self):
         board = self.board()
-        lead, claim = self.lead(board, macroTask={"title": "Grouped work"})
+        lead, claim = self.lead(board, macroTask={"title": "Grouped work", 'goal': "Grouped work"})
         child = self.owned(board, claim)
         ownership = {"leadRunId": lead["runId"], "leadTurnId": claim["turn"]["turnId"],
                      "createdAt": child["createdAt"]}

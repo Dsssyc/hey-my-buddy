@@ -120,7 +120,7 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         owner = board.call("workflow_submit", {
             **BUDDY, "requestId": "moved-macro-owner", "cwd": str(self.repo), "hostId": "host-1",
             "task": "Original project task", "submissionToken": "o" * 32,
-            "macroTask": {"title": "Original project task"},
+            "macroTask": {"title": "Original project task", 'goal': "Original project task"},
             "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
         })
         self.controls[owner["runId"]] = owner["control"]
@@ -170,7 +170,7 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
             **BUDDY, "requestId": "macro-before-move", "hostId": "host-1",
             "task": "first member", "cwd": str(self.repo), "submissionToken": "u" * 32,
             "executionWorkspace": {"kind": "existing", "access": "read", "writeScope": ["."]},
-            "macroTask": {"title": "Relocated project"},
+            "macroTask": {"title": "Relocated project", 'goal': "Relocated project"},
         })
         self.controls[first["runId"]] = first["control"]
         moved = self._move_repository()

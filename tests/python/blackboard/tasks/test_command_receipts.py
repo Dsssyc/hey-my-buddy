@@ -70,7 +70,7 @@ class WorkflowReceiptTests(WorkflowTestCase):
 
     def test_deleted_decision_and_cancel_commands_are_removed_with_the_run(self):
         board = self.board()
-        submitted = self.submit(board, request_id="delete-replay", macroTask={"title": "Disposable"})
+        submitted = self.submit(board, request_id="delete-replay", macroTask={"title": "Disposable", 'goal': "Disposable"})
         self.finish_turn(board, self.claim(board), disposition="attention")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         decision_params = {

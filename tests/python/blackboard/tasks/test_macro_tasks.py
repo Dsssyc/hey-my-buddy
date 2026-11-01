@@ -29,7 +29,7 @@ class ProjectLabelTests(WorkflowTestCase):
 
         with patch.object(self.workspace, "_manifest", side_effect=manifest):
             return self.submit(board, request_id=request_id, cwd=str(cwd), kind="worktree",
-                               **({"macroTask": {"title": request_id}} if grouped else {}))
+                               **({"macroTask": {"title": request_id, 'goal': request_id}} if grouped else {}))
 
     def assert_projects(self, board, submitted, *, label, path, identifier):
         expected = {"id": identifier, "path": str(path), "label": label}
@@ -110,7 +110,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
 
     def test_deleting_group_rejects_named_and_inherited_admission(self):
         board = self.board()
-        first = self.submit(board, macroTask={"title": "group"})
+        first = self.submit(board, macroTask={"title": "group", 'goal': "group"})
         identifier = first["macroTaskId"]
         with board.store.db.write() as connection:
             connection.execute(
@@ -142,7 +142,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
 
     def test_deleting_group_rejects_submission_recovery(self):
         board = self.board()
-        run = self.submit(board, macroTask={"title":"recovering group"})
+        run = self.submit(board, macroTask={"title":"recovering group", 'goal': "recovering group"})
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO macro_task_deletions"
@@ -151,16 +151,16 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
                 (run["macroTaskId"],),
             )
         with self.assertRaises(BoardError) as caught:
-            self.submit(board, macroTask={"title":"recovering group"})
+            self.submit(board, macroTask={"title":"recovering group", 'goal': "recovering group"})
         self.assertEqual(caught.exception.code,"MACRO_TASK_DELETING")
 
     def test_group_and_title_replay_are_separate_from_execution(self):
         board = self.board()
-        first = self.submit(board, kind='worktree', macroTask={'title':'Human group sentinel'}, title='Human run sentinel')
+        first = self.submit(board, kind='worktree', macroTask={'title':'Human group sentinel', 'goal': 'Human group sentinel'}, title='Human run sentinel')
         identifier = first['macroTaskId']
         self.assertTrue(identifier.startswith('macro-'))
         self.assertEqual(first['title'], 'Human run sentinel')
-        replay = self.submit(board, kind='worktree', macroTask={'title':'Human group sentinel'}, title='Human run sentinel')
+        replay = self.submit(board, kind='worktree', macroTask={'title':'Human group sentinel', 'goal': 'Human group sentinel'}, title='Human run sentinel')
         self.assertTrue(replay['duplicate'])
         self.assertEqual(replay['macroTaskId'], identifier)
         second = self.submit(board, request_id='second', kind='worktree', macroTaskId=identifier)
@@ -179,13 +179,15 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
         for hidden in ('Human group sentinel', 'Human run sentinel', identifier):
             self.assertNotIn(hidden, text)
 
-    def test_description_is_atomic_immutable_display_metadata(self):
+    def test_initial_goal_is_atomic_display_metadata(self):
         board = self.board()
-        metadata = {'title': 'Readable micro task', 'description': 'User wording sentinel.'}
+        metadata = {'title': 'Readable micro task', 'goal': 'User wording sentinel.\nSecond paragraph.'}
         run = self.submit(board, kind='worktree', macroTask=metadata, title='Short title', task='Task opening.\nMore detail.')
         identifier = run['macroTaskId']
         summary = board.call('macro_task_timeline', {'macroTaskId': identifier})
-        self.assertEqual(summary['macroTask']['description'], metadata['description'])
+        self.assertEqual(summary['macroTask']['goal']['body'], metadata['goal'])
+        self.assertEqual(summary['macroTask']['goal']['revision'], 1)
+        self.assertEqual(set(summary['macroTask']['goal']), {'body', 'revision', 'createdAt'})
         self.assertEqual(summary['macroTask']['counts']['accepted'], 0)
         self.assertEqual(summary['rows'][0]['taskSummary'], 'Task opening.')
         with board.store.db.read() as db:
@@ -193,25 +195,25 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
             head = db.execute('SELECT MAX(seq) FROM events').fetchone()[0]
         self.assertTrue(self.submit(board, kind='worktree', macroTask=metadata, title='Short title', task='Task opening.\nMore detail.')['duplicate'])
         with self.assertRaises(BoardError) as conflict:
-            self.submit(board, kind='worktree', macroTask={**metadata, 'description': 'Changed'}, title='Short title', task='Task opening.\nMore detail.')
+            self.submit(board, kind='worktree', macroTask={**metadata, 'goal': 'Changed'}, title='Short title', task='Task opening.\nMore detail.')
         self.assertEqual(conflict.exception.code, 'CONFLICT')
         with board.store.db.read() as db:
             self.assertEqual(head, db.execute('SELECT MAX(seq) FROM events').fetchone()[0])
             self.assertEqual(shape, [tuple(r) for r in db.execute('PRAGMA table_info(macro_tasks)')])
             for row in db.execute('SELECT spec_json FROM tasks'):
-                self.assertNotIn(metadata['description'], row[0])
+                self.assertNotIn(metadata['goal'], row[0])
         self.register(board)
-        self.assertNotIn(metadata['description'], json.dumps(self.claim(board)))
-        for value in ('', ' ', 'x' * 301, None, False):
+        self.assertNotIn(metadata['goal'], json.dumps(self.claim(board)))
+        for value in ('', ' ', None, False):
             with self.assertRaises(BoardError):
-                schemas.normalize_presentation({'macroTask': {'title': 'ok', 'description': value}})
-        self.assertEqual(len(schemas.normalize_presentation({'macroTask': {'title': 'ok', 'description': '字' * 300}})['macroTask']['description']), 300)
+                schemas.normalize_presentation({'macroTask': {'title': 'ok', 'goal': value}})
+        self.assertEqual(schemas.normalize_presentation({'macroTask': {'title': 'ok', 'goal': '字' * 300}})['macroTask']['goal'], '字' * 300)
 
     def test_changed_presentation_conflicts_without_creating_another_group(self):
         board = self.board()
-        self.submit(board, macroTask={'title':'one'}, title='first')
-        for extra in ({'macroTask':{'title':'two'}, 'title':'first'},
-                      {'macroTask':{'title':'one'}, 'title':'changed'}, {}):
+        self.submit(board, macroTask={'title':'one', 'goal': 'one'}, title='first')
+        for extra in ({'macroTask':{'title':'two', 'goal': 'two'}, 'title':'first'},
+                      {'macroTask':{'title':'one', 'goal': 'one'}, 'title':'changed'}, {}):
             with self.assertRaises(BoardError) as error:
                 self.submit(board, **extra)
             self.assertEqual(error.exception.code, 'CONFLICT')
@@ -220,7 +222,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
 
     def test_a_foreign_host_cannot_attach_and_unknown_group_admits_nothing(self):
         board = self.board()
-        first = self.submit(board, macroTask={'title':'one'})
+        first = self.submit(board, macroTask={'title':'one', 'goal': 'one'})
         for request_id, host_id, identifier, code in (
             ('foreign','host-2',first['macroTaskId'],'CONFLICT'),
             ('unknown','host-1','macro-unknown','NOT_FOUND'),
@@ -233,7 +235,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
     def test_metadata_input_is_strict_and_omission_keeps_original_fingerprint(self):
         board = self.board()
         for extra in ({'title':None},{'title':False},{'title':' '}, {'title':'x'*201},
-                      {'macroTask':None},{'macroTask':{'title':'ok','extra':1}},
+                      {'macroTask':None},{'macroTask':{'title':'ok','goal':'valid','extra':1}},
                       {'macroTask':{'title':'ok'},'macroTaskId':None},{'macroTaskId':'run:old'}):
             with self.assertRaises(BoardError):
                 self.submit(board, **extra)
@@ -243,7 +245,7 @@ class MacroTaskAdmissionTests(WorkflowTestCase):
 
     def test_snapshot_reads_do_not_advance_activity(self):
         board = self.board()
-        first = self.submit(board, macroTask={'title':'read only index'})
+        first = self.submit(board, macroTask={'title':'read only index', 'goal': 'read only index'})
         with board.store.db.read() as db:
             before = tuple(db.execute('SELECT activity_seq,activity_at FROM macro_tasks').fetchone())
         for _ in range(2):
@@ -386,7 +388,7 @@ class MacroTaskReadTests(WorkflowTestCase):
 
     def grouped_board(self):
         board = self.board()
-        first = self.submit(board, request_id='g-1', kind='worktree', macroTask={'title': 'Ship the timeline'},
+        first = self.submit(board, request_id='g-1', kind='worktree', macroTask={'title': 'Ship the timeline', 'goal': 'Ship the timeline'},
                             title='Backend')
         second = self.submit(board, request_id='g-2', kind='worktree', macroTaskId=first['macroTaskId'], title='Frontend')
         loose = self.submit(board, request_id='loose', kind='worktree', task='standalone work\nsecond line')
@@ -401,7 +403,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.register(board)
         for terminal in ('accepted', 'concluded'):
             root = self.submit(board, request_id=f'helper-root-{terminal}', kind='worktree',
-                               cwd=str(self.workdir(f'root-{terminal}')), macroTask={'title': terminal})
+                               cwd=str(self.workdir(f'root-{terminal}')), macroTask={'title': terminal, 'goal': terminal})
             self.finish_turn(board, self.claim(board, run_id=root['runId']), disposition='assistance')
             view = board.call('workflow_get', {'runId': root['runId']})
             approved = self.decide(board, view, view['activeRequest']['requestId'], command_id=f'delegate-{terminal}', helpers=[{
@@ -435,9 +437,9 @@ class MacroTaskReadTests(WorkflowTestCase):
     def test_fix_target_title_uses_target_presentation_across_macro_tasks(self):
         board = self.board()
         target = self.submit(board, request_id='target', kind='worktree',
-                             macroTask={'title': 'First group'}, title='Backend')
+                             macroTask={'title': 'First group', 'goal': 'First group'}, title='Backend')
         correction = self.submit(board, request_id='correction', kind='worktree',
-                                 macroTask={'title': 'Second group'}, title='Repair')
+                                 macroTask={'title': 'Second group', 'goal': 'Second group'}, title='Repair')
         self.assertNotEqual(target['macroTaskId'], correction['macroTaskId'])
         with board.store.db.write() as db:
             db.execute(
@@ -815,7 +817,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         enable_fixture_buddy(board.store, BUDDY)
         lead = self.submit(board, request_id='authority-root', cwd=str(self.workdir('authority-root')),
                            executionWorkspace={'kind': 'existing', 'access': 'full', 'accessNote': 'Lead checks'},
-                           delegationAuthority=True, macroTask={'title': 'Timeline authority'})
+                           delegationAuthority=True, macroTask={'title': 'Timeline authority', 'goal': 'Timeline authority'})
         timeline = board.call('macro_task_timeline', {'macroTaskId': lead['macroTaskId']})
         self.assertEqual(len(timeline['rows']), 1)
         row = timeline['rows'][0]
@@ -843,7 +845,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         board = self.board()
         self.register(board)
         lead = self.submit(board, request_id='timeline-lead-owner', cwd=str(self.workdir('timeline-lead-owner')),
-                           macroTask={'title': 'Lead owned work'})
+                           macroTask={'title': 'Lead owned work', 'goal': 'Lead owned work'})
         self.finish_turn(board, self.claim(board, run_id=lead['runId'], claim_request_id='timeline-lead-claim'))
         root = self.submit(board, request_id='timeline-owned-root', kind='worktree',
                            cwd=str(self.workdir('timeline-lead-owner')),

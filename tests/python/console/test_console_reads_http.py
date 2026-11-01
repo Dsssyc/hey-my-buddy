@@ -368,7 +368,7 @@ class ConsoleReadCacheTests(ConsoleTestCase, WorkflowTestCase):
     def test_macro_task_and_timeline_reads_are_conditional(self):
         board = self.board()
         submitted = self.submit(
-            board, request_id="cond-1", cwd=str(self.workdir("cond-1")), macroTask={"title": "Conditional"}
+            board, request_id="cond-1", cwd=str(self.workdir("cond-1")), macroTask={"title": "Conditional", 'goal': "Conditional"}
         )
         browser = self.open(board)
         for path in ("/api/macro-tasks?limit=5",

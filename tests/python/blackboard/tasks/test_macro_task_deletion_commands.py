@@ -86,7 +86,7 @@ def assert_deleted_receipts(case, board, target, expected_kinds, retained_comman
 class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
     def test_real_workflow_commands_are_removed_with_their_macro_task(self):
         board = self.board()
-        first = self.submit(board, request_id="commands-first", macroTask={"title": "Disposable"})
+        first = self.submit(board, request_id="commands-first", macroTask={"title": "Disposable", 'goal': "Disposable"})
         self.finish_turn(board, self.claim(board), disposition="attention")
         attention = board.call("workflow_get", {"runId": first["runId"]})
         decided = self.decide(board, attention, attention["activeRequest"]["requestId"],
@@ -110,7 +110,7 @@ class WorkflowDeletionCommandTests(WorkflowTestCase, ConsoleTestCase):
         board.call("workflow_conclude", {"runId": second["runId"],
                                          "note": "Cancelled before execution", **self.control(cancelled)})
 
-        other = self.submit(board, request_id="commands-other", macroTask={"title": "Retained"},
+        other = self.submit(board, request_id="commands-other", macroTask={"title": "Retained", 'goal': "Retained"},
                             cwd=str(self.workdir("commands-other")))
         other_cancelled = board.call("workflow_cancel", {"runId": other["runId"],
                                                          "commandId": "commands-other-cancel", **self.control(other)})

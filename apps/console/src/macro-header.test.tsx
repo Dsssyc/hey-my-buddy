@@ -23,13 +23,13 @@ describe("the macro task header", () => {
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("2已验收");
     expect(within(head).getByRole("button", { name: "列表开关" })).toBeTruthy();
     expect(within(head).getByRole("button", { name: "停止" })).toBeTruthy();
-    expect(head.textContent).not.toContain(timeline.macroTask.description);
+    expect(head.textContent).not.toContain(timeline.macroTask.goal!.body);
     const user = userEvent.setup();
     await user.click(within(head).getByRole("button", { name: "‹ 宏任务" }));
     expect(onBack).toHaveBeenCalledOnce();
     await user.click(within(head).getByRole("button", { name: "时间统计" }));
     const details = screen.getByRole("dialog", { name: "时间统计" });
-    expect(details.textContent).toContain(timeline.macroTask.description);
+    expect(details.textContent).toContain(timeline.macroTask.goal!.body);
     expect(details.textContent).toContain("跨度");
   });
 

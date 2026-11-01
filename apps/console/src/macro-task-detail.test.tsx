@@ -8,7 +8,7 @@ import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import { ApiError } from "./api";
 import type { Snapshot, Task } from "./types";
-import { macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { listSummary, macroTaskDetail, macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import type { MacroTaskStopResult, MacroTaskTimeline } from "./macro-task-types";
 
 function render(ui: ReactElement, options?: RenderOptions) {
@@ -62,17 +62,17 @@ function harness(options: StopOptions = {}) {
   const timeline = macroTaskTimelineFixture();
   if (options.title!) timeline.macroTask.title = options.title!;
   const listed = options.secondStoppable
-    ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "macro-2", title: "另一个进行中的目标",
+    ? [listSummary(timeline.macroTask), macroTaskSummary({ macroTaskId: "macro-2", title: "另一个进行中的目标",
         lastActivitySeq: 30, lastActivityAt: "2026-09-26T07:40:00Z", state: "active",
         counts: { roots: 2, helpers: 0, accepted: 0, failed: 0, active: 1, host: 0, review: 1, ended: 0,
           stoppableRoots: 1, stoppableHelpers: 0, delivered: 1, awaitingHost: 0 } })]
     : options.secondMacroTask
-    ? [timeline.macroTask, macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone",
-        title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", description: null, lastActivitySeq: 20,
+    ? [listSummary(timeline.macroTask), macroTaskSummary({ macroTaskId: "run:3f0e", kind: "standalone",
+        title: "修复标题回退在 CRLF 输入下的显示", titleSource: "task", lastActivitySeq: 20,
         lastActivityAt: "2026-09-25T10:22:00Z", state: "ended",
         counts: { roots: 1, helpers: 0, accepted: 0, failed: 0, active: 0, host: 0, review: 0, ended: 1,
           stoppableRoots: 0, stoppableHelpers: 0, delivered: 0, awaitingHost: 0 } })]
-    : [timeline.macroTask];
+    : [listSummary(timeline.macroTask)];
   const tasks = new Map(["r1", "r2", "r3", "r4", "r7"].map(id => [id, taskFixture(id)]));
   let stopAttempts = 0;
   const stopReply: MacroTaskStopResult = {
@@ -554,7 +554,7 @@ describe("macro-task-level stop (0.15.1 U4)", () => {
       throw new Error(`Unexpected command: ${operation}`);
     });
     (f.api.macroTaskTimeline as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (macroTaskId: string) =>
-      ({ timeline: { ...f.timeline, macroTask: summaries.get(macroTaskId) ?? f.timeline.macroTask }, verifiedAtMs: null }));
+      ({ timeline: { ...f.timeline, macroTask: macroTaskDetail({ ...summaries.get(macroTaskId), macroTaskId }) }, verifiedAtMs: null }));
     await openMacroTask(f);
     // Confirm the first macroTask's stop; its reply stays pending.
     await requestStop(f);

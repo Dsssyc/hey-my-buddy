@@ -39,7 +39,7 @@ from ...protocol.stop import WRAP_UP_INITIATORS
 from ...protocol.turn_input import turn_buddy
 from ...protocol.workspace_manifest import project_id, project_id_sql
 from ..routing.statistics import accumulate_infrastructure, accumulate_overall
-from . import fixes as task_fixes
+from . import macro_tasks, fixes as task_fixes
 from . import host_conclusions
 from . import micro_task
 from .request_reasons import request_reason
@@ -865,7 +865,8 @@ class WorkflowCoordinator:
         if view["task"].get("providerRejection") is not None:
             view["providerRejection"] = view["task"]["providerRejection"]
         if (current_scope() or {}).get("kind") != AGENT_KIND:
-            view.update(title=run_row["title"], macroTaskId=run_row["macro_task_id"])
+            view.update(title=run_row["title"], macroTaskId=run_row["macro_task_id"],
+                        goal=macro_tasks.current_goal(connection, run_row["macro_task_id"]))
         return view
 
     @staticmethod
@@ -1600,7 +1601,7 @@ class WorkflowCoordinator:
             if fixed_run["state"] != "accepted":
                 raise BoardError("INVALID_STATE", "fixes must name an accepted micro task", fixes=fixes)
         macro_task_id = (self._run_row(connection, lead["runId"])["macro_task_id"] if lead is not None else
-                         attach_macro_task(connection, presentation, spec=spec, host_id=hostId,
+                         attach_macro_task(connection, presentation, host_id=hostId,
                                            manifest=manifest, now=now, fixed_run=fixed_run))
         connection.execute(
             "INSERT INTO workflow_runs(run_id, host_id, owner_generation, control_verifier,"
@@ -1639,12 +1640,6 @@ class WorkflowCoordinator:
         if delegationAuthority:
             self.board._append_event(connection, "workflow.delegation_authority_granted", task_id=run_id,
                                      payload={"actor": {"role": "host", "id": hostId}, "buddy": buddy})
-        if "macroTask" in presentation:
-            self.board._append_event(
-                connection, "workflow.macro_task_created", task_id=run_id,
-                payload={"macroTaskId": macro_task_id,
-                         "description": presentation["macroTask"].get("description")},
-            )
         # The column tracks the effective execution checkout (a prepared worktree
         # path), while spec_json/input_fingerprint keep the immutable original
         # spec. Admission and resource claims use the column.
@@ -2001,11 +1996,13 @@ class WorkflowCoordinator:
                 raise BoardError("NOT_FOUND", "Unknown runId", runId=run_id)
             run_row = self._run_optional(connection, run_id)
             if run_row is None:
-                view = {"runId": run_id, "task": self.board._decorate(connection, task)}
+                view = {"runId": run_id, "task": self.board._decorate(connection, task),
+                        "inquiries": self._inquiries(connection, run_id)}
                 if raw_history is not None:
                     view["routingHistory"] = {"entries": [], "nextCursor": None, "total": 0}
                 return view
             view = self.compact(connection, run_row, task)
+            view["inquiries"] = self._inquiries(connection, run_id)
             if raw_history is not None:
                 # Optional newest-first page of this run's own routing decisions;
                 # without it the compact shape is unchanged.
@@ -2015,6 +2012,12 @@ class WorkflowCoordinator:
             if include_audit:
                 view["audit"] = self._audit(connection, run_row)
         return view
+
+    def _inquiries(self, connection, run_id: str) -> list[dict]:
+        return [self.board._message_view(row) for row in connection.execute(
+            "SELECT * FROM messages WHERE task_id=? AND direction='question' ORDER BY created_at,rowid",
+            (run_id,),
+        )]
 
     def _routing_history(self, connection, run_row, *, limit: int, before: int | None) -> dict:
         """One bounded page of this run's routing decisions, newest first.
@@ -4863,6 +4866,53 @@ class WorkflowCoordinator:
                 pendingContinuations=pending,
             )
         return self._lineage_stop_evidence(connection, run_row, action)
+
+    def goal_amend(self, params: dict) -> dict:
+        """Append a macro task's goal under the controlling micro task's Host authority."""
+        schemas.reject_unknown(
+            params, {"runId", "commandId", "goal", "expectedGoalRevision", *schemas.CONTROL_FIELDS},
+            "workflow.goal_amend",
+        )
+        run_id = schemas.required_string(params, "runId", max_length=128)
+        command_id = schemas.required_string(params, "commandId", max_length=128)
+        goal, _size = schemas.bounded_text(params, "goal", max_bytes=schemas.MAX_TASK_BYTES)
+        expected = params.get("expectedGoalRevision")
+        if isinstance(expected, bool) or not isinstance(expected, int) or expected < 0:
+            raise BoardError("INVALID_ARGUMENT", "expectedGoalRevision must be a nonnegative integer")
+        request_key = {"runId": run_id, "goal": goal, "expectedGoalRevision": expected}
+        now = self.now()
+        with self.db.write() as connection:
+            receipt_entry = self.board._receipt_entry(connection, command_id, "workflow.goal_amend", request_key)
+            run_row = self._run_row(connection, run_id)
+            actor, _initiator = self._authorize(
+                connection, run_row, params, console_authority=None, action="A goal amendment"
+            )
+            receipt = self.board._receipt_response(connection, receipt_entry)
+            if receipt is not None:
+                return {**receipt, "duplicate": True}
+            reject_deleting_run(connection, run_id)
+            macro_task_id = run_row["macro_task_id"]
+            if macro_task_id is None:
+                raise BoardError("MACRO_TASK_REQUIRED", "A goal amendment requires a run belonging to a macro task")
+            current = macro_tasks.current_goal(connection, macro_task_id)
+            revision = current["revision"] if current else 0
+            if revision != expected:
+                raise BoardError("GOAL_REVISION_CONFLICT", "The macro task goal changed; re-read it and retry",
+                                 expectedGoalRevision=expected, currentGoalRevision=revision)
+            connection.execute(
+                "INSERT INTO macro_task_goals(macro_task_id,revision,body,created_at) VALUES(?,?,?,?)",
+                (macro_task_id, revision + 1, goal, now),
+            )
+            self.board._append_event(
+                connection, "workflow.goal_amended", task_id=run_id,
+                payload={"macroTaskId": macro_task_id, "goalRevision": revision + 1, "actor": actor},
+            )
+            response = {**self.compact(connection, run_row), "duplicate": False,
+                        "previousGoalRevision": revision, "goalRevision": revision + 1}
+            self.board._store_receipt(connection, command_id, "workflow.goal_amend", request_key, response, task_id=run_id)
+            head = self.board._head_of(connection)
+        self.board._notify(head)
+        return response
 
     def scope_amend(self, params: dict, *, console_authority: dict | None = None) -> dict:
         """Append one new authorization scope version for the next stage.

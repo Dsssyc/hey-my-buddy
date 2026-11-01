@@ -49,7 +49,7 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
             all_changed, _ = probe.request("identity",related["etag"])
             self.assertCountEqual(all_changed["summaryGroups"],self.fixture.macros)
 
-    def test_raw_metadata_and_description_changes_refresh_body_page_and_cursor(self):
+    def test_raw_metadata_changes_refresh_body_page_and_cursor(self):
         store = self.fixture.board.store
         group = self.fixture.macros[0]
         with fixture_module.HandlerProbe(self.fixture.board) as probe:
@@ -61,14 +61,13 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
             with store.db.write() as connection:
                 connection.execute("UPDATE macro_tasks SET activity_seq=999999,title='Fictional HTTP title' WHERE macro_task_id=?",(group,))
                 root = connection.execute("SELECT run_id FROM workflow_runs WHERE macro_task_id=? ORDER BY created_at,rowid LIMIT 1",(group,)).fetchone()[0]
-                connection.execute("UPDATE events SET payload_json=json_set(payload_json,'$.description','Fictional HTTP correction') WHERE kind='workflow.macro_task_created' AND task_id=?",(root,))
             row, updated = probe.request("identity",first["etag"],query="limit=1")
             self.assertEqual(row["status"],200)
             self.assertEqual(row["summaryGroups"],[group])
             summary = macro_summaries(updated)[0]
             self.assertEqual(summary["macroTaskId"],group)
             self.assertEqual(summary["title"],"Fictional HTTP title")
-            self.assertEqual(summary["description"],"Fictional HTTP correction")
+            self.assertNotIn("goal",summary)
             self.assertNotEqual(updated["groups"][0]["nextCursor"],cursor)
             _, after_page = probe.request("identity",query=second_query)
             self.assertTrue(after_page["changed"])
@@ -81,6 +80,21 @@ class ConsoleMacroTaskCacheTests(unittest.TestCase):
                 connection.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','fictional-http-removed') WHERE task_id=?",(root,))
             _, removed = probe.request("identity",query="limit=50&query=fictional-http-needle")
             self.assertEqual(removed["totals"]["all"],0)
+
+    def test_raw_goal_correction_is_detail_only(self):
+        store = self.fixture.board.store
+        group = self.fixture.macros[0]
+        with fixture_module.HandlerProbe(self.fixture.board) as probe:
+            first, page = probe.request("identity")
+            self.assertTrue(all("goal" not in summary for summary in macro_summaries(page)))
+            with store.db.write() as connection:
+                connection.execute("UPDATE macro_task_goals SET body='Fictional HTTP correction' WHERE macro_task_id=? AND revision=1", (group,))
+            replay, body = probe.request("identity", first["etag"])
+            self.assertEqual(replay["status"], 304)
+            self.assertEqual(replay["summaryCalls"], 0)
+            self.assertIsNone(body)
+            detail = macro_tasks.macro_task_timeline(store, {"macroTaskId": group})
+            self.assertEqual(detail["macroTask"]["goal"]["body"], "Fictional HTTP correction")
 
     def test_other_filtered_macro_commit_does_not_recompute_visible_summary(self):
         group, other = self.fixture.macros[:2]

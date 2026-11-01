@@ -44,9 +44,9 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
     def test_browser_previews_and_deletes_whole_macro_task_without_residual_record(self):
         board = self.board()
-        first = self.create(board, macroTask={'title': 'Disposable'})
+        first = self.create(board, macroTask={'title': 'Disposable', 'goal': 'Disposable'})
         second = self.create(board, 'second', macroTaskId=first['macroTaskId'])
-        other = self.create(board, 'retained', macroTask={'title': 'Retained'})
+        other = self.create(board, 'retained', macroTask={'title': 'Retained', 'goal': 'Retained'})
         _, browser = self.open_console(board)
         target = first['macroTaskId']
         preview = self.command(browser, PREVIEW, {'macroTaskId': target})
@@ -97,7 +97,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
     def unavailable_repository_deletion(self, mode):
         from hey_my_buddy import private_dirs
         board = self.board()
-        run = self.create(board, macroTask={'title': 'Unavailable repository'})
+        run = self.create(board, macroTask={'title': 'Unavailable repository', 'goal': 'Unavailable repository'})
         with board.store.db.read() as connection:
             manifest = json.loads(connection.execute(
                 'SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?', (run['runId'],)).fetchone()[0])
@@ -162,7 +162,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
     def test_service_host_and_worker_credentials_do_not_authorize_either_operation(self):
         board = self.board()
-        owner = self.create(board, macroTask={'title': 'Console owned'})
+        owner = self.create(board, macroTask={'title': 'Console owned', 'goal': 'Console owned'})
         target = owner['macroTaskId']
         worker = self.create(board, 'active-worker', settled=False)
         credential = self.claim(board, run_id=worker['runId'])['claim']['agentCredential']
@@ -178,7 +178,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
     def test_requests_reject_invalid_identifiers_unknown_fields_confirmation_and_counts(self):
         board = self.board()
-        target = self.create(board, macroTask={'title': 'Validated target'})['macroTaskId']
+        target = self.create(board, macroTask={'title': 'Validated target', 'goal': 'Validated target'})['macroTaskId']
         _, browser = self.open_console(board)
         valid = {'macroTaskId': target, 'microTaskCount': 1, 'confirm': True}
         for identifier in (None, 1, '', 'unknown', 'macro-', 'run:', 'macro-../escape',
@@ -230,7 +230,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
     def test_unsettled_preview_and_delete_share_structured_blockers(self):
         board = self.board()
-        target = self.create(board, settled=False, macroTask={'title': 'Queued'})['macroTaskId']
+        target = self.create(board, settled=False, macroTask={'title': 'Queued', 'goal': 'Queued'})['macroTaskId']
         _, browser = self.open_console(board)
         preview = self.command(browser, PREVIEW, {'macroTaskId': target})
         self.assertGreater(preview['blockerTotal'], 0)
@@ -246,7 +246,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
     def test_console_stop_then_confirmed_cancelled_micro_tasks_can_delete_without_host_conclusion(self):
         board = self.board()
-        first = self.create(board, settled=False, macroTask={'title': 'Stop then delete'})
+        first = self.create(board, settled=False, macroTask={'title': 'Stop then delete', 'goal': 'Stop then delete'})
         claim = self.claim(board, run_id=first['runId'])
         second = self.create(board, 'queued-to-stop', settled=False, macroTaskId=first['macroTaskId'])
         target = first['macroTaskId']
@@ -275,7 +275,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
     def test_count_change_requires_a_new_preview_before_deletion(self):
         board = self.board()
-        target = self.create(board, macroTask={'title': 'Growing group'})['macroTaskId']
+        target = self.create(board, macroTask={'title': 'Growing group', 'goal': 'Growing group'})['macroTaskId']
         _, browser = self.open_console(board)
         preview = self.command(browser, PREVIEW, {'macroTaskId': target})
         self.create(board, 'new-member', macroTaskId=target)
@@ -310,7 +310,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
     def test_unavailable_harness_refuses_with_structured_details_and_recovers(self):
         board = self.board()
-        run = self.create(board, macroTask={'title': 'Harness health'})
+        run = self.create(board, macroTask={'title': 'Harness health', 'goal': 'Harness health'})
         target = run['macroTaskId']
         session_id = '55555555-5555-4555-8555-555555555555'
         receipt = {'result': {'nativeSession': {'harness': 'codex', 'sessionId': session_id,
@@ -348,7 +348,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
     def test_interrupted_deletion_returns_structured_reason_and_resumes_the_same_record(self):
         board = self.board()
-        target = self.create(board, macroTask={'title': 'Interrupted group'})['macroTaskId']
+        target = self.create(board, macroTask={'title': 'Interrupted group', 'goal': 'Interrupted group'})['macroTaskId']
         _, browser = self.open_console(board)
         params = {'macroTaskId': target, 'microTaskCount': 1, 'confirm': True}
         with patch.object(macro_task_deletion, '_delete_private_roots', side_effect=OSError('Fixture interruption')):
@@ -363,7 +363,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
     def test_skipped_checkout_keeps_the_same_deletion_until_its_lock_is_restored(self):
         board = self.board()
-        run = self.create(board, macroTask={'title': 'Retained checkout'})
+        run = self.create(board, macroTask={'title': 'Retained checkout', 'goal': 'Retained checkout'})
         with board.store.db.read() as connection:
             manifest = json.loads(connection.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
                                                      (run['runId'],)).fetchone()[0])

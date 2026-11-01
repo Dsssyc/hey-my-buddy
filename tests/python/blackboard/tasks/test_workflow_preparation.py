@@ -649,7 +649,7 @@ class RestartPreparationTests(WorkflowTestCase):
         self.register(board)
         run = self.submit(board, request_id="initial-project", cwd=str(self.repo),
                           executionWorkspace={"kind": "worktree", "access": "write"},
-                          macroTask={"title": "initial project"})
+                          macroTask={"title": "initial project", 'goal': "initial project"})
         original = self.manifest(board, run["runId"])
         project = workspace.inspect(str(self.repo))["projectId"]
         other = self.repository("other-project")

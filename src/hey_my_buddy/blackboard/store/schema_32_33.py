@@ -87,6 +87,33 @@ CREATE TABLE IF NOT EXISTS workspace_cleanup_plans (
 
 CLEANUP_INDEX = """CREATE INDEX IF NOT EXISTS workspace_cleanup_plans_run_idx ON workspace_cleanup_plans(run_id, state);"""
 
+MACRO_TASKS_DDL = """
+CREATE TABLE IF NOT EXISTS macro_tasks (
+    macro_task_id       TEXT PRIMARY KEY,
+    title              TEXT NOT NULL,
+    project_id         TEXT NOT NULL,
+    source_host_id     TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    activity_seq       INTEGER NOT NULL DEFAULT 0,
+    activity_at        TEXT NOT NULL
+);
+"""
+
+MACRO_TASKS_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS macro_tasks_activity_idx ON macro_tasks(activity_seq DESC, macro_task_id DESC);",
+    "CREATE INDEX IF NOT EXISTS macro_tasks_project_idx ON macro_tasks(project_id, activity_seq DESC, macro_task_id DESC);",
+)
+
+MACRO_TASK_GOALS_DDL = """
+CREATE TABLE IF NOT EXISTS macro_task_goals (
+    macro_task_id TEXT NOT NULL REFERENCES macro_tasks(macro_task_id) ON DELETE CASCADE,
+    revision      INTEGER NOT NULL,
+    body          TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    PRIMARY KEY (macro_task_id, revision)
+);
+"""
+
 
 def _manifests(connection):
     """Read each stored sealed manifest form, without changing its bytes."""
@@ -212,6 +239,27 @@ def upgrade(connection):
     _mark_old_projects(manifests)
     roots = {(manifest["workspaceId"], manifest["manifestSha256"]): manifest["checkoutRoot"]
              for manifest in manifests}
+
+    goals = []
+    for event in connection.execute("SELECT payload_json,created_at FROM events"
+                                    " WHERE kind='workflow.macro_task_created'"):
+        payload = json.loads(event["payload_json"])
+        if payload["description"] is not None:
+            goals.append((payload["macroTaskId"], 1, payload["description"], event["created_at"]))
+    connection.execute("DELETE FROM events WHERE kind='workflow.macro_task_created'")
+
+    macro_tasks = [dict(row) for row in connection.execute("SELECT rowid,* FROM macro_tasks")]
+    connection.execute("DROP TABLE macro_tasks")
+    connection.execute(MACRO_TASKS_DDL)
+    columns = ("rowid", "macro_task_id", "title", "project_id", "source_host_id", "created_at",
+               "activity_seq", "activity_at")
+    insert = f"INSERT INTO macro_tasks({','.join(columns)}) VALUES({','.join('?' for _ in columns)})"
+    for row in macro_tasks:
+        connection.execute(insert, tuple(row[column] for column in columns))
+    for statement in MACRO_TASKS_INDEXES:
+        connection.execute(statement)
+    connection.execute(MACRO_TASK_GOALS_DDL)
+    connection.executemany("INSERT INTO macro_task_goals(macro_task_id,revision,body,created_at) VALUES(?,?,?,?)", goals)
 
     # Retire unstarted cleanup admissions and their receipts, as in 31 → 32.
     connection.execute("DELETE FROM events WHERE json_extract(payload_json,'$.planId') IN"

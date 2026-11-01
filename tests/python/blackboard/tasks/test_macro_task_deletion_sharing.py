@@ -27,7 +27,7 @@ class DeletionSharingTests(RealWorkspaceTestCase):
     def submit_group(self,board,request_id,*,kind='existing',cwd=None):
         run = board.call('workflow_submit',{
             **BUDDY,'requestId':request_id,'hostId':'host-1','task':'Private shared-object fixture',
-            'cwd':str(cwd or self.repo),'submissionToken':'t'*32,'macroTask':{'title':request_id},
+            'cwd':str(cwd or self.repo),'submissionToken':'t'*32,'macroTask':{'title':request_id, 'goal': request_id},
             'executionWorkspace':{'kind':kind,'access':'write','writeScope':['.']},
         })
         self.controls[run['runId']] = run['control']
