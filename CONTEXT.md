@@ -175,12 +175,16 @@ _Avoid_: run controller, Worker runtime, Worker (for this process)
 ### Work
 
 **项目 / project**:
-The code repository that a macro task belongs to. Every worktree and checkout of one repository belongs to the same project; a worktree or a checkout is not a project.
+The code repository that a macro task belongs to. It stays the same project when it is renamed, moved or copied; a fresh clone is a different project. Every worktree and checkout of one repository belongs to the same project; a worktree or a checkout is not a project.
 _Avoid_: 工作区, workspace (an execution workspace is a checkout, not a project)
 
 **宏任务 / macro task**:
-A user's overall piece of work, holding one or more micro tasks and used to group them for browsing. It is the unit by which the user deletes records; a micro task that belongs to no macro task is deleted on its own. It does not schedule work or grant control authority.
+A user's overall piece of work: it carries a goal statement, holds one or more micro tasks and groups them for browsing. It is the unit by which the user deletes records; a micro task that belongs to no macro task is deleted on its own. It does not schedule work or grant control authority.
 _Avoid_: 工作目标, objective
+
+**目标说明 / goal**:
+What a macro task is meant to achieve, how far counts as done and what is left out. The Host writes it when it creates the macro task and revises it whenever the direction changes; every revision is kept with its time. It is not part of a Worker's input and does not track progress.
+_Avoid_: 描述, description (the fixed display text it replaces)
 
 **微任务 / micro task**:
 One bounded piece of work that a Host buddy delegates, owns and accepts; it may span several Worker turns. Every micro task belongs to at most one macro task.
