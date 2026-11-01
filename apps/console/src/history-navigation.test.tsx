@@ -7,7 +7,7 @@ import { MacroTasks } from "./MacroTasks";
 import type { ConsoleApi } from "./api";
 import type { Snapshot } from "./types";
 import { task as detailTask, workflow as detailWorkflow, audit as detailAudit } from "./task-detail/task-detail.fixtures";
-import { macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { macroTaskGroups, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 import { TooltipProvider } from "./components/ui/tooltip";
 
@@ -41,7 +41,7 @@ function harness(paged = false) {
     task: vi.fn(async (runId: string) => detailTask({ runId,
       lineage: { ...detailTask().lineage!, rootRunId: runId },
       workflow: { ...detailTask().workflow!, macroTaskId: timeline.macroTask.macroTaskId } })),
-    macroTasks: vi.fn(async () => ({ macroTasks: [timeline.macroTask], totals: { all: 1, active: 1, host: 0, review: 0 }, nextCursor: paged ? "older" : null, cursor: 41, changed: false })),
+    macroTasks: vi.fn(async () => ({ groups: macroTaskGroups([timeline.macroTask], paged ? "older" : null), totals: { all: 1, active: 1, host: 0, review: 0 }, cursor: 41, changed: false })),
     macroTaskTimeline: vi.fn(async () => ({ timeline, verifiedAtMs: null })),
   } as unknown as ConsoleApi;
   const refresh = vi.fn(async () => structuredClone(snapshot));
@@ -75,8 +75,8 @@ describe("macro task navigation", () => {
     expect(document.querySelector('[data-slot="macro-sidebar"] [data-slot="macro-list"]')).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));
     expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号")).toHaveProperty("value", "设计");
-    await f.user.click(await screen.findByRole("button", { name: "更早" }));
-    expect(f.api.macroTasks).toHaveBeenCalledWith(expect.objectContaining({ before: "older", limit: 50 }), expect.any(AbortSignal));
+    await f.user.click(await screen.findByRole("button", { name: "显示更多" }));
+    expect(f.api.macroTasks).toHaveBeenCalledWith(expect.objectContaining({ group: "project:p1", before: "older", limit: 20 }), expect.any(AbortSignal));
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     f.unmount();
     const next = harness();

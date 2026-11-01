@@ -21,12 +21,17 @@ const macroTaskSummarySchema = z.looseObject({
 });
 export type MacroTaskSummary = z.infer<typeof macroTaskSummarySchema>;
 export type MacroTaskQuery = {
-  limit?: number; before?: string; projectId?: string; hostId?: string;
+  limit?: number; before?: string; group?: string; hostId?: string;
   query?: string; filter?: MacroTaskFilter; sort?: MacroTaskSort;
 };
+export const macroTaskGroupSchema = z.object({
+  id: z.string().min(1), project: macroTaskSummarySchema.shape.project, total: safeCount,
+  macroTasks: z.array(macroTaskSummarySchema), nextCursor: z.string().nullable(),
+});
+export type MacroTaskGroup = z.infer<typeof macroTaskGroupSchema>;
 export const macroTaskPageSchema = z.object({
-  macroTasks: z.array(macroTaskSummarySchema), totals: z.looseObject({ all: safeCount, active: safeCount, host: safeCount, review: safeCount }),
-  nextCursor: z.string().nullable(), cursor: integer, changed: z.boolean(),
+  groups: z.array(macroTaskGroupSchema), totals: z.looseObject({ all: safeCount, active: safeCount, host: safeCount, review: safeCount }),
+  cursor: integer, changed: z.boolean(),
 });
 export type MacroTaskPage = z.infer<typeof macroTaskPageSchema>;
 export type TimelineBuddy = {

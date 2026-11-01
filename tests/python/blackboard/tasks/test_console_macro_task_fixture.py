@@ -84,7 +84,7 @@ class ConsoleMacroTaskFixtureTests(unittest.TestCase):
                     first, body = probe.request("identity")
                     self.assertEqual(first["status"], 200)
                     self.assertEqual(body["totals"]["all"], 3)
-                    self.assertEqual(len(body["macroTasks"]), 3)
+                    self.assertEqual(sum(len(group["macroTasks"]) for group in body["groups"]), 3)
                     self.assertTrue(first["etag"])
                     self.assertEqual(first["summaryCalls"], 3)
                     second, replay = probe.request("identity", first["etag"])

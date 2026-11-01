@@ -26,7 +26,8 @@ from ...protocol.turn_input import turn_buddy
 from ...protocol.reasons import reason_from_json
 from ...errors import BoardError
 
-LIST_DEFAULT_LIMIT = 50
+LIST_FIRST_LIMIT = 5
+LIST_GROUP_LIMIT = 20
 LIST_MAX_LIMIT = 100
 TIMELINE_DEFAULT_LIMIT = 100
 TIMELINE_MAX_LIMIT = 200
@@ -34,14 +35,14 @@ MAX_SPANS = 800
 MAX_MARKERS = 800
 SUMMARY_LIMIT = 300
 TITLE_LIMIT = 200
-CURSOR_VERSION = 2
+CURSOR_VERSION = 3
 LIST_SORTS = frozenset({"activity-desc", "activity-asc", "created-desc", "created-asc"})
 
 MACRO_TASK_PATTERN = re.compile(r"^macro-[A-Za-z0-9-]{1,120}$")
 STANDALONE_PATTERN = re.compile(r"^run:([A-Za-z0-9._:-]{1,128})$")
 _CURSOR_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,512}$")
 
-LIST_PARAMETERS = frozenset({"limit", "before", "projectId", "hostId", "query", "filter", "sort"})
+LIST_PARAMETERS = frozenset({"limit", "before", "group", "hostId", "query", "filter", "sort"})
 TIMELINE_PARAMETERS = frozenset({"macroTaskId", "limit", "query", "filter"})
 
 #: Group ownership follows helpers and Lead-owned runs to their outermost owner.
@@ -210,15 +211,14 @@ def record_activity(connection, task_id: str | None, seq: int, at: str) -> None:
 def _filters(params: dict) -> tuple[dict, list[str], list[Any]]:
     """Validated member filters and their SQL predicates over ``MEMBERS_SQL`` rows."""
     query = schemas.optional_string(params, "query", max_length=micro_task.QUERY_MAX_LENGTH)
-    project_id = schemas.optional_string(params, "projectId", max_length=micro_task.PROJECT_ID_MAX_LENGTH)
     host_id = schemas.optional_string(params, "hostId", max_length=micro_task.HOST_ID_MAX_LENGTH)
     filter_name = schemas.optional_string(params, "filter", max_length=16) or "all"
     if filter_name not in micro_task.HISTORY_FILTERS:
         raise BoardError("INVALID_ARGUMENT", "filter must be one of: all, active, host, review")
     clauses, values = micro_task.history_where(
-        project_id=project_id, host_id=host_id, query=query, filter_name=filter_name
+        host_id=host_id, query=query, filter_name=filter_name
     )
-    applied = {key: value for key, value in (("query", query), ("projectId", project_id), ("hostId", host_id))
+    applied = {key: value for key, value in (("query", query), ("hostId", host_id))
                if value}
     if filter_name != "all":
         applied["filter"] = filter_name
@@ -328,9 +328,14 @@ def _state(row) -> str:
 
 
 def macro_task_list(store, params: dict) -> dict:
-    """Bounded work-macro-task summaries ordered by activity or creation."""
+    """All matching project groups with bounded summaries in each group."""
     schemas.reject_unknown(params, LIST_PARAMETERS, "macro_task.list")
-    limit = schemas.optional_int(params, "limit", LIST_DEFAULT_LIMIT, 1, LIST_MAX_LIMIT)
+    group = schemas.optional_string(params, "group", max_length=micro_task.PROJECT_ID_MAX_LENGTH + 8)
+    if group is not None and group != "standalone" and not group.startswith("project:"):
+        raise BoardError("INVALID_ARGUMENT", "group must be project:<projectId> or standalone", field="group")
+    if group == "project:":
+        raise BoardError("INVALID_ARGUMENT", "group must name a project", field="group")
+    limit = schemas.optional_int(params, "limit", LIST_GROUP_LIMIT if group else LIST_FIRST_LIMIT, 1, LIST_MAX_LIMIT)
     sort = schemas.optional_string(params, "sort", max_length=32) or "activity-desc"
     if sort not in LIST_SORTS:
         raise BoardError("INVALID_ARGUMENT", "sort must be one of: activity-desc, activity-asc, created-desc, created-asc",
@@ -340,10 +345,14 @@ def macro_task_list(store, params: dict) -> dict:
     ordering = f"{order_column} {direction.upper()}, group_id {direction.upper()}"
     applied, clauses, values = _filters(params)
     common_clauses, common_values = micro_task.history_where(
-        project_id=applied.get("projectId"), host_id=applied.get("hostId"),
+        host_id=applied.get("hostId"),
         query=applied.get("query"),
     )
     before_value = schemas.optional_string(params, "before", max_length=512)
+    if before_value is not None and group is None:
+        raise BoardError("INVALID_ARGUMENT", "before requires group", field="before")
+    if group is not None:
+        applied["group"] = group
     before = _decode_cursor(before_value, applied, sort) if before_value is not None else None
     base_match = " AND ".join(["micro_task_run_id IS NOT NULL", *common_clauses])
     selected_filter = micro_task.FILTER_SQL[applied.get("filter", "all")]
@@ -359,13 +368,19 @@ def macro_task_list(store, params: dict) -> dict:
     # all four totals, order, page membership and the per-group dependency marker.
     narrow = ",".join(f"h.{column}" for column in memo.MEMBER_COLUMNS)
     page_values = []
-    page_where = ""
+    page_conditions = []
+    if group is not None:
+        page_conditions.append("project_group = ?")
+        page_values.append(group)
     if before is not None:
         key, group_id, _issued_head = before
         comparison = "<" if direction == "desc" else ">"
-        page_where = (f"WHERE ({order_column} {comparison} ? OR "
-                      f"({order_column} = ? AND group_id {comparison} ?))")
+        page_conditions.append(f"({order_column} {comparison} ? OR "
+                               f"({order_column} = ? AND group_id {comparison} ?))")
         page_values.extend([key, key, group_id])
+    page_where = "WHERE " + " AND ".join(page_conditions) if page_conditions else ""
+    project_where = "WHERE project_group = ?" if group is not None else ""
+    project_values = [group] if group is not None else []
     groups_sql = f"""
 WITH history AS MATERIALIZED (
     SELECT {narrow}, CASE WHEN {base_match} THEN 1 ELSE 0 END AS base_matching
@@ -379,6 +394,7 @@ members AS MATERIALIZED (
 ),
 matched AS (
     SELECT group_id, MAX(base_matching) AS all_match, MAX(matching) AS selected_match,
+           MAX(project_id) AS project_id, MAX(project_repository_path) AS project_repository_path,
            MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['active']} THEN 1 ELSE 0 END) AS active_match,
            MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['host']} THEN 1 ELSE 0 END) AS host_match,
            MAX(CASE WHEN base_matching=1 AND {micro_task.FILTER_SQL['review']} THEN 1 ELSE 0 END) AS review_match
@@ -386,24 +402,49 @@ matched AS (
 ),
 groups AS (
     SELECT matched.group_id, COALESCE(o.activity_seq, root.activity_seq) AS activity_seq,
-           COALESCE(o.created_at, root.created_at) AS created_at
+           COALESCE(o.created_at, root.created_at) AS created_at,
+           CASE WHEN o.macro_task_id IS NULL THEN 'standalone' ELSE 'project:' || o.project_id END AS project_group,
+           o.project_path, matched.project_repository_path
       FROM matched
       LEFT JOIN macro_tasks o ON o.macro_task_id=matched.group_id
       LEFT JOIN workflow_runs root ON o.macro_task_id IS NULL
         AND matched.group_id LIKE 'run:%' AND root.run_id=substr(matched.group_id,5)
      WHERE matched.selected_match=1
 ),
-page AS (SELECT * FROM groups {page_where}
-          ORDER BY {ordering} LIMIT ?),
+ordered AS (
+    SELECT groups.*, ROW_NUMBER() OVER (PARTITION BY project_group ORDER BY {ordering}) AS ordinal
+      FROM groups
+),
+projects AS (
+    SELECT project_group, COUNT(*) AS project_total,
+           MAX(CASE WHEN ordinal=1 THEN {order_column} END) AS first_key,
+           MAX(CASE WHEN ordinal=1 THEN group_id END) AS first_group_id,
+           MAX(CASE WHEN ordinal=1 THEN project_path END) AS project_path,
+           MAX(CASE WHEN ordinal=1 THEN project_repository_path END) AS project_repository_path
+      FROM ordered {project_where} GROUP BY project_group
+),
+page AS (
+    SELECT * FROM (
+        SELECT ordered.*, ROW_NUMBER() OVER (PARTITION BY project_group ORDER BY {ordering}) AS page_rank
+          FROM ordered {page_where}
+    ) WHERE page_rank <= ?
+),
 stats AS (SELECT COALESCE(SUM(all_match),0) AS all_total,
                 COALESCE(SUM(active_match),0) AS active_total,
                 COALESCE(SUM(host_match),0) AS host_total,
                 COALESCE(SUM(review_match),0) AS review_total FROM matched),
 latest AS (SELECT COALESCE(MAX(activity_seq),0) AS latest FROM groups)
-SELECT stats.*,latest.latest,page.group_id AS page_group_id,page.activity_seq,
-       page.created_at AS page_created_at,members.*
-  FROM stats CROSS JOIN latest LEFT JOIN page ON 1=1 LEFT JOIN members ON members.group_id=page.group_id
- ORDER BY page.{order_column} {direction.upper()},page.group_id {direction.upper()},members.task_id
+SELECT stats.*,latest.latest,projects.project_group,projects.project_total,
+       projects.first_key,projects.first_group_id,
+       projects.project_path AS group_project_path,
+       projects.project_repository_path AS group_repository_path,
+       page.group_id AS page_group_id,page.activity_seq,page.created_at AS page_created_at,members.*
+  FROM stats CROSS JOIN latest LEFT JOIN projects ON 1=1
+  LEFT JOIN page ON page.project_group=projects.project_group
+  LEFT JOIN members ON members.group_id=page.group_id
+ ORDER BY CASE WHEN projects.project_group='standalone' THEN 1 ELSE 0 END,
+          projects.first_key {direction.upper()},projects.first_group_id {direction.upper()},
+          page.{order_column} {direction.upper()},page.group_id {direction.upper()},members.task_id
 """
     cache = memo.for_store(store)
     # Lock precedes the read transaction so concurrent list calls serialize
@@ -411,35 +452,59 @@ SELECT stats.*,latest.latest,page.group_id AS page_group_id,page.activity_seq,
     # below (including a cache miss's _summary) remain from this one snapshot.
     with cache.lock, store.db.read() as connection:
         head = _head(connection)
-        rows = connection.execute(groups_sql, [*common_values, *page_values, limit + 1]).fetchall()
+        rows = connection.execute(groups_sql, [*common_values, *project_values, *page_values, limit + 1]).fetchall()
         totals = {name: int(rows[0][f"{name}_total"]) for name in ("all", "active", "host", "review")}
         changed = before is not None and int(rows[0]["latest"]) > before[2]
         groups = {}
+        projects = {}
         for row in rows:
+            if row["project_group"] is not None:
+                projects.setdefault(row["project_group"], row)
             if row["page_group_id"] is not None:
                 groups.setdefault(row["page_group_id"], []).append(row)
-        page = list(groups)[:limit]
-        markers, reusable = memo.dependencies(connection, {group: groups[group] for group in page})
-        filters = json.dumps(applied, sort_keys=True, ensure_ascii=False)
+        pages = {project_id: [item for item in groups if groups[item][0]["project_group"] == project_id][:limit]
+                 for project_id in projects}
+        page = [item for project_page in pages.values() for item in project_page]
+        markers, reusable = memo.dependencies(connection, {item: groups[item] for item in page})
+        filters = json.dumps({key: value for key, value in applied.items() if key != "group"},
+                             sort_keys=True, ensure_ascii=False)
         information = store.db.path.stat()
         board = (information.st_dev, information.st_ino)
-        keys = {group: (board, group, filters) for group in page}
-        cached = {group: cache.lookup(keys[group], markers[group], reusable=reusable[group])
-                  for group in page}
-        missing = [group for group in page if cached[group] is None]
+        keys = {item: (board, item, filters) for item in page}
+        cached = {item: cache.lookup(keys[item], markers[item], reusable=reusable[item])
+                  for item in page}
+        missing = [item for item in page if cached[item] is None]
         summary_inputs = _summary_inputs(connection, missing, clauses, values) if missing else {}
-        summaries = [cached[group] if cached[group] is not None else cache.get(
-            keys[group], markers[group],
-            lambda group=group: _summary(connection, group, summary_inputs[group]),
-            reusable=reusable[group],
-        ) for group in page]
+        summaries = {item: cached[item] if cached[item] is not None else cache.get(
+            keys[item], markers[item],
+            lambda item=item: _summary(connection, item, summary_inputs[item]),
+            reusable=reusable[item],
+        ) for item in page}
         issued_head = before[2] if before is not None else head
-        next_cursor = (
-            _encode_cursor(groups[page[-1]][0]["activity_seq" if sort_column == "activity" else "page_created_at"],
-                           page[-1], applied, issued_head, sort)
-            if len(groups) > limit else None
-        )
-    return {"macroTasks": summaries, "totals": totals, "nextCursor": next_cursor, "cursor": head, "changed": changed}
+        result_groups = []
+        for project_id, project_row in projects.items():
+            identifiers = pages[project_id]
+            project = None if project_id == "standalone" else {
+                "id": project_id.removeprefix("project:"),
+                "path": project_row["group_project_path"],
+                "label": micro_task.project_label(project_row["group_project_path"], project_row["group_repository_path"]),
+            }
+            if project is not None and identifiers:
+                project = summaries[identifiers[0]]["project"]
+            next_cursor = None
+            if len([item for item in groups if groups[item][0]["project_group"] == project_id]) > limit:
+                last = identifiers[-1]
+                row = groups[last][0]
+                next_cursor = _encode_cursor(row["activity_seq" if sort_column == "activity" else "page_created_at"],
+                                             last, {**applied, "group": project_id}, issued_head, sort)
+            result_groups.append({"id": project_id, "project": project,
+                                  "total": int(project_row["project_total"]),
+                                  "macroTasks": [summaries[item] for item in identifiers],
+                                  "nextCursor": next_cursor})
+        if group is not None and not result_groups:
+            result_groups.append({"id": group, "project": None, "total": 0,
+                                  "macroTasks": [], "nextCursor": None})
+    return {"groups": result_groups, "totals": totals, "cursor": head, "changed": changed}
 
 
 def _members(connection, group_id: str) -> list:

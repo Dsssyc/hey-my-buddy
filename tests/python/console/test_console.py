@@ -17,7 +17,7 @@ from pathlib import Path, PureWindowsPath
 from urllib.parse import quote, urlsplit
 
 from fake_executable import make_fake_executable
-from support import BoardTestCase, PYTHON_ROOT
+from support import BoardTestCase, PYTHON_ROOT, macro_summaries
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.errors import BoardError
 
@@ -907,7 +907,7 @@ class ConsoleMacroTaskTests(ConsoleTestCase, WorkflowTestCase):
         self.assertEqual(page, json.loads(json.dumps(board.call("macro_task_list", {"limit": 5, "filter": "all"}))))
         self.assertEqual(page["totals"], {"all": 2, "active": 2, "host": 0, "review": 0})
         self.assertNotIn("total", page)
-        self.assertEqual({item["macroTaskId"] for item in page["macroTasks"]},
+        self.assertEqual({item["macroTaskId"] for item in macro_summaries(page)},
                          {first["macroTaskId"], f"run:{loose['runId']}"})
         status, _headers, body = browser.get("/api/macro-tasks?limit=5&sort=created-asc")
         self.assertEqual(status, 200, body[:300])

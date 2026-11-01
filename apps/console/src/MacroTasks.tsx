@@ -159,6 +159,10 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   }, []);
   const list = useMacroTaskList(api, { query, filter, sort }, active);
   const rows = list.rows.filter(row => !deletedIds.has(row.macroTaskId));
+  const groups = useMemo(() => list.groups.map(group => {
+    const macroTasks = group.macroTasks.filter(row => !deletedIds.has(row.macroTaskId));
+    return { ...group, macroTasks, total: group.total - (group.macroTasks.length - macroTasks.length) };
+  }).filter(group => group.total > 0), [list.groups, deletedIds]);
   const totals = { ...list.totals };
   for (const row of list.rows) if (deletedIds.has(row.macroTaskId)) {
     --totals.all;
@@ -237,8 +241,8 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
     </div>;
   }
   const listPane = <MacroTaskList
-    rows={rows} totals={totals} loading={list.loading} error={list.error}
-    nextCursor={list.nextCursor} reorder={list.reorder} filter={filter} query={query} sort={sort} selected={selected}
+    groups={groups} totals={totals} loading={list.loading} error={list.error}
+    reorder={list.reorder} filter={filter} query={query} sort={sort} selected={selected}
     active={active} visible={active && !listCollapsed && (!narrow || showNarrowList)} onCollapse={onCollapseList}
     onSortChange={sort => go({ ...location, sort }, "push", origin)}
     onFilterChange={setFilter} onQueryChange={setQuery} onSelect={selectMacroTask}

@@ -38,6 +38,11 @@ from hey_my_buddy.blackboard.service.service import BoardService, WaitAdmission,
 from hey_my_buddy.blackboard.service.live_registry import LiveRegistry  # noqa: E402
 from hey_my_buddy.blackboard.store.store import BoardStore  # noqa: E402
 
+
+def macro_summaries(page: dict) -> list[dict]:
+    """Flatten the wire groups for tests concerned with individual summaries."""
+    return [summary for group in page["groups"] for summary in group["macroTasks"]]
+
 #: A discovery document with the same shape the installed-harness helper emits. Tests
 #: point ``HMB_MODEL_CATALOG_FILE`` at this fixture instead of invoking Node.
 FIXTURE_CATALOG = {

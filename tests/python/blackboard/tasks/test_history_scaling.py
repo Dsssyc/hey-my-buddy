@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import unittest
 
-from support import private_state_dir
+from support import private_state_dir, macro_summaries
 from blackboard.tasks.test_console_macro_task_fixture import fixture_module, SOURCE
 from hey_my_buddy.blackboard.tasks import macro_tasks, macro_task_summary_cache as memo
 
 
 class HistoryScalingTests(unittest.TestCase):
     def test_cold_list_and_timeline_steps_grow_less_than_quadratically(self):
-        # Both boards fit the default 50-group page. Double every relationship,
+        # Both boards fit an explicit 100-item project page. Double every relationship,
         # including helpers and Routers; timeline displays the same four-run group.
         # 2.5 leaves room for sorting/index construction, but excludes a 4x scan.
         measurements = []
@@ -26,7 +26,7 @@ class HistoryScalingTests(unittest.TestCase):
                     store = fixture.board.store
                     store._macro_task_summary_cache = memo.SummaryCache()
                     steps = []
-                    for index, read in enumerate((lambda: macro_tasks.macro_task_list(store, {}),
+                    for index, read in enumerate((lambda: macro_tasks.macro_task_list(store, {"limit": 100}),
                                  lambda: macro_tasks.macro_task_timeline(
                                      store, {"macroTaskId": fixture.macros[0]}))):
                         ticks = 0
@@ -43,7 +43,7 @@ class HistoryScalingTests(unittest.TestCase):
                         finally:
                             with store.db.read() as connection:
                                 connection.set_progress_handler(None, 0)
-                        self.assertEqual(len(result["macroTasks"] if index == 0 else result["rows"]),
+                        self.assertEqual(len(macro_summaries(result) if index == 0 else result["rows"]),
                                          size if index == 0 else 4)
                         steps.append(ticks * 100)
                     measurements.append(steps)

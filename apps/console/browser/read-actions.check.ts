@@ -20,20 +20,20 @@ for (const width of [1440, 390]) for (const theme of ["dark", "light"]) {
         source.searchParams.delete("before");
         const response = await route.fetch({ url: source.toString() });
         const data = await response.json();
-        data.macroTasks = data.macroTasks.filter((row: { kind: string }) => row.kind !== "standalone").slice(0, 3);
-        data.nextCursor = "read-actions-next";
+        const group = data.groups.find((row: { id: string }) => row.id === "project:synthetic-preview-alpha");
+        data.groups = [{ ...group, macroTasks: group.macroTasks.slice(0, 3), total: 4, nextCursor: "read-actions-next" }];
         reads++;
         if (url.searchParams.has("before")) {
           paging = true;
           await pageGate;
-          data.macroTasks = [{ ...data.macroTasks[0], macroTaskId: "read-actions-older", title: "更早的合成宏任务" }];
-          data.nextCursor = null;
+          data.groups[0].macroTasks = [{ ...data.groups[0].macroTasks[0], macroTaskId: "read-actions-older", title: "更早的合成宏任务" }];
+          data.groups[0].nextCursor = null;
         } else if (reads > 1) await pollGate;
         await route.fulfill({ json: data });
       });
       try {
         await open(page, "#tasks");
-        const more = page.getByRole("button", { name: "更早", exact: true });
+        const more = page.locator("[data-slot=macro-group-more]");
         await expect(more).toBeVisible();
         await mkdir(captures, { recursive: true });
         await page.screenshot({ path: `${captures}/list-${width}-${theme}.png`, animations: "disabled" });
@@ -42,7 +42,7 @@ for (const width of [1440, 390]) for (const theme of ["dark", "light"]) {
         await more.click();
         await expect.poll(() => paging).toBe(true);
         const busy = page.locator('[data-slot=macro-list] button[aria-busy="true"]:disabled');
-        await expect(busy).toHaveText("读取中");
+        await expect(busy).toHaveAttribute("data-slot", "macro-group-more");
         await expect(busy).toBeDisabled();
         await expectNoSidewaysScroll(page);
         await mkdir(captures, { recursive: true });

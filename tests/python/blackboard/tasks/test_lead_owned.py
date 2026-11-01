@@ -3,7 +3,7 @@ import json
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
-from support import enable_fixture_buddy
+from support import enable_fixture_buddy, macro_summaries
 from hey_my_buddy.blackboard.tasks import workflow
 from hey_my_buddy.cli.cli_views import micro_task_brief, task_brief, list_brief
 from hey_my_buddy.errors import BoardError
@@ -73,7 +73,7 @@ class LeadOwnedTests(WorkflowTestCase):
             self.assertEqual(identity(board.store, task_id, attempt_id)['group_id'], group)
             self.assertEqual(claim['sessionRecordPath'],
                              str(session_record_path(board.directory, group, attempt_id)))
-        groups = board.call('macro_task_list', {})['macroTasks']
+        groups = macro_summaries(board.call('macro_task_list', {}))
         self.assertEqual([row['macroTaskId'] for row in groups], [group])
         with board.store.db.read() as db:
             members = db.execute(f'SELECT task_id,group_id FROM ({macro_tasks.MEMBERS_SQL})').fetchall()

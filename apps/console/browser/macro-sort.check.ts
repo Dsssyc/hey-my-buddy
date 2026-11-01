@@ -4,19 +4,20 @@ import { open, settle, test } from "./preview";
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
 const C = "macro-33333333-3333-4333-8333-333333333333";
-const standalone = "run:preview-run-c1";
+const alpha = "project:synthetic-preview-alpha";
+const beta = "project:synthetic-preview-beta";
 const expected = {
-  "activity-desc": [B, A, standalone, C],
-  "activity-asc": [C, standalone, A, B],
-  "created-desc": [A, standalone, B, C],
-  "created-asc": [C, B, standalone, A],
+  "activity-desc": [beta, alpha, "standalone"],
+  "activity-asc": [alpha, beta, "standalone"],
+  "created-desc": [alpha, beta, "standalone"],
+  "created-asc": [alpha, beta, "standalone"],
 } as const;
 type Mode = keyof typeof expected;
 type Summary = { macroTaskId: string; createdAt: string | null; lastActivityAt: string | null };
 
 function alphaGroup(page: Page) {
   return page.locator('[data-slot=macro-list] [data-slot=macro-group]')
-    .filter({ has: page.locator(`[data-macro-task-id="${A}"]`) });
+    .filter({ has: page.locator('[data-slot=macro-group-heading]').filter({ hasText: "hey-my-buddy" }) });
 }
 
 async function rows(page: Page) {
@@ -114,6 +115,7 @@ for (const [locale, sortLabel, collapseLabel, collapseListLabel, basisLabels, di
       } });
 
       const seen: Partial<Record<Mode, Record<string, Summary>>> = {};
+      const shown: Partial<Record<Mode, string[]>> = {};
 
       async function expandGroups() {
         for (const heading of await list.locator('[data-slot=macro-group-heading][aria-expanded=false]').all()) await heading.click();
@@ -127,8 +129,15 @@ for (const [locale, sortLabel, collapseLabel, collapseListLabel, basisLabels, di
         const response = await read;
         expect(response.ok()).toBe(true);
         const data = await response.json();
-        expect(data.macroTasks.map((item: Summary) => item.macroTaskId)).toEqual(expected[mode]);
-        seen[mode] = Object.fromEntries(data.macroTasks.map((item: Summary): [string, Summary] => [item.macroTaskId, item]));
+        expect(data.groups.map((group: { id: string }) => group.id)).toEqual(expected[mode]);
+        const alphaRows = data.groups.find((group: { id: string }) => group.id === alpha).macroTasks as Summary[];
+        shown[mode] = alphaRows.map(item => item.macroTaskId);
+        seen[mode] = Object.fromEntries(alphaRows.map((item): [string, Summary] => [item.macroTaskId, item]));
+        expect(alphaRows).toHaveLength(5);
+        const key = mode.startsWith("created") ? "createdAt" : "lastActivityAt";
+        const ordered = [...alphaRows].sort((left, right) =>
+          (left[key] ?? "").localeCompare(right[key] ?? "") * (mode.endsWith("desc") ? -1 : 1));
+        expect(alphaRows.map(item => item.macroTaskId)).toEqual(ordered.map(item => item.macroTaskId));
         if (mode === "activity-desc") await expect(page).not.toHaveURL(/sort=/);
         else await expect(page).toHaveURL(new RegExp(`[?&]sort=${mode}$`));
         await expectShown(mode);
@@ -136,7 +145,7 @@ for (const [locale, sortLabel, collapseLabel, collapseListLabel, basisLabels, di
       async function expectShown(mode: Mode) {
         const created = mode.startsWith("created");
         const label = basisLabels[created ? 1 : 0];
-        const visible = expected[mode].filter(id => id === A || id === C);
+        const visible = shown[mode]!;
         await expect.poll(() => times(page)).toEqual(visible.map(id => {
           const summary = seen[mode]![id]!;
           return [id, created ? summary.createdAt : summary.lastActivityAt, label];
@@ -188,14 +197,14 @@ for (const [locale, sortLabel, collapseLabel, collapseListLabel, basisLabels, di
       await expect(basis).not.toHaveAttribute("data-emphasized", "true");
       await expect(direction).toHaveAttribute("data-emphasized", "true");
       await expandGroups();
-      await expect.poll(() => rows(page)).toEqual([C, A]);
+      await expect.poll(() => rows(page)).toEqual(shown["activity-asc"]);
       await expectShown("activity-asc");
       await page.goBack();
-      await expect.poll(() => rows(page)).toEqual([A, C]);
+      await expect.poll(() => rows(page)).toEqual(shown["activity-desc"]);
       await expect(direction).toHaveAccessibleName(directionLabels[0]);
       await expectShown("activity-desc");
       await page.goForward();
-      await expect.poll(() => rows(page)).toEqual([C, A]);
+      await expect.poll(() => rows(page)).toEqual(shown["activity-asc"]);
       await expect(direction).toHaveAccessibleName(directionLabels[1]);
       await expectShown("activity-asc");
 

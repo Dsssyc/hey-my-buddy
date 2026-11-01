@@ -4,7 +4,7 @@ import {
   ApiError, createApi, parseConsoleAccess, parsePermissionLevels, parseReminderSettings,
   parseRoutingHealth, parseRuntimeVersion, snapshotHarnesses, validPreferences, validRoutingConfiguration,
 } from "./api";
-import { macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
+import { macroTaskGroups, macroTaskSummary, macroTaskTimelineFixture } from "./macro-task-fixtures";
 import type { Snapshot } from "./types";
 
 const unsafe = Number.MAX_SAFE_INTEGER + 1;
@@ -233,11 +233,11 @@ describe("storage, macro task and version response boundaries", () => {
   });
   it("keeps permissive timeline projections and integer cursors while checking summary safe counts", async () => {
     const macroTask = { ...macroTaskSummary(), createdAt: "bad", lastActivityAt: "bad", extra: true };
-    const page = { macroTasks: [macroTask], totals: { all: 0, active: 0, host: 0, review: 0 }, nextCursor: "", cursor: -unsafe, changed: false, extra: true };
+    const page = { groups: [{ ...macroTaskGroups([macroTask])[0], nextCursor: "" }], totals: { all: 0, active: 0, host: 0, review: 0 }, cursor: -unsafe, changed: false, extra: true };
     await expect(apiFor(page).macroTasks({})).resolves.toMatchObject(page);
-    for (const value of [{ ...page, macroTasks: [{ ...macroTask, lastActivitySeq: unsafe }] },
-      { ...page, macroTasks: [{ ...macroTask, counts: { ...macroTask.counts, roots: -1 } }] },
-      { ...page, macroTasks: [{ ...macroTask, matchingRuns: unsafe }] }, { ...page, totals: { ...page.totals, all: unsafe } }]) {
+    for (const value of [{ ...page, groups: [{ ...page.groups[0], macroTasks: [{ ...macroTask, lastActivitySeq: unsafe }] }] },
+      { ...page, groups: [{ ...page.groups[0], macroTasks: [{ ...macroTask, counts: { ...macroTask.counts, roots: -1 } }] }] },
+      { ...page, groups: [{ ...page.groups[0], macroTasks: [{ ...macroTask, matchingRuns: unsafe }] }] }, { ...page, totals: { ...page.totals, all: unsafe } }]) {
       await expect(apiFor(value).macroTasks({})).rejects.toMatchObject({ code: "INVALID_RESPONSE", message: i18n.t("common:error.macroTasks") });
     }
     const timeline = { ...macroTaskTimelineFixture(), observedAt: "bad", cursor: -unsafe,
@@ -252,8 +252,8 @@ describe("storage, macro task and version response boundaries", () => {
   });
   it("requires every summary field and count while keeping its exact enums and nullable fields", async () => {
     const summary = macroTaskSummary();
-    const read = (value: unknown) => apiFor({ macroTasks: [value], totals: { all: 0, active: 0, host: 0, review: 0 },
-      nextCursor: null, cursor: 0, changed: false }).macroTasks({});
+    const read = (value: unknown) => apiFor({ groups: [{ ...macroTaskGroups([summary])[0], macroTasks: [value] }], totals: { all: 0, active: 0, host: 0, review: 0 },
+      cursor: 0, changed: false }).macroTasks({});
     for (const key of Object.keys(summary)) {
       await expect(read(without(summary, key))).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }

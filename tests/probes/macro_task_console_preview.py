@@ -27,8 +27,8 @@ Safety boundary:
   or Git objects are removed.
 * Fixture records reuse the same field names as the console DTOs
   (``apps/console/src/macro-task-types.ts`` and the console snapshot/task views).
-  Reads use one fixed page with a synthetic event head and
-  ``nextCursor`` is always null. Reads stay identical until a synthetic deletion,
+  The list also includes six summary-only rows to exercise grouped paging;
+  timeline fixtures stay tied to the four original macro tasks. Reads stay identical until a synthetic deletion,
   which advances that instance's cursor and removes the target from later reads.
 * Session content is an in-memory ACP-shaped fixture. Its byte offsets mimic grouped JSONL; reads never open a session file or inspect a harness home.
 
@@ -2214,28 +2214,78 @@ def group_matching(group: str, applied: dict) -> set[str]:
             if matches(FIXTURES["runs"][run_id], applied)}
 
 
+def preview_list_rows(applied: dict, state: PreviewState | None) -> list[dict]:
+    rows = [macro_task_summary(group, group_matching(group, applied))
+            for group in FIXTURES["groups"]
+            if (state is None or group not in state.deleted) and group_matching(group, applied)]
+    # These rows exercise a page boundary without changing the timeline fixtures.
+    template = macro_task_summary(MACRO_C, set(FIXTURES["groups"][MACRO_C]))
+    for index in range(6):
+        row = {**template, "macroTaskId": f"macro-preview-list-{index + 1}",
+               "title": f"合成分页任务 {index + 1}", "description": None,
+               "createdAt": instant(0, index + 1), "lastActivityAt": instant(0, index + 1),
+               "lastActivitySeq": index + 1, "state": "ended", "matchingRuns": 1,
+               "rootRunIds": [], "counts": {**template["counts"], "roots": 1, "helpers": 0,
+                                            "accepted": 1, "failed": 0, "active": 0, "host": 0,
+                                            "review": 0, "ended": 1, "stoppableRoots": 0,
+                                            "stoppableHelpers": 0, "delivered": 0, "awaitingHost": 0}}
+        if applied.get("projectId") and applied["projectId"] != row["project"]["id"]:
+            continue
+        if applied.get("hostId") and applied["hostId"] != row["sourceHostId"]:
+            continue
+        if applied.get("query") and applied["query"].casefold() not in (row["title"] + " " + row["project"]["path"]).casefold():
+            continue
+        if applied.get("filter") in ("active", "host", "review"):
+            continue
+        rows.append(row)
+    return rows
+
+
 def macro_task_page(params: dict, state: PreviewState | None = None) -> dict:
-    limit = parse_limit(params, 50, 100)
+    group_id = params.get("group")
+    if "before" in params and group_id is None:
+        raise PreviewError("INVALID_ARGUMENT", "before requires group")
+    if group_id is not None and group_id not in {"standalone", *(f"project:{project['id']}" for project in PROJECTS.values())}:
+        raise PreviewError("INVALID_ARGUMENT", "unknown group")
+    limit = parse_limit(params, 20 if group_id is not None else 5, 100)
     applied = applied_filters(params)
     sort = params.get("sort", "activity-desc")
     if sort not in ("activity-desc", "activity-asc", "created-desc", "created-asc"):
         raise PreviewError("INVALID_ARGUMENT", "sort must be one of: activity-desc, activity-asc, created-desc, created-asc")
     base_scope = {key: value for key, value in applied.items() if key != "filter"}
-    groups = [group for group in FIXTURES["groups"] if state is None or group not in state.deleted]
-    totals = {name: sum(bool(group_matching(group, {**base_scope, "filter": name}))
-                        for group in groups)
+    totals = {name: len(preview_list_rows({**base_scope, "filter": name}, state))
               for name in ("all", "active", "host", "review")}
-    rows = [group for group in groups if group_matching(group, applied)]
+    rows = preview_list_rows(applied, state)
     if sort.startswith("activity"):
-        rows.sort(key=lambda group: (FIXTURES["group_activity"][group][0], group),
+        rows.sort(key=lambda row: (row["lastActivitySeq"], row["macroTaskId"]),
                   reverse=sort.endswith("desc"))
     else:
-        rows.sort(key=lambda group: (macro_task_summary(group, group_matching(group, applied))["createdAt"] or "", group),
+        rows.sort(key=lambda row: (row["createdAt"] or "", row["macroTaskId"]),
                   reverse=sort.endswith("desc"))
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        identity = "standalone" if row["kind"] == "standalone" else f"project:{row['project']['id']}"
+        grouped.setdefault(identity, {"id": identity, "project": None if identity == "standalone" else row["project"],
+                                      "total": 0, "macroTasks": [], "nextCursor": None})
+        grouped[identity]["macroTasks"].append(row)
+        grouped[identity]["total"] += 1
+    before = params.get("before")
+    if before is not None and (not before.startswith(f"preview:{group_id}:") or
+                               not before.removeprefix(f"preview:{group_id}:").isdigit()):
+        raise PreviewError("INVALID_ARGUMENT", "invalid group cursor")
+    offset = int(before.rsplit(":", 1)[1]) if before is not None else 0
+    if group_id is not None and group_id not in grouped:
+        return {"groups": [{"id": group_id, "project": None, "total": 0, "macroTasks": [], "nextCursor": None}],
+                "totals": totals, "cursor": state.cursor if state is not None else FIXTURES["head"], "changed": False}
+    selected = [grouped[group_id]] if group_id is not None else sorted(
+        grouped.values(), key=lambda group: (group["id"] == "standalone", rows.index(group["macroTasks"][0])))
+    for group in selected:
+        full = group["macroTasks"]
+        group["macroTasks"] = full[offset:offset + limit]
+        group["nextCursor"] = f"preview:{group['id']}:{offset + limit}" if offset + limit < len(full) else None
     return {
-        "macroTasks": [macro_task_summary(group, group_matching(group, applied))
-                       for group in rows[:limit]],
-        "totals": totals, "nextCursor": None, "cursor": state.cursor if state is not None else FIXTURES["head"], "changed": False,
+        "groups": selected, "totals": totals,
+        "cursor": state.cursor if state is not None else FIXTURES["head"], "changed": False,
     }
 
 
@@ -2902,7 +2952,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
             if path == "/api/console":
                 return self._json(200, console_snapshot(self.server.scenario, self._assets_ready(), self.server.state))
             if path == "/api/macro-tasks":
-                params = parse_query(query, frozenset({"limit", "projectId", "hostId", "query", "filter", "sort"}))
+                params = parse_query(query, frozenset({"limit", "projectId", "hostId", "query", "filter", "sort", "group", "before"}))
                 return self._json(200, macro_task_page(params, self.server.state))
             if path == "/api/runtime-version":
                 return self._json(200, runtime_version_report())
@@ -3053,7 +3103,8 @@ def resolve_asset(root: Path, relative: str) -> Path | None:
 # Self checks                                                                   #
 # --------------------------------------------------------------------------- #
 REQUIRED_KEYS = {
-    "MacroTaskPage": {"macroTasks", "totals", "nextCursor", "cursor", "changed"},
+    "MacroTaskPage": {"groups", "totals", "cursor", "changed"},
+    "MacroTaskGroup": {"id", "project", "total", "macroTasks", "nextCursor"},
     "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "description", "summary", "project",
                          "sourceHostId", "currentHostIds", "createdAt", "lastActivityAt", "lastActivitySeq",
                          "state", "counts", "matchingRuns", "rootRunIds"},
@@ -3161,6 +3212,7 @@ def validate_fixtures() -> list[str]:
     """Shape drift, determinism and the idle-gap invariants of the fixtures."""
     problems: list[str] = []
     page = macro_task_page({})
+    listed = [item for group in page["groups"] for item in group["macroTasks"]]
     timeline = macro_task_timeline({"macroTaskId": MACRO_A}, "normal")
     configuration = console_snapshot("normal", True)["configuration"]
     if not {"routerBuddyIds", "routerRetryIntervalSeconds", "defaultRoutingMode", "routingBudget",
@@ -3168,8 +3220,9 @@ def validate_fixtures() -> list[str]:
         problems.append("snapshot must use the ADR-021 ordered Router configuration")
     for name, value, keys in (
             ("MacroTaskPage", page, REQUIRED_KEYS["MacroTaskPage"]),
-            ("MacroTaskSummary", page["macroTasks"][0], REQUIRED_KEYS["MacroTaskSummary"]),
-            ("MacroTaskCounts", page["macroTasks"][0]["counts"], REQUIRED_KEYS["MacroTaskCounts"]),
+            ("MacroTaskGroup", page["groups"][0], REQUIRED_KEYS["MacroTaskGroup"]),
+            ("MacroTaskSummary", listed[0], REQUIRED_KEYS["MacroTaskSummary"]),
+            ("MacroTaskCounts", listed[0]["counts"], REQUIRED_KEYS["MacroTaskCounts"]),
             ("MacroTaskTimeline", timeline, REQUIRED_KEYS["MacroTaskTimeline"]),
             ("TimelineRow", timeline["rows"][0], REQUIRED_KEYS["TimelineRow"]),
             ("TimelineSpan", timeline["spans"][0], REQUIRED_KEYS["TimelineSpan"]),
@@ -3282,8 +3335,7 @@ def validate_fixtures() -> list[str]:
         problems.append("a Lead without owned micro tasks must retain its explicit authority")
     if set(page) != REQUIRED_KEYS["MacroTaskPage"]:
         problems.append(f"MacroTaskPage: keys {sorted(set(page))}")
-    expected_totals = {name: sum(bool(group_matching(group, {"filter": name}))
-                                 for group in FIXTURES["groups"])
+    expected_totals = {name: len(preview_list_rows({"filter": name}, None))
                        for name in ("all", "active", "host", "review")}
     if page["totals"] != expected_totals or macro_task_page({"filter": "host"})["totals"] != expected_totals:
         problems.append("macro task totals must count each category across the same scope regardless of selected filter")
@@ -3303,22 +3355,23 @@ def validate_fixtures() -> list[str]:
         problems.append("normal scope must be complete")
     if not macro_task_timeline({"macroTaskId": MACRO_A}, "truncated")["truncated"]["rows"]:
         problems.append("truncated scenario must report row truncation")
-    summary_a = page["macroTasks"][0] if page["macroTasks"][0]["macroTaskId"] == MACRO_A else next(
-        item for item in page["macroTasks"] if item["macroTaskId"] == MACRO_A)
+    summary_a = next(item for item in listed if item["macroTaskId"] == MACRO_A)
     if not summary_a["description"] or len(summary_a["description"]) > 300:
         problems.append("macro task A must carry a bounded description")
     if any(item["description"] is not None and item["kind"] == "standalone"
-           for item in page["macroTasks"]):
+           for item in listed):
         problems.append("standalone groups must not carry a description")
-    if not all(isinstance(item["counts"][key], int) for item in page["macroTasks"]
+    if not all(isinstance(item["counts"][key], int) for item in listed
                for key in ("accepted", "failed")):
         problems.append("root outcome counts must be present on every summary")
     accepted_a = sum(1 for run_id in FIXTURES["groups"][MACRO_A]
                      if FIXTURES["runs"][run_id]["parentRunId"] is None
                      and FIXTURES["runs"][run_id]["acceptedAt"] is not None)
-    for item in page["macroTasks"]:
+    for item in listed:
         if item["counts"]["accepted"] > item["counts"]["roots"]:
             problems.append(f"{item['macroTaskId']}: accepted exceeds roots")
+        if item["macroTaskId"] not in FIXTURES["groups"]:
+            continue
         expected_failed = sum(1 for run_id in FIXTURES["groups"][item["macroTaskId"]]
                               if FIXTURES["runs"][run_id]["parentRunId"] is None
                               and (FIXTURES["runs"][run_id]["hostConclusion"] or {}).get("executionStatus") == "failed")
@@ -3326,6 +3379,18 @@ def validate_fixtures() -> list[str]:
             problems.append(f"{item['macroTaskId']}: failed does not match failed root turns")
     if summary_a["counts"]["accepted"] != accepted_a:
         problems.append("counts.accepted does not match the accepted members")
+    alpha_id = f"project:{PROJECTS['alpha']['id']}"
+    alpha = next(group for group in page["groups"] if group["id"] == alpha_id)
+    if alpha["total"] != 8 or len(alpha["macroTasks"]) != 5 or alpha["nextCursor"] is None:
+        problems.append("alpha group must expose its first five rows and a continuation")
+    if macro_task_page({"group": alpha_id})["groups"][0]["total"] != 8 or len(macro_task_page({"group": alpha_id})["groups"][0]["macroTasks"]) != 8:
+        problems.append("group read must default to twenty rows")
+    second = macro_task_page({"group": alpha_id, "before": alpha["nextCursor"]})["groups"][0]
+    if len(second["macroTasks"]) != 3 or second["nextCursor"] is not None:
+        problems.append("group cursor must page within its group")
+    if macro_task_page({"group": alpha_id, "query": "no-such-macro-task"})["groups"] != [
+            {"id": alpha_id, "project": None, "total": 0, "macroTasks": [], "nextCursor": None}]:
+        problems.append("a known empty group must keep its response container")
     if not all(row["taskSummary"] == task_first_line(FIXTURES["runs"][row["runId"]]["task"])
                for row in timeline["rows"]):
         problems.append("taskSummary must be the first nonempty task line")
@@ -3874,7 +3939,9 @@ def smoke(assets: Path, scenario: str) -> int:
               and version.get("running", {}).get("mode") == "runtime"
               and version.get("installed", {}).get("softwareVersion") == "0.0.0", f"status={status}")
         status, page, _headers = call("GET", "/api/macro-tasks")
-        check("GET /api/macro-tasks", status == 200 and len(page["macroTasks"]) == len(FIXTURES["groups"])
+        check("GET /api/macro-tasks", status == 200 and len(page["groups"]) == 3
+              and page["groups"][-1]["id"] == "standalone"
+              and sum(group["total"] for group in page["groups"]) == len(FIXTURES["groups"]) + 6
               and page["cursor"] == FIXTURES["head"] and page["changed"] is False, f"status={status}")
         status, timeline, _headers = call("GET", f"/api/macro-tasks/{MACRO_A}/timeline")
         if scenario == "error":

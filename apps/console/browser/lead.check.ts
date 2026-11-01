@@ -187,7 +187,8 @@ for (const locale of ["zh-CN", "en-US"]) test.describe(`a long stop title in ${l
     await page.route(/\/api\/macro-tasks(?:\?|$)/, async route => {
       const response = await route.fetch();
       const data = await response.json();
-      const target = data.macroTasks.find((item: { macroTaskId: string }) => item.macroTaskId === MACRO);
+      const target = data.groups.flatMap((group: { macroTasks: { macroTaskId: string }[] }) => group.macroTasks)
+        .find((item: { macroTaskId: string }) => item.macroTaskId === MACRO);
       target.title! = title;
       await route.fulfill({ response, json: data });
     });

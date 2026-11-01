@@ -15,8 +15,8 @@ afterEach(() => { cleanup(); setLanguageChoice("browser"); });
 
 describe("changing the language in an already loaded console", () => {
   it("updates the mounted macro task list and previously imported helper vocabulary without reloading", () => {
-    render(<TooltipProvider><MacroTaskList sort="activity-desc" onSortChange={() => {}} rows={[]} totals={{ all: 0, active: 0, host: 0, review: 0 }}
-      loading={false} error="" nextCursor={null} reorder={null} filter="all" query="" selected={null}
+    render(<TooltipProvider><MacroTaskList sort="activity-desc" onSortChange={() => {}} groups={[]} totals={{ all: 0, active: 0, host: 0, review: 0 }}
+      loading={false} error="" reorder={null} filter="all" query="" selected={null}
       onCollapse={() => {}} onFilterChange={() => {}} onQueryChange={() => {}}
       onSelect={() => {}} onMore={() => {}} onApplyReorder={() => {}} /></TooltipProvider>);
     expect(screen.getByText("没有宏任务")).toBeTruthy();
