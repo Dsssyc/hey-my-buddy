@@ -41,6 +41,7 @@ from ...protocol.workspace_manifest import project_id, project_id_sql
 from ..routing.statistics import accumulate_infrastructure, accumulate_overall
 from . import macro_tasks, fixes as task_fixes
 from . import host_conclusions
+from .path_views import MAX_OUTPUT_PATH_VIEW, _bounded_path_fields
 from . import micro_task
 from .request_reasons import request_reason
 from .macro_task_deletion_guard import reject_deleting_checkout, reject_deleting_run, reject_macro_task
@@ -119,8 +120,6 @@ WRAP_UP_SECONDS = 300
 #: Bounded views of the lifecycle records added by the workspace-lifecycle slice.
 MAX_CONFLICT_VIEW = 8
 MAX_INTEGRATION_VIEW = 8
-MAX_OUTPUT_PATH_VIEW = 32
-MAX_OUTPUT_PATH_SAMPLE_BYTES = 500
 INTEGRATION_PATH_FIELDS = (
     "matchingPaths", "differingPaths", "missingPaths", "adjustments", "hostPaths", "unrecordedPaths",
 )
@@ -479,6 +478,8 @@ class WorkflowCoordinator:
             reason = _preparation_reason(problem.get("details"))
             if reason is not None:
                 view["preparationError"]["reason"] = reason
+            if problem.get("details"):
+                view["preparationError"]["details"] = _preparation_details(problem["details"])
         if include_audit:
             view["decision"] = json.loads(row["decision_json"]) if row["decision_json"] else None
             view["decisionCommandId"] = row["decision_command_id"]
@@ -499,37 +500,7 @@ class WorkflowCoordinator:
             "updatedAt": row["updated_at"],
         }
 
-    @staticmethod
-    def _bounded_path_fields(source: dict, fields: tuple[str, ...]) -> dict:
-        """Project stored path evidence without changing the authoritative record."""
-        def sample_path(path: str) -> str:
-            raw = path.encode("utf-8")
-            return path if len(raw) <= MAX_OUTPUT_PATH_SAMPLE_BYTES else raw[:MAX_OUTPUT_PATH_SAMPLE_BYTES].decode(
-                "utf-8", errors="ignore")
-
-        view = dict(source)
-        for key in fields:
-            values = source.get(key)
-            if isinstance(values, list):
-                samples = []
-                shortened = False
-                for value in values[:MAX_OUTPUT_PATH_VIEW]:
-                    if isinstance(value, str):
-                        sample = sample_path(value)
-                        shortened |= len(sample) < len(value)
-                    elif isinstance(value, dict) and isinstance(value.get("path"), str):
-                        path = value["path"]
-                        sample = {**value, "path": sample_path(path)}
-                        shortened |= len(sample["path"]) < len(path)
-                    else:
-                        sample = value
-                    samples.append(sample)
-                view[key] = samples
-                view[key + "Count"] = len(values)
-                view[key + "Truncated"] = len(values) > MAX_OUTPUT_PATH_VIEW
-                if shortened:
-                    view[key + "SamplesShortened"] = True
-        return view
+    _bounded_path_fields = staticmethod(_bounded_path_fields)
 
     @staticmethod
     def _artifact_view(row) -> dict:
@@ -4416,10 +4387,11 @@ class WorkflowCoordinator:
 
         A failed, cancelled or delivered-but-unaccepted micro task receives one
         independent Host conclusion next to the real execution result; an
-        accepted micro task is already closed. After the stop evidence holds, writable
-        changes that no fixed output has sealed yet become an independent Host
-        partial output (never overwriting an earlier partial of the same
-        attempt), the conclusion and that seal commit together, and the
+        accepted micro task is already closed. After the stop evidence holds,
+        writable managed worktrees receive an independent Host partial output;
+        existing checkouts need one only when the latest turn has no fixed
+        output. A Host partial never overwrites an earlier partial of the same
+        attempt; the conclusion and that seal commit together, and the
         reservations are released and the registered checkout is reclaimed.
         Read-only work ends without a seal. An unresolved workspace conflict, a
         pending continuation or a live helper refuses the conclusion instead of
@@ -4610,12 +4582,22 @@ class WorkflowCoordinator:
         return task
 
     def _conclude_seal_work(self, connection, run_row, task):
-        """A writable attempt's Host partial seal, allowed paths and identity."""
+        """Preserve managed work; an existing checkout seals only unsealed turns."""
         manifest = json.loads(run_row["workspace_manifest_json"])
         if manifest["access"] == "read" or not task["selected_attempt_id"]:
             # Read-only work and an unstarted checkout have no changes to seal.
             # Ending a reader does not depend on its checkout still matching
             # the frozen input, and a partial output needs an attempt identity.
+            return None
+        if json.loads(run_row["execution_workspace_json"])["kind"] == "existing" and connection.execute(
+            "SELECT 1 FROM workflow_artifacts WHERE run_id=?"
+            " AND kind IN ('output','resolved-output','partial-output') AND turn_id=("
+            " SELECT turn_id FROM workflow_turns WHERE run_id=? ORDER BY turn_index DESC LIMIT 1) LIMIT 1",
+            (run_row["run_id"], run_row["run_id"]),
+        ).fetchone() is not None:
+            # Use the submitted kind: a prepared continuation of a managed
+            # worktree also has kind existing in its current manifest. Only a
+            # submitted existing checkout can skip this seal.
             return None
         allowed = self._board_adopted_paths(run_row["run_id"], manifest)
         return manifest, allowed, task["selected_attempt_id"]
@@ -6429,6 +6411,15 @@ class WorkflowCoordinator:
                         continue
                     problem = {"code": getattr(error, "code", "WORKSPACE_PREPARE_FAILED"), "message": _head(str(error), 2000),
                                **({"details": error.details} if isinstance(error, BoardError) and error.details else {})}
+                    if problem["code"] == "WORKSPACE_BASE_MISMATCH":
+                        details = dict(problem["details"])
+                        details["handoffCommit"] = details.pop("baseCommit")
+                        problem.update(
+                            message="The checkout changed after the previous turn was sealed; cancel and conclude this micro task "
+                                    "and start a new one from the current checkout state. Compare the working tree with the "
+                                    "handoff commit in Git for the full diff",
+                            details=details,
+                        )
             with self.db.write() as connection:
                 if snapshot(connection, row["continuation_id"]) != before:
                     # Cancellation, takeover, override, allocation or ownership drift
@@ -7628,6 +7619,18 @@ def _preparation_reason(details) -> str | None:
     if not lines:
         return None
     return f"git {operation}: {_without_remote_user_info(lines[-1])}"[:PREPARATION_REASON_LIMIT]
+
+
+def _preparation_details(value, *, diagnostic=False):
+    """Redact process diagnostics while preserving structured checkout facts."""
+    if isinstance(value, str):
+        return _without_remote_user_info(value) if diagnostic else value
+    if isinstance(value, list):
+        return [_preparation_details(item, diagnostic=diagnostic) for item in value]
+    if isinstance(value, dict):
+        return {key: _preparation_details(item, diagnostic=key in ("argv", "stdout", "stderr", "reason"))
+                for key, item in value.items()}
+    return value
 
 
 def _string_list(value) -> list[str]:

@@ -516,8 +516,20 @@ class WorkspaceTests(unittest.TestCase):
         self.assertNotEqual(first["snapshotSha256"], second["snapshotSha256"])
         self.assertEqual(original_index, (self.repo / ".git/index").read_bytes())
         self.assertEqual(self.base, self.git("rev-parse", "HEAD").decode().strip())
-        self.assert_error("WORKSPACE_BASE_MISMATCH", self.prepare, "stale-handoff", kind="existing",
-                          base={"kind": "working-tree", "ref": first["commit"]}, includeUntracked=first["includedUntracked"])
+        for index in range(40):
+            (self.repo / "src" / f"host-{index:02}.txt").write_text("Host commit\n", encoding="utf-8", newline="\n")
+        long_path = "src/" + "/".join(["a" * 100] * 5) + "/long.txt"
+        native_path(self.repo / long_path).parent.mkdir(parents=True)
+        native_path(self.repo / long_path).write_text("Long Host path\n", encoding="utf-8", newline="\n")
+        self.git("add", long_path, *(f"src/host-{index:02}.txt" for index in range(40)))
+        self.git("commit", "-qm", "Host changes after the seal")
+        error = self.assert_error("WORKSPACE_BASE_MISMATCH", self.prepare, "stale-handoff", kind="existing",
+                                  base={"kind": "working-tree", "ref": first["commit"]}, includeUntracked=first["includedUntracked"])
+        self.assertEqual(error.details["baseCommit"], first["commit"])
+        self.assertEqual(error.details["paths"], [long_path[:500], *[f"src/host-{index:02}.txt" for index in range(31)]])
+        self.assertEqual(error.details["pathsCount"], 42)
+        self.assertTrue(error.details["pathsTruncated"])
+        self.assertTrue(error.details["pathsSamplesShortened"])
 
     def test_sibling_cwd_maps_to_equivalent_subdirectory_in_isolated_tree(self):
         manifest = self.prepare(cwd=str(self.repo / "src"))

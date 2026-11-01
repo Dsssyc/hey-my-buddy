@@ -187,7 +187,7 @@ class LeadShutdownTests(WorkflowTestCase):
         lead, claim = self.lead(board)
         child = self.owned(board, claim)
         self.finish_owned(board, child)
-        self.finish_turn(board, {"claim": claim}, disposition="attention")
+        self.finish_turn(board, {"claim": claim}, runner_status="failed", exit_code=1, seal=False)
         original = self.workspace.host_seal
         def seal(state_dir, manifest, task_id, attempt_id, **kwargs):
             if task_id == lead["runId"]:

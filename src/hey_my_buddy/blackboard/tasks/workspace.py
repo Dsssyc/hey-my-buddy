@@ -28,6 +28,7 @@ from ...errors import BoardError
 from ...protocol.schemas import normalize_access
 from ...protocol.service_process import service_creation_flags
 from ...protocol.workspace_manifest import project_id as manifest_project_id
+from .path_views import _bounded_path_fields
 
 _WINDOWS = os.name == "nt"
 _GIT_TIMEOUT_SECONDS = 60
@@ -654,7 +655,13 @@ def _snapshot(source, intent, workspace_id, *, state_dir):
         # source HEAD. Such a ref is an exact content handoff, not permission to
         # silently absorb unrelated edits made after that turn was sealed.
         if base != source["headCommit"] and input_tree != base_tree:
-            raise BoardError("WORKSPACE_BASE_MISMATCH", "The working tree does not match the explicitly pinned handoff commit")
+            paths = sorted(_tree_changes(root, base_tree, input_tree))
+            raise BoardError(
+                "WORKSPACE_BASE_MISMATCH",
+                "The working tree differs from the selected base commit; select the intended input state before submitting. "
+                "Compare the working tree with the base commit in Git for the full diff",
+                **_bounded_path_fields({"baseCommit": base, "paths": paths}, ("paths",)),
+            )
         snapshot.update(includedUntracked=sorted(observed["included"]),
                         excludedUntracked=sorted(set(observed["untracked"]) - set(observed["included"])),
                         excludedEntries={path: value for path, value in observed["untracked"].items() if path not in observed["included"]},

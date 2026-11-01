@@ -183,7 +183,8 @@ class PreparationTests(WorkflowTestCase):
                   b"fatal: unable to access 'https://user:token@example.invalid/owner/repo.git/':"
                   b" The requested URL returned error: 403\n")
         failure = workspace._git_failure(["git", "-C", "<private-checkout>", "read-tree", "<fixed-tree>"],
-                                         "read-tree", returncode=128, stdout=b"", stderr=stderr)
+                                         "read-tree", returncode=128, stdout=b"", stderr=stderr,
+                                         paths=["src/user@host/file.txt"])
         with patch.object(workspace, "prepare", side_effect=failure):
             self.claim(board, run_id=run_id, claim_request_id="git-error-claim")
         view = board.call("workflow_get", {"runId": run_id})
@@ -192,7 +193,10 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(problem["reason"], "git read-tree: fatal: unable to access"
                          " 'https://example.invalid/owner/repo.git/': The requested URL returned error: 403")
         self.assertNotIn("user:token", problem["reason"])
-        self.assertNotIn("details", problem)
+        self.assertEqual(problem["details"]["operation"], "read-tree")
+        self.assertIn("https://example.invalid/owner/repo.git/", problem["details"]["stderr"])
+        self.assertNotIn("user:token", json.dumps(problem["details"]))
+        self.assertEqual(problem["details"]["paths"], ["src/user@host/file.txt"])
         audited = board.call("workflow_get", {"runId": run_id, "includeAudit": True})
         recorded = next(request["payload"]["preparationError"] for request in audited["audit"]["requests"]
                         if request.get("payload", {}).get("preparationError"))
