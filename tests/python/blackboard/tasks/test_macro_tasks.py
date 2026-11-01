@@ -489,10 +489,34 @@ class MacroTaskReadTests(WorkflowTestCase):
         group = macro_summaries(self.list_(board))[0]
         self.assertEqual(group['title'], 'Implement bounded routing')
         self.assertEqual(group['titleSource'], 'task')
-        self.assertTrue(group['summary'])
+        self.assertNotIn('summary', group)
         timeline = board.call('macro_task_timeline', {'macroTaskId':group['macroTaskId']})
         self.assertEqual(timeline['rows'][0]['title'], group['title'])
-        self.assertEqual(timeline['rows'][0]['summary'], group['summary'])
+        self.assertNotIn('summary', timeline['rows'][0])
+
+    def test_indexes_omit_reports_and_detail_reads_keep_them_whole(self):
+        board = self.board()
+        submitted = self.submit(board, kind="worktree")
+        claimed = self.claim(board, run_id=submitted["runId"])
+        summary = "  " + "报告" * 1500 + "\n最后一段  "
+        request_summary = "请求" * 400 + "\n最后的条件"
+        outcome = self.turn_record(claimed, disposition="assistance")["outcome"]
+        outcome.update(summary=summary)
+        outcome["request"]["summary"] = request_summary
+        self.finish_turn(board, claimed, outcome=outcome)
+        group = macro_summaries(self.list_(board))[0]
+        self.assertNotIn("summary", group)
+        timeline = board.call("macro_task_timeline", {"macroTaskId": group["macroTaskId"]})
+        self.assertNotIn("summary", timeline["macroTask"])
+        self.assertNotIn("summary", timeline["rows"][0])
+        host_span = next(span for span in timeline["spans"] if span["kind"] == "host")
+        self.assertNotIn("summary", host_span)
+        detail = board.call("workflow_get", {"runId": submitted["runId"]})
+        self.assertEqual(detail["currentTurn"]["summary"], summary)
+        self.assertEqual(detail["activeRequest"]["summary"], request_summary)
+        self.assertNotIn("resultSummary", detail["task"]["workflow"])
+        listed = board.call("task_list", {"limit": 10})["runs"]
+        self.assertTrue(all("resultSummary" not in row["workflow"] for row in listed))
 
     def test_execution_spans_use_their_own_receipt_status_not_turn_disposition(self):
         board = self.board()
@@ -946,7 +970,7 @@ class MacroTaskReadTests(WorkflowTestCase):
         self.assertIsNone(execution['endAt'])
         self.assertFalse(timeline['rows'][0]['shutdownConfirmed'])
 
-    def test_system_request_wait_carries_reason_and_worker_wait_carries_only_content(self):
+    def test_system_wait_reason_stays_in_index_and_worker_content_stays_in_detail(self):
         board, first, second, _loose = self.grouped_board()
         self.register(board)
         self.finish_turn(board, self.claim(board, run_id=first['runId']), disposition='assistance')
@@ -957,7 +981,9 @@ class MacroTaskReadTests(WorkflowTestCase):
         spans = board.call('macro_task_timeline', {'macroTaskId': first['macroTaskId']})['spans']
         content = next(span for span in spans if span['runId'] == first['runId'] and span['kind'] == 'host')
         system = next(span for span in spans if span['runId'] == second['runId'] and span['kind'] == 'host')
-        self.assertEqual(content['summary'], 'please review the approach')
+        self.assertNotIn('summary', content)
+        detail = board.call('workflow_get', {'runId': first['runId']})
+        self.assertEqual(detail['activeRequest']['summary'], 'please review the approach')
         self.assertNotIn('reason', content)
         self.assertNotIn('summary', system)
         self.assertEqual(system['reason'], {'code': 'helpers-settled', 'params': {}})

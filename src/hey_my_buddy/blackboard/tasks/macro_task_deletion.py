@@ -161,10 +161,10 @@ def _blockers(store, connection, scope):
     tasks = {row['task_id']:row for row in scope.task_rows}
     reasons = {}
     def block(task_id, code, attempt_ids=()):
-        from .macro_tasks import _run_presentation
+        from .macro_tasks import _run_title
         task = tasks[task_id]
         run = runs.get(task_id)
-        title, title_source, _ = _run_presentation(connection, task_id)
+        title, title_source = _run_title(connection, task_id)
         key = (task_id, code)
         reasons[key] = {'runId': task_id if run else None, 'taskId': task_id,
                         'title': title, 'titleSource': title_source,

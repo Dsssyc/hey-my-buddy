@@ -153,6 +153,13 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
             "efforts": ["low", "high"],
             "models": [{"id": "fixture-model", "name": "Offline model", "inputModalities": ["text"]}],
         }]})
+        from hey_my_buddy.blackboard.store.store import BoardStore
+        from support import enable_fixture_buddy
+        store = BoardStore(self.directory)
+        try:
+            enable_fixture_buddy(store, {"harness": "codex", "provider": "openai", "model": "fixture-model", "effort": "low"})
+        finally:
+            store.db.close()
         (self.directory / "codex-home").mkdir()
         (self.directory / "codex-home/config.toml").write_text("", encoding="utf-8", newline="\n")
 

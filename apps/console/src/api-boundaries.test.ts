@@ -266,7 +266,7 @@ describe("storage, macro task and version response boundaries", () => {
       for (const value of values) await expect(read({ ...summary, [key]: value })).resolves.toBeDefined();
       await expect(read({ ...summary, [key]: "other" })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }
-    for (const key of ["title", "summary", "project", "sourceHostId", "createdAt", "lastActivityAt"]) {
+    for (const key of ["title", "project", "sourceHostId", "createdAt", "lastActivityAt"]) {
       await expect(read({ ...summary, [key]: null })).resolves.toBeDefined();
       await expect(read({ ...summary, [key]: undefined })).rejects.toHaveProperty("code", "INVALID_RESPONSE");
     }

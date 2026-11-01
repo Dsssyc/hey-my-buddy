@@ -315,7 +315,8 @@ class PreviewFixtureTest(unittest.TestCase):
         wait_span = next(span for span in timeline["spans"]
                          if span["runId"] == waiting["runId"] and span["kind"] == "host")
         self.assertEqual(waiting["activeRequest"]["requestId"], wait_span["requestId"])
-        self.assertEqual(waiting["activeRequest"]["summary"], wait_span["summary"])
+        self.assertNotIn("summary", wait_span)
+        self.assertTrue(waiting["activeRequest"]["summary"])
         self.assertEqual(waiting["currentTurn"]["updatedAt"], wait_span["startAt"])
         self.assertIsNone(wait_span["endAt"])
         self.assertEqual("executing", active["state"])

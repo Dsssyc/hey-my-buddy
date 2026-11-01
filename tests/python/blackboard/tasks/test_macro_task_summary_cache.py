@@ -464,62 +464,26 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(self.read(), expected)
             self.assert_recomputed(counter, [])
 
-    def test_standalone_title_task_and_latest_returned_turn_summary(self):
+    def test_standalone_title_and_task_invalidate_without_report_dependencies(self):
         root = self.root_for(self.fixture.macros[1])
         self.sql("UPDATE workflow_runs SET macro_task_id=NULL,title='Fictional standalone title' WHERE run_id=?", (root,))
         group = "run:" + root
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
-            initial = self.rows()[group]
+            self.rows()
             counter.reset_mock()
             self.sql("UPDATE workflow_runs SET title=NULL WHERE run_id=?", (root,))
-            self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task',?) WHERE task_id=?", ("Fictional task fallback\nmore", root))
+            self.sql("UPDATE tasks SET spec_json=json_set(spec_json,'$.task',?) WHERE task_id=?",
+                     ("Fictional task fallback\nmore", root))
             self.assertEqual(self.rows()[group]["title"], "Fictional task fallback")
             self.assert_recomputed(counter, [group])
-            self.sql(
-                "UPDATE attempts SET result_json=json_set(result_json,'$.result.turn.outcome.summary',?)"
-                " WHERE attempt_id=(SELECT attempt_id FROM workflow_turns WHERE run_id=?"
-                " ORDER BY turn_index DESC LIMIT 1)",
-                ("  Fictional  corrected summary\nsecond line", root),
-            )
-            self.assertEqual(self.rows()[group]["summary"], "Fictional corrected summary")
-            self.assert_recomputed(counter, [group])
-            self.sql("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,expected_seconds,state,created_at,updated_at) VALUES('fictional-turn-2',?,2,'reconstructed-new-session','{}','write',1800,'prepared','2026-01-01','2026-01-01')", (root,))
-            self.assertEqual(self.rows()[group]["summary"], "Fictional corrected summary")
-            self.assert_recomputed(counter, [group])
-            second_attempt = "fictional-attempt-" + root
-            with self.store.db.write() as connection:
-                first = connection.execute(
-                    "SELECT a.attempt_id,a.generation,a.result_json FROM workflow_turns t"
-                    " JOIN attempts a ON a.attempt_id=t.attempt_id WHERE t.run_id=?"
-                    " AND t.turn_index=1", (root,),
-                ).fetchone()
-                second_generation = first["generation"] + 1
-                receipt = json.loads(first["result_json"])
-                receipt["result"]["turn"].update(
-                    attemptId=second_attempt, generation=second_generation, turnId="fictional-turn-2",
+            for report in ("  ", "A complete report\nsecond line", "long report " * 1000):
+                self.sql(
+                    "UPDATE attempts SET result_json=json_set(result_json,'$.result.turn.outcome.summary',?)"
+                    " WHERE attempt_id=(SELECT attempt_id FROM workflow_turns WHERE run_id=?"
+                    " ORDER BY turn_index DESC LIMIT 1)", (report, root),
                 )
-                receipt["result"]["turn"]["outcome"]["summary"] = "Fictional newest summary"
-                connection.execute(
-                    "INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
-                    "adapter,result_json,shutdown_confirmed,created_at,updated_at)"
-                    " SELECT ?,task_id,?,nonce_verifier,'finished',adapter,?,shutdown_confirmed,"
-                    "created_at,updated_at FROM attempts WHERE attempt_id=?",
-                    (second_attempt, second_generation, json.dumps(receipt), first["attempt_id"]),
-                )
-                connection.execute(
-                    "UPDATE workflow_turns SET state='returned',attempt_id=?,generation=?"
-                    " WHERE turn_id='fictional-turn-2'",
-                    (second_attempt, second_generation),
-                )
-            self.assertEqual(self.rows()[group]["summary"], "Fictional newest summary")
-            self.assert_recomputed(counter, [group])
-            self.sql(
-                "UPDATE attempts SET result_json=json_set(result_json,'$.result.turn.outcome.summary',"
-                "'Fictional latest corrected') WHERE attempt_id=?", (second_attempt,),
-            )
-            self.assertEqual(self.rows()[group]["summary"], "Fictional latest corrected")
-            self.assert_recomputed(counter, [group])
-            self.assertNotEqual(initial["summary"], self.rows()[group]["summary"])
+                self.assertNotIn("summary", self.rows()[group])
+                self.assert_recomputed(counter, [])
 
     def test_raw_relationship_moves_only_recompute_old_and_new_groups(self):
         old, new = self.fixture.macros[:2]
@@ -725,18 +689,16 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.assertNotIn("privateSyntheticInjection",encoded)
         self.assertNotIn("fictional-padding-",encoded)
         self.assertLess(len(encoded),100000)
-        # Arbitrarily large raw-SQL display fields are bounded in the marker;
-        # instead of risking a collision outside its prefix, decline reuse.
+        # Reports do not enter either the index value or its cache marker.
         self.sql(
             "UPDATE attempts SET result_json=json_set(result_json,'$.result.turn.outcome.summary',?)"
             " WHERE attempt_id=(SELECT attempt_id FROM workflow_turns WHERE run_id=?"
             " AND state='returned' ORDER BY turn_index DESC LIMIT 1)",
             (" "*5000+"fictional-visible",root),
         )
-        self.assertEqual(self.rows()["run:"+root]["summary"],"fictional-visible")
         with patch.object(macro_tasks,"_summary",wraps=macro_tasks._summary) as counter:
-            self.assertEqual(self.rows()["run:"+root]["summary"],"fictional-visible")
-            self.assert_recomputed(counter,["run:"+root])
+            self.assertNotIn("summary", self.rows()["run:"+root])
+            self.assert_recomputed(counter,[])
 
 
 class SummaryCacheReturnTests(unittest.TestCase):

@@ -11,7 +11,7 @@ from contextlib import closing
 import sqlite3
 import unittest
 
-from support import BoardTestCase
+from support import BoardTestCase, enable_fixture_buddy
 from blackboard.evaluation.test_evaluation import EvaluationTestCase as EvaluationFixtures
 
 from hey_my_buddy.blackboard.store.db import SCHEMA_VERSION, Corruption
@@ -36,6 +36,7 @@ class StoreConcurrencyTestCase(EvaluationFixtures):
         self.enterContext(patch.object(workflow, "_workspace_module", self.model_workspace))
 
     def submit_micro_task(self, board, request_id: str, model_service=MODEL_SERVICE_A, *, effort: str = "off") -> str:
+        enable_fixture_buddy(board.store, dict(zip(("harness", "provider", "model", "effort"), (*model_service, effort))))
         submitted = board.call(
             "workflow_submit",
             {

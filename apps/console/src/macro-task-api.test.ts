@@ -109,7 +109,6 @@ describe("work macro task reads", () => {
     await expect(createApi("/private", vi.fn(async () => new Response(JSON.stringify(validList))) as typeof fetch).macroTasks({}))
       .resolves.toEqual(validList);
     for (const malformed of [
-      { ...listSummaryRow, summary: undefined },
       { ...listSummaryRow, sourceHostId: undefined },
       { ...listSummaryRow, project: { ...listSummaryRow.project, path: 4 } },
       { ...listSummaryRow, counts: { ...listSummaryRow.counts, host: -1 } },

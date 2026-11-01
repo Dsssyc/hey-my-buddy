@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from unittest import mock
 
 from mock_workspace import MockWorkspace
-from support import BoardTestCase
+from support import BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.blackboard.store.db import canonical_json, sha256_text
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
@@ -62,6 +62,7 @@ class WorkflowStashTestCase(BoardTestCase):
         return manifest["snapshot"]["repositoryPath"]
 
     def submit_and_claim(self, board, *, request_id="req-1"):
+        enable_fixture_buddy(board.store, BUDDY)
         submitted = board.call("workflow_submit", {
             **BUDDY, "requestId": request_id, "hostId": "host-1", "task": "stash facts task",
             "cwd": str(self.workdir()), "submissionToken": "t" * 32,
@@ -142,6 +143,7 @@ class StartFactFreezingTests(WorkflowStashTestCase):
         board = self.board()
         repository = self.repo_key()
         self.workspace.stash_inventories[repository] = observed([entry("a" * 40, "queued-time entry")])
+        enable_fixture_buddy(board.store, BUDDY)
         submitted = board.call("workflow_submit", {
             **BUDDY, "requestId": "req-1", "hostId": "host-1", "task": "queued change task",
             "cwd": str(self.workdir()), "submissionToken": "t" * 32,

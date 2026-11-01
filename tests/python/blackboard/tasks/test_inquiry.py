@@ -240,6 +240,7 @@ class TestInquiry(BoardTestCase):
                                            "commit", "--allow-empty", "-qm", "inquiry fixture")):
             completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(completed.returncode, 0, completed.stderr)
+        enable_fixture_buddy(client._board.store, {"harness": harness, "provider": provider, "model": model, "effort": effort})
         submitted = client.workflow_submit(
             requestId=request_id, hostId="inquiry-test-host", task="do", cwd=str(cwd), harness=harness,
             provider=provider, model=model, effort=effort,
@@ -1118,6 +1119,7 @@ class ZcodeLiveChannelTests(BoardTestCase):
                                            "commit", "--allow-empty", "-qm", "zcode live fixture")):
             completed = subprocess.run(["git", *arguments], cwd=cwd, env=environment, capture_output=True, text=True, encoding="utf-8")
             self.assertEqual(completed.returncode, 0, completed.stderr)
+        enable_fixture_buddy(client._board.store, {"harness": harness, "provider": "fixture-zcode", "model": "fixture-glm", "effort": "low"})
         submitted = client.workflow_submit(
             requestId=request_id, hostId="zcode-live-test-host", task="do", cwd=str(cwd), harness=harness,
             provider="fixture-zcode", model="fixture-glm", effort="low",

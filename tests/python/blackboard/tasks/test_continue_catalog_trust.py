@@ -43,7 +43,10 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
     def seed(self):
         """One admitted catalog and one submitted run waiting for a continuation."""
         self.evaluation.record_catalog(reading())
-        return self.submit(self.board, provider="fixture", model="alpha", effort="max")
+        submitted = self.submit(self.board, provider="fixture", model="alpha", effort="max")
+        with self.board.store.db.write() as db:
+            db.execute("UPDATE buddies SET enabled=0 WHERE buddy_id='dsh:fixture:alpha:max'")
+        return submitted
 
     def continue_with(self, view, buddy, *, command_id="continue-1"):
         """A Host continuation override without the test helper's auto-enable."""
@@ -147,97 +150,32 @@ class ContinueCatalogTrustTests(WorkflowTestCase):
         self.assertEqual(calls, ["dsh"])
         self.assertEqual(continued["buddy"], IDENTITY)
 
-    def test_catalog_absence_confirmed_before_write_fences_the_override(self):
+    def test_unavailable_and_disabled_route_reports_catalog_reason_first(self):
         submitted = self.seed()
-        self.enable_buddy("dsh:fixture:alpha:max")
         self.evaluation.record_catalog(reading(models=()))
         self.clock.advance(3601)
+        self.evaluation.record_catalog(reading(models=()))
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
-        workflow = self.board.store.workflow
-        validate = workflow._validated_buddy
-
-        def workflow_state():
-            with self.board.store.db.read() as db:
-                return {
-                    table: [tuple(row) for row in db.execute(query, (submitted["runId"],))]
-                    for table, query in {
-                        "run": "SELECT * FROM workflow_runs WHERE run_id=?",
-                        "task": "SELECT * FROM tasks WHERE task_id=?",
-                        "continuations": "SELECT * FROM workflow_continuations WHERE run_id=?",
-                        "receipts": "SELECT * FROM commands WHERE task_id=?",
-                        "events": "SELECT * FROM events WHERE task_id=? ORDER BY seq",
-                    }.items()
-                }
-
-        before = workflow_state()
-
-        def confirm_after_validation(buddy):
-            # The real validator accepts pending alpha even after one hour;
-            # only a second confirmed absence retires it. Publish that reading
-            # after validation returns, before continue enters its write txn.
-            admitted = validate(buddy)
-            self.assertEqual(admitted, IDENTITY)
-            self.assertEqual(calls, [], "Pending admission needs no native re-read")
-            self.evaluation.record_catalog(reading(models=()))
-            return admitted
-
-        with patch.object(workflow, "_validated_buddy", side_effect=confirm_after_validation):
-            with self.assertRaises(BoardError) as rejected:
-                self.continue_with(submitted, IDENTITY)
-        error = rejected.exception
-        self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(error.details.get("reason"), {"code": "catalog-unavailable", "params": {}})
-        self.assertEqual(error.details.get("catalogReadAt"), self.clock.value)
-        self.assertNotIn("remedy", error.details)
-        self.assertNotIn("enabled", error.details, "User enablement is not the cause")
-        self.assertEqual(calls, [], "The write fence must not start a native re-read")
-        self.assertTrue(self.buddy_enabled("dsh:fixture:alpha:max"))
-        self.assertIsNone(self.overridden_event())
-        self.assertEqual(workflow_state(), before, "No buddy, requeue, continuation, receipt or event writes")
-
-    def test_simultaneously_unavailable_and_disabled_reports_the_catalog_reason_first(self):
-        # The write-time gate meets a row that is both unavailable and not
-        # enabled: the catalog cause leads, and the not-enabled shape (with its
-        # enabled:false fact) is not used for it.
-        submitted = self.seed()
-        self.evaluation.record_catalog(reading(models=()))  # alpha pending inside the window
-        calls = []
-        catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
-        workflow = self.board.store.workflow
-        validate = workflow._validated_buddy
-
-        def confirm_after_validation(buddy):
-            admitted = validate(buddy)
-            self.assertEqual(admitted, IDENTITY)
-            self.clock.advance(3601)
-            self.evaluation.record_catalog(reading(models=()))  # Confirmed absence; still not enabled.
-            return admitted
-
-        with patch.object(workflow, "_validated_buddy", side_effect=confirm_after_validation):
-            with self.assertRaises(BoardError) as rejected:
-                self.continue_with(submitted, IDENTITY)
-        error = rejected.exception
-        self.assertEqual(error.code, "BUDDY_UNAVAILABLE")
-        self.assertEqual(error.details.get("reason"), {"code": "catalog-unavailable", "params": {}},
-                         "The catalog cause leads when both causes hold")
-        self.assertEqual(error.details.get("catalogReadAt"), self.clock.value)
-        self.assertNotIn("remedy", error.details)
-        self.assertNotIn("enabled", error.details, "The not-enabled shape is a different refusal")
-        self.assertEqual(calls, [], "The write fence starts no native re-read")
-        self.assertEqual(self.buddy_enabled("dsh:fixture:alpha:max"), False)
+        with self.assertRaises(BoardError) as rejected:
+            self.continue_with(submitted, IDENTITY)
+        self.assertEqual(rejected.exception.code, "BUDDY_UNAVAILABLE")
+        self.assertEqual(rejected.exception.details["reason"]["code"], "catalog-unavailable")
+        self.assertNotIn("enabled", rejected.exception.details)
+        self.assertEqual(calls, ["dsh"])
 
     def test_override_file_route_without_a_buddy_row_refuses_not_enabled(self):
         # The operator's catalog file admits the route at validation without any
-        # recorded catalog, so no buddy row exists when the write-time enabled
+        # recorded catalog, so no buddy row exists when the enabled
         # gate looks for it; that missing row is itself the not-enabled refusal,
         # with the explicit enabled:false fact and no catalog re-read.
         self.catalog_fixture(reading())
         submitted = self.submit(self.board, provider="fixture", model="alpha", effort="max")
-        with self.board.store.db.read() as db:
+        with self.board.store.db.write() as db:
+            db.execute("DELETE FROM buddies WHERE buddy_id='dsh:fixture:alpha:max'")
             self.assertIsNone(db.execute(
                 "SELECT 1 FROM buddies WHERE buddy_id='dsh:fixture:alpha:max'").fetchone(),
-                "A file-validated route has no buddy row until a catalog is recorded")
+                "The removed user policy row must not be recreated by validation")
         calls = []
         catalog.register_catalog_reread(self.directory, lambda name: calls.append(name))
         with self.assertRaises(BoardError) as rejected:

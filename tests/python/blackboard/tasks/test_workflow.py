@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from mock_workspace import MockWorkspace
 from protocol.fixtures import native_turn
-from support import BoardTestCase
+from support import BoardTestCase, enable_fixture_buddy
 
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.errors import BoardError
@@ -57,6 +57,7 @@ class WorkflowTestCase(BoardTestCase):
             "executionWorkspace": {"kind": extra.pop("kind", "existing"), "access": extra.pop("access", "write")},
             **extra,
         }
+        enable_fixture_buddy(board.store, params)
         response = board.call("workflow_submit", params)
         if response.get("control"):
             self.controls[response["runId"]] = response["control"]
@@ -150,6 +151,8 @@ class WorkflowTestCase(BoardTestCase):
     def decide(self, board, view, request_id, *, command_id="decide-1", decision="approve", **extra):
         if "helpers" in extra:
             extra["helpers"] = [{**BUDDY, **helper} for helper in extra["helpers"]]
+            for helper in extra["helpers"]:
+                enable_fixture_buddy(board.store, helper)
         params = {
             "runId": view["runId"],
             "requestId": request_id,
@@ -1963,8 +1966,8 @@ class CompactReadBoundTests(WorkflowTestCase):
         self.finish_turn(board, self.claim(board))
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["microTask"]["task"], big_task)
-        self.assertFalse(view["microTask"]["taskTruncated"])
-        self.assertEqual(view["microTask"]["taskBytes"], len(big_task.encode("utf-8")))
+        self.assertNotIn("taskTruncated", view["microTask"])
+        self.assertNotIn("taskBytes", view["microTask"])
         self.assertNotIn("spec", view["task"])
         serialized = json.dumps(view)
         # Everything outside the whole task text stays bounded.

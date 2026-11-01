@@ -195,12 +195,6 @@ export type Task = {
     title?: string | null;
     /** The macro task the micro task belongs to; absent for a standalone one, which is its own group. */
     macroTaskId?: string | null;
-    /**
-     * Read-only newest returned own turn outcome summary (ADR-012 X title
-     * fallback); null or absent means no usable result yet, never a guess.
-     * Never a title under the 0.16 presentation contract.
-     */
-    resultSummary?: string | null;
   };
   workflowShutdown?: Shutdown;
   [key: string]: unknown;

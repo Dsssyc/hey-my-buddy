@@ -241,7 +241,7 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
             self.assertEqual((blocker['title'], blocker['titleSource']), names[blocker['runId']])
             with board.store.db.read() as connection:
                 self.assertEqual((blocker['title'], blocker['titleSource']),
-                                 macro_tasks._run_presentation(connection, blocker['runId'])[:2])
+                                 macro_tasks._run_title(connection, blocker['runId']))
         self.assertEqual(self.dump(board), before)
 
     def test_routing_execution_without_a_workflow_title_has_explicit_unknown_name(self):

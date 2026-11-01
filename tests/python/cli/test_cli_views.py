@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import hashlib
 import json
 from hey_my_buddy.protocol.contracts import CONTRACT_VERSION
 import os
@@ -26,7 +27,7 @@ from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
 from hey_my_buddy.paths import native_path
 
 PACKET = "Implement the bounded change described here. " * 40
-SUMMARY = "Changed tracked.txt and ran the focused checks. " * 30
+SUMMARY = "Changed tracked.txt and ran the focused checks. " * 60
 
 
 class CliViewTests(RealWorkspaceTestCase):
@@ -125,7 +126,7 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(fetched["macroTaskId"], submitted["macroTaskId"])
         self.assertEqual(fetched["title"], submitted["title"])
 
-    def test_get_brief_cuts_the_task_head_while_full_output_keeps_the_whole_text(self):
+    def test_get_brief_omits_task_packet_while_full_output_keeps_the_whole_text(self):
         long_task = "Continue the specification work. " * 80  # 2640 characters
         self.assertGreater(len(long_task), 2000)
         code, submitted, _ = self.cli("submit", {
@@ -137,14 +138,76 @@ class CliViewTests(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         code, brief, _ = self.cli("get", {"runId": run_id})
         self.assertEqual(code, 0, brief)
-        self.assertEqual(brief["microTask"]["task"], long_task[:2000])
-        self.assertTrue(brief["microTask"]["taskTruncated"])
-        self.assertEqual(brief["microTask"]["taskBytes"], len(long_task.encode("utf-8")))
+        self.assertNotIn("microTask", brief)
         code, full, _ = self.cli("get", {"runId": run_id, "output": "full"})
         self.assertEqual(code, 0, full)
         self.assertEqual(full["microTask"]["task"], long_task)
-        self.assertFalse(full["microTask"]["taskTruncated"])
-        self.assertEqual(full["microTask"]["taskBytes"], len(long_task.encode("utf-8")))
+        self.assertNotIn("taskTruncated", full["microTask"])
+        self.assertNotIn("taskBytes", full["microTask"])
+
+    def test_long_report_is_complete_in_every_read_mode(self):
+        submitted, _ = self.delivered()
+        run_id = submitted["runId"]
+        remaining = [f"{index}: " + "未完成" * 180 for index in range(12)]
+        with self.board_instance.store.db.write() as db:
+            db.execute(
+                "UPDATE attempts SET result_json=json_set(result_json, '$.result.turn.outcome.remaining',json(?))"
+                " WHERE task_id=?", (json.dumps(remaining), run_id),
+            )
+        for mode in ("brief", "full"):
+            for method in ("get", "await", "result"):
+                with self.subTest(method=method, mode=mode):
+                    code, reply, text = self.cli(method, {"runId": run_id, "output": mode})
+                    self.assertEqual(code, 0, reply)
+                    self.assertNotIn("summaryTruncated", text)
+                    if method == "get":
+                        turn = reply["currentTurn"]
+                    elif method == "await":
+                        turn = reply["turn"] if mode == "brief" else reply["result"]["turn"]
+                    else:
+                        turn = reply["result"]["turn"]
+                        if mode == "full":
+                            turn = turn["outcome"]
+                    self.assertEqual(turn["summary"], SUMMARY)
+                    self.assertEqual(turn["remaining"], remaining)
+
+    def test_large_input_manifest_file_is_readable_and_matches_its_digest(self):
+        for index in range(40):
+            (self.repo / f"included-{index}.txt").write_text("included", encoding="utf-8")
+            (self.repo / f"excluded-{index}.txt").write_text("excluded", encoding="utf-8")
+        code, submitted, _ = self.cli("submit", {
+            **BUDDY, "requestId": "large-manifest", "hostId": "host-1", "task": PACKET, "cwd": str(self.repo),
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."],
+                                   "includeUntracked": [f"included-{index}.txt" for index in range(40)]},
+        })
+        self.assertEqual(code, 0, submitted)
+        run_id = submitted["runId"]
+        _, fetched, _ = self.cli("get", {"runId": run_id})
+        reference = fetched["workspace"]["manifestFile"]
+        data = Path(reference["path"]).read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), reference["sha256"])
+        manifest = json.loads(data)
+        self.assertEqual(len(manifest["snapshot"]["includedUntracked"]), 40)
+        self.assertEqual(len(manifest["snapshot"]["excludedUntracked"]), 40)
+        claimed = self.claim(self.board_instance, run_id, request_id="manifest-claim")
+        claim = claimed["claim"]
+        seal = workspace_module.seal(self.directory, manifest, run_id, claim["attempt"]["attemptId"])
+        record = self.turn_record(claim)
+        self.board_instance.call("execution_result", {
+            "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
+            "nonce": "n" * 16, "status": "ok", "shutdownConfirmed": True,
+            "result": {"status": "ok", "turn": record, "workspaceSeal": seal, "workspaceManifest": manifest},
+        })
+        for mode in ("brief", "full"):
+            for method in ("await", "result"):
+                code, reply, _ = self.cli(method, {"runId": run_id, "output": mode})
+                self.assertEqual(code, 0, reply)
+                self.assertEqual(reply["result"]["workspaceManifestFile"], reference)
+                if method == "result" and mode == "full":
+                    snapshot = reply["result"]["workspaceManifest"]["snapshot"]
+                    self.assertEqual(len(snapshot["includedUntracked"]), 32)
+                    self.assertEqual(snapshot["includedUntrackedCount"], 40)
+                    self.assertTrue(snapshot["includedUntrackedTruncated"])
 
     def test_get_brief_preserves_turn_outcome_truncation(self):
         submitted, service_view = self.delivered()
@@ -177,10 +240,7 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(brief["currentTurn"]["summary"], service_view["currentTurn"]["summary"])
         self.assertEqual(brief["workspace"]["path"], service_view["workspace"]["path"])
         self.assertEqual(brief["scope"]["scopeVersion"], service_view["scope"]["scopeVersion"])
-        self.assertEqual(
-            brief["microTask"],
-            {"task": PACKET, "taskTruncated": False, "taskBytes": len(PACKET.encode("utf-8"))},
-        )
+        self.assertNotIn("microTask", brief)
         for omitted in ("executionWorkspace", "task", "turns", "requests", "taskId", "requestFingerprint"):
             self.assertNotIn(omitted, brief)
         code, full, _ = self.cli("get", {"runId": run_id, "output": "full"})
@@ -233,7 +293,7 @@ class CliViewTests(RealWorkspaceTestCase):
         row = next(entry for entry in listed["runs"] if entry["runId"] == run_id)
         self.assertIn("state", row)
         self.assertNotIn("status", row)
-        self.assertTrue(row["title"])
+        self.assertTrue(row["title"].startswith("Implement the bounded change"))
         self.assertLessEqual(len(row["title"]), 120)
         code, macros, _ = self.cli("macro-task-list", {})
         self.assertEqual(code, 0, macros)
@@ -255,7 +315,7 @@ class CliViewTests(RealWorkspaceTestCase):
         code, waited, _ = self.cli("await", {"runId": run_id, "waitSeconds": 5})
         self.assertEqual(code, 0, waited)
         self.assertEqual(waited["outcome"], "completed")
-        self.assertEqual(waited["turn"]["summary"], SUMMARY[:2000])
+        self.assertEqual(waited["turn"]["summary"], SUMMARY)
         self.assertNotIn("turn", waited["result"], "the lifted turn is printed once")
 
 

@@ -66,14 +66,21 @@ class LeadGrantTests(WorkflowTestCase):
 
     def test_grant_requires_an_enabled_available_buddy(self):
         board = self.board()
-        for enabled, available in ((0, 1), (1, 0)):
-            enable_fixture_buddy(board.store, BUDDY)
-            with board.store.db.write() as db:
-                db.execute("UPDATE buddies SET enabled=?,available=?", (enabled, available))
-            with self.subTest(enabled=enabled, available=available), self.assertRaises(BoardError) as caught:
+        enable_fixture_buddy(board.store, BUDDY)
+        with board.store.db.write() as db:
+            db.execute("UPDATE buddies SET enabled=0")
+        with self.assertRaises(BoardError) as caught:
+            board.call("workflow_submit", self.params())
+        self.assertEqual(caught.exception.code, "BUDDY_UNAVAILABLE")
+        self.assertEqual(caught.exception.details["reason"]["code"], "not-enabled")
+        self.assertEqual(board.store.count_tasks(), 0)
+        enable_fixture_buddy(board.store, BUDDY)
+        with patch("hey_my_buddy.blackboard.catalog.catalog.validate_buddy",
+                   side_effect=BoardError("BUDDY_UNAVAILABLE", "fixture route unavailable")):
+            with self.assertRaises(BoardError) as caught:
                 board.call("workflow_submit", self.params())
-            self.assertEqual(caught.exception.code, "BUDDY_UNAVAILABLE")
-            self.assertEqual(board.store.count_tasks(), 0)
+        self.assertEqual(caught.exception.code, "BUDDY_UNAVAILABLE")
+        self.assertEqual(board.store.count_tasks(), 0)
         with patch("hey_my_buddy.blackboard.catalog.catalog.validate_buddy",
                    side_effect=BoardError("HARNESS_UNAVAILABLE", "fixture harness unavailable")):
             with self.assertRaises(BoardError) as caught:

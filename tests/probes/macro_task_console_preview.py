@@ -518,7 +518,7 @@ def run(run_id: str, *, project: str | None, title: str | None, title_source: st
         hosts: tuple[str | None, str | None] = (HOST_A, HOST_A), parent: str | None = None,
         group: str | None = None, lead_owner: tuple[str, str] | None = None,
         accepted: str | None = None, result: bool = False,
-        result_summary: str | None = None, artifacts: list[dict] | None = None,
+        artifacts: list[dict] | None = None,
         integrations: list[dict] | None = None, routing: dict | None = None,
         active_request: dict | None = None, spans: list[dict] | None = None,
         markers: list[dict] | None = None, attempts: list[dict] | None = None,
@@ -535,7 +535,7 @@ def run(run_id: str, *, project: str | None, title: str | None, title_source: st
         "state": state, "status": status, "category": category, "buddy": buddy,
         "sourceHostId": hosts[0], "currentHostId": hosts[1], "acceptedAt": accepted,
         "leadOwner": lead_owner,
-        "resultAvailable": result, "resultSummary": result_summary,
+        "resultAvailable": result,
         "artifacts": artifacts or [], "integrations": integrations or [], "routing": routing,
         "activeRequest": active_request, "spans": spans or [], "markers": markers or [],
         "attempts": attempts or [], "shutdownConfirmed": shutdown_confirmed,
@@ -639,7 +639,7 @@ def build_runs() -> dict[str, dict]:
             task_text="设计并实现工作目标时间轴的只读预览夹具，核对列表、时间轴与详情在长标题下的截断。",
             created=instant(6, 0), updated=instant(7, 5), state="accepted", status="completed",
             category="ended", buddy=CFG_CODEX, accepted=instant(7, 5),
-            result=True, result_summary="合成预览：工作目标时间轴夹具的第一轮交付摘要",
+            result=True,
             spans=[
                 span("queue:att-a1-1", "queue", instant(6, 0), instant(6, 2), "admitted",
                      attempt_id="att-a1-1"),
@@ -699,7 +699,7 @@ def build_runs() -> dict[str, dict]:
             task_text="为 board_prepare 的离线副本补充验证测试，覆盖行数不变与来源文件哈希不变。",
             created=instant(6, 20), updated=instant(6, 55), state="delivered", status="completed",
             category="review", buddy=CFG_GLM, result=True,
-            result_summary="补充 schema 升级离线副本的验证测试",
+
             spans=[
                 span("queue:att-h1-1", "queue", instant(6, 20), instant(6, 24), "admitted",
                      attempt_id="att-h1-1"),
@@ -730,7 +730,7 @@ def build_runs() -> dict[str, dict]:
             task_text="核对 Windows 与 macOS 下离线副本路径大小写与分隔符的边界记录。",
             created=instant(6, 56), updated=instant(7, 2), state="executing", status="reconciliation-needed",
             category="active", buddy=CFG_CLAUDE, result=True, shutdown_confirmed=False,
-            result_summary="核对离线副本的跨平台路径边界",
+
             spans=[
                 span("queue:att-h2-1", "queue", instant(6, 56), instant(6, 57), "admitted",
                      attempt_id="att-h2-1"),
@@ -747,7 +747,7 @@ def build_runs() -> dict[str, dict]:
             task_text="修正第一轮时间轴中等待 Host 的开放片段、决定标记与协助请求的呈现。",
             created=instant(8, 30), updated=instant(9, 20), state="awaiting-host", status="completed",
             category="host", buddy=CFG_CLAUDE, result=True, continuation_count=1,
-            result_summary="核对 Host 等待片段与决定标记的渲染", routing=ROUTING_A2_ABSTENTION,
+            routing=ROUTING_A2_ABSTENTION,
             active_request=ACTIVE_REQUEST,
             spans=[
                 span("queue:att-a2-1", "queue", instant(8, 30), instant(8, 33), "admitted",
@@ -832,7 +832,7 @@ def build_runs() -> dict[str, dict]:
             created=instant(3, 0), updated=instant(5, 35), state="delivered", status="completed",
             category="review", buddy=CFG_GLM, result=True, continuation_count=1,
             delegation_authority=True,
-            result_summary="合成预览：沙箱回归修复完成，等待验收",
+
             spans=[
                 span("queue:att-b1-1", "queue", instant(3, 0), instant(3, 4), "admitted",
                      attempt_id="att-b1-1"),
@@ -870,7 +870,7 @@ def build_runs() -> dict[str, dict]:
             task_text="整理两个平台的沙箱规则差异清单。",
             created=instant(3, 10), updated=instant(3, 25), state="concluded", status="concluded",
             category="ended", buddy=CFG_GLM, result=True,
-            result_summary="整理 macOS 与 Windows 沙箱规则差异清单",
+
             spans=[
                 span("queue:att-b1h-1", "queue", instant(3, 10), instant(3, 11), "admitted",
                      attempt_id="att-b1h-1"),
@@ -907,7 +907,7 @@ def build_runs() -> dict[str, dict]:
             task_text="排查执行器在配额耗尽后仍未封存部分输出的路径，并补齐封存记录。",
             created=instant(6, 5), updated=instant(6, 26), state="concluded", status="concluded",
             category="ended", buddy=CFG_GLM, result=True,
-            result_summary="合成预览：执行器配额耗尽，仅保留封存的部分输出",
+
             spans=[
                 span("queue:att-b2-1", "queue", instant(6, 5), instant(6, 7), "admitted",
                      attempt_id="att-b2-1"),
@@ -940,7 +940,7 @@ def build_runs() -> dict[str, dict]:
             task_text="协调路径样例核对，等待名下微任务交回结果后继续。",
             created=instant(7, 0), updated=instant(7, 35), state="waiting-owned", status="completed",
             category="active", buddy=CFG_CODEX, delegation_authority=True, result=True, continuation_count=1,
-            result_summary="合成预览：已收到范围请求，等待另一条名下微任务执行",
+
             spans=[
                 span("queue:att-b3-1", "queue", instant(7, 0), instant(7, 5), "admitted",
                      attempt_id="att-b3-1"),
@@ -965,7 +965,7 @@ def build_runs() -> dict[str, dict]:
             task_text="核对合成路径样例，遇到范围差异时请求 Lead 决定。",
             created=instant(7, 10), updated=instant(7, 25), state="awaiting-host", status="completed",
             category="active", buddy=CFG_GLM, result=True, active_request=LEAD_REQUEST,
-            result_summary="合成预览：已交回范围请求，等待 Lead 决定",
+
             spans=[
                 span("queue:att-b4-1", "queue", instant(7, 10), instant(7, 11), "admitted",
                      attempt_id="att-b4-1"),
@@ -991,7 +991,7 @@ def build_runs() -> dict[str, dict]:
             task_text="核对重复的路径样例，Lead 确认范围重复后停止。",
             created=instant(7, 13), updated=instant(7, 19), state="cancelled", status="cancelled",
             category="ended", buddy=CFG_GLM, result=True,
-            result_summary="合成预览：已按 Lead 的请求有序收尾并确认停止",
+
             cancellation={"actor": {"role": "lead", "id": "preview-run-b3"}, "note": "路径样例与已有核对重复"},
             spans=[span("execution:att-b6-1", "execution", instant(7, 14), instant(7, 19), "finished",
                         attempt_id="att-b6-1", buddy=CFG_GLM, confirmed=True, generation=1,
@@ -1085,7 +1085,7 @@ def build_runs() -> dict[str, dict]:
             task_text="修复标题回退在 CRLF 输入下的显示，并补充回归测试。",
             created=instant(5, 0), updated=instant(5, 35), state="accepted", status="completed",
             category="ended", buddy=CFG_FLASH, accepted=instant(5, 35),
-            result=True, result_summary="修复标题回退在 CRLF 输入下的显示",
+            result=True,
             spans=[
                 span("queue:att-c1-1", "queue", instant(5, 0), instant(5, 4), "admitted",
                      attempt_id="att-c1-1"),
@@ -1106,7 +1106,7 @@ def build_runs() -> dict[str, dict]:
             title=None, title_source="none", task_text="   ",
             created=instant(5, 6), updated=instant(5, 25), state="delivered", status="completed",
             category="review", buddy=CFG_GLM, result=True,
-            result_summary="合成预览：交付被记录为验收问题。",
+
             spans=[
                 span("queue:att-c1h-1", "queue", instant(5, 6), instant(5, 8), "admitted",
                      attempt_id="att-c1h-1"),
@@ -1898,7 +1898,7 @@ def workflow_extension(entry: dict) -> dict:
                  "ownerGeneration": 1, "hostId": entry["currentHostId"], "revision": entry["revision"],
                  "continuationCount": entry["continuationCount"],
                  "activeRequestId": (entry["activeRequest"]["requestId"] if entry["activeRequest"] else None),
-                 "resultSummary": entry["resultSummary"], "title": entry["title"],
+                 "title": entry["title"],
                  "macroTaskId": entry["group"]}
     if entry["activeRequest"]:
         extension["requestKind"] = entry["activeRequest"]["kind"]
@@ -1985,8 +1985,7 @@ def workflow_view(entry: dict) -> dict:
         # the Host's own recorded conclusion for a failed or cancelled micro task.
         "buddyLocked": entry["buddyLocked"],
         "hostConclusion": entry["hostConclusion"],
-        "microTask": {"task": entry["task"], "taskTruncated": False,
-                 "taskBytes": len(entry["task"].encode("utf-8")),
+        "microTask": {"task": entry["task"],
                  "harness": entry["adapter"] or (entry["buddy"] or {}).get("harness", "dsh"),
                  "cwd": entry["cwd"], "fingerprint": digest(f"{entry['runId']}-micro-task")},
         "buddy": entry["buddy"],
@@ -1996,7 +1995,7 @@ def workflow_view(entry: dict) -> dict:
                             and entry["buddy"]["provider"] == "deepseek-official" else None),
         "buddyRevision": 2 if entry["buddy"] else None,
         "routing": routing, "turns": turns,
-        "currentTurn": ({**turns[0], "summary": turn_summary(entry["attempts"][-1]), "summaryTruncated": False,
+        "currentTurn": ({**turns[0], "summary": turn_summary(entry["attempts"][-1]),
                          "remaining": []} if turns else None),
         "activeRequest": entry["activeRequest"],
         "requests": [{key: record[key] for key in ("requestId", "kind", "state", "createdAt", "decidedAt",
@@ -2048,7 +2047,6 @@ def timeline_row(entry: dict, depth: int) -> dict:
         "delegationAuthority": entry["delegationAuthority"],
         "title": entry["title"], "titleSource": entry["titleSource"],
         "taskSummary": task_first_line(entry["task"]),
-        "summary": entry.get("timelineSummary", "合成记录：已提交输出，等待按记录核对。") if entry["status"] == "completed" else None,
         "createdAt": entry["createdAt"], "state": entry["state"], "status": entry["status"],
         "conclusionStatus": entry["hostConclusion"]["executionStatus"] if entry["hostConclusion"] else None,
         "category": entry["category"], "shutdownConfirmed": len(attempts) == confirmed, "depth": depth,
@@ -2101,7 +2099,6 @@ def macro_task_summary(group: str, matching: set[str]) -> dict:
     seq, at = FIXTURES["group_activity"][group]
     return {
         "macroTaskId": group, "kind": kind, "title": title, "titleSource": title_source,
-        "summary": "合成记录：保留独立委派的结果摘要。" if kind == "standalone" else None,
         "project": PROJECTS[project], "sourceHostId": source_host,
         "currentHostIds": sorted({entry["currentHostId"] for entry in entries if entry["currentHostId"]}),
         "createdAt": created, "lastActivityAt": at, "lastActivitySeq": seq, "state": state,
@@ -2121,7 +2118,7 @@ def span_views(entry: dict) -> list[dict]:
         usage_attempt = (next(record for record in FIXTURES["runs"][item["decisionTaskId"]]["attempts"]
                               if record["attemptId"] == item["attemptId"]) if item["kind"] == "routing" else attempt)
         views.append({
-            **item, "runId": entry["runId"],
+            **{key: value for key, value in item.items() if key != "summary"}, "runId": entry["runId"],
             # Match execution reads from attempts, which do not record effort.
             "buddy": {**item["buddy"], "effort": None} if execution and item["buddy"] else item["buddy"],
             "expectedSeconds": attempt["expectedSeconds"]
@@ -3113,7 +3110,7 @@ def resolve_asset(root: Path, relative: str) -> Path | None:
 REQUIRED_KEYS = {
     "MacroTaskPage": {"groups", "totals", "cursor", "changed"},
     "MacroTaskGroup": {"id", "project", "total", "macroTasks", "nextCursor"},
-    "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "summary", "project",
+    "MacroTaskSummary": {"macroTaskId", "kind", "title", "titleSource", "project",
                          "sourceHostId", "currentHostIds", "createdAt", "lastActivityAt", "lastActivitySeq",
                          "state", "counts", "matchingRuns", "rootRunIds"},
     "MacroTaskCounts": {"roots", "helpers", "accepted", "failed", "active", "host", "review", "ended",
@@ -3122,7 +3119,7 @@ REQUIRED_KEYS = {
                      "turnIndex", "requestId", "buddy", "shutdownConfirmed", "uncertain",
                      "clockSkew", "expectedSeconds", "reminders", "inquiries"},
     "TimelineRow": {"runId", "parentRunId", "rootRunId", "rootLeadRunId", "leadOwnership", "delegationAuthority",
-                    "title", "titleSource", "taskSummary", "summary",
+                    "title", "titleSource", "taskSummary",
                     "createdAt", "state", "status", "conclusionStatus", "category", "shutdownConfirmed", "depth", "kind",
                     "buddy", "acceptedAt", "reviewRejectedAt", "reviewRejectionNote"},
     "TimelineEvent": {"seq", "runId", "kind", "at", "decision", "verdict", "state", "strategy", "note", "actor", "attemptId",

@@ -12,6 +12,7 @@ from blackboard.tasks import test_workflow_preparation as preparation_tests
 from hey_my_buddy.blackboard.tasks import allocation_revocations, storage, workflow as workflow_module, workspace
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
+from support import enable_fixture_buddy
 
 
 class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
@@ -58,6 +59,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.repo = self.repository('source')
 
     def rejected(self, board, request='rejected', **options):
+        enable_fixture_buddy(board.store, {**workflow_tests.BUDDY, **options})
         return board.store.workflow.submit({**workflow_tests.BUDDY,
             'requestId': request, 'hostId': 'host-1', 'task': 'do the thing', 'cwd': str(self.repo),
             'executionWorkspace': {'kind': 'worktree', 'access': 'write'}, **options})
@@ -775,15 +777,9 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.finish_turn(board, self.claim(board), disposition='assistance')
         view = board.call('workflow_get', {'runId': parent['runId']})
         original_prepare = workspace._prepare_locked
-        original_buddy = board.store.workflow._validated_buddy
         captures = {}
         def capture_first(directory, workspace_id, request_id, intent, *, state_dir):
-            manifest = original_prepare(directory, workspace_id, request_id, intent, state_dir=state_dir)
-            if request_id == 'first-cleanup-helper':
-                captures['manifest'] = manifest
-            return manifest
-        def cleanup_while_preparing_next(spec):
-            if spec.get('task') == 'later helper':
+            if request_id == 'later-cleanup-helper':
                 checkout = captures['manifest']['checkoutRoot']
                 planned = board.call('storage_plan', {})
                 candidate = next(row for row in planned['candidates'] if row['path'] == checkout)
@@ -792,10 +788,12 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
                 Reclamation(board.store).run()
                 captures['cleanup'] = Path(checkout).exists()
-            return original_buddy(spec)
+            manifest = original_prepare(directory, workspace_id, request_id, intent, state_dir=state_dir)
+            if request_id == 'first-cleanup-helper':
+                captures['manifest'] = manifest
+            return manifest
         with patch.object(storage, 'process_inventory', return_value=([], [], True)), \
-                patch.object(workspace, '_prepare_locked', side_effect=capture_first), \
-                patch.object(board.store.workflow, '_validated_buddy', side_effect=cleanup_while_preparing_next):
+                patch.object(workspace, '_prepare_locked', side_effect=capture_first):
             approved = self.decide(board, view, view['activeRequest']['requestId'], autoContinue=False,
                 helpers=[{'requestId': 'first-cleanup-helper', 'task': 'first helper', 'cwd': str(self.repo),
                           'executionWorkspace': {'kind': 'worktree', 'writeScope': ['.']}},

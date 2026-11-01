@@ -231,12 +231,6 @@ def _result_command(run_id: str) -> str:
     return f"hey-my-buddy result {shlex.quote(json.dumps({'runId': run_id}, ensure_ascii=False))}"
 
 
-def _head_text(value, limit: int) -> str | None:
-    if value is None:
-        return None
-    return value if len(value) <= limit else value[:limit]
-
-
 def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
     """The bounded default view of one micro-task result.
 
@@ -268,7 +262,6 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
             }
         )
     from ..blackboard.evaluation.native_observations import provider_rejection_view
-    final_text = result.get("finalText")
     disposition = outcome.get("disposition")
     return {
         "status": result.get("status"),
@@ -283,13 +276,12 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
             "resumeMode": turn.get("resumeMode"),
             "sessionId": turn.get("sessionId"),
             "disposition": disposition,
-            "summary": _head_text(outcome.get("summary"), 2000),
-            "remaining": [item[:500] for item in outcome["remaining"][:8]],
+            "summary": outcome.get("summary"),
+            "remaining": outcome["remaining"],
         },
         "request": outcome.get("request") if disposition in ("assistance", "attention") else None,
         "artifacts": artifacts,
-        "finalText": _head_text(final_text, 2000),
-        "finalTextTruncated": final_text is not None and len(final_text) > 2000,
+        "workspaceManifestFile": result.get("workspaceManifestFile"),
         "logPaths": result.get("logPaths"),
         "processState": {"shutdownConfirmed": full["shutdownConfirmed"]},
         "resultCommand": _result_command(run_id),

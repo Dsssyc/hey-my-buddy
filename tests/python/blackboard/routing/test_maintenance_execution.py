@@ -821,9 +821,6 @@ class MaintenanceExecutionTests(WorkflowTestCase):
         self.board_.store.max_concurrent = 8
         with self.board_.store.db.write() as db:
             buddy_id = ":".join(BUDDY[key] for key in ("harness", "provider", "model", "effort"))
-            db.execute("INSERT INTO buddies(buddy_id,label,harness,provider,model,effort,available,enabled,capabilities_json)"
-                       " VALUES(?,?,?,?,?,?,1,1,'[]')", (buddy_id, "Shared model service", *(
-                           BUDDY[key] for key in ("harness", "provider", "model", "effort"))))
             db.execute("INSERT INTO model_service_concurrency VALUES(?,?,?,1)"
                        " ON CONFLICT(harness,provider,model) DO UPDATE SET concurrency_limit=1",
                        tuple(BUDDY[key] for key in ("harness", "provider", "model")))
