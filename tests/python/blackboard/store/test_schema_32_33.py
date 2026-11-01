@@ -59,6 +59,9 @@ class Schema33Tests(unittest.TestCase):
                                  [tuple(row) for row in connection.execute(sql)])
                 self.assertEqual([row[1] for row in migrated.execute('PRAGMA table_info(macro_task_goals)')],
                                  ['macro_task_id', 'revision', 'body', 'created_at'])
+                self.assertEqual([row[1] for row in migrated.execute('PRAGMA table_info(allocation_revocations)')],
+                                 ['allocation_id', 'request_id', 'revoked_at'])
+                self.assertEqual(migrated.execute('SELECT COUNT(*) FROM allocation_revocations').fetchone()[0], 0)
                 self.assertNotIn('project_path',
                                  {row[1] for row in migrated.execute('PRAGMA table_info(macro_tasks)')})
 

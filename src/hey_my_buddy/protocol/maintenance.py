@@ -19,7 +19,12 @@ from ..private_files import publish_bytes, read_bytes
 
 def _root(state: Path, run_id: str) -> Path:
     root = Path(state) / "maintenance"
-    run = root / hashlib.sha256(run_id.encode()).hexdigest()
+    return root / hashlib.sha256(run_id.encode()).hexdigest()
+
+
+def _content_root(state: Path, run_id: str) -> Path:
+    run = _root(state, run_id)
+    root = run.parent
     if linked(root) or linked(run):
         raise BoardError("PRIVATE_PATH_UNSAFE", "Maintenance root must be an ordinary private directory")
     return run
@@ -31,7 +36,7 @@ def publish(state: Path, run_id: str, value: object, *, before_write=None) -> di
     reference = {"sha256": digest}
     if before_write is not None:
         before_write(reference)
-    path = ensure_private_dir(_root(state, run_id)) / (digest + ".json")
+    path = ensure_private_dir(_content_root(state, run_id)) / (digest + ".json")
     publish_bytes(path, raw, immutable=True)
     return reference
 
@@ -41,7 +46,7 @@ def read(state: Path, run_id: str, reference: object):
             or not isinstance(reference["sha256"], str)
             or re.fullmatch(r"[0-9a-f]{64}", reference["sha256"]) is None):
         raise BoardError("INVALID_ARGUMENT", "Invalid maintenance file reference")
-    expected = _root(state, run_id) / (reference["sha256"] + ".json")
+    expected = _content_root(state, run_id) / (reference["sha256"] + ".json")
     raw = read_bytes(expected)
     if hashlib.sha256(raw).hexdigest() != reference["sha256"]:
         raise BoardError("ARTIFACT_MISMATCH", "Maintenance file digest differs")
@@ -57,7 +62,10 @@ def discard(state: Path, run_id: str) -> None:
 
 
 def discard_reference(state: Path, run_id: str, reference: dict) -> None:
-    native_path(_root(state, run_id) / (reference["sha256"] + ".json")).unlink(missing_ok=True)
+    path = _root(state, run_id) / (reference["sha256"] + ".json")
+    if linked(path):
+        raise BoardError("PRIVATE_PATH_UNSAFE", "Maintenance file must be an ordinary private file")
+    native_path(path).unlink(missing_ok=True)
 
 
 def discard_orphans(state: Path, active_run_ids) -> None:

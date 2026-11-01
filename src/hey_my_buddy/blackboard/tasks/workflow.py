@@ -1854,7 +1854,8 @@ class WorkflowCoordinator:
             for reader_id, manifest in readers:
                 self._verify_read_snapshot(manifest, actual["checkoutRoot"], reader_id)
         with workspace_module().submission_preparation(
-                self.board.directory, request_id, intent, shared_locks=shared_locks) as prepared:
+                self.board.directory, request_id, intent, shared_locks=shared_locks,
+                before_prepare=self._prepare_allocation) as prepared:
             try:
                 yield prepared
             except Exception as error:
@@ -1862,21 +1863,21 @@ class WorkflowCoordinator:
                     self._revoke_submission_allocation(request_id, prepared, error, batch=shared_locks is not None)
                 raise
 
+    def _prepare_allocation(self, directory):
+        from . import allocation_revocations
+        allocation_revocations.prepare(self.board, directory)
+
     def _revoke_submission_allocation(self, request_id, prepared, original_error, *, batch):
         """Revoke this invocation's new allocation without replacing admission errors.
 
         The original preparation lock stays held through physical inspection,
         the read-only reference snapshot, and removal of the checkout, refs and records.
-        Lock-file and directory removal follows lock release. With three callers
-        for the same requestId, a second can lock the unlinked old inode while a
-        third recreates and locks a new file, breaking mutual exclusion. This
-        window remains accepted; holding the lock through deletion needs separate
-        Windows verification.
+        The revocation is durable before any removal. Lock-file and
+        directory removal finishes before releasing the original lock.
         """
-        from . import storage
+        from . import allocation_revocations, storage
         module = workspace_module()
         manifest = prepared["manifest"]
-        directory = None
         facts = {"requestId": request_id, "workspaceId": manifest["workspaceId"],
                  "path": manifest["checkoutRoot"], "manifestSha256": manifest["manifestSha256"],
                  "removed": False}
@@ -1894,11 +1895,6 @@ class WorkflowCoordinator:
                     original_error.details["submissionCleanup"] = facts
             else:
                 original_error.add_note("Submission cleanup: " + json.dumps(facts, sort_keys=True))
-            if not facts["removed"] and directory is not None:
-                try:
-                    module._write_once(directory / ("submission-cleanup-" + uuid.uuid4().hex + ".json"), module._json(facts))
-                except Exception as error:
-                    original_error.add_note("Submission cleanup receipt failed: " + str(error)[:2000])
 
         try:
             plan = module.submission_revoke_plan(self.board.directory, manifest)
@@ -1908,19 +1904,13 @@ class WorkflowCoordinator:
             if reasons or plan["reasons"]:
                 facts["reasons"] = sorted(set(reasons + plan["reasons"]))
             else:
-                facts.update(module.revoke_submission(plan))
+                with storage.locked(self.board):
+                    allocation_revocations.record(self.board, directory, request_id)
+                    module.revoke_submission(plan)
+                facts['removed'] = allocation_revocations.finish(self.board, directory)
         except Exception as error:
             cleanup_error(error)
-        if facts["removed"]:
-            def after_release():
-                try:
-                    module.finish_submission_revoke(directory)
-                except Exception as error:
-                    cleanup_error(error)
-                record()
-            prepared["afterRelease"] = after_release
-        else:
-            record()
+        record()
         return facts
 
     @staticmethod
@@ -6446,7 +6436,7 @@ class WorkflowCoordinator:
                         preparation = {}
                         manifest = workspace_module().prepare(
                             self.board.directory, f"{row['run_id']}:{row['continuation_id']}", intent,
-                            _preparation=preparation)
+                            _preparation=preparation, before_prepare=self._prepare_allocation)
                         replayed = preparation["replayed"]
                     if (manifest["checkoutRoot"] != previous["checkoutRoot"]
                             or project_id(manifest) != project_id(previous)
@@ -6460,7 +6450,7 @@ class WorkflowCoordinator:
                         # a new preparation has just observed this same checkout.
                         workspace_module().verify(manifest, state_dir=self.board.directory, require_unchanged=True)
                 except (BoardError, OSError) as error:
-                    if isinstance(error, BoardError) and error.code in {"WORKSPACE_BUSY", "WORKSPACE_GIT_UNKNOWN"}:
+                    if isinstance(error, BoardError) and error.code in {"WORKSPACE_BUSY", "STORAGE_BUSY", "WORKSPACE_GIT_UNKNOWN"}:
                         # Another worker is preparing the same continuation. Leave it
                         # queued so that worker can publish, or a later claim can recover
                         # its durable files. An unfinished Git observation is also retryable.

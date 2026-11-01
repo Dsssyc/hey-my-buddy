@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
-from hey_my_buddy.blackboard.tasks import workspace
+from hey_my_buddy.blackboard.tasks import allocation_revocations, workspace
 
 
 class ReclamationTests(LifecycleTestCase):
@@ -650,13 +650,18 @@ class ReclamationTests(LifecycleTestCase):
             _, directory = workspace._workspace_directory(board.directory, request_id)
             (directory / '.lock').touch()
             (directory / 'request.json').write_bytes(workspace._json({'requestId': request_id}))
-        real = workspace.finish_submission_revoke
+        real = allocation_revocations.finish
         unlocked = []
-        def remove(directory):
-            with storage.locked(board.store), workspace._lock(directory, create=False):
+        def remove(store, directory):
+            with storage.locked(store):
+                with self.assertRaises(BoardError) as busy:
+                    with workspace._lock(directory, create=False):
+                        self.fail('Removal released its allocation lock')
+                self.assertEqual(busy.exception.code, 'WORKSPACE_BUSY')
                 unlocked.append(directory.name)
-            return real(directory)
-        with patch.object(workspace, 'finish_submission_revoke', side_effect=remove):
+            return real(store, directory)
+        from hey_my_buddy.errors import BoardError
+        with patch.object(allocation_revocations, 'finish', side_effect=remove):
             reclamation.Reclamation(board.store).run()
         self.assertEqual(len(unlocked), 2)
         stopped = threading.Event()
@@ -827,7 +832,7 @@ class ReclamationTests(LifecycleTestCase):
              patch.object(workspace, 'revoke_submission', side_effect=outside_transaction('revoke', workspace.revoke_submission)), \
              patch.object(workspace, '_remove_worktree', side_effect=outside_transaction('checkout', workspace._remove_worktree)), \
              patch.object(workspace, '_git', side_effect=git_operation), \
-             patch.object(workspace, 'finish_submission_revoke', side_effect=outside_transaction('records', workspace.finish_submission_revoke)):
+             patch.object(allocation_revocations, 'finish', side_effect=outside_transaction('records', allocation_revocations.finish)):
             reclamation.Reclamation(board.store).run()
         self.assertEqual(observed, ['proof', 'process', 'revoke', 'checkout', 'refs', 'refs', 'refs', 'refs', 'records'])
         self.assertFalse(Path(manifest['checkoutRoot']).parent.exists())

@@ -199,7 +199,7 @@ class RepositoryRelocationTests(ProjectRepositoryCase):
         manifest = self.prepare()
         copied = self.directory / "copy"
         self.copy_repository(copied)
-        shutil.rmtree(self.repo)
+        self.repo.rename(self.directory / "unoffered-original")
         self.assertEqual(workspace.locate_repository(manifest, candidates=(str(copied),)),
                          str(copied / ".git"))
         self.assertEqual(workspace.repository_at(manifest["checkoutRoot"]), str(copied / ".git"))
@@ -227,7 +227,11 @@ class RepositoryRelocationTests(ProjectRepositoryCase):
         checkout = Path(manifest["checkoutRoot"])
         # Only our private link is lost. The user's two links still lead to the
         # original and must stay there when the candidate is the copied repo.
-        (checkout / ".git").write_text("gitdir: missing-repository\n", encoding="utf-8")
+        # Git marks .git as hidden on Windows. Update the existing gitfile
+        # without CREATE_ALWAYS, which Windows rejects for hidden files.
+        with (checkout / ".git").open("r+b") as gitfile:
+            gitfile.write(b"gitdir: missing-repository\n")
+            gitfile.truncate()
         self.assertEqual(workspace.locate_repository(manifest, cwd=str(copied)), str(copied / ".git"))
         self.assertTrue(workspace.verify(manifest, state_dir=self.directory)["valid"])
         self.assertEqual({path: path.read_bytes() for path in users}, users)

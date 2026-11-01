@@ -9,7 +9,7 @@ from pathlib import Path
 
 from ... import private_dirs
 from ...errors import BoardError
-from . import host_conclusions, workspace
+from . import allocation_revocations, host_conclusions, workspace
 
 NATIVE_RETENTION = timedelta(days=3)
 
@@ -143,13 +143,32 @@ def _request_run(connection, request_id):
 def allocation_record(store, directory):
     """Read the immutable request before deciding whether to acquire its lock."""
     result = {'directory': directory, 'manifest': None, 'requestId': None,
-              'owner': None, 'tasks': set(), 'reasons': [], 'afterRelease': None}
+              'owner': None, 'tasks': set(), 'reasons': [], 'revoked': False, 'missing': False}
     try:
-        if private_dirs.linked(directory) or workspace.allocation_lock_directory(store.directory, directory.name) != directory:
-            raise ValueError('Unproven allocation directory or lock')
+        if private_dirs.linked(directory) or not workspace._workspace_identifier(directory.name):
+            raise ValueError('Unproven allocation directory')
         request = workspace._record(directory / 'request.json')
-        if not isinstance(request, dict):
+        if request is None:
+            with store.db.read() as connection:
+                revoked = connection.execute('SELECT request_id FROM allocation_revocations WHERE allocation_id=?',
+                                             (directory.name,)).fetchone()
+            if revoked is None:
+                raise ValueError('Unproven request')
+            request = {'requestId': revoked['request_id']}
+            result['revoked'] = True
+            result['missing'] = not workspace._path_present(directory)
+            if not result['missing']:
+                try:
+                    entries = {entry.name for entry in directory.iterdir()}
+                except FileNotFoundError:
+                    result['missing'] = True
+                else:
+                    if entries - {'.lock'}:
+                        raise ValueError('Revoked allocation has additional evidence')
+        elif not isinstance(request, dict):
             raise ValueError('Unproven request')
+        elif workspace.allocation_lock_directory(store.directory, directory.name) != directory:
+            raise ValueError('Unproven allocation lock')
         request_id = request.get('requestId')
         if not isinstance(request_id, str) or not request_id or '\0' in request_id:
             raise ValueError('Unproven request identity')
@@ -172,12 +191,11 @@ def _allocation_owner(store, item):
             item['reasons'] = ['request-task-retained']
 
 
-def allocation_records(store, directories, *, stopping=lambda: False):
+def allocation_records(store, directories, *, stopping=lambda: False, create_revoked_lock=False):
     """Skip owned allocations without a lock; lock unowned candidates one by one.
 
     Admission also holds the allocation lock, so a candidate's owner is re-read
-    after acquisition. Closing the iterator releases its current lock before
-    finishing an applied revocation's lock-file and directory removal.
+    after acquisition. Removal finishes before the iterator releases its lock.
     """
     for directory in directories:
         if stopping():
@@ -185,21 +203,23 @@ def allocation_records(store, directories, *, stopping=lambda: False):
         item = allocation_record(store, directory)
         if not item['reasons']:
             _allocation_owner(store, item)
-        if item['reasons']:
+        if item['reasons'] or item['missing']:
+            yield item
+            continue
+        if item['revoked'] and not create_revoked_lock and not workspace._path_present(directory / '.lock'):
+            # Inventory grants no deletion authority and never creates a lock.
+            # Reclamation creates it and rechecks the record before removal.
             yield item
             continue
         with ExitStack() as ownership:
-            def after_release():
-                if item['afterRelease'] is not None:
-                    item['afterRelease']()
-            ownership.callback(after_release)
             try:
-                ownership.enter_context(workspace._lock(directory, create=False))
+                ownership.enter_context(workspace._lock(directory, create=create_revoked_lock and item['revoked']))
             except BoardError as error:
                 if error.code not in ('WORKSPACE_BUSY', 'WORKSPACE_UNSAFE', 'PRIVATE_PATH_UNSAFE'):
                     raise
                 item['reasons'] = ['WORKSPACE_BUSY' if error.code == 'WORKSPACE_BUSY' else 'allocation-unproven']
             else:
+                item.update(allocation_record(store, directory))
                 _allocation_owner(store, item)
                 if item['owner'] is None:
                     try:
@@ -265,6 +285,9 @@ def allocation_inventory(store, directories):
     with closing(allocation_records(store, directories)) as records:
         for item in records:
             if item['owner'] is not None:
+                continue
+            if item['missing'] or (item['revoked'] and not item['reasons']
+                                   and not workspace._path_present(item['directory'] / '.lock')):
                 continue
             allocation_plan(store, item)
             if item['reasons']:
@@ -353,6 +376,10 @@ class Reclamation:
     def _discover_allocations(self):
         import os
         root = self.store.directory.resolve() / 'workspaces'
+        with self.store.db.read() as connection:
+            revoked = {root / row['allocation_id'] for row in connection.execute(
+                'SELECT allocation_id FROM allocation_revocations')}
+        self._allocations.update(revoked)
         if not root.is_dir():
             return
         stamp = root.stat().st_mtime_ns
@@ -361,7 +388,7 @@ class Reclamation:
                 current = {root / entry.name: entry.inode() for entry in entries
                            if workspace._workspace_identifier(entry.name)}
             self._allocations.update(path for path, inode in current.items() if self._entries.get(path) != inode)
-            self._allocations.intersection_update(current)
+            self._allocations.intersection_update(current.keys() | revoked)
             for directory in self._entries.keys() - current.keys():
                 self._blocked_allocations.pop(directory, None)
                 self._remember_tasks(directory, set())
@@ -415,7 +442,8 @@ class Reclamation:
         self._discover_allocations()
         failure = None
         try:
-            with closing(allocation_records(store, tuple(self._allocations), stopping=stopping)) as records:
+            with closing(allocation_records(store, tuple(self._allocations), stopping=stopping,
+                                            create_revoked_lock=True)) as records:
                 for item in records:
                     if stopping():
                         return
@@ -424,14 +452,20 @@ class Reclamation:
                         continue
                     try:
                         if not item['reasons']:
-                            with locked(store):
-                                allocation_plan(store, item)
+                            if item['missing']:
+                                if not allocation_revocations.forget_removed(store, directory):
+                                    continue
+                            else:
+                                with locked(store):
+                                    allocation_plan(store, item)
+                                    if not item['reasons']:
+                                        allocation_revocations.record(store, directory, item['requestId'])
+                                        if item['manifest'] is None:
+                                            (directory / 'request.json').unlink(missing_ok=item['revoked'])
+                                        else:
+                                            workspace.revoke_submission(item['plan'])
                                 if not item['reasons']:
-                                    if item['manifest'] is None:
-                                        (directory / 'request.json').unlink()
-                                    else:
-                                        workspace.revoke_submission(item['plan'])
-                                    item['afterRelease'] = lambda directory=directory: workspace.finish_submission_revoke(directory)
+                                    allocation_revocations.finish(store, directory)
                         self._remember_tasks(directory, item['tasks'])
                         if item['reasons']:
                             self._allocations.discard(directory)

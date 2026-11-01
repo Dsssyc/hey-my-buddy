@@ -54,7 +54,7 @@ class StorageTests(BoardTestCase):
         (vanishing_directory / 'payload').write_bytes(b'gone with the directory')
         real_scandir = os.scandir
         def emptied_first(path):
-            if Path(path) == vanishing_directory:
+            if native_path(path) == native_path(vanishing_directory):
                 native_path(vanishing_directory / 'payload').unlink()
                 native_path(vanishing_directory).rmdir()
             return real_scandir(path)

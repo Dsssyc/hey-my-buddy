@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, load_delivered_stock, complete_fixture_cleanup, _git, _sha, _json
+from blackboard.store.upgrade_fixture import FIXTURE, FIXTURE_ROOT_TOKEN, load_fixture, load_delivered_stock, complete_fixture_cleanup, _git, _sha, _json
 from hey_my_buddy.blackboard.store.store import BoardStore
 from hey_my_buddy.blackboard.routing import router_sequence
 from hey_my_buddy.blackboard.store.db import Corruption, Database, SCHEMA_VERSION
@@ -318,8 +318,7 @@ class UpgradeFixtureTests(unittest.TestCase):
 
     def test_portable_roots_rebind_stable_identities_without_changing_native_history(self):
         first, c1 = self.restored('first state')
-        name = ('第二个 “私有” fixture-root state' if os.name == 'nt'
-                else '第二个 "私有" <fixture-root> state')
+        name = '第二个 “私有” ' + FIXTURE_ROOT_TOKEN + ' state'
         second, c2 = self.restored(name)
         _, m1, _ = self.sample(first, c1)
         _, m2, _ = self.sample(second, c2)
@@ -1050,7 +1049,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_cleanup_stock_records_its_current_generator_and_fixed_floor(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        self.assertEqual(metadata['generatorSha256'], 'e59f17977824876ed8d2115b81c55eaa1eee007c21f27ebe4b217eb6ef6d4313')
+        self.assertEqual(metadata['generatorSha256'], 'a3113a5b19f125cedfe435653db26ebb87594738be9f20c1cb7835f76d8f10f7')
         self.assertNotIn('baseGeneratorSha256', metadata)
         self.assertEqual(metadata['cleanupStockGeneratorSha256'], _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
         self.assertEqual(metadata['cleanupStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))

@@ -12,7 +12,8 @@ from unittest.mock import patch
 
 from support import FakeClock
 from blackboard.tasks.test_workflow import WorkflowTestCase
-from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace
+from hey_my_buddy.blackboard.tasks import allocation_revocations, storage, workflow as workflow_module, workspace
+from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
@@ -356,6 +357,46 @@ class PreparationTests(WorkflowTestCase):
             saved = connection.execute("SELECT input_json FROM workflow_turns WHERE attempt_id=?", (first["claim"]["attempt"]["attemptId"],)).fetchone()[0]
         self.assertEqual(json.loads(saved), first["claim"]["turn"]["input"])
         self.assertEqual(self.claim(board, claim_request_id="next")["claim"]["turn"]["input"]["executionWorkspace"], manifest)
+
+    def test_continuation_clears_old_revocation_before_writing_new_allocation(self):
+        board, run_id, _, continuation_id = self.pending()
+        request_id = f"{run_id}:{continuation_id}"
+        _, directory = workspace._workspace_directory(self.directory, request_id)
+        with workspace._lock(directory), storage.locked(board.store):
+            allocation_revocations.record(board.store, directory, request_id)
+        self.assertEqual({path.name for path in directory.iterdir()}, {".lock"})
+        before = self.rows(board, run_id, continuation_id)
+        with storage.locked(board.store):
+            board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        self.assertEqual(self.rows(board, run_id, continuation_id), before)
+        with board.store.db.read() as connection:
+            self.assertIsNotNone(connection.execute(
+                'SELECT 1 FROM allocation_revocations WHERE allocation_id=?',
+                (directory.name,)).fetchone())
+
+        write = workspace._write_once
+        request_writes = []
+
+        def write_new_request(path, data):
+            if path == directory / "request.json":
+                with board.store.db.read() as connection:
+                    self.assertIsNone(connection.execute(
+                        "SELECT 1 FROM allocation_revocations WHERE allocation_id=?",
+                        (directory.name,)).fetchone())
+                request_writes.append(True)
+            return write(path, data)
+
+        with patch.object(workspace, "_write_once", side_effect=write_new_request):
+            board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+
+        self.assertEqual(request_writes, [True])
+        manifest = json.loads(self.rows(board, run_id, continuation_id)[2]["workspace_manifest_json"])
+        self.assertEqual(manifest["workspaceId"], directory.name)
+        self.assertTrue((directory / "request.json").is_file())
+        self.assertTrue((directory / "manifest.json").is_file())
+        Reclamation(board.store).run()
+        self.assertTrue((directory / "request.json").is_file())
+        self.assertTrue((directory / "manifest.json").is_file())
 
     def test_workspace_drift_becomes_attention_and_another_task_can_be_claimed(self):
         board, run_id, _, cont = self.pending()
