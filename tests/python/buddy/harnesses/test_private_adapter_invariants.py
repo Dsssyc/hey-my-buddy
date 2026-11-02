@@ -498,7 +498,7 @@ class PrivateAdapterInvariants(unittest.TestCase):
                 request = handle.request
                 self.assertFalse(native_path(Path(request.private_state.invocation_root) / "dsh-home").exists())
                 self.assertTrue(Path(request.private_state.invocation_root).is_relative_to(context_root(context, "dsh")))
-                records = list(native_path(Path(control["nativeRoot"]) / "sessions").rglob("*.v3.jsonl.zstd"))
+                records = list(native_path(Path(control["nativeRoot"]) / "sessions").rglob("session.v4.jsonl.zstd"))
                 self.assertTrue(records, "the native rollout is in the shared task root")
                 before_cleanup = {path: path.read_bytes() for path in records}
                 cleanup_attempt_credentials(state, "dsh", "task", context.attempt_id)

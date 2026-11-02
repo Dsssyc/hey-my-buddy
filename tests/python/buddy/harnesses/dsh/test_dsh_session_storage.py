@@ -58,7 +58,7 @@ class StorageSplitTests(NativeRunCase):
         session = result.native_identity.session_id
         # The rollout is in the task's shared native root; the marker the next
         # attempt's agent resumes from sits beside it.
-        self.assertTrue(list(native_path(self.root / "sessions").glob(f"{session}.v3.jsonl*")),
+        self.assertTrue(list(native_path(self.root / "sessions").glob(f"*/{session}/session.v4.jsonl*")),
                         "the Worker rollout lives under the task's native-root sessions dir")
         self.assertTrue((self.root / "sessions" / f"{session}.fake-session.json").is_file())
         self.assertFalse(native_path(invocation / "dsh-home").exists())
@@ -67,13 +67,15 @@ class StorageSplitTests(NativeRunCase):
         self.assertFalse((self.root / "dsh-home").exists())
 
     def test_a_fast_run_keeps_its_original_attempt_private_session_path(self):
+        from buddy.harnesses.dsh.acp.fake_agent import RECORD_WORK_DIR
         self.extra_agent_args = ["--prompt-mode", "final", "--final-answer", '{"choice":"a"}',
                                  "--session-record", "usage"]
         result = run(self.fast_request("prompt"), observer=lambda _f: FEEDBACK_CONTINUE,
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "ok", result.end.message)
         session = result.native_identity.session_id
-        self.assertTrue((self.sessions_root / f"{session}.v3.jsonl.zstd").is_file(),
+        self.assertTrue((self.sessions_root / RECORD_WORK_DIR / session
+                         / "session.v4.jsonl.zstd").is_file(),
                         "the fast carrier retains its attempt-private session path")
         self.assertFalse((self.root / "sessions").exists(),
                          "the fast carrier never touches the task's shared sessions root")
