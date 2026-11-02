@@ -31,6 +31,8 @@ export const tasks = {
   offline: "Disconnected", lastRead: "Showing content read at {{time}}", noMatch: "No matching macro tasks", noTasks: "No macro tasks", emptyTitle: "No macro tasks yet", emptyBody: "Delegate a task in a Host session and it will appear here.", choose: "Choose a macro task", harnesses: "Available harnesses {{n}}", buddies: "Enabled buddies {{n}}", buddy: "Buddy", stop: "Stop", more: "More", detail: "Macro task detail", unknown: "Not recorded", readonly: "This session is read only", stopping: "Stopping",
   turn: "Turn {{n}}", kind: { execution: "Execution", routing: "Route", queue: "Queue" },
   microTasks: "Micro tasks",
+  unfinished: "Unfinished",
+  noUnfinishedMicroTasks: "No unfinished micro tasks",
   laneRegion: "This macro task's micro tasks",
   execution: "Execution", wait: "Wait", elapsed: "Elapsed", now: "Now", leadBadge: "Lead", otherMicroTasks: "Other micro tasks",
   laneMicroTasks: "{{n}} micro tasks", laneToggle: "Collapse or expand {{title}}'s micro tasks",

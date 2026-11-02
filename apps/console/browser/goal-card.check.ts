@@ -198,6 +198,8 @@ test("keeps the Chinese zoom hint on one line at 1280px and wraps only when its 
   await page.mouse.move(0, 0);
   await expect(tip).toBeHidden();
   await page.setViewportSize({ width: 390, height: 850 });
+  // The narrow timeline puts its row filter above the axis; wait for that layout.
+  await expect(ruler).toHaveCSS("display", "block");
   const resized = (await ruler.boundingBox())!;
   const viewport = (await page.locator('[data-slot="timeline-tracks"]').boundingBox())!;
   await page.mouse.move(viewport.x + viewport.width - 30, resized.y + 10);

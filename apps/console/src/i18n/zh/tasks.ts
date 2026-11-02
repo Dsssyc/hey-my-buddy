@@ -30,6 +30,8 @@ export const tasks = {
   offline: "连接中断", lastRead: "显示的是 {{time}} 读到的内容", noMatch: "没有匹配的宏任务", noTasks: "没有宏任务", emptyTitle: "还没有宏任务", emptyBody: "在 Host 会话里委派一件事，它会出现在这里。", choose: "选择一个宏任务", harnesses: "可用的 harness {{n}}", buddies: "启用的 buddy {{n}}", buddy: "Buddy", stop: "停止", more: "更多", detail: "宏任务详情", unknown: "未记录", readonly: "当前会话只读", stopping: "正在停止",
   turn: "回合 {{n}}", kind: { execution: "执行", routing: "路由", queue: "排队" },
   microTasks: "微任务",
+  unfinished: "未结束",
+  noUnfinishedMicroTasks: "没有未结束的微任务",
   laneRegion: "这个宏任务的微任务",
   execution: "执行",
   wait: "等待",
