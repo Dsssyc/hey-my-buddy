@@ -44,9 +44,10 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
     function measure() {
       const anchor = button.getBoundingClientRect(), bounds = header.getBoundingClientRect();
       const inset = bounds.width < 480 ? 12 : 24;
-      setGeometry({ "--goal-top": `${bounds.bottom - 4}px`, "--goal-left": `${Math.max(0, anchor.left - bounds.left - inset)}px`,
+      const top = anchor.bottom + 4;
+      setGeometry({ top: top - bounds.top, "--goal-top": `${top}px`, "--goal-left": `${Math.max(0, anchor.left - bounds.left - inset)}px`,
         "--goal-right": `${Math.max(0, bounds.right - inset - anchor.right)}px`,
-        "--goal-start-y": `${anchor.bottom - bounds.bottom + 4}px` } as CSSProperties);
+        "--goal-start-y": `${anchor.bottom - top}px` } as CSSProperties);
     }
     measure();
     const observer = new ResizeObserver(measure); observer.observe(header);

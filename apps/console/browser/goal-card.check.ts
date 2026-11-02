@@ -1,4 +1,4 @@
-import { expect } from "@playwright/test";
+import { expect, type Locator } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { open, test } from "./preview";
@@ -11,6 +11,23 @@ const goals = [
   { body: "让黑板靠 Git 里的项目标记认仓库。\n\n第二版的完整说明。", revision: 2, createdAt: "2026-11-01T02:31:00Z" },
   { body: "下一个存储批：有 Git 时仓库靠标记认。\n\n第一版的完整说明。", revision: 1, createdAt: "2026-10-31T19:41:00Z" },
 ];
+
+async function expectHistoryPadding(card: Locator) {
+  const padding = await card.locator('.goal-version[aria-pressed="true"]').evaluate(element => {
+    const row = element.getBoundingClientRect();
+    const dot = element.querySelector(".goal-version-dot")!.getBoundingClientRect();
+    const text = element.querySelector(".goal-version-dot + span")!.getBoundingClientRect();
+    return {
+      dotInside: dot.left >= row.left && dot.right <= row.right && dot.top >= row.top && dot.bottom <= row.bottom,
+      dotLeft: dot.left - row.left,
+      textTop: text.top - row.top,
+    };
+  });
+  expect(padding.dotInside, "the selected version's background contains its dot").toBe(true);
+  expect(padding.dotLeft, "the selected version's dot has a left inset").toBeGreaterThanOrEqual(8);
+  expect(padding.textTop, "the selected version's text has a top inset").toBeGreaterThanOrEqual(6);
+}
+
 for (const scene of [
   { language: "zh", theme: "dark", width: 1280 },
   { language: "zh", theme: "light", width: 1280 },
@@ -43,6 +60,15 @@ for (const scene of [
   expect(reads).toBe(0);
   await mkdir(captures, { recursive: true });
   await page.screenshot({ path: `${captures}/${name}-closed.png` });
+  const elapsedTrigger = facts.getByRole("button", { name: scene.language === "zh" ? "时间统计" : "Time statistics", exact: true });
+  await elapsedTrigger.click();
+  const elapsedCard = page.locator('[data-slot="popover-content"]:has([data-slot="time-stats-body"])');
+  await expect(elapsedCard).toBeVisible();
+  await elapsedCard.evaluate(element => { for (const animation of element.getAnimations()) animation.finish(); });
+  const elapsedBox = (await elapsedTrigger.boundingBox())!;
+  const elapsedGap = (await elapsedCard.boundingBox())!.y - elapsedBox.y - elapsedBox.height;
+  await page.keyboard.press("Escape");
+  await expect(elapsedCard).toBeHidden();
   const before = await header.boundingBox();
   await trigger.click();
   const card = page.locator('[data-slot="macro-goal-card"]');
@@ -66,6 +92,7 @@ for (const scene of [
     return paragraph.contains(document.elementFromPoint(glyph.x + glyph.width / 2, glyph.y + glyph.height / 2));
   }), "the first character of the goal remains visible mid-animation").toBe(true);
   await card.evaluate(element => { for (const animation of element.getAnimations()) animation.finish(); });
+  await expectHistoryPadding(card);
   const typography = await card.evaluate(element => {
     const frame = element.getBoundingClientRect();
     const body = element.querySelector('[data-slot="macro-goal-body"]')!;
@@ -98,12 +125,15 @@ for (const scene of [
   await page.screenshot({ path: `${captures}/${name}-open.png` });
   expect(await header.boundingBox()).toEqual(before);
   const box = (await card.boundingBox())!;
+  const anchor = (await trigger.boundingBox())!;
+  expect(Math.abs(box.y - anchor.y - anchor.height - elapsedGap), "the goal and elapsed popovers share the same trigger gap").toBeLessThanOrEqual(1);
   expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(scene.width);
   expect(box.y + box.height).toBeLessThanOrEqual(850);
   expect(await card.evaluate(element => getComputedStyle(element).borderRadius)).toBe("6px");
   expect(await card.locator('[data-current="true"]').count()).toBe(1);
   await card.locator(".goal-version").nth(1).click();
   await expect(card.locator('[data-slot="macro-goal-body"]')).toContainText("第二版的完整说明。");
+  await expectHistoryPadding(card);
   await page.keyboard.press("Escape");
   await expect(card).toBeHidden(); await expect(trigger).toBeFocused();
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -133,6 +163,7 @@ test("reads the synthetic preview's real goal endpoint and confines long content
   expect((await response).ok()).toBe(true);
   const card = page.locator('[data-slot="macro-goal-card"]');
   await expect(card.locator(".goal-version")).toHaveCount(1);
+  await expectHistoryPadding(card);
   await page.keyboard.press("Escape");
   await page.route(`**/api/macro-tasks/${macro}/goals`, route => route.fulfill({ json: { macroTaskId: macro, goals: [{ ...goals[0], revision: 1, body: body.repeat(30) }] } }));
   await trigger.click();
