@@ -401,26 +401,30 @@ function workspaceHarness(extraRows: MacroTaskSummary[] = [], unnamed = false) {
   return { ...view, api, command, timeline, refresh, onAddress, user: userEvent.setup(),
     setRows: (next: MacroTaskSummary[]) => { rows = next; } };
 }
-async function openDelete() {
-  await userEvent.click(await screen.findByRole("button", { name: "更多" }));
-  await userEvent.click(await screen.findByRole("button", { name: "删除宏任务…" }));
+async function openDelete(f: ReturnType<typeof workspaceHarness>) {
+  await waitFor(() => expect(document.querySelector('[data-macro-task-id="macro-1"]')).toBeTruthy());
+  const row = document.querySelector('[data-macro-task-id="macro-1"]') as HTMLElement;
+  within(row).getByRole("button", { name: "更多" }).focus();
+  await f.user.keyboard("{Enter}");
+  await f.user.click(await screen.findByRole("menuitem", { name: "删除宏任务…" }));
   return screen.findByRole("dialog");
 }
 
 describe("macro task deletion workspace integration", () => {
   it("offers deletion in the existing menu, cancels safely and restores focus to More", async () => {
     const f = workspaceHarness();
-    const dialog = await openDelete();
+    const dialog = await openDelete(f);
     expect(document.activeElement).toBe(within(dialog).getByRole("button", { name: "取消" }));
     await f.user.click(within(dialog).getByRole("button", { name: "取消" }));
-    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "更多" })));
+    const row = document.querySelector('[data-macro-task-id="macro-1"]') as HTMLElement;
+    await waitFor(() => expect(document.activeElement).toBe(within(row).getByRole("button", { name: "更多" })));
     expect(f.command.mock.calls.every(call => call[0] === "macro_task_deletion_preview")).toBe(true);
   });
 
   it("removes only the deleted row, replaces its address and refreshes the list", async () => {
     const other = macroTaskSummary({ macroTaskId: "macro-2", title: "保留的宏任务", lastActivitySeq: 40 });
     const f = workspaceHarness([other]);
-    await openDelete();
+    await openDelete(f);
     await confirm();
     await waitFor(() => expect(window.location.hash).toBe("#tasks/macro-2"));
     expect(screen.queryByRole("button", { name: new RegExp(`^${f.timeline.macroTask.title}`) })).toBeNull();
@@ -434,7 +438,7 @@ describe("macro task deletion workspace integration", () => {
 
   it("retains the selected macro task for a skipped physical object and completes only after retry", async () => {
     const f = workspaceHarness();
-    await openDelete();
+    await openDelete(f);
     f.command.mockResolvedValueOnce(receipt({ state: "deleting", deletedAt: null, failures: [
       { objectKind: "session-records", path: "/synthetic/records", reason: { code: "macro-task-deletion.owner-unproven", params: {} }, error: null },
     ] }));
@@ -452,7 +456,7 @@ describe("macro task deletion workspace integration", () => {
 
   it("keeps confirmed deletion true when subsequent reads fail", async () => {
     const f = workspaceHarness();
-    await openDelete();
+    await openDelete(f);
     f.refresh.mockRejectedValueOnce(new Error("synthetic refresh failure"));
     vi.mocked(f.api.macroTasks).mockRejectedValueOnce(new ApiError("NETWORK", "synthetic list failure"));
     await confirm();
@@ -463,8 +467,8 @@ describe("macro task deletion workspace integration", () => {
   });
 
   it("keeps an unnamed deletion result localized after a language change", async () => {
-    workspaceHarness([], true);
-    await openDelete();
+    const f = workspaceHarness([], true);
+    await openDelete(f);
     await confirm();
     await screen.findByText("已删除「未命名」。");
     await act(async () => { await i18n.changeLanguage("en"); });
@@ -473,7 +477,7 @@ describe("macro task deletion workspace integration", () => {
 
   it("does not replace another selected task when an earlier deletion completes", async () => {
     const f = workspaceHarness([macroTaskSummary({ macroTaskId: "macro-2", title: "保留的宏任务", lastActivitySeq: 40 })]);
-    await openDelete();
+    await openDelete(f);
     const pending = deferred<unknown>();
     f.command.mockImplementationOnce(async () => pending.promise);
     await confirm();
@@ -504,12 +508,15 @@ describe("macro task deletion workspace integration", () => {
       if (operation === "macro_task_delete") { f.setRows([]); return receipt({ microTaskCount: 1 }); }
       throw new Error(`Unexpected fixture operation: ${operation}`);
     });
-    await f.user.click(await screen.findByRole("button", { name: "更多" }));
-    await f.user.click(screen.getByRole("button", { name: "停止宏任务" }));
+    await waitFor(() => expect(document.querySelector('[data-macro-task-id="macro-1"]')).toBeTruthy());
+    const macroEntry = document.querySelector('[data-macro-task-id="macro-1"]') as HTMLElement;
+    within(macroEntry).getByRole("button", { name: "更多" }).focus();
+    await f.user.keyboard("{Enter}");
+    await f.user.click(screen.getByRole("menuitem", { name: "停止宏任务" }));
     const stop = await screen.findByRole("dialog", { name: "停止宏任务" });
     await f.user.click(within(stop).getByRole("button", { name: "确认停止宏任务" }));
     await waitFor(() => expect(document.querySelector("[data-slot=timeline-row-name]")?.getAttribute("aria-label")).toContain("已取消"));
-    const dialog = await openDelete();
+    const dialog = await openDelete(f);
     await within(dialog).findByText("1 个，其中 1 个取消或失败而没有结论");
     await confirm();
     await waitFor(() => expect(window.location.hash).toBe("#tasks"));

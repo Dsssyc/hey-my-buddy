@@ -51,7 +51,7 @@ for (const theme of ["dark", "light"]) test.describe(`tooltip policy ${theme}`, 
     await expect(tooltip).toHaveCount(0);
 
     // Opening the next tooltip also takes the full 600 ms (no skip-delay window).
-    const menu = page.locator('[data-slot=macro-menu-button]');
+    const menu = page.locator(`[data-macro-task-id="${macro}"] [data-slot=macro-menu-button]`);
     await menu.hover();
     await page.clock.runFor(500);
     await expect(tooltip).toHaveCount(0);

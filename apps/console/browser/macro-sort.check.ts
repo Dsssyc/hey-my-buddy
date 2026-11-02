@@ -1,239 +1,93 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Locator } from "@playwright/test";
 import { open, settle, test } from "./preview";
+import type { MacroTaskPage, MacroTaskSort } from "../src/macro-task-types";
 
 const A = "macro-11111111-1111-4111-8111-111111111111";
 const B = "macro-22222222-2222-4222-8222-222222222222";
-const C = "macro-33333333-3333-4333-8333-333333333333";
-const alpha = "project:synthetic-preview-alpha";
-const beta = "project:synthetic-preview-beta";
-const expected = {
-  "activity-desc": [beta, alpha, "standalone"],
-  "activity-asc": [alpha, beta, "standalone"],
-  "created-desc": [alpha, beta, "standalone"],
-  "created-asc": [alpha, beta, "standalone"],
-} as const;
-type Mode = keyof typeof expected;
-type Summary = { title: string | null; titleSource: string; macroTaskId: string; createdAt: string | null; lastActivityAt: string | null };
+const alpha = "project:synthetic-preview-alpha", beta = "project:synthetic-preview-beta";
+const group = (page: Page, id: string) => page.locator(`[data-slot=macro-group][data-group-id="${id}"]`);
+const rows = (target: Locator) => target.locator("[data-macro-task-id]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-macro-task-id")));
 
-function alphaGroup(page: Page) {
-  return page.locator('[data-slot=macro-list] [data-slot=macro-group]')
-    .filter({ has: page.locator('[data-slot=macro-group-heading]').filter({ hasText: "hey-my-buddy" }) });
-}
-
-async function rows(page: Page) {
-  return alphaGroup(page).locator("[data-macro-task-id]")
-    .evaluateAll(nodes => nodes.map(node => node.getAttribute("data-macro-task-id")));
-}
-
-/** The combined hint names the full title and the time that orders the row. */
-async function times(page: Page) {
-  return alphaGroup(page).locator("[data-macro-task-id]").evaluateAll(nodes => nodes.map(node =>
-    [node.getAttribute("data-macro-task-id"), node.querySelector("[data-slot=macro-entry]")?.getAttribute("aria-description")]));
-}
-
-for (const [locale, sortLabel, collapseLabel, collapseListLabel, basisLabels, directionLabels] of [
-  ["zh-CN", "排序", "全部折叠", "收起宏任务列表", ["最近更新", "创建时间"], ["降序", "升序"]],
-  ["en-US", "Sort", "Collapse all", "Collapse macro task list", ["Last updated", "Created"], ["Descending", "Ascending"]],
-] as const) for (const theme of ["light", "dark"] as const) {
-  test.describe(`macro sort ${locale} ${theme}`, () => {
-    test.use({ locale, viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" });
-
-    test("keeps the four toolbar buttons alike and changes each sort choice on its own", async ({ page }, testInfo) => {
+for (const locale of ["zh-CN", "en-US"] as const) for (const theme of ["dark", "light"] as const) {
+  test.describe(`project sorting ${locale} ${theme}`, () => {
+    test.use({ locale, viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+    test("keeps project choices independent across paging, reload and navigation history", async ({ page }) => {
+      const zh = locale === "zh-CN";
       await page.addInitScript(value => localStorage.setItem("hey-my-buddy.console.theme", value), theme);
-      await open(page, "#tasks");
+      await open(page, `#tasks/${A}?sort=created-asc`);
+      await expect(page).not.toHaveURL(/sort=/);
+      const projects = page.locator("[data-slot=macro-group]");
+      await expect(projects).toHaveCount(3);
+      const initialOrder = await projects.evaluateAll(nodes => nodes.map(node => node.getAttribute("data-group-id")));
+      const originalBeta = await rows(group(page, beta));
+      const historyLength = await page.evaluate(() => history.length);
       const toolbar = page.locator("[data-slot=macro-list-toolbar] > div").last();
-      const basis = page.locator("[data-slot=macro-sort-basis]");
-      const direction = page.locator("[data-slot=macro-sort-direction]");
-      const popup = page.locator("[data-slot=macro-sort-popover]");
-      const collapse = page.getByRole("button", { name: collapseLabel, exact: true });
-      const fold = page.getByRole("button", { name: collapseListLabel, exact: true });
-      const list = page.locator("[data-slot=macro-list]");
-      const basisName = (created: boolean) => `${sortLabel}${locale === "zh-CN" ? "：" : ": "}${basisLabels[created ? 1 : 0]}`;
-      const buttons = toolbar.locator("button");
+      await expect(toolbar.getByRole("button")).toHaveCount(2);
+      await expect(toolbar.getByRole("button").first()).toHaveAccessibleName(zh ? "全部折叠" : "Collapse all");
+      await expect(toolbar.getByRole("button").last()).toHaveAccessibleName(zh ? "收起宏任务列表" : "Collapse macro task list");
 
-      // The four actions sit in one right-hand row, in order and with one shape.
-      await expect(buttons).toHaveCount(4);
-      await expect(fold).toBeVisible();
-      expect(await buttons.evaluateAll(nodes => nodes.map(node =>
-        [node.getAttribute("aria-label"), node.getAttribute("data-variant"), node.getAttribute("data-size")])))
-        .toEqual([
-          [basisName(false), "ghost", "icon-sm"], [directionLabels[0], "ghost", "icon-sm"],
-          [collapseLabel, "ghost", "icon-sm"], [collapseListLabel, "ghost", "icon-sm"],
-        ]);
-      const boxes = await buttons.evaluateAll(nodes => nodes.map(node => {
-        const { x, y, width, height } = node.getBoundingClientRect();
-        return { x, y, width, height };
-      }));
-      for (const box of boxes) {
-        expect(box.width).toBeCloseTo(28, 0);
-        expect(box.height).toBeCloseTo(28, 0);
-      }
-      for (let index = 1; index < boxes.length; index++) {
-        expect(boxes[index].y).toBeCloseTo(boxes[0].y, 0);
-        expect(boxes[index].x - (boxes[index - 1].x + boxes[index - 1].width)).toBeCloseTo(4, 0);
-      }
-
-      await expect(basis).toHaveAccessibleName(basisName(false));
-      await expect(direction).toHaveAccessibleName(directionLabels[0]);
-      await expect(basis).not.toHaveAttribute("data-emphasized", "true");
-      await expect(direction).not.toHaveAttribute("data-emphasized", "true");
-      await expect(basis.locator(".lucide-history")).toHaveCount(1);
-      await expect(direction.locator(".lucide-arrow-down-wide-narrow")).toHaveCount(1);
-      const muted = await basis.evaluate(node => getComputedStyle(node).color);
-      const frame = (await list.boundingBox())!;
-      await page.screenshot({ path: testInfo.outputPath(`macro-sort-toolbar-${locale}-${theme}.png`), clip: {
-        x: frame.x, y: frame.y, width: frame.width, height: 180,
-      } });
-
-      await basis.hover();
-      await expect(page.getByRole("tooltip")).toHaveText(basisName(false));
-      await page.mouse.move(1000, 700);
-      await direction.hover();
-      await expect(page.getByRole("tooltip")).toHaveText(directionLabels[0]);
-      await page.mouse.move(1000, 700);
-      await expect(page.getByRole("tooltip")).toBeHidden();
-
-      await basis.click();
-      await expect(popup).toBeVisible();
-      await expect(popup.getByRole("radio")).toHaveCount(2);
-      await expect(popup.getByRole("radio")).toHaveText([...basisLabels]);
-      await expect(popup.locator("[data-slot=segmented]")).toHaveCount(0);
-      await expect(popup.locator("[role=separator]")).toHaveCount(0);
-      await expect(popup.getByRole("radio", { name: basisLabels[0], exact: true })).toBeChecked();
-      await expect(basis).not.toBeFocused();
-      const pointerFocus = await basis.evaluate(node => ({ visible: node.matches(":focus-visible"), shadow: getComputedStyle(node).boxShadow }));
-      expect(pointerFocus).toEqual({ visible: false, shadow: "none" });
-      const [anchor, floating] = await Promise.all([basis.boundingBox(), popup.boundingBox()]);
-      expect(floating!.y).toBeGreaterThanOrEqual(anchor!.y + anchor!.height);
-      // At the 288px sidebar minimum, Radix shifts the right-aligned popup to
-      // the viewport edge instead of clipping its left side.
-      expect(floating!.x).toBeCloseTo(Math.max(0, anchor!.x + anchor!.width - floating!.width), 0);
-      await page.mouse.move(1000, 700);
-      await page.screenshot({ path: testInfo.outputPath(`macro-sort-popover-${locale}-${theme}.png`), clip: {
-        x: frame.x, y: frame.y, width: frame.width, height: floating!.y + floating!.height - frame.y + 8,
-      } });
-
-      const seen: Partial<Record<Mode, Record<string, Summary>>> = {};
-      const shown: Partial<Record<Mode, string[]>> = {};
-
-      async function expandGroups() {
-        for (const heading of await list.locator('[data-slot=macro-group-heading][aria-expanded=false]').all()) await heading.click();
-      }
-      async function record(mode: Mode, action: () => Promise<void>) {
-        const read = page.waitForResponse(response => {
+      async function choose(id: string, name: string, mode: MacroTaskSort) {
+        const target = group(page, id);
+        const heading = target.locator("[data-slot=macro-group-heading]");
+        if (await heading.getAttribute("aria-expanded") === "false") await heading.click();
+        await heading.hover();
+        await target.locator("[data-slot=macro-sort-button]").click();
+        const menu = page.locator("[data-slot=macro-sort-menu]");
+        await expect(menu.getByRole("group")).toHaveCount(2);
+        await expect(menu.getByRole("menuitemradio", { checked: true })).toHaveCount(2);
+        const response = page.waitForResponse(response => {
           const url = new URL(response.url());
-          return url.pathname === "/api/macro-tasks" && url.searchParams.get("sort") === mode;
+          return url.pathname === "/api/macro-tasks" && url.searchParams.get("group") === id && url.searchParams.get("sort") === mode && !url.searchParams.has("before");
         });
-        await action();
-        const response = await read;
-        expect(response.ok()).toBe(true);
-        const data = await response.json();
-        expect(data.groups.map((group: { id: string }) => group.id)).toEqual(expected[mode]);
-        const alphaRows = data.groups.find((group: { id: string }) => group.id === alpha).macroTasks as Summary[];
-        shown[mode] = alphaRows.map(item => item.macroTaskId);
-        seen[mode] = Object.fromEntries(alphaRows.map((item): [string, Summary] => [item.macroTaskId, item]));
-        expect(alphaRows).toHaveLength(5);
-        const key = mode.startsWith("created") ? "createdAt" : "lastActivityAt";
-        const ordered = [...alphaRows].sort((left, right) =>
-          (left[key] ?? "").localeCompare(right[key] ?? "") * (mode.endsWith("desc") ? -1 : 1));
-        expect(alphaRows.map(item => item.macroTaskId)).toEqual(ordered.map(item => item.macroTaskId));
-        if (mode === "activity-desc") await expect(page).not.toHaveURL(/sort=/);
-        else await expect(page).toHaveURL(new RegExp(`[?&]sort=${mode}$`));
-        await expectShown(mode);
+        await menu.getByRole("menuitemradio", { name, exact: true }).click();
+        const body = await (await response).json() as MacroTaskPage;
+        const ordered = body.groups[0].macroTasks;
+        await expect.poll(() => rows(target)).toEqual(ordered.map(row => row.macroTaskId));
+        await expect(menu).toBeHidden();
+        await expect(page).not.toHaveURL(/sort=/);
+        return body.groups[0];
       }
-      async function expectShown(mode: Mode) {
-        const created = mode.startsWith("created");
-        const visible = shown[mode]!;
-        const expectedHints = await page.evaluate(({ locale, created, summaries }) => {
-          const zh = locale === "zh-CN";
-          const label = zh ? created ? "开始" : "最后活动" : created ? "Started" : "Last activity";
-          const formatter = new Intl.DateTimeFormat(zh ? "zh-CN" : "en", { dateStyle: "medium", timeStyle: "medium", hourCycle: "h23" });
-          return summaries.map(summary => {
-            const stamp = created ? summary.createdAt : summary.lastActivityAt;
-            const title = summary.title ?? (zh ? "未命名" : "Unnamed");
-            const time = stamp === null ? (zh ? "未知" : "Unknown") : formatter.format(new Date(stamp));
-            return [summary.macroTaskId, `${title} · ${label}${zh ? "：" : ": "}${time}${summary.titleSource === "task" ? zh ? " · 取自首行" : " · From the first line" : ""}`];
-          });
-        }, { locale, created, summaries: visible.map(id => seen[mode]![id]!) });
-        await expect.poll(() => times(page)).toEqual(expectedHints);
-      }
-
-      // Choosing a basis leaves the direction alone and keeps the menu open.
-      await record("created-desc", () => popup.getByRole("radio", { name: basisLabels[1], exact: true }).click());
-      await expect(popup).toBeVisible();
-      await expect(basis).toHaveAccessibleName(basisName(true));
-      await expect(basis).toHaveAttribute("data-emphasized", "true");
-      await expect(direction).not.toHaveAttribute("data-emphasized", "true");
-      await expect(basis.locator(".lucide-calendar-plus")).toHaveCount(1);
-      expect(await basis.evaluate(node => getComputedStyle(node).color)).not.toBe(muted);
-      await page.keyboard.press("Escape");
-      await expect(popup).toBeHidden();
-
-      // The direction button toggles on a click and opens nothing.
-      await record("created-asc", () => direction.click());
-      await expect(popup).toBeHidden();
-      await expect(direction).toHaveAccessibleName(directionLabels[1]);
-      await expect(direction).toHaveAttribute("data-emphasized", "true");
-      await expect(direction.locator(".lucide-arrow-up-narrow-wide")).toHaveCount(1);
-      await expect(basis).toHaveAttribute("data-emphasized", "true");
-      await record("created-desc", () => direction.click());
-      await expect(direction).not.toHaveAttribute("data-emphasized", "true");
-      await expect(basis).toHaveAttribute("data-emphasized", "true");
-
-      // Returning the basis to its default clears only that button's emphasis.
-      await basis.click();
-      await record("activity-desc", () => popup.getByRole("radio", { name: basisLabels[0], exact: true }).click());
-      await expect(popup).toBeVisible();
-      await expect(basis).not.toHaveAttribute("data-emphasized", "true");
-      await expect(direction).not.toHaveAttribute("data-emphasized", "true");
-      await page.keyboard.press("Escape");
-      await expect(popup).toBeHidden();
-
-      // An ascending direction is the only emphasized button from here.
-      await record("activity-asc", () => direction.click());
-      await expect(direction).toHaveAttribute("data-emphasized", "true");
-      await expect(basis).not.toHaveAttribute("data-emphasized", "true");
-      await collapse.click();
-      await expect(list.locator('[data-slot=macro-group-heading][aria-expanded=true]')).toHaveCount(0);
-
-      // The URL resumes the same row order after a reload and through history.
+      await choose(alpha, zh ? "创建时间" : "Created", "created-desc");
+      await expect.poll(() => rows(group(page, beta))).toEqual(originalBeta);
+      const ascending = await choose(alpha, zh ? "升序" : "Ascending", "created-asc");
+      expect(await projects.evaluateAll(nodes => nodes.map(node => node.getAttribute("data-group-id")))).toEqual(initialOrder);
+      const moreResponse = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === "/api/macro-tasks" && url.searchParams.get("group") === alpha && url.searchParams.get("before") === ascending.nextCursor;
+      });
+      await group(page, alpha).locator("[data-slot=macro-group-more]").click();
+      const more = await moreResponse;
+      expect(new URL(more.url()).searchParams.get("sort")).toBe("created-asc");
+      const tail = await more.json() as MacroTaskPage;
+      await expect.poll(() => rows(group(page, alpha))).toEqual([...ascending.macroTasks, ...tail.groups[0].macroTasks].map(row => row.macroTaskId));
+      await choose(beta, zh ? "升序" : "Ascending", "activity-asc");
+      await choose("standalone", zh ? "创建时间" : "Created", "created-desc");
+      expect(await page.evaluate(() => history.length)).toBe(historyLength);
+      expect(await page.evaluate(() => Object.fromEntries(Object.entries(localStorage).filter(([key]) => key.startsWith("hey-my-buddy.console.view.macro-task-sort:"))))).toEqual({
+        [`hey-my-buddy.console.view.macro-task-sort:${alpha}`]: "created-asc",
+        [`hey-my-buddy.console.view.macro-task-sort:${beta}`]: "activity-asc",
+        "hey-my-buddy.console.view.macro-task-sort:standalone": "created-desc",
+      });
       await page.reload();
-      await expect(basis).toHaveAccessibleName(basisName(false));
-      await expect(direction).toHaveAccessibleName(directionLabels[1]);
-      await expect(basis).not.toHaveAttribute("data-emphasized", "true");
-      await expect(direction).toHaveAttribute("data-emphasized", "true");
-      await expandGroups();
-      await expect.poll(() => rows(page)).toEqual(shown["activity-asc"]);
-      await expectShown("activity-asc");
+      await expect.poll(() => rows(group(page, alpha))).toEqual(ascending.macroTasks.map(row => row.macroTaskId));
+      for (const [id, choices] of [[alpha, [zh ? "创建时间" : "Created", zh ? "升序" : "Ascending"]], [beta, [zh ? "最近活动" : "Last activity", zh ? "升序" : "Ascending"]], ["standalone", [zh ? "创建时间" : "Created", zh ? "降序" : "Descending"]]] as const) {
+        const trigger = group(page, id).locator("[data-slot=macro-sort-button]");
+        await trigger.focus(); await trigger.press("ArrowDown");
+        for (const name of choices) await expect(page.getByRole("menuitemradio", { name, exact: true })).toHaveAttribute("aria-checked", "true");
+        await page.keyboard.press("Escape");
+        await expect(trigger).toBeFocused();
+      }
+      await group(page, beta).locator(`[data-macro-task-id="${B}"] [data-slot=macro-entry]`).click();
+      await expect(page).toHaveURL(new RegExp(`#tasks/${B}$`));
       await page.goBack();
-      await expect.poll(() => rows(page)).toEqual(shown["activity-desc"]);
-      await expect(direction).toHaveAccessibleName(directionLabels[0]);
-      await expectShown("activity-desc");
+      await expect(page).toHaveURL(new RegExp(`#tasks/${A}$`));
+      await expect.poll(() => rows(group(page, alpha))).toEqual(ascending.macroTasks.map(row => row.macroTaskId));
       await page.goForward();
-      await expect.poll(() => rows(page)).toEqual(shown["activity-asc"]);
-      await expect(direction).toHaveAccessibleName(directionLabels[1]);
-      await expectShown("activity-asc");
-
-      // A pointer click leaves the icon button without a focus ring; Tab draws one.
-      await collapse.click();
-      expect(await collapse.evaluate(node => node.matches(":focus-visible"))).toBe(false);
-      await page.keyboard.press("Shift+Tab");
-      await expect(direction).toBeFocused();
-      await page.keyboard.press("Shift+Tab");
-      await expect(basis).toBeFocused();
+      await expect(page).toHaveURL(new RegExp(`#tasks/${B}$`));
+      await expect(page).not.toHaveURL(/sort=/);
+      await toolbar.getByRole("button").first().click();
+      await expect(page.locator('[data-slot=macro-group-heading][aria-expanded=true]')).toHaveCount(0);
       await settle(page);
-      const keyboardFocus = await basis.evaluate(node => ({ visible: node.matches(":focus-visible"), shadow: getComputedStyle(node).boxShadow }));
-      expect(keyboardFocus.visible).toBe(true);
-      expect(keyboardFocus.shadow).not.toBe("none");
-      expect(keyboardFocus.shadow).toContain("inset");
-      await page.keyboard.press("Enter");
-      await expect(popup).toBeVisible();
-      await page.keyboard.press("Escape");
-      await expect(popup).toBeHidden();
-      await basis.click(); await basis.click();
-      await expect(popup).toBeHidden();
-      await basis.click(); await list.locator("[data-slot=macro-list-heading]").click();
-      await expect(popup).toBeHidden();
     });
   });
 }

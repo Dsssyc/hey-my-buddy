@@ -9,6 +9,7 @@ import { macroTaskGroups } from "./macro-task-fixtures";
 import * as formatting from "./i18n/format";
 import type { MacroTaskPage, MacroTaskQuery, MacroTaskSummary } from "./macro-task-types";
 import { useMacroTaskList } from "./use-macro-task-list";
+import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
 
 const summary = (macroTaskId: string, lastActivitySeq: number, overrides: Partial<MacroTaskSummary> = {}): MacroTaskSummary => ({
   macroTaskId, kind: "macro-task", title: macroTaskId, titleSource: "macro-task", summary: null,
@@ -40,7 +41,7 @@ function setHidden(hidden: boolean) {
   document.dispatchEvent(new Event("visibilitychange"));
 }
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => { cleanup(); vi.useRealTimers(); setHidden(false); });
+afterEach(() => { cleanup(); vi.useRealTimers(); setHidden(false); localStorage.clear(); });
 
 describe("grouped macro task list hook", () => {
   it("keeps the 304 envelope reference and does not redraw entries on verification", async () => {
@@ -52,8 +53,8 @@ describe("grouped macro task list hook", () => {
     const formatted = vi.spyOn(formatting, "formatDateTime");
     function List() {
       const list = useMacroTaskList(api, query, true);
-      return <MacroTaskList {...list} sort="activity-desc" filter="all" query="" selected={null}
-        onSortChange={() => {}} onFilterChange={() => {}} onQueryChange={() => {}} onCollapse={() => {}} onSelect={() => {}}
+      return <MacroTaskList {...list} sortFor={list.sortFor} filter="all" query="" selected={null}
+        onSortChange={list.changeSort} onFilterChange={() => {}} onQueryChange={() => {}} onCollapse={() => {}} onSelect={() => {}}
         onMore={list.more} onApplyReorder={list.applyReorder}/>;
     }
     try {
@@ -126,21 +127,101 @@ describe("grouped macro task list hook", () => {
     await act(async () => f.requests[0]!.resolve(page(first, "older", false, 7)));
     act(() => f.result.current.more("project:p1"));
     await act(async () => f.requests[1]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
-    f.rerender({ query: { ...query, sort: "created-asc" }, active: true });
+    act(() => f.result.current.changeSort("project:p1", "created-asc"));
     expect(ids(f)).toHaveLength(7);
     await startRead();
+    expect(f.requests[2]!.query).not.toHaveProperty("sort");
     await act(async () => f.requests[2]!.resolve(page(first, "sorted-tail", false, 7)));
-    expect(f.requests[3]!.query).toMatchObject({ group: "project:p1", before: "sorted-tail", limit: 2, sort: "created-asc" });
-    await act(async () => f.requests[3]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
+    expect(f.requests[3]!.query).toMatchObject({ group: "project:p1", limit: 5, sort: "created-asc" });
+    await act(async () => f.requests[3]!.resolve(page(first, "sorted-tail", false, 7)));
+    expect(f.requests[4]!.query).toMatchObject({ group: "project:p1", before: "sorted-tail", limit: 2, sort: "created-asc" });
+    await act(async () => f.requests[4]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
     expect(ids(f)).toHaveLength(7);
     expect(f.result.current.groups[0]!.total).toBe(7);
     act(() => f.result.current.reset());
     await startRead();
-    await act(async () => f.requests[4]!.resolve(page(first, "reset-tail", false, 7)));
-    expect(f.requests[5]!.query).toMatchObject({ group: "project:p1", before: "reset-tail", limit: 2 });
-    await act(async () => f.requests[5]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
+    await act(async () => f.requests[5]!.resolve(page(first, "reset-tail", false, 7)));
+    expect(f.requests[6]!.query).toMatchObject({ group: "project:p1", limit: 5, sort: "created-asc" });
+    await act(async () => f.requests[6]!.resolve(page(first, "reset-tail", false, 7)));
+    expect(f.requests[7]!.query).toMatchObject({ group: "project:p1", before: "reset-tail", limit: 2, sort: "created-asc" });
+    await act(async () => f.requests[7]!.resolve(page([summary("item-5", 5), summary("item-6", 4)], null, false, 7)));
     expect(ids(f)).toHaveLength(7);
     expect(f.result.current.groups[0]!.total).toBe(7);
+  });
+
+  it("persists independent orders for projects and standalone and uses each order for more", async () => {
+    const setup = harness(undefined, false);
+    act(() => {
+      setup.result.current.changeSort("project:p1", "created-asc");
+      setup.result.current.changeSort("project:p2", "activity-asc");
+      setup.result.current.changeSort("standalone", "created-desc");
+    });
+    expect(setup.result.current.sortFor("project:p1")).toBe("created-asc");
+    expect(setup.result.current.sortFor("project:p2")).toBe("activity-asc");
+    expect(setup.result.current.sortFor("standalone")).toBe("created-desc");
+    expect(localStorage.getItem(VIEW_PREFERENCE_PREFIX + "macro-task-sort:project:p1")).toBe("created-asc");
+    setup.unmount();
+
+    const f = harness(); await startRead();
+    expect(f.result.current.sortFor("project:p1")).toBe("created-asc");
+    expect(f.result.current.sortFor("project:p2")).toBe("activity-asc");
+    expect(f.result.current.sortFor("standalone")).toBe("created-desc");
+    expect(f.result.current.sortFor("project:p3")).toBe("activity-desc");
+    expect(f.requests[0]!.query).not.toHaveProperty("group");
+    const p1 = summary("one", 3), p2 = summary("two", 2, { project: project("p2") });
+    const loose = summary("loose", 1, { kind: "standalone", project: null });
+    await act(async () => f.requests[0]!.resolve(page([p1, p2, loose], "older")));
+    expect(f.requests.slice(1, 4).map(request => request.query)).toEqual([
+      expect.objectContaining({ group: "project:p1", sort: "created-asc", limit: 5 }),
+      expect.objectContaining({ group: "project:p2", sort: "activity-asc", limit: 5 }),
+      expect.objectContaining({ group: "standalone", sort: "created-desc", limit: 5 }),
+    ]);
+    await act(async () => {
+      f.requests[1]!.resolve(page([p1], null));
+      f.requests[2]!.resolve(page([p2], "older", false, 2));
+      f.requests[3]!.resolve(page([loose], null));
+    });
+    expect(ids(f)).toEqual(["one", "two", "loose"]);
+    act(() => f.result.current.more("project:p2"));
+    expect(f.requests[4]!.query).toMatchObject({ group: "project:p2", sort: "activity-asc", before: "older", limit: 20 });
+    await act(async () => f.requests[4]!.resolve(page([summary("three", 0, { project: project("p2") })], null, false, 2)));
+    expect(f.result.current.groups.map(group => group.macroTasks.map(row => row.macroTaskId))).toEqual([["one"], ["two", "three"], ["loose"]]);
+  });
+
+  it("keeps an open view's cursor bound to its sort when another window saves a different order", async () => {
+    const f = harness(); await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("first", 3)], "older", false, 2)));
+    localStorage.setItem(VIEW_PREFERENCE_PREFIX + "macro-task-sort:project:p1", "created-asc");
+    expect(f.result.current.sortFor("project:p1")).toBe("activity-desc");
+    act(() => f.result.current.more("project:p1"));
+    expect(f.requests[1]!.query).toMatchObject({ group: "project:p1", sort: "activity-desc", before: "older" });
+    await act(async () => f.requests[1]!.resolve(page([summary("second", 2)], null, false, 2)));
+    expect(ids(f)).toEqual(["first", "second"]);
+    f.unmount();
+    const fresh = harness(undefined, false);
+    expect(fresh.result.current.sortFor("project:p1")).toBe("created-asc");
+  });
+
+  it("inherits saved group order after filtering and ignores an obsolete read", async () => {
+    const f = harness(); await startRead();
+    await act(async () => f.requests[0]!.resolve(page([summary("old", 4)])));
+    act(() => f.result.current.changeSort("project:p1", "created-desc"));
+    await startRead();
+    expect(f.requests[1]!.query).not.toHaveProperty("group");
+    f.rerender({ query: { ...query, filter: "host" }, active: true });
+    expect(f.requests[1]!.signal?.aborted).toBe(true);
+    expect(ids(f)).toEqual([]);
+    await startRead();
+    await act(async () => f.requests[1]!.resolve(page([summary("stale", 9)])));
+    expect(ids(f)).toEqual([]);
+    expect(f.requests).toHaveLength(3);
+    const filtered = f.requests.find(request => request.query.filter === "host" && !request.query.group)!;
+    expect(filtered.query).not.toHaveProperty("sort");
+    await act(async () => filtered.resolve(page([summary("current", 2)])));
+    const ordered = f.requests.find(request => request.query.filter === "host" && request.query.group === "project:p1")!;
+    expect(ordered.query).toMatchObject({ sort: "created-desc", limit: 5 });
+    await act(async () => ordered.resolve(page([summary("current", 2)])));
+    expect(ids(f)).toEqual(["current"]);
   });
 
   it("resets loaded groups when a filter or search changes", async () => {

@@ -63,7 +63,7 @@ test.describe("an active micro task's reminder status at narrow width", () => {
   test.use({ locale: "zh-CN", viewport: { width: 320, height: 640 } });
   test("keeps both reminder labels visible beside execution state", async ({ page }) => {
     await open(page, "#tasks");
-    await page.locator('[data-macro-task-id="macro-11111111-1111-4111-8111-111111111111"] button').click();
+    await page.locator('[data-macro-task-id="macro-11111111-1111-4111-8111-111111111111"] [data-slot=macro-entry]').click();
     await page.locator('[data-slot=timeline-tracks] [data-key="span:execution:att-a3-1"]').press("Enter");
     const title = page.locator("[data-slot=detail-pane] h3").first().locator("..");
     await expect(title.getByText("已超过预期")).toBeVisible();

@@ -268,7 +268,7 @@ async function assertHeaderGeometry(page: Page) {
   const header = page.locator("[data-slot=macro-overview-header]");
   await expect(header).toBeVisible();
   await expectNoSidewaysScroll(page);
-  const clipped = await header.evaluate(node => [...node.querySelectorAll<HTMLElement>("dt, dd, button:not([data-slot=macro-menu-button])")]
+  const clipped = await header.evaluate(node => [...node.querySelectorAll<HTMLElement>("dt, dd, button")]
     .filter(element => !element.closest('[data-slot="macro-goal-fact"]') && element.getClientRects().length && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1))
     .map(element => element.textContent?.trim().slice(0, 40)));
   expect(clipped, "macro header text is clipped").toEqual([]);
@@ -278,11 +278,11 @@ async function assertHeaderGeometry(page: Page) {
     "header identity and controls do not overlap").toBe(true);
   const escaped = await header.evaluate(node => {
     const frame = node.getBoundingClientRect();
-    return [...node.querySelectorAll<HTMLElement>("[data-slot=macro-menu-button], dl dd")]
+    return [...node.querySelectorAll<HTMLElement>("dl dd")]
       .filter(item => { const box = item.getBoundingClientRect(); return box.left < frame.left - 1 || box.right > frame.right + 1; })
       .map(item => item.textContent?.trim());
   });
-  expect(escaped, "header counts and controls stay in the header").toEqual([]);
+  expect(escaped, "header counts stay in the header").toEqual([]);
   const titleSize = await header.locator("h2").evaluate(node => parseFloat(getComputedStyle(node).fontSize));
   expect(titleSize).toBeGreaterThanOrEqual(18);
 }
@@ -344,10 +344,12 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       await page.keyboard.press("Escape");
       await expect(page.getByRole("dialog", { name: w.time })).toBeHidden();
 
-      await header.getByRole("button", { name: w.more }).click();
-      await expect(page.getByRole("button", { name: w.stop })).toBeVisible();
+      if (width === 390 && !await list.isVisible()) await header.getByRole("button", { name: new RegExp(w.macro) }).click();
+      const selected = list.locator(`[data-macro-task-id="${A}"][data-selected="true"]`);
+      await selected.locator('[data-slot="macro-menu-button"]').click();
+      await expect(page.getByRole("menuitem", { name: w.stop })).toBeVisible();
       await photograph(page, "menu", w.locale, width, theme);
-      await page.getByRole("button", { name: w.stop }).click();
+      await page.getByRole("menuitem", { name: w.stop }).click();
       await expect(page.getByRole("dialog")).toBeVisible();
       await photograph(page, "stop-confirm", w.locale, width, theme);
       await page.keyboard.press("Escape");
@@ -356,7 +358,7 @@ for (const w of words) for (const width of [1280, 390]) for (const theme of ["li
       if (width === 1280) {
         await list.getByRole("button", { name: w.collapse }).click();
       } else {
-        await header.getByRole("button", { name: /宏任务|Macro tasks/ }).click();
+        if (!await list.isVisible()) await header.getByRole("button", { name: new RegExp(w.macro) }).click();
         await list.getByRole("button", { name: w.collapse }).click();
       }
       await expect(list).toBeHidden();
@@ -581,7 +583,7 @@ for (const w of words) test.describe(`stable macro task order in ${w.locale}`, (
     await page.mouse.move(1200, 10);
     updated = 1;
     await expect(first).toHaveAttribute("data-macro-task-id", id(1), { timeout: 7000 });
-    await list.locator(`[data-macro-task-id="${A}"] button`).click();
+    await list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`).click();
     await expect(page.locator("[data-slot=macro-overview-header]")).toBeVisible();
     await list.hover({ position: { x: 12, y: 12 } });
     updated = 2;
@@ -590,7 +592,7 @@ for (const w of words) test.describe(`stable macro task order in ${w.locale}`, (
     await expect(first).toHaveAttribute("data-macro-task-id", id(1));
     await marker.click();
     await expect(first).toHaveAttribute("data-macro-task-id", id(2));
-    await expect(list.locator(`[data-macro-task-id="${A}"] button`)).toHaveAttribute("aria-pressed", "true");
+    await expect(list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`)).toHaveAttribute("aria-pressed", "true");
     const viewport = list.locator("[data-slot=scroll-area-viewport]");
     await viewport.hover(); await page.mouse.wheel(0, 400);
     await expect.poll(() => viewport.evaluate(node => node.scrollTop)).toBeGreaterThan(0);
@@ -600,7 +602,7 @@ for (const w of words) test.describe(`stable macro task order in ${w.locale}`, (
     await page.mouse.move(1200, 10);
     await viewport.focus(); await viewport.press("Home");
     await expect(first).toHaveAttribute("data-macro-task-id", id(3), { timeout: 7000 });
-    await expect(list.locator(`[data-macro-task-id="${A}"] button`)).toHaveAttribute("aria-pressed", "true");
+    await expect(list.locator(`[data-macro-task-id="${A}"] [data-slot=macro-entry]`)).toHaveAttribute("aria-pressed", "true");
   });
 });
 
@@ -622,9 +624,9 @@ test.describe("macro list motion", () => {
     await photographMidMotion(page, "mid-more-expand", alpha.locator("[data-slot=macro-group-more]"), alpha);
     await expect(alpha.locator("[data-slot=macro-entry]")).toHaveCount(8);
 
-    const row = list.locator("[data-macro-task-id]").nth(1).getByRole("button");
+    const row = list.locator("[data-macro-task-id]").nth(1).locator("[data-slot=macro-entry]");
     await photographMidMotion(page, "mid-row-select", row, row);
-    await expect(list.locator("[data-macro-task-id]").nth(1).getByRole("button")).toHaveAttribute("aria-pressed", "true");
+    await expect(list.locator("[data-macro-task-id]").nth(1).locator("[data-slot=macro-entry]")).toHaveAttribute("aria-pressed", "true");
     const tab = list.getByRole("tab", { name: /^Running/ });
     await photographMidMotion(page, "mid-tab-select", tab, tab);
     await expect(list.getByRole("tab", { name: /^Running/ })).toHaveAttribute("aria-selected", "true");
@@ -662,10 +664,13 @@ test.describe("macro list reduced motion", () => {
     expect(await stats.evaluate(node => getComputedStyle(node).animationName)).toBe("none");
     await page.keyboard.press("Escape");
 
-    await header.getByRole("button", { name: "More" }).click();
-    const stopAction = page.getByRole("button", { name: "Stop macro task" });
+    await page.getByRole("button", { name: "Expand macro task list" }).click();
+    const actionRow = list.locator(`[data-macro-task-id="${A}"]`);
+    await actionRow.hover();
+    await actionRow.locator('[data-slot="macro-menu-button"]').click();
+    const stopAction = page.getByRole("menuitem", { name: "Stop macro task" });
     await expect(stopAction).toBeVisible();
-    expect(await page.getByRole("dialog").evaluate(node => getComputedStyle(node).animationName)).toBe("none");
+    expect(await page.locator('[data-slot="macro-entry-menu"]').evaluate(node => getComputedStyle(node).animationName)).toBe("none");
     await stopAction.click();
     const confirmation = page.getByRole("dialog");
     await expect(confirmation).toBeVisible();
@@ -688,16 +693,17 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
           { title: "进行中的任务", host: 0, review: 0, active: 1, failed: 0, accepted: 0, ended: 0 },
           { title: "Host 已给结论的失败", host: 0, review: 0, active: 0, failed: 1, accepted: 0, ended: 1 },
           { title: "全部验收", host: 0, review: 0, active: 0, failed: 0, accepted: 1, ended: 1 },
+          { title: "等待验收", host: 0, review: 1, active: 0, failed: 0, accepted: 0, ended: 0 },
         ];
         const rows = variants.map(({ title, ...counts }, index) => ({ ...original,
           macroTaskId: index === 1 ? A : `macro-edge-${index}`, title, titleSource: "macro-task",
-          state: index === 0 ? "host" : index === 1 ? "active" : "ended",
+          state: index === 0 ? "host" : index === 1 ? "active" : index === 4 ? "review" : "ended",
           counts: { ...original.counts, roots: counts.host + counts.review + counts.active + counts.ended, ...counts },
           lastActivitySeq: 100 - index,
         }));
         data.groups = [{ id: `project:${original.project.id}`, project: original.project, total: rows.length,
           macroTasks: rows, nextCursor: null }];
-        data.totals = { all: 4, host: 1, active: 2, review: 1 };
+        data.totals = { all: 5, host: 1, active: 2, review: 2 };
         data.changed = false;
         await route.fulfill({ response, json: data });
       });
@@ -714,8 +720,8 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       if (width === 390) await page.locator("[data-slot=macro-overview-header]").getByRole("button", { name: /宏任务/ }).click();
       await expect(list).toBeVisible();
       const rows = list.locator("[data-slot=macro-entry]");
-      await expect(rows).toHaveCount(4);
-      for (const [index, state] of ["等待 Host", "进行中", "失败", "已验收"].entries()) {
+      await expect(rows).toHaveCount(5);
+      for (const [index, state] of ["等待 Host", "进行中", "失败", "已验收", "等待验收"].entries()) {
         await expect(rows.nth(index)).toHaveAccessibleName(new RegExp(state));
       }
       await expect(rows.locator("[data-slot=macro-entry-counts]")).toHaveCount(0);
@@ -723,6 +729,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
         await expect(rows.nth(index).locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", mark);
       }
       await expect(rows.nth(3).locator("[data-slot=state-mark]")).toHaveCount(0);
+      await expect(rows.nth(4).locator("[data-slot=state-mark]")).toHaveAttribute("data-kind", "review");
       const styles = () => rows.evaluateAll(nodes => nodes.map(node => {
         const style = getComputedStyle(node);
         return { background: style.backgroundColor, border: style.borderLeftWidth,

@@ -23,12 +23,14 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
       await page.locator(view.ready).first().waitFor();
       if (view.name === "drawer") await page.getByRole("button", { name: "codex / openai / gpt-5-codex", exact: true }).click();
       if (view.name === "dialog") {
-        const more = page.getByRole("button", { name: "更多", exact: true });
+        const list = page.getByRole("region", { name: "宏任务列表" });
+        if (!await list.isVisible()) await page.locator('[data-slot="macro-overview-header"]').getByRole("button", { name: "‹ 宏任务" }).click();
+        const more = list.locator(`[data-macro-task-id="${macro}"] [data-slot="macro-menu-button"]`);
         await more.hover();
         await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCSS("border-radius", "6px");
         await more.click();
-        await expect(page.locator('[data-slot="popover-content"]')).toHaveCSS("border-radius", "6px");
-        await page.getByRole("button", { name: "停止宏任务", exact: true }).click();
+        await expect(page.locator('[data-slot="macro-entry-menu"]')).toHaveCSS("border-radius", "6px");
+        await page.getByRole("menuitem", { name: "停止宏任务", exact: true }).click();
         await page.getByRole("dialog").waitFor();
       }
       await settle(page);

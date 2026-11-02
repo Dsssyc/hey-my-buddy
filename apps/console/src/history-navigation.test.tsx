@@ -134,6 +134,8 @@ describe("macro task navigation", () => {
     expect(within(header).getByRole("button", { name: "展开宏任务列表" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "宏任务列表（已收起）" })).toBeNull();
     await f.user.click(within(header).getByRole("button", { name: "展开宏任务列表" }));
-    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
+    const list = screen.getByRole("region", { name: "宏任务列表" });
+    const selected = list.querySelector('[data-macro-task-id][data-selected="true"]') as HTMLElement;
+    expect(within(selected).getByRole("button", { name: "更多" })).toBeTruthy();
   });
 });

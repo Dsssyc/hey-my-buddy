@@ -19,7 +19,12 @@ export function readNumberViewPreference(name: string, defaultValue: number): nu
   return Number.isFinite(value) ? value : defaultValue;
 }
 
-export function storeViewPreference(name: string, value: boolean | number): void {
+export function readChoiceViewPreference<T extends string>(name: string, choices: readonly T[]): T | null {
+  const value = readStoredPreference(name);
+  return choices.find(choice => choice === value) ?? null;
+}
+
+export function storeViewPreference(name: string, value: boolean | number | string): void {
   try { window.localStorage.setItem(VIEW_PREFERENCE_PREFIX + name, String(value)); }
   catch { /* The current view still works when storage is unavailable. */ }
 }

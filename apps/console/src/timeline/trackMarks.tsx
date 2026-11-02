@@ -17,6 +17,7 @@ export function IdlePattern({ id }: { id: string }) {
   </pattern></defs>;
 }
 
-export function WaitingDiamond({ x, y }: { x: number; y: number }) {
-  return <path pointerEvents="none" data-slot="waiting-diamond" d={`M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`} className="fill-hand-mark"/>;
+export function WaitingDiamond({ x, y, kind = "hand" }: { x: number; y: number; kind?: "hand" | "review" }) {
+  return <path pointerEvents="none" data-slot="waiting-diamond" data-kind={kind} d={`M${x} ${y - 5.5}l5.5 5.5-5.5 5.5-5.5-5.5Z`}
+    fill={kind === "review" ? "none" : undefined} strokeWidth={kind === "review" ? 1.5 : undefined} className={kind === "review" ? "stroke-hand-mark" : "fill-hand-mark"}/>;
 }

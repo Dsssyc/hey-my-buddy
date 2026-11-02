@@ -91,7 +91,7 @@ describe("the lanes and the detail workspace", () => {
     expect(row("r2").querySelector('[data-slot=row-state]')).toBeNull();
     expect(row("r5").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBeUndefined();
     expect(row("r4").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("live");
-    expect(row("r6").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBeUndefined();
+    expect(row("r6").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("review");
     expect(within(row("r4")).getByLabelText("新出现的微任务")).toBeTruthy();
     expect([...document.querySelectorAll('[data-slot=timeline-row-name]')].map(node => node.getAttribute("data-run-id"))).toEqual(timeline.rows.map(entry => entry.runId));
     expect(row("r3").style.paddingLeft).toBe("31px");
@@ -494,14 +494,17 @@ describe("timeline keyboard and screen reader navigation", () => {
   });
 });
 
-it("gives each settled or active name a three-pixel state edge, with no queue edge or hand/queue symbol", () => {
+it("gives each settled or active name a three-pixel state edge and distinguishes the two human waits", () => {
   setup();
   for (const id of ["r1", "r2", "r3", "r4", "r5", "r6"]) {
     const name = row(id);
     if (name.dataset.stateTone === "queued") expect(name.querySelector('[data-slot=row-state-edge]')).toBeNull();
     else expect(name.querySelector('[data-slot=row-state-edge]')?.className).toContain("w-[3px]");
-    expect(name.querySelector('[data-slot=row-state][data-kind=hand], [data-slot=row-state][data-kind=idle]')).toBeNull();
+    expect(name.querySelector('[data-slot=row-state][data-kind=idle]')).toBeNull();
   }
+  expect(row("r5").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("hand");
+  expect(row("r6").querySelector('[data-slot=row-state]')?.getAttribute("data-kind")).toBe("review");
+  expect(row("r6").querySelector('[data-slot=state-mark] path')?.getAttribute("fill")).toBe("none");
 });
 
 it("selects empty track space without opening on either click or double click", () => {

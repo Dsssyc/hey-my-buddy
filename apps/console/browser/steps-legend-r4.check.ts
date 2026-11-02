@@ -6,7 +6,7 @@ const B = "macro-22222222-2222-4222-8222-222222222222";
 
 for (const { locale, theme, width, counter, next, waitMeaning, clusterMeaning, idleMeaning } of [
   { locale: "zh-CN", theme: "dark", width: 390, counter: "步骤", next: "下一步", waitMeaning: "菱形标出工作交给 Host 或 Lead 的地方，虚线表示仍在等。", clusterMeaning: "挨近的记号合成一个，数字是个数，点开看每一项。", idleMeaning: "较长的无活动时段在时间轴上折叠显示。" },
-  { locale: "en-US", theme: "light", width: 1440, counter: "Step", next: "Next step", waitMeaning: "The diamond marks where work passed to the Host or Lead; a dashed line means it is still waiting.", clusterMeaning: "Nearby marks are merged; the number counts them. Click to list each.", idleMeaning: "A long inactive stretch folded on the timeline." },
+  { locale: "en-US", theme: "light", width: 1440, counter: "Step", next: "Next step", waitMeaning: "The filled diamond marks where work passed to the Host or Lead; a dashed line means it is still waiting.", clusterMeaning: "Nearby marks are merged; the number counts them. Click to list each.", idleMeaning: "A long inactive stretch folded on the timeline." },
 ]) test.describe(`steps and legend ${locale}`, () => {
   test.use({ locale, viewport: { width, height: 900 }, reducedMotion: "reduce" });
 
@@ -30,7 +30,7 @@ for (const { locale, theme, width, counter, next, waitMeaning, clusterMeaning, i
     await page.goto(`#tasks/${A}`);
     const legend = await openLegend(page);
     const items = legend.locator('[data-slot="legend-item"]');
-    await expect(items).toHaveCount(10);
+    await expect(items).toHaveCount(11);
     for (const item of await items.all()) {
       await expect(item).not.toHaveAttribute("tabindex", "0");
       await expect(item).toContainText(/。|\./);

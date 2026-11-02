@@ -18,7 +18,7 @@ for (const { locale, language } of [
     test("renders linked corrections", async ({ page }) => {
     const response = page.waitForResponse(reply => new URL(reply.url()).pathname === timelinePath);
     await open(page, "#tasks");
-    await page.locator(`[data-macro-task-id="${macro}"] button`).click();
+    await page.locator(`[data-macro-task-id="${macro}"] [data-slot=macro-entry]`).click();
     const data = await response;
     expect(data.headers()["x-hey-my-buddy-preview"]).toBe("synthetic-fixture-data");
     const timeline = await data.json() as MacroTaskTimeline;

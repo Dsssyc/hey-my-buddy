@@ -4,28 +4,43 @@ import type { ConsoleApi } from "./api";
 import { errorText, isAbortError } from "./api";
 import { retainEqual } from "./retain-equal";
 import { documentVisibleNow, useDocumentVisible } from "./page-visibility";
-import type { MacroTaskFilter, MacroTaskGroup, MacroTaskQuery } from "./macro-task-types";
+import type { MacroTaskFilter, MacroTaskGroup, MacroTaskQuery, MacroTaskSort } from "./macro-task-types";
+import { readChoiceViewPreference, storeViewPreference } from "./view-preferences";
 
 type PageState = { groups: MacroTaskGroup[]; totals: Record<MacroTaskFilter, number> };
 const emptyPage = (): PageState => ({ groups: [], totals: { all: 0, active: 0, host: 0, review: 0 } });
 const identities = (groups: MacroTaskGroup[]) => groups.map(group => [group.id, group.macroTasks.map(row => row.macroTaskId)]);
+const sortPreference = (groupId: string) => `macro-task-sort:${groupId}`;
+const readSort = (groupId: string) => readChoiceViewPreference(sortPreference(groupId), ["activity-desc", "activity-asc", "created-desc", "created-asc"] as const);
 
 /** Each group owns its keyset. Refreshes replay the loaded extent of each group. */
-export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active: boolean) {
+export function useMacroTaskList(api: ConsoleApi, query: Pick<MacroTaskQuery, "query" | "filter" | "hostId">, active: boolean) {
+  const [revision, setRevision] = useState(0);
+  // An open view owns the order its cursors were read with. Another window's
+  // stored choice is picked up by a new view, never midway through paging.
+  const sorts = useRef(new Map<string, MacroTaskSort | null>());
+  const savedSort = useCallback((groupId: string) => {
+    if (!sorts.current.has(groupId)) sorts.current.set(groupId, readSort(groupId));
+    return sorts.current.get(groupId)!;
+  }, []);
+  const sortFor = useCallback((groupId: string) => savedSort(groupId) ?? "activity-desc", [savedSort]);
+  const changeSort = useCallback((groupId: string, sort: MacroTaskSort) => {
+    storeViewPreference(sortPreference(groupId), sort);
+    sorts.current.set(groupId, sort);
+    setRevision(value => value + 1);
+  }, []);
   const [page, setPage] = useState<PageState>(emptyPage);
   const [loading, setLoading] = useState(active), [error, setError] = useCopyState();
   const [reorder, setReorder] = useState<{ count: number | null } | null>(null);
   // Verification evidence advances even on 304, but has no visible effect until
   // an error needs the connection strip. It must not commit an unchanged list.
   const verifiedAt = useRef<number | null>(null);
-  const [revision, setRevision] = useState(0);
   const generation = useRef(0), pending = useRef(false), request = useRef<AbortController | null>(null);
   const visible = useDocumentVisible(), previousVisible = useRef(visible);
   const initialReadStarted = useRef(false), needsFirst = useRef(false);
   const pageRef = useRef(page); pageRef.current = page;
-  const key = JSON.stringify(query);
-  const { sort: _sort, ...scope } = query;
-  const scopeKey = JSON.stringify(scope);
+  const scopeKey = JSON.stringify(query);
+  const key = scopeKey;
   const current = useRef({ query, active }); current.current = { query, active };
 
   const fetchPage = useCallback(async (mode: "first" | "more" | "poll", foreground = mode !== "poll", groupId?: string) => {
@@ -40,23 +55,32 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
     if (mode === "poll" && needsFirst.current) mode = "first";
     const version = generation.current, controller = new AbortController();
     const params = current.current.query;
+    const groupSort = savedSort;
     initialReadStarted.current = true;
     request.current = controller; pending.current = true;
     if (foreground) { setLoading(true); setError(""); }
     try {
-      const next = await api.macroTasks({ ...params, ...(group ? { group: group.id, before: group.nextCursor!, limit: 20 } : {}) }, controller.signal);
+      const next = await api.macroTasks({ ...params, ...(group ? { group: group.id, sort: groupSort(group.id) ?? "activity-desc", before: group.nextCursor!, limit: 20 } : {}) }, controller.signal);
+      if (version !== generation.current || controller.signal.aborted) return;
       let checked = api.readVerifiedAt?.(next) ?? null;
       let groups = next.groups;
       let changed = next.changed;
-      // A first read returns every group, then only groups already expanded past
-      // five need their loaded extent replayed. The same path handles sorting,
-      // polling, retry and reset; no refresh collapses a loaded group to five.
+      // Discover all groups in the default order, replace saved project orders,
+      // then replay each group's loaded extent on sorting, polling and reset.
       if (!group) groups = await Promise.all(next.groups.map(async first => {
+        const sort = groupSort(first.id);
+        if (sort) {
+          const ordered = await api.macroTasks({ ...params, group: first.id, sort, limit: 5 }, controller.signal);
+          changed ||= ordered.changed;
+          const time = api.readVerifiedAt?.(ordered) ?? null;
+          checked = checked === null || time === null ? null : Math.min(checked, time);
+          first = ordered.groups[0];
+        }
         const count = loaded.groups.find(item => item.id === first.id)?.macroTasks.length ?? 0;
         if (count <= first.macroTasks.length || !first.nextCursor) return first;
         let result = first;
         while (result.macroTasks.length < count && result.nextCursor) {
-          const more = await api.macroTasks({ ...params, group: first.id, before: result.nextCursor, limit: Math.min(100, count - result.macroTasks.length) }, controller.signal);
+          const more = await api.macroTasks({ ...params, group: first.id, sort: sort ?? "activity-desc", before: result.nextCursor, limit: Math.min(100, count - result.macroTasks.length) }, controller.signal);
           changed ||= more.changed;
           const time = api.readVerifiedAt?.(more) ?? null;
           checked = checked === null || time === null ? null : Math.min(checked, time);
@@ -99,7 +123,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
     } finally {
       if (version === generation.current) { pending.current = false; if (foreground) setLoading(false); }
     }
-  }, [api]);
+  }, [api, savedSort]);
 
   const applyReorder = useCallback(() => {
     if (!reorder || !current.current.active) return;
@@ -153,7 +177,7 @@ export function useMacroTaskList(api: ConsoleApi, query: MacroTaskQuery, active:
 
   const rows = useMemo(() => page.groups.flatMap(group => group.macroTasks), [page.groups]);
   return {
-    groups: page.groups, rows, verifiedAtMs: verifiedAt.current, totals: page.totals, loading, error, reorder,
+    groups: page.groups, rows, verifiedAtMs: verifiedAt.current, totals: page.totals, loading, error, reorder, sortFor, changeSort,
     more: (groupId: string) => void fetchPage("more", true, groupId),
     retry: () => void fetchPage(needsFirst.current || pageRef.current.groups.length === 0 ? "first" : "poll", true),
     reset: () => setRevision(value => value + 1), applyReorder,

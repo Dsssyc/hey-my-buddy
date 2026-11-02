@@ -95,6 +95,8 @@ describe("the step strip along the top of a micro task's detail", () => {
     const acceptance = strip().querySelector('[data-key="settle:m1"]')!;
     expect(acceptance.getAttribute("aria-pressed")).toBe("false");
     expect(acceptance.getAttribute("aria-label")).toContain("等待验收");
+    expect(acceptance.querySelector('[data-slot="waiting-diamond"]')?.getAttribute("data-kind")).toBe("review");
+    expect(acceptance.querySelector('[data-slot="waiting-diamond"]')?.getAttribute("fill")).toBe("none");
     fireEvent.click(acceptance);
     expect(acceptance.getAttribute("aria-pressed")).toBe("true");
     expect(pane().textContent).toContain("等待验收");

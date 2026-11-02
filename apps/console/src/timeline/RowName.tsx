@@ -47,7 +47,9 @@ const RowNameView = memo(forwardRef<HTMLButtonElement, {
   const tone = row.status === "queued" ? null : state.tone === "green" ? "live"
     : state.tone === "amber" || row.category === "host" || row.state === "delivered" ? "hand"
     : row.category === "active" ? "live" : isFailedRow(row) ? "fail" : "past";
-  const mark = tone === "live" ? "live" : null;
+  const mark = tone === "live" ? "live" : row.state === "delivered" ? "review"
+    : row.state === "awaiting-host" || row.kind !== "helper" && (row.state === "failed" || row.state === "cancelled") && !["queued", "running", "reconciliation-needed"].includes(row.status) ? "hand"
+      : null;
   const showState = !state.settled || row.kind === "helper" && row.state === "cancelled";
   const button = <button ref={ref} type="button" data-key={`row:${row.runId}`} data-slot="timeline-row-name" data-run-id={row.runId} data-fixes={row.fixes}
     tabIndex={tabIndex} aria-current={list && current ? "true" : undefined} aria-label={[ariaPrefix, title.fullText, repair, state.label].filter(Boolean).join(" · ")} onClick={onClick}

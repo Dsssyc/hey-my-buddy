@@ -25,21 +25,22 @@ describe("the timeline legend", () => {
     expect(screen.queryByRole("dialog", { name: "图例" })).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
-  it("shows all ten marks with their distinct plain meanings", async () => {
+  it("shows all eleven marks with their distinct plain meanings", async () => {
     const user = userEvent.setup();
     render(<Legend/>);
     await user.click(screen.getByRole("button", { name: "图例" }));
     const dialog = screen.getByRole("dialog", { name: "图例" });
     const items = [...dialog.querySelectorAll<HTMLElement>('[data-slot="legend-item"]')];
-    expect(items).toHaveLength(10);
+    expect(items).toHaveLength(11);
     expect(items.map(item => item.getAttribute("data-kind"))).toEqual([
-      "execution", "wait", "waiting", "silent", "inquiry", "event", "accepted", "failed", "cluster", "idle",
+      "execution", "wait", "waiting", "review", "silent", "inquiry", "event", "accepted", "failed", "cluster", "idle",
     ]);
     for (const item of items) {
       expect(item.hasAttribute("tabindex")).toBe(false);
       expect(item.textContent?.length).toBeGreaterThan(10);
     }
     expect(items.find(item => item.dataset.kind === "waiting")?.textContent).toContain("Host 或 Lead");
+    expect(items.find(item => item.dataset.kind === "review")?.textContent).toContain("空心橙色菱形");
     expect(items.find(item => item.dataset.kind === "cluster")?.textContent).toContain("挨近的记号合成一个，数字是个数，点开看每一项。");
     expect(items.find(item => item.dataset.kind === "idle")?.textContent).toContain("折叠显示");
     expect(items.find(item => item.dataset.kind === "accepted")?.querySelector('[data-slot="conclusion-glyph"][data-kind="accepted"]')).toBeTruthy();
@@ -60,6 +61,8 @@ describe("the timeline legend", () => {
     expect(pattern.getAttribute("width")).toBe("14");
     expect(pattern.querySelector("path")?.getAttribute("stroke-opacity")).toBe("0.4");
     expect(dialog.querySelector('[data-kind="waiting"] [data-slot="waiting-diamond"]')?.getAttribute("class")).toBe("fill-hand-mark");
+    expect(dialog.querySelector('[data-kind="review"] [data-slot="waiting-diamond"]')?.getAttribute("class")).toBe("stroke-hand-mark");
+    expect(dialog.querySelector('[data-kind="review"] [data-slot="waiting-diamond"]')?.getAttribute("fill")).toBe("none");
     expect(dialog.querySelector('[data-kind="waiting"] line')?.getAttribute("stroke-dasharray")).toBe("5 4");
   });
 });

@@ -1,7 +1,7 @@
 import { expect, type Locator } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { open, test } from "./preview";
+import { open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 const captures = fileURLToPath(new URL("../../../tmp/console-goal-card", import.meta.url));
@@ -198,6 +198,7 @@ test("keeps the Chinese zoom hint on one line at 1280px and wraps only when its 
   await page.mouse.move(0, 0);
   await expect(tip).toBeHidden();
   await page.setViewportSize({ width: 390, height: 850 });
+  await settle(page);
   // The narrow timeline puts its row filter above the axis; wait for that layout.
   await expect(ruler).toHaveCSS("display", "block");
   const resized = (await ruler.boundingBox())!;
