@@ -6,6 +6,7 @@ import os
 import secrets
 import shutil
 import subprocess
+import unittest
 from unittest.mock import patch
 
 from support import BoardTestCase
@@ -150,13 +151,6 @@ class ProjectMarkerTests(ProjectRepositoryCase):
         plain = self.directory / "plain"
         plain.mkdir()
         self.assertIsNone(workspace.repository_at(str(plain)))
-        if os.name != "nt":
-            plain.chmod(0)
-            try:
-                self.assert_code("WORKSPACE_GIT_ERROR", workspace.repository_at, str(plain))
-            finally:
-                plain.chmod(0o700)
-
         real_run = subprocess.run
 
         def refused(command, *args, **kwargs):
@@ -167,6 +161,45 @@ class ProjectMarkerTests(ProjectRepositoryCase):
 
         with patch.object(workspace.subprocess, "run", side_effect=refused):
             self.assert_code("WORKSPACE_GIT_ERROR", workspace.repository_at, str(self.repo))
+
+    def test_repository_at_git_directory_without_files_is_absent(self):
+        git_dir = self.repo / ".git"
+        for path in git_dir.rglob("*"):
+            if path.is_file():
+                path.unlink()
+        directories = {path.relative_to(git_dir) for path in git_dir.rglob("*")}
+        self.assertIsNone(workspace.repository_at(str(self.repo)))
+        self.assertIsNone(workspace.repository_at(str(git_dir)))
+        self.assertEqual({path.relative_to(git_dir) for path in git_dir.rglob("*")}, directories)
+        self.assertTrue(all(path.is_dir() for path in git_dir.rglob("*")))
+
+    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0,
+                         "chmod 000 requires POSIX and a non-root user")
+    def test_repository_at_unreadable_location_is_an_error(self):
+        mode = self.repo.stat().st_mode
+        self.repo.chmod(0)
+        try:
+            with self.assertRaises(BoardError) as error:
+                workspace.repository_at(str(self.repo))
+            self.assertEqual(error.exception.code, "WORKSPACE_GIT_ERROR")
+            self.assertIn(str(self.repo), str(error.exception.payload()))
+        finally:
+            self.repo.chmod(mode)
+
+    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0,
+                         "chmod 000 requires POSIX and a non-root user")
+    def test_repository_at_unreadable_git_directory_is_an_error(self):
+        git_dir = self.repo / ".git"
+        mode = git_dir.stat().st_mode
+        git_dir.chmod(0)
+        try:
+            with self.assertRaises(BoardError) as error:
+                workspace.repository_at(str(self.repo))
+            self.assertEqual(error.exception.code, "WORKSPACE_IO_ERROR")
+            self.assertIn(str(git_dir), str(error.exception))
+            self.assertIsInstance(error.exception.__cause__, PermissionError)
+        finally:
+            git_dir.chmod(mode)
 
     def test_historical_manifest_versions_use_repository_id_without_rewriting(self):
         current = self.prepare()

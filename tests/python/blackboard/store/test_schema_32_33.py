@@ -71,6 +71,60 @@ class Schema33Tests(unittest.TestCase):
             upgrade.upgrade_state(self.state)
         self.assertEqual(self.schema(), '33')
 
+    def test_git_directory_without_files_is_skipped_and_other_repository_is_marked(self):
+        other = self.root / 'other-repository'
+        subprocess.run(['git', 'init', '--quiet', str(other)], check=True, capture_output=True)
+        other_git = other / '.git'
+        other_id = hashlib.sha256(json.dumps([str(other_git.resolve()), other_git.stat().st_ino],
+                                             ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection, connection:
+            row = connection.execute('SELECT run_id,workspace_manifest_json FROM workflow_runs LIMIT 1').fetchone()
+            manifest = json.loads(row[1])
+            old_id = manifest['repositoryId']
+            manifest['repositoryId'] = other_id
+            manifest['snapshot']['repositoryPath'] = str(other_git)
+            connection.execute('UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?',
+                               (json.dumps(manifest), row[0]))
+
+        (missing_id, missing), (marked_id, marked) = sorted(((old_id, self.repository), (other_id, other_git)))
+        # Always empty the first candidate, so returning instead of continuing
+        # cannot pass merely because the healthy repository was visited first.
+        for path in missing.rglob('*'):
+            if path.is_file():
+                path.unlink()
+        directories = {path.relative_to(missing) for path in missing.rglob('*')}
+        self.assertTrue(directories)
+        self.assertTrue(all(path.is_dir() for path in missing.rglob('*')))
+        self.assertEqual(hashlib.sha256(json.dumps([str(missing.resolve()), missing.stat().st_ino],
+                                                   ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+                         missing_id)
+
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 32, 'targetSchema': 33})
+        self.assertEqual(self.schema(), '33')
+        self.assertEqual({path.relative_to(missing) for path in missing.rglob('*')}, directories)
+        self.assertTrue(all(path.is_dir() for path in missing.rglob('*')))
+        self.assertFalse((missing / schema_32_33.PROJECT_REF).exists())
+        self.assertEqual(self.project(marked), marked_id.encode())
+
+    @unittest.skipUnless(os.name == 'posix' and os.geteuid() != 0,
+                         'chmod 000 requires POSIX and a non-root user')
+    def test_unreadable_git_directory_fails_upgrade_without_writing(self):
+        before = {path.relative_to(self.repository): path.read_bytes()
+                  for path in self.repository.rglob('*') if path.is_file()}
+        mode = self.repository.stat().st_mode
+        self.repository.chmod(0)
+        try:
+            with self.assertRaisesRegex(RuntimeError, 'Cannot inspect old repository') as error:
+                upgrade.upgrade_state(self.state)
+            self.assertIn(str(self.repository), str(error.exception))
+            self.assertIsInstance(error.exception.__cause__, PermissionError)
+        finally:
+            self.repository.chmod(mode)
+        self.assertEqual(self.schema(), '32')
+        self.assertEqual({path.relative_to(self.repository): path.read_bytes()
+                          for path in self.repository.rglob('*') if path.is_file()}, before)
+        self.assertIsNone(self.project())
+
     def test_replaced_location_skips_git_without_touching_replacement(self):
         original = self.repository.parent
         moved = self.root / 'moved-repository'
