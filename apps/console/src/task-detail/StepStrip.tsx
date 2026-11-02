@@ -1,4 +1,3 @@
-import { Hint } from "../components/hint";
 import { useContext, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ReactNode, Ref } from "react";
@@ -133,7 +132,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
     const pressed = selected === index && (itemKey
       ? focusedKey === itemKey || step?.pending && focusedKey === null
       : focusedKey === null || focusedKey === key);
-    return <Hint key={key} text={label}><g role="button" tabIndex={itemKey || selected === index ? 0 : -1} data-key={key} data-linked-item={itemKey ? links.items.get(itemKey) : undefined} aria-pressed={pressed} aria-label={label}
+    return <g key={key} role="button" tabIndex={itemKey || selected === index ? 0 : -1} data-key={key} data-linked-item={itemKey ? links.items.get(itemKey) : undefined} aria-pressed={pressed} aria-label={label}
       onClick={() => itemKey ? links.onItem(itemKey) : onStep(index + 1)}
       onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (itemKey) links.onItem(itemKey); else onStep(index + 1); } }}
       className={pressed ? "pointer-events-auto outline-none" : "pointer-events-auto outline-none focus-visible:[&_.hit]:stroke-ring focus-visible:[&_.hit]:stroke-2"}>
@@ -141,7 +140,7 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
       {pressed && <rect data-slot="selected-item" x={at - STEP_SELECTION_RADIUS_PX} y={STRIP_PX / 2 - STEP_SELECTION_RADIUS_PX} width={STEP_SELECTION_RADIUS_PX * 2} height={STEP_SELECTION_RADIUS_PX * 2} fill="none" className="pointer-events-none stroke-focus"/>}
       {itemKey && <rect data-slot="fragment-focus" x={at - STEP_SELECTION_RADIUS_PX} y={STRIP_PX / 2 - STEP_SELECTION_RADIUS_PX} width={STEP_SELECTION_RADIUS_PX * 2} height={STEP_SELECTION_RADIUS_PX * 2} fill="none" className="pointer-events-none stroke-focus opacity-0"/>}
       {mark}
-    </g></Hint>;
+    </g>;
   };
   const middle = STRIP_PX / 2;
   return <div ref={setGestureArea} data-slot="detail-strip" role="group" aria-label={t("strip.label")} onKeyDown={event => {
@@ -153,12 +152,12 @@ export function StepStrip({ row, timeline, steps, selected, onStep, nowMs, revea
     <div data-slot="step-navigation" className="flex shrink-0 flex-col items-center justify-between border-r border-line px-3 py-2">
       <span data-slot="step-counter" className="whitespace-nowrap text-xs font-medium tabular-nums text-ink">{t("strip.position", { current: selected + 1, total: steps.steps.length })}</span>
       <div className="flex gap-1.5">
-        <Hint text={t("strip.previous")}><Button type="button" variant="ghost" size="icon-sm" aria-label={t("strip.previous")} aria-disabled={selected === 0 || undefined} onClick={() => { if (selected > 0) onStep(selected); }}>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label={t("strip.previous")} aria-disabled={selected === 0 || undefined} onClick={() => { if (selected > 0) onStep(selected); }}>
           <ChevronLeft aria-hidden="true"/>
-        </Button></Hint>
-        <Hint text={t("strip.next")}><Button type="button" variant="ghost" size="icon-sm" aria-label={t("strip.next")} aria-disabled={selected === steps.steps.length - 1 || undefined} onClick={() => { if (selected < steps.steps.length - 1) onStep(selected + 2); }}>
+        </Button>
+        <Button type="button" variant="ghost" size="icon-sm" aria-label={t("strip.next")} aria-disabled={selected === steps.steps.length - 1 || undefined} onClick={() => { if (selected < steps.steps.length - 1) onStep(selected + 2); }}>
           <ChevronRight aria-hidden="true"/>
-        </Button></Hint>
+        </Button>
       </div>
     </div>
     <ScrollArea className="min-w-0 flex-1" orientation="both" viewportProps={{ ref: setViewport, "data-slot": "detail-strip-scroll" }}>

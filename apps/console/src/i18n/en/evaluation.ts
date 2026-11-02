@@ -23,8 +23,6 @@ export default {
   domain: "Domain",
   noDomains: "No domain nodes yet.",
   noSample: "No samples",
-  foldDomain: "Collapse subdomains of {{name}}",
-  unfoldDomain: "Expand subdomains of {{name}}",
   cell: "{{samples}} samples · {{rate}} first pass · {{rework}} rework rounds",
   taskTypes: {
     create: "Create",

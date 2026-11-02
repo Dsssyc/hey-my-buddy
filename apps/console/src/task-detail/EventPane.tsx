@@ -1,8 +1,9 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Section } from "@/components/section";
+import { Section } from "./parts";
 import { actorText, stopActorText } from "../actor";
 import { eventDetails, eventName } from "../macro-task-display";
-import { Facts, Moment, Pane, PaneTitle } from "./parts";
+import { Facts, Fold, Moment, Pane, PaneTitle } from "./parts";
 import { quad } from "./names";
 import type { Step } from "./steps";
 import type { Context } from "./types";
@@ -19,16 +20,14 @@ export function EventPane({ step, ctx }: { step: Step; ctx: Context }) {
   const stopped = event?.kind === "cancel" ? event.actor?.role ?? null : null;
   const note = event ? eventDetails(event) : null;
   const title = step.kind === "cancel" ? eventName(event!) : t(`step.${step.kind}`);
-  return <Pane>
-    <PaneTitle title={title}><Moment at={step.at} itemKey={step.key} label={title} /></PaneTitle>
-    <Section name={t("event.facts")} className="border-t">
+  return <Pane title={
+    <PaneTitle title={title}>{event?.actor && <span>{actorText(event.actor)}</span>}<Moment at={step.at} itemKey={step.key} label={title} /></PaneTitle>}>
+    <Section name={t("event.facts")}>
       {step.kind === "handoff"
         ? <Facts items={[[t("event.from"), quad(step.from) ?? unrecorded, true], [t("event.to"), quad(step.to) ?? unrecorded, true]]} />
         : <Facts items={[
-          [t("decision.who"), event?.actor ? actorText(event.actor) : unrecorded],
-          [t("decision.when"), <Moment key="when" at={step.at} itemKey={step.key} label={eventName(event!)} />],
           ...(stopped ? [[t("event.stoppedBy"), stopActorText(stopped)] as [string, string]] : []),
-          ...(note ? [[t("event.details"), note] as [string, string]] : []),
+          ...(note ? [[t("event.details"), <Fold key="note" text={note} />] as [string, ReactNode]] : []),
         ]} />}
     </Section>
   </Pane>;

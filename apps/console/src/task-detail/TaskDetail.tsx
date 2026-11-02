@@ -22,6 +22,7 @@ import type { SessionClient } from "../session-view/use-session";
 import type { DetailTab } from "./location";
 import { DetailLinks, linkedItems, LinkStyles, scrollToItem } from "./linking";
 import { StepWaits } from "./StepWaits";
+import type { ContentTabs } from "./parts";
 
 type Props = {
   client: TaskDetailClient;
@@ -45,11 +46,11 @@ type Props = {
   onOpenRun: (runId: string, macroTaskId?: string) => void;
 };
 
-function pane(step: Step, ctx: Context) {
+function pane(step: Step, ctx: Context, tabs?: ContentTabs) {
   switch (step.kind) {
     case "delegation": return <DelegationPane step={step} ctx={ctx} />;
-    case "routing": return <RoutingPane step={step} ctx={ctx} />;
-    case "turn": return <TurnPane step={step} ctx={ctx} />;
+    case "routing": return <RoutingPane step={step} ctx={ctx} tabs={tabs} />;
+    case "turn": return <TurnPane step={step} ctx={ctx} tabs={tabs} />;
     case "decision": case "continue": return <DecisionPane step={step} ctx={ctx} />;
     case "acceptance": return <AcceptancePane step={step} ctx={ctx} />;
     default: return <EventPane step={step} ctx={ctx} />;
@@ -162,10 +163,9 @@ export function TaskDetail({ client, sessionClient, tab, onTab, runId, timeline:
       <StepStrip row={row} timeline={timeline!} steps={steps} selected={chosen!} onStep={onStep} nowMs={now} revealRef={revealStrip}/>
     </div>}
     {steps && current && ctx
-      ? <div key={current.key} className="flex min-h-0 min-w-0 flex-1 flex-col">{execution
-        ? <ExecutionTabs routingMode={execution.kind === "routing" ? execution.routing?.routingMode ?? null : undefined} taskText={view.task.task} checkoutRoot={workflow?.cwd ?? view.task.cwd} client={sessionClient} taskId={execution.kind === "routing" ? execution.decisionTaskId! : runId} attemptId={execution.attemptId!}
-          harness={(execution.kind === "routing" ? execution.routing?.routerBuddy?.harness : execution.buddy?.harness) ?? t("unrecorded")} active={active} tab={tab} onTab={onTab}>{pane(current, ctx)}</ExecutionTabs>
-        : pane(current, ctx)}</div>
+      ? <div key={current.key} className="flex min-h-0 min-w-0 flex-1 flex-col">{pane(current, ctx, execution ? children =>
+        <ExecutionTabs routingMode={execution.kind === "routing" ? execution.routing?.routingMode ?? null : undefined} taskText={view.task.task} checkoutRoot={workflow?.cwd ?? view.task.cwd} client={sessionClient} taskId={execution.kind === "routing" ? execution.decisionTaskId! : runId} attemptId={execution.attemptId!}
+          harness={(execution.kind === "routing" ? execution.routing?.routerBuddy?.harness : execution.buddy?.harness) ?? t("unrecorded")} active={active} tab={tab} onTab={onTab}>{children}</ExecutionTabs> : undefined)}</div>
       : <p role="status" className="p-6 text-ink2">{t("loading")}</p>}
   </>);
 }

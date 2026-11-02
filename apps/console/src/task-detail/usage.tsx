@@ -1,7 +1,7 @@
-import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { Hint } from "@/components/hint";
-import { formatCompact, formatNumber } from "../i18n/format";
+import type { TFunction } from "i18next";
+import { formatNumber } from "../i18n/format";
+import { formatCompact } from "../i18n/format";
 import type { TokenUsage } from "../types";
 
 /**
@@ -23,14 +23,14 @@ export function usageLabel(t: TFunction<"taskDetail">, usage: TokenUsage | null)
   ].join(" · ");
 }
 
+/** One execution's own counters. Missing counts stay unknown, never zero. */
 export function Usage({ usage }: { usage: TokenUsage | null }) {
   const { t } = useTranslation("taskDetail");
   const count = (value: number | null | undefined) => (value === null || value === undefined ? t("unknown") : formatCompact(value));
-  return <Hint text={usageLabel(t, usage)}>
-    <span tabIndex={0} className="inline-flex flex-wrap gap-x-3.5 rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+  if (!usage || [usage.inputTokens, usage.outputTokens, usage.cachedInputTokens].every(value => value === null)) return <span className="text-ink3">{t("usage.unrecorded")}</span>;
+  return <span aria-label={usageLabel(t, usage)} className="inline-flex flex-wrap gap-x-3.5">
       <span>{t("usage.inputShort")} {count(usage?.inputTokens)}</span>
       <span>{t("usage.outputShort")} {count(usage?.outputTokens)}</span>
       <span>{t("usage.cacheShort")} {count(usage?.cachedInputTokens)}</span>
-    </span>
-  </Hint>;
+    </span>;
 }

@@ -64,7 +64,7 @@ async function expectDetailWhole(page: Page, { skipTitle = false } = {}) {
   // Events and inquiries share the time scale with bars; the axis and row occupy separate bands.
   await expectWholeAndApart(canvas, strip(page).locator('[data-slot=timeline-axis], [data-slot=timeline-track]'));
   await expectTextUncut(strip(page).locator("text:visible"));
-  await expectWholeAndApart(content(page), content(page).locator(":scope > :not(:last-child), :scope > :last-child > *"));
+  await expectWholeAndApart(content(page), content(page).locator(":scope > :not(:last-child):visible, :scope > :last-child > :visible"));
   await expectTextUncut(pane(page).locator("[data-slot=detail-band] span, [data-slot=detail-live] span"));
   await expectNoSidewaysScroll(page);
   const sideways = await pane(page).locator("[data-slot=scroll-area-viewport]").evaluate(node => node.scrollWidth - node.clientWidth);
@@ -267,7 +267,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
       test("the delegation step: the task, its source, its helpers and its fixes", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/1`);
         await expect(pane(page).getByRole("heading", { name: delegate })).toBeVisible();
-        await expect(pane(page).getByRole("button", { name: /preview-run-a1/ })).toBeVisible();
+        await expect(pane(page).getByRole("button", { name: /preview-run-a1/ })).toHaveCount(0);
         await expect(pane(page).getByRole("button", { name: /schema/ })).toBeVisible();
         await expect(pane(page).getByText("↩")).toBeVisible();
         // A helper is written in the fixed words with a mark, not as the board names its state.
@@ -287,13 +287,13 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(band).toContainText("Router");
         await expect(band).toContainText("dsh / deepseek-official / deepseek-flash / max");
         await expect(band).toContainText(mode);
-        await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText("deepseek-flash");
+        await expect(pane(page)).toContainText("deepseek-flash");
         await expectDetailWhole(page, { skipTitle: true });
       });
 
-      test("a finished turn: the input, its inquiries and their answers, the result and the seal", async ({ page }) => {
+      test("a finished turn: its inquiries and answers, result and seal without repeated input", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/3`);
-        const thread = pane(page).locator("[data-slot=detail-thread]");
+        const thread = pane(page);
         await expect(thread).toContainText("目前读到哪个文件了？");
         await expect(thread).toContainText(answered);
         await expect(thread).toContainText("正在核对");
@@ -301,9 +301,9 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await expect(pane(page).locator("[data-slot=detail-band]")).toContainText("Worker");
         // The seal opens to its evidence.
         await expectDetailWhole(page, { skipTitle: true });
-        // The second turn begins with the Host's continuation input, and ends in a seal that opens to its evidence.
+        // Continuation input belongs to its own step; a later turn retains its result and seal.
         await step(page, turn(2)).click();
-        await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText("路径边界也核对一遍");
+        await expect(pane(page)).not.toContainText("路径边界也核对一遍");
         const seal = pane(page).getByRole("button", { name: new RegExp(locale === "zh-CN" ? "封存" : "Seal") });
         await seal.click();
         await expect(pane(page).getByText("SHA-256").first()).toBeVisible();
@@ -315,10 +315,10 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
 
       test("an inquiry that names no attempt is shown in the turn that came after it", async ({ page }) => {
         await open(page, `#tasks/${A}/preview-run-a1/7`);
-        await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText(ask);
+        await expect(pane(page)).toContainText(ask);
         await expectDetailWhole(page, { skipTitle: true });
         await step(page, turn(1)).click();
-        await expect(pane(page).locator("[data-slot=detail-thread]")).not.toContainText(ask);
+        await expect(pane(page)).not.toContainText(ask);
       });
 
       test("a stop that is not confirmed is written as not confirmed, in the turn and on the strip", async ({ page }) => {
@@ -350,7 +350,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
           return color;
         }));
         expect(await contrastOf(warning)).toBeGreaterThanOrEqual(4.5);
-        await expect(pane(page).locator("[data-slot=detail-thread]")).toContainText(delivered);
+        await expect(pane(page)).toContainText(delivered);
         const live = pane(page).locator("[data-slot=detail-live]");
         await expect(live).toContainText(reported);
         await expect(live).toBeVisible();
@@ -364,7 +364,8 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await open(page, `#tasks/${A}/preview-run-a2`);
         const selected = chosen(page);
         await expect(selected).toHaveAccessibleName(new RegExp(waitingHost));
-        await expect(pane(page).locator("h3").first()).toContainText(locale === "zh-CN" ? "协助请求" : "Assistance request");
+        await expect(pane(page).locator("h3").first()).toContainText(locale === "zh-CN" ? "决定" : "Decision");
+        await expect(pane(page).locator("[data-slot=request-kind]")).toContainText(locale === "zh-CN" ? "协助请求" : "Assistance request");
         await expect(pane(page).getByText(waitingHost).first()).toBeVisible();
         const dashed = await strip(page).locator("[data-slot=host-wait]").last().evaluate(node => node.getAttribute("stroke-dasharray"));
         expect(dashed).toBe("5 4");
@@ -383,6 +384,7 @@ for (const { locale, refresh, turn, delegate, acceptance, running, stuck, overdu
         await open(page, `#tasks/${A}/preview-run-a1/8`);
         await expect(pane(page).locator("h3").first()).toContainText(acceptance);
         await expect(pane(page)).toContainText(integration);
+        await pane(page).getByRole("button", { name: /refs\/heads\/synthetic-preview/ }).click();
         await expect(pane(page)).toContainText("docs/reference/console.md");
         await expect(pane(page)).toContainText("refs/heads/synthetic-preview");
         await expectDetailWhole(page, { skipTitle: true });

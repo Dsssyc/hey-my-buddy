@@ -49,12 +49,12 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
         expect(reported.x).toBeGreaterThanOrEqual(phase.x + phase.width);
         expect(reported.x - phase.x - phase.width).toBeLessThanOrEqual(phase.height);
         expect(Math.abs(reported.y - phase.y)).toBeLessThan(phase.height);
-        await live.getByText("模型输出中").focus();
-        await page.keyboard.press("Tab");
-        await page.keyboard.press("Shift+Tab");
-        await expect(page.getByRole("tooltip").first()).toContainText("最近原生活动");
-        await page.keyboard.press("Escape");
-        await row.getByRole("button", { name: "停止", exact: true }).focus();
+        await live.getByText("模型输出中").hover();
+        await page.waitForTimeout(700);
+        await expect(page.getByRole("tooltip")).toHaveCount(0);
+        const stop = row.getByRole("button", { name: "停止", exact: true });
+        await stop.focus();
+        await expect(stop).toBeFocused();
       } else {
         await expect(row).toContainText("Router 超出了这次调用的时限或工具调用上限。");
         const retry = row.locator('[data-slot="maintenance-retry"]');

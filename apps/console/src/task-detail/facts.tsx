@@ -1,14 +1,12 @@
 import { useState } from "react";
-import type { ReactNode } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { actorRoleText, stopActorText } from "../actor";
 import { formatCoolingTime, formatList } from "../i18n/format";
 import { quad } from "./names";
-import { Lines } from "./parts";
-import type { Basis, Ending, Session } from "./types";
+import { Paths } from "./parts";
+import type { Basis, Ending } from "./types";
 
 /** Why an execution did not end as it should: the cause, who stopped it and why, a native limit. */
 export function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
@@ -21,19 +19,6 @@ export function endingText(ending: Ending, t: TFunction<"taskDetail">): string {
     ending.actor ? `${actorRoleText(ending.actor.role)} · ${ending.actor.id}` : null,
     ending.note,
     ending.rejectionCode ? t(`providerRejection.${ending.rejectionCode}`) : null,
-  ].filter(Boolean).join(" · ");
-}
-
-/** Where an execution's native session is kept, who holds it, whether the native app lists it, and whether it can be resumed: the receipt's own words, or unknown. */
-export function sessionHint(session: Session | null, t: TFunction<"taskDetail">): string {
-  const known = (value: string | null, group: "storage" | "owner" | "visibility", unknown: "session.storageUnknown" | "session.visibilityUnknown") => (value ? t(`session.${group}.${value}`, { defaultValue: value }) : t(unknown));
-  return [
-    known(session?.scope ?? null, "storage", "session.storageUnknown"),
-    session?.owner ? known(session.owner, "owner", "session.storageUnknown") : null,
-    known(session?.visibility ?? null, "visibility", "session.visibilityUnknown"),
-    session?.resumable != null ? t(session.resumable ? "session.resumable" : "session.notResumable") : null,
-    session?.binding != null ? t(session.binding ? "session.bound" : "session.unbound") : null,
-    session?.note ?? null,
   ].filter(Boolean).join(" · ");
 }
 
@@ -59,21 +44,6 @@ function basisLines(basis: Basis, t: TFunction<"taskDetail">): string[] {
   ];
 }
 
-/** The word that says how the buddy came to be the one; with the frozen bounds, where they were recorded, on hover and focus. */
-export function Origin({ basis, children }: { basis: Basis | null; children: ReactNode }) {
-  const { t } = useTranslation("taskDetail");
-  const lines = basis ? basisLines(basis, t) : [];
-  if (lines.length === 0) return <>{children}</>;
-  return <Tooltip>
-    <TooltipTrigger asChild>
-      <span tabIndex={0} className="rounded-sm underline decoration-dotted underline-offset-2 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{children}</span>
-    </TooltipTrigger>
-    <TooltipContent className="max-w-96 text-left text-pretty">
-      <ul className="space-y-1">{lines.map(line => <li key={line} className="wrap-anywhere">{line}</li>)}</ul>
-    </TooltipContent>
-  </Tooltip>;
-}
-
 /** The same bounds, folded under a route's result. */
 export function BasisFold({ basis }: { basis: Basis }) {
   const { t } = useTranslation("taskDetail");
@@ -84,6 +54,6 @@ export function BasisFold({ basis }: { basis: Basis }) {
     <CollapsibleTrigger className="inline-flex items-center gap-1 rounded-sm text-xs">
       <Disclosure open={open} />{t("basis.name")}
     </CollapsibleTrigger>
-    <CollapsibleContent><Lines items={lines} className="mt-1.5 text-ink2" /></CollapsibleContent>
+    <CollapsibleContent><div className="mt-1.5 text-ink2"><Paths items={lines} /></div></CollapsibleContent>
   </Collapsible>;
 }

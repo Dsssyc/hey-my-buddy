@@ -1,9 +1,12 @@
 import { reasonText } from "../i18n/reason";
 import { useTranslation } from "react-i18next";
+import type { ReactNode } from "react";
 import { useContext } from "react";
-import { Section } from "@/components/section";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
+import { CopyableIdentifier } from "../components/CopyableIdentifier";
+import { Section } from "./parts";
 import { actorText } from "../actor";
-import { Facts, Fold, Lines, Moment, Pane, PaneTitle } from "./parts";
+import { Facts, Fold, Paths, Moment, Pane, PaneTitle } from "./parts";
 import type { Step } from "./steps";
 import type { Context } from "./types";
 import { DetailItem, DetailLinks } from "./linking";
@@ -11,7 +14,6 @@ import { eventDetails, eventName } from "../macro-task-display";
 
 const FINAL_KINDS = ["output", "resolved-output"];
 const short = (value: string | null, length = 8) => (value ? value.slice(0, length) : null);
-const ellipsis = (hash: string) => `${hash.slice(0, 8)}…${hash.slice(-4)}`;
 
 /**
  * The end of a micro task: the output it was accepted on and the evidence that
@@ -41,50 +43,66 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
       ? event.integrationId === integration?.integrationId : when && Date.parse(event.at) === Date.parse(when)));
     return event ? `event:${event.seq}` : undefined;
   };
+  const actor = !accepted && !rejectedAt ? conclusion?.actor : step.events.find(event => event.kind === (accepted ? "accept" : "reject"))?.actor;
   const acceptanceKey = keyFor("accept", row?.acceptedAt ?? task.acceptedAt);
   const integrationKey = keyFor("integrate", integration?.createdAt);
   const rejectionKey = keyFor("reject", rejectedAt);
   const conclusionKey = keyFor("conclude", conclusion?.createdAt);
   const shown = new Set([acceptanceKey, artifact ? integrationKey : undefined, rejectedAt ? rejectionKey : undefined, conclusion ? conclusionKey : undefined]);
   const otherEvents = step.events.filter(event => links.items.has(`event:${event.seq}`) && !shown.has(`event:${event.seq}`));
-  return <Pane>
+  return <Pane title={
     <DetailItem itemKey={acceptanceKey} label={t("step.acceptance")}>
     <PaneTitle title={t("step.acceptance")} state={state} tone={step.pending ? "hand" : "past"}>
+      {actor && <span>{actorText(actor)}</span>}
       {settledAt && <Moment at={settledAt} itemKey={accepted ? acceptanceKey : rejectedAt ? rejectionKey : conclusionKey} label={t("step.acceptance")} />}
     </PaneTitle>
-    </DetailItem>
+    </DetailItem>}>
     {otherEvents.map(event => <DetailItem key={event.seq} itemKey={`event:${event.seq}`} label={eventName(event)} className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 border-b px-6 py-3 text-xs text-ink2">
       <span>{eventName(event)}</span><Moment at={event.at} itemKey={`event:${event.seq}`} label={eventName(event)}/>
       {eventDetails(event) && <span className="min-w-0 wrap-anywhere">{eventDetails(event)}</span>}
     </DetailItem>)}
-    {artifact && <Section name={t("acceptance.artifact")} className="border-t">
-      <Facts items={[
-        [t("seal.commit"), artifact.outputCommit ?? unrecorded, true],
-        [t("acceptance.files"), String(artifact.changedPaths.length >= 32 ? "32+" : artifact.changedPaths.length)],
-        [t("seal.sha"), ellipsis(artifact.manifestSha256), true],
-      ]} />
+    {artifact && <Section name={t("acceptance.artifact")}>
+      <Collapsible>
+        <CollapsibleTrigger className="inline-flex max-w-full flex-wrap items-baseline gap-x-2 text-left text-sm">
+          <Disclosure open={false} className="self-center [[data-state=open]>&]:rotate-90" />
+          <code className="font-mono text-xs">{short(artifact.outputCommit, 12) ?? unrecorded}</code>
+          <span className="text-ink3">· {t("seal.files", { n: artifact.changedPaths.length >= 32 ? "32+" : artifact.changedPaths.length })}</span>
+        </CollapsibleTrigger>
+        <CollapsibleContent><div className="pt-3"><Facts items={[
+          [t("seal.commit"), artifact.outputCommit ? <CopyableIdentifier key="commit" value={artifact.outputCommit} /> : unrecorded],
+          [t("seal.sha"), artifact.manifestSha256, true],
+          [t("seal.paths"), <Paths key="paths" items={artifact.changedPaths} />],
+        ]} /></div></CollapsibleContent>
+      </Collapsible>
     </Section>}
-    {artifact && <DetailItem itemKey={integrationKey} label={t("acceptance.integration")} className="border-b last:border-b-0"><Section name={t("acceptance.integration")}>
-      {integration ? <div className="space-y-3">
-        <Facts items={[
-          [t("acceptance.state"), integration.state === "not-required" ? t("acceptance.notRequired") : t("acceptance.verified")],
-          ...(integration.state === "not-required" && integration.note ? [[t("acceptance.why"), integration.note] as [string, string]] : []),
-          ...(integration.state !== "not-required" ? [
-            [t("acceptance.strategy"), integration.strategy] as [string, string],
-            ...(integration.target ? [[t("acceptance.target"), `${integration.target.path} @ ${integration.target.ref}`, true] as [string, string, boolean]] : []),
-            ...(integration.beforeCommit && integration.afterCommit ? [[t("acceptance.commits"), `${short(integration.beforeCommit)} → ${short(integration.afterCommit)}`, true] as [string, string, boolean]] : []),
-          ] : []),
-          [t("acceptance.recordedBy"), <span key="by">{integration.actor ? actorText(integration.actor) : unrecorded} · <Moment at={integration.createdAt} itemKey={integrationKey} label={t("acceptance.integration")} /></span>],
-        ]} />
-        {integration.hostPaths.length > 0 && <div>
-          <p className="mb-1.5 text-xs text-ink3">{t("acceptance.hostPaths", { n: integration.hostPaths.length })}</p>
-          <Lines items={integration.hostPaths} className="font-mono text-xs" />
-        </div>}
-      </div> : <p className="text-ink2">{t("acceptance.noIntegration")}</p>}
+    {artifact && <DetailItem itemKey={integrationKey} label={t("acceptance.integration")}><Section name={t("acceptance.integration")}>
+      {integration ? <Collapsible>
+        <CollapsibleTrigger className="inline-flex max-w-full flex-wrap items-baseline gap-x-2 text-left text-sm">
+          <Disclosure open={false} className="self-center [[data-state=open]>&]:rotate-90" />
+          <span>{t(integration.state === "not-required" ? "acceptance.notRequired" : "acceptance.verified")}</span>
+          {integration.target?.ref && <code className="font-mono text-xs text-ink3">· {integration.target.ref}</code>}
+        </CollapsibleTrigger>
+        <CollapsibleContent><div className="space-y-3 pt-3">
+          <Facts items={[
+            ...(integration.state !== "not-required" ? [
+              [t("acceptance.strategy"), integration.strategy] as [string, string],
+              ...(integration.target ? [[t("acceptance.target"), `${integration.target.path} @ ${integration.target.ref}`, true] as [string, string, boolean]] : []),
+              ...(integration.beforeCommit && integration.afterCommit ? [[t("acceptance.commits"), `${short(integration.beforeCommit)} → ${short(integration.afterCommit)}`, true] as [string, string, boolean]] : []),
+            ] : []),
+            [t("acceptance.recordedBy"), <span key="by">{integration.actor ? actorText(integration.actor) : unrecorded} · <Moment at={integration.createdAt} itemKey={integrationKey} label={t("acceptance.integration")} /></span>],
+          ]} />
+          {integration.note && <Fold text={integration.note} />}
+          {integration.hostPaths.length > 0 && <div>
+            <p className="mb-1.5 text-xs text-ink3">{t("acceptance.hostPaths", { n: integration.hostPaths.length })}</p>
+            <Paths items={integration.hostPaths} />
+          </div>}
+        </div></CollapsibleContent>
+      </Collapsible> : <p className="text-ink2">{t("acceptance.noIntegration")}</p>}
     </Section></DetailItem>}
+    {accepted && view.acceptanceNote && <Section name={t("acceptance.note")}><Fold text={view.acceptanceNote} /></Section>}
     {rejectedAt && <DetailItem itemKey={rejectionKey} label={t("acceptance.rejection")} className="border-b last:border-b-0"><Section name={t("acceptance.rejection")}>
       <Facts items={[
-        [t("decision.when"), <Moment key="at" at={rejectedAt} itemKey={rejectionKey} label={t("acceptance.rejection")} />],
+        ...(rejectedAt !== settledAt ? [[t("acceptance.recordedAt"), <Moment key="at" at={rejectedAt} itemKey={rejectionKey} label={t("acceptance.rejection")} />] as [string, ReactNode]] : []),
         [t("acceptance.note"), rejection ? <Fold key="note" text={rejection} /> : unrecorded],
       ]} />
     </Section></DetailItem>}
@@ -92,7 +110,6 @@ export function AcceptancePane({ step, ctx }: { step: Step; ctx: Context }) {
       <div className="space-y-3">
         <Facts items={[
           [t("acceptance.outcome"), `${t(`acceptance.status.${conclusion.executionStatus}`, { defaultValue: conclusion.executionStatus })} · ${t("acceptance.notCounted")}`],
-          [t("acceptance.recordedBy"), <span key="by">{conclusion.actor ? actorText(conclusion.actor) : unrecorded} · <Moment at={conclusion.createdAt} itemKey={conclusionKey} label={t("acceptance.conclusion")} /></span>],
           [t("acceptance.version"), conclusion.runRevision === null ? unrecorded : `V${conclusion.runRevision}`],
           ...(conclusion.attemptId ? [[t("acceptance.attempt"), conclusion.attemptId, true] as [string, string, boolean]] : []),
           ...(conclusion.artifactId ? [[t("acceptance.artifactRef"), conclusion.artifactId, true] as [string, string, boolean]] : []),

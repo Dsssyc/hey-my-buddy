@@ -124,3 +124,14 @@ describe("buddy-kind evaluation", () => {
     expect(screen.queryByRole("table")).toBeNull();
   });
 });
+
+
+it("renders the kind summary as Markdown and leaves domain disclosure without a hover hint", async () => {
+  const user = userEvent.setup();
+  const view = show({ evaluation: { ...evaluation, summary: { ...evaluation.summary!, text: "## 类别总结\n\n- 适合 **调试** `parser.ts`" } }, domains });
+  await user.click(screen.getByRole("button", { name: /评价与领域经验/ }));
+  expect(screen.getByRole("heading", { name: "类别总结" })).toBeTruthy();
+  expect(view.container.querySelector("li code")?.textContent).toBe("parser.ts");
+  await user.hover(screen.getByRole("button", { name: "后端" }));
+  expect(screen.queryByRole("tooltip")).toBeNull();
+});

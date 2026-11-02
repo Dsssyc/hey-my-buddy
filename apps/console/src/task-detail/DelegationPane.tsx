@@ -1,17 +1,14 @@
 import { cn } from "cn";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Hint } from "@/components/hint";
-import { Section } from "@/components/section";
+import { Section } from "./parts";
 import { StateMark } from "@/components/ui/state-mark";
-import { CopyableIdentifier } from "../components/CopyableIdentifier";
 import { actorText, workflowOwnerText } from "../actor";
 import { taskHost, taskProject } from "../console-data";
 import { displayTitle } from "../macro-task-display";
 import type { Step } from "./steps";
 import { Ask } from "./ask";
 import { Facts, Fold, LinkButton, Moment, Pane, PaneTitle } from "./parts";
-import { Thread } from "./thread";
 import type { Context } from "./types";
 
 /** The word and the mark a helper micro task's state has. */
@@ -39,30 +36,35 @@ export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
   const fixes = row?.fixes ?? null;
   const fixedBy = row?.fixedBy ?? [];
   const sender = step.events[0]?.actor;
+  const owner = workflowOwnerText(task, workflow.hostId);
+  const original = taskHost(task);
+  const leadId = task.lineage?.leadOwnership?.leadRunId ?? task.lineage?.rootLeadRunId ?? null;
+  const originalId = task.lineage?.sourceHostId ?? leadId;
+  const ownerId = task.lineage?.currentHostId ?? workflow.hostId ?? task.workflow?.hostId ?? leadId;
+  const transferred = originalId !== null && ownerId !== null && originalId !== ownerId;
   const asked = ctx.asked.delegation ?? [];
-  return <Pane>
+  return <Pane title={
     <PaneTitle title={t("step.delegation")}>
-      <span>{sender ? actorText(sender) : null}</span>
+      <span>{sender ? actorText(sender) : original}</span>
       <Moment at={step.at ?? task.createdAt} />
-    </PaneTitle>
-    <Section name={t("delegation.task")} className="border-t"><Fold text={task.task} limit={400} /></Section>
-    <Section name={t("delegation.source")}>
+    </PaneTitle>}>
+    <Section name={t("delegation.task")}><Fold text={task.task} /></Section>
+    {transferred && <Section name={t("delegation.source")}>
       <Facts items={[
-        [t("delegation.originalDelegator"), taskHost(task)],
-        [t("delegation.currentOwner"), workflowOwnerText(task, workflow.hostId)],
-        [t("delegation.project"), <Hint key="project" text={project?.path ?? undefined}><span tabIndex={0} className="rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{project?.label ?? t("delegation.unknownProject")}</span></Hint>],
-        [t("delegation.id"), <CopyableIdentifier key="id" value={task.runId} />],
-        ...(parent ? [[t("delegation.parent"), <LinkButton key="parent" hint={parent} onClick={() => ctx.open(parent)}>{title(parent)}</LinkButton>] as [string, ReactNode]] : []),
-        [t("delegation.cwd"), workflow.cwd ?? task.cwd, true],
-        ...(workflow.delegationAuthority ? [[t("delegation.authority"), t("delegation.authorityYes")] as [string, string]] : []),
+        ...(originalId !== sender?.id ? [[t("delegation.originalDelegator"), original] as [string, string]] : []),
+        ...(ownerId !== sender?.id ? [[t("delegation.currentOwner"), owner] as [string, string]] : []),
       ]} />
-    </Section>
+    </Section>}
+    <Section name={t("delegation.project")}>{project?.label ?? t("delegation.unknownProject")}</Section>
+    <Section name={t("delegation.cwd")}><span className="font-mono text-xs">{workflow.cwd ?? task.cwd}</span></Section>
+    {parent && <Section name={t("delegation.parent")}><LinkButton onClick={() => ctx.open(parent)}>{title(parent)}</LinkButton></Section>}
+    {workflow.delegationAuthority && <Section name={t("delegation.authority")}>{t("delegation.authorityYes")}</Section>}
     {workflow.children.some(child => child.role !== "router") && <Section name={t("delegation.helpers")}>
       <ul className="space-y-1.5">{workflow.children.filter(child => child.role !== "router").map(child => {
         const word = HELPER_WORD[child.state];
         return <li key={child.taskId} className="flex flex-wrap items-center gap-x-2">
           <StateMark kind={word.mark} />
-          <LinkButton hint={child.taskId} onClick={() => ctx.open(child.taskId)}>{title(child.taskId)}</LinkButton>
+          <LinkButton onClick={() => ctx.open(child.taskId)}>{title(child.taskId)}</LinkButton>
           <span className={cn("text-xs", word.mark === "hand" ? "text-hand" : word.mark === "fail" ? "text-fail" : "text-ink2")}>
             {t(`state.${word.key === "attention" ? (view.lead ? "lead" : "host") : word.key}`)}
           </span>
@@ -72,14 +74,14 @@ export function DelegationPane({ step, ctx }: { step: Step; ctx: Context }) {
     {(fixes || fixedBy.length > 0) && <Section name={t("delegation.fixes")}>
       <ul className="space-y-1.5">
         {fixes && <li className="flex items-baseline gap-1.5"><span aria-hidden="true" className="text-ink3">↪</span>
-          <span className="sr-only">{t("delegation.fixesTarget")}</span><LinkButton hint={fixes} onClick={() => ctx.open(fixes)}>{title(fixes)}</LinkButton></li>}
+          <span className="sr-only">{t("delegation.fixesTarget")}</span><LinkButton onClick={() => ctx.open(fixes)}>{title(fixes)}</LinkButton></li>}
         {fixedBy.length > 0 && <li className="flex items-baseline gap-1.5"><span aria-hidden="true" className="text-ink3">↩</span>
           <span className="tabular-nums">{t("delegation.fixedBy", { n: fixedBy.length })}</span>
-          <span className="flex flex-wrap gap-x-3">{fixedBy.map(id => <LinkButton key={id} hint={id} onClick={() => ctx.open(id)}>{title(id)}</LinkButton>)}</span></li>}
+          <span className="flex flex-wrap gap-x-3">{fixedBy.map(id => <LinkButton key={id} onClick={() => ctx.open(id)}>{title(id)}</LinkButton>)}</span></li>}
       </ul>
     </Section>}
     {asked.length > 0 && <Section name={t("delegation.inquiries")}>
-      <Thread className="px-0">{asked.map(inquiry => <Ask key={inquiry.messageId} inquiry={inquiry} />)}</Thread>
+      <div className="space-y-4">{asked.map(inquiry => <Ask key={inquiry.messageId} inquiry={inquiry} />)}</div>
     </Section>}
   </Pane>;
 }

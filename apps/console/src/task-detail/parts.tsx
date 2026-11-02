@@ -1,10 +1,11 @@
 import { cn } from "cn";
-import { useContext, useState } from "react";
+import { useContext, useId, useLayoutEffect, useRef, useState } from "react";
+import type { Root, PhrasingContent } from "mdast";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Collapsible, CollapsibleTrigger, Disclosure } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Hint } from "@/components/hint";
+import { MessageResponse } from "../session-view/Markdown";
 import { formatClock, formatMoment } from "../i18n/format";
 import { DetailItem, DetailLinks, ItemTime } from "./linking";
 
@@ -36,7 +37,7 @@ export function MomentRange({ start, end, itemKey, label = "" }: { start: number
 export function PaneTitle({ title, state, tone = "past", warnings = [], note, children }: {
   title: string; state?: string; tone?: "past" | "live" | "hand" | "fail"; warnings?: string[]; note?: ReactNode; children?: ReactNode;
 }) {
-  return <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 px-6 pt-6 pb-3.5">
+  return <div data-slot="pane-title" className="flex shrink-0 flex-wrap items-baseline gap-x-2.5 gap-y-1 px-6 pt-4 pb-2">
     <h3 className="text-base font-semibold">{title}</h3>
     {state && <span className={cn("text-xs", tone === "past" ? "text-ink2" : tone === "live" ? "text-ink state-breathe" : tone === "hand" ? "text-hand" : "text-fail")}>{state}</span>}
     {warnings.map(word => <span key={word} className="text-xs text-hand">{word}</span>)}
@@ -45,28 +46,38 @@ export function PaneTitle({ title, state, tone = "past", warnings = [], note, ch
   </div>;
 }
 
-/** What one step has to say, scrolled; a footer stays under it. */
-export function Pane({ children, footer }: { children: ReactNode; footer?: ReactNode }) {
+/** Header and waits stay above the execution tabs; only the chosen content scrolls. */
+export type ContentTabs = (content: ReactNode) => ReactNode;
+export function Pane({ title, children, footer, tabs }: { title: ReactNode; children: ReactNode; footer?: ReactNode; tabs?: ContentTabs }) {
   const links = useContext(DetailLinks);
+  const content = <ScrollArea className="min-h-0 flex-1"><div className="w-0 min-w-full py-3">{children}</div></ScrollArea>;
   return <section data-slot="detail-pane" className="flex min-h-0 min-w-0 flex-1 flex-col bg-card">
-    <ScrollArea className="min-h-0 flex-1"><div className="w-0 min-w-full pb-4">{links?.waits}{links
-      ? <DetailItem itemKey={links.stepKey || undefined}>{children}</DetailItem> : children}</div></ScrollArea>
+    <DetailItem itemKey={links?.stepKey || undefined} className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {title}
+      {links?.waits}
+      {tabs ? tabs(content) : content}
+    </DetailItem>
     {footer}
   </section>;
 }
 
-/** The pale band that opens a pane: who did it, then what it cost. */
-export function Band({ role, plain = false, identity, end, second, secondEnd }: {
-  role: string; plain?: boolean; identity?: ReactNode; end?: ReactNode; second?: ReactNode; secondEnd?: ReactNode;
+/** Step facts share one label column, without nesting panels. */
+export function Section({ name, children, className }: { name: string; children: ReactNode; className?: string }) {
+  const id = useId();
+  return <div data-slot="section" role="group" aria-labelledby={id} className={cn("grid grid-cols-[84px_minmax(0,1fr)] items-baseline gap-x-4 gap-y-2 px-6 py-1.5 text-sm leading-[1.7] max-sm:grid-cols-[64px_minmax(0,1fr)]", className)}>
+    <span id={id} className="text-xs text-ink3">{name}</span><div className="min-w-0 wrap-anywhere">{children}</div>
+  </div>;
+}
+
+/** Who ran an execution and its usage, in the same label column as the other facts. */
+export function Band({ role, identity, end, second, secondEnd }: {
+  role: string; identity?: ReactNode; end?: ReactNode; second?: ReactNode; secondEnd?: ReactNode;
 }) {
-  return <div data-slot="detail-band" className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-baseline gap-x-2.5 gap-y-1 border-y bg-sunk px-6 py-2.5 text-xs">
-    <span className={cn("leading-[18px]", plain ? "px-0.5 text-ink2" : "rounded-sm border border-ink2 px-[7px] font-medium")}>{role}</span>
-    <span className="min-w-0 font-mono wrap-anywhere">{identity}</span>
-    <span className="text-right text-ink2">{end}</span>
-    {(second || secondEnd) && <div className="col-span-2 col-start-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-ink2">
-      {second && <span className="min-w-0 tabular-nums">{second}</span>}
-      {secondEnd && <span className="ml-auto text-ink3">{secondEnd}</span>}
-    </div>}
+  const { t } = useTranslation("taskDetail");
+  return <div data-slot="detail-band">
+    <Section name={role}><span className="font-mono text-xs">{identity}</span>{end && <span className="ml-2 text-xs text-ink3">{end}</span>}</Section>
+    {second && <Section name={t("usage.name")}>{second}</Section>}
+    {secondEnd && <Section name={t("session.name")}>{secondEnd}</Section>}
   </div>;
 }
 
@@ -80,39 +91,60 @@ export function Facts({ items }: { items: [name: string, value: ReactNode, mono?
   </dl>;
 }
 
-/** The head of a long text, cut where a line or a word ends so that it reads as a whole; null when the text is short. */
-function head(text: string, limit: number): string | null {
-  if (text.length <= limit) return null;
-  const cut = text.lastIndexOf("\n", limit) > limit / 2 ? text.lastIndexOf("\n", limit) : text.lastIndexOf(" ", limit) > limit / 2 ? text.lastIndexOf(" ", limit) : limit;
-  return text.slice(0, cut).trimEnd();
-}
-
-/** A text that is long is folded after its head, and unfolds on a click, in the same paragraph. */
-export function Fold({ text, limit = 280, className }: { text: string; limit?: number; className?: string }) {
+/** Keep the complete Markdown tree mounted; fold its rendered height after about eight lines. */
+export function Fold({ text, className }: { text: string; className?: string }) {
   const { t } = useTranslation("taskDetail");
   const [open, setOpen] = useState(false);
-  const first = head(text, limit);
-  const paragraph = cn("whitespace-pre-wrap wrap-anywhere", className);
-  if (first === null) return <p className={paragraph}>{text}</p>;
-  return <Collapsible open={open} onOpenChange={setOpen}>
-    <p className={paragraph}>{open ? text : `${first}…`}</p>
-    <CollapsibleTrigger className="mt-1 inline-flex items-center gap-1 rounded-sm text-xs">
+  const [long, setLong] = useState(false);
+  const contentId = useId();
+  const body = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => { setOpen(false); }, [text]);
+  useLayoutEffect(() => {
+    const node = body.current!;
+    const measure = () => setLong(node.scrollHeight > parseFloat(getComputedStyle(node).lineHeight) * 8 + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [text]);
+  return <Collapsible data-slot="fold" open={open} onOpenChange={setOpen} className={cn("min-w-0 text-sm leading-[1.7]", className)}>
+    <div id={contentId} data-slot="fold-body" data-folded={long && !open} ref={body}
+      className={cn("min-w-0 wrap-anywhere", long && !open && "max-h-[13.6em] overflow-hidden [mask-image:linear-gradient(#000_70%,transparent)]")}>
+      <MessageResponse className="[&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_h1]:text-base [&_h2]:text-sm [&_h3]:text-sm">{text}</MessageResponse>
+    </div>
+    {long && <CollapsibleTrigger aria-controls={contentId} className="mt-1 inline-flex items-center gap-1 rounded-sm text-xs text-ink2">
       <Disclosure open={open} />{open ? t("fold.less") : t("fold.more")}
-    </CollapsibleTrigger>
+    </CollapsibleTrigger>}
   </Collapsible>;
+}
+
+/** Keep only phrasing markup in a short list item; block containers are flattened. */
+function inlineMarkdown() {
+  return (tree: Root) => {
+    const phrasing = new Set(["text", "emphasis", "strong", "delete", "inlineCode", "link", "linkReference", "break", "image", "imageReference"]);
+    const flatten = (nodes: Root["children"]): PhrasingContent[] => nodes.flatMap(node => {
+      if (phrasing.has(node.type)) return [node as PhrasingContent];
+      if ("children" in node) return flatten(node.children as Root["children"]);
+      return "value" in node ? [{ type: "text" as const, value: node.value }] : [];
+    });
+    tree.children = [{ type: "paragraph", children: flatten(tree.children) }];
+  };
 }
 
 /** One list of short lines under a name, as a request or a remainder lists them. */
 export function Lines({ items, className }: { items: string[]; className?: string }) {
-  return <ul className={cn("space-y-1", className)}>{items.map((item, index) => <li key={index} className="relative pl-3.5 wrap-anywhere before:absolute before:top-[0.7em] before:left-0.5 before:h-[1.5px] before:w-[5px] before:bg-ink3">{item}</li>)}</ul>;
+  return <ul className={cn("space-y-1", className)}>{items.map((item, index) => <li key={index} className="relative pl-3.5 wrap-anywhere before:absolute before:top-[0.7em] before:left-0.5 before:h-[1.5px] before:w-[5px] before:bg-ink3"><MessageResponse remarkPlugins={[inlineMarkdown]} className="[&_p]:inline [&_p]:leading-inherit">{item}</MessageResponse></li>)}</ul>;
+}
+
+/** Paths are product facts and never interpreted as Markdown. */
+export function Paths({ items }: { items: string[] }) {
+  return <ul className="space-y-1 font-mono text-xs">{items.map((item, index) => <li key={index} className="wrap-anywhere">{item}</li>)}</ul>;
 }
 
 /** A name that goes to the thing it names: another micro task's detail. */
-export function LinkButton({ children, hint, onClick }: { children: ReactNode; hint?: string; onClick: () => void }) {
-  return <Hint text={hint}>
-    <button type="button" onClick={onClick}
+export function LinkButton({ children, onClick }: { children: ReactNode; onClick: () => void }) {
+  return <button type="button" onClick={onClick}
       className="min-w-0 rounded-sm text-left underline decoration-line2 underline-offset-2 outline-none transition-colors duration-150 hover:decoration-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 motion-reduce:transition-none">
       {children}
-    </button>
-  </Hint>;
+    </button>;
 }

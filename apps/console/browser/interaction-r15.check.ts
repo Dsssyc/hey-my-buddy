@@ -91,7 +91,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
   });
 });
 
-test("retains the name heading inset and lane totals beside a detail, and aligns copied IDs with other facts", async ({ page }) => {
+test("retains the name heading inset and lane totals beside a detail, and aligns its fact values without repeating the ID", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const beta = "macro-22222222-2222-4222-8222-222222222222";
   await open(page, `#tasks/${beta}`);
@@ -102,14 +102,14 @@ test("retains the name heading inset and lane totals beside a detail, and aligns
   await page.locator('[data-slot=task-names] [data-run-id="preview-run-b1"][data-slot=timeline-row-name]').hover();
   await expect(page.getByRole("tooltip")).toContainText("3 个微任务");
   await page.evaluate(hash => { window.location.hash = hash; }, `#tasks/${macro}/preview-run-a1/1`);
-  const id = page.locator('[data-slot=detail-pane] button[aria-label*="preview-run-a1"]').first();
-  await expect(id).toBeVisible();
-  const geometry = await id.evaluate(button => {
-    const cell = button.closest("dd")!.getBoundingClientRect();
-    const text = button.querySelector("span")!.getBoundingClientRect();
-    const box = button.getBoundingClientRect();
-    return { text: text.left, cell: cell.left, hit: box.left };
-  });
-  expect(Math.abs(geometry.text - geometry.cell)).toBeLessThanOrEqual(1);
-  expect(geometry.text - geometry.hit).toBeGreaterThanOrEqual(8);
+  const pane = page.locator('[data-slot=detail-pane]');
+  await expect(pane.locator('button[aria-label*="preview-run-a1"]')).toHaveCount(0);
+  await expect(page.locator('[data-slot=detail-header] button[aria-label*="preview-run-a1"]')).toBeVisible();
+  const project = pane.getByRole("group", { name: "项目", exact: true });
+  const location = pane.getByRole("group", { name: "执行位置", exact: true });
+  const [projectValue, locationValue, projectLabel] = await Promise.all([
+    project.locator(":scope > div").boundingBox(), location.locator(":scope > div").boundingBox(), project.locator(":scope > span").boundingBox(),
+  ]);
+  expect(Math.abs(projectValue!.x - locationValue!.x)).toBeLessThanOrEqual(1);
+  expect(projectValue!.x - projectLabel!.x - projectLabel!.width).toBeGreaterThanOrEqual(12);
 });
