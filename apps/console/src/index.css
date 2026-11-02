@@ -207,17 +207,18 @@
   overscroll-behavior: contain;
   padding: 0 24px 18px;
 }
-.goal-history { min-width: 0; border-left: 1px solid var(--line); padding-left: 20px; }
-.goal-version { position: relative; display: block; width: 100%; padding: 0 0 16px 18px; text-align: left; outline: none; transition: color 150ms, background-color 150ms; }
-.goal-version::before { content: ""; position: absolute; left: 4px; top: 14px; bottom: -2px; width: 1px; background: var(--line2); }
+.goal-history { --goal-version-inset: 10px; --goal-version-padding: 8px; min-width: 0; border-left: 1px solid var(--line); padding-left: 20px; }
+.goal-history > h3 { padding-left: var(--goal-version-inset); }
+.goal-version { position: relative; display: block; width: 100%; padding: var(--goal-version-padding) var(--goal-version-inset) var(--goal-version-padding) calc(var(--goal-version-inset) + 18px); text-align: left; outline: none; transition: color 150ms, background-color 150ms; }
+.goal-version::before { content: ""; position: absolute; z-index: 1; left: calc(var(--goal-version-inset) + 4px); top: calc(var(--goal-version-padding) + 9.5px); bottom: calc(-1 * (var(--goal-version-padding) + 9.5px)); width: 1px; background: var(--line2); }
 .goal-version:last-child::before { display: none; }
-.goal-version-dot { position: absolute; left: 0; top: 5px; width: 9px; height: 9px; border: 1.5px solid var(--ink3); border-radius: 50%; background: var(--popover-ground); }
+.goal-version-dot { position: absolute; z-index: 1; left: var(--goal-version-inset); top: calc(var(--goal-version-padding) + 5px); width: 9px; height: 9px; border: 1.5px solid var(--ink3); border-radius: 50%; background: var(--popover-ground); }
 .goal-version[data-current="true"] .goal-version-dot { background: var(--ink); border-color: var(--ink); }
 .goal-version:hover, .goal-version[aria-pressed="true"] { background: var(--selected-row); }
 .goal-version:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
 @container (width < 600px) {
   .goal-scroll { grid-template-columns: minmax(0, 1fr) 110px; gap: 12px; }
-  .goal-history { padding-left: 10px; }
+  .goal-history { --goal-version-inset: 8px; --goal-version-padding: 6px; padding-left: 10px; }
   .goal-version time { display: block; margin-left: 0; }
 }
 @container (width < 480px) { .goal-card { left: 12px; right: 12px; } }
