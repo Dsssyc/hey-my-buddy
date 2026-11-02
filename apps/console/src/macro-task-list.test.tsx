@@ -105,9 +105,9 @@ describe("macro task list", () => {
     expect(entries.map(entry => entry.querySelector('[data-slot="state-mark"]')?.getAttribute("data-kind") ?? null)).toEqual(["hand", "live", "fail", null]);
     expect(entries.every(entry => ![...entry.classList].some(name => name.startsWith("before:")))).toBe(true);
     expect(entries.every(entry => !entry.querySelector('[data-slot="macro-entry-counts"]'))).toBe(true);
-    expect(entries.every(entry => entry.classList.contains("h-8"))).toBe(true);
+    expect(entries.every(entry => entry.classList.contains("h-7"))).toBe(true);
     expect(entries.every(entry => entry.querySelector("time") === null)).toBe(true);
-    expect(entries.every(entry => entry.querySelector('[data-slot="macro-entry-title"]')?.classList.contains("truncate"))).toBe(true);
+    expect(entries.every(entry => entry.querySelector('[data-slot="macro-entry-title"]')?.classList.contains("sidebar-label"))).toBe(true);
     expect(within(entries[0]!).getByText("等待 Host", { selector: ".sr-only" })).toBeTruthy();
   });
 

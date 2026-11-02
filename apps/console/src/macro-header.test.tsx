@@ -18,7 +18,7 @@ describe("the macro task header", () => {
     expect(head.querySelector("h2")?.hasAttribute("title")).toBe(false);
     expect(within(head).getByText("hey-my-buddy")).toBeTruthy();
     expect(within(head).getByText("codex-desktop")).toBeTruthy();
-    expect(head.querySelector('[data-slot="macro-overview-facts"]')?.textContent).toMatch(/开始.*\d{2}:\d{2}.*历时/);
+    expect([...head.querySelectorAll('[data-slot="macro-overview-facts"] dt')].map(node => node.textContent)).toEqual(["项目", "Host", "历时", "编号", "目标"]);
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("1进行中");
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("2已验收");
     expect(within(head).getByRole("button", { name: "列表开关" })).toBeTruthy();

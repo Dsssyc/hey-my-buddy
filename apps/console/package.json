@@ -28,6 +28,7 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-i18next": "17.0.16",
+    "react-resizable-panels": "4.15.0",
     "remark-breaks": "4.0.0",
     "shiki": "3.22.0",
     "streamdown": "2.7.0",

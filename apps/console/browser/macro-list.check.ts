@@ -148,7 +148,7 @@ async function assertListGeometry(page: Page, width: number) {
   expect(errors).toEqual([]);
   const listBox = (await list.boundingBox())!;
   expect(listBox.width).toBeLessThanOrEqual(width);
-  expect(listBox.width).toBeGreaterThan(width === 390 ? 350 : 290);
+  expect(listBox.width).toBeGreaterThan(width === 390 ? 350 : 287);
   const viewport = list.locator("[data-slot=scroll-area-viewport]");
   const scrollWidth = await viewport.evaluate(node => ({ content: node.scrollWidth, frame: node.clientWidth }));
   expect(scrollWidth.content, "macro list rows fit the scroll viewport").toBeLessThanOrEqual(scrollWidth.frame + 1);
@@ -172,7 +172,7 @@ async function assertListGeometry(page: Page, width: number) {
   expect(metrics.group.font).toBeGreaterThanOrEqual(12);
   expect(metrics.group.font).toBe(14);
   expect(metrics.entry.font).toBe(13);
-  expect(metrics.entry.height).toBe(32);
+  expect(metrics.entry.height).toBe(28);
 }
 
 async function assertSelectedTabUnderline(page: Page) {
@@ -432,7 +432,7 @@ for (const { locale, width, theme } of [
 for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
   test.describe(`macro text clipping, ${width}px, ${theme}`, () => {
     test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 800 }, reducedMotion: "reduce" });
-    test("ellipsizes clipped project names and titles and reveals their full text on hover", async ({ page }) => {
+    test("fades clipped project names and titles and reveals their full text on hover", async ({ page }) => {
       const labels = [
         { id: A, project: "c-two", title: "检查名称", clipped: false },
         { id: B, project: "c-two-research-and-development-for-multi-agent-console-project-name-that-does-not-fit", title: "检查宏任务列表中项目名称与标题被截断时的渐隐、全文提示以及完整的悬停显示", clipped: true },
@@ -464,7 +464,8 @@ for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
             clipped: node.scrollWidth > node.clientWidth, width: node.clientWidth, contentWidth: node.scrollWidth,
           }));
           expect(geometry.clipped, `${text}: ${JSON.stringify(geometry)}`).toBe(clipped);
-          await expect(label).toHaveCSS("text-overflow", "ellipsis");
+          await expect(label).toHaveCSS("text-overflow", "clip");
+          await expect(label).toHaveCSS("mask-image", clipped ? /linear-gradient.*28px/ : "none");
           await expect(button).toHaveAccessibleName(new RegExp(text.slice(0, 12)));
           const isEntry = button === entry;
           const description = isEntry ? await button.getAttribute("aria-description") : text;
@@ -728,7 +729,7 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
           height: node.getBoundingClientRect().height, font: style.fontSize };
       }));
       let measured = await styles();
-      expect(measured.every(row => row.border === "0px" && row.height === 32 && row.font === "13px")).toBe(true);
+      expect(measured.every(row => row.border === "0px" && row.height === 28 && row.font === "13px")).toBe(true);
       await assertListGeometry(page, width);
       await photograph(page, "edges-list", "zh-CN", width, theme);
       await rows.nth(1).click();

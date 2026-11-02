@@ -1,7 +1,8 @@
+import { Cell, Grid, Gridline, useGridRef } from "react-resizable-panels";
 import { cn } from "cn";
 import { Button } from "./components/ui/button";
 import { Collapsible, CollapsibleContent } from "./components/ui/collapsible";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Ellipsis } from "lucide-react";
@@ -32,7 +33,7 @@ import type { AuthorityLatch } from "./console-session";
 import { displayTitle } from "./macro-task-display";
 import { MacroTaskDeleteDialog } from "./MacroTaskDeleteDialog";
 
-import { useViewPreference } from "./view-preferences";
+import { useNumberViewPreference, useViewPreference } from "./view-preferences";
 
 
 function ConnectionStrip({ error, verifiedAtMs, retry, busy }: { error: string; verifiedAtMs: number | null; retry: () => void; busy: boolean }) {
@@ -122,7 +123,7 @@ export const MacroTasks = memo(function MacroTasks({ snapshot, api, refresh, act
     onCollapseList={() => setListCollapsed(true)} onExpandList={() => setListCollapsed(false)} />;
 });
 
-function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listCollapsed, onCollapseList, onExpandList, connectionError, verifiedAtMs }: {
+function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writesAvailable, location, origin, go, listCollapsed, onCollapseList: collapseList, onExpandList: expandList, connectionError, verifiedAtMs }: {
   snapshot: Snapshot; api: ConsoleApi; refresh: () => Promise<Snapshot | null>; active: boolean;
   authority?: AuthorityLatch; writesAvailable: boolean; connectionError: string; verifiedAtMs: number | null;
   location: TasksLocation; origin: string | null;
@@ -130,6 +131,14 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   listCollapsed: boolean; onCollapseList: () => void; onExpandList: () => void;
 }) {
   const { t } = useTranslation(["tasks", "shell", "macroHeader", "taskDetail"]);
+  const [folding, setFolding] = useState(false);
+  const onCollapseList = () => { setFolding(true); collapseList(); };
+  const onExpandList = () => { setFolding(true); expandList(); };
+  useEffect(() => {
+    if (!folding) return;
+    const timer = window.setTimeout(() => setFolding(false), 200);
+    return () => window.clearTimeout(timer);
+  }, [folding, listCollapsed]);
   const [filter, setFilter] = useState<MacroTaskFilter>("all");
   const [query, setQuery] = useState("");
   const sort = location.sort ?? "activity-desc";
@@ -149,7 +158,19 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   useEffect(() => setMenuOpen(false), [active, selected]);
   const detailRunId = selected ? location.runId : null;
   useEffect(() => { if (detailRunId) setShowNarrowList(false); }, [detailRunId]);
-  const [narrow, setNarrow] = useState(false);
+  const [narrow, setNarrow] = useState(() => window.matchMedia?.("(max-width: 760px)").matches ?? false);
+  const [sidebarWidth, setSidebarWidth] = useNumberViewPreference("macro-task-list-width", 288);
+  const workspaceGrid = useGridRef();
+  // Gridline exposes its DOM ref but does not forward HTML attributes.
+  const resizeHandleRef = useCallback((element: HTMLDivElement | null) => {
+    if (element) {
+      element.setAttribute("aria-label", t("tasks:resizeList"));
+      element.dataset.slot = "macro-sidebar-resize";
+    }
+  }, [t]);
+  useEffect(() => {
+    if (!narrow) workspaceGrid.current!.getTrackById("column", "sidebar").resize(listCollapsed ? "0px" : `${sidebarWidth}px`);
+  }, [listCollapsed, narrow]);
   useEffect(() => {
     if (!window.matchMedia) return;
     const media = window.matchMedia("(max-width: 760px)");
@@ -270,7 +291,7 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
   const disconnected = !!connectionError || !!list.error;
   const lastRead = list.verifiedAtMs ?? verifiedAtMs;
   const empty = !list.loading && !list.error && totals.all === 0 && !query && filter === "all";
-  const detailPane = <aside data-slot="macro-detail" className={cn("col-start-2 flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card", !listCollapsed && showNarrowList && !empty && "max-[760px]:hidden")} aria-label={t("detail")}>
+  const detailPane = <aside data-slot="macro-detail" className={cn("flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-card", !listCollapsed && showNarrowList && !empty && "max-[760px]:hidden")} aria-label={t("detail")}>
     {selected
       ? <div className="flex min-h-0 flex-1 flex-col"><div className="flex min-h-0 min-w-0 flex-1 flex-col [container-type:inline-size]">{timelinePane}</div></div>
       : <>
@@ -288,11 +309,21 @@ function MacroTasksWorkspace({ snapshot, api, refresh, active, authority, writes
         <Button variant="ghost" size="sm" onClick={() => setDeletionNotice(null)}>{t("macroHeader:deletion.dismiss")}</Button>
       </div>}
       {disconnected && <ConnectionStrip busy={!connectionError && list.loading} error={connectionError || list.error} verifiedAtMs={lastRead} retry={() => { if (connectionError) void refresh(); else list.retry(); }}/>}
-      <Collapsible open={!listCollapsed} onOpenChange={open => open ? onExpandList() : onCollapseList()} asChild>
-        <div data-slot="macro-workspace" className={cn("grid min-h-0 flex-1 transition-[grid-template-columns] duration-200 motion-reduce:transition-none max-[760px]:flex max-[760px]:flex-col", listCollapsed ? "grid-cols-[0px_minmax(0,1fr)]" : "grid-cols-[316px_minmax(0,1fr)]")}>
-          <CollapsibleContent data-slot="macro-sidebar" className={cn("h-full min-h-0 min-w-0 w-full", !showNarrowList && !empty && "max-[760px]:hidden", empty && "max-[760px]:h-auto max-[760px]:shrink-0")}>{listPane}</CollapsibleContent>
+      <Collapsible open={!listCollapsed} onOpenChange={open => open ? onExpandList() : onCollapseList()} className="flex min-h-0 flex-1 flex-col">
+        {narrow ? <div data-slot="macro-workspace" className="flex min-h-0 flex-1 flex-col">
+          <CollapsibleContent data-slot="macro-sidebar" className={cn("h-full min-h-0 min-w-0 w-full", !showNarrowList && !empty && "hidden", empty && "h-auto shrink-0")}>{listPane}</CollapsibleContent>
           {detailPane}
-        </div>
+        </div> : <Grid data-slot="macro-workspace" gridRef={workspaceGrid}
+          className={cn("min-h-0 flex-1", folding && "transition-[grid-template-columns] duration-200 motion-reduce:transition-none")}
+          columns={[{ id: "sidebar", defaultSize: listCollapsed ? "0px" : `${sidebarWidth}px`, minSize: listCollapsed ? "0px" : "288px", maxSize: listCollapsed ? "0px" : "50vw", groupResizeBehavior: "preserve-pixel-size" }, { id: "detail", minSize: "0px" }]}
+          rows={1} resizeTargetMinimumSize={{ fine: 12, coarse: 24 }}
+          onLayoutChanged={(_, meta) => { if (meta.isUserInteraction) setSidebarWidth(workspaceGrid.current!.getTrackById("column", "sidebar").getSize().inPixels); }}>
+          <Cell row={0} column={0} className="min-h-0 min-w-0 overflow-hidden">
+            <CollapsibleContent data-slot="macro-sidebar" className="h-full min-h-0 min-w-0 w-full">{listPane}</CollapsibleContent>
+          </Cell>
+          <Gridline type="column" column={1} disabled={listCollapsed} elementRef={resizeHandleRef} className={cn("sidebar-resize", listCollapsed ? "invisible w-0" : "w-px")}/>
+          <Cell row={0} column={1} className="min-h-0 min-w-0 overflow-hidden">{detailPane}</Cell>
+        </Grid>}
       </Collapsible>
     </div>
     {stop.confirming && <StopDialog summary={stop.confirming.summary} scope={stop.confirming.scope}
