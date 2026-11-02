@@ -79,13 +79,11 @@
 
 **Windows 上看不到别的进程是否以检出为工作目录。**（2026-10-31 Windows 测试欠账第二批验收时 Opus 独立审查提出，Host 核对过） `require_idle_checkout` 在 Windows 上直接返回，回收先删文件、删到目录时才失败；用户在检出里开着终端时，里面的文件可能已被删掉。办法：先把整个检出目录改名，改名成功才算没人占用，再删改名后的目录。下一批 Windows 的改动里做。
 
-**仓库被移走或改名之后没有兜底。**（2026-10-31 开发者问起，同日定了做法，见 [ADR-002](../decisions/002-host-directed-assistance-and-workspaces.md) 2026-10-31 的那一段） 现在仓库的身份是 `.git` 目录的路径加 inode，移走或改名就算另一个仓库：续做与验收过不去，旧检出回收不掉，改名前的宏任务也加不进新的微任务；不会误删，也不会写进别的仓库。定下的做法：有 Git 时路径只用来找到仓库，项目靠仓库 Git 数据里的一条标记引用认，检出经 Git 自己的链接找到仓库，链接断了才用 `git worktree repair` 接回。要改各处的身份核对与宏任务存的项目。执行计划见 [schema 33](schema-33/plan.md)，其中待定的几处开发者 2026-11-01 定了（ADR-002 2026-11-01 的那一段），同日开工。
-
 **存储计划“正在变”的树，还缺三处测试。**（2026-10-31 微任务“存储计划不因检出在变而崩”验收时，Opus 独立审查提出，Host 读代码核对过） 代码三处都安全，但没有测试钉住：计划时稳定、`apply` 重新盘点时正在变；`apply` 删除前最后一次核对时正在变；`_finish_pending` 恢复回执时原树正在变。另外 `scandir` 那一支的 `changing` 没有被单独钉住：删掉它，现有测试仍然全绿（可在桩里删掉目录后再建回来）。
 
-**没有任务的空壳，最后一步删不掉就成了证明不了归属的残留。**（2026-10-31 Windows 测试欠账第二批实测，Host 核对过代码） `reclamation.py` 在锁下先删 `request.json`，放锁之后 `workspace.finish_submission_revoke` 再删 `.lock` 与目录；后两步失败或进程中断，残留就成了 `allocation-unproven`，此后不再重试，问题也清掉了。开发者 2026-11-01 定：在黑板里记一行撤销记录，目录删掉时一起删（[ADR-002](../decisions/002-host-directed-assistance-and-workspaces.md) 2026-11-01 的那一段），随 [schema 33](schema-33/plan.md) 做。
+**样板黑板只覆盖一部分存储形式。** 2026-10-27 只读盘点核对、Host 复核过计数：样板黑板 `tests/fixtures/upgrade-base/board.sql` 的 55 张表里，仍有 5 张一行也没有：`artifacts`、`attempt_received_receipts`、`execution_issues`、`service_issues`、`workflow_fixes`；原先列出的 `workflow_children` 等 7 张已有存量，`model_facts` 已随剪枝删掉。原审查还指出生成器只用了 Codex，这一点没有复核。下一次改这 5 张表的存储形式时，升级在样板上测不到它们；按 AGENTS.md，改到样板缺的形式时在同一次改动里扩充生成器。 schema 33 那一批又看到两处（2026-11-02 整条 32 → 33 升级的 Opus 审查，Host 核对过）：下限写的清单都是 v3，样板里没有 v1、v2 的清单，而日常黑板上还有 199 份 v1、1066 份 v2，32 → 33 读它们，绑在它们上面的预约也被转换，这一部分只在 Host 对日常黑板的只读试跑里核对过；样板里删除中的宏任务没有描述，“目标随删除级联”这条路径升级之后没有测到。
 
-**样板黑板只覆盖一部分存储形式。** 2026-10-27 只读盘点核对、Host 复核过计数：样板黑板 `tests/fixtures/upgrade-base/board.sql` 的 55 张表里，仍有 5 张一行也没有：`artifacts`、`attempt_received_receipts`、`execution_issues`、`service_issues`、`workflow_fixes`；原先列出的 `workflow_children` 等 7 张已有存量，`model_facts` 已随剪枝删掉。原审查还指出生成器只用了 Codex，这一点没有复核。下一次改这 5 张表的存储形式时，升级在样板上测不到它们；按 AGENTS.md，改到样板缺的形式时在同一次改动里扩充生成器。
+**升级步骤在黑板之外的效果不报告，碰到冲突时没有出路。**（2026-11-02，整条 32 → 33 升级的 Opus 审查 F4、F8 与修正的审查 F6，Host 核对过） 32 → 33 给旧仓库写项目标记，是升级唯一落在黑板之外的效果，但 `upgrade_state` 只返回起止版本，不说给哪些仓库写了标记、跳过了哪些、为什么；已有标记的内容不同时只能失败，报错没给出路。这一步装上之后冻结，改不了；0.59.0 的安装记录由 Host 用只读试跑补上了这份清单。建议：以后有黑板之外效果的升级步骤，回答里带上逐个位置的结果，失败时写明用户能做什么。
 
 **schema 32 那一批的 Opus 审查留下的三项。**（2026-10-30，审查 `c61e24c1`，Host 核对过） 下一次改到这些形式时一起做：
 - `workflow_turns.expected_seconds` 总等于冻结 spec 的 `expectedSeconds`（`workflow.py` 写入处），负载估算用 COALESCE 两处都读，属于能推出的值，下一次动这张表时删掉；
@@ -110,7 +108,7 @@
 
 ## 运行环境
 
-**Windows 上 Python 全套还有 3 个文件必现失败；自 2026-10-27 那次推送之后，CI 没在 Windows 上跑过。**（2026-11-01，Windows 11 测试机，另一个 Worker 在 `d144828c` 上独立复跑，Host 读过原始输出） 360 个文件中 356 个通过；2026-10-30 记下的 13 个失败文件已由测试欠账的两批修好，随 0.58.4 安装（[安装记录](../acceptance/installs/0.58.4.md)）。剩下三个：`blackboard/tasks/test_storage.py` 的“扫描时目录树在变”一项（0.58.2 那批加的）替换 `os.scandir` 时拿普通路径比较，而 `tree_info` 在 Windows 上传入 `\\?\` 形式的路径，替换从不生效，那个目录里的 23 个字节照样被数进去，是测试的问题，Host 读代码所得，没有单独复现；`buddy/harnesses/zcode/test_zcode_realtime_flow.py` 的“撤回失败之后删掉原有的续接绑定”一项（0.58.3 那批加的）在 Windows 上 `bindingPresent` 仍为真，原因没查，可能是产品的问题；`cli/test_checks_cleanup.py` 断言检查运行器的私有根是合格的状态根，而这个根在 Windows 上继承 TEMP 的 ACL，复跑把 TEMP 放在了继承 D 盘外来 ACE 的目录里，实现方在只属于当前账户的 TEMP 下跑同一条代码路径时通过，所以是环境的问题；开发者 2026-11-01 定：运行器建好私有根之后立刻用 `check_state_root` 核对，不合格就删掉这个空根、不跑测试、以用法错误退出并点名目录，随 [schema 33](schema-33/plan.md) 第三个微任务做。另外 `console/test_console_access.py` 在全套中又遇到一次连接中止，单独复跑通过，见“控制台”一节同类的一条；两个文件的夹具清理因 WinError 32 推迟，根最后删掉了。建议：下一批改 Windows 时先在测试机上查明 ZCode 那一项，连同 `test_storage` 一起修，推送之后让 CI 在 Windows 上跑一次。证据在整合检出被忽略的 `tmp/storage/win-rerun-debt-2/`。
+**Windows 上 Python 全套还有 2 个文件必现失败；自 2026-10-27 那次推送之后，CI 没在 Windows 上跑过。**（2026-11-02，Windows 11 测试机，另一个 Worker 在 0.59.0 的版本提交 `2c9ec15e` 上独立复跑，Host 读过原始输出） 368 个文件中 366 个通过，前端 103 个文件全过；2026-11-01 记下的 `test_storage` 与 `test_checks_cleanup` 已随 schema 33 那一批修好。剩下两个：`blackboard/tasks/test_workspace_submission_cleanup.py` 的 `test_storage_busy_before_revoke_preserves_complete_allocation_for_maintenance`（schema 33 第三个微任务加的）在 `task_submit` 的替身里给分配目录拍快照，连 `.lock` 一起读，而这时产品正经 `LockFileEx` 持着这把锁，Windows 的字节区锁拒绝另一个句柄读，得到 PermissionError；复跑的 Worker 用产品的 `locking.lock` 做了探针，Host 读码核实产品代码不读锁文件，是测试的写法，快照跳过 `.lock` 即可。`buddy/harnesses/zcode/test_zcode_realtime_flow.py` 的“撤回失败之后删掉原有的续接绑定”一项（0.58.3 那批加的）在 Windows 上 `bindingPresent` 仍为真，原因没查，可能是产品的问题。两个文件的夹具清理因 WinError 32 推迟，根最后删掉了；`console/test_console_access.py` 这次通过。建议：下一批改 Windows 时先在测试机上查明 ZCode 那一项，连同快照的写法一起修，推送之后让 CI 在 Windows 上跑一次。证据在整合检出被忽略的 `tmp/storage/win-059/`。
 
 **Windows 上工作目录过长时 harness 起不来，却报成不可用。**（2026-10-26 “Windows 残余（四）”在测试机上实测，排在首次发版之后） 进程的工作目录超过约 260 个字符时，Windows 直接拒绝创建进程（WinError 267；测试机上 282 与 286 个字符的工作目录都起不来，没有创建子进程），DSH 把启动处的 `OSError` 投影成 `harness-unavailable`，看起来像 harness 没装好。安全的一边已经守住：没有起进程，就没有要停的。要改的是如实报出系统拒绝启动的原因与工作目录，让 Host 知道换一个浅一些的检出位置；其余 harness 的启动处是否同样投影，一起核对。
 
@@ -148,6 +146,10 @@
 
 **一项真实守护进程的等待测试偶尔失败。** 2026-10-18 在批次二上跑完整检查（`--jobs 2`，同时另一个会话在跑浏览器检查）时，`tests/python/protocol/test_rpc_config.py` 的 `test_admitted_waits_do_not_starve_control_or_command_completion` 以 admitted 0 != 6 失败；单独重跑两次都通过。原因没有复现，再出现时在负载下复现再定。
 
+**满负载下另有两处测试偶发失败。**（2026-11-02，单进程的完整检查，其他会话同时在用机器） `apps/console/src/buddies/english.test.tsx` 的一项超过 Vitest 默认的 5 秒（schema 33 第三个微任务验收时），单独跑 3.6 秒通过；`tests/python/buddy/harnesses/test_discovery_stop_timing.py` 的两项（`test_tool_in_another_group_is_stopped_before_success` 得到 `shutdown-unverified`，`test_dsh_final_stop_preserves_success_and_nonzero_output` 的退出码 3 被报成成功）在 0.59.0 安装前的完整检查里失败，当时 15 分钟平均负载约 11.5，同一份源码单独重跑 3 次都通过。都与那一批的改动无关。再出现时在负载下复现再定。
+
+**日常服务能读哪些文件夹，可能跟着启动它的 app 走。**（2026-11-02，推断，没有验证） macOS 按 app 分别授权受保护的文件夹：Host 实测，运行它的 Claude app 里的进程能列出 `~/Desktop` 与 `~/Downloads`，列 `~/Documents` 得到 `Operation not permitted`；0.59.0 第一次安装时，升级就是在 `~/Documents` 下一个 Codex app 会话建的仓库上读不了。日常服务由安装进程重启，大概继承同样的限制，于是另一个 Host app 有权限的文件夹，服务未必读得了；按 ADR-002 2026-11-02 那一段，这种情形会失败并点名位置，不会被当成仓库不在。要核对：服务进程实际的权限从哪里来，用户换着用几个 Host app 时会不会撞到。
+
 ## 路由与额度
 
 **Sol 的茧房是路由下一步的检验场。**（2026-11-02 开发者提出：现在的证据悬殊正好是检验环境，Router 若能打破它，大部分茧房问题都能攻破；Sol 不只样本多，覆盖面也最全。以下四点是 Host 的建议，开发者要求讨论时照此带上，设计本身待开发者定。）一、成功不等于少选 Sol：要变的是样本分配，证据稀薄、但合适且更便宜的候选要有机会被试、攒起自己的证据，结果不变差；看探索出去的决定占多少、这些运行的首过率、一段时间后各 buddy 在同一领域的样本差距。二、探索由程序发起，不交给 Router 判断：[ADR-021](../decisions/021-router-buddy-planes-and-routing-evidence.md) 第 7 条本就规定每隔几次（默认 5 次）由程序发起一次，Router 只在“合适且成本不高于首选”的候选里判断；这次的 Router（DSH deepseek-v4-flash，快速模式）的理由就是证据最厚者胜。三、检验要能重放：从日常黑板只读地冻结当前的路由输入（评价表与统计），配一组固定的任务书，改前改后各跑一遍对比；每次 Router 决定都是付费的原生调用，每一批检验先经开发者批准；导出样本最多 100 个已验收的微任务，复现不了现在的悬殊，统计从日常黑板只读地取。四、Host 点名派的运行也算进统计（Host 读 `blackboard/routing/statistics.py` 核实：样本取自所有结束的回合与已验收、已结案的运行，不分谁选的 buddy）：算进去没错，结果是真的，但茧房有一部分是自己喂的。2026-11-02 日常黑板只读计数（已验收或已结案、带 buddy 的微任务；有 `workflow_routes` 记录算路由选的，没有算点名，这是近似）：Sol max 路由 273、点名 89；Sol high 57、144；GLM-5.3 max 47、0；GLM-5.3 high 14、18；deepseek-flash max 15、5；Opus 5.5 high 0、88。例证：决定 `dec-6e03007a…` 把一个机械的样板路径修正交给 Sol max，理由是它在 Windows 长路径（5 个样本，100%）与平台可移植（38 个，约 97%）上证据最厚，同时写明 Sol high 更省。
@@ -182,10 +184,6 @@
 
 ## 委派与 Worker
 
-**宏任务的目标说明，可修改、留历史。**（2026-10-31 开发者定，见 [ADR-016](../decisions/016-human-console-design.md) 0 节 2026-10-31 的第二段） 要改契约（宏任务的读写、`get` 带上所属宏任务的目标）与存储形式（修改历史一张表，描述字段的含义随之改变）。接口开发者 2026-11-01 定了（ADR-016 2026-11-01 的那一段），随 [schema 33](schema-33/plan.md) 做。不改产品也能先做的一步，Host 已写进 skill 与 workflow：宏任务的描述写成它的目标，每份任务书写明它服务于目标的哪一部分。
-
-**简要 `get` 不必带任务书的开头。**（2026-11-01 归入 [schema 33](schema-33/plan.md) 第四个微任务。）（2026-10-31 验收“get 完整输出不截断任务书”时 Host 提出） 那一批让完整输出给任务书全文，也让 CLI 的简要 `get` 带上开头 2000 个字符并标截断。后者是任务书允许的做法，但与“简要视图不重复调用方自己提交的报文”相抵：上下文没压缩时它是重复，压缩之后又不够，验收与续做本来就读完整输出。下一批改 CLI 视图时去掉；服务视图里恒为假的 `taskTruncated` 随下一次契约改动删掉。
-
 **DSH 的检查点说法不够具体。**（2026-10-31） ZCode 改为实时送达之后，只剩 DSH 靠 Worker 自己调用检查点取问题。提示词仍只说在自然的节点与结束之前调用，近 12 次 DSH 执行的 1,048 次工具调用里只调了 19 次。把说法改具体（例如每完成一个步骤、开始一项长检查之前与结束之前），改后用同一个查询再量一次。这是产品里的提示词，由实现方随下一批改到角色文字时做。
 
 **不挂代码仓库的工作没有入口。**（2026-10-25 开发者提出：用户不一定只写代码，做幻灯片、写文档也可能想用这套委派与核对的工作方式，代码只是其中最鲜明、最严谨的一种；开发者说此前讨论过，仓库文档与 Host 的记忆里都没有找到那次的记录）现在每个宏任务属于一个代码仓库，每个微任务在 Git 检出里冻结输入、封存产物；只问一句话的任务没有自然的归属，2026-10-25 ZCode 做 Host 时只好临时建一个仓库。Host 建议分两步：先做不带检出的微任务，Worker 在一个空的私有目录里工作，产物只有它交回的结果，Host 读结果验收；再看要不要让一个普通文件夹（文档、幻灯片）不必先变成 Git 仓库就能当输入。两步都改领域模型（术语表里“项目”的定义、控制台按项目分组）与 README 的定位，动手之前先写 ADR。时机待开发者定，Host 建议首次发版之后。 2026-10-31 开发者定：这样的文件夹按路径认，搬走或改名就当成新的；它后来有了 Git，第一次带着 Git 被使用时沿用原来的项目，见 ADR-002 2026-10-31 的那一段。
@@ -194,8 +192,6 @@
 
 **文档卫生检查手写了 Markdown 解析。**（2026-10-25 Host 验收文档卫生检查时看到）`tests/python/cli/test_documentation_hygiene.py` 为找相对链接手写了约一百五十行 Markdown 解析（围栏、缩进代码、行内代码、引用链接与 HTML 标签）。任务书当时要求只用标准库，是 Host 的失误，违背了“有成熟的库就用”。建议：改用成熟的 CommonMark 解析库作开发依赖，删掉手写的部分；正反用例照旧。
 
-**回复里只给了输入清单的摘要，没给位置。**（2026-11-01 归入 [schema 33](schema-33/plan.md) 第四个微任务。）（2026-10-25 开发者问回复里的工作区清单为何有上限，Host 读代码查明；开发者同意随后面的批顺带做）`get` 与 `await` 的回复里，每张路径清单最多列 32 条、每条最多 500 字节，另给准确的总数与 `…Truncated` 标记（`blackboard/tasks/workflow.py` 的 `MAX_OUTPUT_PATH_VIEW`）；黑板存的清单是完整的。这是读者一端的限制：回复要进 Host 的上下文，也走进程之间的消息。改动的路径有第二条路：回复带着补丁文件的位置与摘要（`diffPath`、`cumulativePatch.path`）。回合输入的清单（`workspaceManifest` 里未跟踪与被排除的条目）没有：完整的清单是检出旁边私有状态里的 `manifest.json`，回复只给了它的摘要 `workspaceManifestSha256`，Host 看到总数超过 32 时没有正式的路去读全部。建议：回复里把这份清单的位置与摘要一起给出，做法与补丁文件相同；上限不动。随下一批改到微任务视图的顺带做。
-
 **提供方对内容的拒绝被记成普通的 harness 故障。**（2026-10-24 开发者转告，Host 只读核对黑板）C-Two 的 Host 经黑板委派一次 Windows 测试，Codex app-server 在执行之前以 `cyberPolicy`（可能的网络安全风险）拒绝了这一回合；黑板把它记成回合失败、`terminationReason: harness-error`，没有让这个提供方进入冷却，这一点是对的，它不是额度。问题是 Host 从记录上看不出这是提供方对内容的拒绝，容易当成技术故障换一个 buddy 重试；同一件事被拒之后换提供方去做，就是绕过拦截。方向：黑板照实记下这是提供方的拒绝，带上原样的代码与文字；Host 指南写明这种结局不改派；不为它加自动处理。先核对 Codex 适配层能否从原生事件里读到这个代码；别的 harness 的拒绝长什么样还没见过，不预先设防。
 
 **请求改用 Pydantic 模型声明，`help` 由模型推出。**（轮子盘点的 C1；开发者 2026-10-24 定：首次发版之后做） `cli/cli_help.py` 读语法树推出各方法参数的两千多行，与散在各处的请求校验，换成按入口声明的 Pydantic 模型。只读计划列了 55 个入口、6 批，先录下现有回复作对照（[第二波的记录](../acceptance/wheels/second-wave.md)）。作为单独一次契约变化做：现有请求校验里的怪异之处（错误带的字段与先后、各处标识的接受集、默认值的规范化等）一并简化，`help` 补正的文字随同一次契约变化。
@@ -203,8 +199,6 @@
 **运行中的回合在 `get` 与 `await` 里看不出进展。**（2026-10-23 开发者觉得 Host 的一次 50 分钟等待不对劲；Host 在 0.51.1 与 0.52.0 上都看到） 回合在跑的整个过程中，`currentTurn.state` 一直是 `prepared`，`currentTurn.updatedAt` 与顶层的 `updatedAt` 停在回合创建的那一刻；进展只在 `task.activity` 里（工具调用数、`lastNativeActivityAt`、`phase`）。Host 据前者判断等待是否正常就会误判。建议：回合开始执行时把它的状态记为运行中；简短输出带上最近一次活动的时刻。
 
 **提交在准备阶段、固定引用之后失败，仍留下记录与引用。**（2026-10-23 只读共享那一批的第二次 Opus 审查指出，Host 读码核对过，不是那一批引入的）撤销只在准备完成之后、准入失败时运行。准备本身在固定引用之后失败（worktree 建不出来、准备期间仓库或检出变了、写 manifest 失败），会留下 `request.json`、`input.json` 和四个固定引用；没有 manifest，存储计划也证明不了它们。只有同一 requestId 的重试能接着用。
-
-**撤销在放锁之后才删锁文件。**（2026-11-01 并入 [schema 33](schema-33/plan.md) 第三个微任务。）（2026-10-23 同一次审查指出，Host 复现过）被拒提交的分配撤销后，锁文件与目录在放锁之后才删除。同一 requestId 有三个调用者并发时，第二个会锁住已被删除的旧文件，第三个新建锁文件后也能拿到锁，互斥就此失效。标准做法是加锁之后确认路径仍指向已锁的文件，并在持锁时删除锁文件；持锁删除在 Windows 上要另行验证，所以那一批没有做。
 
 **回收的删除还有两处没有证明到。** 2026-10-15 “回收续做”的独立审查（[review](reclaim-resume/review.md)）读代码指出，计划时的回收与续做都有，不是那次引入的：一是 worktree 自己登记目录里的东西，除了 HEAD 与索引都不在证明之内，`refs/worktree/*`、`refs/bisect/*`、`logs/HEAD` 与进行中的 rebase 或合并状态随 `git worktree remove` 一起删掉，只被这类引用留住的提交就此不可达；二是内容证明与删除之间隔着一次数据库写，`applying` 的围栏只挡黑板上的写者，这段时间里黑板之外的进程写进检出的文件会被删掉。两条都没有复现，排在工作区那一块的下一批里。
 
