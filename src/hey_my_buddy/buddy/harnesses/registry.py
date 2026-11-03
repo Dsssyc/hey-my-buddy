@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Callable
 
 from ...errors import BoardError
-from ...protocol.capabilities import PERMISSION_LEVELS
+from ...protocol.capabilities import PERMISSION_LEVELS, declared_input_limit
 from ...protocol.session_coverage import SessionCoverage
 from .base import Adapter, AdapterOutcome, ExecutionContext, NoToolStructuredRequest, ProcessHandle
 from .run_contract import HARNESS_NAMES, HarnessRun
@@ -143,12 +143,14 @@ def capability_report() -> dict:
         record = selected(name)
         cause = (record['reason'] if record is not None else
                  make_reason('harness.not-checked', operation='probe') if name in HARNESS_NAMES else None)
+        limit = declared_input_limit(name)
         report[name] = {
             "adapter": name,
             "available": usable,
             "reason": cause,
             "capabilities": list(instance.capabilities),
             "permissionLevels": dict(PERMISSION_LEVELS.get(name, {})),
+            "inputLimit": limit.to_payload() if limit is not None else None,
         }
     return report
 

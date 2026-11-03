@@ -681,6 +681,22 @@ class InterfaceSurfaceTests(unittest.TestCase):
                     native_operation(name, "delete-sessions")
                 self.assertEqual(failure.exception.code, "UNSUPPORTED")
 
+    def test_the_observed_version_fact_selects_the_input_limit_declaration(self):
+        # The public version text this contract carries is the same fact the
+        # input-limit selection reads; the check itself is not wired into any
+        # run path here.
+        from hey_my_buddy.protocol.capabilities import select_input_limit
+
+        def observed(version):
+            result = rc.RunResult(identity=identity(), harness="codex",
+                                  end=rc.RunEnd(status="ok"), harness_version=version)
+            return rc.RunResult.from_payload(result.to_payload()).harness_version
+
+        self.assertEqual(select_input_limit("codex", observed("codex-cli 0.164.0")).state, "known")
+        for version in ("codex-cli 0.165.0", None):
+            with self.subTest(version=version):
+                self.assertEqual(select_input_limit("codex", observed(version)).state, "unknown")
+
     def test_tool_evidence_packages_keep_incomplete_facts(self):
         package = PAYLOADS["codex"]["payloads"]["fastSuccess"]["toolEvidence"]
         result_payload = full_result().to_payload()
