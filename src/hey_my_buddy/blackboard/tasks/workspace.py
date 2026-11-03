@@ -27,6 +27,7 @@ from ...private_dirs import directory_mode
 from ...errors import BoardError
 from ...protocol.schemas import normalize_access
 from ...protocol.service_process import service_creation_flags
+from ...protocol.owned_process import WINDOWS_COMMAND_LINE_LIMIT
 from ...protocol.workspace_manifest import project_id as manifest_project_id
 from .path_views import _bounded_path_fields
 
@@ -458,13 +459,48 @@ def _entries(root, revision=None, *, env=None, git_dir=None):
     return entries
 
 
+def _git_path_chunks(root, args, paths, *, env=None, git_dir=None):
+    """Budget path argv using the command and environment Git will receive."""
+    command, environment = _git_command(root, *args, git_dir=git_dir)
+    environment.update(env or {})
+    if _WINDOWS:
+        def size(value):
+            return len(subprocess.list2cmdline([value]).encode("utf-16-le", errors="surrogatepass")) // 2 + 1
+        # Count Python's Windows quoting, spaces and terminating NUL. Leave
+        # MAX_PATH units for CreateProcess's executable-name expansion.
+        budget = WINDOWS_COMMAND_LINE_LIMIT - sum(size(value) for value in command) - 260
+    else:
+        pointer = struct.calcsize("P")
+        def size(value):
+            return len(os.fsencode(value)) + 1 + pointer
+        # exec counts argv/env strings and their pointer tables. POSIX xargs
+        # reserves another 2048 bytes for implementation/executable overhead.
+        environment_size = sum(size(key + "=" + value) for key, value in environment.items())
+        budget = os.sysconf("SC_ARG_MAX") - sum(size(value) for value in command) - environment_size - 2 * pointer - 2048
+    chunk = []
+    used = 0
+    for path in paths:
+        cost = size(path)
+        if cost > budget:
+            raise _git_failure([*command, path], args[0],
+                               message="A workspace path does not fit the platform Git command line")
+        if used + cost > budget:
+            yield chunk
+            chunk = []
+            used = 0
+        chunk.append(path)
+        used += cost
+    if chunk:
+        yield chunk
+
+
 def _untracked(root, selected, *, env=None, git_dir=None):
     # Git prunes ignored dependency/cache directories before listing files.
-    # Explicit selections may include ignored input, but only within their
-    # literal pathspecs. https://git-scm.com/docs/git-ls-files#_options
+    # Keep literal matching in Git; only split its path argv at the OS limit.
     paths = set(_git(root, "ls-files", "--others", "--exclude-standard", "-z", env=env, git_dir=git_dir).split(b"\0"))
-    if selected:
-        paths.update(_git(root, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *selected, env=env, git_dir=git_dir).split(b"\0"))
+    args = ("ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--")
+    for chunk in _git_path_chunks(root, args, selected, env=env, git_dir=git_dir):
+        paths.update(_git(root, *args, *chunk, env=env, git_dir=git_dir).split(b"\0"))
     result = sorted(_relative(os.fsdecode(path)) for path in paths if path)
     return result
 

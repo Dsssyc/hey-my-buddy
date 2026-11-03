@@ -136,7 +136,7 @@ class WorkspaceGitTruthTests(unittest.TestCase):
         self.git("config", "filter.truth.smudge", quote([sys.executable, str(script), "smudge"]))
         self.git("config", "filter.truth.required", "true")
         self.git("config", "core.filemode", "false")
-        (self.repo / ".gitattributes").write_text("src/filter.txt filter=truth text eol=lf\n", encoding="utf-8", newline="\n")
+        (self.repo / ".gitattributes").write_text("src/*.txt filter=truth text eol=lf\n", encoding="utf-8", newline="\n")
         (self.repo / "src/filter.txt").write_bytes(b"work:base\n")
         (self.repo / "src/script.sh").write_bytes(b"#!/bin/sh\nexit 0\n")
         self.git("add", "-A")
@@ -145,11 +145,14 @@ class WorkspaceGitTruthTests(unittest.TestCase):
         (self.repo / "src/filter.txt").unlink()
         self.git("reset", "--hard", "HEAD")
         self.assertEqual((self.repo / "src/filter.txt").read_bytes(), b"work:base\n")
-        manifest = workspace.prepare(self.state, "filter", self.intent())
+        (self.repo / "src/selected.txt").write_bytes(b"work:selected\n")
+        manifest = workspace.prepare(self.state, "filter", self.intent(selected=["src/selected.txt"]))
         self.assertEqual(self.git("show", manifest["inputCommit"] + ":src/filter.txt"), b"git:base\n")
+        self.assertEqual(self.git("show", manifest["inputCommit"] + ":src/selected.txt"), b"git:selected\n")
         self.assertEqual(self.git("ls-tree", "-r", manifest["inputCommit"], "src/script.sh").split()[0], b"100755")
         checkout = Path(manifest["checkoutRoot"])
         self.assertEqual((checkout / "src/filter.txt").read_bytes(), b"work:base\n")
+        self.assertEqual((checkout / "src/selected.txt").read_bytes(), b"work:selected\n")
         (checkout / "src/filter.txt").write_bytes(b"work:output\n")
         output = workspace.seal(self.state, manifest, "task", "filter")
         self.assertEqual(self.git("show", output["commit"] + ":src/filter.txt"), b"git:output\n")
@@ -169,10 +172,71 @@ class WorkspaceGitTruthTests(unittest.TestCase):
         index = self.repo / ".git/index"
         os.utime(index, ns=(old, old))
         before = index.read_bytes()
-        manifest = workspace.prepare(self.state, "racy-index", self.intent())
+        (self.repo / "src/selected.txt").write_bytes(b"selected\n")
+        manifest = workspace.prepare(self.state, "racy-index", self.intent(selected=["src/selected.txt"]))
         self.assertEqual(self.git("show", manifest["inputCommit"] + ":src/text.txt"), b"new\n")
+        self.assertEqual(self.git("show", manifest["inputCommit"] + ":src/selected.txt"), b"selected\n")
         self.assertEqual(index.read_bytes(), before)
         self.assertEqual(index.stat().st_mtime_ns, old)
+
+    def test_missing_selectors_do_not_change_the_observation(self):
+        (self.repo / "src/tracked.txt").write_bytes(b"tracked\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "selector fixture")
+        (self.repo / "src/selected.txt").write_bytes(b"selected\n")
+        before_index = (self.repo / ".git/index").read_bytes()
+        before_head = self.git("rev-parse", "HEAD")
+
+        def assert_source_unchanged():
+            self.assertEqual((self.repo / ".git/index").read_bytes(), before_index)
+            self.assertEqual(self.git("rev-parse", "HEAD"), before_head)
+
+        self.addCleanup(assert_source_unchanged)
+
+        def observe(selectors):
+            try:
+                return workspace._observe(self.repo, selectors, state_dir=self.state)
+            except BoardError as error:
+                self.fail(f"Observation with {selectors!r} failed: {error.payload()!r}")
+
+        baseline = observe([])
+        selected = observe(["src/selected.txt"])
+
+        for missing in ("src/missing.txt", "missing-directory"):
+            with self.subTest(missing=missing):
+                self.assertEqual(observe([missing]), baseline)
+                self.assertEqual(observe(["src/selected.txt", missing]), selected)
+                error = self.assert_error("INVALID_WORKSPACE", workspace._observe,
+                                          self.repo, ["src/selected.txt", missing],
+                                          require_selected=True, state_dir=self.state)
+                self.assertEqual(error.details["path"], missing)
+
+        (self.repo / "src/selected.txt").unlink()
+        self.assertEqual(observe(["src/selected.txt"]), observe([]))
+
+    def test_ignored_case_alias_matches_literal_git_discovery(self):
+        (self.repo / ".gitignore").write_bytes(b"src/private/\n")
+        (self.repo / "src/tracked.txt").write_bytes(b"tracked\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "case alias fixture")
+        private = self.repo / "src/private"
+        private.mkdir()
+        (private / "Name").write_bytes(b"selected bytes\n")
+        if not (private / "name").exists():
+            self.skipTest("filesystem distinguishes case")
+        selector = "src/private/name"
+        before_index = (self.repo / ".git/index").read_bytes()
+        before_head = self.git("rev-parse", "HEAD")
+        discovered = {os.fsdecode(path) for path in self.git(
+            "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", selector
+        ).split(b"\0") if path}
+
+        observed = workspace._observe(self.repo, [selector], state_dir=self.state)
+
+        self.assertEqual(set(observed["untracked"]), discovered)
+        self.assertEqual(set(observed["included"]), discovered & {selector})
+        self.assertEqual((self.repo / ".git/index").read_bytes(), before_index)
+        self.assertEqual(self.git("rev-parse", "HEAD"), before_head)
 
     def test_git_operations_do_not_run_repository_hooks(self):
         (self.repo / "src/text.txt").write_bytes(b"base\n")
