@@ -40,6 +40,8 @@ it("copies the identifier in place, closes on outside click, rereads on reopen a
   const { user, readGoals, view, ui } = harness();
   const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
   const copy = screen.getByRole("button", { name: "复制标识 macro-1" });
+  expect(copy.closest("dl")!.classList.contains("items-baseline")).toBe(true);
+  expect(copy.closest("dd")!.parentElement!.classList.contains("items-baseline")).toBe(true);
   await user.click(copy);
   expect(write).toHaveBeenCalledWith("macro-1");
   expect(copy.querySelector(".lucide-check")).toBeTruthy();
@@ -52,6 +54,29 @@ it("copies the identifier in place, closes on outside click, rereads on reopen a
   expect(readGoals).toHaveBeenCalledTimes(2);
   view.rerender(ui(false));
   expect(screen.queryByRole("dialog", { name: "目标说明" })).toBeNull();
+});
+
+it("uses the card's own width for the goal line origin and keeps a right-hand trigger over the card", async () => {
+  vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+    const rect = this.matches("header") ? { x: 100, y: 40, width: 1200, height: 90 }
+      : this.matches('[data-slot="macro-goal-trigger"]') ? { x: 1100, y: 50, width: 28, height: 28 }
+      : { x: 124, y: 82, width: 601, height: 300 };
+    return DOMRect.fromRect(rect);
+  });
+  const { user, readGoals } = harness();
+  readGoals.mockResolvedValueOnce({ macroTaskId: "macro-1", goals: [goal] });
+  await user.click(screen.getByRole("button", { name: "目标说明" }));
+  const card = await screen.findByRole("dialog", { name: "目标说明" });
+  await waitFor(() => expect(card.querySelector('[data-slot="macro-goal-scroll"]')?.getAttribute("data-history")).toBe("false"));
+  expect(card.querySelector(".goal-history")).toBeNull();
+  expect(card.style.left).toBe("427px");
+  expect(card.style.top).toBe("42px");
+  expect(card.style.getPropertyValue("--goal-left")).toBe("573px");
+  expect(card.style.getPropertyValue("--goal-right")).toBe("0px");
+  await user.keyboard("{Escape}");
+  await user.click(screen.getByRole("button", { name: "目标说明" }));
+  await waitFor(() => expect(screen.getByRole("dialog").querySelector('[data-slot="macro-goal-scroll"]')?.getAttribute("data-history")).toBe("true"));
+  expect(screen.getByRole("navigation", { name: "历史" })).toBeTruthy();
 });
 it("omits the goal button when the record has none", () => {
   const timeline = macroTaskTimelineFixture(); timeline.macroTask.goal = null;

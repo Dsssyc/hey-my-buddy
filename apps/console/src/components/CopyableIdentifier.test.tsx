@@ -17,6 +17,10 @@ describe("copyable identifiers", () => {
     render(<CopyableIdentifier value={id} />);
     expect(screen.getByText("macro-79771ce9…91da").getAttribute("title")).toBeNull();
     const button = screen.getByRole("button", { name: `复制标识 ${id}` });
+    // Shared fact rows have a 20px line; copying must not make the row taller.
+    expect(button.classList.contains("h-5")).toBe(true);
+    expect(button.classList.contains("leading-5")).toBe(true);
+    expect(button.classList.contains("align-baseline")).toBe(true);
     expect(button.hasAttribute("aria-description")).toBe(false);
     await user.hover(button);
     expect(screen.queryByRole("tooltip")).toBeNull();
