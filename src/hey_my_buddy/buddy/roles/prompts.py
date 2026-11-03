@@ -10,6 +10,21 @@ def _role_prompt(resource: str, sections: tuple[str, ...]) -> str:
     return text + "\n" + "\n\n".join(sections)
 
 
+def _prompt_turn_input(turn_input: dict) -> dict:
+    """The turn input as the Worker's prompt carries it: without the workspace account.
+
+    ``executionWorkspace.snapshot`` is the blackboard's own accounting of the
+    workspace — selectors, refs and fingerprints — and its path lists grow with
+    the workspace's untracked files. It is not part of what the blackboard hands
+    a harness process (ADR-030), while the fields around it (path, access,
+    write scope) are what the Worker works under, so only the snapshot stays
+    out of the serialized input.
+    """
+    workspace = {key: value for key, value in turn_input["executionWorkspace"].items()
+                 if key != "snapshot"}
+    return {**turn_input, "executionWorkspace": workspace}
+
+
 def worker_prompt(task_text: str, turn_input: dict, *, delivery: tuple[str, ...],
                   credential_file: str | None = None) -> str:
     """Shared Worker assembly; delivery describes its native completion channel."""
@@ -18,7 +33,8 @@ def worker_prompt(task_text: str, turn_input: dict, *, delivery: tuple[str, ...]
         lead = (resource_path("roles.lead").read_text(encoding="utf-8"),)
         if credential_file is not None:
             lead += (f"Credential file path: {canonical_json(credential_file)}",)
-    return _role_prompt("roles.worker", (*lead, *delivery, task_text, canonical_json(turn_input)))
+    return _role_prompt("roles.worker",
+                        (*lead, *delivery, task_text, canonical_json(_prompt_turn_input(turn_input))))
 
 
 def router_prompt(call_text: str) -> str:

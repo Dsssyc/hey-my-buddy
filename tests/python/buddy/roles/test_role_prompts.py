@@ -20,6 +20,47 @@ from hey_my_buddy.blackboard.routing.router import render_prompt
 ROOT = Path(__file__).resolve().parents[4]
 
 
+def real_turn_input() -> dict:
+    """One complete current turn input, in the shape workflow.begin_turn freezes."""
+    snapshot = {
+        "excludedEntries": {}, "excludedUntracked": [], "executionFingerprint": "e" * 64,
+        "executionSelectors": [], "includeSelectors": [], "includedUntracked": [],
+        "inputRef": "refs/hey-my-buddy/workspaces/ws-fixture/input",
+        "repositoryPath": "/repos/hey-my-buddy/.git", "sourceHead": "0" * 40,
+        "stagedCommit": "1" * 40, "stagedRef": "refs/hey-my-buddy/workspaces/ws-fixture/staged",
+        "stagedTree": "2" * 40,
+    }
+    return {
+        "version": 3, "taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
+        "resumeMode": "initial", "previousSessionId": None,
+        "context": {
+            "taskId": "task", "turnIndex": 1,
+            "buddy": {"harness": "codex", "provider": "fixture", "model": "fixture", "effort": "low"},
+            "delegationAuthority": False, "routing": {"decisionId": None, "buddyRevision": 1},
+            "nextActions": ["Continue the original task from the recorded checkpoint.",
+                            "Report the structured outcome through this execution harness's supplied completion interface."],
+        },
+        "executionWorkspace": {
+            "access": "write", "baseCommit": "0" * 40,
+            "checkoutRoot": "/state/workspaces/ws-fixture/checkout",
+            "exclusionPolicy": {"kind": "git-standard", "managedPaths": "tracked-and-nonignored-untracked",
+                                "selectedIgnored": "includeUntracked", "version": 1},
+            "inputCommit": "1" * 40, "inputTree": "2" * 40,
+            "integrator": {"id": "claude-code-host", "role": "host"}, "kind": "worktree",
+            "manifestSha256": "3" * 64, "path": "/state/workspaces/ws-fixture/checkout",
+            "projectId": "4" * 64, "snapshot": snapshot, "targetRef": None, "version": 4,
+            "workspaceId": "ws-fixture",
+            "writeScope": ["src/hey_my_buddy/buddy/roles", "tests/python/buddy/roles"],
+        },
+    }
+
+
+def turn_input_without_snapshot(turn: dict) -> dict:
+    """The turn input as the Worker prompt must serialize it: without the snapshot."""
+    workspace = {key: value for key, value in turn["executionWorkspace"].items() if key != "snapshot"}
+    return {**turn, "executionWorkspace": workspace}
+
+
 class RolePromptTests(unittest.TestCase):
     def test_wrap_up_prompt_is_packaged_beside_worker_role_text(self):
         prompt = prompts.wrap_up_prompt()
@@ -81,9 +122,7 @@ class RolePromptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="hey-my-buddy-role-prompts-") as temporary:
             root = Path(temporary)
             task = "ROLE: Host override from task"
-            turn = {"version": 3, "taskId": "task", "attemptId": "attempt", "generation": 1, "turnId": "turn",
-                    "resumeMode": "initial", "executionWorkspace": {"access": "write"},
-                    "ROLE": "Host override from input"}
+            turn = {**real_turn_input(), "ROLE": "Host override from input"}
             (root / "task.txt").write_text(task, encoding="utf-8", newline="\n")
             turn_io.private_json(root / "input.json", turn)
             mount = SimpleNamespace(server_name="test", tool_contracts=[
@@ -94,7 +133,8 @@ class RolePromptTests(unittest.TestCase):
             module = SimpleNamespace(prepare_services=mock.Mock(return_value=binding))
             for name, authority in ((name, authority) for name in ("codex", "claude", "dsh", "zcode")
                                     for authority in (False, True)):
-                turn["context"] = {"delegationAuthority": authority,
+                turn["context"] = {**real_turn_input()["context"],
+                                   "delegationAuthority": authority,
                                    "continuation": {"input": "完整的续做输入\nretain this text"}}
                 turn_io.private_json(root / "input.json", turn)
                 frozen_input = (root / "input.json").read_bytes()
@@ -122,7 +162,8 @@ class RolePromptTests(unittest.TestCase):
                         self.assertNotIn(str(root / "agent-credential.json"), request.input_text)
                     self.assertGreater(request.input_text.index(task), len(role))
                     self.assertEqual(request.input_text.count(task), 1)
-                    self.assertTrue(request.input_text.endswith(turn_io.canonical_json(turn)))
+                    self.assertTrue(request.input_text.endswith(
+                        turn_io.canonical_json(turn_input_without_snapshot(turn))))
                     self.assertEqual((root / "input.json").read_bytes(), frozen_input)
                     self.assertEqual(turn_io.input_hash(turn), frozen_hash)
                     self.assertNotIn("task", turn["context"])
@@ -138,7 +179,8 @@ class RolePromptTests(unittest.TestCase):
         for harness in ("codex", "claude"):
             for authority in (False, True):
                 with self.subTest(harness=harness, authority=authority):
-                    turn = {"context": {"delegationAuthority": authority}}
+                    turn = real_turn_input()
+                    turn["context"]["delegationAuthority"] = authority
                     prompt = worker_format(harness).for_turn(turn).prompt("Task", turn)
                     self.assertEqual(prompt.count(restriction), 1)
                     self.assertNotIn(restriction, prompt[len(worker):])
@@ -149,6 +191,32 @@ class RolePromptTests(unittest.TestCase):
                                            prompt.index(restriction))
                     else:
                         self.assertNotIn(lead, prompt)
+
+    def test_the_prompt_input_drops_only_the_workspace_snapshot_account(self):
+        paths = [f"generated/untracked-batch-{index // 64}/change-{index}.py" for index in range(5000)]
+        crowded = real_turn_input()
+        crowded["executionWorkspace"]["snapshot"].update(
+            includeSelectors=list(paths), executionSelectors=list(paths), includedUntracked=list(paths))
+        empty_snapshot = real_turn_input()
+        empty_snapshot["executionWorkspace"]["snapshot"] = {}
+        crowded_prompt = prompts.worker_prompt("task text", crowded, delivery=("Delivery line.",))
+        empty_prompt = prompts.worker_prompt("task text", empty_snapshot, delivery=("Delivery line.",))
+        # The snapshot is the blackboard's own workspace account, not something
+        # the harness process receives (ADR-030), so a snapshot holding
+        # thousands of paths cannot grow the prompt: it stays byte-identical to
+        # the same turn with an empty snapshot, and none of the paths reach it.
+        self.assertEqual(crowded_prompt, empty_prompt)
+        for path in paths:
+            self.assertNotIn(path, crowded_prompt)
+        self.assertNotIn("snapshot", crowded_prompt)
+        self.assertNotIn("executionFingerprint", crowded_prompt)
+        workspace = crowded["executionWorkspace"]
+        for value in (workspace["path"], workspace["checkoutRoot"], workspace["manifestSha256"],
+                      "src/hey_my_buddy/buddy/roles", "tests/python/buddy/roles",
+                      "Continue the original task from the recorded checkpoint."):
+            self.assertIn(value, crowded_prompt)
+        self.assertIn('"access":"write"', crowded_prompt)
+        self.assertTrue(crowded_prompt.endswith(canonical_json(turn_input_without_snapshot(crowded))))
 
     def test_router_role_and_full_prompt_hashes_are_fixed(self):
         self.assertEqual(hashlib.sha256(resource_path("roles.router").read_bytes()).hexdigest(),
