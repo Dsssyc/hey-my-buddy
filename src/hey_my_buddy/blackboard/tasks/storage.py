@@ -282,6 +282,7 @@ def _allocation_reference_sets(rows, allocations, *, directories=None, on_refere
 
 def inspect(store) -> dict:
     from . import workspace
+    from .workspace_bindings import MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE, effective_manifest
     from .workflow import repository_candidates
     state = store.directory.resolve()
     rows = []
@@ -305,9 +306,25 @@ def inspect(store) -> dict:
     # hold an authoritative database transaction open.
     repository_check = object()
     workspace_inputs = []
+    unproven_workspaces = []
     with store.db.read() as connection:
         for run in connection.execute('SELECT * FROM workflow_runs'):
-            manifest = json.loads(run['workspace_manifest_json'])
+            try:
+                manifest = effective_manifest(state, connection, run)
+            except BoardError as error:
+                if error.code not in ('WORKSPACE_MANIFEST_CHANGED', 'INVALID_WORKSPACE'):
+                    raise
+                owner = connection.execute(
+                    f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}),'
+                    f' run_bindings AS ({RUN_BINDINGS_CTE})'
+                    ' SELECT o.workspace_kind,o.checkout_root,b.workspace_id'
+                    ' FROM run_bindings b JOIN manifest_owners o'
+                    ' ON o.workspace_id=b.workspace_id AND o.manifest_sha256=b.manifest_sha256'
+                    ' WHERE b.run_id=?', (run['run_id'],)).fetchone()
+                if owner is None:
+                    raise
+                unproven_workspaces.append((run['run_id'], run['revision'], dict(owner), error.code))
+                continue
             retained = store.workflow._allocation_provenance(connection, run)
             reasons = None
             # An existing checkout is borrowed unless retained provenance ties
@@ -362,6 +379,13 @@ def inspect(store) -> dict:
     # Board knowledge is independent of whether physical ownership is proved.
     # Rejected/borrowed allocations must not fall through to the orphan path.
     recognized = set()
+    for run_id, revision, owner, code in unproven_workspaces:
+        path = Path(os.path.normpath(owner['checkout_root']))
+        recognized.add(path)
+        if owner['workspace_kind'] == 'worktree' and workspace._workspace_identifier(owner['workspace_id']):
+            recognized.add(state / 'workspaces' / owner['workspace_id'] / 'checkout')
+            if workspace._path_present(path):
+                add('workspaces', path, [code], runId=run_id, revision=revision)
     for _, _, manifest, retained, _ in workspace_inputs:
         for recorded in (manifest, *retained):
             root = recorded.get('checkoutRoot')

@@ -100,7 +100,7 @@ class ReminderFacts(BoardTestCase):
         @contextmanager
         def complete_before_collect_write():
             with original_write() as connection:
-                connection.execute("UPDATE attempts SET execution_state='finished',result_json='{}'"
+                connection.execute("UPDATE attempts SET execution_state='finished',result_json='{}',result_form='current-report-v2'"
                                    ' WHERE attempt_id=?', (self.attempt['attemptId'],))
             with original_write() as connection:
                 yield connection

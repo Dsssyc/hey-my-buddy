@@ -27,7 +27,7 @@ class MaintenanceDataTests(WorkflowTestCase):
         )["task"]["runId"]
         self.maintenance_id = "maintenance-test"
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET state='concluded' WHERE run_id IN (?,?)",
+            db.execute("UPDATE workflow_runs SET state='concluded', workspace_id=NULL, workspace_manifest_sha256=NULL WHERE run_id IN (?,?)",
                        [run["runId"] for run in self.runs])
             now = self.board_.store.now()
             db.execute("INSERT INTO maintenance_runs VALUES(?, 'manual','fixture',?, 'completed',NULL,NULL,?,?)",
@@ -434,7 +434,7 @@ class MaintenanceDataTests(WorkflowTestCase):
             self.finish_turn(self.board_, self.claim(self.board_, run_id=run["runId"]))
             self.runs.append(run)
         with self.board_.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET state='concluded'")
+            db.execute("UPDATE workflow_runs SET state='concluded', workspace_id=NULL, workspace_manifest_sha256=NULL")
             db.execute("INSERT INTO domain_nodes VALUES('existing','Existing','Existing domain',NULL,NULL,?)",
                        (self.maintenance_id,))
             db.executemany("INSERT INTO micro_task_classifications VALUES(?,'existing','review',?)",

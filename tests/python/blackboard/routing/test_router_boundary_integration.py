@@ -649,13 +649,13 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         view = self.routed()
         with self.board_.store.db.write() as db:
             row = self.board_.store.decisions._row(db, view["routing"]["decisionId"])
-            self.assertEqual(_continuation_context(db, row, "missing-run", None)[:2],
+            self.assertEqual(_continuation_context(db, row, "missing-run", None, self.board_.directory)[:2],
                              (False, "micro-task-not-found"))
-            self.assertEqual(_continuation_context(db, row, view["runId"], "another-owner")[:2],
+            self.assertEqual(_continuation_context(db, row, view["runId"], "another-owner", self.board_.directory)[:2],
                              (True, "micro-task-not-owned"))
             db.execute("UPDATE workflow_routes SET owner_generation=owner_generation+1 WHERE decision_id=?",
                        (row["decision_id"],))
-            self.assertEqual(_continuation_context(db, row, view["runId"], None)[:2],
+            self.assertEqual(_continuation_context(db, row, view["runId"], None, self.board_.directory)[:2],
                              (True, "workflow-routing-fenced"))
 
     def test_candidate_gates_use_one_code_with_precise_bound_facts(self):
@@ -823,7 +823,7 @@ class MicroTaskBoundaryTests(WorkflowTestCase):
         for terminal in ("cancelled", "concluded", "accepted"):
             with self.subTest(terminal=terminal):
                 with self.board_.store.db.write() as db:
-                    db.execute("UPDATE workflow_runs SET state=? WHERE run_id=?", (terminal, root["runId"]))
+                    db.execute("UPDATE workflow_runs SET state=?,workspace_id=CASE WHEN ? IN ('accepted','concluded') THEN NULL ELSE workspace_id END,workspace_manifest_sha256=CASE WHEN ? IN ('accepted','concluded') THEN NULL ELSE workspace_manifest_sha256 END WHERE run_id=?", (terminal, terminal, terminal, root["runId"]))
                 after = self.board_.call("workflow_get", {"runId": leaf["runId"]})
                 self.assertTrue(after["routing"]["routingBoundary"]["commands"]["continue"]["blocked"])
                 self.assertEqual(after["routing"]["routingBoundary"]["commands"]["continue"]["code"],

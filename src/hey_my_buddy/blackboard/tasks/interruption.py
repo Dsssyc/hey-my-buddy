@@ -235,7 +235,8 @@ def _recover_one(board, attempt, identity, stopped_evidence):
                     digest = None
             else:
                 digest = received['sha256']
-            receipt = read_execution_receipt(directory, binding=binding, sha256=digest)
+            receipt = read_execution_receipt(directory, binding=binding, sha256=digest,
+                                             form=attempt["result_form"] or "current-report-v2")
             if receipt is None and received is not None:
                 raise BoardError('RECEIPT_MISSING', 'Received execution receipt is missing')
             if receipt is not None:

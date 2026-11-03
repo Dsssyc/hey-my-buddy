@@ -425,9 +425,14 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         other = self.closed(board, "tree-other", project="tree-other")
         now = board.store.now()
         with board.store.db.write() as db:
+            helper_input = db.execute("SELECT workspace_id,input_manifest_sha256 FROM workflow_artifacts"
+                                      " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
+                                      (helper['runId'],)).fetchone()
             db.execute("INSERT INTO workflow_turns(turn_id,run_id,turn_index,resume_mode,input_json,access,"
-                       "expected_seconds,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                       ("lead-tree-turn", helper["runId"], 1, "initial", "{}", "write", 60,
+                       "workspace_id,workspace_manifest_sha256,expected_seconds,state,created_at,updated_at)"
+                       " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                       ("lead-tree-turn", helper["runId"], 1, "initial", "{}", "write",
+                        helper_input['workspace_id'], helper_input['input_manifest_sha256'], 60,
                         "returned", now, now))
             for child, parent, request in ((helper, root, "tree-help-request"),
                                            (grandchild, lead_owned, "tree-grand-request")):
@@ -496,15 +501,18 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         now = board.store.now()
         attempt_ids = ("generation-one", "generation-two")
         with board.store.db.write() as db:
+            initial = db.execute("SELECT workspace_id,input_manifest_sha256 FROM workflow_artifacts"
+                                 " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (task_id,)).fetchone()
             for generation, attempt_id in enumerate(attempt_ids, 1):
                 db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
                            "adapter,shutdown_confirmed,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
                            (attempt_id, task_id, generation, "fixture", "finished", "dsh", 1, now, now))
                 db.execute("INSERT INTO workflow_turns(turn_id,run_id,attempt_id,generation,turn_index,"
-                           "resume_mode,input_json,access,expected_seconds,state,created_at,updated_at)"
-                           " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                           "resume_mode,input_json,workspace_id,workspace_manifest_sha256,access,expected_seconds,state,created_at,updated_at)"
+                           " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                            (f"turn-{generation}", task_id, attempt_id, generation, generation,
-                            "initial", "{}", "write", 60, "returned", now, now))
+                            "initial", "{}", initial['workspace_id'], initial['input_manifest_sha256'],
+                            "write", 60, "returned", now, now))
                 db.execute("INSERT INTO attempt_process_identities(attempt_id,boot_id,root_pid,"
                            "root_started_at) VALUES(?,?,?,?)",
                            (attempt_id, "fixture-boot", generation + 100, generation + 1000))
@@ -562,6 +570,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with board.store.db.read() as db:
             original_task = dict(db.execute("SELECT * FROM tasks WHERE task_id=?", (run["runId"],)).fetchone())
             original_run = dict(db.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone())
+            initial = db.execute("SELECT workspace_id,input_manifest_sha256 FROM workflow_artifacts"
+                                 " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (run["runId"],)).fetchone()
         cases = (
             ("queued", original_run["state"], "queued"),
             ("running", original_run["state"], "running"),
@@ -577,7 +587,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
             with self.subTest(task_state=task_state, run_state=run_state):
                 with board.store.db.write() as db:
                     db.execute("UPDATE tasks SET state=? WHERE task_id=?", (task_state, run["runId"]))
-                    db.execute("UPDATE workflow_runs SET state=? WHERE run_id=?", (run_state, run["runId"]))
+                    pair = (None, None) if run_state in ('accepted', 'concluded') else (
+                        initial['workspace_id'], initial['input_manifest_sha256'])
+                    db.execute("UPDATE workflow_runs SET state=?,workspace_id=?,workspace_manifest_sha256=?"
+                               " WHERE run_id=?", (run_state, *pair, run["runId"]))
                 preview = macro_task_deletion.preview(board.store, target)
                 self.assertIn("macro-task-deletion." + reason, {blocker["reason"]["code"] for blocker in preview["blockers"]})
                 error = self.assert_code("MACRO_TASK_NOT_SETTLED", macro_task_deletion.delete,
@@ -586,7 +599,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with board.store.db.write() as db:
             db.execute("UPDATE tasks SET state=?,selected_attempt_id='missing-attempt' WHERE task_id=?",
                        (original_task["state"], run["runId"]))
-            db.execute("UPDATE workflow_runs SET state=? WHERE run_id=?", (original_run["state"], run["runId"]))
+            db.execute("UPDATE workflow_runs SET state=?,workspace_id=NULL,workspace_manifest_sha256=NULL"
+                       " WHERE run_id=?", (original_run["state"], run["runId"]))
         self.assertIn("macro-task-deletion.stop-unconfirmed", {b["reason"]["code"] for b in
                          macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
@@ -629,8 +643,8 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_requests SET state='declined' WHERE request_id='pending-request'")
             db.execute("INSERT INTO workflow_continuations(continuation_id,run_id,kind,expected_revision,"
-                       "input_text,state,created_at) VALUES(?,?,?,?,?,?,?)",
-                       ("pending-continuation", run["runId"], "manual", 1, "private", "recorded", now))
+                       "input_text,workspace_facts_role,state,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                       ("pending-continuation", run["runId"], "manual", 1, "private", "pending", "recorded", now))
         self.assertIn("macro-task-deletion.queued", {b["reason"]["code"] for b in macro_task_deletion.preview(board.store, target)["blockers"]})
         with board.store.db.write() as db:
             db.execute("UPDATE workflow_continuations SET state='queued' WHERE continuation_id='pending-continuation'")
@@ -700,10 +714,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                             "nativeCheckpoint": {"version": 1, "sessionId": session_id,
                                "taskId": run["runId"], "attemptId": attempt_id}}}
                 db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
-                           "adapter,shutdown_confirmed,result_json,created_at,updated_at)"
-                           " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                           "adapter,shutdown_confirmed,result_json,result_form,created_at,updated_at)"
+                           " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                            (attempt_id, run["runId"], generation, "fixture", "finished", "codex", 1,
-                            json.dumps(receipt), now, now))
+                            json.dumps(receipt), 'archived-report-v1', now, now))
         calls = []
         def delete_native(ids, *, state_dir):
             self.assertIs(state_dir, board.store.directory)
@@ -745,10 +759,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                             "nativeCheckpoint": {"version": 1, "sessionId": session_id,
                                "taskId": run["runId"], "attemptId": attempt_id}}}
                 db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,"
-                           "adapter,shutdown_confirmed,result_json,created_at,updated_at)"
-                           " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                           "adapter,shutdown_confirmed,result_json,result_form,created_at,updated_at)"
+                           " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                            (attempt_id, run["runId"], 1, "fixture", "finished", "codex", 1,
-                            json.dumps(receipt), now, now))
+                            json.dumps(receipt), 'archived-report-v1', now, now))
         error = self.assert_code("MACRO_TASK_STORAGE_IN_USE", macro_task_deletion.preview,
                                  board.store, owner["macroTaskId"])
         self.assertIn({"objectKind": "native-session", "holderRunIds": [other["runId"]]},
@@ -773,9 +787,10 @@ class MacroTaskDeletionTests(WorkflowTestCase):
                        "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
                        ("owned-conflict", run["runId"], "old-attempt", "fingerprint",
                         '{"manifestSha256":"manifest","blockingPaths":[]}', "abandoned", now, now))
-            db.execute("INSERT INTO workflow_artifacts(artifact_id,run_id,kind,manifest_json,"
-                       "manifest_sha256,created_at) VALUES(?,?,?,?,?,?)",
-                       ("owned-workflow-artifact", run["runId"], "output", "{}", "owned-hash", now))
+            db.execute("INSERT INTO workflow_artifacts(artifact_id,run_id,kind,content_form,manifest_json,"
+                       "shared_refs_sha256,created_at)"
+                       " VALUES(?,?,?,'sealed-inline-v1',?,?,?)",
+                       ("owned-workflow-artifact", run["runId"], "shared-refs", "{}", "owned-hash", now))
             db.execute("INSERT INTO workflow_integrations(integration_id,run_id,artifact_id,"
                        "strategy,binding_sha256,verification_json,actor_role,actor_id,created_at)"
                        " VALUES(?,?,?,?,?,?,?,?,?)",
@@ -878,9 +893,11 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         from hey_my_buddy.blackboard.tasks import workspace
         board = self.board()
         run = self.closed(board, 'a' * 32, macro_task='Allocation admission')
-        directory = board.directory / 'workspaces' / ('ws-' + 'a' * 32)
-        directory.mkdir(parents=True)
-        (directory / '.lock').touch()
+        with board.store.db.read() as db:
+            identifier = db.execute("SELECT workspace_id FROM workflow_artifacts"
+                                    " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
+                                    (run['runId'],)).fetchone()[0]
+        directory = board.directory / 'workspaces' / identifier
         with workspace._lock(directory):
             self.assert_code('WORKSPACE_BUSY',macro_task_deletion.delete,board.store,run['macroTaskId'],1)
             now = board.store.now()
@@ -923,12 +940,17 @@ class MacroTaskDeletionTests(WorkflowTestCase):
         with board.store.db.write() as db:
             for run,attempt_id,result in ((owner,'created-session',json.dumps(receipt)),(other,'interrupted-resume',None)):
                 db.execute('INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,'
-                           'adapter,shutdown_confirmed,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
-                           (attempt_id,run['runId'],1,'fixture','finished','codex',1,result,now,now))
+                           'adapter,shutdown_confirmed,result_json,result_form,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                           (attempt_id,run['runId'],1,'fixture','finished','codex',1,result,
+                            'archived-report-v1' if result is not None else None,now,now))
+            original = db.execute("SELECT workspace_id,input_manifest_sha256 FROM workflow_artifacts"
+                                  " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (other['runId'],)).fetchone()
             db.execute('INSERT INTO workflow_turns(turn_id,run_id,attempt_id,turn_index,resume_mode,previous_session_id,'
-                       'input_json,access,expected_seconds,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                       'input_json,workspace_id,workspace_manifest_sha256,access,expected_seconds,state,created_at,updated_at)'
+                       ' VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                        ('interrupted-native-turn',other['runId'],'interrupted-resume',1,'native-session',session_id,
-                        '{}','write',60,'interrupted',now,now))
+                        '{}',original['workspace_id'],original['input_manifest_sha256'],
+                        'write',60,'interrupted',now,now))
         error = self.assert_code('MACRO_TASK_STORAGE_IN_USE',macro_task_deletion.preview,board.store,owner['macroTaskId'])
         self.assertIn({'objectKind':'native-session','holderRunIds':[other['runId']]},error.details['objects'])
         with board.store.db.write() as db:

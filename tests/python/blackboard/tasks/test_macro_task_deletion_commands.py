@@ -177,7 +177,8 @@ class WorkspaceDeletionCommandTests(RealWorkspaceTestCase):
         submitted = self.micro_task_submit(board, request_id="commands-cleanup", scope=(".",), kind="worktree")
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id)
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
+        manifest = resolve_manifest(board.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
         checkout = Path(manifest["path"])
         (checkout / "tracked.txt").write_text("accepted output\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])

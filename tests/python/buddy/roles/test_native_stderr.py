@@ -18,9 +18,19 @@ from hey_my_buddy.paths import native_path
 def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, configure):
     invocation = self.base / "worker"
     invocation.mkdir(mode=0o700)
+    workspace_id = "ws-" + "a" * 32
+    manifest = {"version": 5, "workspaceId": workspace_id, "path": str(cwd), "access": "write"}
+    manifest_sha = hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"),
+                                             ensure_ascii=True).encode()).hexdigest()
+    manifest["manifestSha256"] = manifest_sha
+    manifest_path = self.base / "state" / "workspaces" / workspace_id / "manifest.json"
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True),
+                             encoding="utf-8")
     document = {"taskId": "task", "attemptId": "attempt", "generation": 1,
-                "turnId": "turn", "resumeMode": "initial", "previousSessionId": None,
-                "context": {}, "executionWorkspace": {"access": "write"}}
+                "version": 4, "turnId": "turn", "resumeMode": "initial", "previousSessionId": None,
+                "context": {}, "executionWorkspace": {"workspaceId": workspace_id,
+                                                      "manifestSha256": manifest_sha}}
     input_path = invocation / "turn-input.json"
     input_path.write_text(json.dumps(document), encoding="utf-8")
     task_path = invocation / "task.txt"

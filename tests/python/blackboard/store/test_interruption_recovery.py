@@ -269,7 +269,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         with board.store.db.read() as connection:
             attempt = dict(board.store._attempt_row(connection, actor['attemptId']))
         root = interruption._directory(board.store, attempt)
-        receipt = {'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
+        receipt = {'version': 2, 'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
                    'createdAt': board.store.now(),
                    'report': {'status': 'ok', 'result': {'finalText': 'durable'}, 'shutdownConfirmed': True}}
         fsync_json(root / RECEIPT, receipt)
@@ -331,7 +331,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         root = Path(self.journal(board, actor['attemptId'])['path']).parent
         credential = root / 'agent-credential.json'
         native_path(credential).write_text('private fixture')
-        receipt = {'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
+        receipt = {'version': 2, 'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
                    'createdAt': board.store.now(), 'report': {'status': 'ok', 'shutdownConfirmed': True}}
         fsync_json(root / RECEIPT, receipt)
         original = native_path(root / RECEIPT).read_bytes()
@@ -354,7 +354,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         root = Path(self.journal(board, actor['attemptId'])['path']).parent
         credential = root / 'agent-credential.json'
         native_path(credential).write_text('private fixture')
-        receipt = {'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
+        receipt = {'version': 2, 'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation'],
                    'createdAt': board.store.now(), 'report': {'status': 'ok', 'shutdownConfirmed': True}}
         fsync_json(root / RECEIPT, receipt)
         original = native_path(root / RECEIPT).read_bytes()
@@ -393,7 +393,7 @@ class InterruptionRecoveryTests(BoardTestCase):
         board, client, task, _, actor = self.claimed()
         directory = Path(self.journal(board, actor['attemptId'])['path']).parent
         binding = {'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': actor['generation']}
-        receipt = {**binding, 'createdAt': board.store.now(),
+        receipt = {'version': 2, **binding, 'createdAt': board.store.now(),
                    'report': {'status': 'invalid-status', 'shutdownConfirmed': True}}
         fsync_json(directory / RECEIPT, receipt)
         original = native_path(directory / RECEIPT).read_bytes()
@@ -533,7 +533,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                 with board.store.db.read() as db:
                     attempt = dict(board.store._attempt_row(db, actor['attemptId']))
                     later = dict(board.store._attempt_row(db, good_actor['attemptId']))
-                envelope = {'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': 1,
+                envelope = {'version': 2, 'taskId': task['runId'], 'attemptId': actor['attemptId'], 'generation': 1,
                             'createdAt': board.store.now(),
                             'report': {'status': 'ok', 'result': {'native': name}, 'shutdownConfirmed': True}}
                 if name == 'shape':
@@ -549,7 +549,7 @@ class InterruptionRecoveryTests(BoardTestCase):
                 later_root = interruption._directory(board.store, later)
                 native_path(later_root).mkdir(parents=True)
                 fsync_json(later_root / RECEIPT, {
-                    'taskId': good_task['runId'], 'attemptId': good_actor['attemptId'], 'generation': 1,
+                    'version': 2, 'taskId': good_task['runId'], 'attemptId': good_actor['attemptId'], 'generation': 1,
                     'createdAt': board.store.now(),
                     'report': {'status': 'ok', 'result': {'native': 'later'}, 'shutdownConfirmed': True}})
                 with patch.object(processes, 'inspect_process_identity', return_value='identity-absent'):

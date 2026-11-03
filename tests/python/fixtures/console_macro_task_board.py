@@ -228,10 +228,12 @@ class SyntheticBoard:
         evidence = self.state / "attempts" / run_id / attempt["attemptId"]
         evidence.mkdir(parents=True, exist_ok=True)
         (evidence / "turn-output.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
+        from hey_my_buddy.protocol.workspace_manifest import record_reference, turn_manifest
+        manifest = turn_manifest(self.state, claim["turn"]["input"])
         result = {"status": "ok", "mode": "run", "processState": {"shutdownConfirmed": True},
                   "logPaths": {}, "turn": record, "turnResultPath": str(evidence / "turn-output.json"),
-                  "workspaceSeal": self.workspace.seal(self.state, claim["turn"]["input"]["executionWorkspace"],
-                                                       run_id, attempt["attemptId"])}
+                  "workspaceSeal": record_reference(self.state, self.workspace.seal(
+                      self.state, manifest, run_id, attempt["attemptId"]))}
         self.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': NONCE, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
         if disposition == "completed":
             self.completed_attempts.append(attempt["attemptId"])

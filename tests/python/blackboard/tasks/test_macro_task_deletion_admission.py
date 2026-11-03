@@ -22,7 +22,8 @@ class DeletionAdmissionTests(LifecycleTestCase):
         })
         self.controls[owner["runId"]] = owner["control"]
         claimed = self.claim(board, owner["runId"])
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
+        manifest = resolve_manifest(board.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
         checkout = Path(manifest["path"])
         (checkout / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         seal = workspace.seal(self.directory, manifest, owner["runId"],
@@ -92,7 +93,8 @@ class DeletionAdmissionTests(LifecycleTestCase):
         self.controls[run_id] = submitted["control"]
         claimed = self.claim(board, run_id)
         attempt = claimed["claim"]["attempt"]
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
+        manifest = resolve_manifest(board.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
         result = {"status": "failed"}
         if conflict:
             (self.repo / "tracked.txt").write_text("outside the scope\n", encoding="utf-8", newline="\n")

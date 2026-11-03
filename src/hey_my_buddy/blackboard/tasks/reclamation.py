@@ -10,6 +10,7 @@ from pathlib import Path
 from ... import private_dirs
 from ...errors import BoardError
 from . import allocation_revocations, host_conclusions, workspace
+from .workspace_bindings import MANIFEST_OWNERS_CTE, RUN_BINDINGS_CTE
 
 NATIVE_RETENTION = timedelta(days=3)
 
@@ -17,10 +18,18 @@ NATIVE_RETENTION = timedelta(days=3)
 def workspace_candidates(store, task_ids=None) -> list[str]:
     """Cheap durable selection; existing submissions never need provenance work."""
     query = (
-        "SELECT r.run_id FROM workflow_runs r WHERE r.state IN ('accepted','concluded')"
-        " AND json_extract(r.execution_workspace_json,'$.kind')='worktree'"
+        f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}),"
+        f" run_bindings AS ({RUN_BINDINGS_CTE})"
+        " SELECT r.run_id FROM workflow_runs r"
+        " JOIN run_bindings b ON b.run_id=r.run_id"
+        " JOIN manifest_owners o ON o.workspace_id=b.workspace_id"
+        " AND o.manifest_sha256=b.manifest_sha256"
+        " JOIN workflow_artifacts initial ON initial.run_id=r.run_id AND initial.kind='input'"
+        " JOIN manifest_owners allocation ON allocation.workspace_id=initial.workspace_id"
+        " AND allocation.manifest_sha256=initial.input_manifest_sha256"
+        " WHERE r.state IN ('accepted','concluded') AND allocation.workspace_kind='worktree'"
         " AND NOT EXISTS (SELECT 1 FROM workspace_cleanup_plans p WHERE p.run_id=r.run_id"
-        " AND p.path=json_extract(r.workspace_manifest_json,'$.checkoutRoot') AND p.state='applied')"
+        " AND p.path=o.checkout_root AND p.state='applied')"
     )
     with store.db.read() as connection:
         if task_ids is None:
@@ -37,10 +46,17 @@ def _finished_at(connection, run):
     if run['state'] not in ('failed', 'cancelled'):
         return None
     parent = connection.execute(
-        "SELECT p.* FROM workflow_children c JOIN workflow_runs p ON p.run_id=c.parent_run_id"
-        " WHERE c.child_task_id=?"
-        " AND json_extract(p.workspace_manifest_json,'$.checkoutRoot')=json_extract(?, '$.checkoutRoot')",
-        (run['run_id'], run['workspace_manifest_json']),
+        f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}),"
+        f" run_bindings AS ({RUN_BINDINGS_CTE})"
+        " SELECT p.* FROM workflow_children c JOIN workflow_runs p ON p.run_id=c.parent_run_id"
+        " JOIN run_bindings pb ON pb.run_id=p.run_id"
+        " JOIN manifest_owners po ON po.workspace_id=pb.workspace_id"
+        " AND po.manifest_sha256=pb.manifest_sha256"
+        " JOIN run_bindings rb ON rb.run_id=c.child_task_id"
+        " JOIN manifest_owners ro ON ro.workspace_id=rb.workspace_id"
+        " AND ro.manifest_sha256=rb.manifest_sha256"
+        " WHERE c.child_task_id=? AND po.checkout_root=ro.checkout_root",
+        (run['run_id'],),
     ).fetchone()
     return _finished_at(connection, parent) if parent is not None else None
 

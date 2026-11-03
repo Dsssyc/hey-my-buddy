@@ -1,4 +1,5 @@
 """Lead credentials extend the existing operation and target boundaries."""
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 import json
 from unittest.mock import patch
 
@@ -459,9 +460,9 @@ class LeadOwnedTests(WorkflowTestCase):
         child = self.owned(board, claim)
         run_id = child["runId"]
         with board.store.db.read() as db:
-            original = db.execute("SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone()[0]
-            artifact = db.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input'", (run_id,)).fetchone()[0]
-        self.assertEqual(json.loads(original)["integrator"], {"role": "lead", "id": lead["runId"]})
+            original = board.store.workflow._run_manifest(db, board.store.workflow._run_row(db,run_id))
+            artifact = dict(db.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input'", (run_id,)).fetchone())
+        self.assertEqual(original["integrator"], {"role": "lead", "id": lead["runId"]})
         view, _ = self.finish_owned(board, child)
         taken = board.call("workflow_takeover", {"runId": run_id, "commandId": "console-takeover",
                                                 "newHostId": "lead:ordinary-host", "expectedOwnerGeneration": 1,
@@ -469,8 +470,8 @@ class LeadOwnedTests(WorkflowTestCase):
         self.controls[run_id] = taken["control"]
         self.continue_run(board, taken)
         resumed = self.claim(board, "w2", claim_request_id="claim-current-owner", run_id=run_id)["claim"]
-        self.assertEqual(resumed["turn"]["input"]["executionWorkspace"]["integrator"],
+        self.assertEqual(turn_manifest(self.directory, resumed["turn"]["input"])["integrator"],
                          {"role": "host", "id": "lead:ordinary-host"})
         with board.store.db.read() as db:
-            historical = db.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY created_at LIMIT 1", (run_id,)).fetchone()[0]
+            historical = dict(db.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY created_at LIMIT 1", (run_id,)).fetchone())
         self.assertEqual(historical, artifact)

@@ -8,6 +8,7 @@ from console.test_console import ConsoleTestCase
 from hey_my_buddy.blackboard.tasks import macro_task_deletion, workflow, workspace
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.protocol.reasons import reason
+from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
 
 
 PREVIEW = 'macro_task_deletion_preview'
@@ -16,6 +17,13 @@ DELETE = 'macro_task_delete'
 
 class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleTestCase):
     git = workspace_fixtures.WorkspaceTests.git
+
+    def manifest(self, board, run_id):
+        with board.store.db.read() as connection:
+            row = connection.execute(
+                'SELECT workspace_id, workspace_manifest_sha256 FROM workflow_runs WHERE run_id=?',
+                (run_id,)).fetchone()
+        return resolve_manifest(board.directory, {'workspaceId': row[0], 'manifestSha256': row[1]})
 
     def setUp(self):
         super().setUp()
@@ -57,10 +65,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
                       'checkouts': 2, 'gitRefs': 8},
         })
         params = {'macroTaskId': target, 'microTaskCount': preview['microTaskCount'], 'confirm': True}
-        with board.store.db.read() as connection:
-            checkouts = [Path(json.loads(row[0])['path']) for row in connection.execute(
-                'SELECT workspace_manifest_json FROM workflow_runs WHERE run_id IN (?,?)',
-                (first['runId'], second['runId']))]
+        checkouts = [Path(self.manifest(board, run['runId'])['path']) for run in (first, second)]
         deleted = self.command(browser, DELETE, params)
         self.assertEqual(set(deleted), {'deletionId', 'macroTaskId', 'state', 'deletedAt', 'microTaskCount', 'duplicate'})
         self.assertEqual((deleted['state'], deleted['microTaskCount'], deleted['duplicate']), ('deleted', 2, False))
@@ -98,15 +103,11 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         from hey_my_buddy import private_dirs
         board = self.board()
         run = self.create(board, macroTask={'title': 'Unavailable repository', 'goal': 'Unavailable repository'})
-        with board.store.db.read() as connection:
-            manifest = json.loads(connection.execute(
-                'SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?', (run['runId'],)).fetchone()[0])
+        manifest = self.manifest(board, run['runId'])
         alias = self.submit(board, request_id='borrowed-' + mode, kind='existing', cwd=manifest['checkoutRoot'],
                             macroTaskId=run['macroTaskId'])
         board.call('workflow_cancel', {'runId': alias['runId'], **self.control(alias)})
-        with board.store.db.read() as connection:
-            manifests = [json.loads(row[0]) for row in connection.execute(
-                'SELECT workspace_manifest_json FROM workflow_runs WHERE macro_task_id=?', (run['macroTaskId'],))]
+        manifests = [self.manifest(board, run_id) for run_id in (run['runId'], alias['runId'])]
         prefix = 'refs/hey-my-buddy/workspaces/'
         refs = self.git('for-each-ref', '--format=%(refname)%00%(objectname)', prefix)
         retained = self.repo.with_name('original-repository')
@@ -135,7 +136,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
 
         with patch.object(workspace, '_git', side_effect=read_only_git):
             result = self.command(browser, DELETE, params)
-        self.assertEqual(result['state'], 'deleted')
+        self.assertEqual(result['state'], 'deleted', result)
         self.assertNotIn('failures', result)
         for current in manifests:
             directory = board.directory / 'workspaces' / current['workspaceId']
@@ -322,9 +323,9 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
         now = board.store.now()
         with board.store.db.write() as connection:
             connection.execute('INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,'
-                               'adapter,shutdown_confirmed,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                               'adapter,shutdown_confirmed,result_json,result_form,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                                ('health-attempt-1', run['runId'], 1, 'fixture', 'finished', 'codex', 1,
-                                json.dumps(receipt), now, now))
+                                json.dumps(receipt), 'archived-report-v1', now, now))
             connection.execute("UPDATE harness_health SET status='missing',record_json=? WHERE harness='codex'",
                                (json.dumps({'reason': not_found}),))
         _, browser = self.open_console(board)
@@ -364,9 +365,7 @@ class ConsoleMacroTaskDeletionTests(workflow_fixtures.WorkflowTestCase, ConsoleT
     def test_skipped_checkout_keeps_the_same_deletion_until_its_lock_is_restored(self):
         board = self.board()
         run = self.create(board, macroTask={'title': 'Retained checkout', 'goal': 'Retained checkout'})
-        with board.store.db.read() as connection:
-            manifest = json.loads(connection.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
-                                                     (run['runId'],)).fetchone()[0])
+        manifest = self.manifest(board, run['runId'])
         checkout = Path(manifest['path'])
         from hey_my_buddy.blackboard.tasks import workspace
         workspace._git(checkout, 'worktree', 'unlock', str(checkout))

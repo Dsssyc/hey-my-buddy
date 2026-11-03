@@ -1,10 +1,10 @@
 """Physical deletion boundaries against disposable Git worktrees."""
 import unittest
 import os
+import shutil
 from protocol.session_case import descendant_case
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from blackboard.tasks import test_workspace as workspace_tests
@@ -23,14 +23,20 @@ class DeletionWorkspaceTests(unittest.TestCase):
     intent = workspace_tests.WorkspaceTests.intent
     prepare = workspace_tests.WorkspaceTests.prepare
 
+    def delete_many(self, manifests, artifacts=(), **kwargs):
+        store, owners, records = workspace_tests.deletion_sql_inputs(self, manifests, artifacts)
+        return delete_workspaces(store, owners, records, **kwargs)
+
     def delete(self, manifest, artifacts=()):
-        return delete_workspaces(SimpleNamespace(directory=self.state), [manifest], list(artifacts))
+        return self.delete_many([manifest], artifacts)
 
     def test_later_io_failure_keeps_earlier_skipped_allocations(self):
         manifests = sorted([self.prepare("mixed-one"), self.prepare("mixed-two")],
                            key=lambda item: item["workspaceId"])
         first = self.state / "workspaces" / manifests[0]["workspaceId"]
-        (first / "manifest.json").write_bytes(b"{}")
+        request = json.loads((first / 'request.json').read_bytes())
+        request['requestId'] = 'different-allocation-owner'
+        (first / 'request.json').write_bytes(workspace._json(request))
         second = self.state / "workspaces" / manifests[1]["workspaceId"]
         original = Path.rename
         failure = PermissionError(13, "record directory held open", str(second))
@@ -42,7 +48,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
 
         with patch.object(Path, "rename", autospec=True, side_effect=rename):
             with self.assertRaises(PermissionError) as caught:
-                delete_workspaces(SimpleNamespace(directory=self.state), manifests, [])
+                self.delete_many(manifests)
         self.assertIs(caught.exception, failure)
         self.assertEqual([item["path"] for item in failure.deletion_skipped], [str(first)])
         self.assertEqual(failure.deletion_skipped[0]["reason"]["code"],
@@ -75,7 +81,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                 directory = self.state / "workspaces" / manifest["workspaceId"]
                 checkout = Path(manifest["checkoutRoot"])
                 (checkout / "src/file.txt").write_text("result\n", encoding="utf-8", newline="\n")
-                output = workspace.seal(self.state, manifest, "task-1", "attempt-1")
+                output = workspace.seal(self.state, manifest, f"task-{separate}", "attempt-1")
                 output["cumulativePatch"] = workspace.cumulative_patch(manifest, output, manifest["inputCommit"])
                 if separate:
                     # An existing seal retains the older two-file form.
@@ -100,7 +106,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         (checkout / "src/new.txt").write_text("unsealed\n", encoding="utf-8", newline="\n")
         self.git("worktree", "unlock", str(checkout))
         self.git("worktree", "lock", "--reason", "someone-else", str(checkout))
-        skipped = delete_workspaces(SimpleNamespace(directory=self.state), [manifest, later], [])
+        skipped = self.delete_many([manifest, later])
         self.assertIn("macro-task-deletion.lock-mismatch", [item["reason"]["code"] for item in skipped])
         self.assertIn(str(self.state / "workspaces" / later["workspaceId"]),
                       [item["path"] for item in skipped])
@@ -210,7 +216,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                 directory = self.state / "workspaces" / manifest["workspaceId"]
                 tomb = directory.parent / (".deleting-" + manifest["workspaceId"])
                 if phase == "checkout":
-                    owner, name = workspace, "cleanup_remove"
+                    owner, name = workspace, "deletion_remove_checkout"
                 elif phase == "refs":
                     owner, name = deletion_workspace, "_delete_refs"
                 else:
@@ -324,8 +330,8 @@ class DeletionWorkspaceTests(unittest.TestCase):
         checkout = Path(manifest["checkoutRoot"])
         moved = self.root / "known-moved-location"
         self.repo.rename(moved)
-        skipped = delete_workspaces(
-            SimpleNamespace(directory=self.state), [manifest], [],
+        skipped = self.delete_many(
+            [manifest],
             candidate_paths={manifest["workspaceId"]: (str(moved),)},
         )
         self.assertEqual(skipped, [])
@@ -339,14 +345,29 @@ class DeletionWorkspaceTests(unittest.TestCase):
         moved = self.root / "moved-existing-location"
         self.repo.rename(moved)
         with patch.object(workspace, "_git_in", side_effect=AssertionError("existing checkout was repaired")):
-            skipped = delete_workspaces(
-                SimpleNamespace(directory=self.state), [manifest], [],
+            skipped = self.delete_many(
+                [manifest],
                 candidate_paths={manifest["workspaceId"]: (str(moved),)},
             )
         self.assertEqual(skipped, [])
         self.assertTrue(moved.is_dir())
         prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
         self.assertFalse(self.git("for-each-ref", "--format=%(refname)", prefix, cwd=moved))
+
+    def test_same_project_copy_without_input_anchor_is_not_selected(self):
+        manifest = self.prepare('copied-candidate-anchor', kind='existing')
+        moved = self.root / 'moved-owner'
+        self.repo.rename(moved)
+        copied = self.root / 'copied-candidate'
+        shutil.copytree(moved, copied)
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        anchor = prefix + 'retained/input'
+        different_object = self.git('rev-parse', 'HEAD^{tree}', cwd=copied).strip()
+        self.git('update-ref', anchor, different_object, cwd=copied)
+        self.assertEqual(self.delete_many(
+            [manifest], candidate_paths={manifest['workspaceId']: (str(copied), str(moved))}), [])
+        self.assertFalse(self.git('for-each-ref', '--format=%(refname)', prefix, cwd=moved))
+        self.assertEqual(self.git('rev-parse', anchor, cwd=copied).strip(), different_object)
 
     def test_replaced_repository_clears_private_allocations_without_touching_replacement(self):
         self.unavailable_repository_case("replaced")
@@ -465,7 +486,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
                     repository.mkdir()
                 try:
                     with patch.object(deletion_workspace, "_delete_refs") as delete_refs:
-                        skipped = delete_workspaces(SimpleNamespace(directory=self.state), [later, allocation], [])
+                        skipped = self.delete_many([later, allocation])
                     delete_refs.assert_not_called()
                     self.assertFalse(directory.exists())
                     self.assertFalse(native_path(Path(allocation["checkoutRoot"])).exists())
@@ -482,8 +503,7 @@ class DeletionWorkspaceTests(unittest.TestCase):
         checkout = Path(allocation["checkoutRoot"])
         (checkout / "src/file.txt").write_text("later result\n", encoding="utf-8", newline="\n")
         output = workspace.seal(self.state, later, "task-1", "attempt-1")
-        skipped = delete_workspaces(SimpleNamespace(directory=self.state),
-                                    [later, allocation, later], [output])
+        skipped = self.delete_many([later, allocation, later], [output])
         self.assertEqual(skipped, [])
         self.assertFalse(checkout.exists())
         for manifest in (allocation, later):

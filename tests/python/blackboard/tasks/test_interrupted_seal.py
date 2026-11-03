@@ -1,5 +1,6 @@
 """A stopped orphan's deterministic seal failure follows the ordinary failed-turn path."""
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -46,7 +47,7 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         journal_path = Path(journal["path"])
         native_path(journal_path.parent).mkdir(parents=True, exist_ok=True)
         processes.NativeProcessJournal(journal_path, journal["binding"])
-        return board, submitted, claim, Path(claim["turn"]["input"]["executionWorkspace"]["path"])
+        return board, submitted, claim, Path(turn_manifest(self.directory, claim["turn"]["input"])["path"])
 
     def recover(self, board):
         with patch.object(interruption.processes, "inspect_process_identity", return_value="identity-absent"):
@@ -140,11 +141,11 @@ class InterruptedSealTests(RealWorkspaceTestCase):
         self.assertEqual(self.recover(board)['interrupted'], 1)
         with board.store.db.read() as db:
             final = json.loads(board.store._attempt_row(db, attempt_id)['result_json'])
-            partial = db.execute("SELECT manifest_json FROM workflow_artifacts WHERE attempt_id=? AND kind='partial-output'",
+            partial = db.execute("SELECT * FROM workflow_artifacts WHERE attempt_id=? AND kind='partial-output'",
                                  (attempt_id,)).fetchall()
         self.assertEqual(final, {**original, 'shutdownConfirmed': True})
         self.assertEqual(len(partial), 1)
-        self.assertEqual(json.loads(partial[0][0])['attemptId'], attempt_id)
+        self.assertEqual(artifact_manifest(board.directory, partial[0])['attemptId'], attempt_id)
         self.assertEqual(board.store.resource_claims(), [])
         with patch.object(interruption.processes, 'inspect_process_identity', return_value='identity-absent'):
             self.assertEqual(board.store.recover_executions(), [])

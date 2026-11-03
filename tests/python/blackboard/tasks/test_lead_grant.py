@@ -1,4 +1,5 @@
 """Host grants are micro-task facts, frozen into the ordinary Worker turn."""
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from unittest.mock import patch
 
 from blackboard.tasks.test_workflow import BUDDY, WorkflowTestCase
@@ -101,7 +102,7 @@ class LeadGrantTests(WorkflowTestCase):
         self.register(board)
         claimed = self.claim(board)
         self.assertTrue(claimed["claim"]["turn"]["input"]["context"]["delegationAuthority"])
-        self.assertEqual(claimed["claim"]["turn"]["input"]["executionWorkspace"]["access"], "full")
+        self.assertEqual(turn_manifest(self.directory, claimed["claim"]["turn"]["input"])["access"], "full")
         with board.store.db.read() as db:
             self.assertEqual(db.execute("SELECT delegation_authority FROM workflow_runs").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT COUNT(*) FROM workflow_routes").fetchone()[0], 0)

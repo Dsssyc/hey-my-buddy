@@ -205,7 +205,7 @@ class MacroTaskReadCacheIntegrationTests(unittest.TestCase):
             writer.execute("UPDATE tasks SET spec_json=json_set(spec_json,'$.task','fictional-cache-needle') WHERE task_id=?",(root,))
         first=self.read(params={"query":"fictional-cache-needle","limit":1})
         with self.store.db.write() as writer:
-            writer.execute("UPDATE workflow_runs SET macro_task_id=NULL WHERE run_id=?",(root,))
+            writer.execute("UPDATE workflow_runs SET standalone_project_id=(SELECT project_id FROM macro_tasks WHERE macro_task_id=workflow_runs.macro_task_id),macro_task_id=NULL WHERE run_id=?",(root,))
         changed=self.read(etag=first.entry.identity_etag,params={"query":"fictional-cache-needle","limit":1})
         self.assertFalse(changed.not_modified)
         self.assertEqual(macro_summaries(json.loads(first.entry.body))[0]["macroTaskId"],group)

@@ -125,7 +125,9 @@ class RouterDomainTests(WorkflowTestCase):
         self.assertEqual(packet["project"]["path"], original)
         view = self.board_.call("task_get", {"runId": submitted["runId"]})
         self.assertEqual(packet["project"], view["task"]["lineage"]["project"])
-        self.assertNotEqual(packet["project"]["path"], packet["executionWorkspace"]["path"])
+        from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
+        execution = resolve_manifest(self.board_.directory, packet["executionWorkspace"])
+        self.assertNotEqual(packet["project"]["path"], execution["path"])
         self.assertIn('"project":', router.render_prompt(packet))
 
     def test_chosen_and_abstained_answers_record_judgment_without_classifying(self):

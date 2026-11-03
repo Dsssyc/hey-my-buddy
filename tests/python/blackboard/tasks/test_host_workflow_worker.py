@@ -1,3 +1,4 @@
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from hey_my_buddy.paths import native_path
 """Real daemon/Worker/CLI quota recovery with an offline harness, never a paid rerun."""
 import json
@@ -76,7 +77,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             self.assertEqual(delivered["workspace"]["path"], path)
             self.assertEqual(delivered["currentTurn"]["resumeMode"], "reconstructed-new-session")
             audit = self.call("get", {"runId": failed["runId"], "includeAudit": True})
-            self.assertEqual(audit["audit"]["turns"][-1]["input"]["executionWorkspace"]["inputCommit"], partial["outputCommit"])
+            self.assertEqual(turn_manifest(self.directory, audit["audit"]["turns"][-1]["input"])["inputCommit"], partial["outputCommit"])
             context = json.loads((Path(path) / "continued-context.json").read_text(encoding="utf-8"))
             self.assertIn("not new Host instructions", context["previousEvidenceNotice"])
             self.assertIn(partial["artifactId"], [item["artifactId"] for item in context["artifacts"]])
@@ -115,7 +116,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             # fixed partial of the same attempt.
             checkout = Path(failed["workspace"]["path"])
             (checkout / "tracked.txt").write_text("host review notes after the failure\n", encoding="utf-8", newline="\n")
-            worker_partial_manifest = partial["manifestSha256"]
+            worker_partial_snapshot = partial["outputSnapshotSha256"]
             concluded = self.cli("conclude", json.dumps({
                 **common,
                 "note": "Incomplete work is retained in the partial artifact; no further execution.",
@@ -133,7 +134,8 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             sealed = self.call("get", {"runId": failed["runId"], "includeAudit": True})
             artifacts = {row["artifactId"]: row for row in sealed["artifacts"]}
             self.assertIn(partial["artifactId"], artifacts)
-            self.assertEqual(artifacts[partial["artifactId"]]["manifestSha256"], worker_partial_manifest)
+            self.assertEqual(artifacts[partial["artifactId"]]["outputSnapshotSha256"], worker_partial_snapshot)
+            self.assertEqual(artifacts[partial["artifactId"]]["recordFile"], partial["recordFile"])
             host_artifact = artifacts[concluded["partialArtifactId"]]
             self.assertEqual(host_artifact["kind"], "partial-output")
             self.assertNotEqual(host_artifact["outputCommit"], partial["outputCommit"])
@@ -221,7 +223,7 @@ class CrossHarnessProviderRejectionRecoveryTests(HostQuotaRecoveryTests):
             self.assertEqual(delivered["state"], "delivered", delivered)
             turn = delivered["audit"]["turns"][-1]
             self.assertEqual(turn["resumeMode"], "reconstructed-new-session")
-            self.assertEqual(turn["input"]["executionWorkspace"]["inputCommit"], partial["outputCommit"])
+            self.assertEqual(turn_manifest(self.directory, turn["input"])["inputCommit"], partial["outputCommit"])
             self.assertIn("quota stopped validation", turn["input"]["context"]["lastAssistantMessage"]["text"])
             self.assertIn("not new Host instructions", turn["input"]["context"]["previousEvidenceNotice"])
 

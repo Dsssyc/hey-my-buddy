@@ -14,6 +14,7 @@ from hey_my_buddy.paths import native_path
 from hey_my_buddy.private_dirs import attempt_root, native_root
 from hey_my_buddy.protocol.execution import RECEIPT, fsync_json
 from hey_my_buddy.protocol import process_identity as processes
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest
 
 
 IDENTITY = {"bootId": "macos:00000000-0000-0000-0000-000000000001", "pid": 123,
@@ -80,7 +81,7 @@ class InterruptedContinuationTests(WorkflowTestCase):
         self.continue_run(board, failed)
         second = self.claim(board, claim_request_id="c2")
         document = second["claim"]["turn"]["input"]
-        self.assertEqual(document["executionWorkspace"]["baseCommit"], partial["outputCommit"])
+        self.assertEqual(turn_manifest(self.directory, document)["baseCommit"], partial["outputCommit"])
         self.assertEqual(document["resumeMode"], "reconstructed-new-session")
         self.assertEqual(document["context"]["interruptedTurn"]["evidence"]["kind"], "identity-absent")
         self.assertEqual(document["context"]["interruptedTurn"]["turnId"], first["claim"]["turn"]["turnId"])
@@ -106,7 +107,7 @@ class InterruptedContinuationTests(WorkflowTestCase):
         binding_root = native_root(self.directory, "codex", submitted["runId"])
         native_path(binding_root).mkdir(parents=True)
         binding = {"taskId": submitted["runId"], "threadId": session_id,
-                   "cwd": document["executionWorkspace"]["path"],
+                   "cwd": turn_manifest(self.directory, document)["path"],
                    "buddy": {key: document["context"]["buddy"][key]
                              for key in ("provider", "model", "effort")},
                    "lastTurnId": native_turn_id, "lastAttemptId": attempt_id,
@@ -171,7 +172,7 @@ class InterruptedContinuationTests(WorkflowTestCase):
         native_path(attempt_dir).mkdir(parents=True)
         native_path(attempt_dir / "dsh-session-record.json").write_text(json.dumps(record), encoding="utf-8", newline="\n")
         binding = {"taskId": submitted["runId"], "sessionId": session_id,
-                   "cwd": document["executionWorkspace"]["path"],
+                   "cwd": turn_manifest(self.directory, document)["path"],
                    "buddy": {key: document["context"]["buddy"][key]
                              for key in ("provider", "model", "effort")}}
         native_path(root / (hashlib.sha256(session_id.encode()).hexdigest() + ".json")).write_text(

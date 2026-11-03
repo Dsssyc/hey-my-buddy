@@ -27,8 +27,9 @@ class ReadSharingTests(WorkflowTestCase):
 
     def manifests(self, board):
         with board.store.db.read() as connection:
-            return [json.loads(row[0]) for row in connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_runs ORDER BY rowid")]
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+            return [effective_manifest(board.directory, connection, row) for row in
+                    connection.execute("SELECT * FROM workflow_runs ORDER BY rowid")]
 
     def assert_rejected_without_allocation(self, board, request_id, *, access="read", selectors=(), code="SNAPSHOT_CHANGED", holders=1):
         before_refs = self.git(self.repo, "for-each-ref")

@@ -33,6 +33,7 @@ from ...errors import BoardError
 from ...protocol.client import BoardClient
 from ...protocol import activity as activity_module
 from ...protocol import execution as execution_protocol
+from ...protocol.workspace_manifest import record_reference
 from ...protocol.contracts import ExecutionLive
 from ...protocol.run_identity import RunIdentity
 from ...protocol.reasons import reason as make_reason
@@ -191,11 +192,11 @@ def validate_claim_turn(claim: dict) -> None:
     if not isinstance(turn, dict) or not isinstance(turn.get("turnId"), str) or not turn["turnId"]:
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn identity")
     turn_input = turn.get("input")
-    if not isinstance(turn_input, dict):
+    if (not isinstance(turn_input, dict) or type(turn_input.get("version")) is not int
+            or turn_input["version"] != 4):
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn input")
     workspace = turn_input.get("executionWorkspace")
-    if (not isinstance(workspace, dict) or not isinstance(workspace.get("path"), str)
-            or not workspace["path"]):
+    if (not isinstance(workspace, dict) or set(workspace) != {"workspaceId", "manifestSha256"}):
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid workspace")
     if not isinstance(claim.get("agentCredential"), str) or not claim["agentCredential"]:
         raise BoardError("INVALID_ARGUMENT", "Execution claim has an invalid turn credential")
@@ -776,6 +777,9 @@ class Execution:
             outcome.status = "cancelled"
         if "partialOutput" in outcome.result:
             outcome.result["partialOutput"]["reason"] = termination_reason
+        for key in ("workspaceSeal", "partialWorkspaceSeal"):
+            if isinstance(outcome.result.get(key), dict):
+                outcome.result[key] = record_reference(self.state_dir, outcome.result[key])
         report = outcome.to_report()
         if holder.get('harnessHistory'):
             report['result'] = {**(report.get('result') or {}), 'harnessAttempts': holder['harnessHistory']}
@@ -816,6 +820,7 @@ class Execution:
     def receipt(self, claim: dict, report: dict, directory: Path) -> dict:
         attempt = claim["attempt"]
         receipt = {
+            "version": 2,
             "attemptId": attempt["attemptId"],
             "taskId": attempt["taskId"],
             "generation": attempt["generation"],

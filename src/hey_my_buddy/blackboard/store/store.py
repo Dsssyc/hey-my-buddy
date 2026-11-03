@@ -75,7 +75,7 @@ def _overlaps(left: str, right: str) -> bool:
     return left_path.is_relative_to(right_path) or right_path.is_relative_to(left_path)
 
 
-def _public_result_payload(payload: dict, directory: Path) -> dict:
+def _public_result_payload(payload: dict, directory: Path, result_form: str) -> dict:
     """Bound service-owned workspace facts in a reply, leaving the receipt intact."""
     result = payload.get("result")
     if not isinstance(result, dict):
@@ -99,6 +99,14 @@ def _public_result_payload(payload: dict, directory: Path) -> dict:
             seal_view["cumulativePatch"] = bound(cumulative, ("changedPaths",))
         projected[key] = seal_view
 
+    if result_form == "current-report-v2":
+        for key in ("workspaceSeal", "partialWorkspaceSeal"):
+            seal = projected.get(key)
+            if not isinstance(seal, dict) or not isinstance(seal.get("recordFile"), dict):
+                continue
+            file = seal["recordFile"]
+            projected[key] = {**seal, "recordFile": {**file, "path": str(directory / file["path"])}}
+
     for key in ("workspaceSealError", "partialSealError", "cumulativePatchError"):
         error = result.get(key)
         if not isinstance(error, dict) or not isinstance(error.get("details"), dict):
@@ -111,7 +119,7 @@ def _public_result_payload(payload: dict, directory: Path) -> dict:
 
     # A stopped partial result retains its exact input manifest in the receipt.
     # Its public copy can be as large as the output seal on a busy checkout.
-    manifest = result.get("workspaceManifest")
+    manifest = result.get("workspaceManifest") if result_form == "archived-report-v1" else None
     if isinstance(manifest, dict):
         manifest_view = bound(manifest, ("writeScope",))
         snapshot = manifest.get("snapshot")
@@ -516,6 +524,7 @@ class BoardStore:
             "runtimeIdentity": row["runtime_identity"],
             "logPaths": recorded.get("logPaths") or {},
             "resultAvailable": row["result_json"] is not None,
+            "resultForm": row["result_form"],
             "tokenUsage": (recorded.get("result") or {}).get("tokenUsage"),
             "shutdownConfirmed": bool(row["shutdown_confirmed"]),
             "cancelRequested": row["cancel_requested_at"] is not None,
@@ -534,7 +543,7 @@ class BoardStore:
             "revision": row["revision"],
         }
         if include_result and row["result_json"] is not None:
-            view["result"] = _public_result_payload(recorded, self.directory)
+            view["result"] = _public_result_payload(recorded, self.directory, row["result_form"])
         return view
 
     @staticmethod
@@ -1190,7 +1199,7 @@ class BoardStore:
             payload = json.loads(attempt["result_json"])
             # Only the current execution receipt is unpacked. Its adapter result is
             # opaque data, even when it contains fields named result or turn.
-            view["result"] = _public_result_payload(payload, self.directory)["result"]
+            view["result"] = _public_result_payload(payload, self.directory, attempt["result_form"])["result"]
             view["resultMeta"] = {key: value for key, value in payload.items() if key != "result"}
             view["attemptId"] = attempt["attempt_id"]
             view["resultDelivered"] = view["result"] is not None
@@ -2233,7 +2242,7 @@ class BoardStore:
         # A micro-task turn's sealed output manifest is verified outside the transaction
         # too; a manifest that cannot be verified fails the attempt honestly instead
         # of publishing an unverified success.
-        self.workflow.precheck_result(params)
+        output_record = self.workflow.precheck_result(params)
         # The seal-side shared-stash observation of this attempt's repository is
         # read here, outside the result transaction; the turn's pinned fact binds
         # it below. A failed or partial seal keeps the same honest collection.
@@ -2253,7 +2262,7 @@ class BoardStore:
         }
         return self._commit_execution_result(
             request, seal_stash=seal_stash,
-            completion_evidence=stop_evidence)
+            completion_evidence=stop_evidence, output_record=output_record)
 
     def confirm_execution_shutdown(self, attempt_id: str, evidence: dict) -> dict:
         """Supplement only a no-receipt interruption with its later native-stop proof."""
@@ -2264,16 +2273,17 @@ class BoardStore:
         # native-stop proof can now bind its safely sealed partial output.
         params = {**payload, "shutdownConfirmed": True, "attemptId": attempt_id}
         stop_output = {key: evidence[key] for key in ("partialWorkspaceSeal", "workspaceSealError") if key in evidence}
-        self.workflow.precheck_result({**params, "result": {**(payload["result"] or {}), **stop_output}})
+        output_record = self.workflow.precheck_result({**params, "result": {**(payload["result"] or {}), **stop_output}})
         request = {key: params[key] for key in (
             "attemptId", "status", "result", "artifacts", "shutdownConfirmed", "exitCode", "signal",
             "error", "logPaths", "runtimeIdentity", "terminationReason")}
         return self._commit_execution_result(
             request,
-            seal_stash=self.workflow.collect_result_stash_facts(params), shutdown_evidence=evidence)
+            seal_stash=self.workflow.collect_result_stash_facts(params), shutdown_evidence=evidence,
+            output_record=output_record)
 
     def _commit_execution_result(self, request: dict, *, seal_stash, shutdown_evidence: dict | None = None,
-                                 completion_evidence: dict | None = None) -> dict:
+                                 completion_evidence: dict | None = None, output_record: dict | None = None) -> dict:
         # Normalize the imported projection once for every entry path and replay.
         from ...protocol.usage import normalize_token_usage
         imported = request["result"]
@@ -2393,7 +2403,7 @@ class BoardStore:
             else:
                 task_state = "failed"
             connection.execute(
-                "UPDATE attempts SET result_json=?,"
+                "UPDATE attempts SET result_json=?, result_form=COALESCE(result_form,'current-report-v2'),"
                 " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity),"
                 " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
                 (
@@ -2485,6 +2495,7 @@ class BoardStore:
                 task_state=task_state,
                 now=now,
                 seal_stash=seal_stash,
+                output_record=output_record,
             )
             if micro_task is not None:
                 response["workflow"] = micro_task

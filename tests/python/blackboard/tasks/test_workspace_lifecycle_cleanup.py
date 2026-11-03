@@ -6,6 +6,7 @@ cross-check, while failed executions keep their evidence and storage applies its
 own protection to unsealed sites.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, resolve_manifest, record_reference
 from unittest.mock import patch as defer_reclaim
 from admission import admit_board
 import json
@@ -17,7 +18,6 @@ from blackboard.tasks.test_workflow_real import BUDDY
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
-from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 
@@ -26,7 +26,102 @@ from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 
 class CleanupLifecycleTests(LifecycleTestCase):
 
+    def test_conclusion_keeps_the_seal_from_a_prepared_but_unstarted_continuation(self):
+        board = self.board()
+        run, _claim, initial, checkout, _seal, view, _artifact = self.run_worktree(
+            board, request_id="prepared-then-concluded")
+        board.call("workflow_continue", {
+            "runId": run["runId"], "commandId": "prepare-next-turn",
+            "expectedRevision": view["revision"], "input": "Continue this work",
+            **self.control(view),
+        })
+        board.store.workflow.prepare_continuation_workspace({"runId": run["runId"]})
+        prepared = self.view(board, run["runId"])
+        self.assertNotEqual(prepared["workspace"]["workspaceId"], initial["workspaceId"])
+        (checkout / "tracked.txt").write_text("Host change after next input preparation\n", encoding="utf-8")
+        board.call("workflow_cancel", {"runId": run["runId"], **self.control(prepared)})
+        cancelled = self.view(board, run["runId"])
+        concluded = board.call("workflow_conclude", {
+            "runId": run["runId"], "note": "Preserve the Host change and finish",
+            **self.control(cancelled),
+        })
+        self.assertTrue(concluded['reclaim']['removed'], concluded['reclaim'])
+        self.assertFalse(checkout.exists())
+        with board.store.db.read() as connection:
+            row = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone()
+            current = board.store.workflow._run_manifest(connection, row)
+            host_output = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND output_origin='host' ORDER BY rowid DESC LIMIT 1",
+                (run["runId"],),
+            ).fetchone()
+            with mock.patch.object(board.store.workflow, "_artifact_document",
+                                   wraps=board.store.workflow._artifact_document) as read_output:
+                latest = board.store.workflow._latest_handoff(connection, row, current)
+            read_output.assert_called_once()
+            self.assertEqual(read_output.call_args.args[0]["artifact_id"], host_output["artifact_id"])
+        self.assertIsNotNone(host_output)
+        self.assertNotEqual(host_output["output_manifest_sha256"], initial["manifestSha256"])
+        self.assertEqual(latest["snapshotSha256"], host_output["output_snapshot_sha256"])
 
+
+
+    def test_cumulative_failure_keeps_partial_output_readable_and_resumable(self):
+        board = self.board()
+        self.register(board)
+        submitted, _first, original, checkout, _seal, delivered, _artifact = self.run_worktree(board)
+        run_id = submitted["runId"]
+        board.call("workflow_continue", {"runId": run_id, "commandId": "partial-stage",
+                   "expectedRevision": delivered["revision"], "input": "Continue", **self.control(delivered)})
+        second = self.claim(board, run_id, request_id="partial-claim", nonce="q" * 16)
+        claim = second["claim"]
+        manifest = turn_manifest(board.directory, claim["turn"]["input"])
+        (checkout / "partial.txt").write_text("partial change\n", encoding="utf-8")
+        partial = workspace_module.seal(board.directory, manifest, run_id, claim["attempt"]["attemptId"])
+        cumulative = Path(partial["diffPath"]).with_name("cumulative-" + original["inputCommit"] + ".patch")
+        self.assertFalse(cumulative.exists())
+        board.call("execution_result", {"attemptId": claim["attempt"]["attemptId"],
+                   "generation": claim["attempt"]["generation"], "nonce": "q" * 16,
+                   "status": "failed", "shutdownConfirmed": True, "exitCode": 1,
+                   "result": {"status": "failed", "partialWorkspaceSeal": record_reference(board.directory, partial),
+                              "cumulativePatchError": {"code": "WORKSPACE_IO_ERROR", "message": "injected patch failure"}}})
+        failed = self.view(board, run_id)
+        preserved = next(row for row in failed["artifacts"] if row["kind"] == "partial-output")
+        self.assertNotIn("cumulativePatch", preserved)
+        self.assertEqual(Path(preserved["diffPath"]).read_bytes(), Path(partial["diffPath"]).read_bytes())
+        board.call("workflow_continue", {"runId": run_id, "commandId": "resume-partial",
+                   "expectedRevision": failed["revision"], "input": "Finish", **self.control(failed)})
+        third = self.claim(board, run_id, request_id="partial-resume", nonce="r" * 16)
+        self.assertIsNotNone(third["claim"], third)
+        final_input = turn_manifest(board.directory, third["claim"]["turn"]["input"])
+        (checkout / "final.txt").write_text("final change\n", encoding="utf-8")
+        final = workspace_module.seal(board.directory, final_input, run_id, third["claim"]["attempt"]["attemptId"])
+        self.finish_turn(board, third, final, nonce="r" * 16)
+        view = self.view(board, run_id)
+        artifact = next(row for row in view["artifacts"] if row["artifactId"] == view["finalArtifactId"])
+        with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False}):
+            self.accept(board, view, artifact, not_required=True)
+        with board.store.db.read() as connection:
+            attempt_ids = [row[0] for row in connection.execute("SELECT attempt_id FROM attempts WHERE task_id=?", (run_id,))]
+        for attempt_id in attempt_ids:
+            board.store.complete_execution_cleanup(attempt_id)
+        import tempfile
+        from tools.test_export_board_sample import export_sample
+        from support import InProcessBoard
+        with tempfile.TemporaryDirectory(dir=self.directory.parent, prefix="partial-sample-") as temporary:
+            output = export_sample(board.directory, Path(temporary) / "sample")
+            sample = InProcessBoard(output)
+            try:
+                sample_view = sample.call("workflow_get", {"runId": run_id})
+                sample_partial = next(row for row in sample_view["artifacts"] if row["kind"] == "partial-output")
+                self.assertNotIn("cumulativePatch", sample_partial)
+                self.assertTrue(Path(sample_partial["diffPath"]).is_relative_to(output))
+            finally:
+                sample.close()
+        # A required cumulative file that disappears is still an integrity error.
+        Path(artifact["cumulativePatch"]["path"]).unlink()
+        with self.assertRaises(BoardError) as missing:
+            self.view(board, run_id)
+        self.assertEqual(missing.exception.code, "ARTIFACT_MISSING")
 
     def test_cleanup_removes_only_the_registered_worktree_and_is_idempotent(self):
         board, submitted, manifest, checkout, artifact, view = self.accepted_worktree()
@@ -101,13 +196,13 @@ class CleanupLifecycleTests(LifecycleTestCase):
         helper_id = decided['children'][0]['taskId']
         claim = self.claim(board, helper_id, request_id='evidence-helper-claim')['claim']
         attempt = claim['attempt']
-        helper_manifest = claim['turn']['input']['executionWorkspace']
+        helper_manifest = turn_manifest(self.directory, claim['turn']['input'])
         self.assertEqual(helper_manifest['checkoutRoot'], str(checkout))
         evidence = private_dirs.ensure_private_dir(private_dirs.attempt_root(
             board.directory, 'dsh', helper_id, attempt['attemptId'])) / 'unknown-events.json'
         native_path(evidence).write_text('helper failure evidence', encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, helper_manifest, helper_id, attempt['attemptId'])
-        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': {'status': 'invalid-result', 'workspaceSeal': seal}})
+        board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': {'status': 'invalid-result', 'workspaceSeal': record_reference(self.directory, seal)}})
         concluded = board.call('workflow_conclude', {
             'runId': run_id, 'targetRunId': helper_id, 'note': 'end the failed helper',
             **self.control(self.view(board, run_id)),
@@ -283,7 +378,7 @@ class CleanupLifecycleTests(LifecycleTestCase):
         })
         self.controls[existing["runId"]] = existing["control"]
         existing_claim = admit_board(board_existing, {'workerId': 'w-existing', 'claimRequestId': 'existing-claim', 'nonce': 'e' * 16, 'runId': existing['runId']})
-        existing_manifest = existing_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        existing_manifest = turn_manifest(self.directory, existing_claim["claim"]["turn"]["input"])
         existing_seal = workspace_module.seal(self.directory, existing_manifest, existing["runId"],
                                               existing_claim["claim"]["attempt"]["attemptId"])
         self.finish_turn(board_existing, existing_claim, existing_seal, nonce="e" * 16, worker_id="w-existing")
@@ -302,16 +397,10 @@ class CleanupLifecycleTests(LifecycleTestCase):
         tampered["manifestSha256"] = workspace_module._sha(
             workspace_module._json({key: value for key, value in tampered.items() if key != "manifestSha256"})
         )
-        with board.store.db.write() as connection:
-            connection.execute(
-                "UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?",
-                (canonical_json(tampered), submitted["runId"]),
-            )
-        foreign = self.view(board, submitted["runId"])
-        with self.assertRaises(BoardError) as raised:
-            self.reclaim(board, foreign)
-        self.assertEqual(raised.exception.code, "NOT_READY")
-        self.assertIn("unsafe-path", raised.exception.details["reasons"])
+        with board.store.db.read() as connection:
+            frozen = connection.execute("SELECT workspace_id,workspace_manifest_sha256 FROM workflow_runs WHERE run_id=?",
+                                        (submitted["runId"],)).fetchone()
+        self.assertEqual(tuple(frozen), (None, None))
         self.assertTrue((self.repo / "tracked.txt").exists())
         self.assertTrue(checkout.exists())
         with self.assertRaises(BoardError) as raised:
@@ -390,6 +479,8 @@ class CleanupLifecycleTests(LifecycleTestCase):
         board, submitted, first, second, final, view = self.two_turn_worktree()
         checkout = Path(first["checkoutRoot"])
         run_id = submitted["runId"]
+        from hey_my_buddy.blackboard.tasks import reclamation
+        self.assertIn(run_id, reclamation.workspace_candidates(board.store))
         cumulative = final["cumulativePatch"]
         self.assertNotEqual(cumulative["path"], final["diffPath"])
         self.assertNotEqual(cumulative["sha256"], final["diffSha256"])
@@ -482,9 +573,11 @@ class CleanupLifecycleTests(LifecycleTestCase):
         })
         self.controls[borrowed["runId"]] = borrowed["control"]
         with board.store.db.read() as connection:
-            borrowed_manifest = json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (borrowed["runId"],)
-            ).fetchone()[0])
+            borrowed_row = connection.execute(
+                "SELECT workspace_id,workspace_manifest_sha256 FROM workflow_runs WHERE run_id=?", (borrowed["runId"],)
+            ).fetchone()
+        borrowed_manifest = resolve_manifest(self.directory, {"workspaceId": borrowed_row["workspace_id"],
+                                                              "manifestSha256": borrowed_row["workspace_manifest_sha256"]})
         # The borrow is the same physical checkout under another logical workspace id.
         self.assertEqual(borrowed_manifest["kind"], "existing")
         self.assertEqual(borrowed_manifest["checkoutRoot"], first["checkoutRoot"])
@@ -532,9 +625,11 @@ class CleanupLifecycleTests(LifecycleTestCase):
         self.assertEqual(decided["decision"], "approve")
         helper_id = decided["children"][0]["taskId"]
         with board.store.db.read() as connection:
-            helper_manifest = json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_children WHERE child_task_id=?", (helper_id,)
-            ).fetchone()[0])
+            helper_row = connection.execute(
+                "SELECT workspace_id,workspace_manifest_sha256 FROM workflow_runs WHERE run_id=?", (helper_id,)
+            ).fetchone()
+        helper_manifest = resolve_manifest(self.directory, {"workspaceId": helper_row["workspace_id"],
+                                                            "manifestSha256": helper_row["workspace_manifest_sha256"]})
         self.assertEqual(helper_manifest["kind"], "existing")
         self.assertEqual(helper_manifest["checkoutRoot"], manifest["checkoutRoot"])
         self.assertNotEqual(helper_manifest["workspaceId"], manifest["workspaceId"])

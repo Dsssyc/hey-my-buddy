@@ -9,6 +9,7 @@ interact with prepare/seal/verify. Every repository is a private fixture created
 by the test; no shared or daily board is touched.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -363,7 +364,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         self.git("stash", "drop", "stash@{1}")
         claimed = admit_board(board, {'workerId': self.worker, 'claimRequestId': 'claim-real-stash', 'nonce': 'n' * 16, 'runId': run_id})
         claim = claimed["claim"]
-        manifest = claim["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claim["turn"]["input"])
         frozen = claim["turn"]["input"]["context"]["sharedStash"]
         self.assertEqual(frozen["start"]["state"], "observed")
         self.assertEqual(frozen["repositoryPath"], manifest["snapshot"]["repositoryPath"])
@@ -378,7 +379,7 @@ class RealBoardClaimStashTests(StashInventoryTestCase):
         seal = workspace.seal(self.directory, manifest, run_id, claim["attempt"]["attemptId"])
         result = {
             "status": "ok", "processState": {"shutdownConfirmed": True},
-            "turn": self.turn_record(claim), "turnResultPath": "/tmp/turn.json", "workspaceSeal": seal,
+            "turn": self.turn_record(claim), "turnResultPath": "/tmp/turn.json", "workspaceSeal": record_reference(self.directory, seal),
         }
         board.call('execution_result', {'attemptId': claim['attempt']['attemptId'], 'generation': claim['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
         view = board.call("workflow_get", {"runId": run_id})

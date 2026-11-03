@@ -24,6 +24,7 @@ from ...json_codec import decode_strict_json
 from ...private_dirs import context_root, native_root, ensure_private_dir, make_temporary_dir
 from ...private_files import open_read, publish_bytes, read_bytes, read_text
 from ...protocol import usage
+from ...protocol.workspace_manifest import turn_manifest
 from ...protocol.capabilities import PERMISSION_LEVELS
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ..harnesses.base import AdapterOutcome, ExecutionContext
@@ -367,7 +368,9 @@ def worker_request(control: dict, module):
     task_text = read_text(Path(control["taskFile"]))
     from ..harnesses.registry import worker_format
     format = worker_format(control["harness"])
-    permission = turn_input["executionWorkspace"]["access"]
+    workspace = turn_manifest(Path(control["stateDir"]), turn_input)
+    prompt_input = {**turn_input, "executionWorkspace": workspace}
+    permission = workspace["access"]
     if format is None:
         from ..harnesses.live import EXISTING_CAPABILITIES
         checkpoint = EXISTING_CAPABILITIES[control["harness"]].inquiry_delivery == "cooperative-checkpoint"
@@ -383,7 +386,7 @@ def worker_request(control: dict, module):
             delegation_authority=delegation_authority,
             native_stderr=str(invocation_root / "native-stderr.log"))
         prompt = worker_services.micro_task_prompt(
-            task_text, turn_input, binding.completion_tool,
+            task_text, prompt_input, binding.completion_tool,
             checkpoint_tool=binding.checkpoint_tool, answer_tool=binding.answer_tool,
             credential_file=credential_file)
         services, descriptions = binding.services, (binding.description,)
@@ -392,7 +395,7 @@ def worker_request(control: dict, module):
                       if f"mcp__{mount.server_name}__{tool['name']}" == binding.completion_tool)
     else:
         format = format.for_turn(turn_input)
-        prompt, schema = format.prompt(task_text, turn_input, credential_file=credential_file), format.schema
+        prompt, schema = format.prompt(task_text, prompt_input, credential_file=credential_file), format.schema
         inquiry_services = None
         if inquiry is not None:
             inquiry_services = module.prepare_inquiry_services(
@@ -743,7 +746,6 @@ class WorkerRunExecutor:
                                    and turn_io.checkpoint_resumable(payload, checkpoint)))}
         if self.receipt_options.capture_session_from_turn:
             payload["nativeSession"]["sessionIdSource"] = "turn-record" if session_id else "none"
-        payload["workspaceManifest"] = context.effective_workspace
         if error:
             payload["turnError"] = error
             if status == "ok":

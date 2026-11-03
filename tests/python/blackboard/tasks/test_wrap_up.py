@@ -1,5 +1,6 @@
 """Durable stop intent and observed termination at the blackboard boundary."""
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -21,7 +22,7 @@ class WrapUpStopTests(WorkflowTestCase):
     def result_params(self, claim, *, reason, status="cancelled", shutdown=True):
         attempt = claim["claim"]["attempt"]
         record = self.turn_record(claim)
-        payload = {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': status, 'shutdownConfirmed': shutdown, 'terminationReason': reason, 'result': {'status': status, 'mode': 'run', 'processState': {'shutdownConfirmed': shutdown}, 'logPaths': {'stdout': '/tmp/out', 'stderr': '/tmp/err'}, 'turn': record, 'turnResultPath': '/tmp/turn-output.json', 'workspaceSeal': self.workspace.seal(self.directory, claim['claim']['turn']['input']['executionWorkspace'], attempt['taskId'], attempt['attemptId'])}}
+        payload = {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': status, 'shutdownConfirmed': shutdown, 'terminationReason': reason, 'result': {'status': status, 'mode': 'run', 'processState': {'shutdownConfirmed': shutdown}, 'logPaths': {'stdout': '/tmp/out', 'stderr': '/tmp/err'}, 'turn': record, 'turnResultPath': '/tmp/turn-output.json', 'workspaceSeal': record_reference(self.directory, self.workspace.seal(self.directory, turn_manifest(self.directory, claim['claim']['turn']['input']), attempt['taskId'], attempt['attemptId']))}}
         return payload
 
     def test_console_escalation_during_host_receipt_preserves_shutdown_and_replay(self):

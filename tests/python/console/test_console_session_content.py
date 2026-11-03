@@ -115,8 +115,8 @@ class SessionContentTests(ConsoleTestCase, WorkflowTestCase):
         report = AdapterOutcome(status='ok', result=_base_result(native), exit_code=0,
                                 shutdown_confirmed=True).to_report()
         with board.store.db.write() as connection:
-            connection.execute("UPDATE attempts SET execution_state='finished', result_json=?",
-                               (json.dumps(report),))
+            connection.execute("UPDATE attempts SET execution_state='finished', result_json=?, result_form=?",
+                               (json.dumps(report), 'current-report-v2'))
         return native.session_record_failure.to_payload()
 
     def test_cursor_survives_append_and_finish_with_stopped_reason(self):

@@ -1,5 +1,6 @@
 """Permission choices freeze on turns and follow explicit continuation boundaries."""
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 
 import json
 from pathlib import Path
@@ -99,7 +100,7 @@ class PermissionLevelsTests(WorkflowTestCase):
                 self.continue_run(board, current, command_id=f'continue-{index}', **kwargs)
             claim = self.claim(board, run_id=view['runId'], claim_request_id=f'claim-{index}')
             self.assertIsNotNone(claim['claim'])
-            workspace = claim['claim']['turn']['input']['executionWorkspace']
+            workspace = turn_manifest(self.directory, claim['claim']['turn']['input'])
             self.assertEqual(workspace['access'], access)
             self.assertEqual(workspace['version'], 4)
             self.assertNotIn('accessNote', workspace)
@@ -125,7 +126,7 @@ class PermissionLevelsTests(WorkflowTestCase):
         prepared = len(self.workspace.prepare_calls)
         current = self.continue_run(board, original, access='full', accessNote='  Updated explanation  ')
         claim = self.claim(board, run_id=original['runId'])
-        execution = claim['claim']['turn']['input']['executionWorkspace']
+        execution = turn_manifest(self.directory, claim['claim']['turn']['input'])
         self.assertEqual(execution, manifest)
         self.assertEqual(len(self.workspace.prepare_calls), prepared)
         self.assertNotIn('accessNote', execution)
@@ -145,7 +146,7 @@ class PermissionLevelsTests(WorkflowTestCase):
         changed = self.continue_run(board, view, access='read')
         self.assertEqual(changed['access'], 'read')
         claim = self.claim(board, run_id=view['runId'])
-        self.assertEqual(claim['claim']['turn']['input']['executionWorkspace']['access'], 'read')
+        self.assertEqual(turn_manifest(self.directory, claim['claim']['turn']['input'])['access'], 'read')
         self.assertEqual(claim['claim']['turn']['turnIndex'], 1)
 
     def test_continue_unknown_access_and_invalid_reason_are_rejected(self):
@@ -194,7 +195,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
                 })
             claim = self.claim(board, run_id, request_id=f'git-claim-{index}')
             self.assertIsNotNone(claim['claim'])
-            manifest = claim['claim']['turn']['input']['executionWorkspace']
+            manifest = turn_manifest(self.directory, claim['claim']['turn']['input'])
             git_workspace.verify(manifest, require_unchanged=True, state_dir=self.directory)
             saved.append(dict(manifest))
             self.assertEqual(manifest['access'], access)
@@ -205,7 +206,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
             self.finish_turn(board, claim, seal)
         with board.store.db.read() as connection:
             turns = connection.execute('SELECT input_json,access,access_note FROM workflow_turns ORDER BY turn_index').fetchall()
-            self.assertEqual([json.loads(row[0])['executionWorkspace'] for row in turns], saved)
+            self.assertEqual([json.loads(row[0])['executionWorkspace'] for row in turns], [manifest_ref(item) for item in saved])
             self.assertEqual([row[1] for row in turns], ['write', 'read', 'full', 'write'])
             self.assertEqual([row[2] for row in turns], [None, None, 'Need system writes', None])
             self.assertEqual(connection.execute("SELECT access FROM workspace_reservations WHERE state='held'").fetchone()[0], 'write')
@@ -221,7 +222,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         run_id = submitted['runId']
         self.controls[run_id] = submitted['control']
         claim = self.claim(board, run_id)
-        manifest = claim['claim']['turn']['input']['executionWorkspace']
+        manifest = turn_manifest(self.directory, claim['claim']['turn']['input'])
         seal = git_workspace.seal(self.directory, manifest, run_id, claim['claim']['attempt']['attemptId'])
         self.finish_turn(board, claim, seal)
         current = self.view(board, run_id)
@@ -232,7 +233,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         with board.store.db.read() as connection:
             run = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
             row = board.store.decisions._row(connection, run['current_routing_id'])
-            stopped, problem, _policy, _run = _continuation_context(connection, row, run_id, run_id)
+            stopped, problem, _policy, _run = _continuation_context(connection, row, run_id, run_id, board.directory)
             self.assertTrue(stopped)
             self.assertIsNone(problem)
 
@@ -249,7 +250,7 @@ class GitPermissionLevelsTests(RealWorkspaceTestCase):
         board.call('workflow_continue', {'runId': submitted['runId'], 'commandId': 'read-input',
                    'expectedRevision': submitted['revision'], **self.control(submitted), 'input': 'Inspect', 'access': 'read'})
         claim = self.claim(board, submitted['runId'])
-        manifest = claim['claim']['turn']['input']['executionWorkspace']
+        manifest = turn_manifest(self.directory, claim['claim']['turn']['input'])
         self.assertEqual(manifest['snapshot']['executionSelectors'], ['input.txt'])
         self.assertEqual(manifest['access'], 'read')
         git_workspace.verify(manifest, require_unchanged=True, state_dir=self.directory)

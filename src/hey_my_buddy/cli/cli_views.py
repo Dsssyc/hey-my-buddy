@@ -121,6 +121,12 @@ _OUTPUT_ARTIFACT = (
     "kind",
     "turnId",
     "manifestSha256",
+    "contentForm",
+    "workspaceRef",
+    "inputManifestSha256",
+    "outputSnapshotSha256",
+    "sharedRefsSha256",
+    "recordFile",
     "outputCommit",
     "diffPath",
     "diffSha256",
@@ -286,9 +292,23 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
 
 def micro_task_receipt(response: dict) -> dict:
     """A mutation receipt: the resulting state plus the operation's own result."""
-    if response["task"]["lineage"]["kind"] not in ("micro-task", "helper"):
-        return response
-    receipt = micro_task_brief(response, turn_summary=False)
+    if "task" not in response:
+        # Recovery of an already absent allocation returns an action view from
+        # SQL facts; reading its missing manifest would defeat that recovery.
+        receipt = _pick(response, ("runId", "state", "status", "revision", "ownerGeneration"))
+        if response.get("cleanup") is not None:
+            receipt["cleanup"] = _plan_brief(response["cleanup"])
+    else:
+        if response["task"]["lineage"]["kind"] not in ("micro-task", "helper"):
+            return response
+        receipt = micro_task_brief(response, turn_summary=False)
+    if "artifacts" in receipt:
+        # A mutation acknowledges the selected records. Patch contents and paths
+        # remain in get/full; keep the identities and files for the next command.
+        receipt["artifacts"] = [_pick(row, ("artifactId", "kind", "turnId", "contentForm",
+            "manifestSha256", "outputSnapshotSha256", "recordFile", "outputCommit", "action",
+            "partial", "verified", "final", "changedPathsCount", "changedPathsTruncated"))
+            for row in receipt["artifacts"]]
     receipt["view"] = "receipt"
     if response.get("duplicate"):
         receipt["duplicate"] = True

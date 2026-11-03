@@ -11,6 +11,7 @@ from ...errors import BoardError
 from ...process_observation import _processes
 from ...protocol.process_start import process_start
 from ...protocol.reasons import reason
+from .workspace_bindings import MANIFEST_OWNERS_CTE
 
 
 def first_execution_time(connection, manifest: dict) -> float | None:
@@ -20,8 +21,12 @@ def first_execution_time(connection, manifest: dict) -> float | None:
     bound when excluding older processes. These are existing board facts.
     """
     value = connection.execute(
-        "SELECT MIN(a.started_at) FROM workflow_turns w JOIN attempts a ON a.attempt_id=w.attempt_id"
-        " WHERE json_extract(w.input_json,'$.executionWorkspace.checkoutRoot')=?",
+        f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})"
+        " SELECT MIN(a.started_at) FROM workflow_turns w"
+        " JOIN attempts a ON a.attempt_id=w.attempt_id"
+        " JOIN manifest_owners o ON o.workspace_id=w.workspace_id"
+        " AND o.manifest_sha256=w.workspace_manifest_sha256"
+        " WHERE o.checkout_root=?",
         (manifest['checkoutRoot'],),
     ).fetchone()[0]
     return datetime.fromisoformat(value).timestamp() if value is not None else None

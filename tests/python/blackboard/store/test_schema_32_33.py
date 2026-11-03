@@ -13,7 +13,7 @@ from unittest import mock
 
 from blackboard.store.upgrade_fixture import load_fixture
 from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, upgrade
-from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 
 
 class Schema33Tests(unittest.TestCase):
@@ -30,6 +30,12 @@ class Schema33Tests(unittest.TestCase):
                 schema_30_31.upgrade(connection)
                 schema_31_32.upgrade(connection)
 
+    def upgrade33(self):
+        # These tests target the already frozen 32 → 33 step, including
+        # deliberately inconsistent old inputs unrelated to the next boundary.
+        with mock.patch.object(upgrade, 'SCHEMA_VERSION', 33):
+            return upgrade.upgrade_state(self.state)
+
     def schema(self):
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             return connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
@@ -42,13 +48,13 @@ class Schema33Tests(unittest.TestCase):
             row = connection.execute('SELECT workspace_manifest_json FROM workflow_runs LIMIT 1').fetchone()
             old_id = json.loads(row[0])['repositoryId']
         self.assertIsNone(self.project())
-        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 32, 'targetSchema': 33})
+        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 32, 'targetSchema': SCHEMA_VERSION})
         self.assertEqual(self.project(), old_id.encode())
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as migrated:
             self.assertEqual({row[0] for row in migrated.execute(
                 'SELECT target_project_id FROM workflow_integrations')}, {None})
             reservation = migrated.execute('SELECT workspace_id,manifest_sha256,checkout_root FROM workspace_reservations LIMIT 1').fetchone()
-            manifest = migrated.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE json_extract(workspace_manifest_json,\'$.workspaceId\')=?', (reservation[0],)).fetchone()
+            manifest = migrated.execute("SELECT manifest_json FROM workflow_artifacts WHERE kind='input' AND workspace_id=?", (reservation[0],)).fetchone()
             self.assertEqual(reservation[2], json.loads(manifest[0])['checkoutRoot'])
             fresh = Database(self.root / 'fresh')
             self.addCleanup(fresh.close)
@@ -68,7 +74,7 @@ class Schema33Tests(unittest.TestCase):
     def test_missing_location_skips_git(self):
         self.repository.parent.rename(self.root / 'moved-repository')
         with mock.patch.object(schema_32_33, '_git', side_effect=AssertionError('Git must not run')):
-            upgrade.upgrade_state(self.state)
+            self.upgrade33()
         self.assertEqual(self.schema(), '33')
 
     def test_git_directory_without_files_is_skipped_and_other_repository_is_marked(self):
@@ -99,7 +105,7 @@ class Schema33Tests(unittest.TestCase):
                                                    ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                          missing_id)
 
-        self.assertEqual(upgrade.upgrade_state(self.state), {'sourceSchema': 32, 'targetSchema': 33})
+        self.assertEqual(self.upgrade33(), {'sourceSchema': 32, 'targetSchema': 33})
         self.assertEqual(self.schema(), '33')
         self.assertEqual({path.relative_to(missing) for path in missing.rglob('*')}, directories)
         self.assertTrue(all(path.is_dir() for path in missing.rglob('*')))
@@ -115,7 +121,7 @@ class Schema33Tests(unittest.TestCase):
         self.repository.chmod(0)
         try:
             with self.assertRaisesRegex(RuntimeError, 'Cannot inspect old repository') as error:
-                upgrade.upgrade_state(self.state)
+                self.upgrade33()
             self.assertIn(str(self.repository), str(error.exception))
             self.assertIsInstance(error.exception.__cause__, PermissionError)
         finally:
@@ -132,7 +138,7 @@ class Schema33Tests(unittest.TestCase):
         original.mkdir()
         subprocess.run(['git', 'init', '--quiet', str(original)], check=True, capture_output=True)
         with mock.patch.object(schema_32_33, '_git', side_effect=AssertionError('Git must not run')):
-            upgrade.upgrade_state(self.state)
+            self.upgrade33()
         self.assertEqual(self.schema(), '33')
         self.assertIsNone(self.project(original / '.git'))
         self.assertIsNone(self.project(moved / '.git'))
@@ -148,7 +154,7 @@ class Schema33Tests(unittest.TestCase):
                                '(SELECT macro_task_id FROM macro_tasks LIMIT 1)', (old_id, str(git_dir)))
             connection.execute('UPDATE workflow_integrations SET target_repository_id=?,target_path=? WHERE integration_id='
                                '(SELECT integration_id FROM workflow_integrations LIMIT 1)', (old_id, str(independent)))
-        upgrade.upgrade_state(self.state)
+        self.upgrade33()
         self.assertIsNone(self.project(git_dir))
         with closing(sqlite3.connect(self.state / 'board.sqlite3')) as connection:
             self.assertEqual({row[0] for row in connection.execute(
@@ -162,7 +168,7 @@ class Schema33Tests(unittest.TestCase):
             connection.execute('UPDATE workspace_cleanup_plans SET evidence_json=? WHERE plan_id=?',
                                (json.dumps(evidence), row[0]))
         with self.assertRaises(KeyError):
-            upgrade.upgrade_state(self.state)
+            self.upgrade33()
         self.assertEqual(self.schema(), '32')
 
     def test_inherited_git_environment_cannot_redirect_marker(self):
@@ -170,7 +176,7 @@ class Schema33Tests(unittest.TestCase):
         subprocess.run(['git', 'init', '--quiet', str(other)], check=True, capture_output=True)
         with mock.patch.dict(os.environ, {'GIT_DIR': str(other / '.git'),
                                           'GIT_INDEX_FILE': str(other / '.git' / 'index')}):
-            upgrade.upgrade_state(self.state)
+            self.upgrade33()
         self.assertIsNotNone(self.project())
         self.assertIsNone(self.project(other / '.git'))
 
@@ -179,14 +185,14 @@ class Schema33Tests(unittest.TestCase):
         hook = self.repository / 'hooks' / 'reference-transaction'
         hook.write_text('#!/bin/sh\nexit 91\n', encoding='utf-8')
         hook.chmod(0o755)
-        upgrade.upgrade_state(self.state)
+        self.upgrade33()
         self.assertIsNotNone(self.project())
 
     def test_stat_permission_failure_keeps_schema_32(self):
         failure = PermissionError(13, 'Permission denied', str(self.repository))
         with mock.patch.object(Path, 'stat', side_effect=failure):
             with self.assertRaisesRegex(RuntimeError, 'Cannot inspect old repository') as error:
-                upgrade.upgrade_state(self.state)
+                self.upgrade33()
         self.assertIn(str(self.repository), str(error.exception))
         self.assertEqual(self.schema(), '32')
         self.assertIsNone(self.project())
@@ -194,7 +200,7 @@ class Schema33Tests(unittest.TestCase):
     def test_different_existing_marker_fails_and_rolls_back(self):
         schema_32_33._mark_project(self.repository, 'another-project')
         with self.assertRaisesRegex(RuntimeError, 'Different project marker'):
-            upgrade.upgrade_state(self.state)
+            self.upgrade33()
         self.assertEqual(self.schema(), '32')
         self.assertEqual(self.project(), b'another-project')
 
@@ -208,7 +214,7 @@ class Schema33Tests(unittest.TestCase):
 
         with mock.patch.object(schema_32_33.subprocess, 'run', side_effect=fail):
             with self.assertRaisesRegex(RuntimeError, 'diagnostic-err') as error:
-                upgrade.upgrade_state(self.state)
+                self.upgrade33()
         self.assertIn(str(self.repository), str(error.exception))
         self.assertIn('diagnostic-out', str(error.exception))
         self.assertEqual(self.schema(), '32')
@@ -216,11 +222,11 @@ class Schema33Tests(unittest.TestCase):
     def test_marker_survives_database_rollback_and_retry(self):
         with mock.patch.object(schema_32_33, '_cleanup_evidence', side_effect=RuntimeError('injected after marker')):
             with self.assertRaisesRegex(RuntimeError, 'injected after marker'):
-                upgrade.upgrade_state(self.state)
+                self.upgrade33()
         self.assertEqual(self.schema(), '32')
         marked = self.project()
         self.assertIsNotNone(marked)
-        upgrade.upgrade_state(self.state)
+        self.upgrade33()
         self.assertEqual(self.schema(), '33')
         self.assertEqual(self.project(), marked)
 

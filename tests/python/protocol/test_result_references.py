@@ -25,7 +25,7 @@ class ResultReferenceTests(BoardTestCase):
         self.client = BoardClient(self.board_fixture.directory, call=self.board_fixture.call)
 
     def publish(self, report):
-        receipt = {"taskId": self.claim["task"]["taskId"], "attemptId": self.attempt["attemptId"],
+        receipt = {"version": 2, "taskId": self.claim["task"]["taskId"], "attemptId": self.attempt["attemptId"],
                    "generation": self.attempt["generation"], "report": report, "createdAt": "2026-10-19T00:00:00Z"}
         fsync_json(self.receipt_dir / RECEIPT, receipt)
         return receipt_reference(self.receipt_dir)

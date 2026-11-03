@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 from hey_my_buddy import private_files, private_dirs
+from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 
 
@@ -185,12 +186,20 @@ class PrivatePublicationTests(unittest.TestCase):
         binding = {'taskId': 'task', 'attemptId': 'attempt', 'generation': 1}
         execution.fsync_json(directory / execution.STARTUP, binding)
         self.assertEqual(execution._private_json(directory / execution.STARTUP), binding)
-        receipt = {**binding, 'createdAt': '2026-10-25T00:00:00+00:00', 'report': {}}
+        receipt = {**binding, 'version': 2, 'createdAt': '2026-10-25T00:00:00+00:00', 'report': {}}
         receipts.write_receipt(directory, receipt)
         reference = execution.receipt_reference(directory)
         self.assertEqual(reference['path'], str(directory / execution.RECEIPT))
         self.assertNotIn('\\\\?\\', reference['path'])
         self.assertEqual(execution.read_execution_receipt(directory, binding=binding, sha256=reference['sha256']), receipt)
+        archived = {key: value for key, value in receipt.items() if key != 'version'}
+        execution.fsync_json(directory / execution.RECEIPT, archived)
+        with self.assertRaises(BoardError):
+            execution.read_execution_receipt(directory)
+        self.assertEqual(execution.read_execution_receipt(directory, form='archived-report-v1'), archived)
+        execution.fsync_json(directory / execution.RECEIPT, {**receipt, 'version': 2.0})
+        with self.assertRaises(BoardError):
+            execution.read_execution_receipt(directory)
 
     def test_spawn_handle_identifies_the_writer_process(self):
         writer = r'''

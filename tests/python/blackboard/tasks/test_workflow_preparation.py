@@ -1,4 +1,5 @@
 """Continuation admission and fixed handoffs with disposable real Git checkouts."""
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, resolve_manifest, artifact_manifest
 from admission import admit_board, admit_store
 import itertools
 import json
@@ -14,7 +15,6 @@ from support import FakeClock
 from blackboard.tasks.test_workflow import WorkflowTestCase
 from hey_my_buddy.blackboard.tasks import allocation_revocations, storage, workflow as workflow_module, workspace
 from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
-from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
 
@@ -83,6 +83,14 @@ class PreparationTests(WorkflowTestCase):
             continuation = dict(connection.execute("SELECT * FROM workflow_continuations WHERE continuation_id=?", (continuation_id,)).fetchone())
             reservation = dict(connection.execute("SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone())
         return run, task, continuation, reservation
+
+    @staticmethod
+    def pair(row):
+        return row["workspace_id"], row["workspace_manifest_sha256"]
+
+    def row_manifest(self, row):
+        return resolve_manifest(self.directory, {"workspaceId": row["workspace_id"],
+                                                 "manifestSha256": row["workspace_manifest_sha256"]})
 
     def failed_helper(self, *, unvalidated_seal=False):
         (self.repo / ".gitignore").write_text("tests/.env\ntests/cache/\n", encoding="utf-8", newline="\n")
@@ -171,7 +179,7 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(during[0]["state"], "executing")
         self.assertEqual(during[0]["revision"], before[0]["revision"])
         self.assertEqual(during[2]["state"], "queued")
-        self.assertIsNone(during[2]["workspace_manifest_json"])
+        self.assertEqual(self.pair(during[2]), (None, None))
         self.assertIsNone(during[0]["active_request_id"])
         resumed = self.claim(board, run_id=run_id, claim_request_id="git-unknown-retry")
         self.assertIsNotNone(resumed["claim"], resumed)
@@ -228,7 +236,7 @@ class PreparationTests(WorkflowTestCase):
         self.continue_run(board, view, targetRunId=helper_id, command_id="recover-unvalidated-seal")
         resumed = self.claim(board, run_id=helper_id, claim_request_id="claim-after-unvalidated-seal")
         self.assertIsNotNone(resumed["claim"], resumed)
-        manifest = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(manifest["snapshot"]["includedUntracked"], ["tests/test_math_ops.py"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_artifacts WHERE attempt_id=? AND kind='output'",
@@ -245,7 +253,7 @@ class PreparationTests(WorkflowTestCase):
         continued = self.continue_run(board, view, targetRunId=helper_id, command_id="recover-partial", input="Use the partial tests and finish")
         resumed = self.claim(board, run_id=helper_id, claim_request_id="partial-helper-next")
         self.assertIsNotNone(resumed["claim"], resumed)
-        manifest = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(manifest["path"], str(checkout))
         self.assertEqual(manifest["writeScope"], ["tests"])
         self.assertEqual(manifest["snapshot"]["includedUntracked"], ["tests/test_math_ops.py"])
@@ -283,7 +291,7 @@ class PreparationTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT state FROM workflow_runs WHERE run_id=?", (helper_id,)).fetchone()[0], "failed")
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_continuations WHERE run_id=?", (helper_id,)).fetchone()[0], 0)
-            checkout_root = failed["claim"]["turn"]["input"]["executionWorkspace"]["checkoutRoot"]
+            checkout_root = turn_manifest(self.directory, failed["claim"]["turn"]["input"])["checkoutRoot"]
             holders = connection.execute("SELECT holder_task_id FROM workspace_reservations WHERE checkout_root=? AND state='held'", (checkout_root,)).fetchall()
         self.assertEqual([row[0] for row in holders], [competing["runId"]])
 
@@ -319,8 +327,8 @@ class PreparationTests(WorkflowTestCase):
             board.store.workflow.prepare_continuation_workspace({"runId": helper_id})
         after = self.rows(board, helper_id, first["continuationId"])
         self.assertEqual(after[2]["state"], "invalidated")
-        self.assertIsNone(after[2]["workspace_manifest_json"])
-        self.assertEqual(after[0]["workspace_manifest_json"], before[0]["workspace_manifest_json"])
+        self.assertEqual(self.pair(after[2]), (None, None))
+        self.assertEqual(self.pair(after[0]), self.pair(before[0]))
         claimed = self.claim(board, run_id=helper_id, claim_request_id="newer-recovery-claim")
         self.assertIsNotNone(claimed["claim"], claimed)
         self.assertEqual(claimed["claim"]["turn"]["input"]["context"]["continuation"]["input"], "Newer recovery input")
@@ -347,8 +355,8 @@ class PreparationTests(WorkflowTestCase):
         before = self.rows(board, run_id, cont)
         board.store.workflow.prepare_continuation_workspace({"runId": run_id})
         after = self.rows(board, run_id, cont)
-        manifest = json.loads(after[2]["workspace_manifest_json"])
-        self.assertEqual(manifest["checkoutRoot"], json.loads(before[0]["workspace_manifest_json"])["checkoutRoot"])
+        manifest = self.row_manifest(after[2])
+        self.assertEqual(manifest["checkoutRoot"], self.row_manifest(before[0])["checkoutRoot"])
         self.assertEqual(after[3]["manifest_sha256"], manifest["manifestSha256"])
         self.assertEqual(after[3]["workspace_id"], manifest["workspaceId"])
         for key in ("request_fingerprint", "execution_workspace_json"):
@@ -360,7 +368,7 @@ class PreparationTests(WorkflowTestCase):
         with board.store.db.read() as connection:
             saved = connection.execute("SELECT input_json FROM workflow_turns WHERE attempt_id=?", (first["claim"]["attempt"]["attemptId"],)).fetchone()[0]
         self.assertEqual(json.loads(saved), first["claim"]["turn"]["input"])
-        self.assertEqual(self.claim(board, claim_request_id="next")["claim"]["turn"]["input"]["executionWorkspace"], manifest)
+        self.assertEqual(turn_manifest(self.directory, self.claim(board, claim_request_id="next")["claim"]["turn"]["input"]), manifest)
 
     def test_continuation_clears_old_revocation_before_writing_new_allocation(self):
         board, run_id, _, continuation_id = self.pending()
@@ -394,7 +402,7 @@ class PreparationTests(WorkflowTestCase):
             board.store.workflow.prepare_continuation_workspace({"runId": run_id})
 
         self.assertEqual(request_writes, [True])
-        manifest = json.loads(self.rows(board, run_id, continuation_id)[2]["workspace_manifest_json"])
+        manifest = self.row_manifest(self.rows(board, run_id, continuation_id)[2])
         self.assertEqual(manifest["workspaceId"], directory.name)
         self.assertTrue((directory / "request.json").is_file())
         self.assertTrue((directory / "manifest.json").is_file())
@@ -443,7 +451,7 @@ class PreparationTests(WorkflowTestCase):
         view = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(view["state"], "awaiting-host")
         self.assertEqual(view["activeRequest"]["preparationError"]["code"], "WORKSPACE_CHANGED")
-        self.assertIsNone(self.rows(board, run_id, continuation_id)[2]["workspace_manifest_json"])
+        self.assertEqual(self.pair(self.rows(board, run_id, continuation_id)[2]), (None, None))
 
     def test_concurrent_preparation_lock_retains_continuation_and_allows_recovery(self):
         board, run_id, _, cont = self.pending(kind="worktree")
@@ -460,7 +468,7 @@ class PreparationTests(WorkflowTestCase):
             self.assertEqual(during[0]["state"], "executing")
             self.assertEqual(during[0]["revision"], before[0]["revision"])
             self.assertEqual(during[2]["state"], "queued")
-            self.assertIsNone(during[2]["workspace_manifest_json"])
+            self.assertEqual(self.pair(during[2]), (None, None))
             self.assertIsNone(during[0]["active_request_id"])
         resumed = self.claim(board, claim_request_id="recovered", run_id=run_id)
         self.assertIsNotNone(resumed["claim"])
@@ -477,14 +485,14 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(view["state"], "awaiting-host")
         self.assertEqual(view["activeRequest"]["preparationError"]["code"],
                          "WORKSPACE_REPOSITORY_NOT_FOUND")
-        self.assertIsNone(self.rows(board, run_id, continuation_id)[2]["workspace_manifest_json"])
+        self.assertEqual(self.pair(self.rows(board, run_id, continuation_id)[2]), (None, None))
 
     def test_real_worktree_continuation_retains_checkout_and_source_files(self):
         board, run_id, first, cont = self.pending(kind="worktree")
-        previous = first["claim"]["turn"]["input"]["executionWorkspace"]
+        previous = turn_manifest(self.directory, first["claim"]["turn"]["input"])
         resumed = self.claim(board, claim_request_id="worktree-continuation", run_id=run_id)
         self.assertIsNotNone(resumed["claim"], resumed)
-        current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        current = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         for field in ("checkoutRoot", "projectId", "path"):
             self.assertEqual(current[field], previous[field])
         self.assertEqual(resumed["claim"]["task"]["cwd"], previous["path"])
@@ -495,8 +503,8 @@ class PreparationTests(WorkflowTestCase):
         board, run_id, first, _ = self.pending()
         claim = admit_board(board, {'nonce': 'n' * 16, 'runId': run_id})
         self.assertIsNotNone(claim["claim"])
-        workspace = claim["claim"]["turn"]["input"]["executionWorkspace"]
-        previous = first["claim"]["turn"]["input"]["executionWorkspace"]
+        workspace = turn_manifest(self.directory, claim["claim"]["turn"]["input"])
+        previous = turn_manifest(self.directory, first["claim"]["turn"]["input"])
         self.assertNotEqual(workspace["baseCommit"], previous["baseCommit"])
         output = next(item for item in board.call("workflow_get", {"runId": run_id})["artifacts"]
                       if item["kind"] == "output")
@@ -536,7 +544,8 @@ class PreparationTests(WorkflowTestCase):
                 # A coordinator allocation replacement, including its reservation.
                 # Deliberately retain revision to require actual manifest comparison.
                 with board.store.db.write() as connection:
-                    connection.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?", (canonical_json(replacement), run_id))
+                    connection.execute("UPDATE workflow_runs SET workspace_id=?, workspace_manifest_sha256=? WHERE run_id=?",
+                                       (replacement["workspaceId"], replacement["manifestSha256"], run_id))
                     connection.execute("UPDATE tasks SET cwd=? WHERE task_id=?", (replacement["path"], run_id))
                     connection.execute("UPDATE workspace_reservations SET workspace_id=?, checkout_root=?, manifest_sha256=? WHERE holder_task_id=? AND state='held'", (replacement["workspaceId"], replacement["checkoutRoot"], replacement["manifestSha256"], run_id))
             return manifest
@@ -544,8 +553,8 @@ class PreparationTests(WorkflowTestCase):
         with patch.object(workspace, "prepare", side_effect=race):
             board.store.workflow.prepare_continuation_workspace({"runId": run_id})
         after = self.rows(board, run_id, cont)
-        self.assertIsNone(after[2]["workspace_manifest_json"])
-        self.assertEqual(after[0]["workspace_manifest_json"], canonical_json(replacement) if replacement else before[0]["workspace_manifest_json"])
+        self.assertEqual(self.pair(after[2]), (None, None))
+        self.assertEqual(self.pair(after[0]), (replacement["workspaceId"], replacement["manifestSha256"]) if replacement else self.pair(before[0]))
         self.assertEqual(after[1]["cwd"], replacement["path"] if replacement else before[1]["cwd"])
         self.assertEqual(after[2]["input_text"], before[2]["input_text"])
         self.assertEqual(after[1]["spec_json"], before[1]["spec_json"])
@@ -566,9 +575,9 @@ class PreparationTests(WorkflowTestCase):
         verify.assert_not_called()
         after = self.rows(board, run_id, cont)
         self.assertEqual(after[0]["state"], "awaiting-host")
-        self.assertEqual(after[0]["workspace_manifest_json"], before[0]["workspace_manifest_json"])
+        self.assertEqual(self.pair(after[0]), self.pair(before[0]))
         self.assertEqual(after[1]["cwd"], before[1]["cwd"])
-        self.assertIsNone(after[2]["workspace_manifest_json"])
+        self.assertEqual(self.pair(after[2]), (None, None))
 
     def test_transferred_checkout_is_not_scanned_by_preparation(self):
         board = self.board()
@@ -606,8 +615,8 @@ class PreparationTests(WorkflowTestCase):
         third = self.claim(board, claim_request_id="claim-third")
         self.assertIsNotNone(third["claim"])
         with board.store.db.read() as connection:
-            latest = connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='output' ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()
-        self.assertEqual(third["claim"]["turn"]["input"]["executionWorkspace"]["baseCommit"], json.loads(latest[0])["commit"])
+            latest = connection.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output' ORDER BY rowid DESC LIMIT 1", (run_id,)).fetchone()
+        self.assertEqual(turn_manifest(self.directory, third["claim"]["turn"]["input"])["baseCommit"], artifact_manifest(self.directory, latest)["commit"])
 
     def test_helper_output_reference_never_impersonates_a_new_failed_attempt(self):
         board = self.board()
@@ -644,8 +653,8 @@ class PreparationTests(WorkflowTestCase):
         with board.store.db.write() as connection:
             board.store.workflow._pin_artifact(connection, run_id=run_id, kind="output", manifest=seal, attempt_id=attempt_id, turn_id=first["claim"]["turn"]["turnId"], now=board.store.now())
         with board.store.db.read() as connection:
-            chosen = board.store.workflow._latest_handoff(connection, original, json.loads(original["workspace_manifest_json"]))
-        self.assertEqual(chosen["manifestSha256"], json.loads(original["workspace_manifest_json"])["manifestSha256"])
+            chosen = board.store.workflow._latest_handoff(connection, original, self.row_manifest(original))
+        self.assertEqual(chosen["manifestSha256"], self.row_manifest(original)["manifestSha256"])
         self.assertNotEqual(chosen["manifestSha256"], other["manifestSha256"])
 
     def test_authorized_helper_seal_becomes_the_same_checkout_handoff(self):
@@ -662,10 +671,10 @@ class PreparationTests(WorkflowTestCase):
         (self.repo / "tracked.txt").write_text("newer helper output\n", encoding="utf-8", newline="\n")
         self.finish_turn(board, claim)
         with board.store.db.read() as connection:
-            artifact = connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='output'", (helper,)).fetchone()
+            artifact = connection.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output'", (helper,)).fetchone()
         resumed = self.claim(board, claim_request_id="resumed", run_id=submitted["runId"])
         self.assertIsNotNone(resumed["claim"], resumed)
-        self.assertEqual(resumed["claim"]["turn"]["input"]["executionWorkspace"]["baseCommit"], json.loads(artifact[0])["commit"])
+        self.assertEqual(turn_manifest(self.directory, resumed["claim"]["turn"]["input"])["baseCommit"], artifact_manifest(self.directory, artifact)["commit"])
 
 
 class RestartPreparationTests(WorkflowTestCase):
@@ -676,6 +685,8 @@ class RestartPreparationTests(WorkflowTestCase):
     repository = PreparationTests.repository
     failed_helper = PreparationTests.failed_helper
     rows = PreparationTests.rows
+    pair = staticmethod(PreparationTests.pair)
+    row_manifest = PreparationTests.row_manifest
 
     def setUp(self):
         super().setUp()
@@ -685,9 +696,8 @@ class RestartPreparationTests(WorkflowTestCase):
 
     def manifest(self, board, run_id):
         with board.store.db.read() as connection:
-            return json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (run_id,)
-            ).fetchone()[0])
+            row = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run_id,)).fetchone()
+        return self.row_manifest(row)
 
     def test_initial_immutable_input_wins_over_later_manifest_reservation_and_cwd(self):
         board = self.board()
@@ -704,8 +714,8 @@ class RestartPreparationTests(WorkflowTestCase):
         # These mutable fallbacks describe a later execution site. The first
         # immutable input artifact continues to name the delegated project.
         with board.store.db.write() as connection:
-            connection.execute("UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?",
-                               (canonical_json(foreign_manifest), run["runId"]))
+            connection.execute("UPDATE workflow_runs SET workspace_id=?, workspace_manifest_sha256=? WHERE run_id=?",
+                               (foreign_manifest["workspaceId"], foreign_manifest["manifestSha256"], run["runId"]))
             connection.execute("UPDATE tasks SET cwd=? WHERE task_id=?", (str(other), run["runId"]))
         board = self.board()
         task = board.call("task_get", {"runId": run["runId"]})["task"]
@@ -717,9 +727,9 @@ class RestartPreparationTests(WorkflowTestCase):
         timeline = board.call("macro_task_timeline", {"macroTaskId": run["macroTaskId"]})
         self.assertEqual(timeline["macroTask"]["project"]["id"], project)
         with board.store.db.read() as connection:
-            retained = json.loads(connection.execute(
-                "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
-                (run["runId"],)).fetchone()[0])
+            retained = artifact_manifest(self.directory, connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1",
+                (run["runId"],)).fetchone())
         self.assertEqual(retained, original)
 
     def test_restart_helper_transfer_handoff_and_return_keep_single_ownership(self):
@@ -736,7 +746,7 @@ class RestartPreparationTests(WorkflowTestCase):
             "executionWorkspace": {"kind": "existing", "access": "write"},
         }])
         helper_id = approved["children"][0]["taskId"]
-        old = parent["claim"]["turn"]["input"]["executionWorkspace"]
+        old = turn_manifest(self.directory, parent["claim"]["turn"]["input"])
         board = self.board()
         for access in ("read", "write"):
             with self.subTest(access=access):
@@ -752,11 +762,11 @@ class RestartPreparationTests(WorkflowTestCase):
         (self.repo / "tracked.txt").write_text("helper output after restart\n", encoding="utf-8", newline="\n")
         self.finish_turn(board, helper)
         with board.store.db.read() as connection:
-            output = json.loads(connection.execute(
-                "SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='output'", (helper_id,)).fetchone()[0])
+            output = artifact_manifest(self.directory, connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output'", (helper_id,)).fetchone())
         resumed = self.claim(board, run_id=root["runId"], claim_request_id="restart-parent-claim")
         self.assertIsNotNone(resumed["claim"], resumed)
-        current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        current = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(current["baseCommit"], output["commit"])
         self.assertEqual(current["path"], old["path"])
         self.assertEqual(current["checkoutRoot"], workspace.inspect(str(self.repo))["checkoutRoot"])
@@ -776,7 +786,7 @@ class RestartPreparationTests(WorkflowTestCase):
                                          command_id="restart-recover-partial", input="finish the preserved partial tests")
         resumed = self.claim(board, run_id=helper_id, claim_request_id="restart-partial-claim")
         self.assertIsNotNone(resumed["claim"], resumed)
-        manifest = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(manifest["path"], str(checkout))
         self.assertEqual(manifest["snapshot"]["includedUntracked"], ["tests/test_math_ops.py"])
         self.assertIn("test_partial", self.git(checkout, "show", f"{manifest['inputCommit']}:tests/test_math_ops.py"))

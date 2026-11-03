@@ -181,10 +181,19 @@ function parseArtifacts(value: unknown): Artifact[] {
     const artifact = rec(item, "artifact");
     if (!OUTPUT_KINDS.includes(artifact.kind as never)) return [];
     const kind = artifact.kind as Artifact["kind"];
+    const contentForm = oneOf(
+      artifact.contentForm, ["sealed-inline-v1", "record-reference"] as const, "artifact.contentForm");
+    const snapshotSha256 = contentForm === "record-reference"
+      ? str(artifact.outputSnapshotSha256, "artifact.outputSnapshotSha256")
+      : str(artifact.manifestSha256, "artifact.manifestSha256");
+    const record = contentForm === "record-reference" ? rec(artifact.recordFile, "artifact.recordFile") : null;
     return [{
       artifactId: str(artifact.artifactId, "artifact.artifactId"), kind,
       attemptId: str(artifact.attemptId, "artifact.attemptId"),
-      manifestSha256: str(artifact.manifestSha256, "artifact.manifestSha256"),
+      manifestSha256: snapshotSha256,
+      contentForm, outputSnapshotSha256: contentForm === "record-reference" ? snapshotSha256 : undefined,
+      recordFile: record && { path: str(record.path, "artifact.recordFile.path"),
+        sha256: str(record.sha256, "artifact.recordFile.sha256") },
       outputCommit: strOrNull(artifact.outputCommit, "artifact.outputCommit"),
       diffPath: strOrNull(artifact.diffPath, "artifact.diffPath"),
       changedPaths: strings(artifact.changedPaths, "artifact.changedPaths"),

@@ -82,8 +82,8 @@ class RoutingOwnershipTests(RouterDispatchTestCase, ConsoleTestCase):
         _request, first, second = self.replaced_router()
         with self.board_.store.db.write() as db:
             db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,"
-                       "shutdown_confirmed,result_json,created_at,updated_at)"
-                       " VALUES('root-attempt','run-1',1,'verifier','finished','dsh',1,'{}',?,?)", (T0, T0))
+                       "shutdown_confirmed,result_json,result_form,created_at,updated_at)"
+                       " VALUES('root-attempt','run-1',1,'verifier','finished','dsh',1,'{}','current-report-v2',?,?)", (T0, T0))
             db.execute("UPDATE tasks SET state='completed',selected_attempt_id='root-attempt' WHERE task_id='run-1'")
             db.execute("UPDATE workflow_runs SET state='delivered' WHERE run_id='run-1'")
         for claim in (first, second):

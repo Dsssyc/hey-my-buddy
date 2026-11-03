@@ -7,12 +7,77 @@ import subprocess
 import shutil
 import unittest
 import tempfile
+import uuid
 from unittest.mock import patch
-from types import SimpleNamespace
 
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.blackboard.tasks import workspace, macro_task_deletion_workspace
+from hey_my_buddy.blackboard.store.store import BoardStore
+from hey_my_buddy.blackboard.tasks.workspace_bindings import MANIFEST_OWNERS_CTE
 from hey_my_buddy.paths import native_path
+
+
+def deletion_sql_inputs(case, manifests, artifacts=()):
+    """Publish prepared test workspaces as current SQL owner facts for physical deletion."""
+    if not hasattr(case, '_deletion_store'):
+        case._deletion_store = BoardStore(case.state)
+        case._deletion_store.initialize()
+        case.addCleanup(case._deletion_store.db.close)
+    store = case._deletion_store
+    manifests = list(manifests)
+    artifacts = list(artifacts)
+    now = store.now()
+    with store.db.write() as connection:
+        for manifest in manifests:
+            identifier = manifest['workspaceId']
+            request_id = case._workspace_request_ids[identifier]
+            attached = next((row for row in artifacts if row.get('workspaceId') == identifier), None)
+            run_id = attached['taskId'] if attached is not None else 'fixture-' + identifier
+            project_id = workspace.manifest_project_id(manifest)
+            connection.execute(
+                "INSERT OR IGNORE INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,"
+                "adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                (run_id, request_id, '{"expectedSeconds":1}', 'fixture', 1,
+                 'codex', manifest['checkoutRoot'], 'cancelled', 1, now, now))
+            connection.execute(
+                "INSERT OR IGNORE INTO workflow_runs(run_id,standalone_project_id,control_verifier,"
+                "execution_workspace_json,workspace_id,workspace_manifest_sha256,state,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (run_id, project_id, 'fixture', '{}', identifier, manifest['manifestSha256'],
+                 'cancelled', now, now))
+            connection.execute(
+                "INSERT OR IGNORE INTO workflow_artifacts(artifact_id,run_id,kind,content_form,workspace_id,"
+                "input_manifest_sha256,workspace_facts_role,workspace_kind,checkout_root,repository_path,"
+                "input_commit,staged_commit,created_at) VALUES(?,?,'input','input-reference',?,?,?,?,?,?,?,?,?)",
+                ('fixture-input-' + identifier + '-' + manifest['manifestSha256'], run_id, identifier,
+                 manifest['manifestSha256'], 'owner', manifest['kind'], manifest['checkoutRoot'],
+                 manifest['snapshot']['repositoryPath'], manifest['inputCommit'],
+                 manifest['snapshot']['stagedCommit'], now))
+        for artifact in artifacts:
+            kind = {'host-output': 'partial-output', 'resolution': 'resolved-output',
+                    'abandoned-site': 'abandoned-site', None: 'output'}[artifact.get('kind')]
+            origin = ('host' if artifact.get('kind') == 'host-output' else 'worker') if kind in ('output','partial-output') else None
+            artifact_id = 'fixture-output-' + uuid.uuid5(uuid.NAMESPACE_URL,
+                artifact['ref'] + artifact['snapshotSha256']).hex
+            connection.execute(
+                "INSERT OR IGNORE INTO workflow_artifacts(artifact_id,run_id,attempt_id,kind,content_form,"
+                "manifest_json,output_snapshot_sha256,output_origin,output_workspace_id,output_manifest_sha256,"
+                "output_commit,output_action,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (artifact_id, artifact['taskId'], artifact['attemptId'], kind, 'sealed-inline-v1',
+                 json.dumps(artifact), artifact['snapshotSha256'], origin, artifact['workspaceId'],
+                 artifact['manifestSha256'], artifact['commit'],
+                 artifact.get('action') if kind == 'resolved-output' else None, now))
+    pairs = {(row['workspaceId'], row['manifestSha256']) for row in manifests}
+    with store.db.read() as connection:
+        owners = [dict(row) for row in connection.execute(
+            f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})'
+            ' SELECT o.*,r.standalone_project_id AS project_id FROM manifest_owners o'
+            ' JOIN workflow_runs r ON r.run_id=o.owner_run_id')
+            if (row['workspace_id'], row['manifest_sha256']) in pairs]
+        records = [dict(row) for row in connection.execute(
+            "SELECT * FROM workflow_artifacts WHERE kind IN ('output','resolved-output','partial-output','abandoned-site')")
+            if (row['output_workspace_id'], row['output_manifest_sha256']) in pairs]
+    return store, owners, records
 
 
 class WorkspaceTests(unittest.TestCase):
@@ -75,7 +140,9 @@ class WorkspaceTests(unittest.TestCase):
                 "writeScope": ["src"], "integrator": {"role": "host", "id": "host-1"}, **updates}
 
     def prepare(self, request="request", **updates):
-        return workspace.prepare(self.state, request, self.intent(**updates))
+        manifest = workspace.prepare(self.state, request, self.intent(**updates))
+        self.__dict__.setdefault('_workspace_request_ids', {})[manifest['workspaceId']] = request
+        return manifest
 
     def legacy_full_manifest(self, manifest):
         legacy = dict(manifest, version=2, accessReason="Original Host explanation", access="full")
@@ -144,8 +211,8 @@ class WorkspaceTests(unittest.TestCase):
         legacy = self.legacy_full_manifest(current)
         checkout = Path(legacy["checkoutRoot"])
         self.assertTrue(checkout.is_dir())
-        self.assertEqual(macro_task_deletion_workspace.delete_workspaces(
-            SimpleNamespace(directory=self.state), [legacy], []), [])
+        store, owners, artifacts = deletion_sql_inputs(self, [legacy])
+        self.assertEqual(macro_task_deletion_workspace.delete_workspaces(store, owners, artifacts), [])
         self.assertFalse(checkout.exists())
 
     def test_v2_request_replays_without_changing_its_disk_records(self):

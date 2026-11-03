@@ -5,6 +5,7 @@ One ``accept`` must verify the exact final artifact against its recorded target
 history, and a target that moved under the review is refused.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest
 from unittest.mock import patch as defer_reclaim
 import os
 from pathlib import Path
@@ -79,7 +80,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         self.assertEqual(continued["state"], "executing")
         second = self.claim(board, run_id, request_id="two-turns-claim-2", nonce="q" * 16)
         self.assertIsNotNone(second["claim"], second)
-        second_manifest = second["claim"]["turn"]["input"]["executionWorkspace"]
+        second_manifest = turn_manifest(self.directory, second["claim"]["turn"]["input"])
         (checkout / "tracked.txt").write_text("second output\n", encoding="utf-8", newline="\n")
         second_seal = workspace_module.seal(self.directory, second_manifest, run_id,
                                             second["claim"]["attempt"]["attemptId"])
@@ -194,7 +195,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         })
         self.assertEqual(continued["state"], "executing")
         second_claim = self.claim(board, run_id, request_id="cleared-refs-second", nonce="q" * 16)
-        second_manifest = second_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        second_manifest = turn_manifest(self.directory, second_claim["claim"]["turn"]["input"])
         clear_workspace_refs()
         attempt = second_claim["claim"]["attempt"]
         context = ExecutionContext(
@@ -233,7 +234,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
             "input": "finish", **self.control(yielded),
         })
         second = self.claim(board, submitted["runId"], request_id="noop-claim", nonce="q" * 16)
-        second_manifest = second["claim"]["turn"]["input"]["executionWorkspace"]
+        second_manifest = turn_manifest(self.directory, second["claim"]["turn"]["input"])
         final_seal = workspace_module.seal(self.directory, second_manifest, submitted["runId"],
                                            second["claim"]["attempt"]["attemptId"])
         self.assertEqual(final_seal["changedPaths"], [])
@@ -279,7 +280,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         })
         self.controls[submitted["runId"]] = submitted["control"]
         claimed = self.claim(board, submitted["runId"], request_id="delete-mode-claim")
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
         (checkout / "tracked.txt").unlink()
         (checkout / "mode.txt").chmod(0o755)
@@ -346,7 +347,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         })
         self.controls[submitted["runId"]] = submitted["control"]
         claimed = self.claim(board, submitted["runId"], request_id="adopt-reclaim-claim")
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
         (checkout / "src" / "feature.py").parent.mkdir(parents=True, exist_ok=True)
         (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
@@ -402,7 +403,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         })
         self.controls[submitted["runId"]] = submitted["control"]
         claimed = self.claim(board, submitted["runId"], request_id="adopt-forge-claim")
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
         (checkout / "src" / "feature.py").parent.mkdir(parents=True, exist_ok=True)
         (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
@@ -428,14 +429,16 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         with board.store.db.write() as connection:
             connection.execute(
                 "INSERT INTO workflow_artifacts(artifact_id, run_id, turn_id, attempt_id, kind,"
-                " manifest_json, manifest_sha256, created_at) VALUES('art-forged', ?, NULL, NULL,"
-                " 'resolved-output', ?, '0' * 64wait, '2020-01-01T00:00:00.000Z')"
-                .replace("'0' * 64wait", "'0'"),
+                " content_form, manifest_json, output_snapshot_sha256, output_workspace_id,"
+                " output_manifest_sha256, output_commit, output_action, created_at)"
+                " VALUES('art-forged', ?, NULL, 'forged-attempt', 'resolved-output', 'sealed-inline-v1', ?, ?, ?, ?, ?, 'adopt',"
+                " '2020-01-01T00:00:00.000Z')",
                 (submitted["runId"], canonical_json({
                     "kind": "resolution", "action": "adopt",
                     "manifestSha256": manifest["manifestSha256"], "snapshotSha256": "0",
                     "adoptedPaths": ["smuggled.txt"], "changedPaths": ["smuggled.txt"],
-                })),
+                }), "0", manifest["workspaceId"], manifest["manifestSha256"],
+                 manifest["inputCommit"]),
             )
         params = {"runId": submitted["runId"], "note": "the forged record must not smuggle this path",
                   **self.control(self.view(board, submitted["runId"]))}

@@ -385,16 +385,21 @@ class ClaimTests(RouterDispatchTestCase):
 class WorkflowWiringTests(RouterDispatchTestCase):
     def route_micro_task(self, run_id="run-1", *, required_capabilities=()):
         """One micro task admitted through the coordinator's workflow entry."""
+        from mock_workspace import MockWorkspace
+        workspace = MockWorkspace(self.board_.directory)
+        manifest = workspace.prepare(self.board_.directory, f"routing-{run_id}",
+                                     {"kind": "existing", "cwd": str(self.workdir()), "access": "write"})
         with self.board_.store.db.write() as db:
             db.execute(
                 "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,queue_reason,revision,created_at,updated_at) VALUES(?,?,'host',json_set(?,'$.expectedSeconds',60),'digest',1,'unresolved','/work','queued','awaiting-model-selection',1,?,?)",
                 (run_id, run_id, canonical_json({"task": "do the thing"}), T0, T0))
             db.execute(
                 "INSERT INTO workflow_runs(run_id,host_id,source_host_id,control_verifier,"
-                " request_fingerprint,execution_workspace_json,workspace_manifest_json,state,created_at,updated_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                " request_fingerprint,execution_workspace_json,workspace_id,workspace_manifest_sha256,standalone_project_id,state,created_at,updated_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (run_id, "host-1", "host-1", "verifier", "request-digest",
-                 canonical_json({"kind": "existing"}), canonical_json({"kind": "existing"}), "executing", T0, T0))
+                 canonical_json({"kind": "existing"}), manifest["workspaceId"], manifest["manifestSha256"],
+                 manifest["projectId"], "executing", T0, T0))
             response = self.board_.store.decisions.route_workflow(
                 db, run_id=run_id, sequence=1, spec={"task": "do the thing", "requiredCapabilities": list(required_capabilities), "expectedSeconds": 60}, manifest=None)
         return response

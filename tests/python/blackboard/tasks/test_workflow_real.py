@@ -8,6 +8,7 @@ manifests, the turn input file, the provenance validation and the shutdown gate
 are real; only the native harness is the project's own fake program.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import hashlib
@@ -18,6 +19,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from support import BoardTestCase, enable_fixture_buddy
@@ -131,6 +133,26 @@ class RealWorkspaceTestCase(BoardTestCase):
         )
 
 
+class CumulativePatchProjectionTests(RealWorkspaceTestCase):
+    def test_cumulative_patch_paths_ignore_an_enclosing_git_worktree(self):
+        from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
+        initial_commit = self.git("rev-parse", "HEAD").strip()
+        (self.repo / "tracked.txt").write_text("a real patch change\n", encoding="utf-8")
+        raw = self.git("diff", "--binary", "--no-renames").encode()
+        state = self.repo / "nested-private-state"
+        relative = Path("workspaces") / ("ws-" + "a" * 32) / "outputs" / ("b" * 64) / "output.json"
+        directory = (state / relative).parent
+        directory.mkdir(parents=True, mode=0o700)
+        (directory / ("cumulative-" + initial_commit + ".patch")).write_bytes(raw)
+        coordinator = SimpleNamespace(board=SimpleNamespace(directory=state),
+                                      _initial_input_commit=lambda connection, run_id: initial_commit)
+        row = {"content_form": "record-reference", "kind": "output", "run_id": "nested",
+               "record_path": relative.as_posix()}
+        record = {"inputCommit": "e" * 40, "commit": "f" * 40}
+        view = WorkflowCoordinator._cumulative_patch_view(coordinator, row, record, connection=object())
+        self.assertEqual(view["changedPaths"], ["tracked.txt"])
+
+
 class DirtyInputTests(RealWorkspaceTestCase):
     def test_submit_transports_dirty_input_without_changing_the_source_index(self):
         (self.repo / "tracked.txt").write_text("staged change\n", encoding="utf-8", newline="\n")
@@ -181,7 +203,7 @@ class DirtyInputTests(RealWorkspaceTestCase):
         manifest = self.manifest_for("req-1")
         claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-1', 'nonce': 'n' * 16})
         turn = claim["claim"]["turn"]
-        self.assertEqual(turn["input"]["executionWorkspace"]["manifestSha256"], manifest["manifestSha256"])
+        self.assertEqual(turn_manifest(self.directory, turn["input"])["manifestSha256"], manifest["manifestSha256"])
         seal = workspace.seal(self.directory, manifest, run_id, claim["claim"]["attempt"]["attemptId"])
         self.assertTrue(seal.get("commit"))
         self.assertTrue(seal.get("snapshotSha256"))
@@ -205,11 +227,11 @@ class DirtyInputTests(RealWorkspaceTestCase):
         )
         board.call(
             'execution_result',
-            {'attemptId': claim['claim']['attempt']['attemptId'], 'generation': claim['claim']['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': record, 'turnResultPath': '/tmp/turn.json', 'workspaceSeal': seal}, 'shutdownConfirmed': True, 'exitCode': 0},
+            {'attemptId': claim['claim']['attempt']['attemptId'], 'generation': claim['claim']['attempt']['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': record, 'turnResultPath': '/tmp/turn.json', 'workspaceSeal': record_reference(self.directory, seal)}, 'shutdownConfirmed': True, 'exitCode': 0},
         )
         view = board.call("workflow_get", {"runId": run_id})
         output = [row for row in view["artifacts"] if row["kind"] == "output"][0]
-        self.assertEqual(output["manifestSha256"], seal["snapshotSha256"])
+        self.assertEqual(output["outputSnapshotSha256"], seal["snapshotSha256"])
         self.assertEqual(output["outputCommit"], seal["commit"])
         decided = board.call(
             "workflow_decide",
@@ -225,7 +247,7 @@ class DirtyInputTests(RealWorkspaceTestCase):
         )
         self.assertEqual(decided["state"], "executing")
         second = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-2', 'nonce': 'm' * 16})
-        second_input = second["claim"]["turn"]["input"]["executionWorkspace"]
+        second_input = turn_manifest(self.directory, second["claim"]["turn"]["input"])
         self.assertEqual(second_input["baseCommit"], seal["commit"])
         self.assertNotEqual(second_input["manifestSha256"], manifest["manifestSha256"])
         self.assertEqual(second_input["path"], manifest["path"])
@@ -308,7 +330,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
                 "resumeMode": "initial",
                 "inputSha256": "",
                 "input": {
-                    "version": 1,
+                    "version": 4,
                     "taskId": run_id,
                     "attemptId": attempt_id,
                     "generation": index,
@@ -316,7 +338,7 @@ class RealAdapterTests(RealWorkspaceTestCase):
                     "resumeMode": "initial",
                     "previousSessionId": None,
                     "context": {"task": "do work"},
-                    "executionWorkspace": manifest,
+                    "executionWorkspace": manifest_ref(manifest),
                 },
             },
             agent_credential="credential-token",
@@ -430,7 +452,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
         record = self._turn_record(run_id, claim, disposition, session_id, seal)
         return board.call(
             'execution_result',
-            {'attemptId': claim['claim']['attempt']['attemptId'], 'generation': claim['claim']['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': record, 'turnResultPath': '/tmp/turn.json', 'workspaceSeal': seal}, 'shutdownConfirmed': True, 'exitCode': 0},
+            {'attemptId': claim['claim']['attempt']['attemptId'], 'generation': claim['claim']['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': record, 'turnResultPath': '/tmp/turn.json', 'workspaceSeal': record_reference(self.directory, seal)}, 'shutdownConfirmed': True, 'exitCode': 0},
         )
 
     def test_parent_continuation_bases_on_the_helpers_sealed_commit(self):
@@ -441,7 +463,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
         run_id = submitted["runId"]
 
         parent_claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-1', 'nonce': 'n' * 16})
-        parent_manifest = parent_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        parent_manifest = turn_manifest(self.directory, parent_claim["claim"]["turn"]["input"])
         parent_seal = workspace.seal(
             self.directory, parent_manifest, run_id, parent_claim["claim"]["attempt"]["attemptId"]
         )
@@ -475,7 +497,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
         self.assertIn((child, "held"), states)
 
         helper_claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-2', 'nonce': 'm' * 16, 'runId': child})
-        helper_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        helper_manifest = turn_manifest(self.directory, helper_claim["claim"]["turn"]["input"])
         self.assertEqual(helper_manifest["checkoutRoot"], parent_manifest["checkoutRoot"])
         # The helper writes a new file and seals its output on the shared checkout.
         (self.repo / "helper-new.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
@@ -491,7 +513,7 @@ class TransferredCheckoutContinuationTests(RealWorkspaceTestCase):
         # Ownership returns to the parent, and its continuation is based on the
         # helper's sealed commit (never the parent's older seal).
         parent_second = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-3', 'nonce': 'k' * 16, 'runId': run_id})
-        effective = parent_second["claim"]["turn"]["input"]["executionWorkspace"]
+        effective = turn_manifest(self.directory, parent_second["claim"]["turn"]["input"])
         self.assertEqual(effective["baseCommit"], helper_seal["commit"])
         self.assertEqual(effective["inputTree"], helper_seal["tree"])
         verified = workspace.verify(effective, require_unchanged=True, state_dir=self.directory)
@@ -538,7 +560,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
     def _finish(self, board, run_id, claim, disposition, seal, session_id, nonce):
         board.call(
             'execution_result',
-            {'attemptId': claim['claim']['attempt']['attemptId'], 'generation': claim['claim']['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': self._record(run_id, claim, disposition, seal, session_id), 'turnResultPath': '/tmp/turn.json', 'workspaceSeal': seal}, 'shutdownConfirmed': True, 'exitCode': 0},
+            {'attemptId': claim['claim']['attempt']['attemptId'], 'generation': claim['claim']['attempt']['generation'], 'nonce': nonce, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': self._record(run_id, claim, disposition, seal, session_id), 'turnResultPath': '/tmp/turn.json', 'workspaceSeal': record_reference(self.directory, seal)}, 'shutdownConfirmed': True, 'exitCode': 0},
         )
 
     def test_helper_refs_are_frozen_into_the_parent_continuation(self):
@@ -548,7 +570,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
         submitted = self.submit(board)
         run_id = submitted["runId"]
         parent_claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'claim-1', 'nonce': 'n' * 16})
-        parent_manifest = parent_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        parent_manifest = turn_manifest(self.directory, parent_claim["claim"]["turn"]["input"])
         parent_seal = workspace.seal(
             self.directory, parent_manifest, run_id, parent_claim["claim"]["attempt"]["attemptId"]
         )
@@ -581,7 +603,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
         for index, child in enumerate([row["taskId"] for row in approved["children"]], start=1):
             nonce = chr(ord("a") + index) * 16
             claim = admit_board(board, {'workerId': 'w1', 'claimRequestId': f'claim-h{index}', 'nonce': nonce, 'runId': child})
-            manifest = claim["claim"]["turn"]["input"]["executionWorkspace"]
+            manifest = turn_manifest(self.directory, claim["claim"]["turn"]["input"])
             manifests[child] = manifest
             native_path(Path(manifest["path"]) / f"helper-{index}.txt").write_text(f"helper {index} output\n", encoding="utf-8", newline="\n")
             seal = workspace.seal(self.directory, manifest, child, claim["claim"]["attempt"]["attemptId"])
@@ -623,7 +645,7 @@ class PinnedHelperHandoffTests(RealWorkspaceTestCase):
         self.assertEqual(frozen_again, {child: seal["commit"] for child, seal in seals.items()})
         for child, seal in seals.items():
             artifacts = board.call("workflow_get", {"runId": child})["artifacts"]
-            self.assertIn(seal["snapshotSha256"], [row["manifestSha256"] for row in artifacts])
+            self.assertIn(seal["snapshotSha256"], [row["outputSnapshotSha256"] for row in artifacts if row["kind"] in ("output", "resolved-output", "partial-output")])
 
 
 class WorktreeContinuationReuseTests(TransferredCheckoutContinuationTests):
@@ -633,7 +655,7 @@ class WorktreeContinuationReuseTests(TransferredCheckoutContinuationTests):
         submitted = self.submit(board, request_id="wt-1", kind="worktree")
         run_id = submitted["runId"]
         first = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'wt-c1', 'nonce': 'n' * 16})
-        manifest_one = first["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest_one = turn_manifest(self.directory, first["claim"]["turn"]["input"])
         seal_one = workspace.seal(self.directory, manifest_one, run_id, first["claim"]["attempt"]["attemptId"])
         self._finish(board, run_id, first, "assistance", seal_one, "sess-w1", "n" * 16)
         view = board.call("workflow_get", {"runId": run_id})
@@ -650,7 +672,7 @@ class WorktreeContinuationReuseTests(TransferredCheckoutContinuationTests):
             },
         )
         second = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'wt-c2', 'nonce': 'm' * 16, 'runId': run_id})
-        manifest_two = second["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest_two = turn_manifest(self.directory, second["claim"]["turn"]["input"])
         self.assertEqual(manifest_two["path"], manifest_one["path"])
         self.assertEqual(manifest_two["checkoutRoot"], manifest_one["checkoutRoot"])
         self.assertEqual(manifest_two["baseCommit"], seal_one["commit"])
@@ -677,7 +699,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
 
         # Turn 1: the parent yields in its allocated checkout.
         first = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c1', 'nonce': 'n' * 16})
-        manifest_one = first["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest_one = turn_manifest(self.directory, first["claim"]["turn"]["input"])
         seal_one = workspace.seal(self.directory, manifest_one, run_id, first["claim"]["attempt"]["attemptId"])
         self._finish(board, run_id, first, "assistance", seal_one, "sess-1", "n" * 16)
 
@@ -706,7 +728,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
         )
         child = approved["children"][0]["taskId"]
         helper = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c2', 'nonce': 'm' * 16, 'runId': child})
-        helper_manifest = helper["claim"]["turn"]["input"]["executionWorkspace"]
+        helper_manifest = turn_manifest(self.directory, helper["claim"]["turn"]["input"])
         self.assertEqual(helper_manifest["path"], manifest_one["path"])
         (self.repo / "helper-new.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
         seal_two = workspace.seal(
@@ -716,7 +738,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
 
         # Turn 2 continues in the SAME physical checkout, based on the helper's seal.
         second = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c3', 'nonce': 'k' * 16, 'runId': run_id})
-        manifest_two = second["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest_two = turn_manifest(self.directory, second["claim"]["turn"]["input"])
         self.assertEqual(manifest_two["path"], manifest_one["path"])
         self.assertEqual(manifest_two["baseCommit"], seal_two["commit"])
         (self.repo / "parent-turn2.txt").write_text("parent integration\n", encoding="utf-8", newline="\n")
@@ -740,7 +762,7 @@ class ContinuationCheckoutReuseTests(TransferredCheckoutContinuationTests):
             },
         )
         third = admit_board(board, {'workerId': 'w1', 'claimRequestId': 'r-c4', 'nonce': 'j' * 16, 'runId': run_id})
-        manifest_three = third["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest_three = turn_manifest(self.directory, third["claim"]["turn"]["input"])
         self.assertEqual(manifest_three["path"], manifest_one["path"])
         self.assertEqual(manifest_three["baseCommit"], seal_three["commit"])
         self.assertEqual(manifest_three["inputTree"], seal_three["tree"])

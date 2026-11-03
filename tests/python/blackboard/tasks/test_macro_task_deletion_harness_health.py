@@ -27,7 +27,7 @@ class DeletionHarnessHealthTests(WorkflowTestCase):
     def owned_user_store_session(self, board, run):
         """One finished Codex attempt whose receipt proves a user-store session."""
         attempt_id = 'health-attempt-1'
-        receipt = {'result': {'nativeSession': {'harness': 'codex', 'sessionId': SESSION_ID,
+        receipt = {'status': 'ok', 'shutdownConfirmed': True, 'result': {'nativeSession': {'harness': 'codex', 'sessionId': SESSION_ID,
                                                 'captured': True, 'storageOwner': 'harness-user-store',
                                                 'resumeMode': 'initial'},
                               'nativeCheckpoint': {'version': 1, 'sessionId': SESSION_ID,
@@ -35,7 +35,7 @@ class DeletionHarnessHealthTests(WorkflowTestCase):
         now = board.store.now()
         with board.store.db.write() as db:
             db.execute('INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,'
-                       'adapter,shutdown_confirmed,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                       "adapter,shutdown_confirmed,result_json,result_form,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'current-report-v2',?,?)",
                        (attempt_id, run['runId'], 1, 'fixture', 'finished', 'codex', 1,
                         json.dumps(receipt), now, now))
         return attempt_id

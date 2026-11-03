@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import json
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -19,7 +20,7 @@ from hey_my_buddy.errors import BoardError
 class MockWorkspace:
     def __init__(self, root: Path):
         self.root = Path(root)
-        self.manifests: dict[str, dict] = {}
+        self.manifests: dict[tuple[str, str], dict] = {}
         self.prepare_calls: list[tuple[str, dict]] = []
         self.verify_calls: list[dict] = []
         self.seal_calls: list[tuple[str, str]] = []
@@ -57,7 +58,7 @@ class MockWorkspace:
         root = self._repository_root(cwd)
         return {"checkoutRoot": root, "projectId": f"repo:{root}"}
 
-    def _manifest(self, *, request_id: str, intent: dict) -> dict:
+    def _manifest(self, *, state_dir: Path, request_id: str, intent: dict) -> dict:
         kind = intent.get("kind", "existing")
         cwd = intent.get("cwd")
         if kind == "worktree":
@@ -72,7 +73,7 @@ class MockWorkspace:
         base_commit = base.get("ref") or "a" * 40
         manifest = {
             "version": 4,
-            "workspaceId": f"ws-{request_id}",
+            "workspaceId": "ws-" + sha256_text(json.dumps([str(Path(state_dir).resolve()), request_id],sort_keys=True,separators=(",",":"),ensure_ascii=True))[:32],
             "kind": kind,
             "path": path,
             **identity,
@@ -93,7 +94,7 @@ class MockWorkspace:
         prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
         manifest["snapshot"].update(inputRef=prefix + "input", stagedRef=prefix + "staged",
                                     stagedCommit=manifest["inputCommit"])
-        manifest["manifestSha256"] = sha256_text(canonical_json(manifest))
+        manifest["manifestSha256"] = sha256_text(json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True))
         return manifest
 
     # -- interface ----------------------------------------------------------
@@ -155,13 +156,19 @@ class MockWorkspace:
         self.prepare_calls.append((request_id, dict(intent)))
         if request_id in self.fail_prepare:
             raise BoardError("WORKSPACE_PREPARE_FAILED", "injected prepare failure", requestId=request_id)
-        replayed = request_id in self.manifests
+        cache_key = (str(Path(state_dir).resolve()), request_id)
+        replayed = cache_key in self.manifests
         if _preparation is not None:
             _preparation["replayed"] = replayed
         if replayed:
-            return dict(self.manifests[request_id])
-        manifest = self._manifest(request_id=request_id, intent=intent)
-        self.manifests[request_id] = manifest
+            return dict(self.manifests[cache_key])
+        manifest = self._manifest(state_dir=state_dir, request_id=request_id, intent=intent)
+        self.manifests[cache_key] = manifest
+        from hey_my_buddy.private_files import publish_bytes
+        from hey_my_buddy.private_dirs import ensure_private_dir
+        directory = Path(state_dir) / "workspaces" / manifest["workspaceId"]
+        ensure_private_dir(directory)
+        publish_bytes(directory / "manifest.json", json.dumps(manifest,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode(), immutable=True)
         return dict(manifest)
 
     def verify(self, manifest: dict, *, state_dir: Path, require_unchanged: bool = True) -> dict:
@@ -183,15 +190,16 @@ class MockWorkspace:
         self.seal_calls.append((task_id, attempt_id))
         if task_id in self.fail_seal:
             raise BoardError("WORKSPACE_SEAL_FAILED", "injected seal failure", taskId=task_id)
-        attempt_dir = Path(state_dir) / "attempts" / task_id / attempt_id
-        attempt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        diff = attempt_dir / "workspace.diff"
-        diff.write_text("--- a\n+++ b\n", encoding="utf-8", newline="\n")
+        from hey_my_buddy.private_dirs import ensure_private_dir
+        output_id = hashlib.sha256(json.dumps([task_id,attempt_id],sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()).hexdigest()
+        attempt_dir = Path(state_dir) / "workspaces" / manifest["workspaceId"] / "outputs" / output_id
+        ensure_private_dir(attempt_dir)
+        diff = attempt_dir / "output.patch"
+        diff.write_text("diff --git a/src/feature.py b/src/feature.py\nnew file mode 100644\n--- /dev/null\n+++ b/src/feature.py\n@@ -0,0 +1 @@\n+fixture\n", encoding="utf-8", newline="\n")
         os.chmod(diff, 0o600)
         seal = {
             "version": 1,
             "workspaceId": manifest.get("workspaceId"),
-            "kind": manifest.get("kind"),
             "path": manifest.get("path"),
             "checkoutRoot": manifest.get("checkoutRoot"),
             "projectId": manifest.get("projectId"),
@@ -204,7 +212,7 @@ class MockWorkspace:
             "changedPaths": ["src/feature.py"],
             "outsideScope": [],
             "snapshotSha256": (manifest.get("snapshot") and sha256_text(canonical_json(manifest["snapshot"]))) or "",
-            "ref": f"refs/hey-my-buddy/workflow/{task_id}/{attempt_id}",
+            "ref": f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/outputs/{output_id}",
             "diffPath": str(diff),
             "diffSha256": sha256_text(diff.read_text(encoding="utf-8")),
             "sealedAfterShutdown": True,
@@ -213,12 +221,36 @@ class MockWorkspace:
         # Like the real module: manifestSha256 is the input digest the turn executed
         # on, snapshotSha256 is the output identity derived from the snapshot record.
         seal["manifestSha256"] = manifest["manifestSha256"]
-        seal["snapshotSha256"] = sha256_text(canonical_json({k: v for k, v in seal.items() if k != "snapshotSha256"}))
+        bindings = ("workspaceId", "taskId", "attemptId", "manifestSha256", "baseCommit", "inputCommit",
+                    "commit", "tree", "changedPaths", "includedUntracked", "diffSha256")
+        seal["snapshot"] = {"version": 1, **{key: seal[key] for key in bindings}}
+        seal["snapshotSha256"] = sha256_text(json.dumps(seal["snapshot"],sort_keys=True,separators=(",",":"),ensure_ascii=True))
+        from hey_my_buddy.private_files import publish_bytes
+        from hey_my_buddy.private_dirs import ensure_private_dir
+        output_id = hashlib.sha256(json.dumps([task_id,attempt_id],sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()).hexdigest()
+        directory = Path(state_dir) / "workspaces" / manifest["workspaceId"] / "outputs" / output_id
+        ensure_private_dir(directory)
+        publish_bytes(directory / "output.json", json.dumps(seal,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode(), immutable=True)
         return seal
+
+    @staticmethod
+    def _validate_output_record(manifest, artifact):
+        from hey_my_buddy.blackboard.tasks.workspace import _validate_output_record
+        _validate_output_record(manifest, artifact)
+
+    def cumulative_patch(self, manifest, artifact, original_commit):
+        patch = Path(artifact["diffPath"])
+        if original_commit != manifest["inputCommit"]:
+            from hey_my_buddy.private_files import publish_bytes
+            patch = patch.with_name("cumulative-" + original_commit + ".patch")
+            publish_bytes(patch, Path(artifact["diffPath"]).read_bytes(), immutable=True)
+        return {"baseCommit": original_commit, "outputCommit": artifact["commit"],
+                "path": str(patch), "sha256": sha256_text(patch.read_text()),
+                "changedPaths": artifact["changedPaths"]}
 
     # -- read helpers -------------------------------------------------------
     def manifest_for(self, request_id: str) -> dict:
-        return dict(self.manifests[request_id])
+        return dict(next(value for (_, key), value in reversed(self.manifests.items()) if key == request_id))
 
     # -- Host lifecycle surface: this double owns no disposable checkout -----
     def integration_verify(self, artifact, *, original_input=None, final_input=None, path=None, ref=None,

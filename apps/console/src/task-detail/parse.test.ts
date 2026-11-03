@@ -37,7 +37,7 @@ const seals = [
   { artifactId: "s-turn", kind: "turn-input", attemptId: "a1", turnId: "t1", sourceTaskId: "m1", manifestSha256: "b".repeat(64), createdAt: "t", path: "/work/m1", baseCommit: "c1", inputCommit: "c1" },
   { artifactId: "s-refs", kind: "shared-refs", attemptId: "a1", turnId: "t1", sourceTaskId: "m1", manifestSha256: "c".repeat(64), createdAt: "t", sharedStash: { state: "observed" } },
 ];
-const output = { artifactId: "o1", kind: "output", attemptId: "a1", turnId: "t1", sourceTaskId: "m1", manifestSha256: "d".repeat(64), createdAt: "t",
+const output = { artifactId: "o1", kind: "output", contentForm: "sealed-inline-v1", attemptId: "a1", turnId: "t1", sourceTaskId: "m1", manifestSha256: "d".repeat(64), createdAt: "t",
   outputCommit: "c2", diffPath: "/d.diff", diffSha256: "e".repeat(64), changedPaths: ["a.ts"], cumulativePatch: { baseCommit: "c1", outputCommit: "c2", path: "/p", sha256: "f".repeat(64), changedPaths: ["a.ts"] } };
 const partial = { ...output, artifactId: "o2", kind: "partial-output", partial: true, verified: false, final: false, cumulativePatch: undefined };
 
@@ -81,6 +81,17 @@ describe("the compact collaboration record", () => {
     expect(parsed.artifacts[1]!.cumulativePatch).toBeNull();
     // A sealed output must name its attempt: that is what files it under a turn.
     expect(() => parseWorkflow(reply({ artifacts: [{ ...output, attemptId: null }] }), "m1")).toThrow(ApiError);
+    expect(() => parseWorkflow(reply({ artifacts: [{ ...output, contentForm: undefined }] }), "m1")).toThrow(ApiError);
+  });
+
+  it("reads a referenced output record with its file identity", () => {
+    const referenced = { ...output, manifestSha256: undefined, contentForm: "record-reference",
+      outputSnapshotSha256: "d".repeat(64), recordFile: { path: "/private/output.json", sha256: "e".repeat(64) } };
+    const parsed = parseWorkflow(reply({ artifacts: [referenced] }), "m1");
+    expect(parsed.artifacts[0]).toMatchObject({ contentForm: "record-reference",
+      manifestSha256: "d".repeat(64), outputSnapshotSha256: "d".repeat(64),
+      recordFile: referenced.recordFile });
+    expect(() => parseWorkflow(reply({ artifacts: [{ ...referenced, recordFile: undefined }] }), "m1")).toThrow(ApiError);
   });
 
   it("reads a user's lock, and a turn without its recorded route as unrecorded", () => {

@@ -234,9 +234,9 @@ def _result_command(run_id: str) -> str:
 def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
     """The bounded default view of one micro-task result.
 
-    The durable result keeps the whole runner payload, the effective manifest and the
-    sealed output; normal await callers get this compact view plus the exact
-    command that reads the full record back.
+    The durable result keeps the runner payload and a reference to the sealed
+    output; normal await callers get this compact view plus the command that
+    reads the full record back.
     """
     if full.get("workflowState") is None:
         # Infrastructure executions retain their opaque result payload.
@@ -256,6 +256,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
                 **({"partial": True, "verified": False, "final": False} if partial else {}),
                 "snapshotSha256": seal.get("snapshotSha256"),
                 "manifestSha256": seal.get("manifestSha256"),
+                "recordFile": seal.get("recordFile"),
                 "commit": seal.get("commit"),
                 "diffPath": seal.get("diffPath"),
                 "cumulativePatch": seal.get("cumulativePatch"),
@@ -263,7 +264,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
         )
     from ..blackboard.evaluation.native_observations import provider_rejection_view
     disposition = outcome.get("disposition")
-    return {
+    view = {
         "status": result.get("status"),
         "terminationReason": full.get("terminationReason"),
         "interruptionEvidence": result.get("interruptionEvidence"),
@@ -281,11 +282,13 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
         },
         "request": outcome.get("request") if disposition in ("assistance", "attention") else None,
         "artifacts": artifacts,
-        "workspaceManifestFile": result.get("workspaceManifestFile"),
         "logPaths": result.get("logPaths"),
         "processState": {"shutdownConfirmed": full["shutdownConfirmed"]},
         "resultCommand": _result_command(run_id),
     }
+    if "workspaceManifestFile" in result:
+        view["workspaceManifestFile"] = result["workspaceManifestFile"]
+    return view
 
 
 def _boundary_command(method: str, params: dict) -> str:

@@ -335,6 +335,13 @@ def publish_result_receipt(state_dir: Path, params: dict) -> dict:
         db.row_factory = sqlite3.Row
         row = db.execute("SELECT task_id, adapter, model_harness, created_at FROM attempts WHERE attempt_id = ?",
                          (attempt_id,)).fetchone()
+        turn = db.execute("SELECT input_json FROM workflow_turns WHERE attempt_id=?", (attempt_id,)).fetchone()
+        if turn is not None:
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import MANIFEST_OWNERS_CTE
+            original = db.execute(
+                f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE}) SELECT o.input_commit FROM workflow_artifacts a"
+                " JOIN manifest_owners o ON o.workspace_id=a.workspace_id AND o.manifest_sha256=a.input_manifest_sha256"
+                " WHERE a.run_id=? AND a.kind='input' ORDER BY a.rowid LIMIT 1", (row["task_id"],)).fetchone()[0]
     if row is None:
         raise AssertionError(f"Fixture result has no claimed attempt: {attempt_id}")
     adapter = row["model_harness"] if row["adapter"] == "decision" else row["adapter"]
@@ -342,8 +349,20 @@ def publish_result_receipt(state_dir: Path, params: dict) -> dict:
     path = directory / RECEIPT
     report = {key: value for key, value in params.items()
               if key not in ("attemptId", "generation", "nonce")}
+    if turn is not None and params.get("shutdownConfirmed") is True:
+        from hey_my_buddy.protocol.workspace_manifest import turn_manifest, resolve_record
+        from hey_my_buddy.blackboard.tasks.workflow import workspace_module
+        payload = report.get("result") or {}
+        seal_ref = payload.get("partialWorkspaceSeal") or payload.get("workspaceSeal")
+        if (isinstance(seal_ref, dict) and set(seal_ref) == {"recordFile", "snapshotSha256"}
+                and "cumulativePatchError" not in payload):
+            # Synthetic executors preserve the same existing cumulative file as
+            # runtime.enrich before publishing the immutable current receipt.
+            manifest = turn_manifest(state_dir, json.loads(turn["input_json"]))
+            sealed = resolve_record(state_dir, seal_ref)
+            workspace_module().cumulative_patch(manifest, sealed, original)
     native_path(directory).mkdir(mode=directory_mode(), parents=True, exist_ok=True)
-    fsync_json(path, {"taskId": row["task_id"], "attemptId": attempt_id,
+    fsync_json(path, {"version": 2, "taskId": row["task_id"], "attemptId": attempt_id,
                                         "generation": params["generation"], "report": report,
                                         "createdAt": row["created_at"]})
     return {"attemptId": attempt_id, "generation": params["generation"], "nonce": params["nonce"],

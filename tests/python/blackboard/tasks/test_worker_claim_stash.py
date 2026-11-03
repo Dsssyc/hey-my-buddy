@@ -8,6 +8,7 @@ at all. Every fact is a per-repository observation keyed by the manifest's own
 repository path.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -69,12 +70,12 @@ class ClaimStashTestCase(BoardTestCase):
         attempt = claim["attempt"]
         outcome = {"disposition": "completed", "summary": "did the work", "remaining": [], "decisions": [],
                    "artifacts": [], "request": None}
-        manifest = claim["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claim["turn"]["input"])
         result = {"status": "ok", "processState": {"shutdownConfirmed": True},
                   "turn": native_turn.claim_record(claim, outcome=outcome, session_id=session_id),
                   "turnResultPath": "/tmp/turn.json",
-                  "workspaceSeal": self.workspace.seal(self.directory, manifest, attempt["taskId"],
-                                                       attempt["attemptId"])}
+                  "workspaceSeal": record_reference(self.directory, self.workspace.seal(self.directory, manifest, attempt["taskId"],
+                                                       attempt["attemptId"]))}
         return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce, 'status': 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 0})
 
 
@@ -358,9 +359,7 @@ class ClaimCollectionScopeTests(ClaimStashTestCase):
         self.assertEqual(frozen["repositoryPath"], repository_two)
         self.assertEqual(frozen["start"]["entries"][0]["commit"], "2" * 40)
         with board.store.db.read() as connection:
-            manifest = json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (second["runId"],)
-            ).fetchone()[0])
+            manifest = board.store.workflow._run_manifest(connection, board.store.workflow._run_row(connection, second["runId"]))
         self.assertEqual(frozen["manifestSha256"], manifest["manifestSha256"])
 
 

@@ -67,13 +67,16 @@ class ExecutionEndpointTests(unittest.TestCase):
                 "attempt": {"taskId": "task", "attemptId": "attempt", "generation": 1},
                 "agentCredential": "private-fixture"}
         claim = {**base, "turn": {"turnId": "turn-1", "input": {
-            "executionWorkspace": {"path": "/workspace"}}}}
+            "version": 4, "executionWorkspace": {"workspaceId": "ws-" + "a" * 32,
+                                                     "manifestSha256": "b" * 64}}}}
         validate_claim_turn(base)  # Internal command executions have no turn.
         validate_claim_turn(claim)
         for bad in (None, [], {"turnId": "", "input": claim["turn"]["input"]},
                     {"turnId": "turn-1", "input": []},
-                    {"turnId": "turn-1", "input": {"executionWorkspace": []}},
-                    {"turnId": "turn-1", "input": {"executionWorkspace": {"path": ""}}}):
+                    {"turnId": "turn-1", "input": {"version": 4, "executionWorkspace": []}},
+                    {"turnId": "turn-1", "input": {**claim["turn"]["input"], "version": 4.0}},
+                    {"turnId": "turn-1", "input": {"version": 3, "executionWorkspace": {"path": "/workspace"}}},
+                    {"turnId": "turn-1", "input": {"version": 4, "executionWorkspace": {"path": ""}}}):
             with self.subTest(turn=bad), self.assertRaises(BoardError) as refused:
                 validate_claim_turn({**base, "turn": bad})
             self.assertEqual(refused.exception.code, "INVALID_ARGUMENT")
@@ -228,7 +231,9 @@ class ExecutionEndpointTests(unittest.TestCase):
             self.assertIsNone(context.turn_id)
             self.assertEqual(context.cwd, directory)
             context.turn = {"turnId": "turn-1", "input": {
-                "executionWorkspace": {"path": "/workspace"}}}
+                "version": 4, "executionWorkspace": {"workspaceId": "ws-" + "a" * 32,
+                                                        "manifestSha256": "b" * 64}}}
+            context.effective_workspace = {"path": "/workspace"}
             self.assertEqual(context.turn_id, "turn-1")
             self.assertEqual(context.turn_input, context.turn["input"])
             self.assertEqual(context.cwd, "/workspace")

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 
+from ...protocol.workspace_manifest import artifact_manifest
 from . import host_conclusions
 from ..store.db import sha256_text
 
@@ -138,7 +139,7 @@ def replay_response(coordinator, connection, kind: str, stored: dict) -> dict:
         artifact = connection.execute(
             "SELECT * FROM workflow_artifacts WHERE artifact_id=?", (artifact_id,)
         ).fetchone() if artifact_id else None
-        manifest = json.loads(artifact["manifest_json"]) if artifact is not None else {}
+        manifest = artifact_manifest(coordinator.board.directory, artifact) if artifact is not None else {}
         delivery = coordinator._resolution_delivery_view(conflict) if stored["delivered"] else None
         result.update(
             conflictId=stored["conflictId"], action=stored["action"],
