@@ -62,10 +62,10 @@ def deletion_sql_inputs(case, manifests, artifacts=()):
             connection.execute(
                 "INSERT OR IGNORE INTO workflow_artifacts(artifact_id,run_id,attempt_id,kind,content_form,"
                 "manifest_json,output_snapshot_sha256,output_origin,output_workspace_id,output_manifest_sha256,"
-                "output_ref,output_commit,output_action,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "output_commit,output_action,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (artifact_id, artifact['taskId'], artifact['attemptId'], kind, 'sealed-inline-v1',
                  json.dumps(artifact), artifact['snapshotSha256'], origin, artifact['workspaceId'],
-                 artifact['manifestSha256'], artifact['ref'], artifact['commit'],
+                 artifact['manifestSha256'], artifact['commit'],
                  artifact.get('action') if kind == 'resolved-output' else None, now))
     pairs = {(row['workspaceId'], row['manifestSha256']) for row in manifests}
     with store.db.read() as connection:

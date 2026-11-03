@@ -1,6 +1,7 @@
 """Physical deletion boundaries against disposable Git worktrees."""
 import unittest
 import os
+import shutil
 from protocol.session_case import descendant_case
 import json
 from pathlib import Path
@@ -352,6 +353,21 @@ class DeletionWorkspaceTests(unittest.TestCase):
         self.assertTrue(moved.is_dir())
         prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
         self.assertFalse(self.git("for-each-ref", "--format=%(refname)", prefix, cwd=moved))
+
+    def test_same_project_copy_without_input_anchor_is_not_selected(self):
+        manifest = self.prepare('copied-candidate-anchor', kind='existing')
+        moved = self.root / 'moved-owner'
+        self.repo.rename(moved)
+        copied = self.root / 'copied-candidate'
+        shutil.copytree(moved, copied)
+        prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
+        anchor = prefix + 'retained/input'
+        different_object = self.git('rev-parse', 'HEAD^{tree}', cwd=copied).strip()
+        self.git('update-ref', anchor, different_object, cwd=copied)
+        self.assertEqual(self.delete_many(
+            [manifest], candidate_paths={manifest['workspaceId']: (str(copied), str(moved))}), [])
+        self.assertFalse(self.git('for-each-ref', '--format=%(refname)', prefix, cwd=moved))
+        self.assertEqual(self.git('rev-parse', anchor, cwd=copied).strip(), different_object)
 
     def test_replaced_repository_clears_private_allocations_without_touching_replacement(self):
         self.unavailable_repository_case("replaced")

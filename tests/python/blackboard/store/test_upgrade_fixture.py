@@ -550,6 +550,12 @@ class UpgradeFixtureTests(unittest.TestCase):
             elif name == 'router_settings':
                 self.assertEqual([row[:len(original[0])] for row in actual], original)
                 self.assertEqual(actual[0][-2:], (None, 3600))
+            elif name in ('decision_requests', 'router_requests'):
+                columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
+                self.assertEqual([tuple(row[columns.index(column)] for column in old_columns[name])
+                                  for row in actual], original, name)
+                form = 'request_form' if name == 'decision_requests' else 'snapshot_form'
+                self.assertTrue(all(row[columns.index(form)] == 'archived-inline-v1' for row in actual))
             else:
                 self.assertEqual(actual, original, name)
                 self.assertEqual(after['fingerprints'][name], before['fingerprints'][name], name)
@@ -656,7 +662,8 @@ class UpgradeFixtureTests(unittest.TestCase):
         run_id = fixture['stockIds']['helperParent']
         decision_id = connection.execute('SELECT current_routing_id FROM workflow_runs WHERE run_id=?',
                                          (run_id,)).fetchone()[0]
-        frozen = [tuple(row) for row in connection.execute('SELECT rowid,* FROM router_requests ORDER BY rowid')]
+        frozen = [tuple(row) for row in connection.execute(
+            'SELECT rowid,decision_id,round,snapshot_json,frozen_at FROM router_requests ORDER BY rowid')]
         legacy_budget = json.loads(connection.execute('SELECT snapshot_json FROM router_requests WHERE decision_id=?',
                                                        (decision_id,)).fetchone()[0])['facts']['budget']
         self.assertEqual(legacy_budget, {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64, 'bytesRead': 2097152})
@@ -682,8 +689,64 @@ class UpgradeFixtureTests(unittest.TestCase):
         spans = [span for span in timeline['spans'] if span['kind'] == 'routing' and span['decisionId'] == decision_id]
         self.assertTrue(spans)
         self.assertTrue(all(span['routing']['budget'] == expected for span in spans))
-        self.assertEqual([tuple(row) for row in connection.execute('SELECT rowid,* FROM router_requests ORDER BY rowid')
+        self.assertEqual([tuple(row) for row in connection.execute(
+            'SELECT rowid,decision_id,round,snapshot_json,frozen_at FROM router_requests ORDER BY rowid')
                           if row['decision_id'] != new['routing']['decisionId']], frozen)
+        self.assertTrue(all(row[0] == 'archived-inline-v1' for row in connection.execute(
+            'SELECT snapshot_form FROM router_requests WHERE decision_id!=?',
+            (new['routing']['decisionId'],))))
+        archived_request = connection.execute(
+            'SELECT request_form,requested_json FROM decision_requests WHERE decision_id=?',
+            (decision_id,)).fetchone()
+        self.assertEqual(archived_request['request_form'], 'archived-inline-v1')
+        self.assertIn('inputTree', archived_request['requested_json'])
+        historical_dispatch = connection.execute(
+            'SELECT task_id FROM router_dispatches WHERE decision_id=? ORDER BY rowid DESC LIMIT 1',
+            (decision_id,)).fetchone()
+        if historical_dispatch is not None:
+            document = router_sequence.dispatch(connection, historical_dispatch['task_id'])['document']
+            self.assertEqual(document.get('executionWorkspaceForm'), 'archived-inline-v1')
+            self.assertIn('inputTree', document['executionWorkspace'])
+
+    def test_retry_of_upgraded_router_request_freezes_only_a_manifest_reference(self):
+        from support import FakeClock, InProcessBoard
+
+        fixture, connection = self.restored('archived-routing-retry', migrate=False)
+        run_id = fixture['stockIds']['helperParent']
+        decision_id = connection.execute('SELECT current_routing_id FROM workflow_runs WHERE run_id=?',
+                                         (run_id,)).fetchone()[0]
+        original = [tuple(row) for row in connection.execute(
+            'SELECT round,snapshot_json,frozen_at FROM router_requests WHERE decision_id=? ORDER BY round',
+            (decision_id,))]
+        upgrade_state(fixture['state'])
+        board = InProcessBoard(fixture['state'], clock=FakeClock('2026-01-01T00:03:00.000Z'))
+        self.addCleanup(board.close)
+        with board.store.db.write() as db:
+            db.execute("DELETE FROM evaluation_preferences WHERE mode='pin'")
+            row = board.store.decisions._row(db, decision_id)
+            archived = json.loads(row['requested_json'])['executionWorkspace']
+            self.assertIn('inputTree', archived)
+            board.store.decisions._retry_selection(db, row,
+                reason={'code': 'router-out-of-bounds', 'params': {}}, now=board.store.now())
+            snapshots = db.execute(
+                'SELECT round,snapshot_json,snapshot_form,frozen_at FROM router_requests'
+                ' WHERE decision_id=? ORDER BY round', (decision_id,)).fetchall()
+            self.assertEqual([(r['round'], r['snapshot_json'], r['frozen_at'])
+                              for r in snapshots[:-1]], original)
+            latest = snapshots[-1]
+            expected = {key: archived[key] for key in ('workspaceId', 'manifestSha256')}
+            self.assertEqual(latest['snapshot_form'], 'manifest-reference-v2')
+            self.assertEqual(json.loads(latest['snapshot_json'])['baseInput']['executionWorkspace'], expected)
+            task_id = db.execute(
+                'SELECT task_id FROM router_dispatches WHERE decision_id=? AND round=?',
+                (decision_id, latest['round'])).fetchone()[0]
+            dispatch = router_sequence.dispatch(db, task_id)['document']
+            self.assertEqual(dispatch['executionWorkspace'], expected)
+            self.assertEqual(dispatch['executionWorkspaceForm'], 'manifest-reference-v2')
+            retained = db.execute('SELECT requested_json,request_form FROM decision_requests WHERE decision_id=?',
+                                  (decision_id,)).fetchone()
+            self.assertEqual(retained['request_form'], 'archived-inline-v1')
+            self.assertEqual(json.loads(retained['requested_json'])['executionWorkspace'], archived)
 
     def test_failed_second_column_addition_rolls_back_the_whole_upgrade(self):
         fixture, connection = self.restored('failed-upgrade', migrate=False)

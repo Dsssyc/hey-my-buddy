@@ -23,17 +23,24 @@ def _request(row: dict) -> dict:
 
 def _dispatch(connection, row: dict) -> dict:
     snapshot = request_snapshot(connection, row["decision_id"], row["round"])
+    snapshot_form = connection.execute(
+        "SELECT snapshot_form FROM router_requests WHERE decision_id=? AND round=?",
+        (row["decision_id"], row["round"])).fetchone()[0]
     buddy = {key: row[key] for key in _IDENTITY_FIELDS}
     document = {**snapshot["baseInput"], "buddy": buddy,
                 "routerBuddyId": row["buddy_id"], "routerBuddy": buddy,
                 "routerIndex": row["router_index"]}
+    if "executionWorkspace" in document:
+        document["executionWorkspaceForm"] = snapshot_form
     return {"decisionId": row["decision_id"], "taskId": row["task_id"], "routerIndex": row["router_index"],
-            "round": row["round"], "buddyId": row["buddy_id"], "buddy": buddy,
+            "round": row["round"], "snapshotForm": snapshot_form,
+            "buddyId": row["buddy_id"], "buddy": buddy,
             "document": document,
             "createdAt": row["created_at"]}
 
 
-def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str, round: int = 1) -> dict:
+def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str, round: int = 1,
+                   snapshot_form: str = "manifest-reference-v2") -> dict:
     """Freeze one request's Router facts, shared base input and admission inspections.
 
     The stored document is the request's own evidence: the settings snapshot the
@@ -43,7 +50,7 @@ def freeze_request(connection, decision_id: str, *, snapshot: dict, now: str, ro
     """
     row = _store(connection, "router_requests", {
         "decision_id": decision_id, "round": round,
-        "snapshot_json": canonical_json(snapshot), "frozen_at": now,
+        "snapshot_json": canonical_json(snapshot), "snapshot_form": snapshot_form, "frozen_at": now,
     })
     return _request(row)
 

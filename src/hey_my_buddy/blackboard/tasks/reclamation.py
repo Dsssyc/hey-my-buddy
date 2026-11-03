@@ -276,7 +276,7 @@ def allocation_plan(store, item):
             item['tasks'].update(value for key in row.keys()
                                  if (key.endswith('task_id') or key.endswith('run_id'))
                                  and isinstance(value := row[key], str))
-        item['reasons'].extend(_allocation_reference_sets(_workspace_reference_rows(connection, store.directory),
+        item['reasons'].extend(_allocation_reference_sets(_workspace_reference_rows(connection),
             [(manifest, item['requestId'])], directories=[str(directory)], on_reference=referenced)[0])
     checkout = directory / 'checkout'
     if not item['reasons'] and workspace._path_present(checkout):

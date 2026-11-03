@@ -558,7 +558,7 @@ def artifact(artifact_id: str, attempt_id: str, commit: str, diff_path: str,
              cumulative_patch: dict | None = None) -> dict:
     # ADR-018: a sealed partial output is `partial-output` with
     # partial/verified/final = true/false/false and is never the final artifact.
-    view = {"artifactId": artifact_id, "kind": kind, "attemptId": attempt_id,
+    view = {"artifactId": artifact_id, "kind": kind, "contentForm": "sealed-inline-v1", "attemptId": attempt_id,
             "turnId": f"turn-{attempt_id}", "manifestSha256": digest(f"{artifact_id}-manifest"),
             "outputCommit": commit, "diffPath": diff_path, "diffSha256": digest(f"{artifact_id}-diff"),
             "changedPaths": paths, "partial": partial, "verified": verified, "final": final}
@@ -574,12 +574,12 @@ def artifact_views(entry: dict) -> list[dict]:
     base = digest(f"{entry['runId']}-input")[:40]
     seal = {"path": entry["cwd"], "baseCommit": base, "inputCommit": base}
     seals = [{"artifactId": f"seal-{entry['runId']}-input", "kind": "input", "attemptId": None, "turnId": None,
-              "sourceTaskId": None, "manifestSha256": digest(f"{entry['runId']}-input-seal"),
+              "sourceTaskId": None, "contentForm": "sealed-inline-v1", "manifestSha256": digest(f"{entry['runId']}-input-seal"),
               "createdAt": entry["createdAt"], **seal}]
     for item in entry["attempts"]:
         for kind in ("turn-input", "shared-refs"):
             view = {"artifactId": f"seal-{item['attemptId']}-{kind}", "kind": kind, "attemptId": item["attemptId"],
-                    "turnId": item["turnId"], "sourceTaskId": entry["runId"],
+                    "turnId": item["turnId"], "sourceTaskId": entry["runId"], "contentForm": "sealed-inline-v1",
                     "manifestSha256": digest(f"{item['attemptId']}-{kind}"), "createdAt": item["startedAt"]}
             seals.append({**view, **seal} if kind == "turn-input" else
                          {**view, "sharedStash": {"state": "observed", "entryCount": 0}})

@@ -11,7 +11,7 @@ from ...errors import BoardError
 from ...protocol.reasons import reason
 from . import workspace
 from .macro_task_deletion_progress import collect_skipped
-from .workspace_bindings import MANIFEST_OWNERS_CTE
+from .workspace_bindings import MANIFEST_OWNERS_CTE, output_record_id, output_references
 
 
 _PREFIX = "refs/hey-my-buddy/workspaces/"
@@ -36,16 +36,15 @@ def _skip(kind: str, path: str, code: str, workspace_id: str | None = None) -> d
             "reason": reason(_SKIP_CODES[code])}
 
 
-def _repository_current(manifest: dict, *, candidates=(), require_owner_anchor=False) -> Path | None:
-    locations = candidates() if callable(candidates) else candidates
-    for location in (*locations, manifest['repository_path']):
-        repository = workspace.repository_at(location)
-        if repository is not None and workspace.read_project_id(repository) == manifest['project_id']:
-            if require_owner_anchor and _refs(Path(repository), manifest['workspace_id']).get(
-                    _PREFIX + manifest['workspace_id'] + '/retained/input') != manifest['input_commit']:
-                continue
-            return Path(repository)
-    return None
+def _repository_current(manifest: dict, *, candidates=()) -> Path | None:
+    # The locator's original-checkout rule and its candidate retained/input
+    # proof are also the deletion rules. All values here are SQL owner facts.
+    reference = {'version': 4, 'workspaceId': manifest['workspace_id'], 'kind': manifest['workspace_kind'],
+                 'checkoutRoot': manifest['checkout_root'], 'projectId': manifest['project_id'],
+                 'inputCommit': manifest['input_commit'],
+                 'snapshot': {'repositoryPath': manifest['repository_path']}}
+    repository = workspace.locate_repository(reference, candidates=candidates, repair=False)
+    return Path(repository) if repository is not None else None
 
 
 def _fixed_refs(manifest: dict) -> dict[str, str]:
@@ -84,30 +83,8 @@ def _artifact_refs(artifact: dict, manifests: dict[str, dict]) -> dict[str, str]
     manifest = manifests.get(identifier)
     if manifest is None or artifact['output_manifest_sha256'] != manifest['manifest_sha256']:
         return {}
-    ref, commit = artifact['output_ref'], artifact['output_commit']
-    task_id, attempt_id = artifact['run_id'], artifact['attempt_id']
-    if not isinstance(task_id, str) or not task_id or not isinstance(ref, str):
-        return {}
-    record_id = ref.rsplit('/', 1)[-1][:64]
-    if (not re.fullmatch('[0-9a-f]{64}', record_id)
-            or attempt_id is not None and record_id != workspace._sha(workspace._json([task_id, attempt_id]))):
-        return {}
-    prefix = _PREFIX + identifier + "/"
-    kind = artifact['kind']
-    if kind in ('output', 'partial-output'):
-        suffix = record_id + ('-host' if artifact['output_origin'] == 'host' else '')
-        family, retained_family = "outputs/", "output-"
-    elif kind == 'resolved-output' and artifact['output_action'] in workspace.RESOLUTION_ACTIONS:
-        suffix = record_id + '-' + artifact['output_action']
-        family, retained_family = "resolutions/", "resolution-"
-    elif kind == "abandoned-site":
-        suffix = record_id
-        family, retained_family = "abandoned/", "abandoned-"
-    else:
-        return {}
-    if ref != prefix + family + suffix or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', commit):
-        return {}
-    return {ref: commit, prefix + "retained/" + retained_family + suffix: commit}
+    ref, retained = output_references(artifact)
+    return {ref: artifact['output_commit'], retained: artifact['output_commit']}
 
 
 def _expected_refs(by_id: dict[str, dict], artifacts: list[dict]) -> dict[str, dict[str, str]]:
@@ -130,10 +107,8 @@ def _expected_refs(by_id: dict[str, dict], artifacts: list[dict]) -> dict[str, d
     # commit; a separately published output keeps its own explicit binding.
     for artifact in paired_outputs:
         identifier = artifact['output_workspace_id']
-        record_id = artifact['output_ref'].rsplit('/', 1)[-1][:64]
-        suffix = record_id + ('' if artifact['output_origin'] == 'host' else '-host')
-        prefix = _PREFIX + identifier + "/"
-        for ref in (prefix + "outputs/" + suffix, prefix + "retained/output-" + suffix):
+        opposite = {**artifact, 'output_origin': 'worker' if artifact['output_origin'] == 'host' else 'host'}
+        for ref in output_references(opposite):
             expected[identifier].setdefault(ref, artifact['output_commit'])
     return expected
 
@@ -214,7 +189,7 @@ def _delete_exact_refs(repository: Path, identifier: str, expected: dict[str, st
 def _foreign_output_files(state: Path, artifact: dict) -> tuple[Path, tuple[str, ...]]:
     """Derive the sealed output's own physical names from its SQL ref identity."""
     identifier = artifact['output_workspace_id']
-    record_id = artifact['output_ref'].rsplit('/', 1)[-1][:64]
+    record_id = output_record_id(artifact['run_id'], artifact['attempt_id'])
     suffix = '-host' if artifact['kind'] in ('output', 'partial-output') and artifact['output_origin'] == 'host' else ''
     directory = state / 'workspaces' / identifier / 'outputs' / (record_id + suffix)
     if artifact['kind'] in ('output', 'partial-output'):
@@ -260,12 +235,20 @@ def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
     skipped = []
     planned: dict[Path, tuple[str, set[str]]] = {}
     with store.db.read() as connection:
+        external = [dict(row) for row in connection.execute(
+            "SELECT * FROM workflow_artifacts WHERE run_id NOT IN (SELECT value FROM json_each(?))"
+            " AND kind IN ('output','resolved-output','partial-output','abandoned-site')",
+            (scope_ids,))]
+        external_refs = {output_references(row)[0] for row in external}
+        own_refs = {output_references(row)[0] for row in artifacts
+                    if row['kind'] in ('output', 'resolved-output', 'partial-output', 'abandoned-site')}
         for artifact in artifacts:
             if artifact['kind'] not in ('output', 'resolved-output', 'partial-output', 'abandoned-site'):
                 continue
             identifier = artifact['output_workspace_id']
             if identifier in by_id:
                 continue
+            ref = output_references(artifact)[0]
             owner = connection.execute(
                 f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})'
                 ' SELECT o.*,COALESCE(m.project_id,r.standalone_project_id) AS project_id'
@@ -274,7 +257,7 @@ def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
                 ' WHERE o.workspace_id=? AND o.manifest_sha256=?',
                 (identifier, artifact['output_manifest_sha256'])).fetchone()
             if owner is None:
-                skipped.append(_skip('ref', artifact['output_ref'], 'REF_UNPROVEN', identifier))
+                skipped.append(_skip('ref', ref, 'REF_UNPROVEN', identifier))
                 continue
             owner = dict(owner)
             if not _state_owner_proven(connection, state, owner):
@@ -283,13 +266,9 @@ def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
                 continue
             bound = _artifact_refs(artifact, {identifier: owner})
             if not bound:
-                skipped.append(_skip('ref', artifact['output_ref'], 'REF_UNPROVEN', identifier))
+                skipped.append(_skip('ref', ref, 'REF_UNPROVEN', identifier))
                 continue
-            shared = connection.execute(
-                "SELECT 1 FROM workflow_artifacts WHERE kind IN ('output','resolved-output','partial-output','abandoned-site')"
-                ' AND run_id NOT IN (SELECT value FROM json_each(?)) AND output_ref=? LIMIT 1',
-                (scope_ids, artifact['output_ref'])).fetchone()
-            if shared is not None:
+            if ref in external_refs:
                 continue
             initial = connection.execute(
                 f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})'
@@ -298,23 +277,19 @@ def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
                 " WHERE a.run_id=? AND a.kind='input' ORDER BY a.rowid LIMIT 1",
                 (artifact['run_id'],)).fetchone()
             if initial is None:
-                skipped.append(_skip('allocation', artifact['output_ref'], 'OWNER_UNPROVEN', identifier))
+                skipped.append(_skip('allocation', ref, 'OWNER_UNPROVEN', identifier))
                 continue
             initial_commit = initial['input_commit']
             counterpart = None
             if artifact['kind'] in ('output', 'partial-output'):
-                record_id = artifact['output_ref'].rsplit('/', 1)[-1][:64]
                 opposite_origin = 'worker' if artifact['output_origin'] == 'host' else 'host'
-                opposite_suffix = record_id + ('-host' if opposite_origin == 'host' else '')
-                opposite_ref = _PREFIX + identifier + '/outputs/' + opposite_suffix
-                externally_bound = connection.execute(
-                    'SELECT 1 FROM workflow_artifacts WHERE run_id NOT IN (SELECT value FROM json_each(?))'
-                    ' AND output_ref=? LIMIT 1', (scope_ids, opposite_ref)).fetchone()
-                own_counterpart = any(other['output_ref'] == opposite_ref for other in artifacts)
-                if externally_bound is None and not own_counterpart:
+                counterpart = {**artifact, 'output_origin': opposite_origin}
+                opposite_ref, opposite_retained = output_references(counterpart)
+                if opposite_ref not in external_refs and opposite_ref not in own_refs:
                     bound[opposite_ref] = artifact['output_commit']
-                    bound[_PREFIX + identifier + '/retained/output-' + opposite_suffix] = artifact['output_commit']
-                    counterpart = {**artifact, 'output_ref': opposite_ref, 'output_origin': opposite_origin}
+                    bound[opposite_retained] = artifact['output_commit']
+                else:
+                    counterpart = None
             directory, names = _foreign_output_files(state, artifact)
             if (artifact['record_path'] is not None and
                     state / artifact['record_path'] not in tuple(directory / name for name in names)):
@@ -331,10 +306,9 @@ def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
                 ' LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id'
                 ' WHERE COALESCE(m.project_id,r.standalone_project_id)=?',
                 (owner['project_id'],)).fetchall()
-            repository = _repository_current(owner, candidates=tuple(row['repository_path'] for row in candidates),
-                                             require_owner_anchor=True)
+            repository = _repository_current(owner, candidates=tuple(row['repository_path'] for row in candidates))
             if repository is None:
-                skipped.append(_skip('ref', artifact['output_ref'], 'DEPENDENCY_RETAINED', identifier))
+                skipped.append(_skip('ref', ref, 'DEPENDENCY_RETAINED', identifier))
                 continue
             ref_skips = _delete_exact_refs(repository, identifier, bound)
             skipped.extend(ref_skips)
@@ -349,10 +323,6 @@ def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
                 opposite_owned = set(opposite_names)
                 opposite_owned.add(f'cumulative-{initial_commit}.patch')
                 planned.setdefault(opposite_directory, (identifier, set()))[1].update(opposite_owned)
-        external = [dict(row) for row in connection.execute(
-            "SELECT * FROM workflow_artifacts WHERE run_id NOT IN (SELECT value FROM json_each(?))"
-            " AND kind IN ('output','resolved-output','partial-output','abandoned-site')",
-            (scope_ids,))]
         shared_directories = {_foreign_output_files(state, row)[0] for row in external}
         for directory, (identifier, names) in planned.items():
             skipped.extend(_remove_foreign_output_directory(directory, names, identifier,
