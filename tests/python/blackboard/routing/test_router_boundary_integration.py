@@ -165,6 +165,20 @@ class BoundaryReadingTests(RouterDispatchTestCase):
                                                (claim["attempt"]["attemptId"],)).fetchone()[0])
                 self.assertEqual(receipt["result"], original)
 
+    def test_a_trial_reads_only_the_receipts_usage_never_its_token_usage(self):
+        request, first = self.start()
+        output = self.failure(first)
+        output["tokenUsage"] = {"inputTokens": 10, "outputTokens": 2}
+        self.report(first, output, status="failed")
+        second = self.next_claim(request)
+        self.report(second, self.failure(second, "provider-error"), status="failed")
+        trials = self.boundary(request["decisionId"])["routerTrials"]
+        self.assertEqual(trials[0]["usage"], {"elapsedMs": 100, "toolCalls": 0})
+        with self.board_.store.db.read() as db:
+            receipt = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                            (first["attempt"]["attemptId"],)).fetchone()[0])
+        self.assertEqual(receipt["result"]["tokenUsage"]["inputTokens"], 10)
+
     def test_old_attempt_does_not_borrow_a_new_attempts_decision_code(self):
         request, first = self.start(review=True)
         output = self.answer(first)

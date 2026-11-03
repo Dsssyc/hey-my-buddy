@@ -1131,6 +1131,26 @@ class RoutingSpanTests(WorkflowTestCase):
                            " VALUES(?,?,1,'resolved','2026-01-02T00:00:00Z')", (decision_id, task_id))
         self.assertEqual(self.spans(board, task_id)[0], before)
 
+    def test_the_span_carries_the_recorded_routing_token_usage(self):
+        board, task_id = self.recorded_task()
+        decision_output = {'status': 'ok', 'decision': {"domainNodeId": None, "taskType": "change",
+                                                          'buddyId': 'frozen-buddy', 'note': 'frozen note',
+                                                          'evidence': []},
+                           'usage': {'elapsedMs': 120, 'toolCalls': 0}}
+        self.decision(board, task_id, output=decision_output)
+        self.assertNotIn('tokenUsage', self.spans(board, task_id)[0])
+        usage = {'version': 1, 'inputTokens': 10, 'cachedInputTokens': 4, 'outputTokens': 2,
+                 'inputBasis': 'includes-cached', 'source': 'dsh', 'scope': 'attempt',
+                 'completeness': 'complete', 'nativeRecords': 1}
+        attempt_output = {'status': 'ok', 'operation': 'select', 'usage': decision_output['usage'],
+                          'tokenUsage': usage, 'stopEvidence': {'shutdownConfirmed': True}}
+        with board.store.db.write() as db:
+            db.execute("UPDATE attempts SET result_json=? WHERE task_id=?",
+                       (json.dumps({'status': 'ok', 'result': attempt_output}), task_id))
+        span = self.spans(board, task_id)[0]
+        self.assertEqual(span['tokenUsage'], usage)
+        self.assertEqual(span['routing']['usage'], {'elapsedMs': 120, 'toolCalls': 0})
+
     def test_review_unavailability_keeps_its_own_round_budget_without_a_result_copy(self):
         board, task_id = self.recorded_task()
         budget = {'preset': 'deep', 'timeoutSeconds': 600, 'toolCalls': 64, 'bytesRead': 2097152}

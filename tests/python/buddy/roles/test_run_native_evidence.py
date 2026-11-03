@@ -219,6 +219,22 @@ class NativeEvidenceRoleTests(unittest.TestCase):
             self.assertEqual(rejected.status, "failed")
             self.assertEqual(rejected.result["code"], "answer-shape")
 
+    def test_router_results_keep_the_harness_reported_token_usage_in_both_modes(self):
+        for mode, payload in zip(("fast", "review"), self.project(self.result())):
+            payload["rawAnswer"] = {"buddyId": "chosen", "domainNodeId": None, "taskType": "change",
+                                    "note": "fits", "evidence": []}
+            outcome = self.router_collect(payload, mode)
+            self.assertEqual(outcome.status, "ok", outcome.result)
+            self.assertEqual(outcome.result["tokenUsage"], self.result().usage.value)
+
+    def test_router_token_usage_stays_unknown_when_the_harness_reported_none(self):
+        for mode, payload in zip(("fast", "review"),
+                                 self.project(self.result().model_copy(update={"usage": None}))):
+            payload["rawAnswer"] = {"buddyId": "chosen", "domainNodeId": None, "taskType": "change",
+                                    "note": "fits", "evidence": []}
+            outcome = self.router_collect(payload, mode)
+            self.assertIsNone(outcome.result["tokenUsage"])
+
     def test_unknown_events_use_the_ordinary_format_correction_rule(self):
         correction = FastCorrection({"type": "object"}, "Choose")
         facts = {"unknownEvents": {"total": 1}, "settled": True, "rawAnswer": "{"}

@@ -174,6 +174,7 @@ class DecisionAdapter(Adapter):
             "requested": document["buddy"], "resolved": native_result.get("resolved"),
             "modelStarted": native_result.get("modelStarted"),
             "nativeIdentity": native_result.get("nativeIdentity"), "usage": usage,
+            "tokenUsage": native_result.get("tokenUsage"),
             "toolEvidence": native_result.get("toolEvidence"),
             "harnessVersion": native_result.get("harnessVersion"),
             "nativeEvidence": native_result.get("nativeEvidence"),
@@ -198,8 +199,6 @@ class DecisionAdapter(Adapter):
             result.update(reason="The native review permission policy could not be verified")
         if verification is not None and not verification["unchanged"]:
             code = verification["code"]
-        if document.get("kind") == "maintain":
-            result["tokenUsage"] = native_result.get("tokenUsage")
         if code is None and outcome.status == "ok" and document.get("kind") != "maintain":
             try:
                 result["decision"] = router.validate_answer(native_result.get("rawAnswer"),
