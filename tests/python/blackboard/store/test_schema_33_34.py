@@ -15,6 +15,7 @@ from unittest import mock
 from blackboard.store.upgrade_fixture import FIXTURE, load_fixture, load_delivered_stock, load_workspace_growth_stock, load_legacy_stock
 from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33, schema_33_34, upgrade
 from hey_my_buddy.blackboard.store.db import Database
+from hey_my_buddy.blackboard.tasks.workspace_bindings import output_references
 
 
 class WorkspaceReferenceUpgradeTests(unittest.TestCase):
@@ -318,7 +319,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
         for row in db.execute("SELECT * FROM workflow_artifacts WHERE kind IN ('output','resolved-output','partial-output','abandoned-site')"):
             record = json.loads(row['manifest_json'])
             self.assertEqual((row['output_workspace_id'], row['output_manifest_sha256'],
-                              row['output_ref'], row['output_commit']),
+                              output_references(row)[0], row['output_commit']),
                              (record['workspaceId'], record['manifestSha256'], record['ref'], record['commit']))
             self.assertEqual(row['output_action'], record.get('action') if row['kind'] == 'resolved-output' else None)
         for row in db.execute('SELECT * FROM workflow_runs'):
@@ -331,7 +332,9 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
 
     def test_missing_or_changed_current_file_refuses_and_names_its_run(self):
         for mutation, category in (('missing', 'manifest-missing'), ('content', 'manifest-digest-mismatch'),
-                                   ('binding', 'manifest-binding-mismatch'), ('unsafe', 'manifest-unsafe'),
+                                   ('binding', 'manifest-binding-mismatch'),
+                                   ('input-commit', 'manifest-binding-mismatch'),
+                                   ('staged-commit', 'manifest-binding-mismatch'), ('unsafe', 'manifest-unsafe'),
                                    ('shape', 'manifest-invalid'), ('missing-digest', 'manifest-binding-mismatch')):
             with self.subTest(mutation=mutation):
                 fixture, db = self.restored(mutation)
@@ -349,6 +352,12 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                     if os.name == 'nt':
                         continue
                     path.chmod(0o644)
+                elif mutation == 'input-commit':
+                    value['inputCommit'] = 'f' * 40
+                    path.write_text(json.dumps(value))
+                elif mutation == 'staged-commit':
+                    value['snapshot']['stagedCommit'] = 'f' * 40
+                    path.write_text(json.dumps(value))
                 else:
                     value['access' if mutation == 'content' else 'workspaceId'] = (('write' if value['access'] == 'read' else 'read')
                         if mutation == 'content' else 'ws-' + 'f' * 32)
@@ -551,6 +560,22 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                 self.assertEqual((fixture['state'] / 'board.sqlite3').read_bytes(), raw_before)
                 self.assertEqual(self.files(fixture), files)
 
+    def test_existing_owner_candidates_disagreeing_on_input_commit_refuse_upgrade(self):
+        fixture, db = self.restored('deletion-fact-conflict')
+        row = db.execute(
+            "SELECT a.* FROM workflow_artifacts a JOIN workflow_runs r ON r.run_id=a.run_id"
+            " WHERE a.kind='input' AND r.state NOT IN ('accepted','concluded')"
+            " AND a.manifest_sha256=json_extract(r.workspace_manifest_json,'$.manifestSha256') LIMIT 1"
+        ).fetchone()
+        self.assertIsNotNone(row)
+        value = json.loads(row['manifest_json'])
+        value['inputCommit'] = 'f' * 40
+        db.execute('UPDATE workflow_artifacts SET manifest_json=? WHERE artifact_id=?',
+                   (json.dumps(value), row['artifact_id']))
+        db.commit()
+        with self.assertRaisesRegex(ValueError, 'workspace-facts-conflict'):
+            upgrade.upgrade_state(fixture['state'])
+
     def test_null_combinations_are_enforced_by_sql(self):
         fixture, db = self.restored()
         upgrade.upgrade_state(fixture['state'])
@@ -569,7 +594,9 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
             "UPDATE workflow_artifacts SET checkout_root=NULL WHERE workspace_facts_role='owner'",
             "UPDATE workflow_artifacts SET input_commit=NULL WHERE workspace_facts_role='owner'",
             "UPDATE workflow_continuations SET staged_commit=NULL WHERE workspace_facts_role='owner'",
-            "UPDATE workflow_artifacts SET output_ref=NULL WHERE kind='output'",
+            "UPDATE workflow_artifacts SET attempt_id=NULL WHERE kind='output'",
+            "UPDATE workflow_artifacts SET output_action='unknown' WHERE kind='resolved-output'",
+            "UPDATE workflow_artifacts SET output_action='abandon' WHERE kind='resolved-output'",
             "UPDATE workflow_artifacts SET output_workspace_id=NULL WHERE kind='output'",
             "UPDATE workflow_artifacts SET content_form='input-reference',manifest_json=NULL WHERE kind='turn-input'",
             "UPDATE attempts SET result_form=NULL WHERE result_json IS NOT NULL",

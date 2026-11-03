@@ -68,7 +68,7 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertFalse(any(row['eligible'] for row in rows if row['path'] in (str(checkout), str(checkout.parent))))
 
     def references(self, connection, manifest):
-        return storage._allocation_reference_sets(storage._workspace_reference_rows(connection, self.directory), [(manifest, None)])[0]
+        return storage._allocation_reference_sets(storage._workspace_reference_rows(connection), [(manifest, None)])[0]
 
     def accept_at_orphan(self, manifest, checkout):
         """A real public acceptance verifies a ref without switching target HEAD."""
@@ -154,7 +154,7 @@ class StorageOrphanTests(WorkflowTestCase):
                             (identity, parent['runId'], 'private-artifact', strategy, identity,
                              value if kind == 'path' else '', 'HEAD', manifest['projectId'],
                              json.dumps(value if kind == 'nested' else {}), '2026-01-01T00:00:00Z'))
-                        rows = [(table, row) for table, row in storage._workspace_reference_rows(connection, self.directory)
+                        rows = [(table, row) for table, row in storage._workspace_reference_rows(connection)
                                 if table == 'workflow_integrations' and row['integration_id'] == identity]
                         self.assertEqual(storage._allocation_reference_sets(rows, [(manifest, None)])[0],
                             ['workflow_integrations-reference'])
@@ -180,7 +180,7 @@ class StorageOrphanTests(WorkflowTestCase):
                             (identity, parent['runId'], value if kind == 'path' else '', state,
                              json.dumps(value if kind == 'nested' else {}),
                              '2026-01-01T00:00:00Z'))
-                        rows = [(table, row) for table, row in storage._workspace_reference_rows(connection, self.directory)
+                        rows = [(table, row) for table, row in storage._workspace_reference_rows(connection)
                                 if table == 'workspace_cleanup_plans' and row['plan_id'] == identity]
                         self.assertEqual(storage._allocation_reference_sets(rows, [(manifest, None)])[0],
                             ['workspace_cleanup_plans-reference'])
@@ -243,6 +243,28 @@ class StorageOrphanTests(WorkflowTestCase):
                  manifest['manifestSha256'], manifest['kind'], manifest['checkoutRoot'],
                  manifest['snapshot']['repositoryPath'], manifest['inputCommit'], manifest['snapshot']['stagedCommit'], '2026-01-01T00:00:00Z'))
         self.assert_retained(checkout, planned)
+
+    def test_reference_scan_uses_sql_facts_without_poisoning_other_allocations(self):
+        manifest, _, _ = self.orphan()
+        other, _, _ = self.orphan('other-orphan')
+        parent = self.submit(self.board_instance, request_id='registered-owner', cwd=str(self.repo), kind='existing')
+        with self.board_instance.store.db.write() as connection:
+            connection.execute('''INSERT INTO workflow_artifacts
+                (artifact_id,run_id,kind,content_form,workspace_id,input_manifest_sha256,
+                 workspace_facts_role,workspace_kind,checkout_root,repository_path,input_commit,staged_commit,created_at)
+                VALUES (?,?,'input','input-reference',?,?,'owner',?,?,?,?,?,?)''',
+                ('referenced-owner', parent['runId'], manifest['workspaceId'], manifest['manifestSha256'],
+                 manifest['kind'], manifest['checkoutRoot'], manifest['snapshot']['repositoryPath'],
+                 manifest['inputCommit'], manifest['snapshot']['stagedCommit'], '2026-01-01T00:00:00Z'))
+        # The reference is corrupt on disk, but location/ownership for retention
+        # is already registered in SQL. It must not poison unrelated candidates.
+        (self.directory / 'workspaces' / manifest['workspaceId'] / 'manifest.json').write_bytes(b'{broken')
+        with self.board_instance.store.db.read() as connection:
+            reasons = self.references(connection, manifest)
+            unrelated = self.references(connection, other)
+        self.assertIn('workflow_artifacts-reference', reasons)
+        self.assertFalse(any('unproven' in reason for reason in reasons + unrelated))
+        self.assertEqual(unrelated, [])
 
     def test_unreadable_retained_artifact_keeps_reference_unproven(self):
         manifest, checkout, planned = self.orphan()
@@ -347,7 +369,7 @@ class StorageOrphanTests(WorkflowTestCase):
                 for row in connection.execute(sql):
                     read_rows.append(sql)
                     yield row
-            rows = storage._workspace_reference_rows(SimpleNamespace(execute=streamed), self.directory)
+            rows = storage._workspace_reference_rows(SimpleNamespace(execute=streamed))
             self.assertIs(iter(rows), rows, 'reference rows must stream, never materialize all tables')
             next(rows)
             self.assertEqual(len(read_rows), 1, 'the first row must not preload historical facts')

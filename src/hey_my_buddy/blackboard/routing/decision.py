@@ -19,6 +19,7 @@ import uuid
 from typing import Any
 
 from ...protocol import schemas
+from ...protocol.workspace_manifest import manifest_ref
 from ...protocol.task_types import TASK_TYPES
 from ..evaluation import user_policy
 from . import selection_policy, router, router_sequence, router_failover, evidence
@@ -47,7 +48,7 @@ _ROW_COLUMNS = (
     " r.task_id AS decision_task_id, r.attempt_id AS decision_attempt_id,"
     " r.generation AS decision_generation,"
     " r.selected_json, r.output_json,"
-    " r.requested_json,"
+    " r.requested_json, r.request_form,"
     " r.updated_at AS request_updated_at"
 )
 _ROW_FROM = " FROM decision_requests r JOIN evaluation_decisions d ON d.decision_id = r.decision_id"
@@ -250,7 +251,8 @@ class DecisionCoordinator:
         }
         return self._create(request_id, request)
 
-    def _create(self, request_id: str, request: dict, *, connection=None) -> dict:
+    def _create(self, request_id: str, request: dict, *, connection=None,
+                request_form: str = "manifest-reference-v2") -> dict:
         # Keep the caller's admission input independent of the persisted snapshot,
         # including when an internal caller reuses the same dictionary on replay.
         request = dict(request)
@@ -350,19 +352,21 @@ class DecisionCoordinator:
             )
             connection.execute(
                 "INSERT INTO decision_requests(decision_id, request_id, input_fingerprint,"
-                " task_id, requested_json, updated_at) VALUES(?,?,?,?,?,?)",
+                " task_id, requested_json, request_form, updated_at) VALUES(?,?,?,?,?,?,?)",
                 (
                     decision_id,
                     request_id,
                     fingerprint,
                     None,
                     canonical_json(request),
+                    request_form,
                     now,
                 ),
             )
             # Every decision has a round-one snapshot, even when program selection
             # needs no Router dispatch. Its task is the single stored task source.
-            router_sequence.freeze_request(connection, decision_id, snapshot=snapshot, now=now)
+            router_sequence.freeze_request(connection, decision_id, snapshot=snapshot, now=now,
+                                           snapshot_form=request_form)
             if resolution is not None:
                 self._record_preflight_walk(connection, request_id, resolution.inspections, now=now)
             if status == "queued" and resolution is not None and resolution.buddy is not None:
@@ -416,17 +420,21 @@ class DecisionCoordinator:
             required_capabilities.append(f"permission:{access}")
         from ..tasks.micro_task import resolve
         task = connection.execute("SELECT * FROM tasks WHERE task_id=?", (run_id,)).fetchone()
+        request_id = f"workflow:{run_id}:{sequence}"
+        previous = self._row_by_request(connection, request_id)
+        request_form = previous["request_form"] if previous is not None else "manifest-reference-v2"
         request = {
             "project": resolve(connection, task)["project"],
             "kind": "select", "task": task_text,
             "expectedSeconds": spec["expectedSeconds"],
-            "executionWorkspace": manifest,
+            "executionWorkspace": (manifest if request_form == "archived-inline-v1" or manifest is None
+                                   else manifest_ref(manifest)),
             "requiredCapabilities": required_capabilities,
             "constraints": schemas.buddy_constraints(spec),
             "workflowRouting": True,
             "routingBasis": {"overloadedModelServices": overloaded_model_services or []},
         }
-        return self._create(f"workflow:{run_id}:{sequence}", request, connection=connection)
+        return self._create(request_id, request, connection=connection, request_form=request_form)
 
     def _create_task(self, connection: sqlite3.Connection, *, decision_id: str, request_id: str, router_budget_seconds: int | None, now: str, request_key: str | None = None, kind: str = "select", document: dict | None = None) -> str:
         """Admit one ordinary selection task, using the real queue and capacity.
@@ -948,7 +956,10 @@ class DecisionCoordinator:
                          "routingBasis": request["routingBasis"], "constraints": request.get("constraints", {}),
                          "requiredCapabilities": request.get("requiredCapabilities", [])})
         if resolution.facts["routingMode"] != "fast":
-            document["executionWorkspace"] = request.get("executionWorkspace")
+            manifest = request.get("executionWorkspace")
+            document["executionWorkspace"] = (
+                manifest_ref(manifest) if row["request_form"] == "archived-inline-v1" and manifest is not None
+                else manifest)
         if resolution.facts["routingMode"] is not None:
             document["outputSchema"] = router.answer_schema(
                 [item["buddyId"] for item in document["buddies"]], resolution.facts["routingMode"],

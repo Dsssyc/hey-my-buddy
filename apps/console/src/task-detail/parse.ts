@@ -181,7 +181,7 @@ function parseArtifacts(value: unknown): Artifact[] {
     const artifact = rec(item, "artifact");
     if (!OUTPUT_KINDS.includes(artifact.kind as never)) return [];
     const kind = artifact.kind as Artifact["kind"];
-    const contentForm = artifact.contentForm === undefined ? undefined : oneOf(
+    const contentForm = oneOf(
       artifact.contentForm, ["sealed-inline-v1", "record-reference"] as const, "artifact.contentForm");
     const snapshotSha256 = contentForm === "record-reference"
       ? str(artifact.outputSnapshotSha256, "artifact.outputSnapshotSha256")

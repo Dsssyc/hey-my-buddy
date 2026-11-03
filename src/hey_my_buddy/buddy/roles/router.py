@@ -11,6 +11,7 @@ from ...private_dirs import context_root, ensure_private_dir
 from ...paths import native_path
 from ...blackboard.routing import router
 from ...protocol import maintenance as maintenance_files
+from ...protocol.workspace_manifest import resolve_manifest
 from ...json_codec import canonical_json
 from . import router_input
 from .prompts import router_prompt
@@ -48,6 +49,23 @@ it may return concrete errors for up to two corrections in this execution.
 Preserve entries already accepted."""
 
 
+def _review_manifest(document: dict, state_dir: Path) -> dict | None:
+    manifest = document.get("executionWorkspace")
+    if manifest is None:
+        return None
+    form = document["executionWorkspaceForm"]
+    if form == "archived-inline-v1":
+        return manifest
+    if form != "manifest-reference-v2":
+        raise BoardError("INVALID_ARGUMENT", "Unknown Router workspace form")
+    try:
+        return resolve_manifest(state_dir, manifest)
+    except BoardError as error:
+        code = ("router-input-changed" if error.code == "WORKSPACE_MANIFEST_CHANGED"
+                else "router-input-unavailable")
+        raise BoardError(code, "The frozen Router manifest could not be verified") from None
+
+
 def prepare_router_fast(document: dict, buddy: dict, native: Adapter,
                         context: ExecutionContext) -> role_seam.FastPreparation:
     """Everything the fast mode's native call needs, except the start itself.
@@ -77,7 +95,7 @@ def prepare_router_review(document: dict, buddy: dict, native: Adapter,
     The mirror is materialized from the immutable input tree before the native
     call exists, and the binding the collection re-verifies is frozen here.
     """
-    manifest = document.get("executionWorkspace")
+    manifest = _review_manifest(document, Path(context.environment["HMB_STATE_DIR"]))
     root, digest = router_input.prepare(
         manifest, ensure_private_dir(context_root(context, native.name)),
         state_dir=Path(context.environment["HMB_STATE_DIR"]),
@@ -154,9 +172,20 @@ class DecisionAdapter(Adapter):
             except OSError:
                 pass  # Retain unexpected native files for inspection.
         if outcome.shutdown_confirmed and getattr(handle, 'router_input', None) is not None:
-            verification = router_input.verify(
-                *handle.router_input, state_dir=Path(context.environment["HMB_STATE_DIR"]),
-                deadline=time.monotonic() + document["budget"]["timeoutSeconds"])
+            state_dir = Path(context.environment["HMB_STATE_DIR"])
+            try:
+                current_manifest = _review_manifest(document, state_dir)
+                if current_manifest != handle.router_input[0]:
+                    raise BoardError("router-input-changed", "The Router manifest changed after preparation")
+            except BoardError as error:
+                if error.code not in ("router-input-changed", "router-input-unavailable"):
+                    raise
+                verification = {"unchanged": False, "code": "router-input-changed",
+                                "manifestSha256": (document.get("executionWorkspace") or {}).get("manifestSha256")}
+            else:
+                verification = router_input.verify(
+                    *handle.router_input, state_dir=state_dir,
+                    deadline=time.monotonic() + document["budget"]["timeoutSeconds"])
             if verification["unchanged"] is None:
                 raise BoardError("router-input-unknown", "The frozen Router input could not yet be verified")
             # The mirror is a full copy of the frozen input. Once the native group is

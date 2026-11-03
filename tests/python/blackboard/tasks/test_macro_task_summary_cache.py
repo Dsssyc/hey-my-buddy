@@ -179,6 +179,34 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.assertEqual(self.rows()[group]["project"]["label"], "bare-repository")
             self.assert_recomputed(counter, [])
 
+    def test_prepared_continuation_keeps_the_macro_project_at_its_original_input(self):
+        with self.store.db.read() as connection:
+            row = connection.execute(
+                "SELECT run_id,macro_task_id,workspace_id,workspace_manifest_sha256"
+                " FROM workflow_runs WHERE state='delivered' AND macro_task_id IS NOT NULL"
+                " ORDER BY rowid LIMIT 1",
+            ).fetchone()
+        self.assertIsNotNone(row)
+        run_id, group = row["run_id"], row["macro_task_id"]
+        original_pair = (row["workspace_id"], row["workspace_manifest_sha256"])
+        original = self.rows()[group]["project"]
+        original_run_project = self.fixture.call("task_get", {"runId": run_id})["task"]["lineage"]["project"]
+        view = self.fixture.call("workflow_get", {"runId": run_id})
+        self.store.workflow.continue_run({
+            "runId": run_id, "commandId": "macro-project-continuation",
+            "expectedRevision": view["revision"], "input": "Continue fictional work",
+            "helperPolicy": "keep",
+        }, console_authority={"sessionId": "private-cache-test"})
+        self.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        with self.store.db.read() as connection:
+            current = connection.execute(
+                "SELECT workspace_id,workspace_manifest_sha256 FROM workflow_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+        self.assertNotEqual(tuple(current), original_pair)
+        self.assertEqual(self.rows()[group]["project"], original)
+        self.assertEqual(self.fixture.call("task_get", {"runId": run_id})["task"]["lineage"]["project"], original_run_project)
+
     def test_root_helper_and_router_stop_changes_are_selective(self):
         group = self.fixture.macros[0]
         parent = self.root_for(group)

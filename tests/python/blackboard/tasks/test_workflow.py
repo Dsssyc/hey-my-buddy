@@ -1274,6 +1274,24 @@ class ContinuationPolicyTests(WorkflowTestCase):
 
 
 class ArtifactIdentityTests(WorkflowTestCase):
+    def test_result_import_reads_the_output_record_once(self):
+        from hey_my_buddy.protocol import workspace_manifest as references
+        board = self.board()
+        submitted = self.submit(board)
+        claim = self.claim(board)
+        attempt = claim["claim"]["attempt"]
+        manifest = turn_manifest(board.directory, claim["claim"]["turn"]["input"])
+        sealed = self.workspace.seal(board.directory, manifest, submitted["runId"], attempt["attemptId"])
+        reference = record_reference(board.directory, sealed)
+        params = {"attemptId": attempt["attemptId"], "status": "ok", "shutdownConfirmed": True,
+                  "result": {"turn": self.turn_record(claim), "workspaceSeal": reference}}
+        with patch.object(references, "read_bytes", wraps=references.read_bytes) as reader:
+            result = board.store.execution_result(params, stop_evidence={"kind": "process-reaped", "native": "receipt"})
+        reads = [call for call in reader.call_args_list
+                 if call.args[0] == board.directory / reference["recordFile"]["path"]]
+        self.assertEqual(result["workflow"]["state"], "delivered")
+        self.assertEqual(len(reads), 1, "Validated output bytes must be passed into settlement without reopening")
+
     def test_output_is_bound_to_the_sealed_snapshot(self):
         board = self.board()
         self.register(board)

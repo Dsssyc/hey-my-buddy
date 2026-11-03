@@ -228,11 +228,10 @@ class RouterPublicationTests(WorkflowTestCase):
             continuation = connection.execute('SELECT workspace_id,workspace_manifest_sha256,workspace_facts_role FROM workflow_continuations').fetchone()
             self.assertIn(continuation['workspace_facts_role'], ('owner', 'reference'))
             frozen = json.loads(connection.execute('SELECT requested_json FROM decision_requests ORDER BY rowid DESC LIMIT 1').fetchone()[0])
-            from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
-            self.assertEqual(frozen['executionWorkspace'], resolve_manifest(board.directory, {
+            self.assertEqual(frozen['executionWorkspace'], {
                 'workspaceId': continuation['workspace_id'],
                 'manifestSha256': continuation['workspace_manifest_sha256'],
-            }))
+            })
             self.assertIn(continuation_text, frozen['task'])
             self.assertIn(helper_text, frozen['task'])
             self.assertGreater(len(frozen['task'].encode()), 128 * 1024)

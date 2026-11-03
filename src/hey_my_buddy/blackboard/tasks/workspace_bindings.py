@@ -1,5 +1,6 @@
 """Relational workspace identity and the single owner of location facts."""
 
+import hashlib
 import json
 
 from ...protocol.workspace_manifest import artifact_manifest, resolve_manifest, turn_manifest
@@ -14,6 +15,31 @@ SELECT workspace_id, workspace_manifest_sha256,
        workspace_kind, checkout_root, repository_path, input_commit, staged_commit, run_id
 FROM workflow_continuations WHERE workspace_facts_role='owner'
 """
+
+
+def output_record_id(run_id, attempt_id):
+    """The physical output directory identity, independent of stored refs."""
+    return hashlib.sha256(json.dumps([run_id, attempt_id], sort_keys=True,
+                                     separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+
+
+def output_references(artifact):
+    """Return an output's published and retained Git names from SQL facts."""
+    identifier = artifact['output_workspace_id']
+    record_id = output_record_id(artifact['run_id'], artifact['attempt_id'])
+    kind = artifact['kind']
+    if kind in ('output', 'partial-output'):
+        suffix = record_id + ('-host' if artifact['output_origin'] == 'host' else '')
+        published, retained = 'outputs/' + suffix, 'retained/output-' + suffix
+    elif kind == 'resolved-output':
+        suffix = record_id + '-' + artifact['output_action']
+        published, retained = 'resolutions/' + suffix, 'retained/resolution-' + suffix
+    elif kind == 'abandoned-site':
+        published, retained = 'abandoned/' + record_id, 'retained/abandoned-' + record_id
+    else:
+        raise ValueError(f'Artifact kind has no output references: {kind}')
+    prefix = f'refs/hey-my-buddy/workspaces/{identifier}/'
+    return prefix + published, prefix + retained
 
 # The terminal binding is frozen history. A run that never began a turn uses its
 # initial input; the current slot is reserved for runs that can still continue.
@@ -62,6 +88,22 @@ def workspace_facts(connection, manifest):
         return "reference", None, None, None, None, None
     return ("owner", manifest["kind"], manifest["checkoutRoot"], manifest["snapshot"]["repositoryPath"],
             manifest["inputCommit"], manifest["snapshot"]["stagedCommit"])
+
+
+def owned_manifest(state_dir, connection, workspace_id, manifest_sha256):
+    """Read the declared owner of one selected output's exact input pair."""
+    pair = workspace_id, manifest_sha256
+    artifact = connection.execute(
+        "SELECT * FROM workflow_artifacts WHERE kind='input' AND workspace_facts_role='owner'"
+        " AND workspace_id=? AND input_manifest_sha256=?", pair).fetchone()
+    if artifact is not None:
+        return artifact_manifest(state_dir, artifact)
+    continuation = connection.execute(
+        "SELECT workspace_id,workspace_manifest_sha256 FROM workflow_continuations"
+        " WHERE workspace_facts_role='owner' AND workspace_id=? AND workspace_manifest_sha256=?",
+        pair).fetchone()
+    return resolve_manifest(state_dir, {"workspaceId": continuation["workspace_id"],
+                                        "manifestSha256": continuation["workspace_manifest_sha256"]})
 
 
 def retained_manifests(state_dir, connection, run_id):

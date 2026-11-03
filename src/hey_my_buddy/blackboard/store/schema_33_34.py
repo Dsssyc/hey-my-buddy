@@ -12,6 +12,35 @@ from pathlib import Path
 import re
 import stat
 
+DECISION_REQUESTS_DDL = """
+CREATE TABLE IF NOT EXISTS decision_requests (
+    decision_id            TEXT PRIMARY KEY REFERENCES evaluation_decisions(decision_id) ON DELETE RESTRICT,
+    request_id             TEXT NOT NULL UNIQUE,
+    input_fingerprint      TEXT NOT NULL,
+    task_id                TEXT,
+    attempt_id             TEXT,
+    generation             INTEGER,
+    selected_json          TEXT,
+    output_json            TEXT,
+    requested_json         TEXT NOT NULL DEFAULT '{}',
+    request_form           TEXT NOT NULL DEFAULT 'manifest-reference-v2'
+        CHECK (request_form IN ('archived-inline-v1','manifest-reference-v2')),
+    updated_at             TEXT NOT NULL
+);
+"""
+
+ROUTER_REQUESTS_DDL = """
+CREATE TABLE IF NOT EXISTS router_requests (
+    decision_id      TEXT NOT NULL REFERENCES decision_requests(decision_id) ON DELETE RESTRICT,
+    round            INTEGER NOT NULL CHECK (round >= 1),
+    snapshot_json    TEXT NOT NULL,
+    snapshot_form    TEXT NOT NULL DEFAULT 'manifest-reference-v2'
+        CHECK (snapshot_form IN ('archived-inline-v1','manifest-reference-v2')),
+    frozen_at        TEXT NOT NULL,
+    PRIMARY KEY (decision_id, round)
+);
+"""
+
 ATTEMPTS_DDL = """
 CREATE TABLE IF NOT EXISTS attempts (
     attempt_id          TEXT PRIMARY KEY,
@@ -196,9 +225,8 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
     staged_commit   TEXT,
     output_workspace_id TEXT,
     output_manifest_sha256 TEXT,
-    output_ref      TEXT,
     output_commit   TEXT,
-    output_action   TEXT,
+    output_action   TEXT CHECK (output_action IN ('restore','adopt')),
     output_origin   TEXT CHECK (output_origin IN ('worker','host')),
     created_at      TEXT NOT NULL,
     CHECK ((kind IN ('input','turn-input') AND workspace_id IS NOT NULL AND input_manifest_sha256 IS NOT NULL
@@ -223,11 +251,11 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
             AND input_commit IS NULL AND staged_commit IS NULL)),
     CHECK (kind!='input' OR workspace_facts_role IS NOT NULL),
     CHECK ((kind IN ('output','resolved-output','partial-output','abandoned-site')
-            AND output_workspace_id IS NOT NULL AND output_manifest_sha256 IS NOT NULL
-            AND output_ref IS NOT NULL AND output_commit IS NOT NULL)
+            AND attempt_id IS NOT NULL AND output_workspace_id IS NOT NULL
+            AND output_manifest_sha256 IS NOT NULL AND output_commit IS NOT NULL)
         OR (kind NOT IN ('output','resolved-output','partial-output','abandoned-site')
             AND output_workspace_id IS NULL AND output_manifest_sha256 IS NULL
-            AND output_ref IS NULL AND output_commit IS NULL AND output_action IS NULL)),
+            AND output_commit IS NULL AND output_action IS NULL)),
     CHECK ((kind='resolved-output' AND output_action IS NOT NULL)
         OR (kind!='resolved-output' AND output_action IS NULL)),
     CHECK ((kind IN ('output','partial-output') AND output_origin IS NOT NULL)
@@ -288,7 +316,8 @@ def _manifest(value, run_id):
     if type(value.get('version')) is not int or value['version'] not in (1, 2, 3, 4):
         _fail(run_id, pair, 'manifest-version-invalid')
     project = value['projectId'] if value['version'] == 4 else value['repositoryId']
-    facts = (value['kind'], value['checkoutRoot'], value['snapshot']['repositoryPath'], project)
+    facts = (value['kind'], value['checkoutRoot'], value['snapshot']['repositoryPath'], project,
+             value['inputCommit'], value['snapshot']['stagedCommit'])
     if (facts[0] not in ('existing', 'worktree')
             or any(not isinstance(item, str) or not item for item in facts[1:])):
         _fail(run_id, pair, 'workspace-facts-invalid')
@@ -419,7 +448,7 @@ def _inventory(connection, stock):
                 suffix = record_id + ('-host' if record_kind == 'host-output' else '')
                 expected_ref = f'refs/hey-my-buddy/workspaces/{workspace_id}/outputs/{suffix}'
                 action = None
-            elif record_kind == 'resolution' and kind == 'resolved-output' and value.get('action') in ('restore', 'adopt', 'abandon'):
+            elif record_kind == 'resolution' and kind == 'resolved-output' and value.get('action') in ('restore', 'adopt'):
                 action = value['action']
                 expected_ref = f'refs/hey-my-buddy/workspaces/{workspace_id}/resolutions/{record_id}-{action}'
             elif record_kind == 'abandoned-site' and kind == 'abandoned-site':
@@ -430,7 +459,7 @@ def _inventory(connection, stock):
             if value.get('ref') != expected_ref or not isinstance(value.get('commit'), str) or not value['commit']:
                 _fail(row['run_id'], pair, 'artifact-output-ref-mismatch')
             row.update(output_workspace_id=workspace_id, output_manifest_sha256=pair[1],
-                       output_ref=expected_ref, output_commit=value['commit'], output_action=action)
+                       output_commit=value['commit'], output_action=action)
             row['output_snapshot_sha256'] = row['manifest_sha256']
             if kind in ('output', 'partial-output'):
                 origin = value.get('kind')
@@ -587,17 +616,24 @@ def _rebuild(connection, table, ddl, rows):
 
 def upgrade(connection):
     stock = {table: _rows(connection, table) for table in (
-        'attempts', 'workflow_runs', 'workflow_children', 'workflow_continuations', 'workflow_turns', 'workflow_artifacts')}
+        'attempts', 'workflow_runs', 'workflow_children', 'workflow_continuations', 'workflow_turns', 'workflow_artifacts',
+        'decision_requests', 'router_requests')}
     manifests, facts = _inventory(connection, stock)
     _file_boundary(connection, stock, manifests, facts)
     for row in stock['attempts']:
         row['result_form'] = 'archived-report-v1' if row['result_json'] is not None else None
+    for row in stock['decision_requests']:
+        row['request_form'] = 'archived-inline-v1'
+    for row in stock['router_requests']:
+        row['snapshot_form'] = 'archived-inline-v1'
     for table, ddl in (
         ('attempts', ATTEMPTS_DDL), ('workflow_runs', WORKFLOW_RUNS_DDL),
         ('workflow_children', WORKFLOW_CHILDREN_DDL), ('workflow_continuations', WORKFLOW_CONTINUATIONS_DDL),
         ('workflow_turns', WORKFLOW_TURNS_DDL), ('workflow_artifacts', WORKFLOW_ARTIFACTS_DDL),
+        ('router_requests', ROUTER_REQUESTS_DDL), ('decision_requests', DECISION_REQUESTS_DDL),
     ):
         _rebuild(connection, table, ddl, stock[table])
     for statement in INDEXES:
         connection.execute(statement)
+    connection.execute('CREATE INDEX IF NOT EXISTS decision_requests_task_idx ON decision_requests(task_id)')
     connection.execute("UPDATE meta SET value='34' WHERE key='schema_version'")

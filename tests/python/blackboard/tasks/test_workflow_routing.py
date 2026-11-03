@@ -48,6 +48,30 @@ class TestWorkflowRouting(WorkflowTestCase):
         owned = claim["claim"]
         return board.call('execution_result', {'attemptId': owned['attempt']['attemptId'], 'generation': owned['attempt']['generation'], 'nonce': NONCE, 'status': status, 'shutdownConfirmed': shutdown, 'result': {**claim_tool_receipt(owned, state_dir=board.directory), 'status': 'ok', 'operation': 'select', 'stopEvidence': {'shutdownConfirmed': shutdown, 'native': {'shutdownConfirmed': shutdown}}, 'usage': {'elapsedMs': 100, 'toolCalls': 0}, 'inputVerification': {'unchanged': True, 'snapshotSha256': 'fixture-digest', 'manifestSha256': owned['decisionInput']['executionWorkspace']['manifestSha256']}, 'decision': self.valid_decision(owned['decisionInput'], buddy_id)}})
 
+    def test_current_router_request_snapshot_and_dispatch_hold_manifest_reference(self):
+        board = self.board()
+        self.seed(board)
+        submitted = self.routed(board, request_id="routing-manifest-reference")
+        decision_id = submitted["routing"]["decisionId"]
+        with board.store.db.read() as connection:
+            row = connection.execute(
+                "SELECT requested_json,request_form FROM decision_requests WHERE decision_id=?",
+                (decision_id,)).fetchone()
+            request = json.loads(row["requested_json"])
+            snapshot = connection.execute(
+                "SELECT snapshot_json,snapshot_form FROM router_requests WHERE decision_id=?",
+                (decision_id,)).fetchone()
+            frozen = json.loads(snapshot["snapshot_json"])
+        reference = request["executionWorkspace"]
+        self.assertEqual(set(reference), {"workspaceId", "manifestSha256"})
+        self.assertEqual(row["request_form"], "manifest-reference-v2")
+        self.assertEqual(snapshot["snapshot_form"], "manifest-reference-v2")
+        self.assertEqual(frozen["baseInput"]["executionWorkspace"], reference)
+        claim = self.router_claim(board, submitted)
+        dispatched = claim["claim"]["decisionInput"]
+        self.assertEqual(dispatched["executionWorkspace"], reference)
+        self.assertEqual(dispatched["executionWorkspaceForm"], "manifest-reference-v2")
+
     def test_macro_task_goal_never_enters_selector_or_worker(self):
         board = self.board()
         self.seed(board)

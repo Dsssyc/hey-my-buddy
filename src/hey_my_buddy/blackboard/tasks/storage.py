@@ -189,7 +189,7 @@ def _runtime_leftover_recent(path: Path, now: float) -> bool:
     return False
 
 
-def _workspace_reference_rows(connection, state_dir):
+def _workspace_reference_rows(connection):
     """Physical references in retained facts, without filtering their state.
 
     Integration targets need not be a run's execution workspace: verifying a
@@ -207,15 +207,6 @@ def _workspace_reference_rows(connection, state_dir):
         'workflow_integrations', 'workspace_cleanup_plans', 'workflow_host_conclusions'):
         for row in connection.execute('SELECT * FROM ' + table):
             yield table, row
-            if table == 'workflow_artifacts' and row['content_form'] in ('input-reference', 'record-reference'):
-                from ...protocol.workspace_manifest import artifact_manifest
-                try:
-                    document = artifact_manifest(state_dir, row)
-                except BoardError:
-                    # An unreadable retained reference cannot prove an allocation unused.
-                    yield table, {'run_id': row['run_id'], 'reference_json': '{'}
-                else:
-                    yield table, {'run_id': row['run_id'], 'reference_json': json.dumps(document)}
 
 
 def submission_references(connection, manifest: dict, request_id: str, directory: Path) -> list[str]:
@@ -225,7 +216,7 @@ def submission_references(connection, manifest: dict, request_id: str, directory
     this request's records or refs. A worktree's checkout identity belongs to
     its allocation and protects references independently of path spelling.
     """
-    return _allocation_reference_sets(_workspace_reference_rows(connection, directory.parent.parent), [(manifest, request_id)],
+    return _allocation_reference_sets(_workspace_reference_rows(connection), [(manifest, request_id)],
                                       directories=[str(directory)])[0]
 
 
