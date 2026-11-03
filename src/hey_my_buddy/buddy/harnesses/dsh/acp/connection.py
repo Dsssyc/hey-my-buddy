@@ -274,7 +274,7 @@ class AcpConnection:
 
     # -- requests and notifications ---------------------------------------------
 
-    def request(self, method: str, params: dict, timeout: float) -> dict:
+    def request(self, method: str, params: dict, timeout: float, *, on_sent=None) -> dict:
         """Send one request and wait for its response within one budget that
         covers queuing, writing and waiting; errors raise, late answers arrive
         as facts, and every failure path releases the pending entry."""
@@ -291,6 +291,8 @@ class AcpConnection:
             deadline=deadline)
         try:
             self._await_write(job, method, timeout)
+            if on_sent is not None:
+                on_sent()
         except BaseException:
             with self._pending_lock:
                 resolved = waiter["resolved"]

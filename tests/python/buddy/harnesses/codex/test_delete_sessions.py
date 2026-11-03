@@ -67,7 +67,7 @@ class DeleteSessionTests(unittest.TestCase):
         for session_id, code, message in cases:
             with self.subTest(session_id=session_id), self.assertRaises(BoardError) as caught:
                 CodexAdapter().delete_sessions(["owned", session_id, "must-not-delete"], state_dir=Path(os.environ["HMB_STATE_DIR"]))
-            self.assertEqual(caught.exception.details["nativeError"], {"code": code, "message": message})
+            self.assertEqual(caught.exception.details["nativeError"], {"code": code, "message": message, "nativeMethod": "thread/delete"})
             self.assertTrue(str(caught.exception).startswith("Codex rejected thread/delete: "))
             self.assertLessEqual(len(str(caught.exception).encode("utf-8")), 512)
             if len(message.encode("utf-8")) < 400:

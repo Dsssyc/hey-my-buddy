@@ -126,6 +126,11 @@ def result_frame(case, session_id):
                                                    "summary": "x" * (600 * 1024)}}
     if case == "failed":
         result.update(is_error=True, subtype="error_during_execution")
+    if case == "input-too-large":
+        result.update(is_error=True, subtype="error_during_execution",
+                      error={"code": "invalid_params", "message": "fixture admission refusal",
+                             "data": {"input_error_code": "input_too_large", "max_chars": 9,
+                                      "actual_chars": 10, "secret": "must never appear"}})
     if case == "error-subtype-without-flag":
         result["subtype"] = "error_during_execution"
         result.pop("is_error")
@@ -287,7 +292,8 @@ def run_turn(case):
     if case == "quota-warning":
         send({"type": "rate_limit_event", "rate_limit_info": {
             "status": "allowed_warning", "rateLimitType": "seven_day", "resetsAt": "2026-09-27T00:00:00Z"}})
-    send({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}})
+    if case != "input-too-large":
+        send({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "working"}]}})
     if case == "long-tool-name":
         send({"type": "assistant", "session_id": session_id, "message": {
             "role": "assistant", "content": [{"type": "tool_use", "id": "long-tool-call",

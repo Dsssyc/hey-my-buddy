@@ -19,6 +19,7 @@ from ...protocol import activity as activity_module
 from ..tasks import micro_task
 from ..tasks import scheduling
 from ...protocol import schemas
+from ...protocol.input_failure import INPUT_REJECTED, input_failure_view, is_input_too_large, normalize_input_failure
 from ...protocol.reasons import reason as make_reason, reason_from_json, validate_waiting_reason
 from .db import (
     ACTIVE_ATTEMPT_STATES,
@@ -624,6 +625,7 @@ class BoardStore:
             recorded = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
             view["tokenUsage"] = (recorded.get("result") or {}).get("tokenUsage")
             view["providerRejection"] = provider_rejection_view(recorded.get("result"))
+            view["inputFailure"] = input_failure_view(recorded)
             release = connection.execute(
                 "SELECT payload_json FROM events WHERE task_id=? AND attempt_id=? AND kind='attempt.released'",
                 (task["task_id"], attempt["attempt_id"]),
@@ -2287,9 +2289,23 @@ class BoardStore:
         # Normalize the imported projection once for every entry path and replay.
         from ...protocol.usage import normalize_token_usage
         imported = request["result"]
-        if isinstance(imported, dict) and "tokenUsage" in imported:
-            request = {**request, "result": {**imported,
-                "tokenUsage": normalize_token_usage(imported["tokenUsage"])}}
+        if isinstance(imported, dict):
+            normalized = dict(imported)
+            if "tokenUsage" in imported:
+                normalized["tokenUsage"] = normalize_token_usage(imported["tokenUsage"])
+            if "inputFailure" in imported:
+                failure = normalize_input_failure(imported["inputFailure"])
+                if failure is None:
+                    raise BoardError("INVALID_ARGUMENT", "The inputFailure facts are invalid")
+                normalized["inputFailure"] = failure
+            if normalized.get("code") == INPUT_REJECTED and "inputFailure" not in normalized:
+                raise BoardError("INVALID_ARGUMENT", "An input rejection requires inputFailure")
+            if normalized.get("code") == INPUT_REJECTED:
+                failure = normalized["inputFailure"]
+                if (request["status"] != "failed" or failure["stage"] == "native-admission"
+                        and (not is_input_too_large(failure) or failure["nativeRequestSent"] is not True)):
+                    raise BoardError("INVALID_ARGUMENT", "An input rejection requires failed admission evidence")
+            request = {**request, "result": normalized}
         status, result = request["status"], request["result"]
         verified_artifacts = request["artifacts"]
         shutdown_confirmed = request["shutdownConfirmed"]
@@ -2299,6 +2315,10 @@ class BoardStore:
         attempt_id_param = request["attemptId"]
         with self.db.write() as connection:
             attempt = self._attempt_row(connection, attempt_id_param)
+            if isinstance(result, dict) and isinstance(result.get("inputFailure"), dict):
+                harness = attempt["model_harness"] or attempt["adapter"]
+                if result["inputFailure"]["harness"]["name"] != harness:
+                    raise BoardError("INVALID_ARGUMENT", "inputFailure harness does not match the execution")
             self._require_effective_attempt(connection, attempt)
             if attempt["execution_state"] == "finished" and attempt["result_json"] is None:
                 raise BoardError("ATTEMPT_FINISHED", "This execution was released before process creation")
@@ -2418,7 +2438,10 @@ class BoardStore:
                 ),
             )
             from ..evaluation.native_observations import persist
-            persist(connection, attempt, result, status=status,
+            persist_result = ({**result, "providerRejection": None}
+                              if isinstance(result, dict) and result.get("code") == INPUT_REJECTED
+                              else result)
+            persist(connection, attempt, persist_result, status=status,
                     shutdown_confirmed=shutdown_confirmed, now=now)
             self._transition_task(connection, task, task_state)
             connection.execute(

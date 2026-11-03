@@ -295,7 +295,7 @@ class NativeShapeRoundTests(NativeRunCase):
             result = native_run.run(self.fast_request("Return only one JSON value matching this schema: {}"),
                 observer=lambda _facts: RunFeedback(action="continue"), services=None, cancelled=lambda: False)
         self.assertEqual(result.end.reason_code, "buddy-mismatch")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.completion_evidence)
         self.assertNotIn("session/send", calls)

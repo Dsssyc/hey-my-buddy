@@ -9,6 +9,7 @@ from unittest import mock
 from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.registry import RUN_SEAMS
+from hey_my_buddy.buddy.roles.prompts import PromptText
 from hey_my_buddy.buddy.roles import inline_run, router, run_execution, structured_call, turn_io
 from hey_my_buddy.buddy.roles.run_observers import FastCorrection
 from hey_my_buddy.protocol.capabilities import PERMISSION_LEVELS
@@ -80,7 +81,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
             control = {"operation": "worker", "harness": "zcode", "timeoutSeconds": None,
                        "inputFile": str(root / "input.json"), "nativeRoot": directory}
             handle = run_execution.InlineRunHandle(control, request.identity, grace_seconds=0)
-            with mock.patch.object(run_execution, "worker_request", return_value=(request, None, None, None)), \
+            with mock.patch.object(run_execution, "worker_request", return_value=(request, None, None, None, PromptText((("task", request.input_text),)).parts)), \
                  mock.patch.object(inline_run, "_inline_live", return_value=nullcontext(None)), \
                  mock.patch.object(inline_run, "run_harness", return_value=result), \
                  mock.patch.object(run_execution, "_worker_result", return_value=turn) as publish:

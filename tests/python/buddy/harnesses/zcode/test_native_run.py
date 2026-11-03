@@ -199,6 +199,22 @@ class MockNativeCase(ZcodeFixtureCase):
 
 
 class FastSeamTests(NativeRunCase):
+    def test_initial_native_input_refusal_keeps_structured_admission_facts(self):
+        select_fixture(self.environment, self.root, "zcode",
+                       Path(__file__).parent / "fixtures/mock_zcode.py")
+        os.environ.update(self.environment)
+        os.environ["HMB_ZCODE_TEST_CASE"] = "input-too-large"
+        prompt = structured_prompt("Choose a buddy", SCHEMA)
+        result = run(self.fast_request(prompt), observer=FastCorrection(SCHEMA, prompt).observer,
+                     services=None, cancelled=lambda: False)
+        self.assertIs(result.native_request_sent, True)
+        self.assertIs(result.model_started, False)
+        self.assertEqual(result.native_admission_error.value, {
+            "nativeMethod": "session/send", "nativeCode": "invalid_params",
+            "message": "fixture admission refusal", "input_error_code": "input_too_large",
+            "max_chars": 9, "actual_chars": 10})
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_native_failure_survives_a_disconnected_final_metadata_read(self):
         fixture = Path(__file__).parent / "fixtures/mock_zcode_usage.py"
         select_fixture(self.environment, self.root, "zcode", fixture)
@@ -549,7 +565,7 @@ class FastSeamTests(NativeRunCase):
         # Nothing is claimed that the run never reached: no session opened, no
         # effective policy, no buddy check, no completion, no model,
         # and no native exit code — the holding side's own never-spawned fact.
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
         self.assertIsNone(result.effective_policy.tools)
         checked = result.buddy.checked
         self.assertIsNone(checked.provider)
@@ -656,9 +672,9 @@ class WorkerSeamTests(MockNativeCase):
         calls, mode_readbacks = [], []
         original = native_run.NativeConnection.call
 
-        def call(connection, method, params):
+        def call(connection, method, params, *, on_sent=None):
             calls.append((method, params))
-            result = original(connection, method, params)
+            result = original(connection, method, params, on_sent=on_sent)
             if method in ("session/resume", "session/setMode"):
                 mode_readbacks.append((method, result["settings"]["mode"]))
             return result

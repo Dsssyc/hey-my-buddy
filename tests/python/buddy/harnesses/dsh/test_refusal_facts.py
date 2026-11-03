@@ -61,8 +61,10 @@ class RefusalFactsTests(NativeRunCase):
         self.launch = patcher.start()
         self.addCleanup(patcher.stop)
 
-    def request(self, method, params, timeout):
+    def request(self, method, params, timeout, *, on_sent=None):
         self.methods.append(method)
+        if on_sent is not None:
+            on_sent()
         if method == "initialize":
             return copy.deepcopy(self.initialize_value)
         if method in ("session/new", "session/resume"):

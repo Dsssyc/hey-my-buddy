@@ -165,7 +165,7 @@ class RolePromptTests(unittest.TestCase):
                                "credentialFile": str(root / "agent-credential.json"),
                                "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
                                "timeoutSeconds": 1}
-                    request, _, _, error = run_execution.worker_request(control, module)
+                    request, _, _, error, _parts = run_execution.worker_request(control, module)
                     self.assertIsNone(error)
                     self.assertTrue(request.input_text.startswith(role + "\n"))
                     self.assertEqual(request.input_text.count(role), 1)

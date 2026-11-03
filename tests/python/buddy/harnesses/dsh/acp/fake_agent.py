@@ -416,6 +416,12 @@ class FakeAgent:
             self._stop_reading.set()
             log(self.log_path, {"event": "stdin-frozen", "method": method})
         if method == "session/prompt":
+            if method in self.error_data_on:
+                self.send({"jsonrpc": "2.0", "id": message["id"], "error": {
+                    "code": -32602, "message": "fixture admission refusal",
+                    "data": {"input_error_code": "input_too_large", "max_chars": 9,
+                             "actual_chars": 10, "marker": "SAFE-TEST-MARKER-in-data"}}})
+                return
             if self.park_prompt:
                 log(self.log_path, {"event": "parked-prompt"})
                 threading.Event().wait()  # never returns: only the group stop ends this

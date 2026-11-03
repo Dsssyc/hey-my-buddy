@@ -12,6 +12,7 @@ from ...private_dirs import ensure_private_dir
 from ...paths import native_path
 from ...protocol.structured_schema import schema_errors
 from .turn_io import private_json, canonical_json
+from .prompts import PromptText
 
 
 @dataclass(frozen=True)
@@ -37,9 +38,11 @@ def correction_code(raw, schema: dict) -> str | None:
     return "answer-shape" if errors else None
 
 
-def structured_prompt(prompt: str, schema: dict) -> str:
+def structured_prompt(prompt: str, schema: dict) -> PromptText:
     """Python supplies the answer schema for harnesses without a native JSON option."""
-    return prompt + "\n\nReturn only one JSON value matching this schema: " + canonical_json(schema)
+    assembled = prompt if isinstance(prompt, PromptText) else PromptText((("task", prompt),))
+    return assembled.appended("format", "\n\nReturn only one JSON value matching this schema: "
+                              + canonical_json(schema))
 
 
 def _retain_no_tool_evidence(binding: _NoToolEvidence, payload: dict) -> None:

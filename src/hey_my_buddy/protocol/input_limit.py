@@ -5,9 +5,9 @@ known limit is checked in its declared unit, and an unknown limit never blocks
 a run but still measures the same text so a later native rejection can carry
 the diagnostic sizes. Everything here is a pure function over strings with the
 standard library only — no tokenizer, and no second prompt assembly; the parts
-arrive already split at construction time by their source. Wiring this check
-into the execution paths is a later step; nothing on an execution path calls
-this module yet.
+arrive already split at construction time by their source. The execution
+process uses the judgment before its initial native request, and retains it
+only in memory unless that request fails.
 """
 from __future__ import annotations
 

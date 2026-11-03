@@ -128,11 +128,18 @@ class Connection:
             if (not isinstance(error, dict) or type(error.get("code")) is not int
                     or not isinstance(error.get("message"), str)):
                 raise CodexProtocolError("invalid-protocol", "Codex returned an invalid RPC error")
-            native_error = {"code": error["code"], "message": error["message"]}
+            native_error = {"code": error["code"], "message": error["message"],
+                            "nativeMethod": method}
+            data = error.get("data")
+            if isinstance(data, dict):
+                kept = {key: data[key] for key in
+                        ("input_error_code", "max_chars", "actual_chars") if key in data}
+                if kept:
+                    native_error["data"] = kept
             # The whole native-refusal text — the ``Codex rejected <method>:`` prefix
             # included — is bounded to the UTF-8 byte budget the public ``RunEnd.message``
             # keeps, so a long native reason travels cut but readable, never dropped for
-            # size. Nothing past ``error.message`` is expanded (no ``error.data``).
+            # size. Only the three input-admission fields above cross from data.
             text = f"Codex rejected {method}: {error['message']}"
             text = truncate_utf8(text, NATIVE_SUMMARY_BYTES)
             raise CodexProtocolError("native-rpc-error", text, native_error=native_error)

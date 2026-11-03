@@ -380,7 +380,18 @@ class NativeRpcErrorTests(unittest.TestCase):
                                       "data": {"accountPlan": "must never appear"}})
         self.assertEqual(error.code, "native-rpc-error")
         self.assertEqual(error.args[0], "Codex rejected turn/start: model not found: fixture-model")
-        self.assertEqual(error.native_error, {"code": -32000, "message": "model not found: fixture-model"})
+        self.assertEqual(error.native_error, {"code": -32000, "message": "model not found: fixture-model",
+                                              "nativeMethod": "turn/start"})
+
+    def test_initial_input_error_keeps_only_the_machine_data_fields(self):
+        error = self.call_with_error({"code": -32602, "message": "fixture refusal",
+                                      "data": {"input_error_code": "input_too_large",
+                                               "max_chars": 9, "actual_chars": 10,
+                                               "private": "must never appear"}})
+        self.assertEqual(error.native_error, {"code": -32602, "message": "fixture refusal",
+                                               "nativeMethod": "turn/start",
+                                               "data": {"input_error_code": "input_too_large",
+                                                        "max_chars": 9, "actual_chars": 10}})
 
     def test_a_long_multibyte_error_is_cut_byte_safely_with_its_prefix_kept(self):
         # The Host probe's shape: a native reason of repeated three-byte CJK
@@ -394,7 +405,8 @@ class NativeRpcErrorTests(unittest.TestCase):
         self.assertEqual(error.code, "native-rpc-error")
         self.assertTrue(error.args[0].startswith("Codex rejected turn/start: 模型不可用"))
         self.assertNotIn("accountPlan", error.args[0])
-        self.assertEqual(error.native_error, {"code": -32000, "message": "模型不可用" * 80 + "\U0001D11E" * 10})
+        self.assertEqual(error.native_error, {"code": -32000, "message": "模型不可用" * 80 + "\U0001D11E" * 10,
+                                              "nativeMethod": "turn/start"})
         self.assertLessEqual(len(error.args[0].encode("utf-8")), NATIVE_SUMMARY_BYTES)
         self.assertNotIn("\N{REPLACEMENT CHARACTER}", error.args[0])
 
@@ -419,7 +431,8 @@ class NativeRpcErrorTests(unittest.TestCase):
         for message in ("", "   "):
             with self.subTest(message=message):
                 failure = self.call_with_error({"code": -32000, "message": message})
-                self.assertEqual(failure.native_error, {"code": -32000, "message": message})
+                self.assertEqual(failure.native_error, {"code": -32000, "message": message,
+                                                        "nativeMethod": "turn/start"})
                 self.assertEqual(failure.args[0], "Codex rejected turn/start: " + message)
 
 

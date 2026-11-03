@@ -11,6 +11,7 @@ import time
 from typing import Callable
 
 from ..native_observations import bound_native_text, native_counter
+from ..input_admission import admission_error
 from ..session_receipts import (refusal_shaped, verify_receipt, verify_tool_refusal,
                                 verify_inquiry_receipt)
 from ....json_codec import canonical_json, decode_strict_json
@@ -763,17 +764,21 @@ class NativeConnection:
             "at": _now(),
         })
 
-    def call(self, method: str, params: dict) -> dict:
+    def call(self, method: str, params: dict, *, on_sent=None) -> dict:
         request_id = self.next_id
         self.next_id += 1
         self.send({"id": request_id, "method": method, "params": params})
+        if on_sent is not None:
+            on_sent()
         while request_id not in self.responses:
             self.pump()
         response = self.responses.pop(request_id)
         if "error" in response:
             # Native errors can contain provider request details. Keep them in the
             # native private logs; public failures identify only the operation.
-            raise NativeRpcError("native-rpc-error", f"ZCode rejected {method}")
+            failure = NativeRpcError("native-rpc-error", f"ZCode rejected {method}")
+            failure.native_error = admission_error(method, response["error"])
+            raise failure
         result = response.get("result")
         if not isinstance(result, dict):
             self.on_unknown(_unknown_label("rpc-result", method, result))

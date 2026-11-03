@@ -253,5 +253,6 @@
   ],
   "workspace.continuation-prepare-failed": [
     "continuationId"
-  ]
+  ],
+  "workflow.input-rejected": ["harness"]
 }

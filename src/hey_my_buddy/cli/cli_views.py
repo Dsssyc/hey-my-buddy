@@ -104,7 +104,7 @@ def _nonzero(mapping: Any) -> dict:
 
 # -- micro task views -----------------------------------------------------
 
-_TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode", "resumeReason", "resumeDetail", "outcomeTruncated")
+_TURN_BRIEF = ("turnId", "turnIndex", "state", "disposition", "resumeMode", "resumeReason", "resumeDetail", "outcomeTruncated", "inputFailure")
 #: The routing basis keeps the frozen submission facts (hard constraints and the
 #: user exclusions that narrowed the candidate set) beside the choice itself, so
 #: a Host sees why a route had few candidates without a table read.
@@ -218,6 +218,7 @@ def micro_task_brief(view: dict, *, turn_summary: bool = True) -> dict:
                 "hostConclusion",
                 "providerCooling",
                 "providerRejection",
+                "inputFailure",
                 "macroTaskId",
                 "goal",
                 "title",
@@ -421,6 +422,7 @@ _TASK_BRIEF = (
     "shutdownConfirmed",
     "terminationReason",
     "interruptionEvidence",
+    "inputFailure",
     "cancelRequestedAt",
     "acceptedAt",
     "reviewRejectedAt",
@@ -459,6 +461,8 @@ def task_brief(view: dict) -> dict:
     brief["tokenUsage"] = view.get("tokenUsage")
     if view.get("providerRejection") is not None:
         brief["providerRejection"] = view["providerRejection"]
+    if view.get("inputFailure") is not None:
+        brief["inputFailure"] = view["inputFailure"]
     activity = view.get("activity")
     if activity:
         brief["activity"] = activity
@@ -476,7 +480,7 @@ def list_brief(response: dict) -> dict:
     rows = response["runs"]
     brief_rows = []
     for row in rows:
-        entry = _pick(row, ("runId", "requestId", "adapter", "state", "workflowState", "awaitingHost", "createdAt", "providerRejection"))
+        entry = _pick(row, ("runId", "requestId", "adapter", "state", "workflowState", "awaitingHost", "createdAt", "providerRejection", "inputFailure"))
         lineage = row.get("lineage")
         if lineage is not None:
             buddy = lineage.get("buddy")

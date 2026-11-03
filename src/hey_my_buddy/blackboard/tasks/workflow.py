@@ -34,6 +34,7 @@ from typing import Any
 
 from ...paths import is_absolute_path
 from ...protocol import schemas
+from ...protocol.input_failure import INPUT_REJECTED, input_failure_view
 from ...protocol.reasons import reason as make_reason, reason_from_json
 from ...protocol.stop import WRAP_UP_INITIATORS
 from ...protocol.turn_input import turn_buddy
@@ -368,6 +369,9 @@ class WorkflowCoordinator:
         failure = provider_rejection_view(result)
         if failure is not None:
             view["providerRejection"] = failure
+        input_failure = input_failure_view(payload)
+        if input_failure is not None:
+            view["inputFailure"] = input_failure
         if compact:
             # The default view is an index: the full input/outcome/provenance is in audit.
             return view
@@ -417,6 +421,7 @@ class WorkflowCoordinator:
                 "routing": payload.get("source") == "routing",
                 "decisionId": decision_id,
                 "reason": projected_reason,
+                "inputFailure": payload.get("inputFailure"),
             }
             if boundary is not None:
                 view["routingBoundary"] = boundary
@@ -427,6 +432,7 @@ class WorkflowCoordinator:
             "state": row["state"],
             "summary": row["summary"],
             "reason": projected_reason,
+            "inputFailure": payload.get("inputFailure"),
             "decisionId": decision_id,
             "turnId": row["turn_id"],
             "attemptId": row["attempt_id"],
@@ -882,6 +888,8 @@ class WorkflowCoordinator:
         view.update(task_fixes.view(connection, run_row["run_id"]))
         if view["task"].get("providerRejection") is not None:
             view["providerRejection"] = view["task"]["providerRejection"]
+        if view["task"].get("inputFailure") is not None:
+            view["inputFailure"] = view["task"]["inputFailure"]
         if (current_scope() or {}).get("kind") != AGENT_KIND:
             view.update(title=run_row["title"], macroTaskId=run_row["macro_task_id"],
                         goal=macro_tasks.current_goal(connection, run_row["macro_task_id"]))
@@ -924,6 +932,7 @@ class WorkflowCoordinator:
             "resultAvailable": decorated["resultAvailable"],
             "tokenUsage": decorated.get("tokenUsage"),
             "providerRejection": decorated.get("providerRejection"),
+            "inputFailure": decorated.get("inputFailure"),
             "shutdownConfirmed": decorated["shutdownConfirmed"],
             "terminationReason": decorated["terminationReason"],
             "interruptionEvidence": decorated.get("interruptionEvidence"),
@@ -5833,6 +5842,7 @@ class WorkflowCoordinator:
             if request is not None:
                 extension["requestKind"] = request["kind"]
                 extension["requestSummary"] = request["summary"]
+                extension["requestReason"] = request_reason(connection, request)
                 payload = json.loads(request["payload_json"])
                 extension["requestRouting"] = payload.get("source") == "routing"
                 extension["requestTargetRunId"] = (payload.get("origin") or {}).get("runId")
@@ -6928,7 +6938,8 @@ class WorkflowCoordinator:
                 "SELECT t.turn_id,t.state,a.model_harness,a.model_provider,a.model_model,a.result_json"
                 " FROM workflow_turns t JOIN attempts a ON a.attempt_id=t.attempt_id"
                 " WHERE t.run_id=? ORDER BY t.turn_index DESC", (run_id,)):
-            failure = provider_rejection_view(self.result_payload(json.loads(turn["result_json"]) if turn["result_json"] else None))
+            recorded = self.result_payload(json.loads(turn["result_json"]) if turn["result_json"] else None)
+            failure = provider_rejection_view(recorded) if recorded.get("code") != INPUT_REJECTED else None
             if failure is not None and failure["code"] == "overloaded":
                 identity = (turn["model_harness"], turn["model_provider"], turn["model_model"])
                 excluded.setdefault(identity, dict(zip(("harness", "provider", "model"), identity)) | {
@@ -6938,7 +6949,10 @@ class WorkflowCoordinator:
         return list(excluded.values())
 
     def _provider_rejection_reroutable(self, connection, run, turn, attempt, payload):
-        failure = self.result_payload(payload).get("providerRejection")
+        result = self.result_payload(payload)
+        if result.get("code") == INPUT_REJECTED:
+            return False
+        failure = result.get("providerRejection")
         routing = json.loads(turn["input_json"])["context"]["routing"]
         if (not failure or failure["code"] not in ("quota-exceeded", "overloaded") or failure.get("rejectionPhase") != "before-model"
                 or not attempt["shutdown_confirmed"] or attempt["cancel_requested_at"] is not None
@@ -7018,6 +7032,23 @@ class WorkflowCoordinator:
                     "conflictIds": conflict_ids,
                     "sharedStash": self._shared_refs_summary(shared_refs),
                 }
+            input_failure = input_failure_view(payload)
+            if (task_state == "failed" and attempt["shutdown_confirmed"]
+                    and self.result_payload(payload).get("code") == INPUT_REJECTED):
+                request_id = self._record_system_request(
+                    connection, run_row,
+                    make_reason("workflow.input-rejected", harness=input_failure["harness"]["name"]),
+                    {"inputFailure": input_failure}, now, turn_row=turn_row,
+                )
+                self.board._append_event(
+                    connection, "workflow.turn_failed", task_id=run_row["run_id"],
+                    attempt_id=attempt["attempt_id"], revision=self._run_row(connection, run_row["run_id"])["revision"],
+                    payload={"turnId": turn_row["turn_id"], "state": "awaiting-host", "requestId": request_id,
+                             "reason": "workflow.input-rejected"},
+                )
+                return {"accepted": False, "disposition": None, "state": "awaiting-host",
+                        "requestId": request_id, "inputFailure": input_failure,
+                        "sharedStash": self._shared_refs_summary(shared_refs)}
             if task_state == "failed" and self._native_resume_refused(turn_row, payload):
                 # No model consumed this continuation. Requeue its exact frozen
                 # input, including helper authority and the prepared workspace.

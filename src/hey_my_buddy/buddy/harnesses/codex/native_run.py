@@ -50,6 +50,8 @@ from ....protocol.reasons import reason as make_reason
 from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
 from ..inquiry_bridge import InquiryBridge
+from ..input_admission import admission_error
+from ....protocol.input_failure import is_input_too_large
 from ..session_receipts import MAX_ANSWER_BYTES, MAX_INQUIRY_ID_BYTES
 from ....private_dirs import ensure_private_dir
 from ....private_files import open_read, read_bytes
@@ -344,6 +346,9 @@ class _RunState:
     reason: str | None = None
     error_text: str | None = None
     model_started: bool = False
+    native_request_sent: bool | None = False
+    native_admission_error: dict | None = None
+    initial_request_attempted: bool = False
     thread_opened: bool = False
     configured: bool = False
     version: str | None = None
@@ -1060,9 +1065,23 @@ def _admit_turn(connection: Connection, request: RunRequest, thread_id: str,
     if mode == "worker":
         state.worker_policy = {"sandboxPolicy": params["sandboxPolicy"],
                                "approvalPolicy": params["approvalPolicy"]}
-    return connection.call("turn/start", params,
-                           on_sent=(lambda: chain.session.record.project(chain.session.record_input, input_text))
-                           if chain.session is not None else None)
+    initial = not state.initial_request_attempted
+    state.initial_request_attempted = True
+    if initial:
+        state.native_request_sent = None
+
+    def on_sent() -> None:
+        if initial:
+            state.native_request_sent = True
+        if chain.session is not None:
+            chain.session.record.project(chain.session.record_input, input_text)
+
+    try:
+        return connection.call("turn/start", params, on_sent=on_sent)
+    except CodexProtocolError as error:
+        if initial and error.native_error is not None:
+            state.native_admission_error = admission_error("turn/start", error.native_error)
+        raise
 
 
 def _checkpoint(request: RunRequest, evidence: TurnEvidence) -> dict:
@@ -1266,12 +1285,12 @@ def _worker_turn(connection: Connection, chain: _EventChain, request: RunRequest
                  inquiry_services: ClientInquiryServices | None = None,
                  inquiry_poller: list[_NativeInquiry] | None = None) -> None:
     """The micro task turn: one admission, settlement, usage, checkpoint."""
-    state.model_started = True
     response = _admit_turn(connection, request, thread_id, request.input_text, "worker", state, chain)
     turn = response.get("turn")
     turn_id = turn.get("id") if isinstance(turn, dict) else None
     if not isinstance(turn_id, str) or not turn_id:
         raise CodexProtocolError("wrong-native-turn", "Codex did not acknowledge a native turn")
+    state.model_started = True
     state.turn_id = turn_id
     if chain.projector is not None:
         # The trusted root identity comes only from this native turn receipt.
@@ -1356,7 +1375,6 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
     while True:
         fast_state = {"started": False, "completed": None, "final": None}
         chain.unbind()
-        state.model_started = True
         response = _admit_turn(connection, request, thread_id, input_text, mode, state, chain)
         turn = response.get("turn")
         turn_id = turn.get("id") if isinstance(turn, dict) else None
@@ -1365,6 +1383,7 @@ def _structured_rounds(connection: Connection, chain: _EventChain, request: RunR
                 raise CodexProtocolError("invalid-native-result", "Codex returned no native turn identity")
         elif not isinstance(turn_id, str):
             raise CodexProtocolError("wrong-native-turn", "No read-only turn identity")
+        state.model_started = True
         state.turn_id = turn_id
         if chain.projector is not None:
             # The trusted root identity comes only from this native turn receipt.
@@ -1843,7 +1862,11 @@ def _build_result(request: RunRequest, prep: _Preparation | None, state: _RunSta
                    message=bounded_utf8(state.error_text, NATIVE_SUMMARY_BYTES)),
         harness_version=state.version,
         native_event_count=state.event_count or None,
-        model_started=True if state.model_started else None,
+        model_started=(True if state.model_started else
+                       False if not state.initial_request_attempted or
+                       is_input_too_large(state.native_admission_error) else None),
+        native_request_sent=state.native_request_sent,
+        native_admission_error=_native_error_package(state.native_admission_error),
         buddy=_checked_buddy(request, state, mode),
         native_identity=native_identity,
         native_evidence=NativeEvidence(

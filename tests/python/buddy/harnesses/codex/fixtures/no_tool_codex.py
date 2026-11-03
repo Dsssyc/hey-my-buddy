@@ -87,6 +87,11 @@ def main():
                 del receipt["modelProvider"]
             send({"id": ident, "result": receipt})
         elif method == "turn/start":
+            if case == "input-too-large":
+                send({"id": ident, "error": {"code": -32602, "message": "fixture admission refusal",
+                      "data": {"input_error_code": "input_too_large", "max_chars": 9,
+                               "actual_chars": 10, "secret": "must never appear"}}})
+                continue
             turns += 1
             trace = Path(os.environ["HMB_CODEX_FIXTURE_STATE"])
             recorded = json.loads(trace.read_text(encoding="utf-8"))

@@ -202,6 +202,8 @@ class DecisionAdapter(Adapter):
             "operation": document.get("kind", "select"), "status": "ok" if outcome.status == "ok" else "error",
             "requested": document["buddy"], "resolved": native_result.get("resolved"),
             "modelStarted": native_result.get("modelStarted"),
+            "nativeRequestSent": native_result.get("nativeRequestSent"),
+            **({"inputFailure": native_result["inputFailure"]} if "inputFailure" in native_result else {}),
             "nativeIdentity": native_result.get("nativeIdentity"), "usage": usage,
             "tokenUsage": native_result.get("tokenUsage"),
             "toolEvidence": native_result.get("toolEvidence"),

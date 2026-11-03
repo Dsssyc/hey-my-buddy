@@ -119,7 +119,7 @@ def _freeze_review_run(harness, context, request, *, mutation, timeout, stopped,
     }
     control.update(invocationId=identity.invocation_id)
     # —— 原生运行替身：真实角色请求构造器，随后直接交对象 ——
-    built_request, _services, _observer, _correction = run_execution.review_request(control, SimpleNamespace(prepare_run_services=None))
+    built_request, _services, _observer, _correction, _parts = run_execution.review_request(control, SimpleNamespace(prepare_run_services=None))
     if mutation:
         mutation(Path(request.cwd), Path(control["directory"]).parent)
     if isinstance(answer, str):

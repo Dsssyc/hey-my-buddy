@@ -51,6 +51,8 @@ from ..native_support import (
     utc_now,
 )
 from ..inquiry_bridge import InquiryBridge
+from ..input_admission import admission_error
+from ....protocol.input_failure import is_input_too_large
 from ..session_receipts import ReceiptError
 from ..c_two_live import CTwoLiveEndpoint
 from ....protocol.activity import ActivityPublisher, MAX_SESSION_ID
@@ -484,6 +486,9 @@ class _RunState:
     reason: str | None = None
     error_text: str | None = None
     model_started: bool = False
+    native_request_sent: bool | None = False
+    native_admission_error: dict | None = None
+    initial_request_attempted: bool = False
     root_model_activity: bool = False
     harness_version: str | None = None
     session_opened: bool = False
@@ -568,7 +573,9 @@ def _native_call(call, *, code: str, message: str):
     try:
         return call()
     except AcpRequestError as error:
-        raise NativeError(code, f"{message}: the native agent refused {error.method}") from None
+        failure = NativeError(code, f"{message}: the native agent refused {error.method}")
+        failure.native_error = admission_error(error.method, error.error)
+        raise failure from None
     except AcpTimeout:
         raise NativeError("deadline", f"{message}: the run's overall deadline expired") from None
     except AcpConnectionClosed:
@@ -1099,10 +1106,16 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     state.root_model_activity = False
     activity.note_prompt()
     result: dict = {}
+    initial = not state.initial_request_attempted
+    state.initial_request_attempted = True
+    if initial:
+        state.native_request_sent = None
 
     def send() -> None:
         try:
-            result["value"] = client.prompt(session_id, input_text, timeout=_remaining(deadline))
+            result["value"] = client.prompt(session_id, input_text, timeout=_remaining(deadline),
+                                             on_sent=(lambda: setattr(state, "native_request_sent", True))
+                                             if initial else None)
         except BaseException as error:  # noqa: BLE001 - the loop maps every failure below
             result["error"] = error
 
@@ -1133,6 +1146,10 @@ def _prompt_and_observe(*, client: AcpClient, pump: _Pump, session_id: str, inpu
     thread.join(timeout=5.0)
     if "error" in result:
         error = result["error"]
+        if isinstance(error, AcpRequestError):
+            if initial:
+                state.native_admission_error = admission_error(error.method, error.error)
+            raise NativeError("native-prompt-refused", "the native agent refused the root prompt") from None
         if isinstance(error, AcpConnectionClosed):
             raise NativeError("transport-error", "the native agent connection ended during the prompt")
         if isinstance(error, AcpTimeout):
@@ -1538,7 +1555,11 @@ def _build_result(request: RunRequest, *, state: _RunState,
         harness_version=state.harness_version,
         native_event_count=state.event_count or None,
         native_evidence=_native_evidence_facts(state),
-        model_started=True if state.model_started else None,
+        model_started=(True if state.model_started else
+                       False if not state.initial_request_attempted or
+                       is_input_too_large(state.native_admission_error) else None),
+        native_request_sent=state.native_request_sent,
+        native_admission_error=state.native_admission_error,
         buddy=ResultBuddy(
             requested=RunBuddy(provider=request.buddy.provider,
                                model=request.buddy.model,

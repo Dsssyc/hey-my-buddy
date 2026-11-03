@@ -43,7 +43,7 @@ def assert_summary_stderr(self, module, *, harness, spec, cwd, native_root, conf
                "invocationId": "first-invocation", "cwd": str(cwd),
                "spec": spec,
                "timeoutSeconds": 30}
-    request, services, observer, error = run_execution.worker_request(control, module)
+    request, services, observer, error, _parts = run_execution.worker_request(control, module)
     self.assertIsNone(error)
     configure(services, "first invocation stderr")
     first = module.run(request, observer=observer, services=services, cancelled=lambda: False)
