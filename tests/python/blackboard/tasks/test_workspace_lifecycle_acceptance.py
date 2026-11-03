@@ -195,6 +195,7 @@ class AcceptanceLifecycleTests(LifecycleTestCase):
         })
         self.assertEqual(continued["state"], "executing")
         second_claim = self.claim(board, run_id, request_id="cleared-refs-second", nonce="q" * 16)
+        self.assertIsNotNone(second_claim["claim"], self.view(board, run_id)["activeRequest"])
         second_manifest = turn_manifest(self.directory, second_claim["claim"]["turn"]["input"])
         clear_workspace_refs()
         attempt = second_claim["claim"]["attempt"]

@@ -27,18 +27,18 @@ class SealRef(TypedDict):
 
 class SelectorsSelection(TypedDict):
     kind: Literal["selectors"]
+    selectors: list[str]
 
 
 class SealSelection(TypedDict):
     kind: Literal["seal"]
+    seal: SealRef
 
 
 class RecoverySelection(TypedDict):
     kind: Literal["recovery"]
 
 
-# The plan fixes these discriminants but leaves the selectors key and the
-# placement of SealRef within executionSelection for its writer to settle.
 ExecutionSelection = SelectorsSelection | SealSelection | RecoverySelection
 
 

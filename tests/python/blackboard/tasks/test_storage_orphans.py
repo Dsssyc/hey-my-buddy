@@ -111,7 +111,10 @@ class StorageOrphanTests(WorkflowTestCase):
 
     def test_old_full_manifest_checkout_is_proven_as_an_orphan(self):
         current, checkout, _ = self.orphan()
-        old = dict(current, version=2, access='full', accessReason='Original Host explanation')
+        snapshot = dict(current['snapshot'], executionSelectors=[], includeSelectors=[],
+                        includedUntracked=workspace.input_untracked_paths(current),
+                        excludedUntracked=sorted(current['snapshot']['excludedEntries']))
+        old = dict(current, version=2, access='full', accessReason='Original Host explanation', snapshot=snapshot)
         old['repositoryId'] = old.pop('projectId')
         old['checkoutId'] = '0' * 64
         old['manifestSha256'] = workspace._sha(workspace._json({

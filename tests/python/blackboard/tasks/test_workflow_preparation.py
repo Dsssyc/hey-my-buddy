@@ -237,7 +237,7 @@ class PreparationTests(WorkflowTestCase):
         resumed = self.claim(board, run_id=helper_id, claim_request_id="claim-after-unvalidated-seal")
         self.assertIsNotNone(resumed["claim"], resumed)
         manifest = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
-        self.assertEqual(manifest["snapshot"]["includedUntracked"], ["tests/test_math_ops.py"])
+        self.assertEqual(workspace.input_untracked_paths(manifest), ["tests/test_math_ops.py"])
         with board.store.db.read() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM workflow_artifacts WHERE attempt_id=? AND kind='output'",
                                                 (failed["claim"]["attempt"]["attemptId"],)).fetchone()[0], 0)
@@ -256,7 +256,7 @@ class PreparationTests(WorkflowTestCase):
         manifest = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(manifest["path"], str(checkout))
         self.assertEqual(manifest["writeScope"], ["tests"])
-        self.assertEqual(manifest["snapshot"]["includedUntracked"], ["tests/test_math_ops.py"])
+        self.assertEqual(workspace.input_untracked_paths(manifest), ["tests/test_math_ops.py"])
         self.assertEqual(self.git(checkout, "show", f"{manifest['inputCommit']}:tests/test_math_ops.py"), "def test_partial():\n    assert 1 + 1 == 2")
         self.assertNotIn("outside.txt", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
         self.assertNotIn("tests/.env", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
@@ -444,8 +444,10 @@ class PreparationTests(WorkflowTestCase):
             run = board.store.workflow._run_row(connection, run_id)
             row = connection.execute("SELECT * FROM workflow_continuations WHERE continuation_id=?",
                                      (continuation_id,)).fetchone()
-            intent = board.store.workflow._continuation_intent(connection, run, row)
-        prepared = workspace.prepare(self.directory, f"{run_id}:{continuation_id}", intent)
+            intent, output = board.store.workflow._continuation_intent(connection, run, row)
+            final_input = workflow_module.owned_manifest(self.directory, connection,
+                                                        output["workspaceId"], output["manifestSha256"])
+        prepared = workspace.prepare(self.directory, f"{run_id}:{continuation_id}", intent, handoff=(final_input, output))
         native_path(Path(prepared["path"]) / "tracked.txt").write_text("changed after the prepared input\n", encoding="utf-8", newline="\n")
         board.store.workflow.prepare_continuation_workspace({"runId": run_id})
         view = board.call("workflow_get", {"runId": run_id})
@@ -517,6 +519,9 @@ class PreparationTests(WorkflowTestCase):
     def test_takeover_during_git_cannot_activate_old_owner_preparation(self):
         self.preparation_race("takeover")
 
+    def test_scope_change_during_git_cannot_activate_the_previous_scope(self):
+        self.preparation_race("scope")
+
     def test_manual_override_during_git_cannot_activate_old_input(self):
         self.preparation_race("continue")
 
@@ -540,6 +545,10 @@ class PreparationTests(WorkflowTestCase):
                 board.call("workflow_takeover", {"runId": run_id, "commandId": "takeover-during-prepare", "expectedOwnerGeneration": view["ownerGeneration"], "newHostId": "host-2", **self.control(view)})
             elif operation == "continue":
                 self.continue_run(board, view, command_id="override-during-prepare", input="new Host input")
+            elif operation == "scope":
+                board.call("workflow_scope_amend", {"runId": run_id, "commandId": "scope-during-prepare",
+                           "expectedRevision": view["revision"], "expectedScopeVersion": 1,
+                           "writeScope": ["src"], "note": "Only the next scope may run", **self.control(view)})
             else:
                 # A coordinator allocation replacement, including its reservation.
                 # Deliberately retain revision to require actual manifest comparison.
@@ -657,6 +666,158 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(chosen["manifestSha256"], self.row_manifest(original)["manifestSha256"])
         self.assertNotEqual(chosen["manifestSha256"], other["manifestSha256"])
 
+    def test_continuation_reads_only_the_selected_output_record_once(self):
+        board, run_id, _first, continuation = self.pending()
+        coordinator = board.store.workflow
+        with board.store.db.read() as connection:
+            artifact = connection.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output'",
+                                          (run_id,)).fetchone()
+        from hey_my_buddy.protocol import workspace_manifest
+        read_bytes = workspace_manifest.read_bytes
+        reads = []
+        def record_read(path):
+            if Path(path).name == "output.json":
+                reads.append(Path(path))
+            return read_bytes(path)
+        with patch.object(workspace_manifest, "read_bytes", side_effect=record_read):
+            coordinator.prepare_continuation_workspace({"runId": run_id})
+        self.assertEqual(reads, [self.directory / artifact["record_path"]])
+        self.assertEqual(self.rows(board, run_id, continuation)[2]["state"], "queued")
+        self.assertEqual(workspace.execution_selection(self.row_manifest(self.rows(board, run_id, continuation)[2]))["seal"]["artifactId"], artifact["artifact_id"])
+
+    def test_repeated_continuations_keep_generated_paths_out_of_request_and_turn_input(self):
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={"kind": "existing", "access": "write"})
+        claimed = self.claim(board, run_id=submitted["runId"])
+        generated = self.repo / "generated"
+        generated.mkdir()
+        sizes = []
+        paths = []
+        for round_index, count in enumerate((320, 1100)):
+            for number in range(len(paths), count):
+                path = f"generated/sealed-file-{number:04d}.txt"
+                (self.repo / path).write_text(f"generated {number}\n", encoding="utf-8")
+                paths.append(path)
+            self.finish_turn(board, claimed, disposition="assistance")
+            view = board.call("workflow_get", {"runId": submitted["runId"]})
+            with board.store.db.read() as connection:
+                run = board.store.workflow._run_row(connection, submitted["runId"])
+                handoff = board.store.workflow._latest_handoff(connection, run, board.store.workflow._run_manifest(connection, run))
+            self.continue_run(board, view, command_id=f"large-continuation-{round_index}")
+            claimed = self.claim(board, run_id=submitted["runId"], claim_request_id=f"large-turn-{round_index}")
+            document = claimed["claim"]["turn"]["input"]
+            manifest = turn_manifest(self.directory, document)
+            request = json.loads((self.directory / "workspaces" / manifest["workspaceId"] / "request.json").read_text())
+            selection = {"kind": "seal", "seal": {"artifactId": handoff["artifactId"], "snapshotSha256": handoff["snapshotSha256"]}}
+            self.assertEqual(request["intent"]["executionSelection"], selection)
+            self.assertEqual(workspace.execution_selection(manifest), selection)
+            self.assertNotIn("includeUntracked", request["intent"])
+            self.assertEqual(manifest["version"], 5)
+            for key in ("includeSelectors", "executionSelectors", "includedUntracked", "excludedUntracked"):
+                self.assertNotIn(key, manifest["snapshot"])
+            self.assertEqual(workspace.input_untracked_paths(manifest), paths)
+            self.assertEqual(document["context"]["latestHandoff"]["artifactId"], handoff["artifactId"])
+            self.assertNotIn("artifacts", document["context"])
+            encoded = [workflow_module.canonical_json(item) for item in (request, document)]
+            for text in encoded:
+                self.assertLess(len(text), 15000)
+                self.assertTrue(all(path not in text for path in paths))
+            sizes.append(tuple(map(len, encoded)))
+        self.assertEqual(sizes[0][0], sizes[1][0])
+        self.assertLess(abs(sizes[1][1] - sizes[0][1]), 256)
+
+    def test_recovery_has_no_file_count_limit_or_host_selectors(self):
+        board, parent, helper, failed, checkout = self.failed_helper()
+        for number in range(300):
+            (checkout / "tests" / f"partial-{number:04d}.txt").write_text("partial\n", encoding="utf-8")
+        view = board.call("workflow_get", {"runId": parent["runId"]})
+        self.continue_run(board, view, targetRunId=helper, command_id="many-recovery-files")
+        claimed = self.claim(board, run_id=helper, claim_request_id="recover-many-files")
+        self.assertIsNotNone(claimed["claim"], claimed)
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
+        self.assertEqual(workspace.execution_selection(manifest), {"kind": "recovery"})
+        self.assertEqual(len(workspace.input_untracked_paths(manifest)), 301)
+        request = json.loads((self.directory / "workspaces" / manifest["workspaceId"] / "request.json").read_text())
+        self.assertEqual(request["intent"]["executionSelection"], {"kind": "recovery"})
+        self.assertNotIn("includeUntracked", request["intent"])
+        for path in ("outside.txt", "tests/.env", "tests/cache/state.json"):
+            self.assertNotIn(path, workspace.input_untracked_paths(manifest))
+
+    def test_changed_output_ref_allows_preparation_without_reading_it_but_blocks_cleanup(self):
+        board, run_id, first, continuation = self.pending(kind="worktree")
+        initial = turn_manifest(self.directory, first["claim"]["turn"]["input"])
+        with board.store.db.read() as connection:
+            run = board.store.workflow._run_row(connection, run_id)
+            sealed = board.store.workflow._latest_handoff(connection, run, initial)
+        self.git(self.repo, "update-ref", sealed["ref"], sealed["inputCommit"])
+        git = workspace._git
+        def observe(root, *args, **kwargs):
+            self.assertNotIn(sealed["ref"], args, "Preparation must use immutable objects, not the output pointer")
+            return git(root, *args, **kwargs)
+        with patch.object(workspace, "_git", side_effect=observe):
+            board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        prepared = self.row_manifest(self.rows(board, run_id, continuation)[2])
+        self.assertEqual(prepared["inputCommit"], sealed["commit"])
+        self.assertEqual(prepared["inputTree"], sealed["tree"])
+        self.assertEqual(workspace.execution_selection(prepared)["seal"]["artifactId"], sealed["artifactId"])
+        self.assertEqual(self.git(self.repo, "rev-parse", sealed["ref"]), sealed["inputCommit"])
+        inspection = workspace.cleanup_inspect(self.directory, initial, sealed=sealed)
+        self.assertFalse(inspection["eligible"], inspection)
+        self.assertIn("sealed-output-invalid", inspection["reasons"])
+
+    def test_handoff_preparation_rechecks_the_patch(self):
+        board, run_id, _first, continuation = self.pending()
+        with board.store.db.read() as connection:
+            run = board.store.workflow._run_row(connection, run_id)
+            sealed = board.store.workflow._latest_handoff(connection, run, board.store.workflow._run_manifest(connection, run))
+            row = connection.execute("SELECT record_path FROM workflow_artifacts WHERE artifact_id=?", (sealed["artifactId"],)).fetchone()
+        record = self.directory / row["record_path"]
+        original_bytes = record.read_bytes()
+        Path(sealed["diffPath"]).write_bytes(b"tampered patch\n")
+        board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        failed = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(failed["activeRequest"]["preparationError"]["code"], "WORKSPACE_MANIFEST_CHANGED")
+        self.assertEqual(self.rows(board, run_id, continuation)[2]["state"], "invalidated")
+        self.assertEqual(record.read_bytes(), original_bytes)
+
+    def test_seal_equal_to_head_does_not_authorize_later_worktree_edits(self):
+        board, run_id, _first, continuation = self.pending()
+        with board.store.db.read() as connection:
+            run = board.store.workflow._run_row(connection, run_id)
+            handoff = board.store.workflow._latest_handoff(connection, run, board.store.workflow._run_manifest(connection, run))
+        self.git(self.repo, "reset", "--hard", handoff["commit"])
+        (self.repo / "tracked.txt").write_text("edit after sealing\n", encoding="utf-8")
+        board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        view = board.call("workflow_get", {"runId": run_id})
+        self.assertEqual(view["activeRequest"]["preparationError"]["code"], "WORKSPACE_BASE_MISMATCH")
+        self.assertEqual(self.rows(board, run_id, continuation)[2]["state"], "invalidated")
+
+    def test_seal_inherits_exact_ignored_files_without_reselecting_their_directory(self):
+        (self.repo / ".gitignore").write_text("private/\n", encoding="utf-8")
+        self.git(self.repo, "add", ".gitignore")
+        self.git(self.repo, "commit", "-qm", "ignore private data")
+        (self.repo / "private").mkdir()
+        (self.repo / "private" / "input.txt").write_text("selected\n", encoding="utf-8")
+        board = self.board()
+        self.register(board)
+        submitted = self.submit(board, cwd=str(self.repo), executionWorkspace={
+            "kind": "existing", "access": "write", "includeUntracked": ["private"]})
+        self.finish_turn(board, self.claim(board), disposition="assistance")
+        view = board.call("workflow_get", {"runId": submitted["runId"]})
+        (self.repo / "private" / "later-secret.txt").write_text("not selected\n", encoding="utf-8")
+        self.continue_run(board, view)
+        # Only explicit Host selectors may reach Git's path selector argv.
+        selectors = workspace._untracked
+        def explicit_only(root, selected, **kwargs):
+            self.assertEqual(list(selected), [])
+            return selectors(root, selected, **kwargs)
+        with patch.object(workspace, "_untracked", side_effect=explicit_only):
+            claimed = self.claim(board, run_id=submitted["runId"], claim_request_id="exact-ignored-files")
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
+        self.assertEqual(workspace.input_untracked_paths(manifest), ["private/input.txt"])
+        workspace.verify(manifest, state_dir=self.directory)
+
     def test_authorized_helper_seal_becomes_the_same_checkout_handoff(self):
         board = self.board(clock=FakeClock())
         self.register(board)
@@ -674,7 +835,12 @@ class PreparationTests(WorkflowTestCase):
             artifact = connection.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output'", (helper,)).fetchone()
         resumed = self.claim(board, claim_request_id="resumed", run_id=submitted["runId"])
         self.assertIsNotNone(resumed["claim"], resumed)
-        self.assertEqual(turn_manifest(self.directory, resumed["claim"]["turn"]["input"])["baseCommit"], artifact_manifest(self.directory, artifact)["commit"])
+        document = resumed["claim"]["turn"]["input"]
+        manifest = turn_manifest(self.directory, document)
+        self.assertEqual(manifest["baseCommit"], artifact_manifest(self.directory, artifact)["commit"])
+        self.assertEqual(document["context"]["latestHandoff"]["artifactId"], artifact["artifact_id"])
+        self.assertEqual(document["context"]["latestHandoff"]["taskId"], helper)
+        self.assertEqual(workspace.execution_selection(manifest)["seal"]["artifactId"], artifact["artifact_id"])
 
 
 class RestartPreparationTests(WorkflowTestCase):
@@ -788,7 +954,7 @@ class RestartPreparationTests(WorkflowTestCase):
         self.assertIsNotNone(resumed["claim"], resumed)
         manifest = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(manifest["path"], str(checkout))
-        self.assertEqual(manifest["snapshot"]["includedUntracked"], ["tests/test_math_ops.py"])
+        self.assertEqual(workspace.input_untracked_paths(manifest), ["tests/test_math_ops.py"])
         self.assertIn("test_partial", self.git(checkout, "show", f"{manifest['inputCommit']}:tests/test_math_ops.py"))
         self.assertNotIn("outside.txt", self.git(checkout, "ls-tree", "-r", "--name-only", manifest["inputCommit"]))
         self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "outside the helper write scope\n")

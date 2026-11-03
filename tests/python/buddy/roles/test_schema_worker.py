@@ -1,7 +1,6 @@
 """The schema Worker uses one role policy and real native fixture deliveries."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import hashlib
 import json
@@ -22,7 +21,7 @@ from hey_my_buddy.buddy.roles import inline_run, run_controller, run_execution
 from hey_my_buddy.json_codec import canonical_json
 from hey_my_buddy.errors import BoardError
 from buddy.harnesses.claude.test_native_run import BUDDY, NativeRunCase
-from buddy.roles.test_role_prompts import real_turn_input
+from buddy.roles.test_role_prompts import real_turn_input, freeze_turn_input
 
 
 class CodexSchemaTests(unittest.TestCase):
@@ -56,6 +55,7 @@ class CodexSchemaTests(unittest.TestCase):
                 root = Path(directory)
                 turn = real_turn_input()
                 turn["executionWorkspace"]["access"] = "full"
+                turn = freeze_turn_input(root, turn)
                 (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
                 (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
                 control = {"harness": harness, "privateRoot": str(root), "directory": str(root),
@@ -128,6 +128,7 @@ class CodexSchemaTests(unittest.TestCase):
                     root = Path(directory)
                     turn = real_turn_input()
                     turn["executionWorkspace"]["access"] = access
+                    turn = freeze_turn_input(root, turn)
                     (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
                     (root / "task.txt").write_text("Task", encoding="utf-8", newline="\n")
                     mount = SimpleNamespace(server_name="test", tool_contracts=[
@@ -179,10 +180,11 @@ class SchemaWorkerTests(NativeRunCase):
         turn = real_turn_input()
         turn["previousSessionId"] = previous
         turn["executionWorkspace"]["access"] = "read"
+        turn = freeze_turn_input(root, turn)
         (root / "input.json").write_text(canonical_json(turn), encoding="utf-8", newline="\n")
         (root / "task.txt").write_text("Do this bounded task", encoding="utf-8", newline="\n")
         control = {"operation": "worker", "harness": "claude", "spec": BUDDY,
-                   "stateDir": os.environ["HMB_STATE_DIR"],
+                   "stateDir": str(root),
                    "invocationId": uuid.uuid4().hex, "privateRoot": str(root),
                    "directory": str(root), "nativeRoot": str(root / "native"),
                    "sessionRecordPath": str(root / "session.jsonl"),
@@ -275,9 +277,9 @@ class SchemaWorkerTests(NativeRunCase):
         # pins the full assembled prompt, including the published Worker text.
         hashes = {
             "codex": ("b46e2bd89c8d171059f35ad52c7c97c8b98fd32bc49382da1c299b4d0d500f1a",
-                      "38c2e5f03c72d8245867de695ac6c74aeb3ca8bf67cb3a7b6f40a4ff7d4746b1"),
+                      "bf49421a2acf9be4e2d5160a3ae7c4f3e5056e7659b42e120de39df17f7472f2"),
             "claude": ("ff7983882b2a1adefe1cad314fec9c009086ca2ae3fd38d33fe9fddf248f9bca",
-                       "b2d0ced986c9c5f7eb370b65bd27feb97656de4f6dff2c9b5d14e18bb7df05a9"),
+                       "9eff3c00c8e947fb38dd293dc31353d9dd36901d3d247eff0d46291c9cf20015"),
         }
         for name, (schema_hash, prompt_hash) in hashes.items():
             with self.subTest(harness=name):

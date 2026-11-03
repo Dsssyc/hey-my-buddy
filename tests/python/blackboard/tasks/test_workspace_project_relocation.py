@@ -78,7 +78,7 @@ class ProjectMarkerTests(ProjectRepositoryCase):
         self.assertEqual(workspace.read_project_id(self.common()), project_id)
         self.assertEqual(self.git(self.repo, "cat-file", "-t", PROJECT_REF), b"blob")
         self.assertEqual(self.git(self.repo, "show", PROJECT_REF).decode().strip(), project_id)
-        self.assertEqual(manifest["version"], 4)
+        self.assertEqual(manifest["version"], 5)
         self.assertNotIn("repositoryId", manifest)
         self.assertNotIn("checkoutId", manifest)
 
@@ -203,10 +203,15 @@ class ProjectMarkerTests(ProjectRepositoryCase):
 
     def test_historical_manifest_versions_use_repository_id_without_rewriting(self):
         current = self.prepare()
+        snapshot = {key: value for key, value in current["snapshot"].items() if key != "executionSelection"}
+        snapshot.update(executionSelectors=workspace.execution_selection(current).get("selectors", [])
+                        if workspace.execution_selection(current) else [],
+                        includeSelectors=[], includedUntracked=workspace.input_untracked_paths(current),
+                        excludedUntracked=sorted(snapshot["excludedEntries"]))
         for version in (1, 2, 3):
             with self.subTest(version=version):
                 historical = dict(current, version=version, checkoutId="historical-checkout",
-                                  repositoryId=current["projectId"])
+                                  repositoryId=current["projectId"], snapshot=snapshot)
                 historical.pop("projectId")
                 if version == 1:
                     historical["integrator"] = "host:host-1"

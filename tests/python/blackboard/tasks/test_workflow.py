@@ -2008,6 +2008,9 @@ class CompleteTurnInputTests(WorkflowTestCase):
         submitted = self.submit(board, task=task)
         for index in range(4):
             claim = self.claim(board, claim_request_id=f"turn-{index}", run_id=submitted["runId"])
+            if index == 0:
+                self.assertIsNone(claim["claim"]["turn"]["input"]["context"]["latestHandoff"])
+                self.assertEqual(claim["claim"]["turn"]["input"]["context"]["artifactsTotal"], 1)
             self.finish_turn(board, claim)
             view = board.call("workflow_get", {"runId": submitted["runId"]})
             continuation = self.continue_run(board, view, command_id=f"continue-{index}")
@@ -2026,8 +2029,11 @@ class CompleteTurnInputTests(WorkflowTestCase):
         self.assertEqual(turn["input"]["version"], 4)
         self.assertNotIn("task", context)
         self.assertEqual(context["helperOutcomes"], helpers)
-        # The context uses already published artifact references; the turn stores its own input binding.
-        self.assertEqual(len(context["artifacts"]), count)
+        # Only the newest handoff summary and the run's actual artifact row count cross the boundary.
+        self.assertNotIn("artifacts", context)
+        self.assertEqual(context["artifactsTotal"], count)
+        self.assertIsNotNone(context["latestHandoff"])
+        self.assertNotIn("changedPaths", context["latestHandoff"])
         self.assertGreater(len(workflow_module.canonical_json(turn["input"]).encode()), 256 * 1024)
         self.assertEqual(len(context["nextActions"]), 2)
         for field in ("taskTruncated", "helperOutcomeTotal", "artifactTotal", "artifactsTruncated"):
