@@ -178,11 +178,6 @@ class MicroTaskProvenanceTests(MicroTaskTestCase):
         run_id = submitted["runId"]
         original = self.micro_task_of(board, run_id)["project"]
         with board.store.db.write() as connection:
-            connection.execute(
-                "UPDATE workflow_runs SET workspace_manifest_json=json_set(workspace_manifest_json,"
-                " '$.projectId', 'repo:later', '$.snapshot.repositoryPath', '/later/repository')"
-                " WHERE run_id=?", (run_id,),
-            )
             connection.execute("UPDATE tasks SET cwd='/later/checkout' WHERE task_id=?", (run_id,))
         self.assertEqual(self.micro_task_of(board, run_id)["project"], original)
         self.assertEqual(original["path"], os.path.realpath(str(self.workdir())))

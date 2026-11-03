@@ -28,7 +28,7 @@ import binascii
 import json
 import re
 import sqlite3
-from ...protocol.workspace_manifest import project_id_sql
+from .workspace_bindings import MANIFEST_OWNERS_CTE
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -127,7 +127,8 @@ SELECT dispatch.task_id, dispatch.decision_id, route.run_id,
 #: ``workflow_routes``, and that run's root is used for the decision's project and
 #: Host, so a decision is never misattributed to its own private decision directory.
 RELATION_SQL = f"""
-WITH RECURSIVE routing_tasks AS ({ROUTING_TASKS_SQL}),
+WITH RECURSIVE manifest_owners AS ({MANIFEST_OWNERS_CTE}),
+routing_tasks AS ({ROUTING_TASKS_SQL}),
 lineage(task_id, root_run_id) AS (
     SELECT child_task_id, child_task_id FROM workflow_children
     UNION ALL
@@ -208,14 +209,13 @@ SELECT
          WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
          ELSE json_extract(t.spec_json, '$.cwd') END AS project_path,
     CASE WHEN root_run.run_id IS NOT NULL THEN
-        (SELECT {project_id_sql('artifact.manifest_json')}
-           FROM workflow_artifacts artifact
-          WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
-          ORDER BY artifact.rowid LIMIT 1)
+        COALESCE(root_run.standalone_project_id, root_macro.project_id)
          WHEN dr.decision_id IS NOT NULL OR t.adapter = 'decision' THEN NULL
          ELSE NULL END AS project_id,
-    (SELECT json_extract(artifact.manifest_json, '$.snapshot.repositoryPath')
-       FROM workflow_artifacts artifact
+    (SELECT owner.repository_path
+       FROM workflow_artifacts artifact JOIN manifest_owners owner
+         ON owner.workspace_id=artifact.workspace_id
+        AND owner.manifest_sha256=artifact.input_manifest_sha256
       WHERE artifact.run_id = root_run.run_id AND artifact.kind = 'input'
       ORDER BY artifact.rowid LIMIT 1) AS project_repository_path,
     json_extract(t.spec_json, '$.task') AS task,
@@ -248,6 +248,7 @@ LEFT JOIN roots wr_roots ON wr_roots.task_id = dr_route.run_id
 LEFT JOIN workflow_runs source_run ON source_run.run_id = COALESCE(r.run_id, dr_route.run_id)
 LEFT JOIN tasks root_task ON root_task.task_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
 LEFT JOIN workflow_runs root_run ON root_run.run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
+LEFT JOIN macro_tasks root_macro ON root_macro.macro_task_id=root_run.macro_task_id
 LEFT JOIN workflow_lead_tasks root_lead
   ON root_lead.owned_run_id = COALESCE(rt.root_run_id, r.run_id, wr_roots.root_run_id, dr_route.run_id)
 """

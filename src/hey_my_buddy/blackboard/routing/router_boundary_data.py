@@ -14,6 +14,7 @@ from ...protocol import schemas
 from ...protocol.reasons import reason_from_json
 from .router_boundary import build_boundary
 from .candidate import candidate_bound
+from ..tasks.workspace_bindings import effective_manifest
 
 _CHANGED_CODES = frozenset({
     "router-input-changed",
@@ -200,7 +201,7 @@ def router_trials(connection, row, *, now):
     return trials
 
 
-def _continuation_context(connection, row, run_id, owner_run_id):
+def _continuation_context(connection, row, run_id, owner_run_id, state_dir):
     """Read existing permission/lineage/stop/workspace gates; grant no authority."""
     if run_id is None:
         return False, None, None, None
@@ -242,7 +243,7 @@ def _continuation_context(connection, row, run_id, owner_run_id):
         f"SELECT r.task_id FROM decision_requests r JOIN workflow_routes w ON w.decision_id=r.decision_id WHERE w.run_id IN ({markers}) AND r.task_id IS NOT NULL", ids)
     if any(not _stopped(connection, item[0]) for item in routing_tasks):
         return False, None, helper_policy, run
-    manifest = json.loads(run["workspace_manifest_json"])
+    manifest = effective_manifest(state_dir, connection, run)
     reservations = connection.execute("SELECT * FROM workspace_reservations WHERE holder_task_id=? ORDER BY rowid DESC", (run_id,)).fetchall()
     current = next((item for item in reservations if item["state"] in ("held", "transferred")), None)
     current = current or next((item for item in reservations if item["checkout_root"] == manifest["checkoutRoot"]), None)
@@ -309,7 +310,7 @@ def _retry_at(connection, facts, trials, *, now, kind):
 
 
 def routing_boundary(connection, row, *, now, run_id=None, revision=None,
-                     owner_run_id=None, owner_revision=None) -> dict | None:
+                     owner_run_id=None, owner_revision=None, state_dir=None) -> dict | None:
     """Build a current readable Host boundary from frozen evidence, without writes."""
     route = connection.execute("SELECT * FROM workflow_routes WHERE decision_id=?", (row["decision_id"],)).fetchone()
     execution_changed = row["status"] == "completed" and route is not None and route["state"] in ("needs-host", "fenced")
@@ -318,7 +319,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     request = _json(row["requested_json"], {})
     snapshot = router_sequence.request_snapshot(connection, row["decision_id"])
     if (request.get("routingBasis") or {}).get("candidateCount") == 0:
-        stopped, problem, helper_policy, _run = _continuation_context(connection, row, run_id, owner_run_id)
+        stopped, problem, helper_policy, _run = _continuation_context(connection, row, run_id, owner_run_id, state_dir)
         return build_boundary(
             kind="routing-changed", code=row["reason_code"],
             reason=reason_from_json(row["reason_code"], row["reason_params_json"]),
@@ -348,7 +349,7 @@ def routing_boundary(connection, row, *, now, run_id=None, revision=None,
     candidates = facts.get("buddies") or []
     retry_at = _retry_at(connection, snapshot["facts"],
                          trials, now=now, kind=kind)
-    stopped, problem, helper_policy, run = _continuation_context(connection, row, run_id, owner_run_id)
+    stopped, problem, helper_policy, run = _continuation_context(connection, row, run_id, owner_run_id, state_dir)
     dispatch_docs = router_sequence.dispatches(connection, row["decision_id"])
     if any(not _stopped(connection, item["taskId"]) for item in dispatch_docs) or any(
             item["outcome"] in ("stopUnknown", "unknown", "executing") for item in trials if item["taskId"]):

@@ -6,6 +6,7 @@ module and the DSH runner process are substituted, exactly like the contract's
 module boundary prescribes.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -134,10 +135,12 @@ class WorkflowTestCase(BoardTestCase):
             "turnResultPath": "/tmp/turn-output.json",
         }
         if seal:
-            manifest = claim["turn"]["input"]["executionWorkspace"]
-            result["workspaceSeal"] = self.workspace.seal(
-                self.directory, manifest, attempt["taskId"], attempt["attemptId"]
-            )
+            from hey_my_buddy.protocol.workspace_manifest import turn_manifest, record_reference
+            manifest = turn_manifest(board.directory, claim["turn"]["input"])
+            sealed = self.workspace.seal(board.directory, manifest, attempt["taskId"], attempt["attemptId"])
+            original = claim["turn"]["input"]["context"]["microTaskInputCommit"]
+            self.workspace.cumulative_patch(manifest, sealed, original)
+            result["workspaceSeal"] = record_reference(board.directory, sealed)
         if result_mutator is not None:
             result_mutator(result)
         return board.call(
@@ -226,13 +229,14 @@ class LifecycleTests(WorkflowTestCase):
         submitted = self.submit(board, task=task)
         claimed = self.claim(board)['claim']
         original = claimed['turn']['input']
-        self.assertEqual(original['version'], 3)
+        self.assertEqual(original['version'], 4)
         self.assertNotIn('task', original['context'])
         self.assertNotIn('taskTruncated', original['context'])
         turn_id = claimed['turn']['turnId']
         for version, key in ((1, 'reason'), (2, 'note')):
             with self.subTest(version=version):
                 payload = {**original, 'version': version,
+                           'executionWorkspace': turn_manifest(board.directory, original),
                            'context': {**original['context'], 'task': task[:8000], 'taskTruncated': True,
                                        'hostDecision': {key: 'Host text'}}}
                 raw = json.dumps(payload)
@@ -245,7 +249,7 @@ class LifecycleTests(WorkflowTestCase):
                                                         (turn_id,)).fetchone()[0], raw)
         with board.store.db.write() as connection:
             connection.execute('UPDATE workflow_turns SET input_json=? WHERE turn_id=?',
-                               (json.dumps({**original, 'version': 4}), turn_id))
+                               (json.dumps({**original, 'version': 5}), turn_id))
         with self.assertRaises(BoardError) as unknown:
             board.call('workflow_get', {'runId': submitted['runId']})
         self.assertEqual(unknown.exception.code, 'TURN_INVALID')
@@ -948,7 +952,7 @@ class WorkspaceTests(WorkflowTestCase):
 
         failed = self.finish_turn(board, claim, seal=False, result_mutator=bad_seal)
         self.assertEqual(failed["taskState"], "failed")
-        self.assertEqual(failed["attempt"]["result"]["result"]["microTaskError"]["code"], "WORKSPACE_INVALID")
+        self.assertEqual(failed["attempt"]["result"]["result"]["microTaskError"]["code"], "ARTIFACT_MISMATCH")
         audit = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         self.assertEqual([row for row in audit["artifacts"] if row["kind"] == "output"], [])
 
@@ -1275,13 +1279,13 @@ class ArtifactIdentityTests(WorkflowTestCase):
         self.register(board)
         submitted = self.submit(board)
         claim = self.claim(board)
-        manifest = claim["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claim["claim"]["turn"]["input"])
         self.finish_turn(board, claim)
         view = board.call("workflow_get", {"runId": submitted["runId"], "includeAudit": True})
         output = [row for row in view["artifacts"] if row["kind"] == "output"][0]
         seal = self.workspace.seal(self.directory, manifest, submitted["runId"], claim["claim"]["attempt"]["attemptId"])
-        self.assertEqual(output["manifestSha256"], seal["snapshotSha256"])
-        self.assertNotEqual(output["manifestSha256"], manifest["manifestSha256"])
+        self.assertEqual(output["outputSnapshotSha256"], seal["snapshotSha256"])
+        self.assertNotEqual(output["outputSnapshotSha256"], manifest["manifestSha256"])
         pinned = [
             turn["sealedArtifacts"][0]["snapshotSha256"]
             for turn in view["audit"]["turns"]
@@ -1408,7 +1412,7 @@ class LateCancellationTests(WorkflowTestCase):
 
         failed = self.finish_turn(board, claim, seal=False, result_mutator=bad_seal)
         result = failed["attempt"]["result"]["result"]
-        self.assertEqual(result["microTaskError"]["code"], "WORKSPACE_INVALID")
+        self.assertEqual(result["microTaskError"]["code"], "ARTIFACT_MISMATCH")
         self.assertNotIn("receiptRejection", result)
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         self.assertEqual(view["state"], "cancelled")
@@ -1455,13 +1459,13 @@ class ContinuationWorkspaceTests(WorkflowTestCase):
         self.register(board)
         submitted = self.submit(board)
         first = self.claim(board)
-        first_manifest = first["claim"]["turn"]["input"]["executionWorkspace"]
+        first_manifest = turn_manifest(self.directory, first["claim"]["turn"]["input"])
         self.finish_turn(board, first, disposition="assistance", session_id="sess-1")
         view = board.call("workflow_get", {"runId": submitted["runId"]})
         decided = self.decide(board, view, view["activeRequest"]["requestId"], decision="decline")
         second = self.claim(board, claim_request_id="c2")
         turn_input = second["claim"]["turn"]["input"]
-        effective = turn_input["executionWorkspace"]
+        effective = turn_manifest(board.directory, turn_input)
         self.assertNotEqual(effective["manifestSha256"], first_manifest["manifestSha256"])
         self.assertEqual(effective["baseCommit"], "d" * 40)
         self.assertEqual(
@@ -2001,10 +2005,10 @@ class CompleteTurnInputTests(WorkflowTestCase):
         claim = self.claim(board, claim_request_id="complete-context", run_id=submitted["runId"])
         turn = claim["claim"]["turn"]
         context = turn["input"]["context"]
-        self.assertEqual(turn["input"]["version"], 3)
+        self.assertEqual(turn["input"]["version"], 4)
         self.assertNotIn("task", context)
         self.assertEqual(context["helperOutcomes"], helpers)
-        # Admission pins this turn's input artifact after assembling its input.
+        # The context uses already published artifact references; the turn stores its own input binding.
         self.assertEqual(len(context["artifacts"]), count)
         self.assertGreater(len(workflow_module.canonical_json(turn["input"]).encode()), 256 * 1024)
         self.assertEqual(len(context["nextActions"]), 2)
@@ -2018,7 +2022,7 @@ class CompleteTurnInputTests(WorkflowTestCase):
         self.assertEqual(spec["task"], task)
         for row in rows:
             document = json.loads(row["input_json"])
-            self.assertEqual(document["version"], 3)
+            self.assertEqual(document["version"], 4)
             self.assertNotIn("task", document["context"])
             self.assertNotIn("taskTruncated", document["context"])
 
@@ -2029,6 +2033,7 @@ class CompleteTurnInputTests(WorkflowTestCase):
         first = self.claim(board)
         turn = first["claim"]["turn"]
         historical = {**turn["input"], "version": 2,
+                      "executionWorkspace": turn_manifest(board.directory, turn["input"]),
                       "context": {**turn["input"]["context"], "task": task[:8000], "taskTruncated": True}}
         frozen = workflow_module.canonical_json(historical)
         turn["input"] = historical
@@ -2040,7 +2045,7 @@ class CompleteTurnInputTests(WorkflowTestCase):
         self.continue_run(board, view)
         second = self.claim(board, claim_request_id="after-v2", run_id=submitted["runId"])
         new_input = second["claim"]["turn"]["input"]
-        self.assertEqual(new_input["version"], 3)
+        self.assertEqual(new_input["version"], 4)
         self.assertNotIn("task", new_input["context"])
         self.assertNotIn("taskTruncated", new_input["context"])
         with board.store.db.read() as connection:

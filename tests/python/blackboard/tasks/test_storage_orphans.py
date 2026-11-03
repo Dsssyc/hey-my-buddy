@@ -68,7 +68,7 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertFalse(any(row['eligible'] for row in rows if row['path'] in (str(checkout), str(checkout.parent))))
 
     def references(self, connection, manifest):
-        return storage._allocation_reference_sets(storage._workspace_reference_rows(connection), [(manifest, None)])[0]
+        return storage._allocation_reference_sets(storage._workspace_reference_rows(connection, self.directory), [(manifest, None)])[0]
 
     def accept_at_orphan(self, manifest, checkout):
         """A real public acceptance verifies a ref without switching target HEAD."""
@@ -80,9 +80,10 @@ class StorageOrphanTests(WorkflowTestCase):
         self.finish_turn(board, claim)
         view = board.call('workflow_get', {'runId': delivered['runId']})
         with board.store.db.read() as connection:
-            sealed = json.loads(connection.execute(
-                'SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?',
-                (view['finalArtifactId'],)).fetchone()[0])
+            from hey_my_buddy.protocol.workspace_manifest import artifact_manifest
+            sealed = artifact_manifest(board.directory, connection.execute(
+                'SELECT * FROM workflow_artifacts WHERE artifact_id=?',
+                (view['finalArtifactId'],)).fetchone())
         with defer_reclaim.object(board.store.workflow, "_reclaim_checkout", return_value={"removed": False, "reasons": ["fixture-retained"]}):
             accepted = board.call('workflow_accept', {
                 'runId': delivered['runId'], 'artifactId': view['finalArtifactId'],
@@ -153,7 +154,7 @@ class StorageOrphanTests(WorkflowTestCase):
                             (identity, parent['runId'], 'private-artifact', strategy, identity,
                              value if kind == 'path' else '', 'HEAD', manifest['projectId'],
                              json.dumps(value if kind == 'nested' else {}), '2026-01-01T00:00:00Z'))
-                        rows = [(table, row) for table, row in storage._workspace_reference_rows(connection)
+                        rows = [(table, row) for table, row in storage._workspace_reference_rows(connection, self.directory)
                                 if table == 'workflow_integrations' and row['integration_id'] == identity]
                         self.assertEqual(storage._allocation_reference_sets(rows, [(manifest, None)])[0],
                             ['workflow_integrations-reference'])
@@ -179,7 +180,7 @@ class StorageOrphanTests(WorkflowTestCase):
                             (identity, parent['runId'], value if kind == 'path' else '', state,
                              json.dumps(value if kind == 'nested' else {}),
                              '2026-01-01T00:00:00Z'))
-                        rows = [(table, row) for table, row in storage._workspace_reference_rows(connection)
+                        rows = [(table, row) for table, row in storage._workspace_reference_rows(connection, self.directory)
                                 if table == 'workspace_cleanup_plans' and row['plan_id'] == identity]
                         self.assertEqual(storage._allocation_reference_sets(rows, [(manifest, None)])[0],
                             ['workspace_cleanup_plans-reference'])
@@ -222,9 +223,12 @@ class StorageOrphanTests(WorkflowTestCase):
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_continuations
                 (continuation_id,run_id,kind,expected_revision,input_text,
-                 workspace_manifest_json,state,created_at)
-                VALUES (?,?,'manual',1,'input',?,'invalidated',?)''',
-                ('retained-continuation', parent['runId'], json.dumps(manifest), '2026-01-01T00:00:00Z'))
+                 workspace_id,workspace_manifest_sha256,workspace_facts_role,
+                 workspace_kind,checkout_root,repository_path,input_commit,staged_commit,state,created_at)
+                VALUES (?,?,'manual',1,'input',?,?,'owner',?,?,?,?,?,'invalidated',?)''',
+                ('retained-continuation', parent['runId'], manifest['workspaceId'], manifest['manifestSha256'],
+                 manifest['kind'], manifest['checkoutRoot'], manifest['snapshot']['repositoryPath'],
+                 manifest['inputCommit'], manifest['snapshot']['stagedCommit'], '2026-01-01T00:00:00Z'))
         self.assert_retained(checkout, planned)
 
     def test_workflow_artifact_manifest_protects_allocation(self):
@@ -232,10 +236,12 @@ class StorageOrphanTests(WorkflowTestCase):
         parent = self.submit(self.board_instance, request_id='other-run', cwd=str(self.repo), kind='existing')
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_artifacts
-                (artifact_id,run_id,kind,manifest_json,manifest_sha256,created_at)
-                VALUES (?,?,'input',?,?,?)''',
-                ('retained-artifact', parent['runId'], json.dumps(manifest), manifest['manifestSha256'],
-                 '2026-01-01T00:00:00Z'))
+                (artifact_id,run_id,kind,manifest_json,workspace_id,input_manifest_sha256,
+                 content_form,workspace_facts_role,workspace_kind,checkout_root,repository_path,input_commit,staged_commit,created_at)
+                VALUES (?,?,'input',?,?,?,'sealed-inline-v1','owner',?,?,?,?,?,?)''',
+                ('retained-artifact', parent['runId'], json.dumps(manifest), manifest['workspaceId'],
+                 manifest['manifestSha256'], manifest['kind'], manifest['checkoutRoot'],
+                 manifest['snapshot']['repositoryPath'], manifest['inputCommit'], manifest['snapshot']['stagedCommit'], '2026-01-01T00:00:00Z'))
         self.assert_retained(checkout, planned)
 
     def test_unreadable_retained_artifact_keeps_reference_unproven(self):
@@ -245,19 +251,17 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertFalse(any(row['path'] == str(checkout) for row in storage.inspect(self.board_instance.store)['candidates']))
         with self.board_instance.store.db.write() as connection:
             connection.execute('''INSERT INTO workflow_artifacts
-                (artifact_id,run_id,kind,manifest_json,manifest_sha256,created_at)
-                VALUES (?,?,'input','{invalid-json','unreadable-private-fixture',?)''',
-                ('unreadable-artifact', parent['runId'], '2026-01-01T00:00:00Z'))
+                (artifact_id,run_id,kind,content_form,manifest_json,shared_refs_sha256,created_at)
+                VALUES (?,?,'shared-refs','sealed-inline-v1','{invalid-json',?,?)''',
+                ('unreadable-artifact', parent['runId'], '0' * 64, '2026-01-01T00:00:00Z'))
         with self.board_instance.store.db.read() as connection:
             reasons = self.references(connection, manifest)
         self.assertIn('workflow_artifacts-reference-unproven', reasons)
-        # Corrupt service-owned JSON now fails inventory loudly. The deletion
-        # boundary still treats its references as unproven and removes nothing.
-        with self.assertRaises(sqlite3.OperationalError):
-            storage.inspect(self.board_instance.store)
-        with self.assertRaises(BoardError) as raised:
-            self.apply(planned)
-        self.assertEqual(raised.exception.code, 'INTERNAL_ERROR')
+        # Corrupt sealed JSON keeps every allocation reference unproven.
+        self.assertIn('workflow_artifacts-reference-unproven', next(
+            row for row in storage.inspect(self.board_instance.store)['candidates']
+            if row['path'] == str(checkout))['reasons'])
+        self.apply(planned)
         self.assertTrue(checkout.exists())
 
     def test_artifact_location_protects_checkout_even_without_manifest(self):
@@ -314,17 +318,13 @@ class StorageOrphanTests(WorkflowTestCase):
         self.assertTrue(checkout.is_dir())
         # Retained board provenance also protects an allocation whose current
         # manifest alone no longer proves the physical ownership.
-        with self.board_instance.store.db.write() as connection:
-            current = dict(manifest, kind='existing')
-            current['manifestSha256'] = workspace._sha(workspace._json({k: v for k, v in current.items() if k != 'manifestSha256'}))
-            connection.execute('UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?',
-                               (json.dumps(current), submitted['runId']))
         changed = dict(manifest, access='read')
         changed['manifestSha256'] = workspace._sha(workspace._json({k: v for k, v in changed.items() if k != 'manifestSha256'}))
         (checkout.parent / 'manifest.json').write_text(json.dumps(changed), encoding="utf-8", newline="\n")
-        self.assertIsNone(workspace.resolve_allocation(self.directory, current, [manifest]))
         unproven = self.board_instance.call('storage_plan', {})
         self.assertFalse(any(row.get('orphan') and row['path'] == str(checkout) for row in unproven['candidates']))
+        self.assertIn('WORKSPACE_MANIFEST_CHANGED', next(
+            row for row in unproven['candidates'] if row['path'] == str(checkout))['reasons'])
         self.assertTrue(checkout.is_dir())
 
     def test_planning_streams_rows_and_parses_each_field_once_per_orphan(self):
@@ -347,7 +347,7 @@ class StorageOrphanTests(WorkflowTestCase):
                 for row in connection.execute(sql):
                     read_rows.append(sql)
                     yield row
-            rows = storage._workspace_reference_rows(SimpleNamespace(execute=streamed))
+            rows = storage._workspace_reference_rows(SimpleNamespace(execute=streamed), self.directory)
             self.assertIs(iter(rows), rows, 'reference rows must stream, never materialize all tables')
             next(rows)
             self.assertEqual(len(read_rows), 1, 'the first row must not preload historical facts')

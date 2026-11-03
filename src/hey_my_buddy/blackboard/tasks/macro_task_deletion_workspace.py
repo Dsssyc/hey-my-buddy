@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 
 from ... import private_dirs
@@ -10,6 +11,7 @@ from ...errors import BoardError
 from ...protocol.reasons import reason
 from . import workspace
 from .macro_task_deletion_progress import collect_skipped
+from .workspace_bindings import MANIFEST_OWNERS_CTE
 
 
 _PREFIX = "refs/hey-my-buddy/workspaces/"
@@ -34,54 +36,76 @@ def _skip(kind: str, path: str, code: str, workspace_id: str | None = None) -> d
             "reason": reason(_SKIP_CODES[code])}
 
 
-def _repository_current(manifest: dict, *, candidates=()) -> Path | None:
-    repository = workspace.locate_repository(manifest, candidates=candidates, repair=False)
-    return Path(repository) if repository is not None else None
+def _repository_current(manifest: dict, *, candidates=(), require_owner_anchor=False) -> Path | None:
+    locations = candidates() if callable(candidates) else candidates
+    for location in (*locations, manifest['repository_path']):
+        repository = workspace.repository_at(location)
+        if repository is not None and workspace.read_project_id(repository) == manifest['project_id']:
+            if require_owner_anchor and _refs(Path(repository), manifest['workspace_id']).get(
+                    _PREFIX + manifest['workspace_id'] + '/retained/input') != manifest['input_commit']:
+                continue
+            return Path(repository)
+    return None
 
 
 def _fixed_refs(manifest: dict) -> dict[str, str]:
-    identifier = manifest["workspaceId"]
+    identifier = manifest['workspace_id']
     prefix = _PREFIX + identifier + "/"
-    snapshot = manifest["snapshot"]
-    if (snapshot["inputRef"] != prefix + "input" or snapshot["stagedRef"] != prefix + "staged"):
-        raise BoardError("WORKSPACE_MANIFEST_CHANGED", "Input reference does not belong to its workspace")
-    return {snapshot["inputRef"]: manifest["inputCommit"],
-            snapshot["stagedRef"]: snapshot["stagedCommit"],
-            prefix + "retained/input": manifest["inputCommit"],
-            prefix + "retained/staged": snapshot["stagedCommit"]}
+    return {prefix + 'input': manifest['input_commit'],
+            prefix + 'staged': manifest['staged_commit'],
+            prefix + 'retained/input': manifest['input_commit'],
+            prefix + 'retained/staged': manifest['staged_commit']}
+
+
+def _state_owner_proven(connection, state: Path, owner: dict) -> bool:
+    """Bind SQL owner publication to this state's preparation identity."""
+    args = (owner['owner_run_id'], owner['workspace_id'], owner['manifest_sha256'])
+    source = connection.execute(
+        "SELECT t.request_id FROM workflow_artifacts a JOIN tasks t ON t.task_id=a.run_id"
+        " WHERE a.kind='input' AND a.workspace_facts_role='owner'"
+        " AND a.run_id=? AND a.workspace_id=? AND a.input_manifest_sha256=?",
+        args).fetchone()
+    if source is None:
+        source = connection.execute(
+            "SELECT run_id || ':' || continuation_id AS request_id FROM workflow_continuations"
+            " WHERE workspace_facts_role='owner' AND run_id=?"
+            " AND workspace_id=? AND workspace_manifest_sha256=?",
+            args).fetchone()
+    if source is None:
+        return False
+    expected = 'ws-' + workspace._sha(workspace._json([str(state), source['request_id']]))[:32]
+    return owner['workspace_id'] == expected
 
 
 def _artifact_refs(artifact: dict, manifests: dict[str, dict]) -> dict[str, str]:
-    identifier = artifact.get("workspaceId")
+    if artifact['kind'] not in ('output', 'resolved-output', 'partial-output', 'abandoned-site'):
+        return {}
+    identifier = artifact['output_workspace_id']
     manifest = manifests.get(identifier)
-    if manifest is None or artifact.get("manifestSha256") != manifest["manifestSha256"]:
+    if manifest is None or artifact['output_manifest_sha256'] != manifest['manifest_sha256']:
         return {}
-    ref, commit = artifact.get("ref"), artifact.get("commit")
-    snapshot = artifact.get("snapshot")
-    if (not isinstance(ref, str) or not isinstance(commit, str)
-            or not isinstance(snapshot, dict)
-            or artifact.get("snapshotSha256") != workspace._sha(workspace._json(snapshot))
-            or any(artifact.get(key) != snapshot.get(key) for key in
-                   ("workspaceId", "taskId", "attemptId", "manifestSha256", "commit", "tree"))):
+    ref, commit = artifact['output_ref'], artifact['output_commit']
+    task_id, attempt_id = artifact['run_id'], artifact['attempt_id']
+    if not isinstance(task_id, str) or not task_id or not isinstance(ref, str):
         return {}
-    task_id, attempt_id = artifact.get("taskId"), artifact.get("attemptId")
-    if not all(isinstance(value, str) and value for value in (task_id, attempt_id)):
+    record_id = ref.rsplit('/', 1)[-1][:64]
+    if (not re.fullmatch('[0-9a-f]{64}', record_id)
+            or attempt_id is not None and record_id != workspace._sha(workspace._json([task_id, attempt_id]))):
         return {}
-    record_id = workspace._sha(workspace._json([task_id, attempt_id]))
     prefix = _PREFIX + identifier + "/"
-    kind = artifact.get("kind")
-    if kind in (None, "host-output"):
-        suffix = record_id + ("-host" if kind == "host-output" else "")
+    kind = artifact['kind']
+    if kind in ('output', 'partial-output'):
+        suffix = record_id + ('-host' if artifact['output_origin'] == 'host' else '')
         family, retained_family = "outputs/", "output-"
-    elif kind == "resolution" and artifact.get("action") in workspace.RESOLUTION_ACTIONS:
-        suffix = record_id + "-" + artifact["action"]
+    elif kind == 'resolved-output' and artifact['output_action'] in workspace.RESOLUTION_ACTIONS:
+        suffix = record_id + '-' + artifact['output_action']
         family, retained_family = "resolutions/", "resolution-"
     elif kind == "abandoned-site":
         suffix = record_id
         family, retained_family = "abandoned/", "abandoned-"
     else:
         return {}
-    if ref != prefix + family + suffix:
+    if ref != prefix + family + suffix or not re.fullmatch(r'(?:[0-9a-f]{40}|[0-9a-f]{64})', commit):
         return {}
     return {ref: commit, prefix + "retained/" + retained_family + suffix: commit}
 
@@ -95,22 +119,22 @@ def _expected_refs(by_id: dict[str, dict], artifacts: list[dict]) -> dict[str, d
             continue
         bound = _artifact_refs(artifact, by_id)
         for ref, oid in bound.items():
-            identifier = artifact["workspaceId"]
+            identifier = artifact['output_workspace_id']
             previous = expected[identifier].setdefault(ref, oid)
             if previous != oid:
                 raise BoardError("WORKSPACE_CONFLICT", "Conflicting retained artifact references", ref=ref)
-        if bound and artifact.get("kind") in (None, "host-output"):
+        if bound and artifact['kind'] in ('output', 'partial-output'):
             paired_outputs.append(artifact)
     # Publication deduplicates equal Worker/Host snapshots, although their
     # physical seal names differ. A counterpart is bound only to that same
     # commit; a separately published output keeps its own explicit binding.
     for artifact in paired_outputs:
-        identifier = artifact["workspaceId"]
-        record_id = workspace._sha(workspace._json([artifact["taskId"], artifact["attemptId"]]))
-        suffix = record_id + ("" if artifact.get("kind") == "host-output" else "-host")
+        identifier = artifact['output_workspace_id']
+        record_id = artifact['output_ref'].rsplit('/', 1)[-1][:64]
+        suffix = record_id + ('' if artifact['output_origin'] == 'host' else '-host')
         prefix = _PREFIX + identifier + "/"
         for ref in (prefix + "outputs/" + suffix, prefix + "retained/output-" + suffix):
-            expected[identifier].setdefault(ref, artifact["commit"])
+            expected[identifier].setdefault(ref, artifact['output_commit'])
     return expected
 
 
@@ -164,27 +188,202 @@ def _delete_refs(repository: Path, identifier: str, expected: dict[str, str]) ->
         return skipped
 
 
+def _delete_exact_refs(repository: Path, identifier: str, expected: dict[str, str]) -> list[dict]:
+    """Delete only one output's own names inside a shared workspace namespace."""
+    with collect_skipped() as skipped:
+        actual = _refs(repository, identifier)
+        for ref, bound in sorted(expected.items()):
+            if ref not in actual:
+                continue
+            if actual[ref] is None:
+                skipped.append(_skip('ref', ref, 'REF_UNPROVEN', identifier))
+            elif actual[ref] != bound:
+                skipped.append(_skip('ref', ref, 'REF_CHANGED', identifier))
+            else:
+                try:
+                    workspace._git(repository, 'update-ref', '--no-deref', '-d', ref, bound)
+                except BoardError:
+                    current = _refs(repository, identifier)
+                    if current.get(ref) == bound:
+                        raise
+                    if ref in current:
+                        skipped.append(_skip('ref', ref, 'REF_CHANGED', identifier))
+        return skipped
+
+
+def _foreign_output_files(state: Path, artifact: dict) -> tuple[Path, tuple[str, ...]]:
+    """Derive the sealed output's own physical names from its SQL ref identity."""
+    identifier = artifact['output_workspace_id']
+    record_id = artifact['output_ref'].rsplit('/', 1)[-1][:64]
+    suffix = '-host' if artifact['kind'] in ('output', 'partial-output') and artifact['output_origin'] == 'host' else ''
+    directory = state / 'workspaces' / identifier / 'outputs' / (record_id + suffix)
+    if artifact['kind'] in ('output', 'partial-output'):
+        names = ('output.json', 'output.patch', 'pending.json')
+    elif artifact['kind'] == 'resolved-output':
+        action = artifact['output_action']
+        names = (f'resolve-{action}.json', f'resolve-{action}.patch', f'resolve-{action}-pending.json')
+    else:
+        names = ('abandoned.json', 'abandoned.patch', 'abandoned-pending.json')
+    return directory, names
+
+
+def _remove_foreign_output_directory(directory: Path, names: set[str], identifier: str,
+                                     *, shared: bool) -> list[dict]:
+    """Remove only names derived from the borrower's task and SQL input."""
+    if not workspace._path_present(directory):
+        return []
+    if private_dirs.linked(directory) or not directory.is_dir():
+        return [_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier)]
+    for name in names:
+        path = directory / name
+        if private_dirs.linked(path) or workspace._path_present(path) and not path.is_file():
+            return [_skip('allocation', str(path), 'OWNER_UNPROVEN', identifier)]
+    conflicts = directory / 'scope-conflicts'
+    if not shared and (private_dirs.linked(conflicts) or workspace._path_present(conflicts) and not conflicts.is_dir()):
+        return [_skip('allocation', str(conflicts), 'OWNER_UNPROVEN', identifier)]
+    for name in names:
+        (directory / name).unlink(missing_ok=True)
+    if not shared and conflicts.is_dir():
+        private_dirs.remove_tree(conflicts)
+    if shared:
+        return []
+    if any(directory.iterdir()):
+        return [_skip('allocation', str(directory), 'DEPENDENCY_RETAINED', identifier)]
+    directory.rmdir()
+    return []
+
+
+def _delete_foreign_outputs(store, by_id, artifacts, owned_runs) -> list[dict]:
+    """Remove a borrower's exact output while the workspace owner remains."""
+    state = store.directory.resolve()
+    scope_ids = json.dumps(sorted(owned_runs))
+    skipped = []
+    planned: dict[Path, tuple[str, set[str]]] = {}
+    with store.db.read() as connection:
+        for artifact in artifacts:
+            if artifact['kind'] not in ('output', 'resolved-output', 'partial-output', 'abandoned-site'):
+                continue
+            identifier = artifact['output_workspace_id']
+            if identifier in by_id:
+                continue
+            owner = connection.execute(
+                f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})'
+                ' SELECT o.*,COALESCE(m.project_id,r.standalone_project_id) AS project_id'
+                ' FROM manifest_owners o JOIN workflow_runs r ON r.run_id=o.owner_run_id'
+                ' LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id'
+                ' WHERE o.workspace_id=? AND o.manifest_sha256=?',
+                (identifier, artifact['output_manifest_sha256'])).fetchone()
+            if owner is None:
+                skipped.append(_skip('ref', artifact['output_ref'], 'REF_UNPROVEN', identifier))
+                continue
+            owner = dict(owner)
+            if not _state_owner_proven(connection, state, owner):
+                skipped.append(_skip('allocation', str(state / 'workspaces' / identifier),
+                                     'OWNER_UNPROVEN', identifier))
+                continue
+            bound = _artifact_refs(artifact, {identifier: owner})
+            if not bound:
+                skipped.append(_skip('ref', artifact['output_ref'], 'REF_UNPROVEN', identifier))
+                continue
+            shared = connection.execute(
+                "SELECT 1 FROM workflow_artifacts WHERE kind IN ('output','resolved-output','partial-output','abandoned-site')"
+                ' AND run_id NOT IN (SELECT value FROM json_each(?)) AND output_ref=? LIMIT 1',
+                (scope_ids, artifact['output_ref'])).fetchone()
+            if shared is not None:
+                continue
+            initial = connection.execute(
+                f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})'
+                ' SELECT o.input_commit FROM workflow_artifacts a JOIN manifest_owners o'
+                ' ON o.workspace_id=a.workspace_id AND o.manifest_sha256=a.input_manifest_sha256'
+                " WHERE a.run_id=? AND a.kind='input' ORDER BY a.rowid LIMIT 1",
+                (artifact['run_id'],)).fetchone()
+            if initial is None:
+                skipped.append(_skip('allocation', artifact['output_ref'], 'OWNER_UNPROVEN', identifier))
+                continue
+            initial_commit = initial['input_commit']
+            counterpart = None
+            if artifact['kind'] in ('output', 'partial-output'):
+                record_id = artifact['output_ref'].rsplit('/', 1)[-1][:64]
+                opposite_origin = 'worker' if artifact['output_origin'] == 'host' else 'host'
+                opposite_suffix = record_id + ('-host' if opposite_origin == 'host' else '')
+                opposite_ref = _PREFIX + identifier + '/outputs/' + opposite_suffix
+                externally_bound = connection.execute(
+                    'SELECT 1 FROM workflow_artifacts WHERE run_id NOT IN (SELECT value FROM json_each(?))'
+                    ' AND output_ref=? LIMIT 1', (scope_ids, opposite_ref)).fetchone()
+                own_counterpart = any(other['output_ref'] == opposite_ref for other in artifacts)
+                if externally_bound is None and not own_counterpart:
+                    bound[opposite_ref] = artifact['output_commit']
+                    bound[_PREFIX + identifier + '/retained/output-' + opposite_suffix] = artifact['output_commit']
+                    counterpart = {**artifact, 'output_ref': opposite_ref, 'output_origin': opposite_origin}
+            directory, names = _foreign_output_files(state, artifact)
+            if (artifact['record_path'] is not None and
+                    state / artifact['record_path'] not in tuple(directory / name for name in names)):
+                skipped.append(_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier))
+                continue
+            if any(private_dirs.linked(path) for path in (state / 'workspaces' / identifier,
+                                                          state / 'workspaces' / identifier / 'outputs', directory)):
+                skipped.append(_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier))
+                continue
+            candidates = connection.execute(
+                f'WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})'
+                ' SELECT DISTINCT o.repository_path FROM manifest_owners o'
+                ' JOIN workflow_runs r ON r.run_id=o.owner_run_id'
+                ' LEFT JOIN macro_tasks m ON m.macro_task_id=r.macro_task_id'
+                ' WHERE COALESCE(m.project_id,r.standalone_project_id)=?',
+                (owner['project_id'],)).fetchall()
+            repository = _repository_current(owner, candidates=tuple(row['repository_path'] for row in candidates),
+                                             require_owner_anchor=True)
+            if repository is None:
+                skipped.append(_skip('ref', artifact['output_ref'], 'DEPENDENCY_RETAINED', identifier))
+                continue
+            ref_skips = _delete_exact_refs(repository, identifier, bound)
+            skipped.extend(ref_skips)
+            if ref_skips:
+                continue
+            own_names = set(names)
+            if artifact['kind'] in ('output', 'partial-output', 'resolved-output'):
+                own_names.add(f'cumulative-{initial_commit}.patch')
+            planned.setdefault(directory, (identifier, set()))[1].update(own_names)
+            if counterpart is not None:
+                opposite_directory, opposite_names = _foreign_output_files(state, counterpart)
+                opposite_owned = set(opposite_names)
+                opposite_owned.add(f'cumulative-{initial_commit}.patch')
+                planned.setdefault(opposite_directory, (identifier, set()))[1].update(opposite_owned)
+        external = [dict(row) for row in connection.execute(
+            "SELECT * FROM workflow_artifacts WHERE run_id NOT IN (SELECT value FROM json_each(?))"
+            " AND kind IN ('output','resolved-output','partial-output','abandoned-site')",
+            (scope_ids,))]
+        shared_directories = {_foreign_output_files(state, row)[0] for row in external}
+        for directory, (identifier, names) in planned.items():
+            skipped.extend(_remove_foreign_output_directory(directory, names, identifier,
+                                                             shared=directory in shared_directories))
+    return skipped
+
+
 def _record_proven(state: Path, manifest: dict) -> bool:
-    identifier = manifest["workspaceId"]
+    identifier = manifest['workspace_id']
     directory = state / "workspaces" / identifier
-    if private_dirs.linked(directory) or workspace.allocation_lock_directory(state, identifier) != directory:
+    structural = (manifest['workspace_kind'] in ('worktree', 'existing')
+            and (manifest['workspace_kind'] != 'worktree' or
+                 manifest['checkout_root'] == str(directory / 'checkout'))
+            and manifest['owner_run_id']
+            and manifest['project_id']
+            and manifest['input_commit'] and manifest['staged_commit']
+            and not private_dirs.linked(directory)
+            and workspace.allocation_lock_directory(state, identifier) == directory)
+    if not structural:
         return False
-    if workspace._record(directory / "manifest.json") != manifest:
-        return False
-    request = workspace._record(directory / "request.json")
-    pinned = workspace._record(directory / "input.json")
+    request = workspace._record(directory / 'request.json')
+    pinned = workspace._record(directory / 'input.json')
     if not isinstance(request, dict) or not isinstance(pinned, dict):
         return False
-    request_id = request["requestId"]
-    if not isinstance(request_id, str) or not request_id or "\0" in request_id:
+    request_id = request.get('requestId')
+    if not isinstance(request_id, str) or not request_id or '\0' in request_id:
         return False
-    expected = "ws-" + workspace._sha(workspace._json([str(state), request_id]))[:32]
-    return (expected == identifier
-            and request["version"] == manifest["version"]
-            and request["intent"]["kind"] == manifest["kind"]
-            and pinned["inputCommit"] == manifest["inputCommit"]
-            and pinned["inputTree"] == manifest["inputTree"]
-            and pinned["snapshot"]["stagedCommit"] == manifest["snapshot"]["stagedCommit"])
+    expected = 'ws-' + workspace._sha(workspace._json([str(state), request_id]))[:32]
+    return (expected == identifier and request['intent']['kind'] == manifest['workspace_kind']
+            and pinned['inputCommit'] == manifest['input_commit']
+            and pinned['snapshot']['stagedCommit'] == manifest['staged_commit'])
 
 
 def _tombstone(state: Path, identifier: str) -> Path:
@@ -202,122 +401,95 @@ def _remove_tombstone(state: Path, identifier: str) -> bool:
 
 
 def delete_workspaces(store, manifests: list[dict], artifacts: list[dict], *, first_execution_times=None,
-                      candidate_paths=None) -> list[dict]:
-    """Remove proven physical allocations, exact refs, then their private records.
-
-    The caller owns the storage lock, shared-dependency check and settled-task
-    proof. Input manifests and artifacts come from those task rows while they
-    remain in the board. No database transaction is held through this function.
-    """
+                      candidate_paths=None, owned_runs=()) -> list[dict]:
+    """Remove SQL-owned checkouts, exact Git refs, and private record trees."""
     state = store.directory.resolve()
     first_execution_times = first_execution_times or {}
     candidate_paths = candidate_paths or {}
     by_id = {}
     with collect_skipped() as skipped:
         for manifest in manifests:
-            workspace._validate_manifest(manifest)
-            identifier = manifest["workspaceId"]
+            identifier = manifest['workspace_id']
             if identifier in by_id and by_id[identifier] != manifest:
-                raise BoardError("WORKSPACE_CONFLICT", "Conflicting retained workspace manifests")
+                raise BoardError('WORKSPACE_CONFLICT', 'Conflicting retained workspace owners')
             by_id[identifier] = manifest
-        # A later turn may prepare another logical manifest for the same checkout.
-        # Its refs must remain available until the physical checkout is proved and
-        # removed, even when its workspace id sorts before the allocation id.
-        blocked = {}
+        with store.db.read() as connection:
+            for identifier, owner in by_id.items():
+                if not _state_owner_proven(connection, state, owner):
+                    skipped.append(_skip('allocation', str(state / 'workspaces' / identifier),
+                                         'OWNER_UNPROVEN', identifier))
+        if skipped:
+            return skipped
+        skipped.extend(_delete_foreign_outputs(store, by_id, artifacts, owned_runs))
+        if skipped:
+            return skipped
+        expected = _expected_refs(by_id, artifacts)
+        blocked_roots = {}
         for identifier, manifest in sorted(by_id.items()):
-            if manifest["kind"] != "worktree":
+            if manifest['workspace_kind'] != 'worktree':
                 continue
-            directory = state / "workspaces" / identifier
+            root = manifest['checkout_root']
+            directory = state / 'workspaces' / identifier
+            if root != str(directory / 'checkout'):
+                skipped.append(_skip('allocation', root, 'OWNER_UNPROVEN', identifier))
+                blocked_roots[root] = identifier
+                continue
             if not workspace._path_present(directory):
                 continue
-            if workspace.allocation_lock_directory(state, identifier) != directory:
-                skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
-                blocked[manifest["checkoutRoot"]] = _SKIP_CODES["OWNER_UNPROVEN"]
+            if not _record_proven(state, manifest):
+                skipped.append(_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier))
+                blocked_roots[root] = identifier
                 continue
             with workspace._lock(directory, create=False):
-                if not _record_proven(state, manifest):
-                    skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
-                    blocked[manifest["checkoutRoot"]] = _SKIP_CODES["OWNER_UNPROVEN"]
-                    continue
-                repository = workspace.locate_repository(manifest, candidates=candidate_paths.get(identifier, ()))
-                if repository is None:
-                    # The private allocation record proves its private bytes. Its
-                    # former repository's refs and registration are no longer ours
-                    # to pursue; the record phase removes this whole allocation.
-                    continue
-                checkout = directory / "checkout"
-                checkout_retained = False
+                repository = _repository_current(manifest, candidates=candidate_paths.get(identifier, ()))
+                checkout = directory / 'checkout'
                 if workspace._path_present(checkout):
                     from .checkout_processes import require_idle_checkout
-                    require_idle_checkout(checkout, first_execution_at=first_execution_times.get(
-                        manifest["checkoutRoot"]))
-                # A missing checkout may still have its original registration.
-                # Complete that same proven boundary before refs or records leave.
-                proof = workspace.deletion_inspect(state, manifest, repository=repository)
-                if proof["reasons"]:
-                    skipped.extend(_skip("checkout", str(checkout), reason, identifier)
-                                   for reason in proof["reasons"])
-                    checkout_retained = True
-                else:
-                    workspace.cleanup_remove(state, manifest, proof=proof, repository=repository)
-                if checkout_retained or workspace._path_present(checkout):
-                    skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
-                    blocked[manifest["checkoutRoot"]] = _SKIP_CODES["DEPENDENCY_RETAINED"]
-                    continue
+                    require_idle_checkout(checkout, first_execution_at=first_execution_times.get(root))
+                if repository is not None:
+                    reasons = workspace.deletion_remove_checkout(repository, checkout,
+                        workspace_id=identifier, project_id=manifest['project_id'],
+                        input_commit=manifest['input_commit'])
+                    skipped.extend(_skip('checkout', str(checkout), code, identifier) for code in reasons)
+                if repository is not None and workspace._path_present(checkout):
+                    skipped.append(_skip('allocation', str(directory), 'DEPENDENCY_RETAINED', identifier))
+                    blocked_roots[root] = identifier
+                elif repository is not None and reasons:
+                    blocked_roots[root] = identifier
 
         for identifier, manifest in sorted(by_id.items()):
-            directory = state / "workspaces" / identifier
-            blocked_reason = blocked.get(manifest["checkoutRoot"])
-            if blocked_reason is not None:
-                if manifest["kind"] != "worktree" and workspace._path_present(directory):
-                    skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
+            directory = state / 'workspaces' / identifier
+            root = manifest['checkout_root']
+            if root in blocked_roots:
+                if identifier != blocked_roots[root] and workspace._path_present(directory):
+                    skipped.append(_skip('allocation', str(directory), 'DEPENDENCY_RETAINED', identifier))
                 continue
-            if not workspace._path_present(directory):
-                repository = workspace.locate_repository(manifest, candidates=candidate_paths.get(identifier, ()), repair=False)
-                if repository is None:
-                    _remove_tombstone(state, identifier)
-                    continue
-                expected = _expected_refs({identifier: manifest}, artifacts)[identifier]
-                ref_skips = _delete_refs(repository, identifier, expected)
+            repository = _repository_current(manifest, candidates=candidate_paths.get(identifier, ()))
+            if repository is not None:
+                ref_skips = _delete_refs(repository, identifier, expected[identifier])
                 skipped.extend(ref_skips)
-                if not ref_skips and not _refs(repository, identifier):
-                    _remove_tombstone(state, identifier)
+                if ref_skips or _refs(repository, identifier):
+                    skipped.append(_skip('allocation', str(directory), 'DEPENDENCY_RETAINED', identifier))
+                    continue
+            if not workspace._path_present(directory):
+                _remove_tombstone(state, identifier)
                 continue
-            if workspace._path_present(_tombstone(state, identifier)):
-                skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
-                continue
-            if workspace.allocation_lock_directory(state, identifier) != directory:
-                skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
+            tomb = _tombstone(state, identifier)
+            if workspace._path_present(tomb) or not _record_proven(state, manifest):
+                skipped.append(_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier))
                 continue
             with workspace._lock(directory, create=False):
-                if not _record_proven(state, manifest):
-                    skipped.append(_skip("allocation", str(directory), "OWNER_UNPROVEN", identifier))
-                    continue
-                repository = workspace.locate_repository(manifest, candidates=candidate_paths.get(identifier, ()), repair=False)
-                current_repository = repository is not None
-                checkout = directory / "checkout"
-                if current_repository and manifest["kind"] == "worktree" and workspace._path_present(checkout):
-                    skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
-                    continue
-                if current_repository:
-                    expected = _expected_refs({identifier: manifest}, artifacts)[identifier]
-                    ref_skips = _delete_refs(repository, identifier, expected)
-                    skipped.extend(ref_skips)
-                    if ref_skips or _refs(repository, identifier):
-                        skipped.append(_skip("allocation", str(directory), "DEPENDENCY_RETAINED", identifier))
+                checkout = directory / 'checkout'
+                if workspace._path_present(checkout):
+                    if repository is not None:
+                        skipped.append(_skip('allocation', str(directory), 'DEPENDENCY_RETAINED', identifier))
                         continue
-                elif manifest["kind"] == "worktree" and workspace._path_present(checkout) and not private_dirs.linked(checkout):
+                    if manifest['workspace_kind'] != 'worktree' or private_dirs.linked(checkout):
+                        skipped.append(_skip('allocation', str(directory), 'OWNER_UNPROVEN', identifier))
+                        continue
                     from .checkout_processes import require_idle_checkout
-                    require_idle_checkout(checkout, first_execution_at=first_execution_times.get(
-                        manifest["checkoutRoot"]))
-                tomb = _tombstone(state, identifier)
-                if workspace._path_present(tomb):
-                    skipped.append(_skip("allocation", str(tomb), "OWNER_UNPROVEN", identifier))
-                    continue
-            # Windows cannot rename a directory while its descendant .lock is open.
-            # The caller keeps the storage lock. Host sealing and scope resolution
-            # check the durable deletion mark under this same workspace lock before
-            # writing files or refs, so neither can cross the proof-to-rename gap.
+                    require_idle_checkout(checkout, first_execution_at=first_execution_times.get(root))
+            # Windows cannot rename while the descendant lock is open.
             native_path(directory).rename(native_path(tomb))
             private_dirs.remove_tree(tomb)
         return skipped

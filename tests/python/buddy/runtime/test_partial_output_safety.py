@@ -1,5 +1,6 @@
 """A partial artifact never substitutes for process-stop or model-start evidence."""
 from types import SimpleNamespace
+from pathlib import Path
 import unittest
 from unittest.mock import patch, Mock
 
@@ -11,8 +12,10 @@ from hey_my_buddy.buddy.runtime.partial_outputs import capture, enrich
 
 class PartialOutputSafetyTests(unittest.TestCase):
     def context(self):
-        return SimpleNamespace(turn_input={"executionWorkspace": {"path": "/private/fixture"}},
-                               effective_workspace=None, environment={"HMB_STATE_DIR": "/private/fixture-state"},
+        return SimpleNamespace(turn_input={"version": 4, "executionWorkspace": {
+                                   "workspaceId": "ws-" + "a" * 32, "manifestSha256": "b" * 64}},
+                               effective_workspace={"path": "/private/fixture"},
+                               environment={"HMB_STATE_DIR": "/private/fixture-state"},
                                task_id="run", attempt_id="attempt")
 
     def test_transport_classification_uses_only_the_normalized_code(self):
@@ -53,9 +56,21 @@ class PartialOutputSafetyTests(unittest.TestCase):
                 result = AdapterOutcome("failed", result=dict(payload), shutdown_confirmed=True)
                 capture(self.context(), result)
                 self.assertEqual(result.result["partialWorkspaceSeal"]["changedPaths"], ["src/one.py"])
-                self.assertEqual(result.result["workspaceManifest"], {"path": "/private/fixture"})
+                self.assertNotIn("workspaceManifest", result.result)
                 self.assertEqual(result.result["partialOutput"],
                                  {"partial": True, "verified": False, "final": False})
+
+    def test_partial_seal_resolves_the_current_turn_reference_before_sealing(self):
+        context = self.context()
+        context.effective_workspace = None
+        resolved = {"path": "/private/fixture", "workspaceId": "ws-" + "a" * 32}
+        module = SimpleNamespace(seal=Mock(return_value={"changedPaths": ["src/one.py"]}))
+        result = AdapterOutcome("failed", result={"modelStarted": True}, shutdown_confirmed=True)
+        with patch("hey_my_buddy.buddy.runtime.partial_outputs.turn_manifest", return_value=resolved) as read, patch(
+                "hey_my_buddy.blackboard.tasks.workflow.workspace_module", return_value=module):
+            capture(context, result)
+        read.assert_called_once_with(Path(context.environment["HMB_STATE_DIR"]), context.turn_input)
+        module.seal.assert_called_once_with(Path(context.environment["HMB_STATE_DIR"]), resolved, "run", "attempt")
 
     def test_out_of_scope_failure_preserves_conflict_instead_of_a_partial_output(self):
         error = BoardError("WORKSPACE_SCOPE_VIOLATION", "outside declared scope", paths=["src/forbidden.py"])
@@ -94,7 +109,7 @@ class PartialOutputSafetyTests(unittest.TestCase):
         self.assertEqual(classify_termination(result, timed_out=False, cancel_requested=False), "completed")
         with patch("hey_my_buddy.blackboard.tasks.workflow.workspace_module", return_value=module):
             workspace_cause = enrich(context, result)
-        module.cumulative_patch.assert_called_once_with(context.turn_input["executionWorkspace"], seal, "initial-commit")
+        module.cumulative_patch.assert_called_once_with(context.effective_workspace, seal, "initial-commit")
         self.assertTrue(workspace_cause)
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.error, "Cumulative patch could not be preserved: Git could not capture the patch")

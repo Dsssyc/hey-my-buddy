@@ -1,5 +1,6 @@
 """Real Git coverage for repository relocation across Host lifecycle operations."""
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 
 from pathlib import Path
 from unittest.mock import patch
@@ -30,7 +31,7 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
             board.call("workflow_continue", request)
         self.assertEqual(caught.exception.code, "WORKSPACE_REPOSITORY_NOT_FOUND")
         with board.store.db.read() as connection:
-            row = connection.execute("SELECT revision,workspace_manifest_json FROM workflow_runs WHERE run_id=?",
+            row = connection.execute("SELECT revision FROM workflow_runs WHERE run_id=?",
                                      (submitted["runId"],)).fetchone()
             self.assertEqual(row["revision"], awaiting["revision"])
             self.assertEqual(connection.execute(
@@ -125,7 +126,7 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         })
         self.controls[owner["runId"]] = owner["control"]
         claimed = self.claim(board, owner["runId"])
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["checkoutRoot"])
         (checkout / "tracked.txt").write_text("macro output\n", encoding="utf-8")
         seal = workspace.seal(self.directory, manifest, owner["runId"], claimed["claim"]["attempt"]["attemptId"])
@@ -144,7 +145,7 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         # Native session deletion is outside this Git/blackboard integration.
         with patch.object(deletion, "_delete_sessions", return_value=[]):
             result = deletion.delete(board.store, owner["macroTaskId"], 1)
-        self.assertEqual(result["state"], "deleted")
+        self.assertEqual(result["state"], "deleted", result)
         self.assertFalse(checkout.exists())
         prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
         self.assertFalse(git(moved, "for-each-ref", "--format=%(refname)", prefix))
@@ -210,7 +211,7 @@ class ProjectRelocationWorkflowTests(LifecycleTestCase):
         })
         self.controls[submitted["runId"]] = submitted["control"]
         claimed = self.claim(board, submitted["runId"])
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         (self.repo / "tracked.txt").write_text("integrated existing output\n", encoding="utf-8")
         seal = workspace.seal(self.directory, manifest, submitted["runId"],
                               claimed["claim"]["attempt"]["attemptId"])

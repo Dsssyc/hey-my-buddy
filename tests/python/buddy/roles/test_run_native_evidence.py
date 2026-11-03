@@ -165,7 +165,7 @@ class NativeEvidenceRoleTests(unittest.TestCase):
         self.assertEqual(outcome.result["tokenUsage"], result.usage.value)
         self.assertEqual(outcome.result["lastAssistantMessage"]["text"], "done")
         self.assertTrue(outcome.result["nativeSession"]["present"])
-        self.assertEqual(outcome.result["workspaceManifest"], {"partial": True})
+        self.assertNotIn("workspaceManifest", outcome.result)
         self.assertEqual(outcome.artifacts, partial)
 
     def router_collect(self, payload, mode="fast", domain_nodes=()):

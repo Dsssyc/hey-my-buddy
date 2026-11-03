@@ -83,6 +83,16 @@ describe("the compact collaboration record", () => {
     expect(() => parseWorkflow(reply({ artifacts: [{ ...output, attemptId: null }] }), "m1")).toThrow(ApiError);
   });
 
+  it("reads a referenced output record with its file identity", () => {
+    const referenced = { ...output, manifestSha256: undefined, contentForm: "record-reference",
+      outputSnapshotSha256: "d".repeat(64), recordFile: { path: "/private/output.json", sha256: "e".repeat(64) } };
+    const parsed = parseWorkflow(reply({ artifacts: [referenced] }), "m1");
+    expect(parsed.artifacts[0]).toMatchObject({ contentForm: "record-reference",
+      manifestSha256: "d".repeat(64), outputSnapshotSha256: "d".repeat(64),
+      recordFile: referenced.recordFile });
+    expect(() => parseWorkflow(reply({ artifacts: [{ ...referenced, recordFile: undefined }] }), "m1")).toThrow(ApiError);
+  });
+
   it("reads a user's lock, and a turn without its recorded route as unrecorded", () => {
     const parsed = parseWorkflow(reply({ buddyLocked: true, turns: [{ ...turn, routing: null, buddy: null, tokenUsage: null }] }), "m1");
     expect(parsed.buddyLocked).toBe(true);

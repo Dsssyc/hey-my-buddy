@@ -7,6 +7,7 @@ decision and the resealed handoff are all real. A failed site is never promoted
 to an authorized baseline, and a mechanical resolution never needs a model turn.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from admission import admit_board, admit_store
 
 import json
@@ -60,9 +61,9 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def resolution_record(board, resolved):
         with board.store.db.read() as connection:
             row = connection.execute(
-                "SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?", (resolved["artifactId"],)
+                "SELECT * FROM workflow_artifacts WHERE artifact_id=?", (resolved["artifactId"],)
             ).fetchone()
-        return json.loads(row["manifest_json"])
+        return artifact_manifest(board.directory, row)
 
     def historical_record_paths(self, manifest, task_id, attempt_id, basename):
         output_id = workspace_module._sha(workspace_module._json([task_id, attempt_id]))
@@ -113,7 +114,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
     def finish_turn(self, board, claimed, seal, *, disposition="completed", worker_id=None):
         claim = claimed["claim"]
         attempt = claim["attempt"]
-        return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': self.turn_record(claim, disposition=disposition), 'turnResultPath': '/tmp/turn-result.json', 'workspaceSeal': seal}, 'shutdownConfirmed': True, 'exitCode': 0})
+        return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'ok', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': self.turn_record(claim, disposition=disposition), 'turnResultPath': '/tmp/turn-result.json', 'workspaceSeal': record_reference(self.directory, seal)}, 'shutdownConfirmed': True, 'exitCode': 0})
 
     def view(self, board, run_id, **extra):
         return board.call("workflow_get", {"runId": run_id, **extra})
@@ -158,7 +159,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id)
         self.assertIsNotNone(claimed["claim"], claimed)
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
         (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
         (checkout / "tracked.txt").write_text("outside the authorized scope\n", encoding="utf-8", newline="\n")
@@ -180,7 +181,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         submitted = self.micro_task_submit(board, request_id=request_id, scope=("src",))
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id)
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
         (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
         (checkout / "tracked.txt").write_text("outside the authorized scope\n", encoding="utf-8", newline="\n")
@@ -276,11 +277,11 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(attention["activeRequest"]["preparationError"]["code"], "WORKSPACE_SCOPE_CONFLICT")
         with board.store.db.read() as connection:
             continuation = connection.execute(
-                "SELECT state, workspace_manifest_json FROM workflow_continuations WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
+                "SELECT state, workspace_id FROM workflow_continuations WHERE run_id=? ORDER BY rowid DESC LIMIT 1",
                 (run_id,),
             ).fetchone()
         self.assertEqual(continuation["state"], "invalidated")
-        self.assertIsNone(continuation["workspace_manifest_json"])
+        self.assertIsNone(continuation["workspace_id"])
         # The failure site is preserved exactly, not captured into a new baseline.
         self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
@@ -312,7 +313,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(continued["state"], "executing")
         resumed = self.claim(board, run_id, request_id="claim-after-restore", nonce="m" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
-        execution = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(execution["baseCommit"], record["outputCommit"])
         self.assertEqual(execution["inputCommit"], record["outputCommit"])
         self.assertEqual(resumed["claim"]["turn"]["turnIndex"], 2)
@@ -329,7 +330,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         board = self.board()
         submitted = self.micro_task_submit(board, request_id="thousand-scope-paths", scope=("src",))
         claimed = self.claim(board, submitted["runId"])
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         checkout = Path(manifest["path"])
         for path in paths:
             (checkout / path).write_text("outside scope\n", encoding="utf-8", newline="\n")
@@ -402,7 +403,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             attempt_id = claimed["claim"]["attempt"]["attemptId"]
             turn = connection.execute("SELECT state FROM workflow_turns WHERE attempt_id=?", (attempt_id,)).fetchone()
             artifact = connection.execute(
-                "SELECT kind, manifest_json FROM workflow_artifacts WHERE attempt_id=? AND kind IN ('output','resolved-output')",
+                "SELECT * FROM workflow_artifacts WHERE attempt_id=? AND kind IN ('output','resolved-output')",
                 (attempt_id,),
             ).fetchone()
             receipts = connection.execute(
@@ -411,7 +412,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(turn["state"], "failed")
         self.assertIsNone(board.call("workflow_get", {"runId": run_id})["currentTurn"]["disposition"])
         self.assertEqual(artifact["kind"], "resolved-output")
-        self.assertEqual(json.loads(artifact["manifest_json"])["action"], "restore")
+        self.assertEqual(artifact_manifest(self.directory, artifact)["action"], "restore")
 
     def test_partial_restore_reports_the_remaining_paths(self):
         board, submitted, claimed, manifest, checkout = self.scoped_failure()
@@ -458,7 +459,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         continued = self.continue_run(board, adopted, command_id="continue-after-adoption")
         self.assertEqual(continued["state"], "executing")
         resumed = self.claim(board, run_id, request_id="claim-adopted", nonce="k" * 16)
-        execution = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(execution["baseCommit"], adopted["outputCommit"])
         self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
@@ -482,7 +483,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.assertEqual(continued["state"], "executing")
         resumed = self.claim(board, run_id, request_id="claim-abandoned", nonce="j" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
-        execution = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(execution["manifestSha256"], manifest["manifestSha256"])
         self.assertEqual((checkout / "src" / "feature.py").read_text(encoding="utf-8"), "value = 1\n")
 
@@ -549,7 +550,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         submitted = self.micro_task_submit(board, request_id="amend-run", scope=("src",))
         run_id = submitted["runId"]
         first = self.claim(board, run_id, request_id="claim-amend-first")
-        manifest = first["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, first["claim"]["turn"]["input"])
         active = self.view(board, run_id)
         with self.assertRaises(BoardError) as raised:
             self.amend(board, active, write_scope=(".", "docs"), note="retroactive")
@@ -580,7 +581,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         submitted = self.micro_task_submit(board, request_id="amend-stage", scope=("src",))
         run_id = submitted["runId"]
         first = self.claim(board, run_id, request_id="claim-first")
-        manifest = first["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, first["claim"]["turn"]["input"])
         self.assertEqual(manifest["writeScope"], ["src"])
         checkout = Path(manifest["path"])
         (checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
@@ -592,7 +593,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         self.continue_run(board, amended, command_id="continue-amended")
         resumed = self.claim(board, run_id, request_id="claim-amended", nonce="d" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
-        execution = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(execution["writeScope"], ["docs", "src"])
         self.assertEqual(execution["baseCommit"], seal["commit"])
         # The earlier turn input keeps its original scope; only the new stage moved.
@@ -600,7 +601,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
             original = connection.execute(
                 "SELECT input_json FROM workflow_turns WHERE attempt_id=?", (first["claim"]["attempt"]["attemptId"],)
             ).fetchone()
-        self.assertEqual(json.loads(original["input_json"])["executionWorkspace"]["writeScope"], ["src"])
+        self.assertEqual(turn_manifest(self.directory, json.loads(original["input_json"]))["writeScope"], ["src"])
 
     # -- Host-resolution delivery of a scope-only failure ---------------------
     def test_native_scope_only_failure_is_delivered_by_a_full_restore(self):
@@ -817,7 +818,7 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         submitted = self.micro_task_submit(board, request_id="helper-scope", scope=("src",))
         run_id = submitted["runId"]
         claimed = self.claim(board, run_id, request_id="helper-scope-claim")
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         native_path(Path(manifest["path"]) / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal, disposition="assistance")

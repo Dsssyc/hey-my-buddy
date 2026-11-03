@@ -272,7 +272,6 @@ class UpgradeChainTests(unittest.TestCase):
             self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
 
     def test_floor_runs_every_step_with_schema31_stock_and_matches_a_new_board(self):
-        self.add_bound_stock('schema-30-reservation-stock.sql')
         def step_with_new_form(db):
             schema_30_31.upgrade(db)
             add_schema31_stock(db)
@@ -285,17 +284,25 @@ class UpgradeChainTests(unittest.TestCase):
         self.assert_current_structure()
 
     def test_terminal_reservation_stock_releases_at_the_original_host_decision_time(self):
-        self.add_bound_stock('schema-30-reservation-stock.sql')
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
-        reader_id = metadata['reservationStockRunId']
+        reader_id = self.db.execute("SELECT r.run_id FROM workspace_reservations w"
+                                    " JOIN workflow_runs r ON r.run_id=w.holder_task_id"
+                                    " JOIN workflow_host_conclusions h ON h.run_id=r.run_id"
+                                    " WHERE w.access='read' AND r.state='concluded' LIMIT 1").fetchone()[0]
         reader = self.db.execute("SELECT w.*,r.execution_workspace_json,h.created_at AS concluded_at"
                                  " FROM workspace_reservations w JOIN workflow_runs r ON r.run_id=w.holder_task_id"
                                  " JOIN workflow_host_conclusions h ON h.run_id=r.run_id WHERE r.run_id=?",
                                  (reader_id,)).fetchone()
-        self.assertEqual((reader['access'], reader['state'], reader['released_at']), ('read', 'held', None))
-        self.assertTrue(reader['path'].endswith('/fixture-subdirectory'))
+        self.assertEqual((reader['access'], reader['state']), ('read', 'released'))
         self.assertEqual(json.loads(reader['execution_workspace_json'])['kind'], 'existing')
-        self.assertEqual(reader['concluded_at'], metadata['reservationStockConcludedAt'])
+        # Model an inherited reservation that the old Host conclusion did not
+        # release, using a complete output and conclusion from the floor writer.
+        self.db.execute("UPDATE workspace_reservations SET state='held',released_at=NULL WHERE holder_task_id=?",
+                        (reader_id,))
+        self.db.commit()
+        self.assertEqual(tuple(self.db.execute(
+            'SELECT state,released_at FROM workspace_reservations WHERE holder_task_id=?',
+            (reader_id,)).fetchone()), ('held', None))
         # The floor's accept writer already releases its own reservations. Also
         # exercise an inherited held acceptance without changing that evidence.
         self.db.execute("UPDATE workspace_reservations SET state='held',released_at=NULL WHERE holder_task_id=?",

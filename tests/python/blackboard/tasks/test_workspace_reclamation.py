@@ -4,6 +4,7 @@ from pathlib import Path
 
 from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 from hey_my_buddy.blackboard.tasks import allocation_revocations, workspace
+from hey_my_buddy.protocol.workspace_manifest import record_reference, turn_manifest
 
 
 class ReclamationTests(LifecycleTestCase):
@@ -159,8 +160,16 @@ class ReclamationTests(LifecycleTestCase):
         self.assertFalse(checkout.exists())
         with board.store.db.read() as connection:
             run = board.store.workflow._run_row(connection, view["runId"])
-            current = json.loads(run["workspace_manifest_json"])
-            self.assertNotEqual(current["manifestSha256"], manifest["manifestSha256"])
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+            from hey_my_buddy.protocol.workspace_manifest import resolve_manifest
+            self.assertEqual(effective_manifest(board.directory, connection, run)["manifestSha256"],
+                             manifest["manifestSha256"])
+            prepared = connection.execute(
+                "SELECT workspace_id,workspace_manifest_sha256 FROM workflow_continuations"
+                " WHERE run_id=? AND workspace_id IS NOT NULL ORDER BY rowid DESC LIMIT 1",
+                (view["runId"],)).fetchone()
+            current = resolve_manifest(board.directory, {"workspaceId": prepared["workspace_id"],
+                                                         "manifestSha256": prepared["workspace_manifest_sha256"]})
             handoff = board.store.workflow._latest_handoff(connection, run, current)
             self.assertEqual(handoff["kind"], "host-output")
             self.assertEqual(handoff["manifestSha256"], current["manifestSha256"])
@@ -408,11 +417,12 @@ class ReclamationTests(LifecycleTestCase):
                 if terminal == 'failed':
                     child = self.claim(board, child_id, request_id='borrower-failed-claim')['claim']
                     attempt = child['attempt']
-                    seal = workspace.seal(board.directory, child['turn']['input']['executionWorkspace'], child_id, attempt['attemptId'])
+                    seal = workspace.seal(board.directory, turn_manifest(board.directory, child['turn']['input']),
+                                          child_id, attempt['attemptId'])
                     board.call('execution_result', {
                         'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16,
                         'status': 'failed', 'terminationReason': 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1,
-                        'result': {'status': 'invalid-result', 'workspaceSeal': seal},
+                        'result': {'status': 'invalid-result', 'workspaceSeal': record_reference(self.directory, seal)},
                     })
                 root = private_dirs.ensure_private_dir(private_dirs.micro_task_root(board.directory, 'dsh', child_id))
                 (root / 'failed-evidence.log').write_text('retained', encoding='utf-8')
@@ -455,7 +465,7 @@ class ReclamationTests(LifecycleTestCase):
             'executionWorkspace': {'kind': 'worktree', 'access': 'write', 'writeScope': ['.']},
         })
         claimed = self.claim(board, submitted['runId'], request_id='running-maintenance-claim')
-        manifest = claimed['claim']['turn']['input']['executionWorkspace']
+        manifest = turn_manifest(board.directory, claimed['claim']['turn']['input'])
         directory = Path(manifest['checkoutRoot']).parent
         maintenance = Reclamation(board.store)
         original_lock = workspace._lock
@@ -680,7 +690,9 @@ class ReclamationTests(LifecycleTestCase):
         submitted = self.submit(board, request_id='cached-owner', kind='worktree')
         self.controls[submitted['runId']] = submitted['control']
         with board.store.db.read() as connection:
-            manifest = json.loads(board.store.workflow._run_row(connection, submitted['runId'])['workspace_manifest_json'])
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+            row = board.store.workflow._run_row(connection, submitted['runId'])
+            manifest = effective_manifest(board.directory, connection, row)
         maintenance = reclamation.Reclamation(board.store)
         board.store.on_change = maintenance.changed
         maintenance.run()
@@ -734,7 +746,7 @@ class ReclamationTests(LifecycleTestCase):
 
     def test_continuation_selects_a_new_manifest_host_seal_and_ignores_another_checkout(self):
         board = self.board()
-        submitted, claim, _, checkout, _, view, _ = self.run_worktree(board, disposition='attention')
+        submitted, claim, initial, checkout, _, view, _ = self.run_worktree(board, disposition='attention')
         run_id = submitted['runId']
         board.call('workflow_continue', {'runId': run_id, 'commandId': 'prepare-before-cancel',
                                         'expectedRevision': view['revision'], 'input': 'prepare', 'helperPolicy': 'keep', **self.control(view)})
@@ -742,14 +754,17 @@ class ReclamationTests(LifecycleTestCase):
         board.call('workflow_cancel', {'runId': run_id, **self.control(view)})
         with board.store.db.read() as connection:
             run = board.store.workflow._run_row(connection, run_id)
-            current = json.loads(run['workspace_manifest_json'])
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+            current = effective_manifest(board.directory, connection, run)
         (checkout / 'host-stage.txt').write_text('Host progress after preparation', encoding='utf-8')
         attempt_id = claim['claim']['attempt']['attemptId']
         host_seal = workspace.host_seal(board.directory, current, run_id, attempt_id)
+        workspace.cumulative_patch(current, host_seal, initial['inputCommit'])
         foreign = workspace.prepare(board.directory, 'foreign-handoff', {
             'kind': 'worktree', 'cwd': str(self.repo), 'access': 'write', 'writeScope': ['.'],
             'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'fixture-host'}})
         foreign_seal = workspace.host_seal(board.directory, foreign, run_id, attempt_id)
+        workspace.cumulative_patch(foreign, foreign_seal, initial['inputCommit'])
         with board.store.db.write() as connection:
             pin = board.store.workflow._pin_artifact
             pin(connection, run_id=run_id, kind='partial-output', manifest=host_seal,
@@ -765,12 +780,13 @@ class ReclamationTests(LifecycleTestCase):
                                         'expectedRevision': cancelled['revision'], 'input': 'finish', **self.control(cancelled)})
         board.store.workflow.prepare_continuation_workspace({'runId': run_id})
         with board.store.db.read() as connection:
-            prepared = json.loads(board.store.workflow._run_row(connection, run_id)['workspace_manifest_json'])
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+            prepared = effective_manifest(board.directory, connection,
+                                          board.store.workflow._run_row(connection, run_id))
         self.assertEqual(prepared['inputCommit'], host_seal['commit'])
         self.assertEqual(prepared['checkoutRoot'], current['checkoutRoot'])
 
-    def test_cleanup_plan_keeps_one_binding_per_root_for_a_run(self):
-        from hey_my_buddy.blackboard.store.db import canonical_json
+    def test_cleanup_plan_uses_terminal_turn_binding_after_another_input_is_retained(self):
         board, submitted, manifest, checkout, _, _ = self.accepted_worktree()
         coordinator = board.store.workflow
         first = coordinator.cleanup_plan({'runId': submitted['runId']})['plan']
@@ -780,16 +796,17 @@ class ReclamationTests(LifecycleTestCase):
             'base': {'kind': 'working-tree'}, 'integrator': {'role': 'host', 'id': 'host-1'},
         })
         with board.store.db.write() as connection:
-            connection.execute('UPDATE workflow_runs SET workspace_manifest_json=? WHERE run_id=?',
-                               (canonical_json(replacement), submitted['runId']))
+            coordinator._pin_artifact(connection, run_id=submitted['runId'], kind='input',
+                                      manifest=replacement, attempt_id=None, turn_id=None,
+                                      now=board.store.now())
         second = coordinator.cleanup_plan({'runId': submitted['runId']})['plan']
-        self.assertNotEqual(second['planId'], first['planId'])
-        self.assertEqual(second['path'], replacement['checkoutRoot'])
+        self.assertEqual(second['planId'], first['planId'])
+        self.assertEqual(second['path'], str(checkout))
         with board.store.db.read() as connection:
             paths = [row[0] for row in connection.execute(
                 'SELECT path FROM workspace_cleanup_plans WHERE run_id=? ORDER BY rowid',
                 (submitted['runId'],))]
-        self.assertEqual(paths, [str(checkout), replacement['checkoutRoot']])
+        self.assertEqual(paths, [str(checkout)])
 
     def test_busy_result_converges_if_a_competing_cleanup_already_committed(self):
         from unittest.mock import patch

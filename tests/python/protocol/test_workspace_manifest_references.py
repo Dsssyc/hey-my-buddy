@@ -1,0 +1,67 @@
+"""Frozen references must read the exact private file they name."""
+import hashlib
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol.workspace_manifest import (
+    artifact_manifest, manifest_ref, record_reference, resolve_manifest, resolve_record, turn_manifest,
+)
+
+
+def _bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+
+
+class WorkspaceManifestReferences(unittest.TestCase):
+    def test_current_reference_rejects_changed_file_and_archived_turn_keeps_its_body(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            workspace_id = "ws-" + "a" * 32
+            directory = state / "workspaces" / workspace_id
+            directory.mkdir(parents=True)
+            body = {"version": 4, "workspaceId": workspace_id, "projectId": "project", "path": "/example"}
+            manifest = {**body, "manifestSha256": hashlib.sha256(_bytes(body)).hexdigest()}
+            (directory / "manifest.json").write_bytes(_bytes(manifest))
+            reference = manifest_ref(manifest)
+            self.assertEqual(resolve_manifest(state, reference), manifest)
+            self.assertEqual(turn_manifest(state, {"version": 4, "executionWorkspace": reference}), manifest)
+            with self.assertRaises(BoardError) as caught:
+                turn_manifest(state, {"version": 4.0, "executionWorkspace": reference})
+            self.assertEqual(caught.exception.code, "TURN_INVALID")
+            archived = {"version": 3, "executionWorkspace": {"version": 3, "repositoryId": "historical"}}
+            self.assertEqual(turn_manifest(state, archived), archived["executionWorkspace"])
+            (directory / "manifest.json").write_bytes(_bytes({**manifest, "path": "/changed"}))
+            with self.assertRaises(BoardError) as caught:
+                resolve_manifest(state, reference)
+            self.assertEqual(caught.exception.code, "WORKSPACE_MANIFEST_CHANGED")
+
+    def test_record_reference_binds_existing_bytes_and_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            state = Path(temporary)
+            record = {"version": 1, "workspaceId": "ws-" + "b" * 32,
+                      "taskId": "task", "attemptId": "attempt", "snapshotSha256": "c" * 64}
+            output_id = hashlib.sha256(_bytes(["task", "attempt"])).hexdigest()
+            directory = state / "workspaces" / record["workspaceId"] / "outputs" / output_id
+            directory.mkdir(parents=True)
+            file = directory / "output.json"
+            file.write_bytes(_bytes(record))
+            reference = record_reference(state, {**record, "cumulativePatch": {"path": "derived"}})
+            self.assertFalse(Path(reference["recordFile"]["path"]).is_absolute())
+            self.assertEqual(resolve_record(state, reference), record)
+            for malformed in ({}, {"manifestSha256": "not-a-hash"},
+                              {"recordFile": {}, "snapshotSha256": record["snapshotSha256"]},
+                              {**reference, "recordFile": {**reference["recordFile"], "path": str(file)}}):
+                with self.subTest(reference=malformed), self.assertRaises(BoardError) as caught:
+                    resolve_record(state, malformed)
+                self.assertEqual(caught.exception.code, "ARTIFACT_MISMATCH")
+            row = {"content_form": "record-reference", "record_path": reference["recordFile"]["path"],
+                   "record_sha256": reference["recordFile"]["sha256"],
+                   "output_snapshot_sha256": record["snapshotSha256"]}
+            self.assertEqual(artifact_manifest(state, row), record)
+            file.write_bytes(_bytes({**record, "taskId": "other"}))
+            with self.assertRaises(BoardError) as caught:
+                resolve_record(state, reference)
+            self.assertEqual(caught.exception.code, "ARTIFACT_MISMATCH")

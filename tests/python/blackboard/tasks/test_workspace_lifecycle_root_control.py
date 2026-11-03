@@ -5,6 +5,7 @@ stale helper command, and only the control root's revision authorizes the
 helper's reclamation.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from unittest.mock import patch as defer_reclaim
 import json
 from pathlib import Path
@@ -106,7 +107,7 @@ class RootControlLifecycleTests(LifecycleTestCase):
         self.assertNotEqual(root_view["state"], "accepted")
         parent_claim = self.claim(board, run_id, request_id="parent-claim-2", nonce="p" * 16)
         self.assertIsNotNone(parent_claim["claim"], parent_claim)
-        parent_manifest = parent_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        parent_manifest = turn_manifest(self.directory, parent_claim["claim"]["turn"]["input"])
         native_path(Path(parent_manifest["path"]) / "parent-second.txt").write_text("parent second stage\n", encoding="utf-8", newline="\n")
         parent_seal = workspace_module.seal(self.directory, parent_manifest, run_id,
                                             parent_claim["claim"]["attempt"]["attemptId"])

@@ -2,6 +2,12 @@
 from pathlib import Path
 
 from ...errors import BoardError
+from ...protocol.workspace_manifest import turn_manifest
+
+
+def _workspace(context):
+    return context.effective_workspace or turn_manifest(
+        Path(context.environment["HMB_STATE_DIR"]), context.turn_input)
 
 
 def capture(context, outcome):
@@ -10,12 +16,12 @@ def capture(context, outcome):
     payload = outcome.result
     if payload.get("modelStarted") is False:
         return
-    manifest = context.effective_workspace or context.turn_input["executionWorkspace"]
     state = context.environment.get("HMB_STATE_DIR")
-    if not manifest or not state:
+    if not state:
         return
     try:
         from ...blackboard.tasks.workflow import workspace_module
+        manifest = _workspace(context)
         seal = payload.pop("workspaceSeal", None) or workspace_module().seal(
             Path(state), manifest, context.task_id, context.attempt_id)
         # A partial output is work evidence, not a process record: the runners
@@ -23,7 +29,6 @@ def capture(context, outcome):
         # and never proves work. Changed managed files are the concrete evidence.
         if seal and seal.get("changedPaths"):
             payload["partialWorkspaceSeal"] = seal
-            payload["workspaceManifest"] = manifest
             payload["partialOutput"] = {"partial": True, "verified": False, "final": False}
     except BoardError as error:
         payload["partialSealError"] = error.payload()
@@ -33,13 +38,13 @@ def enrich(context, outcome):
     capture(context, outcome)
     if not outcome.shutdown_confirmed or not context.turn_input:
         return False
-    manifest = context.effective_workspace or context.turn_input["executionWorkspace"]
     original = context.turn_input.get("context", {}).get("microTaskInputCommit")
     seal = outcome.result.get("workspaceSeal") or outcome.result.get("partialWorkspaceSeal")
-    if not manifest or not original or not seal:
+    if not original or not seal:
         return False
     try:
         from ...blackboard.tasks.workflow import workspace_module
+        manifest = _workspace(context)
         seal["cumulativePatch"] = workspace_module().cumulative_patch(manifest, seal, original)
     except BoardError as error:
         completed_before_patch = outcome.status == "ok"

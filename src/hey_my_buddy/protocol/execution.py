@@ -219,7 +219,7 @@ def receipt_reference(directory: Path) -> dict:
 
 
 def read_execution_receipt(directory: Path, *, binding: dict | None = None,
-                           sha256: str | None = None) -> dict | None:
+                           sha256: str | None = None, form: str = "current-report-v2") -> dict | None:
     try:
         descriptor = open_regular_fd(Path(directory) / RECEIPT, os.O_RDONLY)
     except FileNotFoundError:
@@ -231,7 +231,15 @@ def read_execution_receipt(directory: Path, *, binding: dict | None = None,
     value = decode_strict_json(raw)
     if not isinstance(value, dict):
         raise BoardError("INVALID_ARGUMENT", "Execution receipt must be an object")
-    if set(value) != {"attemptId", "generation", "taskId", "report", "createdAt"}:
+    if form == "current-report-v2":
+        expected_fields = {"version", "attemptId", "generation", "taskId", "report", "createdAt"}
+        if type(value.get("version")) is not int or value["version"] != 2:
+            raise BoardError("INVALID_ARGUMENT", "Execution receipt has an invalid version")
+    elif form == "archived-report-v1":
+        expected_fields = {"attemptId", "generation", "taskId", "report", "createdAt"}
+    else:
+        raise BoardError("INVALID_ARGUMENT", "Unknown execution receipt form")
+    if set(value) != expected_fields:
         raise BoardError("INVALID_ARGUMENT", "Execution receipt has an invalid shape")
     if (not isinstance(value["taskId"], str) or not value["taskId"]
             or not isinstance(value["attemptId"], str) or not value["attemptId"]

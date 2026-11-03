@@ -22,6 +22,7 @@ import blackboard.tasks.workspace_git_fixture as git_fixtures
 from hey_my_buddy import private_dirs
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module
 from hey_my_buddy.blackboard.tasks import workspace as workspace_module
+from hey_my_buddy.protocol.workspace_manifest import record_reference, resolve_manifest
 from hey_my_buddy.blackboard.store.db import canonical_json
 from hey_my_buddy.errors import BoardError
 from hey_my_buddy.paths import native_path
@@ -101,7 +102,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
     def finish_turn(self, board, claimed, seal, *, disposition="completed", nonce="n" * 16, worker_id=None):
         claim = claimed["claim"]
         attempt = claim["attempt"]
-        return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce, 'status': 'ok', 'terminationReason': 'completed', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': self.turn_record(claim, disposition=disposition), 'turnResultPath': '/tmp/turn-result.json', 'workspaceSeal': seal}, 'shutdownConfirmed': True, 'exitCode': 0})
+        return board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': nonce, 'status': 'ok', 'terminationReason': 'completed', 'result': {'status': 'ok', 'processState': {'shutdownConfirmed': True}, 'turn': self.turn_record(claim, disposition=disposition), 'turnResultPath': '/tmp/turn-result.json', 'workspaceSeal': record_reference(board.directory, seal)}, 'shutdownConfirmed': True, 'exitCode': 0})
 
     def view(self, board, run_id, **extra):
         return board.call("workflow_get", {"runId": run_id, **extra})
@@ -114,7 +115,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         })
         self.controls[submitted["runId"]] = submitted["control"]
         claimed = self.claim(board, submitted["runId"], request_id=f"{request_id}-claim")
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = resolve_manifest(board.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
         checkout = Path(manifest["path"])
         (checkout / "tracked.txt").write_text(output, encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, submitted["runId"],
@@ -195,7 +196,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         run_id = submitted["runId"]
         self.controls[run_id] = submitted["control"]
         claimed = self.claim(board, run_id)
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = resolve_manifest(board.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
         checkout = Path(manifest["path"])
         for number in range(file_count):
             native_path(checkout / name("old", number)).rename(native_path(checkout / name("new", number)))
@@ -248,11 +249,13 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         wire = called.call_args.args[0]
         self.assertLess(len(wire.encode()), 2048)
         if long_paths:
-            self.assertGreater(receipt_sizes[0], 8 * 1024 * 1024)
+            self.assertLess(receipt_sizes[0], transport.MAX_MESSAGE_BYTES)
+            self.assertGreater(native_path(Path(sealed["diffPath"]).with_name("output.json")).stat().st_size,
+                               8 * 1024 * 1024)
         with board.store.db.read() as connection:
             stored_result = json.loads(connection.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
                                        (claimed["claim"]["attempt"]["attemptId"],)).fetchone()[0])
-        self.assertEqual(stored_result["result"]["workspaceSeal"], sealed)
+        self.assertEqual(stored_result["result"]["workspaceSeal"], record_reference(self.directory, sealed))
         view = self.view(board, run_id)
         artifact = next(row for row in view["artifacts"] if row["kind"] == "output")
         target = self.target_with_artifact(artifact)
@@ -321,7 +324,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(continued["state"], "executing")
         second = self.claim(board, run_id, request_id=f"{request_id}-claim-2", nonce="q" * 16)
         self.assertIsNotNone(second["claim"], second)
-        second_manifest = second["claim"]["turn"]["input"]["executionWorkspace"]
+        second_manifest = resolve_manifest(board.directory, second["claim"]["turn"]["input"]["executionWorkspace"])
         self.assertEqual(second_manifest["kind"], "existing")
         self.assertNotEqual(second_manifest["workspaceId"], first_manifest["workspaceId"])
         for field in ("checkoutRoot", "projectId", "path"):
@@ -356,7 +359,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.controls[run_id] = submitted['control']
         first = self.claim(board, run_id, request_id='failed-evidence-first')['claim']
         attempt = first['attempt']
-        manifest = first['turn']['input']['executionWorkspace']
+        manifest = resolve_manifest(board.directory, first['turn']['input']['executionWorkspace'])
         checkout = Path(manifest['path'])
         failed_root = private_dirs.ensure_private_dir(
             private_dirs.attempt_root(board.directory, 'dsh', run_id, attempt['attemptId']))
@@ -369,7 +372,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         native_path(native / 'session.json').write_text('native continuation state', encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, attempt['attemptId'])
         result = {'status': 'ok' if import_failure else 'invalid-result', 'evidenceRefs': refs,
-                  'workspaceSeal': seal, 'processState': {'shutdownConfirmed': True}}
+                  'workspaceSeal': record_reference(self.directory, seal), 'processState': {'shutdownConfirmed': True}}
         if import_failure:
             result['turn'] = {'invalid': 'not an importable turn'}
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'n' * 16, 'status': 'ok' if import_failure else 'failed', 'terminationReason': 'completed' if import_failure else 'harness-error', 'shutdownConfirmed': True, 'exitCode': 1, 'result': result})
@@ -401,7 +404,7 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         })
         second = self.claim(board, run_id, request_id='failed-evidence-second', nonce='q' * 16)
         second_id = second['claim']['attempt']['attemptId']
-        second_manifest = second['claim']['turn']['input']['executionWorkspace']
+        second_manifest = resolve_manifest(board.directory, second['claim']['turn']['input']['executionWorkspace'])
         successful_root = private_dirs.ensure_private_dir(
             private_dirs.attempt_root(board.directory, 'dsh', run_id, second_id))
         native_path(successful_root / 'thread-notifications.json').write_text('successful evidence', encoding="utf-8", newline="\n")
@@ -457,14 +460,15 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         self.assertEqual(decided["decision"], "approve")
         helper_id = decided["children"][0]["taskId"]
         with board.store.db.read() as connection:
-            helper_manifest = json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_children WHERE child_task_id=?", (helper_id,)
-            ).fetchone()["workspace_manifest_json"])
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+            helper_run = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (helper_id,)).fetchone()
+            helper_manifest = effective_manifest(board.directory, connection, helper_run)
         self.assertEqual(helper_manifest["kind"], "worktree")
         self.assertNotEqual(helper_manifest["checkoutRoot"], manifest["checkoutRoot"])
         helper_claim = self.claim(board, helper_id, request_id=f"{request_id}-helper-claim", nonce="h" * 16)
         self.assertIsNotNone(helper_claim["claim"], helper_claim)
-        helper_turn_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        helper_turn_manifest = resolve_manifest(board.directory,
+                                                helper_claim["claim"]["turn"]["input"]["executionWorkspace"])
         helper_checkout = Path(helper_turn_manifest["path"])
         (helper_checkout / "helper.txt").write_text("helper output\n", encoding="utf-8", newline="\n")
         helper_seal = workspace_module.seal(self.directory, helper_turn_manifest, helper_id,
@@ -498,7 +502,8 @@ class LifecycleTestCase(RealWorkspaceTestCase):
         helper_id = decided["children"][0]["taskId"]
         helper_claim = self.claim(board, helper_id, request_id=f"{request_id}-helper-claim", nonce="s" * 16)
         self.assertIsNotNone(helper_claim["claim"], helper_claim)
-        helper_manifest = helper_claim["claim"]["turn"]["input"]["executionWorkspace"]
+        helper_manifest = resolve_manifest(board.directory,
+                                           helper_claim["claim"]["turn"]["input"]["executionWorkspace"])
         helper_checkout = Path(helper_manifest["path"])
         (helper_checkout / "src" / "feature.py").write_text("value = 2\n", encoding="utf-8", newline="\n")
         (helper_checkout / "tracked.txt").write_text("outside the helper scope\n", encoding="utf-8", newline="\n")

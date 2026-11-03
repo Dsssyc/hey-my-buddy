@@ -1,4 +1,5 @@
 """Host edits between sealed turns do not become Worker output at conclusion."""
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,7 +28,7 @@ class ExistingConclusionTests(LifecycleTestCase):
         run_id = submitted["runId"]
         self.controls[run_id] = submitted["control"]
         claimed = self.claim(board, run_id)
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         (self.repo / "cache-a/result.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         sealed = workspace.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, sealed, disposition="attention")
@@ -79,7 +80,7 @@ class ExistingConclusionTests(LifecycleTestCase):
         })
         claimed = self.claim(board, replacement["runId"], request_id="replacement-claim")
         self.assertIsNotNone(claimed["claim"])
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         self.assertEqual(manifest["snapshot"]["sourceHead"], git(self.repo, "rev-parse", "HEAD").strip())
         self.assertEqual((self.repo / paths[-1]).read_text(encoding="utf-8"), "Host work outside the scope\n")
         final = workspace.seal(self.directory, manifest, replacement["runId"], claimed["claim"]["attempt"]["attemptId"])
@@ -137,7 +138,7 @@ class ExistingConclusionTests(LifecycleTestCase):
         self.controls[run_id] = submitted["control"]
         claimed = self.claim(board, run_id)
         claim = claimed["claim"]
-        manifest = claim["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claim["turn"]["input"])
         checkout = Path(manifest["path"])
         (checkout / "tracked.txt").write_text("Host will adopt this path\n", encoding="utf-8", newline="\n")
         with self.assertRaises(BoardError):
@@ -184,7 +185,7 @@ class ExistingConclusionTests(LifecycleTestCase):
         })
         helper_id = decided["children"][0]["taskId"]
         claimed = self.claim(board, helper_id, request_id="same-checkout-helper-claim")
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["claim"]["turn"]["input"])
         (checkout / "helper.txt").write_text("The helper's sealed work\n", encoding="utf-8", newline="\n")
         seal = workspace.seal(self.directory, manifest, helper_id, claimed["claim"]["attempt"]["attemptId"])
         self.finish_turn(board, claimed, seal)

@@ -1,6 +1,8 @@
 """Large stored workspace evidence stays readable through bounded Host views."""
 import json
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 from hey_my_buddy.blackboard.tasks import command_receipts
@@ -23,16 +25,28 @@ class WorkspaceOutputViewTests(unittest.TestCase):
     def assert_bounded(self, value):
         self.assertLess(len(json.dumps(value).encode()), MAX_MESSAGE_BYTES)
 
+    @staticmethod
+    def coordinator():
+        coordinator = object.__new__(WorkflowCoordinator)
+        coordinator.board = SimpleNamespace(directory=Path("/private"))
+        return coordinator
+
+    @staticmethod
+    def archived_output_row(kind, manifest):
+        return {"artifact_id": "artifact", "kind": kind, "attempt_id": "attempt", "turn_id": "turn",
+                "run_id": "run", "output_snapshot_sha256": "snapshot", "created_at": "now",
+                "content_form": "sealed-inline-v1", "manifest_json": json.dumps(manifest),
+                "input_manifest_sha256": None, "shared_refs_sha256": None, "record_path": None,
+                "record_sha256": None, "workspace_id": None}
+
     def test_output_artifact_keeps_shared_and_separate_patch_paths(self):
         for kind in ("output", "partial-output", "resolved-output"):
             for path in ("/private/output.patch", "/private/cumulative.patch"):
                 with self.subTest(kind=kind, path=path):
                     manifest = {"commit": "commit", "diffPath": "/private/output.patch", "diffSha256": "digest",
                                 "cumulativePatch": {"path": path, "sha256": "digest", "changedPaths": ["src/file.py"]}}
-                    row = {"artifact_id": "artifact", "kind": kind, "attempt_id": "attempt", "turn_id": "turn",
-                           "run_id": "run", "manifest_sha256": "snapshot", "created_at": "now",
-                           "manifest_json": json.dumps(manifest)}
-                    view = WorkflowCoordinator._artifact_view(row)
+                    row = self.archived_output_row(kind, manifest)
+                    view = self.coordinator()._artifact_view(row)
                     self.assertEqual(view["diffPath"], manifest["diffPath"])
                     self.assertEqual(view["diffSha256"], manifest["diffSha256"])
                     self.assertEqual(view["cumulativePatch"]["path"], path)
@@ -45,10 +59,8 @@ class WorkspaceOutputViewTests(unittest.TestCase):
             "changedPaths": self.paths,
             "cumulativePatch": {"path": "/private/cumulative.patch", "changedPaths": self.paths},
         }
-        row = {"artifact_id": "artifact", "kind": "output", "attempt_id": "attempt", "turn_id": "turn",
-               "run_id": "run", "manifest_sha256": "snapshot", "created_at": "now",
-               "manifest_json": json.dumps(manifest)}
-        view = WorkflowCoordinator._artifact_view(row)
+        row = self.archived_output_row("output", manifest)
+        view = self.coordinator()._artifact_view(row)
         self.assertEqual(len(json.loads(row["manifest_json"])["changedPaths"]), 3000)
         self.assertEqual(view["changedPaths"], [path[:500] for path in self.paths[:32]])
         self.assertEqual(view["changedPathsCount"], 3000)

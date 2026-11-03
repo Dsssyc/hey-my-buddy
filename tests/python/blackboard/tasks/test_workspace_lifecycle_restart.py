@@ -6,6 +6,7 @@ administration directory is refused, a scope failure keeps its reason, and an
 abandoned continuation returns its input.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from unittest.mock import patch as defer_reclaim
 import json
 import shutil
@@ -59,7 +60,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         self.assertEqual(continued["state"], "executing")
         resumed = self.claim(board, run_id, request_id="restart-chain-second", nonce="q" * 16)
         self.assertIsNotNone(resumed["claim"], resumed)
-        current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        current = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         actual = workspace_module.inspect(str(checkout))
         self.assertEqual(current["path"], original["path"])
         self.assertEqual(current["checkoutRoot"], actual["checkoutRoot"])
@@ -177,7 +178,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         })
         resumed = self.claim(board, helper_id, request_id="restart-restored-helper-claim")
         self.assertIsNotNone(resumed["claim"], resumed)
-        current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        current = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(current["baseCommit"], resolved["outputCommit"])
         self.assertEqual(current["checkoutRoot"], workspace_module.inspect(current["path"])["checkoutRoot"])
         for path, raw in files.items():
@@ -207,7 +208,7 @@ class RestartLifecycleTests(LifecycleTestCase):
         })
         resumed = self.claim(board, helper_id, request_id="restart-abandoned-helper-claim")
         self.assertIsNotNone(resumed["claim"], resumed)
-        current = resumed["claim"]["turn"]["input"]["executionWorkspace"]
+        current = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(current, flow["helperManifest"])
         for path, raw in files.items():
             self.assertEqual(native_path(self.directory / path).read_bytes(), raw, path)

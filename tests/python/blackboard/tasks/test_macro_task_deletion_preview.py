@@ -29,11 +29,11 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         board = self.board()
         run = self.create(board, macroTask={'title': 'Scope', 'goal': 'Scope'})
         with board.store.db.read() as connection:
-            scope = deletion._collect(connection, run['macroTaskId'])
+            scope = deletion._collect(connection, run['macroTaskId'], board.directory)
         self.assertEqual(len(scope.artifacts), 1)
-        self.assertGreater(len(scope.manifests), 1)
+        self.assertEqual(len(scope.manifests), 1)
         before = self.dump(board)
-        allocation = board.directory / 'workspaces' / scope.manifests[0]['workspaceId']
+        allocation = board.directory / 'workspaces' / scope.manifests[0]['workspace_id']
         files = {str(path.relative_to(native_path(allocation))): path.read_bytes()
                  for path in native_path(allocation).rglob('*') if path.is_file()}
         refs = self.git('for-each-ref', '--format=%(refname) %(objectname)', 'refs/hey-my-buddy/')
@@ -50,7 +50,10 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         run = self.create(board)
         with board.store.db.write() as connection:
             original = dict(connection.execute('SELECT * FROM workflow_artifacts WHERE run_id=?', (run['runId'],)).fetchone())
-            duplicate = {**original, 'artifact_id': 'same-path-second-record'}
+            duplicate = {**original, 'artifact_id': 'same-path-second-record',
+                         'workspace_facts_role': 'reference', 'workspace_kind': None,
+                         'checkout_root': None, 'repository_path': None,
+                         'input_commit': None, 'staged_commit': None}
             columns = tuple(duplicate)
             connection.execute(f"INSERT INTO workflow_artifacts({','.join(columns)}) VALUES({','.join('?' for _ in columns)})",
                                tuple(duplicate.values()))
@@ -71,14 +74,20 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         board = self.board()
         run = self.create(board)
         with board.store.db.read() as connection:
-            manifest = deletion._collect(connection, 'run:' + run['runId']).manifests[0]
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+            row = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (run['runId'],)).fetchone()
+            manifest = effective_manifest(board.directory, connection, row)
         native_path(Path(manifest['path']) / 'src/file.txt').write_text('sealed output\n', encoding="utf-8", newline="\n")
         artifact = workspace.seal(board.directory, manifest, run['runId'], 'sealed-attempt')
         with board.store.db.write() as connection:
             for identifier in ('sealed-first-record', 'sealed-second-record'):
-                connection.execute('INSERT INTO workflow_artifacts(artifact_id,run_id,kind,manifest_json,manifest_sha256,created_at)'
-                                   ' VALUES(?,?,?,?,?,?)', (identifier, run['runId'], 'output', json.dumps(artifact),
-                                                          artifact['snapshotSha256'], board.store.now()))
+                connection.execute('INSERT INTO workflow_artifacts(artifact_id,run_id,kind,content_form,'
+                                   'manifest_json,output_snapshot_sha256,output_origin,created_at,'
+                                   'output_workspace_id,output_manifest_sha256,output_ref,output_commit)'
+                                   ' VALUES(?,?,?,\'sealed-inline-v1\',?,?,\'worker\',?,?,?,?,?)',
+                                   (identifier, run['runId'], 'output', json.dumps(artifact),
+                                    artifact['snapshotSha256'], board.store.now(), artifact['workspaceId'],
+                                    artifact['manifestSha256'], artifact['ref'], artifact['commit']))
         before = self.dump(board)
         self.assertEqual(deletion.preview(board.store, 'run:' + run['runId'])['scope'], {
             'artifacts': {'count': 3, 'bytes': None}, 'sessions': {'count': 0, 'bytes': 0}, 'checkouts': 1, 'gitRefs': 6})
@@ -90,7 +99,9 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
             with self.subTest(paired=paired):
                 run = self.create(board, request_id='paired-' + str(paired))
                 with board.store.db.read() as connection:
-                    manifest = deletion._collect(connection, 'run:' + run['runId']).manifests[0]
+                    from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+                    row = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (run['runId'],)).fetchone()
+                    manifest = effective_manifest(board.directory, connection, row)
                 worker = workspace.seal(board.directory, manifest, run['runId'], 'equal-snapshot')
                 with board.store.db.write() as connection:
                     first = board.store.workflow._pin_artifact(
@@ -116,8 +127,9 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         board = self.board()
         run = self.create(board)
         with board.store.db.read() as connection:
-            manifest = json.loads(connection.execute(
-                "SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone()[0])
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+            row = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone()
+            manifest = effective_manifest(board.directory, connection, row)
         proof = workspace.deletion_inspect(board.directory, manifest)
         workspace.cleanup_remove(board.directory, manifest, proof=proof)
         self.assertFalse(Path(manifest["checkoutRoot"]).exists())
@@ -132,17 +144,17 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         self.assertFalse(Path(manifest["checkoutRoot"]).exists())
         self.assertEqual(self.dump(board), before)
 
-    def test_unproven_allocation_makes_whole_checkout_count_unknown(self):
+    def test_missing_manifest_does_not_change_sql_allocation_count(self):
         board = self.board()
         first = self.create(board, macroTask={'title': 'Incomplete allocations', 'goal': 'Incomplete allocations'})
         self.create(board, 'second', macroTaskId=first['macroTaskId'])
         with board.store.db.read() as connection:
-            manifest = json.loads(connection.execute('SELECT workspace_manifest_json FROM workflow_runs WHERE run_id=?',
-                                                     (first['runId'],)).fetchone()[0])
+            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
+            row = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (first['runId'],)).fetchone()
+            manifest = effective_manifest(board.directory, connection, row)
         (board.directory / 'workspaces' / manifest['workspaceId'] / 'manifest.json').unlink()
         scope = deletion.preview(board.store, first['macroTaskId'])['scope']
-        self.assertIsNone(scope['checkouts'])
-        self.assertEqual(scope['gitRefs'], 8)
+        self.assertEqual(scope['checkouts'], 2)
 
     def test_empty_retained_scope_is_zero(self):
         board = self.board()
@@ -159,12 +171,9 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         board = self.board()
         run = self.create(board)
         with board.store.db.read() as connection:
-            collected = deletion._collect(connection, 'run:' + run['runId'])
+            collected = deletion._collect(connection, 'run:' + run['runId'], board.directory)
         conflicting = json.loads(json.dumps(collected.manifests[0]))
-        conflicting['targetRef'] = 'refs/heads/another-target'
-        conflicting['manifestSha256'] = workspace._sha(workspace._json({key: value for key, value in conflicting.items()
-                                                                     if key != 'manifestSha256'}))
-        workspace._validate_manifest(conflicting)
+        conflicting['input_commit'] = 'f' * 40
         collected.manifests.append(conflicting)
         with board.store.db.read() as connection:
             self.assertIsNone(deletion._scope_summary(board.store, collected, connection)['gitRefs'])
@@ -173,16 +182,17 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         board = self.board()
         run = self.create(board)
         with board.store.db.read() as connection:
-            collected = deletion._collect(connection, 'run:' + run['runId'])
+            collected = deletion._collect(connection, 'run:' + run['runId'], board.directory)
         manifest = collected.manifests[0]
-        checkout = Path(manifest['checkoutRoot'])
-        native_path(checkout / 'src/file.txt').write_text('changed output\n', encoding='utf-8', newline='\n')
-        output = workspace.seal(board.directory, manifest, run['runId'], 'conflicting-output')
-        conflicting = json.loads(json.dumps(output))
-        for document in (conflicting, conflicting['snapshot']):
-            document['commit'] = manifest['inputCommit']
-            document['tree'] = manifest['inputTree']
-        conflicting['snapshotSha256'] = workspace._sha(workspace._json(conflicting['snapshot']))
+        workspace_id = manifest['workspace_id']
+        output_id = workspace._sha(workspace._json([run['runId'], 'conflicting-output']))
+        output = {'run_id': run['runId'], 'attempt_id': 'conflicting-output', 'kind': 'output',
+                  'output_origin': 'worker', 'output_action': None,
+                  'output_workspace_id': workspace_id,
+                  'output_manifest_sha256': manifest['manifest_sha256'],
+                  'output_ref': f'refs/hey-my-buddy/workspaces/{workspace_id}/outputs/{output_id}',
+                  'output_commit': 'a' * 40}
+        conflicting = {**output, 'output_commit': 'b' * 40}
         collected.artifacts.extend([output, conflicting])
         with board.store.db.read() as connection:
             self.assertIsNone(deletion._scope_summary(board.store, collected, connection)['gitRefs'])
@@ -200,9 +210,10 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
                             'nativeCheckpoint': {'version': 1, 'sessionId': session_id,
                             'taskId': run['runId'], 'attemptId': attempt_id}}}
                 connection.execute('INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,'
-                                   'adapter,shutdown_confirmed,result_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+                                   'adapter,shutdown_confirmed,result_json,result_form,created_at,updated_at)'
+                                   ' VALUES(?,?,?,?,?,?,?,?,?,?,?)',
                                    (attempt_id, run['runId'], generation, 'fixture', 'finished', 'codex', 1,
-                                    json.dumps(receipt), now, now))
+                                    json.dumps(receipt), 'archived-report-v1', now, now))
         inventory = worker_sessions.deletable_sessions(board.store, {run['runId']})
         # Also repeat a task binding to make the projection's identity rule
         # independent of the inventory's existing per-task deduplication.
@@ -248,7 +259,7 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         board = self.board()
         run = self.create(board)
         with board.store.db.read() as connection:
-            scope = deletion._collect(connection, 'run:' + run['runId'])
+            scope = deletion._collect(connection, 'run:' + run['runId'], board.directory)
             route_task = dict(scope.task_rows[0])
             route_task['task_id'] = 'route-without-title'
             scope.task_rows.append(route_task)

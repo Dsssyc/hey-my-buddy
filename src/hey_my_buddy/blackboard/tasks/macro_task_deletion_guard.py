@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ...errors import BoardError
+from .workspace_bindings import MANIFEST_OWNERS_CTE
 
 
 def reject_macro_task(connection, macro_task_id: str) -> None:
@@ -60,11 +61,12 @@ def reject_deleting_checkout(connection, manifest: dict, state_dir: Path) -> Non
     workspace_id = allocation.parts[0]
     owned_root = str(state_dir / "workspaces" / workspace_id / "checkout")
     owners = connection.execute(
-        "SELECT DISTINCT a.run_id"
-        " FROM workflow_artifacts a WHERE a.kind='input'"
-        " AND json_extract(a.manifest_json, '$.kind')='worktree'"
-        " AND json_extract(a.manifest_json, '$.checkoutRoot')=?"
-        " AND json_extract(a.manifest_json, '$.workspaceId')=?",
+        f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})"
+        " SELECT DISTINCT a.run_id FROM workflow_artifacts a"
+        " JOIN manifest_owners o ON o.workspace_id=a.workspace_id"
+        " AND o.manifest_sha256=a.input_manifest_sha256"
+        " WHERE a.kind='input' AND o.workspace_kind='worktree'"
+        " AND o.checkout_root=? AND a.workspace_id=?",
         (owned_root, workspace_id),
     ).fetchall()
     for owner in owners:

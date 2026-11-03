@@ -25,6 +25,7 @@ from hey_my_buddy.cli import main as cli, cli_views
 from hey_my_buddy.protocol import transport
 from hey_my_buddy.blackboard.tasks import workflow as workflow_module, workspace as workspace_module
 from hey_my_buddy.paths import native_path
+from hey_my_buddy.protocol.workspace_manifest import record_reference, resolve_manifest
 
 PACKET = "Implement the bounded change described here. " * 40
 SUMMARY = "Changed tracked.txt and ran the focused checks. " * 60
@@ -84,7 +85,7 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(code, 0, submitted)
         run_id = submitted["runId"]
         claimed = self.claim(self.board_instance, run_id, request_id="views-claim")
-        manifest = claimed["claim"]["turn"]["input"]["executionWorkspace"]
+        manifest = resolve_manifest(self.directory, claimed["claim"]["turn"]["input"]["executionWorkspace"])
         native_path(Path(manifest["path"]) / "tracked.txt").write_text("sealed output\n", encoding="utf-8", newline="\n")
         seal = workspace_module.seal(self.directory, manifest, run_id, claimed["claim"]["attempt"]["attemptId"])
         seal["cumulativePatch"] = workspace_module.cumulative_patch(manifest, seal, manifest["inputCommit"])
@@ -196,18 +197,17 @@ class CliViewTests(RealWorkspaceTestCase):
         self.board_instance.call("execution_result", {
             "attemptId": claim["attempt"]["attemptId"], "generation": claim["attempt"]["generation"],
             "nonce": "n" * 16, "status": "ok", "shutdownConfirmed": True,
-            "result": {"status": "ok", "turn": record, "workspaceSeal": seal, "workspaceManifest": manifest},
+            "result": {"status": "ok", "turn": record,
+                       "workspaceSeal": record_reference(self.directory, seal)},
         })
         for mode in ("brief", "full"):
             for method in ("await", "result"):
                 code, reply, _ = self.cli(method, {"runId": run_id, "output": mode})
                 self.assertEqual(code, 0, reply)
-                self.assertEqual(reply["result"]["workspaceManifestFile"], reference)
-                if method == "result" and mode == "full":
-                    snapshot = reply["result"]["workspaceManifest"]["snapshot"]
-                    self.assertEqual(len(snapshot["includedUntracked"]), 32)
-                    self.assertEqual(snapshot["includedUntrackedCount"], 40)
-                    self.assertTrue(snapshot["includedUntrackedTruncated"])
+                self.assertNotIn("workspaceManifestFile", reply["result"])
+                self.assertNotIn("workspaceManifest", reply["result"])
+                self.assertIn(record_reference(self.directory, seal)["recordFile"]["sha256"],
+                              json.dumps(reply))
 
     def test_get_brief_preserves_turn_outcome_truncation(self):
         submitted, service_view = self.delivered()
@@ -233,9 +233,11 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertEqual(brief["finalArtifactId"], service_view["finalArtifactId"])
         output = next(row for row in service_view["artifacts"] if row["kind"] == "output")
         self.assertEqual(brief["artifacts"], [{key: output[key] for key in (
-            "artifactId", "kind", "turnId", "manifestSha256", "outputCommit", "diffPath", "diffSha256",
-            "cumulativePatch", "changedPaths", "changedPathsCount", "changedPathsTruncated") if key in output}])
-        self.assertEqual(brief["artifacts"][0]["cumulativePatch"]["path"], output["diffPath"])
+            "artifactId", "kind", "turnId", "manifestSha256", "contentForm", "outputSnapshotSha256",
+            "recordFile", "outputCommit", "diffPath", "diffSha256", "cumulativePatch",
+            "changedPaths", "changedPathsCount", "changedPathsTruncated", "partial", "verified",
+            "final", "action") if key in output}])
+        self.assertEqual(brief["artifacts"][0]["recordFile"], output["recordFile"])
         self.assertEqual(brief["otherArtifacts"], len(service_view["artifacts"]) - 1)
         self.assertEqual(brief["currentTurn"]["summary"], service_view["currentTurn"]["summary"])
         self.assertEqual(brief["workspace"]["path"], service_view["workspace"]["path"])
@@ -269,6 +271,10 @@ class CliViewTests(RealWorkspaceTestCase):
         self.assertNotIn("summary", accepted.get("currentTurn", {}))
         self.assertTrue(accepted["reclaim"]["removed"])
         self.assertEqual(accepted["cleanup"]["state"], "applied")
+        self.assertEqual(accepted["artifacts"][0]["recordFile"], artifact["recordFile"])
+        self.assertEqual(accepted["artifacts"][0]["outputSnapshotSha256"], artifact["outputSnapshotSha256"])
+        self.assertNotIn("cumulativePatch", accepted["artifacts"][0])
+        self.assertNotIn("diffPath", accepted["artifacts"][0])
         # Measure the projection independently of the runner's temporary-root
         # length; the path values themselves are asserted above and elsewhere.
         portable_text = text.replace(json.dumps(str(self.directory))[1:-1], "<fixture-root>")
@@ -372,6 +378,18 @@ class ProjectionUnitTests(unittest.TestCase):
                                                        "reason": "chosen", "constraints": {}}})
         self.assertNotIn("routingBasis", legacy["routing"])
         self.assertNotIn("constraints", legacy["routing"])
+
+    def test_reclaim_action_receipt_uses_sql_state_without_workspace_expansion(self):
+        action = {"runId": "r", "state": "accepted", "status": "completed", "revision": 2,
+                  "ownerGeneration": 1, "removed": True, "alreadyRemoved": True,
+                  "path": "/private-fixture/workspaces/ws-test/checkout", "planId": "p",
+                  "retention": {"artifactIds": ["a"]}}
+        brief = cli_views.render("reclaim", action)
+        self.assertEqual(brief["view"], "receipt")
+        self.assertEqual(brief["planId"], "p")
+        self.assertTrue(brief["removed"])
+        self.assertNotIn("retention", brief)
+        self.assertEqual(cli_views.render("reclaim", action, "full"), action)
 
     def test_unknown_receipt_fields_are_not_dropped(self):
         receipt = cli_views.micro_task_receipt({"task": {"lineage": {"kind": "micro-task"}}, "runId": "r", "revision": 1, "buddy": None, "newField": {"x": 1}})

@@ -44,7 +44,10 @@ class ExecutionContext:
         """The Worker workspace path, or the directory of a non-Worker execution."""
         turn_input = self.turn_input
         if turn_input is not None:
-            return turn_input["executionWorkspace"]["path"]
+            from ...protocol.workspace_manifest import turn_manifest
+            if self.effective_workspace is None:
+                self.effective_workspace = turn_manifest(Path(self.environment["HMB_STATE_DIR"]), turn_input)
+            return self.effective_workspace["path"]
         return self.spec["cwd"]
 
     @property

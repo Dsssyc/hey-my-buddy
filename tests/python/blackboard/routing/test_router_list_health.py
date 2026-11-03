@@ -87,7 +87,7 @@ class RouterListHealthTestCase(BoardTestCase):
                 db.execute(
                     "INSERT INTO tasks(task_id,request_id,owner,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at) VALUES(?,?,'host',json_set('{}','$.routerBudgetSeconds',60),'digest',1,'decision','<private>','completed',1,?,?)",
                     (task_id, task_id, at, at))
-                db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,0,'nonce','finished','decision',?,1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), at, at, at))
+                db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,result_form,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,0,'nonce','finished','decision',?,'archived-report-v1',1,?,?,?)", (attempt_id, task_id, canonical_json(receipt), at, at, at))
         requested = {"kind": "select", "routerBuddyId": buddy_id,
                      "routingBasis": {"candidateCount": candidates}}
         with self.db.write() as db:

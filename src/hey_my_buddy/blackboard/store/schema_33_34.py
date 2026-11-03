@@ -125,17 +125,22 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     workspace_kind    TEXT CHECK (workspace_kind IN ('existing','worktree')),
     checkout_root     TEXT,
     repository_path   TEXT,
+    input_commit      TEXT,
+    staged_commit     TEXT,
     state             TEXT NOT NULL CHECK (state IN ('recorded','queued','consumed','cancelled','invalidated')),
     attempt_id        TEXT,
     turn_id           TEXT,
     created_at        TEXT NOT NULL,
     consumed_at       TEXT,
     CHECK ((workspace_facts_role='pending' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
-            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL)
+            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)
         OR (workspace_facts_role='owner' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
-            AND workspace_kind IS NOT NULL AND checkout_root IS NOT NULL AND repository_path IS NOT NULL)
+            AND workspace_kind IS NOT NULL AND checkout_root IS NOT NULL AND repository_path IS NOT NULL
+            AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
         OR (workspace_facts_role='reference' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
-            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL)),
+            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)),
     CHECK ((kind IN ('manual','helper') AND trigger_event_json IS NULL)
         OR (kind='lead-wakeup' AND trigger_event_json IS NOT NULL
             AND json_valid(trigger_event_json) AND json_type(trigger_event_json)='object'))
@@ -187,6 +192,13 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
     workspace_kind  TEXT CHECK (workspace_kind IN ('existing','worktree')),
     checkout_root   TEXT,
     repository_path TEXT,
+    input_commit    TEXT,
+    staged_commit   TEXT,
+    output_workspace_id TEXT,
+    output_manifest_sha256 TEXT,
+    output_ref      TEXT,
+    output_commit   TEXT,
+    output_action   TEXT,
     output_origin   TEXT CHECK (output_origin IN ('worker','host')),
     created_at      TEXT NOT NULL,
     CHECK ((kind IN ('input','turn-input') AND workspace_id IS NOT NULL AND input_manifest_sha256 IS NOT NULL
@@ -201,12 +213,23 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
         OR (content_form='record-reference' AND kind IN ('output','resolved-output','partial-output','abandoned-site')
             AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)),
     CHECK ((kind='input' AND workspace_facts_role='owner' AND workspace_kind IS NOT NULL
-            AND checkout_root IS NOT NULL AND repository_path IS NOT NULL)
+            AND checkout_root IS NOT NULL AND repository_path IS NOT NULL
+            AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
         OR (kind='input' AND workspace_facts_role='reference' AND workspace_kind IS NULL
-            AND checkout_root IS NULL AND repository_path IS NULL)
+            AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)
         OR (kind!='input' AND workspace_facts_role IS NULL AND workspace_kind IS NULL
-            AND checkout_root IS NULL AND repository_path IS NULL)),
+            AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)),
     CHECK (kind!='input' OR workspace_facts_role IS NOT NULL),
+    CHECK ((kind IN ('output','resolved-output','partial-output','abandoned-site')
+            AND output_workspace_id IS NOT NULL AND output_manifest_sha256 IS NOT NULL
+            AND output_ref IS NOT NULL AND output_commit IS NOT NULL)
+        OR (kind NOT IN ('output','resolved-output','partial-output','abandoned-site')
+            AND output_workspace_id IS NULL AND output_manifest_sha256 IS NULL
+            AND output_ref IS NULL AND output_commit IS NULL AND output_action IS NULL)),
+    CHECK ((kind='resolved-output' AND output_action IS NOT NULL)
+        OR (kind!='resolved-output' AND output_action IS NULL)),
     CHECK ((kind IN ('output','partial-output') AND output_origin IS NOT NULL)
         OR (kind NOT IN ('output','partial-output') AND output_origin IS NULL))
 );
@@ -368,12 +391,46 @@ def _inventory(connection, stock):
                 if pair not in owners:
                     owners[pair] = row
                     row.update(workspace_facts_role='owner', workspace_kind=facts[pair][0],
-                               checkout_root=facts[pair][1], repository_path=facts[pair][2])
+                               checkout_root=facts[pair][1], repository_path=facts[pair][2],
+                               input_commit=value['inputCommit'],
+                               staged_commit=value['snapshot']['stagedCommit'])
                 else:
                     row['workspace_facts_role'] = 'reference'
         elif kind in OUTPUT_KINDS:
             if row['manifest_sha256'] != value['snapshotSha256']:
                 _fail(row['run_id'], (None, row['manifest_sha256']), 'artifact-output-binding-mismatch')
+            workspace_id = value['workspaceId']
+            pair = (workspace_id, value['manifestSha256'])
+            if value['taskId'] != row['run_id'] or value['attemptId'] != row['attempt_id']:
+                _fail(row['run_id'], pair, 'artifact-output-identity-mismatch')
+            snapshot = value['snapshot']
+            if (not isinstance(snapshot, dict) or any(value.get(key) != snapshot.get(key) for key in
+                    ('workspaceId', 'taskId', 'attemptId', 'manifestSha256', 'commit', 'tree'))):
+                _fail(row['run_id'], pair, 'artifact-output-snapshot-mismatch')
+            snapshot_digest = hashlib.sha256(json.dumps(snapshot, sort_keys=True, separators=(',', ':'),
+                                                        ensure_ascii=True).encode()).hexdigest()
+            if snapshot_digest != value['snapshotSha256']:
+                _fail(row['run_id'], pair, 'artifact-output-snapshot-mismatch')
+            record_id = hashlib.sha256(json.dumps([row['run_id'], row['attempt_id']],
+                                                  sort_keys=True, separators=(',', ':'),
+                                                  ensure_ascii=True).encode()).hexdigest()
+            record_kind = value.get('kind')
+            if record_kind in (None, 'host-output') and kind in ('output', 'partial-output'):
+                suffix = record_id + ('-host' if record_kind == 'host-output' else '')
+                expected_ref = f'refs/hey-my-buddy/workspaces/{workspace_id}/outputs/{suffix}'
+                action = None
+            elif record_kind == 'resolution' and kind == 'resolved-output' and value.get('action') in ('restore', 'adopt', 'abandon'):
+                action = value['action']
+                expected_ref = f'refs/hey-my-buddy/workspaces/{workspace_id}/resolutions/{record_id}-{action}'
+            elif record_kind == 'abandoned-site' and kind == 'abandoned-site':
+                action = None
+                expected_ref = f'refs/hey-my-buddy/workspaces/{workspace_id}/abandoned/{record_id}'
+            else:
+                _fail(row['run_id'], pair, 'artifact-output-kind-mismatch')
+            if value.get('ref') != expected_ref or not isinstance(value.get('commit'), str) or not value['commit']:
+                _fail(row['run_id'], pair, 'artifact-output-ref-mismatch')
+            row.update(output_workspace_id=workspace_id, output_manifest_sha256=pair[1],
+                       output_ref=expected_ref, output_commit=value['commit'], output_action=action)
             row['output_snapshot_sha256'] = row['manifest_sha256']
             if kind in ('output', 'partial-output'):
                 origin = value.get('kind')
@@ -397,7 +454,9 @@ def _inventory(connection, stock):
         if pair not in owners:
             owners[pair] = row
             row.update(workspace_facts_role='owner', workspace_kind=facts[pair][0],
-                       checkout_root=facts[pair][1], repository_path=facts[pair][2])
+                       checkout_root=facts[pair][1], repository_path=facts[pair][2],
+                       input_commit=manifests[pair]['inputCommit'],
+                       staged_commit=manifests[pair]['snapshot']['stagedCommit'])
         else:
             row['workspace_facts_role'] = 'reference'
 
@@ -433,6 +492,11 @@ def _inventory(connection, stock):
         for pair in pairs:
             if pair not in owners:
                 _fail(run_id, pair, 'workspace-owner-missing')
+    for row in stock['workflow_artifacts']:
+        if row['kind'] in OUTPUT_KINDS:
+            pair = (row['output_workspace_id'], row['output_manifest_sha256'])
+            if pair not in owners:
+                _fail(row['run_id'], pair, 'artifact-output-owner-missing')
     return manifests, facts
 
 

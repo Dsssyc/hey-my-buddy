@@ -74,7 +74,7 @@ class CurrentRouterTestCase(BoardTestCase):
 
     def add_attempt(self, attempt_id, task_id, *, at=T0, state="finished", receipt=None):
         with self.board_.store.db.write() as db:
-            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,1,'nonce',?,'decision',?,?,?,?,?)", (attempt_id, task_id, state, canonical_json(receipt) if receipt is not None else None, 1 if state == 'finished' else 0, at, at, at))
+            db.execute("INSERT INTO attempts(attempt_id,task_id,generation,nonce_verifier,execution_state,adapter,result_json,result_form,shutdown_confirmed,started_at,created_at,updated_at) VALUES(?,?,1,'nonce',?,'decision',?,?,?,?,?,?)", (attempt_id, task_id, state, canonical_json(receipt) if receipt is not None else None, 'archived-report-v1' if receipt is not None else None, 1 if state == 'finished' else 0, at, at, at))
 
     def add_routing_record(self, *, decision, request, kind, buddy_id=None, code=None, at=T0,
                            attempt_state=None, receipt=None, output=None, called=None, candidates=3):

@@ -2,7 +2,6 @@
 import os
 from pathlib import Path
 import subprocess
-from types import SimpleNamespace
 import unittest
 
 from blackboard.tasks import test_workspace as fixtures
@@ -47,7 +46,8 @@ class PrivateAllocationPathTests(unittest.TestCase):
             self.assertEqual(workspace.allocation_lock_directory(self.state, manifest['workspaceId']), directory)
             self.assertEqual(workspace.resolve_allocation(self.state, manifest)['workspaceId'], manifest['workspaceId'])
 
-            skipped = deletion.delete_workspaces(SimpleNamespace(directory=self.state), [manifest], [])
+            store, owners, records = fixtures.deletion_sql_inputs(self, [manifest])
+            skipped = deletion.delete_workspaces(store, owners, records)
 
             self.assertEqual(skipped, [])
             self.assertEqual(list(relocated.iterdir()), [])
@@ -67,7 +67,8 @@ class PrivateAllocationPathTests(unittest.TestCase):
         self.link_directory(directory, target)
         target.rmdir()
         try:
-            skipped = deletion.delete_workspaces(SimpleNamespace(directory=self.state), [manifest], [])
+            store, owners, records = fixtures.deletion_sql_inputs(self, [manifest])
+            skipped = deletion.delete_workspaces(store, owners, records)
             self.assertEqual([item['reason']['code'] for item in skipped],
                              ['macro-task-deletion.owner-unproven'])
             self.assertTrue(private_dirs.linked(directory))

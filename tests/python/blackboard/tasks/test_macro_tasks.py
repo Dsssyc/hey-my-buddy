@@ -18,10 +18,7 @@ class ProjectLabelTests(WorkflowTestCase):
 
         def manifest(**params):
             value = original(**params)
-            if repository is None:
-                value["snapshot"].pop("repositoryPath")
-            else:
-                value["snapshot"]["repositoryPath"] = repository
+            value["snapshot"]["repositoryPath"] = repository
             value["manifestSha256"] = sha256_text(canonical_json({
                 key: item for key, item in value.items() if key != "manifestSha256"
             }))
@@ -72,18 +69,6 @@ class ProjectLabelTests(WorkflowTestCase):
                 )
                 self.assert_projects(board, submitted, label="repository.git", path=cwd,
                                      identifier=f"repo:{cwd}")
-
-    def test_missing_repository_location_keeps_submitted_directory_name(self):
-        board = self.board()
-        cwd = self.workdir("plain-directory")
-        for grouped in (True, False):
-            with self.subTest(grouped=grouped):
-                submitted = self.submit_from_repository(
-                    board, cwd, None, request_id=f"plain-{grouped}", grouped=grouped,
-                )
-                self.assert_projects(board, submitted, label="plain-directory", path=cwd,
-                                     identifier=f"repo:{cwd}")
-
 
 class MacroTaskAdmissionTests(WorkflowTestCase):
     def test_deleting_standalone_tree_fences_its_run(self):
@@ -1145,7 +1130,7 @@ class RoutingSpanTests(WorkflowTestCase):
         attempt_output = {'status': 'ok', 'operation': 'select', 'usage': decision_output['usage'],
                           'tokenUsage': usage, 'stopEvidence': {'shutdownConfirmed': True}}
         with board.store.db.write() as db:
-            db.execute("UPDATE attempts SET result_json=? WHERE task_id=?",
+            db.execute("UPDATE attempts SET result_json=?,result_form='current-report-v2' WHERE task_id=?",
                        (json.dumps({'status': 'ok', 'result': attempt_output}), task_id))
         span = self.spans(board, task_id)[0]
         self.assertEqual(span['tokenUsage'], usage)
@@ -1209,7 +1194,7 @@ class RoutingSpanTests(WorkflowTestCase):
                                (status, 'router-abstained' if expected and result_status == 'ok' else None,
                                 '{}' if expected and result_status == 'ok' else None))
                     db.execute("UPDATE decision_requests SET output_json=?", (json.dumps(output),))
-                    db.execute("UPDATE attempts SET result_json=?, shutdown_confirmed=? WHERE task_id=?",
+                    db.execute("UPDATE attempts SET result_json=?, result_form='current-report-v2', shutdown_confirmed=? WHERE task_id=?",
                                (json.dumps({'status': result_status}), int(shutdown), task_id))
                 span = self.spans(board, task_id)[0]
                 self.assertEqual(span.get('disposition') == 'abstention', expected)

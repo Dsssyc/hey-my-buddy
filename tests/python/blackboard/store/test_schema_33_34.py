@@ -195,7 +195,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                     for entry in fixture['operations']:
                         if entry['operation'] == 'execution_result':
                             reference = entry['params']['receipt']
-                            self.assertIsNotNone(read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256']))
+                            self.assertIsNotNone(read_execution_receipt(Path(reference['path']).parent, sha256=reference['sha256'], form='archived-report-v1'))
                     evidence = {}
                     for table, columns in (('workflow_artifacts','artifact_id,manifest_json'),
                                            ('workflow_turns','turn_id,input_json'), ('attempts','attempt_id,result_json')):
@@ -306,14 +306,21 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
             for (raw,) in db.execute(f'SELECT {column} FROM {table} WHERE {predicate}'):
                 value = json.loads(raw)
                 expected[value['workspaceId'], value['manifestSha256']] = (
-                    value['kind'], value['checkoutRoot'], value['snapshot']['repositoryPath'])
+                    value['kind'], value['checkoutRoot'], value['snapshot']['repositoryPath'],
+                    value['inputCommit'], value['snapshot']['stagedCommit'])
         upgrade.upgrade_state(fixture['state'])
-        owners = list(db.execute("SELECT workspace_id,input_manifest_sha256,workspace_kind,checkout_root,repository_path"
+        owners = list(db.execute("SELECT workspace_id,input_manifest_sha256,workspace_kind,checkout_root,repository_path,input_commit,staged_commit"
                                  " FROM workflow_artifacts WHERE workspace_facts_role='owner' UNION ALL"
-                                 " SELECT workspace_id,workspace_manifest_sha256,workspace_kind,checkout_root,repository_path"
+                                 " SELECT workspace_id,workspace_manifest_sha256,workspace_kind,checkout_root,repository_path,input_commit,staged_commit"
                                  " FROM workflow_continuations WHERE workspace_facts_role='owner'"))
         self.assertEqual(len(owners), len(expected))
         self.assertEqual({tuple(row[:2]): tuple(row[2:]) for row in owners}, expected)
+        for row in db.execute("SELECT * FROM workflow_artifacts WHERE kind IN ('output','resolved-output','partial-output','abandoned-site')"):
+            record = json.loads(row['manifest_json'])
+            self.assertEqual((row['output_workspace_id'], row['output_manifest_sha256'],
+                              row['output_ref'], row['output_commit']),
+                             (record['workspaceId'], record['manifestSha256'], record['ref'], record['commit']))
+            self.assertEqual(row['output_action'], record.get('action') if row['kind'] == 'resolved-output' else None)
         for row in db.execute('SELECT * FROM workflow_runs'):
             if row['macro_task_id'] is None:
                 self.assertIsNotNone(row['standalone_project_id'])
@@ -350,6 +357,7 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, category) as caught:
                     upgrade.upgrade_state(fixture['state'])
                 self.assertIn(row['run_id'], str(caught.exception))
+                self.assertEqual(list(db.iterdump()), before)
                 original = json.loads(row['workspace_manifest_json'])
                 self.assertIn(original['workspaceId'], str(caught.exception))
                 self.assertIn(original['manifestSha256'], str(caught.exception))
@@ -456,7 +464,23 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, category) as caught:
                     upgrade.upgrade_state(fixture['state'])
                 self.assertIn(row['run_id'], str(caught.exception))
-                self.assertEqual(list(db.iterdump()), before)
+
+    def test_output_snapshot_digest_rejects_corrupt_old_seal_without_rewriting_files(self):
+        fixture, db = self.restored('corrupt-output-snapshot')
+        row = db.execute("SELECT * FROM workflow_artifacts WHERE kind='output' ORDER BY rowid LIMIT 1").fetchone()
+        self.assertIsNotNone(row)
+        value = json.loads(row['manifest_json'])
+        value['snapshot']['changedPaths'].append('fabricated.txt')
+        db.execute('UPDATE workflow_artifacts SET manifest_json=? WHERE artifact_id=?',
+                   (json.dumps(value), row['artifact_id']))
+        db.commit()
+        before = list(db.iterdump())
+        files = self.files(fixture)
+        with self.assertRaisesRegex(ValueError, 'artifact-output-snapshot-mismatch') as caught:
+            upgrade.upgrade_state(fixture['state'])
+        self.assertIn(row['run_id'], str(caught.exception))
+        self.assertEqual(list(db.iterdump()), before)
+        self.assertEqual(self.files(fixture), files)
 
     def test_shared_input_pair_gets_one_owner_and_one_reference(self):
         fixture, db = self.restored()
@@ -543,6 +567,10 @@ class WorkspaceReferenceUpgradeTests(unittest.TestCase):
             "UPDATE workflow_artifacts SET record_path='extra',record_sha256='extra' WHERE kind='shared-refs'",
             "UPDATE workflow_artifacts SET workspace_facts_role=NULL WHERE kind='input'",
             "UPDATE workflow_artifacts SET checkout_root=NULL WHERE workspace_facts_role='owner'",
+            "UPDATE workflow_artifacts SET input_commit=NULL WHERE workspace_facts_role='owner'",
+            "UPDATE workflow_continuations SET staged_commit=NULL WHERE workspace_facts_role='owner'",
+            "UPDATE workflow_artifacts SET output_ref=NULL WHERE kind='output'",
+            "UPDATE workflow_artifacts SET output_workspace_id=NULL WHERE kind='output'",
             "UPDATE workflow_artifacts SET content_form='input-reference',manifest_json=NULL WHERE kind='turn-input'",
             "UPDATE attempts SET result_form=NULL WHERE result_json IS NOT NULL",
             "UPDATE attempts SET result_json=NULL WHERE result_form IS NOT NULL",

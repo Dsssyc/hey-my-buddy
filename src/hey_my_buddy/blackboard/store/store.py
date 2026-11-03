@@ -75,7 +75,7 @@ def _overlaps(left: str, right: str) -> bool:
     return left_path.is_relative_to(right_path) or right_path.is_relative_to(left_path)
 
 
-def _public_result_payload(payload: dict, directory: Path) -> dict:
+def _public_result_payload(payload: dict, directory: Path, result_form: str = "archived-report-v1") -> dict:
     """Bound service-owned workspace facts in a reply, leaving the receipt intact."""
     result = payload.get("result")
     if not isinstance(result, dict):
@@ -99,6 +99,14 @@ def _public_result_payload(payload: dict, directory: Path) -> dict:
             seal_view["cumulativePatch"] = bound(cumulative, ("changedPaths",))
         projected[key] = seal_view
 
+    if result_form == "current-report-v2":
+        for key in ("workspaceSeal", "partialWorkspaceSeal"):
+            seal = projected.get(key)
+            if not isinstance(seal, dict) or not isinstance(seal.get("recordFile"), dict):
+                continue
+            file = seal["recordFile"]
+            projected[key] = {**seal, "recordFile": {**file, "path": str(directory / file["path"])}}
+
     for key in ("workspaceSealError", "partialSealError", "cumulativePatchError"):
         error = result.get(key)
         if not isinstance(error, dict) or not isinstance(error.get("details"), dict):
@@ -111,7 +119,7 @@ def _public_result_payload(payload: dict, directory: Path) -> dict:
 
     # A stopped partial result retains its exact input manifest in the receipt.
     # Its public copy can be as large as the output seal on a busy checkout.
-    manifest = result.get("workspaceManifest")
+    manifest = result.get("workspaceManifest") if result_form == "archived-report-v1" else None
     if isinstance(manifest, dict):
         manifest_view = bound(manifest, ("writeScope",))
         snapshot = manifest.get("snapshot")
@@ -516,6 +524,7 @@ class BoardStore:
             "runtimeIdentity": row["runtime_identity"],
             "logPaths": recorded.get("logPaths") or {},
             "resultAvailable": row["result_json"] is not None,
+            "resultForm": row["result_form"],
             "tokenUsage": (recorded.get("result") or {}).get("tokenUsage"),
             "shutdownConfirmed": bool(row["shutdown_confirmed"]),
             "cancelRequested": row["cancel_requested_at"] is not None,
@@ -534,7 +543,7 @@ class BoardStore:
             "revision": row["revision"],
         }
         if include_result and row["result_json"] is not None:
-            view["result"] = _public_result_payload(recorded, self.directory)
+            view["result"] = _public_result_payload(recorded, self.directory, row["result_form"])
         return view
 
     @staticmethod
@@ -1190,7 +1199,7 @@ class BoardStore:
             payload = json.loads(attempt["result_json"])
             # Only the current execution receipt is unpacked. Its adapter result is
             # opaque data, even when it contains fields named result or turn.
-            view["result"] = _public_result_payload(payload, self.directory)["result"]
+            view["result"] = _public_result_payload(payload, self.directory, attempt["result_form"])["result"]
             view["resultMeta"] = {key: value for key, value in payload.items() if key != "result"}
             view["attemptId"] = attempt["attempt_id"]
             view["resultDelivered"] = view["result"] is not None
@@ -2393,7 +2402,7 @@ class BoardStore:
             else:
                 task_state = "failed"
             connection.execute(
-                "UPDATE attempts SET result_json=?,"
+                "UPDATE attempts SET result_json=?, result_form=COALESCE(result_form,'current-report-v2'),"
                 " shutdown_confirmed=?, runtime_identity=COALESCE(?, runtime_identity),"
                 " stop_initiator=COALESCE(stop_initiator,?),finished_at=?, updated_at=?, revision=revision+1 WHERE attempt_id=?",
                 (

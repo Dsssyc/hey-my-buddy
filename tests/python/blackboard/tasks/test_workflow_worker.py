@@ -166,7 +166,7 @@ class RealWorkerTurnTests(MicroTaskWorkerTestCase):
                 self.fail(self.execution_diagnostics(run_id, latest))
             outputs = [row for row in delivered["artifacts"] if row["kind"] == "output"]
             self.assertEqual(len(outputs), 1)
-            self.assertTrue(outputs[0]["manifestSha256"])
+            self.assertTrue(outputs[0]["outputSnapshotSha256"])
             self.assertTrue(outputs[0]["outputCommit"])
             self.assertEqual(delivered["counts"]["turns"], 1)
             turn = delivered["turns"][0]

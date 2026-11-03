@@ -160,8 +160,6 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
     def test_pinned_repository_location_corrections_invalidate_only_its_group(self):
         group = self.fixture.macros[0]
         root = self.root_for(group)
-        self.sql("UPDATE workflow_runs SET workspace_manifest_json=json_set(workspace_manifest_json,"
-                 "'$.snapshot.repositoryPath','/fictional/run-repository/.git') WHERE run_id=?", (root,))
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             self.read()
             self.assert_recomputed(counter, self.fixture.macros)
@@ -169,18 +167,15 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                                 ("/fictional/corrected-repository/.git", "corrected-repository"),
                                 ("/fictional/bare-repository", "bare-repository")):
                 with self.subTest(path=path):
-                    self.sql("UPDATE workflow_artifacts SET manifest_json=json_set(manifest_json,"
-                             "'$.snapshot.repositoryPath',?) WHERE run_id=? AND kind='input'", (path, root))
+                    self.sql("UPDATE workflow_artifacts SET repository_path=?"
+                             " WHERE run_id=? AND kind='input' AND workspace_facts_role='owner'", (path, root))
                     summary = self.rows()[group]
                     self.assertEqual(summary["project"]["label"], label)
                     self.assert_recomputed(counter, [group])
                     task = self.fixture.board.call("task_get", {"runId": root})["task"]
                     self.assertEqual(task["lineage"]["project"]["label"], label)
                     self.assertEqual(task["lineage"]["project"]["id"], summary["project"]["id"])
-            # The current run manifest cannot invalidate the fixed input's
-            # repository location or its cached summary.
-            self.sql("UPDATE workflow_runs SET workspace_manifest_json=json_set(workspace_manifest_json,"
-                     "'$.snapshot.repositoryPath','/fictional/fallback-repository/.git') WHERE run_id=?", (root,))
+            # A run holds only a binding; its project location is the owner fact.
             self.assertEqual(self.rows()[group]["project"]["label"], "bare-repository")
             self.assert_recomputed(counter, [])
 
@@ -209,7 +204,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
             self.sql("UPDATE workflow_runs SET host_id='fictional-new-host',owner_generation=2 WHERE run_id=?", (parent,))
             self.assertIn("fictional-new-host", self.rows()[group]["currentHostIds"])
             self.assert_recomputed(counter, [group])
-            self.sql("UPDATE workflow_runs SET state='accepted' WHERE run_id=?", (parent,))
+            self.sql("UPDATE workflow_runs SET state='accepted',workspace_id=NULL,workspace_manifest_sha256=NULL WHERE run_id=?", (parent,))
             self.sql("UPDATE tasks SET accepted_at='2026-01-01T00:00:00Z' WHERE task_id=?", (parent,))
             self.assertGreater(self.rows()[group]["counts"]["accepted"], initial["counts"]["accepted"])
             self.assert_recomputed(counter, [group])
@@ -235,7 +230,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
                 ("UPDATE tasks SET active_attempt_id='fictional-dangling-active' WHERE task_id=?",(root,),"UPDATE tasks SET active_attempt_id=NULL WHERE task_id=?",(root,)),
                 ("UPDATE tasks SET selected_attempt_id='fictional-dangling-selected' WHERE task_id=?",(root,),"UPDATE tasks SET selected_attempt_id=? WHERE task_id=?",(selected,root)),
                 ("UPDATE attempts SET execution_state='uncertain' WHERE attempt_id=?",(selected,),"UPDATE attempts SET execution_state='finished' WHERE attempt_id=?",(selected,)),
-                ("UPDATE attempts SET result_json=NULL WHERE attempt_id=?",(selected,),"UPDATE attempts SET result_json=? WHERE attempt_id=?",(result,selected)),
+                ("UPDATE attempts SET result_json=NULL,result_form=NULL WHERE attempt_id=?",(selected,),"UPDATE attempts SET result_json=?,result_form='current-report-v2' WHERE attempt_id=?",(result,selected)),
             ):
                 with self.subTest(statement=statement):
                     self.sql(statement,params)
@@ -265,7 +260,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
     def test_host_conclusion_execution_status_invalidates_failed_count(self):
         group = self.fixture.macros[0]
         root = self.root_for(group)
-        self.sql("UPDATE workflow_runs SET state='concluded' WHERE run_id=?", (root,))
+        self.sql("UPDATE workflow_runs SET state='concluded',workspace_id=NULL,workspace_manifest_sha256=NULL WHERE run_id=?", (root,))
         self.sql(
             "INSERT INTO workflow_host_conclusions("
             "conclusion_id,run_id,run_revision,owner_generation,execution_status,note,"
@@ -359,7 +354,6 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.read()
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             self.sql("UPDATE macro_tasks SET project_id=? WHERE macro_task_id=?", (project, group))
-            self.sql("UPDATE workflow_artifacts SET manifest_json=json_set(manifest_json,'$.projectId',?) WHERE run_id=? AND kind='input'", (project, root))
             self.assertEqual(self.rows()[group]["project"]["id"], project)
             self.assert_recomputed(counter, [group])
             self.assertEqual(self.rows(group="project:" + project)[group]["matchingRuns"], 4)
@@ -466,7 +460,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
 
     def test_standalone_title_and_task_invalidate_without_report_dependencies(self):
         root = self.root_for(self.fixture.macros[1])
-        self.sql("UPDATE workflow_runs SET macro_task_id=NULL,title='Fictional standalone title' WHERE run_id=?", (root,))
+        self.sql("UPDATE workflow_runs SET standalone_project_id=(SELECT project_id FROM macro_tasks WHERE macro_task_id=workflow_runs.macro_task_id),macro_task_id=NULL,title='Fictional standalone title' WHERE run_id=?", (root,))
         group = "run:" + root
         with patch.object(macro_tasks, "_summary", wraps=macro_tasks._summary) as counter:
             self.rows()
@@ -516,7 +510,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
         self.sql("UPDATE macro_tasks SET activity_seq=999999 WHERE macro_task_id=?", (group,))
         self.assertEqual(macro_summaries(self.read(limit=1))[0]["macroTaskId"],group)
         self.assertTrue(self.read(group=project_group, limit=1,before=first["groups"][0]["nextCursor"])["changed"])
-        self.sql("UPDATE workflow_runs SET macro_task_id=NULL WHERE macro_task_id=?", (group,))
+        self.sql("UPDATE workflow_runs SET standalone_project_id=(SELECT project_id FROM macro_tasks WHERE macro_task_id=workflow_runs.macro_task_id),macro_task_id=NULL WHERE macro_task_id=?", (group,))
         after = self.read()
         self.assertNotIn(group,{row["macroTaskId"] for row in macro_summaries(after)})
         self.assertGreater(after["totals"]["all"],3)
@@ -672,7 +666,7 @@ class MacroTaskSummaryCacheTests(unittest.TestCase):
 
     def test_marker_never_copies_large_result_or_outcome_documents(self):
         root=self.root_for(self.fixture.macros[1])
-        self.sql("UPDATE workflow_runs SET macro_task_id=NULL WHERE run_id=?",(root,))
+        self.sql("UPDATE workflow_runs SET standalone_project_id=(SELECT project_id FROM macro_tasks WHERE macro_task_id=workflow_runs.macro_task_id),macro_task_id=NULL WHERE run_id=?",(root,))
         self.read()
         with patch.object(macro_tasks,"_summary",wraps=macro_tasks._summary) as counter:
             self.sql(

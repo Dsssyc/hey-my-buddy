@@ -215,16 +215,24 @@ def macro_task_goal_history(store, params: dict) -> dict:
 
 def project(connection, macro_task_id: str) -> dict:
     """The creating root owns the source directory and sealed Git provenance."""
+    from .workspace_bindings import MANIFEST_OWNERS_CTE
     row = connection.execute(
-        "SELECT m.project_id,json_extract(t.spec_json,'$.cwd') AS path,"
-        " (SELECT json_extract(a.manifest_json,'$.snapshot.repositoryPath') FROM workflow_artifacts a"
-        "  WHERE a.run_id=r.run_id AND a.kind='input' ORDER BY a.rowid LIMIT 1) AS repository_path"
+        "SELECT m.project_id,r.run_id,json_extract(t.spec_json,'$.cwd') AS path"
         " FROM macro_tasks m JOIN workflow_runs r ON r.macro_task_id=m.macro_task_id"
         " JOIN tasks t ON t.task_id=r.run_id WHERE m.macro_task_id=? ORDER BY r.created_at,r.rowid LIMIT 1",
         (macro_task_id,),
     ).fetchone()
+    initial = connection.execute(
+        "SELECT workspace_id,input_manifest_sha256 FROM workflow_artifacts"
+        " WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (row["run_id"],),
+    ).fetchone()
+    owner = connection.execute(
+        f"WITH manifest_owners AS ({MANIFEST_OWNERS_CTE})"
+        " SELECT repository_path FROM manifest_owners WHERE workspace_id=? AND manifest_sha256=?",
+        (initial["workspace_id"], initial["input_manifest_sha256"]),
+    ).fetchone()
     return {"id": row["project_id"], "path": row["path"],
-            "label": micro_task.project_label(row["path"], row["repository_path"])}
+            "label": micro_task.project_label(row["path"], owner["repository_path"])}
 
 
 def record_activity(connection, task_id: str | None, seq: int, at: str) -> None:

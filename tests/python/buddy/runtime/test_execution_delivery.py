@@ -144,7 +144,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         report = {"status": "failed", "shutdownConfirmed": True,
                   "terminationReason": "harness-error"}
         receipt = self.execution.receipt(CLAIM, report, self.execution.directory)
-        self.assertEqual(set(receipt), {"attemptId", "taskId", "generation", "report", "createdAt"})
+        self.assertEqual(set(receipt), {"version", "attemptId", "taskId", "generation", "report", "createdAt"})
         self.assertEqual(read_execution_receipt(self.execution.directory), receipt)
         raw = native_path(self.execution.directory / "result-receipt.json").read_text(encoding="utf-8")
         self.assertNotIn("nonce", raw)
@@ -155,7 +155,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
     def test_receipt_reader_refuses_foreign_binding_and_malformed_envelope(self):
         from hey_my_buddy.protocol.execution import fsync_json, RECEIPT
         binding = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1}
-        receipt = {**binding, "report": {},
+        receipt = {**binding, "version": 2, "report": {},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         fsync_json(self.execution.directory / RECEIPT, receipt)
         self.assertEqual(read_execution_receipt(self.execution.directory, binding=binding), receipt)
@@ -169,7 +169,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                     read_execution_receipt(self.execution.directory, binding=binding)
 
     def test_offline_delivery_retries_same_attempt_result_after_flushing_hint(self):
-        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
@@ -199,7 +199,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
 
     def test_uncertain_delivery_fails_once_and_preserves_exact_receipt(self):
         from hey_my_buddy.buddy.runtime.receipts import write_receipt, RECEIPT
-        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
         write_receipt(self.execution.directory, receipt)
         original = native_path(self.execution.directory / RECEIPT).read_bytes()
@@ -224,7 +224,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
             with self.subTest(code=code):
                 directory = self.execution.directory / code
                 native_path(directory).mkdir()
-                receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+                receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                            "report": {"status": "ok"}, "createdAt": "2026-10-16T00:00:00+00:00"}
                 write_receipt(directory, receipt)
                 client = mock.Mock()
@@ -236,7 +236,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
                 self.assertFalse(native_path(directory / "result-delivery.json").exists())
 
     def test_result_waits_for_hint_already_in_backoff(self):
-        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
@@ -474,7 +474,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in pause.call_args_list], [0.25, 0.5])
 
     def test_fatal_hint_refusal_ends_receipt_delivery_with_durable_receipt(self):
-        receipt = {"attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
+        receipt = {"version": 2, "attemptId": "attempt-1", "taskId": "task-1", "generation": 1,
                    "report": {"status": "ok"},
                    "createdAt": "2026-10-16T00:00:00+00:00"}
         from hey_my_buddy.buddy.runtime.receipts import write_receipt
@@ -559,7 +559,7 @@ class ExecutionDeliveryTests(unittest.TestCase):
 
     def test_unknown_progress_failure_during_delivery_leaves_receipt_and_exits(self):
         from hey_my_buddy.buddy.runtime.receipts import write_receipt, RECEIPT
-        receipt = {'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
+        receipt = {'version': 2, 'taskId': 'task-1', 'attemptId': 'attempt-1', 'generation': 1,
                    'report': {'status': 'ok', 'shutdownConfirmed': True}, 'createdAt': 'fixture'}
         write_receipt(self.execution.directory, receipt)
         original = native_path(self.execution.directory / RECEIPT).read_bytes()

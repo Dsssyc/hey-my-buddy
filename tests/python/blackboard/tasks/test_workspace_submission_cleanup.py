@@ -1,4 +1,5 @@
 """Submission failure revokes only the invocation's new private Git allocation."""
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from unittest.mock import patch as defer_reclaim
 import json
 import tempfile
@@ -99,12 +100,12 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         second = self.claim(board, run_id=run_id, nonce='q' * 16)
         attempt = second['claim']['attempt']
         success_id = attempt['attemptId']
-        manifest = second['claim']['turn']['input']['executionWorkspace']
+        manifest = turn_manifest(self.directory, second['claim']['turn']['input'])
         seal = workspace.seal(self.directory, manifest, run_id, success_id)
         board.call('execution_result', {'attemptId': success_id, 'generation': attempt['generation'],
             'nonce': 'q' * 16, 'status': 'ok', 'terminationReason': 'completed', 'shutdownConfirmed': True,
             'exitCode': 0, 'result': {'status': 'ok', 'turn': self.turn_record(second),
-                'processState': {'shutdownConfirmed': True}, 'workspaceSeal': seal}})
+                'processState': {'shutdownConfirmed': True}, 'workspaceSeal': record_reference(self.directory, seal)}})
         delivered = board.call('workflow_get', {'runId': run_id})
         records = {}
         group_id = 'run:' + run_id
@@ -158,12 +159,12 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         claimed = self.claim(board, run_id=run_id)
         attempt = claimed['claim']['attempt']
         attempt_id = attempt['attemptId']
-        manifest = claimed['claim']['turn']['input']['executionWorkspace']
+        manifest = turn_manifest(self.directory, claimed['claim']['turn']['input'])
         seal = workspace.seal(self.directory, manifest, run_id, attempt_id)
         board.call('execution_result', {'attemptId': attempt_id, 'generation': attempt['generation'],
             'nonce': 'n' * 16, 'status': 'ok', 'terminationReason': 'completed', 'shutdownConfirmed': True,
             'exitCode': 0, 'result': {'status': 'ok', 'turn': self.turn_record(claimed),
-                'processState': {'shutdownConfirmed': True}, 'workspaceSeal': seal}})
+                'processState': {'shutdownConfirmed': True}, 'workspaceSeal': record_reference(self.directory, seal)}})
         delivered = board.call('workflow_get', {'runId': run_id})
         path = private_dirs.session_record_path(board.directory, 'run:' + run_id, attempt_id)
         record = SessionRecord(path, attempt_id)
@@ -206,9 +207,9 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         self.finish_turn(board, claim)
         view = board.call('workflow_get', {'runId': delivered['runId']})
         with board.store.db.read() as connection:
-            sealed = json.loads(connection.execute(
-                'SELECT manifest_json FROM workflow_artifacts WHERE artifact_id=?',
-                (view['finalArtifactId'],)).fetchone()[0])
+            sealed = artifact_manifest(board.directory, connection.execute(
+                'SELECT * FROM workflow_artifacts WHERE artifact_id=?',
+                (view['finalArtifactId'],)).fetchone())
         original = BoardError('ADMISSION_FAILED', 'Controlled admission refusal after integration')
         def admission(*args, **kwargs):
             manifest = kwargs['micro_task']['manifest']

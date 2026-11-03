@@ -648,17 +648,22 @@ CREATE TABLE IF NOT EXISTS workflow_continuations (
     workspace_kind    TEXT CHECK (workspace_kind IN ('existing','worktree')),
     checkout_root     TEXT,
     repository_path   TEXT,
+    input_commit      TEXT,
+    staged_commit     TEXT,
     state             TEXT NOT NULL CHECK (state IN ('recorded','queued','consumed','cancelled','invalidated')),
     attempt_id        TEXT,
     turn_id           TEXT,
     created_at        TEXT NOT NULL,
     consumed_at       TEXT,
     CHECK ((workspace_facts_role='pending' AND workspace_id IS NULL AND workspace_manifest_sha256 IS NULL
-            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL)
+            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)
         OR (workspace_facts_role='owner' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
-            AND workspace_kind IS NOT NULL AND checkout_root IS NOT NULL AND repository_path IS NOT NULL)
+            AND workspace_kind IS NOT NULL AND checkout_root IS NOT NULL AND repository_path IS NOT NULL
+            AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
         OR (workspace_facts_role='reference' AND workspace_id IS NOT NULL AND workspace_manifest_sha256 IS NOT NULL
-            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL)),
+            AND workspace_kind IS NULL AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)),
     CHECK ((kind IN ('manual','helper') AND trigger_event_json IS NULL)
         OR (kind='lead-wakeup' AND trigger_event_json IS NOT NULL
             AND json_valid(trigger_event_json) AND json_type(trigger_event_json)='object'))
@@ -858,6 +863,13 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
     workspace_kind  TEXT CHECK (workspace_kind IN ('existing','worktree')),
     checkout_root   TEXT,
     repository_path TEXT,
+    input_commit    TEXT,
+    staged_commit   TEXT,
+    output_workspace_id TEXT,
+    output_manifest_sha256 TEXT,
+    output_ref      TEXT,
+    output_commit   TEXT,
+    output_action   TEXT,
     output_origin   TEXT CHECK (output_origin IN ('worker','host')),
     created_at      TEXT NOT NULL,
     CHECK ((kind IN ('input','turn-input') AND workspace_id IS NOT NULL AND input_manifest_sha256 IS NOT NULL
@@ -872,12 +884,23 @@ CREATE TABLE IF NOT EXISTS workflow_artifacts (
         OR (content_form='record-reference' AND kind IN ('output','resolved-output','partial-output','abandoned-site')
             AND manifest_json IS NULL AND record_path IS NOT NULL AND record_sha256 IS NOT NULL)),
     CHECK ((kind='input' AND workspace_facts_role='owner' AND workspace_kind IS NOT NULL
-            AND checkout_root IS NOT NULL AND repository_path IS NOT NULL)
+            AND checkout_root IS NOT NULL AND repository_path IS NOT NULL
+            AND input_commit IS NOT NULL AND staged_commit IS NOT NULL)
         OR (kind='input' AND workspace_facts_role='reference' AND workspace_kind IS NULL
-            AND checkout_root IS NULL AND repository_path IS NULL)
+            AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)
         OR (kind!='input' AND workspace_facts_role IS NULL AND workspace_kind IS NULL
-            AND checkout_root IS NULL AND repository_path IS NULL)),
+            AND checkout_root IS NULL AND repository_path IS NULL
+            AND input_commit IS NULL AND staged_commit IS NULL)),
     CHECK (kind!='input' OR workspace_facts_role IS NOT NULL),
+    CHECK ((kind IN ('output','resolved-output','partial-output','abandoned-site')
+            AND output_workspace_id IS NOT NULL AND output_manifest_sha256 IS NOT NULL
+            AND output_ref IS NOT NULL AND output_commit IS NOT NULL)
+        OR (kind NOT IN ('output','resolved-output','partial-output','abandoned-site')
+            AND output_workspace_id IS NULL AND output_manifest_sha256 IS NULL
+            AND output_ref IS NULL AND output_commit IS NULL AND output_action IS NULL)),
+    CHECK ((kind='resolved-output' AND output_action IS NOT NULL)
+        OR (kind!='resolved-output' AND output_action IS NULL)),
     CHECK ((kind IN ('output','partial-output') AND output_origin IS NOT NULL)
         OR (kind NOT IN ('output','partial-output') AND output_origin IS NULL))
 );

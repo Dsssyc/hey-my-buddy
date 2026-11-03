@@ -1,5 +1,6 @@
 """A Lead controls workspace decisions for its own real-Git micro tasks."""
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from unittest.mock import patch as defer_reclaim
 from admission import admit_board, admit_store
 
@@ -68,7 +69,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         response = admit_board(board, {'workerId': 'child-worker', 'claimRequestId': f"claim-{child['runId']}", 'nonce': 'c' * 16, 'runId': child['runId']})
         claimed = response["claim"]
         self.assertIsNotNone(claimed, response)
-        manifest = claimed["turn"]["input"]["executionWorkspace"]
+        manifest = turn_manifest(self.directory, claimed["turn"]["input"])
         return claimed, manifest, Path(manifest["path"])
 
     def _finish_child(self, board, child: dict, claim: dict, *, seal: dict | None = None,
@@ -82,7 +83,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
                           turn=native_turn.claim_record(claim, outcome={
                               "disposition": "completed", "summary": "completed the child task",
                               "remaining": [], "decisions": [], "artifacts": [], "request": None,
-                          }), workspaceSeal=seal)
+                          }), workspaceSeal=record_reference(self.directory, seal))
         board.call('execution_result', {'attemptId': attempt['attemptId'], 'generation': attempt['generation'], 'nonce': 'c' * 16, 'status': 'failed' if scope_failure else 'ok', 'result': result, 'shutdownConfirmed': True, 'exitCode': 1 if scope_failure else 0, **({'error': result['workspaceSealError']} if scope_failure else {})})
 
     def _wrong_lead_refused(self, board, operation: str, params: dict, other: dict) -> None:
@@ -269,7 +270,7 @@ class LeadWorkspaceTests(RealWorkspaceTestCase):
         board = self.board(max_concurrent=4)
         enable_fixture_buddy(board.store, BUDDY)
         lead = self._lead(board, 'managed-lead', self.repo, 'lead-worker', kind='worktree')
-        lead_manifest = lead['claim']['turn']['input']['executionWorkspace']
+        lead_manifest = turn_manifest(self.directory, lead['claim']['turn']['input'])
         target = Path(lead_manifest['checkoutRoot'])
         with workspace._lock(target.parent, create=False):
             pass

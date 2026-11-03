@@ -75,11 +75,35 @@ class ExportBoardSampleTests(WorkflowTestCase):
         board.store.complete_execution_cleanup(attempt_id)
         return run, attempt_id
 
+    def test_record_patch_locations_use_the_reference_across_platforms(self):
+        from hey_my_buddy.protocol.workspace_manifest import artifact_manifest
+        board = self.source_board()
+        run, _attempt = self.accepted(board, "native-path-record")
+        with board.store.db.read() as connection:
+            row = connection.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output'",
+                                     (run["runId"],)).fetchone()
+        record = artifact_manifest(board.directory, row)
+        # A decoded frozen record may name the Windows host that produced it.
+        # The current sample's files still live at their state-relative references.
+        foreign = {**record, "diffPath": r"C:\origin-host\output.patch"}
+        expected = (board.directory / row["record_path"]).with_suffix(".patch")
+        with patch.object(board.store.workflow, "_artifact_document", return_value=foreign):
+            view = board.store.workflow._artifact_view(row)
+        self.assertEqual(view["diffPath"], str(expected))
+        self.assertEqual(view["cumulativePatch"]["path"], str(expected))
+        before = files(board.directory)
+        with patch.dict(export_sample.__globals__, {"resolve_record": lambda *args: foreign}):
+            sample = export_sample(board.directory, self.directory / "portable-record-sample")
+        copied = (sample / row["record_path"]).with_suffix(".patch")
+        self.assertEqual(copied.read_bytes(), expected.read_bytes())
+        self.assert_source_unchanged(before, files(board.directory))
+
     def test_console_history_and_sessions_survive_and_source_bytes_do_not_change(self):
         board = self.source_board()
         first, attempt = self.accepted(board, 'accepted-first', macroTask={'title': 'Sample macro', 'goal': 'Sample macro'})
         second, _ = self.accepted(board, 'accepted-second', macroTaskId=first['macroTaskId'])
         unaccepted = self.submit(board, request_id='not-accepted', macroTaskId=first['macroTaskId'])
+        unselected_manifest = Path(board.call('workflow_get', {'runId': unaccepted['runId']})['workspace']['manifestFile']['path'])
         self.finish_turn(board, self.claim(board, run_id=unaccepted['runId']))
         cancelled = self.submit(board, request_id='cancelled', kind='worktree')
         board.call('workflow_cancel', {'runId': cancelled['runId'], **self.control(cancelled), 'note': 'Fixture'})
@@ -103,8 +127,11 @@ class ExportBoardSampleTests(WorkflowTestCase):
         source_secret = board.store.db.secret.hex()
         board.store.db.close()
         before = files(board.directory)
+        with closing(sqlite3.connect(board.directory / DB_FILE)) as connection:
+            source_results = dict(connection.execute('SELECT attempt_id,result_json FROM attempts'))
         output = export_sample(board.directory, self.directory / 'sample')
         assert_private_path(self, output, 0o700)
+        self.assertFalse((output / unselected_manifest.relative_to(board.directory)).exists())
         self.assertFalse((output / 'controls').exists())
         self.assertFalse((output / 'harnesses').exists())
         self.assertEqual([p.name for p in native_path(output / 'sessions').rglob('*.jsonl')], [attempt + '.jsonl'])
@@ -119,6 +146,23 @@ class ExportBoardSampleTests(WorkflowTestCase):
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM attempts WHERE execution_state!=\'finished\'').fetchone()[0], 0)
             self.assertEqual(connection.execute('PRAGMA foreign_key_check').fetchall(), [])
             self.assertEqual(connection.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+            if SCHEMA_VERSION >= 34:
+                referenced = connection.execute(
+                    "SELECT content_form,workspace_id,record_path FROM workflow_artifacts "
+                    "WHERE content_form IN ('input-reference','record-reference')").fetchall()
+                self.assertTrue(referenced)
+                for form, workspace_id, record_path in referenced:
+                    path = (output / 'workspaces' / workspace_id / 'manifest.json'
+                            if form == 'input-reference' else output / record_path)
+                    self.assertTrue(path.is_file(), (form, path))
+                    self.assertTrue(path.is_relative_to(output))
+                for attempt_id, raw in connection.execute(
+                        "SELECT attempt_id,result_json FROM attempts WHERE result_form='current-report-v2'"):
+                    self.assertEqual(raw, source_results[attempt_id])
+                    result = json.loads(raw)['result'] or {}
+                    for key in ('workspaceSeal', 'partialWorkspaceSeal'):
+                        if key in result:
+                            self.assertTrue((output / result[key]['recordFile']['path']).is_file())
             meta = dict(connection.execute('SELECT key,value FROM meta'))
             self.assertEqual(meta['schema_version'], str(SCHEMA_VERSION))
             self.assertNotEqual(meta[SECRET_KEY], source_secret)
@@ -156,8 +200,8 @@ class ExportBoardSampleTests(WorkflowTestCase):
                     "INSERT INTO tasks(task_id,request_id,spec_json,input_fingerprint,fingerprint_version,adapter,cwd,state,revision,created_at,updated_at,accepted_at) VALUES(?,?,json_set('{}','$.expectedSeconds',10),'hash',1,'dsh','fixture','completed',1,?,?,?)",
                     (identifier, identifier, time, time, time))
                 connection.execute(
-                    'INSERT INTO workflow_runs(run_id,control_verifier,execution_workspace_json,workspace_manifest_json,state,created_at,updated_at) '
-                    'VALUES(?,\'source-verifier\',\'{}\',\'{}\',\'accepted\',?,?)', (identifier, time, time))
+                    'INSERT INTO workflow_runs(run_id,control_verifier,execution_workspace_json,standalone_project_id,state,created_at,updated_at) '
+                    "VALUES(?,'source-verifier','{}','sample-project','accepted',?,?)", (identifier, time, time))
         database.close()
         before = files(source)
         result = subprocess.run([sys.executable, str(TOOL), str(self.directory / 'sample'), '--source', str(source)],
@@ -174,7 +218,7 @@ class ExportBoardSampleTests(WorkflowTestCase):
             with self.subTest(assignment=assignment):
                 board = InProcessBoard(self.directory / ('source-' + str(len(self._stack))))
                 self._stack.append(board)
-                run, attempt = self.accepted(board, 'accepted', kind='worktree')
+                run, attempt = self.accepted(board, 'accepted-' + str(len(self._stack)), kind='worktree')
                 with board.store.db.write() as connection:
                     connection.execute('UPDATE attempts SET execution_state=\'finished\',shutdown_confirmed=1,cleanup_pending=0')
                     connection.execute(f'UPDATE attempts SET {assignment} WHERE attempt_id=?', (attempt,))

@@ -4,6 +4,7 @@ The board, transaction and harness provenance validators are real. The workspace
 and native receipts are private synthetic fixtures; no native harness runs.
 """
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 
 import json
 
@@ -36,10 +37,10 @@ class ServiceTurnMutationTests(WorkflowTestCase):
             "nativeEvidence": {"stop": {"groupState": "gone", "reason": "completed"}},
             "turn": record,
             "turnResultPath": "/tmp/turn-output.json",
-            "workspaceSeal": self.workspace.seal(
-                self.directory, claim["turn"]["input"]["executionWorkspace"],
+            "workspaceSeal": record_reference(self.directory, self.workspace.seal(
+                self.directory, turn_manifest(self.directory, claim["turn"]["input"]),
                 attempt["taskId"], attempt["attemptId"],
-            ),
+            )),
         }
         receipt = board.call("execution_result", {
             "attemptId": attempt["attemptId"], "generation": attempt["generation"],

@@ -1,5 +1,6 @@
 """A private offline DSH CLI network error retains work for explicit continuation."""
 from __future__ import annotations
+from hey_my_buddy.protocol.workspace_manifest import turn_manifest, manifest_ref, record_reference, artifact_manifest
 from hey_my_buddy.paths import native_path
 
 import json
@@ -50,5 +51,5 @@ class NetworkErrorContinuationTests(MicroTaskWorkerTestCase):
             self.assertEqual(code, 0, delivered)
             self.assertEqual(delivered["state"], "delivered")
             turn = delivered["audit"]["turns"][-1]
-            self.assertEqual(turn["input"]["executionWorkspace"]["inputCommit"], partial["outputCommit"])
+            self.assertEqual(turn_manifest(self.directory, turn["input"])["inputCommit"], partial["outputCommit"])
             self.assertIn("connection dropped", turn["input"]["context"]["lastAssistantMessage"]["text"])

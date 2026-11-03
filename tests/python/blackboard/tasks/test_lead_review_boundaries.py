@@ -137,7 +137,10 @@ class LeadReviewBoundaryTests(WorkflowTestCase):
         # A persisted board can be observed after a child changes; acceptance must
         # inspect the current owned rows rather than rely on the Lead turn's result.
         with board.store.db.write() as db:
-            db.execute("UPDATE workflow_runs SET state='delivered' WHERE run_id=?", (child["runId"],))
+            input_row = db.execute("SELECT workspace_id,input_manifest_sha256 FROM workflow_artifacts"
+                                   " WHERE run_id=? AND kind='input'", (child["runId"],)).fetchone()
+            db.execute("UPDATE workflow_runs SET state='delivered',workspace_id=?,workspace_manifest_sha256=?"
+                       " WHERE run_id=?", (*input_row, child["runId"]))
         with self.assertRaises(BoardError) as caught:
             self.accept_run(board, delivered)
         self.assertEqual(caught.exception.code, "NOT_READY")
