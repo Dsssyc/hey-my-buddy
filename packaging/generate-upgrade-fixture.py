@@ -32,6 +32,7 @@ FLOOR_SCHEMA = 30
 # An existing five-file repository commit keeps workspace capture bounded.
 # This is the workspace input, never the source used to create the database.
 WORKSPACE_INPUT = "122ec20edcdeb97cc655ae3993c402c2c9c966a3"
+SCHEMA33_WRITER_COMMIT = "e3459d8a3b03c06d2af192382a788e051ced9a64"
 AT = "2026-01-01T00:00:00.000Z"
 PROFILES = ["codex:openai:fixture-alpha:high", "codex:openai:fixture-beta:high"]
 THIRD_CANDIDATE = "codex:openai:fixture-gamma:high"
@@ -117,7 +118,31 @@ def generate_in_canonical_slot(args, root, work):
          *(["--python", str(args.python.absolute())] if args.python else []),
          *(["--cleanup-stock-for", str(args.cleanup_stock_for.resolve())] if args.cleanup_stock_for else []),
          *(["--reservation-stock-for", str(args.reservation_stock_for.resolve())] if args.reservation_stock_for else []),
-         *(["--delivered-stock-for", str(args.delivered_stock_for.resolve())] if args.delivered_stock_for else [])], cwd=root, env=env)
+         *(["--delivered-stock-for", str(args.delivered_stock_for.resolve())] if args.delivered_stock_for else []),
+         *(["--workspace-growth-stock-for", str(args.workspace_growth_stock_for.resolve())]
+           if args.workspace_growth_stock_for else [])], cwd=root, env=env)
+    if args.workspace_growth_stock_for:
+        # The released writer has finished and its base export is closed. Run
+        # only the three frozen historical steps in this private generated board.
+        from hey_my_buddy.blackboard.store import schema_30_31, schema_31_32, schema_32_33
+        with sqlite3.connect(work / "state/board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=OFF")
+            for step in (schema_30_31.upgrade, schema_31_32.upgrade, schema_32_33.upgrade):
+                step(connection)
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise ValueError("Generated schema-33 board has broken foreign keys")
+        archived = work / "schema33-source"
+        archived.mkdir()
+        with (work / "schema33.tar").open("wb") as stream:
+            run(["git", "archive", SCHEMA33_WRITER_COMMIT], cwd=root, stdout=stream)
+        with tarfile.open(work / "schema33.tar") as stream:
+            stream.extractall(archived, filter="data")
+        schema33_env = dict(env, PYTHONPATH=str(archived / "src"))
+        run([*interpreter, str(Path(__file__).resolve()), "--populate-schema33",
+             "--work-dir", str(work), "--output-dir", str(args.output_dir.resolve()),
+             "--workspace-growth-stock-for", str(args.workspace_growth_stock_for.resolve())],
+            cwd=root, env=schema33_env)
 
 
 def bind_floor_stock(fixed_sql, written_sql, stock):
@@ -1284,7 +1309,263 @@ def populate(args):
             (fixed / 'metadata.json').write_text(
                 json.dumps(fixed_metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
             hashing.close()
+        if args.workspace_growth_stock_for:
+            # This pending continuation is produced entirely by released
+            # submit/result/continue writers, after the frozen base export.
+            hashing.enter_context(patch.object(hashlib, 'sha256', recorded_sha256))
+            before_resources = export_resources(work, workspace, preimages)
+            with store.db.read() as connection:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+                before = {table: {row['rowid']: dict(row) for row in connection.execute(
+                    f'SELECT rowid AS rowid,* FROM "{table}"')} for table in tables}
+            clock[0] = '2026-01-05T01:00:00.000Z'
+            pending = call('workflow_submit', {
+                'requestId': 'fixture-growth-floor-pending', 'hostId': 'fixture-host',
+                'submissionToken': 'fixture-growth-floor-token',
+                'task': 'Continue a released-writer workspace',
+                'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'cwd': str(work / 'workspaces/accepted'),
+                'executionWorkspace': {'kind': 'existing', 'access': 'read'},
+                'macroTask': {'title': 'Released floor continuation stock'},
+            })
+            pending_claim = admit(nonce, pending['runId'])
+            pending_manifest = pending_claim['turn']['input']['executionWorkspace']
+            pending_seal = workspace.seal(work / 'state', pending_manifest, pending['runId'],
+                                          pending_claim['attempt']['attemptId'])
+            report(pending_claim, nonce, status='ok', result={
+                'status': 'ok', 'turn': completed_record(pending_claim, 'growth-floor-pending'),
+                'workspaceSeal': pending_seal, 'processState': {'shutdownConfirmed': True},
+            })
+            pending_view = call('workflow_get', {'runId': pending['runId']})
+            assert pending_view['state'] == 'delivered'
+            call('workflow_continue', {
+                'runId': pending['runId'], 'commandId': 'fixture-growth-floor-continue',
+                'expectedRevision': pending_view['revision'], 'input': 'Prepared later by the upgraded writer',
+                **pending['control'],
+            })
+            abandoned = call('workflow_submit', {
+                'requestId': 'fixture-growth-floor-abandoned', 'hostId': 'fixture-host',
+                'submissionToken': 'fixture-growth-floor-abandoned-token',
+                'task': 'Preserve an abandoned out-of-scope site',
+                'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                'cwd': str(work / 'workspaces/failed'),
+                'executionWorkspace': {'kind': 'existing', 'access': 'full',
+                                       'accessNote': 'Fixture abandoned site',
+                                       'writeScope': ['fixture.txt']},
+                'macroTask': {'title': 'Released abandoned-site stock'},
+            })
+            abandoned_claim = admit(nonce, abandoned['runId'])
+            abandoned_path = work / 'workspaces/failed/abandoned-edge.txt'
+            abandoned_path.write_bytes(b'fixture abandoned site\n')
+            try:
+                workspace.seal(work / 'state', abandoned_claim['turn']['input']['executionWorkspace'],
+                               abandoned['runId'], abandoned_claim['attempt']['attemptId'])
+            except BoardError as error:
+                assert error.code == 'WORKSPACE_SCOPE_VIOLATION', error
+            else:
+                raise AssertionError('Expected a scope conflict for abandoned-site stock')
+            report(abandoned_claim, nonce, status='failed', result={
+                'status': 'failed', 'workspaceSealError': seal_error,
+                'processState': {'shutdownConfirmed': True},
+            })
+            abandoned_view = call('workflow_get', {'runId': abandoned['runId']})
+            conflict = abandoned_view['workspaceConflicts'][0]
+            call('workflow_workspace_resolve', {
+                'runId': abandoned['runId'], 'commandId': 'fixture-growth-floor-abandon',
+                'expectedRevision': abandoned_view['revision'], 'conflictId': conflict['conflictId'],
+                'observedFingerprint': conflict['observedFingerprint'], 'action': 'abandon',
+                'note': 'Preserve the full out-of-scope site as fixture evidence',
+                **abandoned['control'],
+            })
+            # An actual private Git stash makes the released shared-refs writer
+            # retain a nonempty observation and a recoverable refs/stash object.
+            stash_path = work / 'workspaces/delivered/stash-marker.txt'
+            stash_path.write_bytes(b'fixture shared stash stock\n')
+            run(['git', '-C', str(work / 'workspaces/delivered'), 'stash', 'push', '-u',
+                 '-m', 'fixture-growth-stash', '--', 'stash-marker.txt'])
+            stash_ids = {}
+            for label in ('observed', 'unknown'):
+                submitted = call('workflow_submit', {
+                    'requestId': 'fixture-growth-floor-stash-' + label, 'hostId': 'fixture-host',
+                    'submissionToken': 'fixture-growth-floor-stash-token-' + label,
+                    'task': 'Inspect shared stash ' + label,
+                    'harness': 'codex', 'provider': 'openai', 'model': 'fixture-alpha', 'effort': 'high',
+                    'cwd': str(work / 'workspaces/accepted'),
+                    'executionWorkspace': {'kind': 'existing', 'access': 'read'},
+                    'macroTask': {'title': 'Released shared-stash ' + label + ' stock'},
+                })
+                stash_ids[label] = submitted['runId']
+                observation = (patch.object(workspace, 'shared_stash_inventory',
+                                            side_effect=BoardError('FIXTURE_STASH_UNKNOWN', 'Synthetic Git read failure'))
+                               if label == 'unknown' else ExitStack())
+                with observation:
+                    claimed = admit(nonce, submitted['runId'])
+                    report(claimed, nonce, status='failed', result={
+                        'status': 'failed', 'processState': {'shutdownConfirmed': True},
+                    })
+            with store.db.read() as connection:
+                stock = {}
+                for table in tables:
+                    rows = [dict(row) for row in connection.execute(f'SELECT rowid AS rowid,* FROM "{table}" ORDER BY rowid')]
+                    if any(row != before[table][row['rowid']] for row in rows if row['rowid'] in before[table]):
+                        raise ValueError(f'Released growth stock changed an existing {table} row')
+                    added = [row for row in rows if row['rowid'] not in before[table]]
+                    if added:
+                        stock[table] = added
+            stock = {table: [{name: value.replace(str(work), FIXTURE_ROOT_TOKEN)
+                              if isinstance(value, str) else value for name, value in row.items()}
+                             for row in rows] for table, rows in stock.items()}
+            fixed = args.workspace_growth_stock_for.resolve()
+            stock = bind_floor_stock((fixed / 'board.sql').read_text(encoding='utf-8'),
+                                     sql_path.read_text(encoding='utf-8'), stock)
+            with sqlite3.connect(':memory:') as connection:
+                sql = ('-- Pending continuation from released 0.54.1 writers.\n'
+                       + insert_stock(connection, stock))
+            after_resources = export_resources(work, workspace, preimages)
+            if any(after_resources['files'].get(key) != value
+                   for key, value in before_resources['files'].items()):
+                raise ValueError('Released growth stock changed an existing physical file')
+            before_objects = {item['oid'] for item in before_resources['gitObjects']}
+            before_hashes = {item['oldSha256'] for item in before_resources['hashBindings']}
+            delta = {'format': 1,
+                     'gitObjects': [item for item in after_resources['gitObjects'] if item['oid'] not in before_objects],
+                     'hashBindings': [item for item in after_resources['hashBindings']
+                                      if item['oldSha256'] not in before_hashes],
+                     'files': {key: value for key, value in after_resources['files'].items()
+                               if key not in before_resources['files']},
+                     'refs': {key: value for key, value in after_resources['refs'].items()
+                              if key not in before_resources['refs']}}
+            resources = json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True) + '\n'
+            for target in (output, fixed):
+                (target / 'schema-30-workspace-growth-stock.sql').write_text(sql, encoding='utf-8', newline='\n')
+                (target / 'schema-30-workspace-growth-resources.json').write_text(resources, encoding='utf-8', newline='\n')
+            fixed_metadata = json.loads((fixed / 'metadata.json').read_text(encoding='utf-8'))
+            fixed_metadata.update(growth30WriterCommit=FLOOR_COMMIT,
+                                  growth30BaseSha256=digest((fixed / 'board.sql').read_bytes()),
+                                  growth30SqlSha256=digest(sql.encode()),
+                                  growth30ResourcesSha256=digest(resources.encode()),
+                                  growth30GeneratorSha256=digest(Path(__file__).read_bytes()),
+                                  growth30RunId=pending['runId'],
+                                  growth30AbandonedRunId=abandoned['runId'],
+                                  growth30StashRunIds=stash_ids)
+            (fixed / 'metadata.json').write_text(
+                json.dumps(fixed_metadata, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+            hashing.close()
     print(json.dumps(verify(output, work / "restored.sqlite3"), ensure_ascii=False))
+
+
+def populate_schema33(args):
+    """Append only schema-33 writer facts after the frozen floor upgrade chain."""
+    from unittest.mock import patch
+    from hey_my_buddy.blackboard.service.service import BoardService, call_operation
+    from hey_my_buddy.blackboard.service.live_registry import LiveRegistry
+    from hey_my_buddy.blackboard.store.store import BoardStore
+    from hey_my_buddy.blackboard.tasks import workspace
+
+    work = args.work_dir.resolve()
+    source = work / "schema33-source"
+    import hey_my_buddy
+    if Path(hey_my_buddy.__file__).resolve() != source / "src/hey_my_buddy/__init__.py":
+        raise ValueError("Schema-33 stock must run from its archived source")
+    with sqlite3.connect(work / "state/board.sqlite3") as connection:
+        if connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0] != "33":
+            raise ValueError("Schema-33 writer requires the privately upgraded floor")
+
+    preimages = {}
+    native_sha256 = hashlib.sha256
+
+    def recorded_sha256(data=b"", **kwargs):
+        result = native_sha256(data, **kwargs)
+        caller = sys._getframe(1)
+        ascii_json = caller.f_globals.get("__name__") in {
+            "hey_my_buddy.blackboard.tasks.workspace", "hey_my_buddy.blackboard.tasks.workspace_identity"}
+        preimages[result.hexdigest()] = (bytes(data).decode("utf-8"), ascii_json)
+        return result
+
+    def rows(connection):
+        return {table: {row["rowid"]: dict(row) for row in connection.execute(
+                    f'SELECT rowid AS rowid,* FROM "{table}"')}
+                for (table,) in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")}
+
+    with ExitStack() as stack:
+        stack.enter_context(patch.object(hashlib, "sha256", recorded_sha256))
+        stack.enter_context(patch("uuid.uuid4", side_effect=(uuid.UUID(int=n) for n in itertools.count(10000))))
+        before_resources = export_resources(work, workspace, preimages)
+        with sqlite3.connect(work / "state/board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            before = rows(connection)
+        store = BoardStore(work / "state", clock=lambda: "2026-01-06T00:00:00.000Z")
+        service = BoardService(store, token="fixture-service-token", control={},
+                               on_stop=lambda p: p, on_restart=lambda p: p, live_registry=LiveRegistry())
+        requests = (
+            ("macro", {"macroTask": {"title": "Schema 33 workspace reference stock",
+                                      "goal": "Inspect the archived schema 33 workspace manifest."}}),
+            ("standalone", {}),
+        )
+        produced = {}
+        for label, presentation in requests:
+            result = call_operation(service, "workflow_submit", {
+                "requestId": "fixture-growth-33-" + label,
+                "hostId": "fixture-host",
+                "submissionToken": "fixture-growth-33-token-" + label,
+                "task": "Inspect a schema 33 workspace manifest",
+                "harness": "codex", "provider": "openai", "model": "fixture-alpha", "effort": "high",
+                "cwd": str(work / "workspaces/delivered"),
+                "executionWorkspace": {"kind": "existing", "access": "read"},
+                **presentation,
+            })
+            produced[label] = result["runId"]
+        with sqlite3.connect(work / "state/board.sqlite3") as connection:
+            connection.row_factory = sqlite3.Row
+            after = rows(connection)
+        stock = {}
+        for table, current in after.items():
+            if any(row != before[table][rowid] for rowid, row in current.items() if rowid in before[table]):
+                raise ValueError(f"Schema-33 stock unexpectedly changed existing {table} rows")
+            added = [row for rowid, row in sorted(current.items()) if rowid not in before[table]]
+            if added:
+                stock[table] = added
+        stock = {table: [{name: value.replace(str(work), FIXTURE_ROOT_TOKEN)
+                          if isinstance(value, str) else value for name, value in row.items()}
+                         for row in table_rows] for table, table_rows in stock.items()}
+        fixed = args.workspace_growth_stock_for.resolve()
+        stock = bind_floor_stock((fixed / "board.sql").read_text(encoding="utf-8"),
+                                 (args.output_dir / "board.sql").read_text(encoding="utf-8"), stock)
+        with sqlite3.connect(":memory:") as connection:
+            sql = ("-- Schema-33 rows from archived e3459d8 after the frozen floor upgrade chain.\n"
+                   + insert_stock(connection, stock))
+        after_resources = export_resources(work, workspace, preimages)
+        before_objects = {item["oid"] for item in before_resources["gitObjects"]}
+        before_hashes = {item["oldSha256"] for item in before_resources["hashBindings"]}
+        for field in ("files", "refs"):
+            if any(after_resources[field].get(key) != value
+                   for key, value in before_resources[field].items()):
+                raise ValueError(f"Schema-33 stock changed a pre-existing {field} entry")
+        delta = {"format": 1,
+                 "gitObjects": [item for item in after_resources["gitObjects"] if item["oid"] not in before_objects],
+                 "hashBindings": [item for item in after_resources["hashBindings"]
+                                  if item["oldSha256"] not in before_hashes],
+                 "files": {key: value for key, value in after_resources["files"].items()
+                           if key not in before_resources["files"]},
+                 "refs": {key: value for key, value in after_resources["refs"].items()
+                          if key not in before_resources["refs"]}}
+        resources = json.dumps(delta, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        sql_name = "schema-33-workspace-growth-stock.sql"
+        resource_name = "schema-33-workspace-growth-resources.json"
+        for target in (args.output_dir, fixed):
+            (target / sql_name).write_text(sql, encoding="utf-8", newline="\n")
+            (target / resource_name).write_text(resources, encoding="utf-8", newline="\n")
+        metadata = json.loads((fixed / "metadata.json").read_text(encoding="utf-8"))
+        metadata.update(growth33WriterCommit=SCHEMA33_WRITER_COMMIT,
+                        growth33BaseSha256=digest((fixed / "board.sql").read_bytes()),
+                        growth33SqlSha256=digest(sql.encode()),
+                        growth33ResourcesSha256=digest(resources.encode()),
+                        growth33GeneratorSha256=digest(Path(__file__).read_bytes()),
+                        growth33RunIds=produced)
+        (fixed / "metadata.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def export_resources(work, workspace, preimages):
@@ -1304,11 +1585,13 @@ def export_resources(work, workspace, preimages):
         actual = workspace.inspect(str(checkout))
         checkouts[label] = template(actual["checkoutRoot"])
         for role, path in (("checkoutId", actual["gitDir"]), ("repositoryId", actual["repositoryPath"])):
-            identities[actual[role]] = template(path)
+            if role in actual:
+                identities[actual[role]] = template(path)
     repository = work / "repository"
     # Git refs, object IDs and types here use ASCII syntax, within UTF-8.
     refs = dict(line.split(" ") for line in subprocess.check_output(
-        ["git", "-C", str(repository), "for-each-ref", "--format=%(refname) %(objectname)", "refs/hey-my-buddy/"],
+        ["git", "-C", str(repository), "for-each-ref", "--format=%(refname) %(objectname)",
+         "refs/hey-my-buddy/", "refs/stash"],
         text=True, encoding="utf-8").splitlines())
     # The fixed input is a root commit: its complete reachable object closure is
     # tiny. Export raw object bytes as hex so no generating repository is needed.
@@ -1496,6 +1779,161 @@ def verify(output, restored):
                 "sourceSchemaMatches": True}
 
 
+
+def derive_legacy_stock(args):
+    """Derive independent old-form fixture copies from the frozen floor rows.
+
+    This is fixture preparation, not an upgrade or an historical writer run.
+    Preserve the base export; rebind the selected input and all dependent seals
+    in separate v1/v2 profiles before tests take their preservation baseline.
+    """
+    root = Path(__file__).resolve().parents[1]
+    work, output, fixed = args.work_dir.resolve(), args.output_dir.resolve(), args.legacy_stock_for.resolve()
+    if not work.is_relative_to(root / 'tmp/w3') or not output.is_relative_to(root / 'tmp/w3'):
+        raise ValueError('Legacy derivation work and output must be under tmp/w3/')
+    work.mkdir(parents=True, exist_ok=False)
+    output.mkdir(parents=True, exist_ok=False)
+    base_sql = (fixed / 'board.sql').read_bytes()
+    base_resources = json.loads((fixed / 'workspace-resources.json').read_text())
+    metadata = json.loads((fixed / 'metadata.json').read_text())
+    if digest(base_sql) != metadata['sqlSha256']:
+        raise ValueError('Legacy derivation requires the unchanged floor export')
+    run_id = metadata['stockIds']['helperParent']
+    history = {
+        'manifest1To2': 'e87ac40ef5475e7fb0768a2b5b47ccd5095292f8',
+        'manifest2To3': '8810d564b9b652c02d75b8fa75a50ab1349def51',
+        'turnInput1To2': 'd560e1f2b11556beeb555b993ea2f726220794dc',
+        'turnInput2To3': '8dc9834a1ab24355694e79b8592f03b039461814',
+    }
+    with sqlite3.connect(':memory:') as connection:
+        connection.row_factory = sqlite3.Row
+        connection.executescript(base_sql.decode())
+        source_rows = {name: [dict(row) for row in connection.execute(f'SELECT rowid AS rowid,* FROM "{name}" ORDER BY rowid')]
+                       for (name,) in connection.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+    run = next(row for row in source_rows['workflow_runs'] if row['run_id'] == run_id)
+    if run['state'] != 'concluded':
+        raise ValueError('Legacy source must be concluded and have no future physical action')
+    source_manifests = [json.loads(row['manifest_json']) for row in source_rows['workflow_artifacts']
+                        if row['run_id'] == run_id and row['kind'] == 'input']
+    source_manifests += [json.loads(row['workspace_manifest_json']) for row in source_rows['workflow_continuations']
+                         if row['run_id'] == run_id and row['workspace_manifest_json'] is not None]
+    workspace_ids = {value['workspaceId'] for value in source_manifests}
+    if len(workspace_ids) != 2 or any(value['access'] != 'read' or value['version'] != 3 for value in source_manifests):
+        raise ValueError('The fixed read-only initial and continuation manifests changed')
+    task = next(row for row in source_rows['tasks'] if row['task_id'] == run_id)
+    task_text = json.loads(task['spec_json'])['task']
+    results = {}
+    for version in (1, 2):
+        substitutions = {}
+        recipes = []
+
+        def transform(value):
+            if isinstance(value, list):
+                return [transform(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            updated = {key: transform(item) for key, item in value.items()}
+            if (updated.get('workspaceId') in workspace_ids and updated.get('version') == 3
+                    and 'checkoutRoot' in updated and 'repositoryId' in updated):
+                updated['version'] = version
+                if version == 1:
+                    updated['integrator'] = updated['integrator']['id']
+            if (updated.get('taskId') == run_id and 'executionWorkspace' in updated
+                    and 'context' in updated and 'resumeMode' in updated):
+                updated['version'] = version
+                context = updated['context']
+                context.update(task=task_text[:8000], taskTruncated=len(task_text) > 8000)
+                if context.get('helperOutcomes'):
+                    if len(context['helperOutcomes']) > 8:
+                        raise ValueError('Legacy source exceeds the historical helper limit')
+                    context['helperOutcomeTotal'] = len(context['helperOutcomes'])
+                if context.get('artifacts'):
+                    if len(context['artifacts']) > 8:
+                        raise ValueError('Legacy source exceeds the historical artifact limit')
+                    context['artifactTotal'] = len(context['artifacts'])
+                if len(json_text(context).encode()) > 64 * 1024:
+                    raise ValueError('Legacy source would enter the historical context truncation path')
+            return updated
+
+        def replace_hashes(text):
+            return re.sub(r'[0-9a-f]{64}', lambda match: substitutions.get(match[0], match[0]), text)
+
+        def rewrite(text):
+            try:
+                value = json.loads(text)
+            except (ValueError, TypeError):
+                return replace_hashes(text)
+            changed = transform(value)
+            if changed != value:
+                # Preserve the actual serializer of every preimage, including
+                # fsync_json's spaced, insertion-ordered receipt envelope.
+                for ascii_json in (False, True):
+                    for sorted_keys in (True, False):
+                        for separators in ((',', ':'), (', ', ': ')):
+                            options = dict(ensure_ascii=ascii_json, sort_keys=sorted_keys, separators=separators)
+                            if json.dumps(value, **options) == text:
+                                return replace_hashes(json.dumps(changed, **options))
+                raise ValueError('Unrecognized historical JSON serializer in derived stock')
+            return replace_hashes(text)
+
+        # The floor export already orders all path-dependent preimages by
+        # dependency. Legacy fields add no new edge, so reuse that order.
+        for recipe in base_resources['hashBindings']:
+            payload = rewrite(recipe['template'])
+            if payload != recipe['template']:
+                derived_sha = digest(payload.encode())
+                substitutions[recipe['oldSha256']] = derived_sha
+                recipes.append({**recipe, 'sourceSha256': recipe['oldSha256'],
+                                'oldSha256': derived_sha, 'template': payload})
+        updates, provenance = [], []
+        with sqlite3.connect(':memory:') as quoting:
+            def literal(value):
+                return quoting.execute('SELECT quote(?)', (value,)).fetchone()[0]
+            for table, rows in source_rows.items():
+                for row in rows:
+                    changed = {}
+                    for key, value in row.items():
+                        if isinstance(value, str):
+                            updated = rewrite(value)
+                            if updated != value:
+                                changed[key] = updated
+                    if changed:
+                        updates.append(f'UPDATE "{table}" SET ' + ','.join(f'"{key}"={literal(value)}' for key, value in changed.items())
+                                       + f' WHERE rowid={row["rowid"]};')
+                        provenance.append({'table': table, 'sourceRowid': row['rowid'], 'columns': sorted(changed)})
+        files = {}
+        for name, content in base_resources['files'].items():
+            updated = rewrite(content)
+            if updated != content:
+                files[name] = updated
+        operation_updates = []
+        for index, operation in enumerate(json.loads((fixed / 'operations.json').read_text())):
+            updated = json.loads(replace_hashes(json_text(transform(operation))))
+            if updated != operation:
+                operation_updates.append({'sourceIndex': index, 'value': updated})
+        resources = {'format': 1, 'hashBindings': recipes, 'files': files,
+                     'sourceRunId': run_id, 'sourceRows': provenance, 'history': history,
+                     'operationUpdates': operation_updates,
+                     'sourceManifestPairs': [{'workspaceId': value['workspaceId'], 'manifestSha256': value['manifestSha256']}
+                                             for value in source_manifests]}
+        stem = f'schema-30-legacy-v{version}'
+        sql = f'-- Derived retained-form profile v{version}; apply only to a private floor fixture before its baseline.\n' + '\n'.join(updates) + '\n'
+        resource_text = json.dumps(resources, ensure_ascii=False, sort_keys=True, indent=2) + '\n'
+        for destination in (output, fixed):
+            (destination / (stem + '-stock.sql')).write_text(sql, encoding='utf-8', newline='\n')
+            (destination / (stem + '-resources.json')).write_text(resource_text, encoding='utf-8', newline='\n')
+        results[str(version)] = {'sqlSha256': digest(sql.encode()), 'resourcesSha256': digest(resource_text.encode()),
+                                 'updatedRows': len(provenance), 'derivedFiles': len(files), 'derivedHashes': len(recipes)}
+    metadata['legacyStock'] = {'baseSha256': digest(base_sql), 'sourceResourcesSha256': metadata['resourcesSha256'],
+                               'sourceOperationsSha256': metadata['operationsSha256'],
+                               'generatorSha256': digest(Path(__file__).read_bytes()), 'sourceRunId': run_id,
+                               'history': history, 'profiles': results,
+                               'generationCommand': 'uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/w3/<new-private-dir> --output-dir tmp/w3/<new-output-dir> --legacy-stock-for tests/fixtures/upgrade-floor'}
+    (fixed / 'metadata.json').write_text(json.dumps(metadata, ensure_ascii=False, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+    (work / 'derivation.json').write_text(json.dumps(results, indent=2) + '\n', encoding='utf-8')
+    print(json_text({'legacyStock': results, 'sourceRunId': run_id}))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, required=True)
@@ -1505,20 +1943,27 @@ def main():
     parser.add_argument("--cleanup-stock-for", type=Path, help="Derive and update the interrupted journal for this fixed floor; preserve its base stock")
     parser.add_argument("--reservation-stock-for", type=Path, help="Derive a read-only concluded reservation for this fixed floor; preserve its base stock")
     parser.add_argument("--delivered-stock-for", type=Path, help="Derive a delivered v3 run and its physical resources from the floor writers")
+    parser.add_argument("--workspace-growth-stock-for", type=Path, help="Generate schema-33 workspace reference stock on an upgraded private floor")
+    parser.add_argument("--legacy-stock-for", type=Path, help="Derive retained v1/v2 profiles from the fixed floor; never rewrite the base")
+    parser.add_argument("--populate-schema33", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--populate", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--verify", action="store_true", help="Only restore and validate; no old-source imports")
     args = parser.parse_args()
     if args.output_dir is None:
         args.output_dir = (args.work_dir.with_name(args.work_dir.name + "-generated")
-                           if (args.cleanup_stock_for or args.reservation_stock_for or args.delivered_stock_for) and not args.verify else Path("tests/fixtures/upgrade-floor"))
+                           if (args.cleanup_stock_for or args.reservation_stock_for or args.delivered_stock_for or args.workspace_growth_stock_for or args.legacy_stock_for) and not args.verify else Path("tests/fixtures/upgrade-floor"))
     if any(fixed and args.output_dir.resolve() == fixed.resolve()
-           for fixed in (args.cleanup_stock_for, args.reservation_stock_for, args.delivered_stock_for)):
+           for fixed in (args.cleanup_stock_for, args.reservation_stock_for, args.delivered_stock_for, args.workspace_growth_stock_for, args.legacy_stock_for)):
         parser.error("supplements require a separate output-dir to preserve the fixed floor payloads")
-    if args.verify:
+    if args.legacy_stock_for:
+        derive_legacy_stock(args)
+    elif args.verify:
         args.work_dir.mkdir(parents=True, exist_ok=False)
         print(json.dumps(verify(args.output_dir, args.work_dir / "restored.sqlite3"), ensure_ascii=False))
     elif args.populate:
         populate(args)
+    elif args.populate_schema33:
+        populate_schema33(args)
     else:
         generate(args)
 

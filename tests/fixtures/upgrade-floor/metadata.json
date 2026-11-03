@@ -50,6 +50,26 @@
   "format": 2,
   "generationCommand": "python packaging/generate-upgrade-fixture.py --work-dir <new-private-tmp-dir> --output-dir tests/fixtures/upgrade-floor",
   "generatorSha256": "a3113a5b19f125cedfe435653db26ebb87594738be9f20c1cb7835f76d8f10f7",
+  "growth30AbandonedRunId": "00000000-0000-0000-0000-000000000192",
+  "growth30BaseSha256": "ff34e0fdcde2d672e36c5d793fd19b3fd051d271d26f3e4df8c8d7849a440799",
+  "growth30GeneratorSha256": "70e3ed545a219aa2fb08b3d2738f73ed0840d16e12fffc6e91a4767a931a77a6",
+  "growth30ResourcesSha256": "3fbae3b504326c3b52bb164df8eadb4348e736c8dec58f4bcff693a3db2e4ce0",
+  "growth30RunId": "00000000-0000-0000-0000-00000000017f",
+  "growth30SqlSha256": "b7325ed1733de4b21305f51baa189958c7ad0d7c9ce41c1f824b66727f6ca183",
+  "growth30StashRunIds": {
+    "observed": "00000000-0000-0000-0000-0000000001a6",
+    "unknown": "00000000-0000-0000-0000-0000000001b2"
+  },
+  "growth30WriterCommit": "4de1dd9478980e924a4a86b2c50aaca33e33b79d",
+  "growth33BaseSha256": "ff34e0fdcde2d672e36c5d793fd19b3fd051d271d26f3e4df8c8d7849a440799",
+  "growth33GeneratorSha256": "70e3ed545a219aa2fb08b3d2738f73ed0840d16e12fffc6e91a4767a931a77a6",
+  "growth33ResourcesSha256": "c3b3d03dc451668cae4949a60ade79999b5e1fc5a5995ab005e232bbbfa3c591",
+  "growth33RunIds": {
+    "macro": "00000000-0000-0000-0000-000000002713",
+    "standalone": "00000000-0000-0000-0000-00000000271a"
+  },
+  "growth33SqlSha256": "ddc84cadda90fb0c32e13fd4417c2675bed4af678ae98b9909a43815126cecf4",
+  "growth33WriterCommit": "e3459d8a3b03c06d2af192382a788e051ced9a64",
   "inquiryStock": {
     "dbDeliveredNoEntry": {
       "attemptId": "00000000-0000-0000-0000-0000000000c1",
@@ -133,6 +153,36 @@
       "messageId": "00000000-0000-0000-0000-0000000000cc",
       "taskId": "00000000-0000-0000-0000-0000000000be"
     }
+  },
+  "legacyStock": {
+    "baseSha256": "ff34e0fdcde2d672e36c5d793fd19b3fd051d271d26f3e4df8c8d7849a440799",
+    "generationCommand": "uv run --frozen python packaging/generate-upgrade-fixture.py --work-dir tmp/w3/<new-private-dir> --output-dir tmp/w3/<new-output-dir> --legacy-stock-for tests/fixtures/upgrade-floor",
+    "generatorSha256": "7fa336b1e18e138806eca6ecad8cc8e13243e7018ddbf056430af302519d9258",
+    "history": {
+      "manifest1To2": "e87ac40ef5475e7fb0768a2b5b47ccd5095292f8",
+      "manifest2To3": "8810d564b9b652c02d75b8fa75a50ab1349def51",
+      "turnInput1To2": "d560e1f2b11556beeb555b993ea2f726220794dc",
+      "turnInput2To3": "8dc9834a1ab24355694e79b8592f03b039461814"
+    },
+    "profiles": {
+      "1": {
+        "derivedFiles": 10,
+        "derivedHashes": 12,
+        "resourcesSha256": "e4d27ad05e46f3e0548b75a5ca7ffa797313e6caff0fa97175f3baf0e85ace2b",
+        "sqlSha256": "70742462e038c1e9fad355085e06bb4c182959f971cf0ff7c81750db4ee7967f",
+        "updatedRows": 19
+      },
+      "2": {
+        "derivedFiles": 10,
+        "derivedHashes": 12,
+        "resourcesSha256": "9c2b70e0fbaa9181799d717a9f8494182a91773c94180e551c9e11c87c4a825c",
+        "sqlSha256": "7bcaa3d3058bddf9b18920ec3af38f96245ce9b35698287c27cf8b696df78d91",
+        "updatedRows": 19
+      }
+    },
+    "sourceOperationsSha256": "ee6ca04b3d6857b33877fef71d89c4ed17bc4cb49a6f719039438a71607027a2",
+    "sourceResourcesSha256": "5c3df8d29901eb82adf4f607e3d9179abc476908c6bb614e99c90fdeea95f4c3",
+    "sourceRunId": "00000000-0000-0000-0000-0000000000be"
   },
   "loadedSourceModules": [
     "src/hey_my_buddy/blackboard/__init__.py",

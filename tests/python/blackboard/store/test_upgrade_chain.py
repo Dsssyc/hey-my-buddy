@@ -5,11 +5,12 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import re
 import tempfile
 import unittest
 from unittest import mock
 
-from blackboard.store.upgrade_fixture import FIXTURE, complete_fixture_cleanup
+from blackboard.store.upgrade_fixture import FIXTURE, FIXTURE_ROOT_TOKEN, load_fixture, complete_fixture_cleanup
 from hey_my_buddy.blackboard.store import schema_30_31, schema_32_33, upgrade
 from hey_my_buddy.blackboard.store.db import Database, SCHEMA_VERSION
 from hey_my_buddy.install.upgrade import preflight
@@ -63,11 +64,84 @@ class UpgradeChainTests(unittest.TestCase):
         self.addCleanup(self.scratch.cleanup)
         self.root = Path(self.scratch.name)
         self.state = self.root / 'state'
-        self.state.mkdir()
+        self.fixture = load_fixture(self.state)
         self.db = sqlite3.connect(self.state / 'board.sqlite3')
         self.addCleanup(self.db.close)
-        self.db.executescript((FIXTURE / 'board.sql').read_text(encoding='utf-8'))
         self.db.row_factory = sqlite3.Row
+
+    def add_bound_stock(self, filename, *, schema31=False):
+        """Bind SQL-only supplemental history to this fixture's private roots.
+
+        These old supplements add no file dependency of their own. The applying
+        journal names a base allocation whose actual files load_fixture restored.
+        Only their new/changed rows are applied; current writers never run here.
+        """
+        with closing(sqlite3.connect(':memory:')) as template:
+            template.row_factory = sqlite3.Row
+            template.executescript((FIXTURE / 'board.sql').read_text())
+            if schema31:
+                schema_30_31.upgrade(template)
+            tables = [row[0] for row in template.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            before = {table: {row['rowid']: dict(row) for row in template.execute(
+                f'SELECT rowid AS rowid,* FROM "{table}"')} for table in tables}
+            template.executescript((FIXTURE / filename).read_text())
+            after = {table: {row['rowid']: dict(row) for row in template.execute(
+                f'SELECT rowid AS rowid,* FROM "{table}"')} for table in tables}
+        bindings = dict(self.fixture['bindings'])
+        def bind(value):
+            if isinstance(value, dict):
+                return {bind(key): bind(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [bind(item) for item in value]
+            if not isinstance(value, str):
+                return value
+            def token(match):
+                text = match[0]
+                if not text.startswith(FIXTURE_ROOT_TOKEN):
+                    return bindings.get(text, text)
+                relative = text.removeprefix(FIXTURE_ROOT_TOKEN)
+                root = self.fixture['fixtureRoot']
+                if relative == '/state' or relative.startswith('/state/'):
+                    root, relative = self.state, relative.removeprefix('/state')
+                relative = re.sub(r'ws-[0-9a-f]{32}|[0-9a-f]{64}',
+                                  lambda item: bindings.get(item[0], item[0]), relative)
+                return str(root.joinpath(*relative.lstrip('/').split('/')))
+            return re.sub(re.escape(FIXTURE_ROOT_TOKEN) + r'(?:/[\w.-]+)*|ws-[0-9a-f]{32}|[0-9a-f]{64}', token, value)
+        # The reservation supplement's own old inline manifest has a path-bound
+        # self digest; derive it before binding other rows that refer to it.
+        for table in ('workflow_artifacts', 'workflow_runs'):
+            column = 'manifest_json' if table == 'workflow_artifacts' else 'workspace_manifest_json'
+            for key, row in after[table].items():
+                if row == before[table].get(key):
+                    continue
+                value = json.loads(row[column])
+                if value.get('workspaceId') and value.get('kind') in ('existing', 'worktree'):
+                    payload = bind({key: item for key, item in value.items() if key != 'manifestSha256'})
+                    bindings[value['manifestSha256']] = hashlib.sha256(json.dumps(
+                        payload, ensure_ascii=True, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        with self.db:
+            for table in tables:
+                for rowid in before[table].keys() - after[table].keys():
+                    self.db.execute(f'DELETE FROM "{table}" WHERE rowid=?', (rowid,))
+                for rowid, row in after[table].items():
+                    old = before[table].get(rowid)
+                    if row == old:
+                        continue
+                    values = {}
+                    for key, value in row.items():
+                        if isinstance(value, str) and value.startswith(('{', '[')):
+                            parsed = json.loads(value)
+                            bound = bind(parsed)
+                            value = json.dumps(bound, ensure_ascii=False, sort_keys=True, separators=(',', ':')) if bound != parsed else value
+                        else:
+                            value = bind(value)
+                        values[key] = value
+                    if old is None:
+                        self.db.execute(f'INSERT INTO "{table}"({",".join(values)}) VALUES({",".join("?" for _ in values)})', list(values.values()))
+                    else:
+                        changed = {key: values[key] for key in values if row[key] != old[key]}
+                        self.db.execute(f'UPDATE "{table}" SET {",".join(key + "=?" for key in changed)} WHERE rowid=?', [*changed.values(), rowid])
 
     def schema31(self):
         with self.db:
@@ -115,7 +189,8 @@ class UpgradeChainTests(unittest.TestCase):
 
     def test_result_stock_drops_read_counters_and_budget_copies_and_keeps_frozen_content(self):
         self.schema31()
-        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
+        frozen_columns = {table: ','.join(['rowid', *(row[1] for row in self.db.execute(f'PRAGMA table_info({table})') if row[1] not in ('manifest_sha256', 'workspace_manifest_json'))]) for table in ('workflow_turns', 'workflow_artifacts', 'workflow_host_conclusions', 'workflow_continuations', 'router_requests', 'attempt_received_receipts')}
+        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')]
                   for table in ('router_requests', 'workflow_turns', 'attempt_received_receipts')}
         specs = list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks ORDER BY rowid'))
         sources = (('attempts', 'attempt_id', 'result_json', ('result', 'usage')),
@@ -149,7 +224,7 @@ class UpgradeChainTests(unittest.TestCase):
             self.assertEqual(self.db.execute(f"SELECT COUNT(*) FROM {table} WHERE json_type({column},?) IS NOT NULL",
                                              (budget_path,)).fetchone()[0], 0)
         for table, rows in frozen.items():
-            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
+            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')], rows)
         self.assertEqual(list(self.db.execute('SELECT task_id,spec_json,input_fingerprint FROM tasks ORDER BY rowid')), specs)
         self.assertGreater(self.db.execute("SELECT COUNT(*) FROM router_requests,json_tree(snapshot_json) WHERE json_tree.key='bytesRead'").fetchone()[0], 0)
         self.assertEqual(self.db.execute("SELECT json_extract(spec_json,'$.decision.document.budget.bytesRead') FROM tasks WHERE task_id='schema31-maintenance-task'").fetchone()[0], 524288)
@@ -197,7 +272,7 @@ class UpgradeChainTests(unittest.TestCase):
             self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
 
     def test_floor_runs_every_step_with_schema31_stock_and_matches_a_new_board(self):
-        self.db.executescript((FIXTURE / 'schema-30-reservation-stock.sql').read_text())
+        self.add_bound_stock('schema-30-reservation-stock.sql')
         def step_with_new_form(db):
             schema_30_31.upgrade(db)
             add_schema31_stock(db)
@@ -210,7 +285,7 @@ class UpgradeChainTests(unittest.TestCase):
         self.assert_current_structure()
 
     def test_terminal_reservation_stock_releases_at_the_original_host_decision_time(self):
-        self.db.executescript((FIXTURE / 'schema-30-reservation-stock.sql').read_text())
+        self.add_bound_stock('schema-30-reservation-stock.sql')
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         reader_id = metadata['reservationStockRunId']
         reader = self.db.execute("SELECT w.*,r.execution_workspace_json,h.created_at AS concluded_at"
@@ -238,7 +313,8 @@ class UpgradeChainTests(unittest.TestCase):
         # updated_at may move for a later lifecycle operation; it is no decision time.
         self.db.execute("UPDATE workflow_runs SET updated_at='2026-02-01T00:00:00.000Z'")
         self.db.commit()
-        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')]
+        frozen_columns = {table: ','.join(['rowid', *(row[1] for row in self.db.execute(f'PRAGMA table_info({table})') if row[1] not in ('manifest_sha256', 'workspace_manifest_json'))]) for table in ('workflow_turns', 'workflow_artifacts', 'workflow_host_conclusions', 'workflow_continuations', 'router_requests', 'attempt_received_receipts')}
+        frozen = {table: [tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')]
                   for table in ('workflow_host_conclusions', 'workflow_artifacts', 'workflow_turns')}
         roots = {}
         for (raw,) in self.db.execute('SELECT workspace_manifest_json FROM workflow_runs'):
@@ -260,7 +336,7 @@ class UpgradeChainTests(unittest.TestCase):
                                          (reader_id,)).fetchone()[0],
                          roots[reader['workspace_id'], reader['manifest_sha256']])
         for table, rows in frozen.items():
-            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT rowid,* FROM {table} ORDER BY rowid')], rows)
+            self.assertEqual([tuple(row) for row in self.db.execute(f'SELECT {frozen_columns[table]} FROM {table} ORDER BY rowid')], rows)
         self.assert_current_structure()
 
     def test_a_terminal_reservation_without_its_decision_time_aborts_the_upgrade(self):
@@ -327,7 +403,7 @@ class UpgradeChainTests(unittest.TestCase):
 
     def test_cleanup_stock_discards_old_admissions_and_preserves_interrupted_and_completed_journals(self):
         self.schema31()
-        self.db.executescript((FIXTURE / 'schema-31-cleanup-stock.sql').read_text())
+        self.add_bound_stock('schema-31-cleanup-stock.sql', schema31=True)
         before = [dict(row) for row in self.db.execute('SELECT rowid,* FROM workspace_cleanup_plans ORDER BY rowid')]
         self.assertEqual({row['state'] for row in before}, {'planned', 'blocked', 'applying', 'applied'})
         started = next(row for row in before if row['state']=='applying')

@@ -41,7 +41,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def sample(self, fixture, connection):
         run_id = fixture['stableIds']['delivered']
         row = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (run_id,)).fetchone()
-        manifest = json.loads(row['workspace_manifest_json'])
+        manifest = json.loads(connection.execute("SELECT manifest_json FROM workflow_artifacts WHERE run_id=? AND kind='input' ORDER BY rowid LIMIT 1", (run_id,)).fetchone()[0])
         attempt = connection.execute('SELECT selected_attempt_id FROM tasks WHERE task_id=?', (run_id,)).fetchone()[0]
         return run_id, manifest, attempt
 
@@ -343,6 +343,7 @@ class UpgradeFixtureTests(unittest.TestCase):
         before = upgrade.idle_snapshot(state)
         old_rows = {name: [tuple(row) for row in connection.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid')]
                     for name in before['tables']}
+        old_columns = {name: ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info(\"{name}\")'))] for name in before['tables']}
         macro_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(macro_tasks)')]]
         task_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(tasks)')]]
         identity_columns = ['rowid', *[row[1] for row in connection.execute('PRAGMA table_info(attempt_process_identities)')]]
@@ -410,6 +411,12 @@ class UpgradeFixtureTests(unittest.TestCase):
             if name == 'meta':
                 self.assertEqual([(row[1], row[2]) for row in actual if row[1] != 'schema_version'],
                                  [(row[1], row[2]) for row in original if row[1] != 'schema_version'])
+            elif name in ('attempts', 'workflow_runs', 'workflow_children', 'workflow_continuations', 'workflow_turns', 'workflow_artifacts'):
+                removed = {'workspace_manifest_json', 'manifest_sha256'}
+                keep = [column for column in old_columns[name] if column not in removed]
+                expected = [{column: row[old_columns[name].index(column)] for column in keep} for row in original]
+                actual_columns = ['rowid', *(row[1] for row in connection.execute(f'PRAGMA table_info("{name}")'))]
+                self.assertEqual([{column: row[actual_columns.index(column)] for column in keep} for row in actual], expected, name)
             elif name == 'macro_tasks':
                 keep = [i for i, column in enumerate(macro_columns) if column != 'project_path']
                 self.assertEqual(actual, [tuple(row[i] for i in keep) for row in original])
@@ -1047,12 +1054,12 @@ class UpgradeFixtureTests(unittest.TestCase):
         for row in upgraded.execute('SELECT * FROM workspace_cleanup_plans'):
             self.assertNotIn('expiresAt', WorkflowCoordinator._plan_view(row))
 
-    def test_cleanup_stock_records_its_current_generator_and_fixed_floor(self):
+    def test_cleanup_stock_records_its_original_generator_and_fixed_floor(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
         self.assertEqual(metadata['generatorSha256'], 'a3113a5b19f125cedfe435653db26ebb87594738be9f20c1cb7835f76d8f10f7')
         self.assertNotIn('baseGeneratorSha256', metadata)
-        self.assertEqual(metadata['cleanupStockGeneratorSha256'], _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
+        self.assertEqual(metadata['cleanupStockGeneratorSha256'], metadata['generatorSha256'])
         self.assertEqual(metadata['cleanupStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
         self.assertEqual(metadata['cleanupStockSha256'], _sha((FIXTURE / 'schema-31-cleanup-stock.sql').read_bytes()))
         self.assertIn('--cleanup-stock-for', metadata['cleanupStockGenerationCommand'])
@@ -1060,7 +1067,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_reservation_stock_records_its_floor_writer_and_generator(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        self.assertEqual(metadata['reservationStockGeneratorSha256'], _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
+        self.assertEqual(metadata['reservationStockGeneratorSha256'], metadata['generatorSha256'])
         self.assertEqual(metadata['reservationStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
         self.assertEqual(metadata['reservationStockSha256'], _sha((FIXTURE / 'schema-30-reservation-stock.sql').read_bytes()))
         self.assertIn('--reservation-stock-for', metadata['reservationStockGenerationCommand'])
@@ -1068,8 +1075,7 @@ class UpgradeFixtureTests(unittest.TestCase):
     def test_delivered_stock_records_its_floor_writer_and_physical_resources(self):
         metadata = json.loads((FIXTURE / 'metadata.json').read_text())
         root = Path(__file__).resolve().parents[4]
-        self.assertEqual(metadata['deliveredStockGeneratorSha256'],
-                         _sha((root / 'packaging/generate-upgrade-fixture.py').read_bytes()))
+        self.assertEqual(metadata['deliveredStockGeneratorSha256'], metadata['generatorSha256'])
         self.assertEqual(metadata['deliveredStockBaseSha256'], _sha((FIXTURE / 'board.sql').read_bytes()))
         self.assertEqual(metadata['deliveredStockSqlSha256'],
                          _sha((FIXTURE / 'schema-30-delivered-stock.sql').read_bytes()))

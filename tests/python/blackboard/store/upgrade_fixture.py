@@ -315,3 +315,224 @@ def load_delivered_stock(fixture: dict) -> None:
                         values.append(value)
                     connection.execute(insert, values)
     fixture["bindings"].update(bindings)
+
+
+def load_workspace_growth_stock(fixture: dict, *, stage: str) -> None:
+    """Restore a writer-labeled supplement at its exact schema boundary.
+
+    ``floor30`` follows ``load_fixture`` and precedes the frozen chain;
+    ``schema33`` follows 32 → 33 and precedes 33 → 34. No writer is run here.
+    """
+    names = {
+        "floor30": (30, "growth30", "schema-30-workspace-growth"),
+        "schema33": (33, "growth33", "schema-33-workspace-growth"),
+    }
+    if stage not in names:
+        raise ValueError(f"Unknown workspace growth stock stage: {stage}")
+    expected_version, key, stem = names[stage]
+    metadata = json.loads((FIXTURE / "metadata.json").read_text(encoding="utf-8"))
+    sql = (FIXTURE / f"{stem}-stock.sql").read_bytes()
+    resource_bytes = (FIXTURE / f"{stem}-resources.json").read_bytes()
+    if (_sha(sql) != metadata[key + "SqlSha256"]
+            or _sha(resource_bytes) != metadata[key + "ResourcesSha256"]
+            or _sha((FIXTURE / "board.sql").read_bytes()) != metadata[key + "BaseSha256"]):
+        raise ValueError(f"{stage} supplement digest changed")
+    resources = json.loads(resource_bytes)
+    if resources["format"] != 1:
+        raise ValueError(f"Unsupported {stage} supplement resource format")
+    state, fixture_root = fixture["state"], fixture["fixtureRoot"]
+    with closing(sqlite3.connect(state / "board.sqlite3")) as connection:
+        version = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+        if version != str(expected_version):
+            raise ValueError(f"{stage} stock requires schema {expected_version}, found {version}")
+    bindings = dict(fixture["bindings"])
+    identity_token = r"ws-[0-9a-f]{32}|[0-9a-f]{64}"
+    for relative, content in resources["files"].items():
+        matched = re.fullmatch(r"workspaces/(ws-[0-9a-f]{32})/request.json", relative)
+        if matched is not None:
+            request = json.loads(content)
+            bindings[matched[1]] = "ws-" + _sha(_json(
+                [str(state), request["requestId"]], ascii_json=True).encode())[:32]
+
+    def replace(value, *, ascii_json=False, json_payload=False):
+        def substitute(match):
+            token = match[0]
+            if not token.startswith(FIXTURE_ROOT_TOKEN):
+                return bindings.get(token, token)
+            relative = token.removeprefix(FIXTURE_ROOT_TOKEN)
+            if relative == "/state" or relative.startswith("/state/"):
+                root, relative = state, relative.removeprefix("/state")
+            else:
+                root = fixture_root
+            relative = re.sub(identity_token, lambda item: bindings.get(item[0], item[0]), relative)
+            path = root.joinpath(*relative.lstrip("/").split("/")) if relative else root
+            return json.dumps(str(path), ensure_ascii=ascii_json)[1:-1] if json_payload else str(path)
+
+        return re.sub(re.escape(FIXTURE_ROOT_TOKEN) + r"(?:/[\w.-]+)*|" + identity_token,
+                      substitute, value)
+
+    for recipe in resources["hashBindings"]:
+        payload = replace(recipe["template"], ascii_json=recipe["asciiJson"], json_payload=True)
+        bindings[recipe["oldSha256"]] = _sha(payload.encode())
+
+    def bind(value):
+        if isinstance(value, str):
+            return replace(value)
+        if isinstance(value, list):
+            return [bind(item) for item in value]
+        if isinstance(value, dict):
+            return {bind(name): bind(item) for name, item in value.items()}
+        return value
+
+    repository = fixture_root / "repository"
+    with tempfile.TemporaryDirectory(prefix="growth-stock-objects-") as scratch:
+        grouped = {}
+        for item in resources["gitObjects"]:
+            path = Path(scratch) / item["oid"]
+            path.write_bytes(bytes.fromhex(item["hex"]))
+            grouped.setdefault(item["type"], []).append(path)
+        for kind, paths in grouped.items():
+            listing = "".join(f"{path}\n" for path in paths)
+            actual = _git(repository, "hash-object", "-w", "-t", kind, "--stdin-paths",
+                          data=listing.encode("utf-8"))
+            if actual.splitlines() != [path.name for path in paths]:
+                raise ValueError(f"{stage} Git object changed")
+    if resources["refs"]:
+        updates = "".join(f"update {replace(ref)} {oid}\n" for ref, oid in resources["refs"].items())
+        _git(repository, "update-ref", "--stdin", data=updates.encode("utf-8"))
+    for relative, content in resources["files"].items():
+        target = state / replace(relative)
+        native_path(target.parent).mkdir(parents=True, exist_ok=True)
+        text = replace(content, json_payload=True) if target.name == "result-receipt.json" else (
+            _json(bind(json.loads(content)), ascii_json=True) if target.suffix == ".json" else replace(content))
+        native_path(target).write_bytes(text.encode("utf-8"))
+        native_path(target).chmod(0o600)
+        if target.name == "request.json":
+            native_path(target.parent / ".lock").touch()
+
+    with closing(sqlite3.connect(state / "board.sqlite3")) as connection:
+        connection.row_factory = sqlite3.Row
+        with closing(sqlite3.connect(":memory:")) as template:
+            template.row_factory = sqlite3.Row
+            connection.backup(template)
+            tables = [name for (name,) in template.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            before = {name: {row[0] for row in template.execute(f'SELECT rowid FROM "{name}"')}
+                      for name in tables}
+            template.executescript(sql.decode("utf-8"))
+            with connection:
+                for name in tables:
+                    columns = [row[1] for row in template.execute(f'PRAGMA table_info("{name}")')]
+                    fields = ",".join(("rowid", *(f'"{column}"' for column in columns)))
+                    placeholders = ",".join("?" for _ in range(len(columns) + 1))
+                    for row in template.execute(f'SELECT rowid,* FROM "{name}" ORDER BY rowid'):
+                        if row[0] in before[name]:
+                            continue
+                        values = []
+                        for value in row:
+                            if isinstance(value, str) and value.startswith(("{", "[")):
+                                parsed = json.loads(value)
+                                rebound = bind(parsed)
+                                value = _json(rebound) if parsed != rebound else value
+                            elif isinstance(value, str):
+                                value = replace(value)
+                            values.append(value)
+                        connection.execute(f'INSERT INTO "{name}"({fields}) VALUES({placeholders})', values)
+    fixture["bindings"].update(bindings)
+    fixture.setdefault("resourceFiles", []).extend(replace(path) for path in resources["files"])
+
+
+def load_legacy_stock(fixture: dict, *, version: int) -> None:
+    """Prepare one independent v1/v2 derived copy before its upgrade baseline.
+
+    The checked base export stays unchanged. The profile supplies every changed
+    row/physical record and its dependency-ordered digest preimages, so the old
+    turn, output, shared-ref and receipt bindings remain coherent after rebinding.
+    """
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError('Legacy stock version must be 1 or 2')
+    if 'legacyVersion' in fixture:
+        raise ValueError('Legacy stock requires a fresh floor copy')
+    metadata = json.loads((FIXTURE / 'metadata.json').read_text())
+    legacy = metadata['legacyStock']
+    profile = legacy['profiles'][str(version)]
+    stem = f'schema-30-legacy-v{version}'
+    sql = (FIXTURE / (stem + '-stock.sql')).read_bytes()
+    raw_resources = (FIXTURE / (stem + '-resources.json')).read_bytes()
+    if (_sha(sql) != profile['sqlSha256'] or _sha(raw_resources) != profile['resourcesSha256']
+            or _sha((FIXTURE / 'board.sql').read_bytes()) != legacy['baseSha256']):
+        raise ValueError('Legacy derived stock digest changed')
+    resources = json.loads(raw_resources)
+    if resources['format'] != 1:
+        raise ValueError('Unsupported legacy stock resource format')
+    state, fixture_root = fixture['state'], fixture['fixtureRoot']
+    bindings = dict(fixture['bindings'])
+    token_pattern = re.escape(FIXTURE_ROOT_TOKEN) + r'(?:/[\w.-]+)*|ws-[0-9a-f]{32}|[0-9a-f]{64}'
+
+    def replace(text, *, ascii_json=False, json_payload=False):
+        def substitute(match):
+            token = match[0]
+            if not token.startswith(FIXTURE_ROOT_TOKEN):
+                return bindings.get(token, token)
+            relative = token.removeprefix(FIXTURE_ROOT_TOKEN)
+            root = fixture_root
+            if relative == '/state' or relative.startswith('/state/'):
+                root, relative = state, relative.removeprefix('/state')
+            relative = re.sub(r'ws-[0-9a-f]{32}|[0-9a-f]{64}',
+                              lambda item: bindings.get(item[0], item[0]), relative)
+            path = root.joinpath(*relative.lstrip('/').split('/')) if relative else root
+            return json.dumps(str(path), ensure_ascii=ascii_json)[1:-1] if json_payload else str(path)
+        return re.sub(token_pattern, substitute, text)
+
+    def bind(value):
+        if isinstance(value, str):
+            return replace(value)
+        if isinstance(value, list):
+            return [bind(item) for item in value]
+        if isinstance(value, dict):
+            return {bind(key): bind(item) for key, item in value.items()}
+        return value
+
+    for recipe in resources['hashBindings']:
+        payload = replace(recipe['template'], ascii_json=recipe['asciiJson'], json_payload=True)
+        bindings[recipe['oldSha256']] = _sha(payload.encode())
+    with closing(sqlite3.connect(state / 'board.sqlite3')) as connection:
+        found = connection.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+        if found != '30':
+            raise ValueError(f'Legacy stock requires schema 30, found {found}')
+        with closing(sqlite3.connect(':memory:')) as template:
+            template.row_factory = sqlite3.Row
+            connection.backup(template)
+            template.executescript(sql.decode())
+            with connection:
+                for source in resources['sourceRows']:
+                    table, columns, rowid = source['table'], source['columns'], source['sourceRowid']
+                    values = template.execute(f'SELECT {",".join(columns)} FROM "{table}" WHERE rowid=?', (rowid,)).fetchone()
+                    rebound = []
+                    for value in values:
+                        if isinstance(value, str) and value.startswith(('{', '[')):
+                            original = json.loads(value)
+                            updated = bind(original)
+                            value = _json(updated) if updated != original else value
+                        elif isinstance(value, str):
+                            value = replace(value)
+                        rebound.append(value)
+                    connection.execute(f'UPDATE "{table}" SET {",".join(column + "=?" for column in columns)} WHERE rowid=?',
+                                       [*rebound, rowid])
+    for relative, content in resources['files'].items():
+        path = state / replace(relative)
+        if path.name == 'result-receipt.json':
+            payload = replace(content, json_payload=True)
+        elif path.suffix == '.json':
+            payload = _json(bind(json.loads(content)), ascii_json=True)
+        else:
+            payload = replace(content)
+        native_path(path).write_bytes(payload.encode())
+    for update in resources['operationUpdates']:
+        fixture['operations'][update['sourceIndex']] = bind(update['value'])
+    # Retain the source→derived binding so all fixture consumers agree about
+    # this private copy. The alternative profile starts from a fresh base.
+    for recipe in resources['hashBindings']:
+        bindings[recipe['sourceSha256']] = bindings[recipe['oldSha256']]
+    fixture['bindings'].update(bindings)
+    fixture['legacyVersion'] = version
