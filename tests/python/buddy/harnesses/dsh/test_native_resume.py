@@ -284,7 +284,7 @@ class ResumeFailureTests(NativeResumeCase):
         # No process was ever spawned and no session was silently rebuilt.
         self.assertEqual(self.agent_log(), [])
         self.assertIsNone(result.native_identity)
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
         self.assertEqual(result.stop_evidence.native.group_state, "gone",
                          "the spawn never happened; gone is the honest fact")
         self.assertIsNone(result.continuation)
@@ -338,7 +338,7 @@ class ResumeFailureTests(NativeResumeCase):
         native_path(binding_path).write_text(json.dumps(binding), encoding="utf-8", newline="\n")
         _, _, _, refused = self.resumed_turn(previous)
         self.assertEqual(refused.end.reason_code, "native-resume-unavailable")
-        self.assertIsNone(refused.model_started)
+        self.assertIs(refused.model_started, False)
 
     def test_a_foreign_session_id_echoed_by_the_resume_answer_fails(self):
         _request1, _bound1, _mount1, result1 = self.first_turn()

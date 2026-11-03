@@ -75,7 +75,7 @@ class NoToolEvidenceSafetyTests(unittest.TestCase):
                                  native_evidence=lambda _result: {})
         self.enterContext(mock.patch.dict(RUN_SEAMS, {"codex": module}))
         def execute(control, handle):
-            frame, _services, _observer, _correction = run_execution.fast_request(control, module)
+            frame, _services, _observer, _correction, _parts = run_execution.fast_request(control, module)
             result = rc.RunResult(identity=frame.identity, harness="codex", end=rc.RunEnd(status="ok"),
                 value=rc.RunValue(schema_status="unknown", raw="{}"),
                 stop_evidence=rc.StopEvidence(native=rc.StopLayer(group_state="gone")))

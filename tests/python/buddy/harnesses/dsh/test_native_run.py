@@ -206,6 +206,19 @@ class NativeRunCase(unittest.TestCase):
 
 
 class FastSeamTests(NativeRunCase):
+    def test_initial_native_input_refusal_keeps_structured_admission_facts(self):
+        self.extra_agent_args += ["--error-data-on", "session/prompt"]
+        result = run(self.fast_request("fixture prompt"),
+                     observer=FastCorrection(SCHEMA, "fixture prompt").observer,
+                     services=None, cancelled=lambda: False)
+        self.assertIs(result.native_request_sent, True)
+        self.assertIs(result.model_started, False)
+        self.assertEqual(result.native_admission_error.value, {
+            "nativeMethod": "session/prompt", "nativeCode": -32602,
+            "message": "fixture admission refusal", "input_error_code": "input_too_large",
+            "max_chars": 9, "actual_chars": 10})
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     """The final-message carrier over the none/read/write launch configurations."""
 
     def test_fast_and_review_runs_retain_stderr_in_their_invocation(self):
@@ -516,7 +529,7 @@ class FastSeamTests(NativeRunCase):
                          services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "harness-unavailable")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
         self.assertIsNone(result.end.native_exit_code)
         self.assertIsNone(result.harness_version)
         self.assertIsNone(result.activity, "a failed spawn supplies no native activity")
@@ -532,7 +545,7 @@ class FastSeamTests(NativeRunCase):
                      services=None, cancelled=lambda: False)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "transport-error")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
         stop = result.stop_evidence.native
         # The process was held, so the run started one: the held connection's
         # own facts are retained, and the leader's real exit is the end's code.
@@ -558,7 +571,7 @@ class FastSeamTests(NativeRunCase):
         self.assertEqual(result.end.reason_code, "transport-error")
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown", "an unobservable group is never gone")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
 
     def test_launch_bookkeeping_failure_keeps_the_wrapper_stop_evidence(self):
         from hey_my_buddy.buddy.harnesses.run_contract import FEEDBACK_CONTINUE
@@ -575,7 +588,7 @@ class FastSeamTests(NativeRunCase):
         stop = result.stop_evidence.native
         self.assertEqual(stop.group_state, "unknown",
                          "the wrapper's own finalize evidence rules, not the session count")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
 
     def test_a_late_tool_fact_reaches_the_role_and_stops_the_run(self):
         # A same-root tool fact emitted while the client drains at EOF still
@@ -860,10 +873,10 @@ class WorkerSeamTests(NativeRunCase):
         observed = []
         request_call = AcpConnection.request
 
-        def record_request(connection, method, params, timeout):
+        def record_request(connection, method, params, timeout, *, on_sent=None):
             if method in ("initialize", "session/new", "session/set_config_option"):
                 observed.append((method, timeout))
-            return request_call(connection, method, params, timeout)
+            return request_call(connection, method, params, timeout, on_sent=on_sent)
 
         with mock.patch.object(AcpConnection, "request", record_request):
             result = run(request, observer=worker_observer, services=bound.services,

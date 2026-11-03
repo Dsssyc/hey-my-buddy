@@ -19,6 +19,9 @@ from pathlib import Path
 from unittest import mock
 
 import blackboard.tasks.workspace_lifecycle_case as lifecycle_tests
+from blackboard.tasks.test_input_failure_workflow import failure as input_failure_fixture
+from support import FIXTURE_CATALOG, enable_fixture_buddy
+from copy import deepcopy
 from blackboard.tasks.test_workflow_real import BUDDY, RealWorkspaceTestCase
 
 from hey_my_buddy.cli import main as cli, cli_views
@@ -91,6 +94,47 @@ class CliViewTests(RealWorkspaceTestCase):
         seal["cumulativePatch"] = workspace_module.cumulative_patch(manifest, seal, manifest["inputCommit"])
         self.finish_turn(self.board_instance, claimed, seal)
         return submitted, self.view(self.board_instance, run_id)
+
+    def assert_input_failure_visible(self, stage):
+        buddy = {**BUDDY, **({"harness": "codex"} if stage == "preflight" else {})}
+        if stage == "preflight":
+            catalog = deepcopy(FIXTURE_CATALOG)
+            catalog["providers"][0]["harness"] = "codex"
+            self.catalog_fixture(catalog)
+        enable_fixture_buddy(self.board_instance.store, buddy)
+        code, submitted, _ = self.cli("submit", {
+            **buddy, "requestId": "input-failure-views", "hostId": "host-1",
+            "task": PACKET, "cwd": str(self.repo),
+            "executionWorkspace": {"kind": "worktree", "access": "write", "writeScope": ["."]},
+        })
+        self.assertEqual(code, 0, submitted)
+        run_id = submitted["runId"]
+        claimed = self.claim(self.board_instance, run_id, request_id="input-failure-claim")
+        attempt = claimed["claim"]["attempt"]
+        facts = input_failure_fixture(stage)
+        self.board_instance.call("execution_result", {
+            "attemptId": attempt["attemptId"], "generation": attempt["generation"],
+            "nonce": "n" * 16, "status": "failed", "shutdownConfirmed": True,
+            "exitCode": 1, "result": {"code": "HARNESS_INPUT_REJECTED", "inputFailure": facts},
+        })
+        for method in ("get", "result", "await"):
+            with self.subTest(method=method):
+                code, reply, _ = self.cli(method, {"runId": run_id, **({"waitSeconds": 1} if method == "await" else {})})
+                self.assertEqual(code, 0, reply)
+                if method == "get":
+                    self.assertEqual(reply["activeRequest"]["reason"]["code"], "workflow.input-rejected")
+                    self.assertEqual(reply["currentTurn"]["inputFailure"], facts)
+                elif method == "result":
+                    self.assertEqual(reply["inputFailure"], facts)
+                else:
+                    self.assertEqual(reply["request"]["reason"]["code"], "workflow.input-rejected")
+                    self.assertEqual(reply["result"]["inputFailure"], facts)
+
+    def test_preflight_input_rejection_is_visible_in_cli(self):
+        self.assert_input_failure_visible("preflight")
+
+    def test_native_admission_input_rejection_is_visible_in_cli(self):
+        self.assert_input_failure_visible("native-admission")
 
     def test_output_is_cli_local_and_validated_before_rpc(self):
         code, error, _ = self.cli("ping", {"output": "verbose"})

@@ -40,9 +40,10 @@ BACKGROUND_TASK_TERMINAL_STATUSES = ("completed", "succeeded", "failed", "cancel
 
 
 class ClaudeProtocolError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, native_error: dict | None = None):
         super().__init__(message)
         self.code = code
+        self.native_error = native_error
 
 
 class ProviderRejected(Exception):

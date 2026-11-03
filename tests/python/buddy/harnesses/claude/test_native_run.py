@@ -296,7 +296,7 @@ class Batch4FactsTests(NativeRunCase):
         result = self.execute(self.request())
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
@@ -570,7 +570,7 @@ class WorkerCarrierTests(NativeRunCase):
         result = self.execute(broken)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
         checked = result.buddy.checked
         self.assertIsNone(checked.provider)
         self.assertIsNone(checked.model)
@@ -583,7 +583,7 @@ class WorkerCarrierTests(NativeRunCase):
         result = self.execute(request)
         self.assertEqual(result.end.status, "error")
         self.assertEqual(result.end.reason_code, "invalid-buddy")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
         self.assertEqual(self.fixture_state()["userTurns"], 0)
         self.assertIsNone(result.buddy.checked.model)
         self.assertIsNone(result.buddy.checked.effort)
@@ -809,6 +809,17 @@ class RequestGateTests(NativeRunCase):
 
 
 class SettlementGuardTests(NativeRunCase):
+    def test_initial_native_input_refusal_keeps_structured_admission_facts(self):
+        self.fixture_case("input-too-large")
+        result = self.execute(self.request())
+        self.assertIs(result.native_request_sent, True)
+        self.assertIs(result.model_started, False)
+        self.assertEqual(result.native_admission_error.value, {
+            "nativeMethod": "stream-json/result", "nativeCode": "invalid_params",
+            "message": "fixture admission refusal", "input_error_code": "input_too_large",
+            "max_chars": 9, "actual_chars": 10})
+        self.assertEqual(result.stop_evidence.native.group_state, "gone")
+
     def test_model_output_before_the_user_message_is_rejected_with_its_facts_kept(self):
         self.use_fixture(STREAM_FIXTURE)
         # The premature frame is written before the initialize response, so
@@ -832,7 +843,7 @@ class SettlementGuardTests(NativeRunCase):
         self.assertIsNone(broken.native_identity)
         # No native root was ever confirmed, and the package lists none.
         self.assertEqual(broken.tool_evidence.value["nativeIdentity"], [])
-        self.assertTrue(broken.model_started, "the input send itself is still a fact")
+        self.assertIs(broken.native_request_sent, True)
         self.fixture_case("init-wrong-session")
         foreign = self.execute(self.request())
         self.assertEqual(foreign.end.status, "error")

@@ -66,7 +66,7 @@ class CodexSchemaTests(unittest.TestCase):
                            "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
                            "cwd": str(root), "timeoutSeconds": 10,
                            "inquiry": {"resultsPath": str(root / "inquiry.results.jsonl")}}
-                request, services, _observer, error = run_execution.worker_request(control, run_seam(harness))
+                request, services, _observer, error, _parts = run_execution.worker_request(control, run_seam(harness))
                 self.assertIsNone(error)
                 self.assertEqual(services.inquiry.configuration["identity"]["turnId"], "turn")
                 self.assertEqual(services.inquiry.configuration["inquiryJournalPath"], control["inquiry"]["resultsPath"])
@@ -144,7 +144,7 @@ class CodexSchemaTests(unittest.TestCase):
                                "invocationId": "invocation",
                                "spec": {"provider": "fixture", "model": "fixture", "effort": "low"},
                                "cwd": str(root), "timeoutSeconds": 10}
-                    request, _services, _observer, error = run_execution.worker_request(control, module)
+                    request, _services, _observer, error, _parts = run_execution.worker_request(control, module)
                     self.assertIsNone(error)
                     self.assertEqual(request.permission, access)
 

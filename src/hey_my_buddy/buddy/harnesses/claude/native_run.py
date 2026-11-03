@@ -61,6 +61,8 @@ from ....protocol.activity import ActivityPublisher, native_tool_name
 from ..c_two_live import CTwoLiveEndpoint
 from ..in_turn_inquiry import INQUIRY_TOOLS, InquiryServices, prepare_inquiry_services
 from ..inquiry_bridge import InquiryBridge
+from ..input_admission import admission_error
+from ....protocol.input_failure import is_input_too_large
 from ..session_receipts import ReceiptError, refusal_shaped
 from ...roles.turn_io import private_json
 from ..version import VersionShutdownError, probe_version
@@ -249,6 +251,7 @@ class _RunState:
     status: str = "error"
     reason: str | None = None
     error_text: str | None = None
+    native_admission_error: dict | None = None
     provider_rejection: dict | None = None
     catalog_checked: bool = False
     catalog: dict | None = None
@@ -427,6 +430,7 @@ class _TurnCollector:
         self.unsupported_requests = 0
         self.early_messages: list[tuple[bool, dict]] = []
         self.user_sent = False
+        self.user_send_attempted = False
         self.provider = "unknown"
         self.last_activity: dict | None = None
         self._connection: Connection | None = None
@@ -501,11 +505,12 @@ class _TurnCollector:
 
     def send_input(self, connection: Connection, session_id: str, cwd: str, input_text: str) -> None:
         # The user-message boundary: anything the CLI already emitted is
-        # pre-user output; the model is counted as started from this send on.
+        # pre-user output; a completed write is only a send fact.
         connection.pump_available()
-        self.user_sent = True
+        self.user_send_attempted = True
         connection.send({"type": "user", "message": {"role": "user",
                        "content": [{"type": "text", "text": input_text}]}})
+        self.user_sent = True
         if self.session is not None:
             self.session.record.project(self.session.start_prompt, session_id, input_text)
         self.evidence = TurnEvidence(session_id, cwd, provider=self.provider)
@@ -759,8 +764,14 @@ def _check_terminal(evidence: TurnEvidence, session_id: str) -> bool:
         raise ProviderRejected("unknown", None, source="claude/stream-json-result")
     if (native_result.get("is_error") is True or subtype == "error"
             or isinstance(subtype, str) and subtype.startswith("error_")):
+        source = {"code": native_result.get("error_code", native_result.get("code", subtype)),
+                  "message": native_result.get("error_message", native_result.get("result")),
+                  "data": native_result.get("data")}
+        if isinstance(native_result.get("error"), dict):
+            source.update(native_result["error"])
         raise ClaudeProtocolError("native-turn-failed",
-                                  "the Claude native turn reported an error result")
+                                  "the Claude native turn reported an error result",
+                                  native_error=admission_error("stream-json/result", source))
     return False
 
 
@@ -1030,7 +1041,13 @@ def _build_result(request: RunRequest, *, state: _RunState, collector: _TurnColl
             harness_version=spawn.version if spawn is not None else None,
             native_event_count=evidence.event_seq if evidence is not None and evidence.event_seq else None,
             native_evidence=native_evidence,
-            model_started=True if user_sent else None,
+            model_started=(True if evidence is not None and
+                           (evidence.root_model_activity or state.terminal_ok)
+                           else False if not (collector is not None and collector.user_send_attempted)
+                           or is_input_too_large(state.native_admission_error) else None),
+            native_request_sent=(True if user_sent else None if collector is not None and
+                                 collector.user_send_attempted else False),
+            native_admission_error=state.native_admission_error,
             buddy=ResultBuddy(
                 requested=RunBuddy(provider=request.buddy.provider,
                                    model=request.buddy.model,
@@ -1179,6 +1196,10 @@ def run(request: RunRequest, *, observer: Callable[[Mapping[str, Any]], RunFeedb
             state.status = "cancelled" if error.code == "user-cancel" else "error"
             state.reason = error.code
             state.error_text = str(error)
+            if (isinstance(error, ClaudeProtocolError) and collector is not None
+                    and collector.user_sent and collector.evidence is not None
+                    and not collector.evidence.root_model_activity):
+                state.native_admission_error = error.native_error
             # A result can report a structured rejection before the stream fails
             # during the drain. Its activity history is then incomplete, but the
             # rejection itself remains a native fact.

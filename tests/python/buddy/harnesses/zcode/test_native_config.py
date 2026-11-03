@@ -136,7 +136,7 @@ class NativeConfigTests(NativeConfigCase):
         version.assert_not_called()
         spawn.assert_not_called()
         self.assertEqual(result.end.reason_code, "harness-unavailable")
-        self.assertIsNone(result.model_started)
+        self.assertIs(result.model_started, False)
 
     def test_unreadable_builtin_billing_content_does_not_refuse_preparation(self):
         self.builtin.write_text("not JSON", encoding="utf-8", newline="\n")

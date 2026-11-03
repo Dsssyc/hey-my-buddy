@@ -12,9 +12,13 @@ from pathlib import Path
 from ...errors import BoardError
 from ...json_codec import decode_strict_json
 from ...private_files import publish_bytes, read_bytes
+from ...protocol.capabilities import select_input_limit
+from ...protocol.input_failure import INPUT_REJECTED, input_failure, is_input_too_large
+from ...protocol.input_limit import check_prompt_input
 from ..harnesses.c_two_live import CTwoLiveEndpoint
 from ..harnesses.live import EXISTING_CAPABILITIES, LiveCapabilities
 from ..harnesses.registry import adapter, run_seam
+from ..harnesses.runtime_selection import environment_for, selected
 from ..harnesses.run_contract import (
     FrozenJson, ResultBuddy, RunEnd, RunResult, StopEvidence, StopLayer,
     ResumeCheckpoint, RunBudget, RunContinuation,
@@ -82,7 +86,7 @@ def _summary_run(control, request, result, module, deadline, handle):
     next_control = {**control, "privateRoot": str(root), "taskFile": str(task_path),
                     "invocationId": uuid.uuid4().hex,
                     "timeoutSeconds": min(86400, math.ceil(remaining))}
-    next_request, services, observer, _ = run_execution.worker_request(next_control, module)
+    next_request, services, observer, _, _parts = run_execution.worker_request(next_control, module)
     next_request = next_request.model_copy(update={
         "continuation": RunContinuation(mode="native-session", previous_session_id=identity.session_id,
                                         checkpoint=checkpoint),
@@ -138,24 +142,47 @@ def execute(control: dict, handle) -> tuple[RunResult, object, dict, int]:
     started = time.monotonic()
     input_error = None
     if control["operation"] == "worker":
-        request, services, observer, input_error = run_execution.worker_request(control, module)
+        request, services, observer, input_error, parts = run_execution.worker_request(control, module)
         correction = None
     elif control["operation"] == "fast":
-        request, services, observer, correction = run_execution.fast_request(control, module)
+        request, services, observer, correction, parts = run_execution.fast_request(control, module)
     elif control["operation"] == "review":
-        request, services, observer, correction = run_execution.review_request(control, module)
+        request, services, observer, correction, parts = run_execution.review_request(control, module)
     else:
         raise BoardError("INVALID_ARGUMENT", "Unknown role operation")
     handle.request = request
     original_identity = request.identity
+    record = selected(request.harness, environment_for())
+    version = record.get("version") if record is not None else None
+    check = check_prompt_input(select_input_limit(request.harness, version), parts)
+    if input_error is None and check.blocked:
+        input_error = BoardError(INPUT_REJECTED, "The initial prompt exceeds the harness's declared input limit")
     if input_error is None:
         with _inline_live(request, services, handle) as live_services:
             result = run_harness(module, request, observer=observer, services=live_services,
                                  cancelled=handle.cancelled.is_set)
+        if result.native_admission_error is not None:
+            native_error = result.native_admission_error.value
+            native_version = result.harness_version if result.harness_version is not None else version
+            native_check = (check_prompt_input(select_input_limit(request.harness, native_version), parts)
+                            if native_version != version else check)
+            failure = input_failure(native_check, stage="native-admission", harness=request.harness,
+                version=native_version,
+                native_request_sent=result.native_request_sent, model_started=result.model_started,
+                native_error=native_error)
+            update = {"input_failure": FrozenJson(failure)}
+            if is_input_too_large(native_error):
+                update["end"] = result.end.model_copy(update={"reason_code": INPUT_REJECTED})
+                update["provider_rejection"] = None
+            result = result.model_copy(update=update)
     else:
         result = RunResult(identity=request.identity, harness=request.harness,
             end=RunEnd(status="error", reason_code=input_error.code, message=input_error.message),
-            buddy=ResultBuddy(requested=request.buddy), model_started=False,
+            harness_version=version, buddy=ResultBuddy(requested=request.buddy),
+            native_request_sent=False, model_started=False,
+            input_failure=(input_failure(check, stage="preflight", harness=request.harness, version=version,
+                           native_request_sent=False, model_started=False)
+                           if input_error.code == INPUT_REJECTED else None),
             stop_evidence=StopEvidence(native=StopLayer(group_state="gone")))
     wrap_up_candidate = False
     grace_expired = False

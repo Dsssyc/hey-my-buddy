@@ -164,7 +164,7 @@ def main():
             if case == "bad-catalog":
                 send({"id": ident, "result": {"data": {"not": "a list"}, "nextCursor": None}})
                 continue
-            if case in ("unlisted-model", "long-native-error"):
+            if case in ("unlisted-model", "long-native-error", "input-too-large"):
                 send({"id": ident, "result": {"data": [{"model": "other-model", "displayName": "Other",
                     "description": "not the selected model", "hidden": False, "isDefault": True,
                     "defaultReasoningEffort": "low", "supportedReasoningEfforts": [{"reasoningEffort": "low"}, {"reasoningEffort": "high"}]}],
@@ -262,7 +262,7 @@ def main():
             write_state(state)
             turn_index = len(state['threads'][thread_id]['turns'])
             turn_id = f"native-turn-{turn_index + 1}"
-            if case in ("unlisted-model", "long-native-error"):
+            if case in ("unlisted-model", "long-native-error", "input-too-large"):
                 # The native answer, not the adapter's catalog reading, decides:
                 # the server rejects the turn under the selected model's own
                 # name. The long case carries a native reason of repeated
@@ -273,7 +273,12 @@ def main():
                 write_state(state)
                 native_reason = ("模型不可用" * 80 + "\U0001D11E" * 10) if case == "long-native-error" \
                     else f"model not found: {params['model']}"
-                send({"id": ident, "error": {"code": -32000, "message": native_reason}})
+                error = {"code": -32602 if case == "input-too-large" else -32000,
+                         "message": "fixture admission refusal" if case == "input-too-large" else native_reason}
+                if case == "input-too-large":
+                    error["data"] = {"input_error_code": "input_too_large", "max_chars": 9,
+                                     "actual_chars": 10, "secret": "must never appear"}
+                send({"id": ident, "error": error})
                 continue
             if case == "quota-before-overflow":
                 for _ in range(140):

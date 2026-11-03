@@ -37,6 +37,7 @@ import uuid
 from typing import Any, Callable
 
 from ..protocol.transport import ServiceError, _call_service
+from ..protocol.input_failure import input_failure_view
 
 # The wait window may never exceed the existing 24 h CLI wait maximum.
 MAX_WAIT_SECONDS = 86400
@@ -168,6 +169,7 @@ def _envelope(
         "resultDelivered": result_delivered,
         "terminationReason": run.get("terminationReason"),
         "interruptionEvidence": run.get("interruptionEvidence"),
+        "inputFailure": run.get("inputFailure"),
         # For a micro task, cancellation/completion never implies that a
         # still-running descendant is stopped just because the parent is idle.
         "shutdownConfirmed": (
@@ -270,6 +272,7 @@ def _micro_task_result_view(full: dict, run_id: str) -> dict | None:
         "interruptionEvidence": result.get("interruptionEvidence"),
         "tokenUsage": full.get("tokenUsage"),
         "providerRejection": provider_rejection_view(result),
+        "inputFailure": input_failure_view(result),
         "turn": None
         if turn is None
         else {
@@ -333,6 +336,7 @@ def _host_boundary(
             "requestId": workflow.get("activeRequestId"),
             "kind": workflow.get("requestKind"),
             "summary": workflow.get("requestSummary"),
+            "reason": workflow.get("requestReason"),
             "expectedRevision": workflow.get("revision"),
             "routing": routing,
         }

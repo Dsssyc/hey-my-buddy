@@ -141,7 +141,8 @@ def _base_result(result) -> dict:
         "harnessVersion": result.harness_version or "unknown",
         "requested": result.buddy.requested.to_payload() if result.buddy.requested else None,
         "resolved": None,
-        "modelStarted": result.model_started is True,
+        "nativeRequestSent": result.native_request_sent,
+        "modelStarted": result.model_started,
         "processState": {"shutdownConfirmed": result.stop_evidence.native.group_state == "gone",
                          "nativeExitCode": result.end.native_exit_code},
     }
@@ -156,6 +157,8 @@ def _base_result(result) -> dict:
         payload["error"] = result.end.message or result.end.reason_code or "the native run failed"
     if result.provider_rejection is not None:
         payload["providerRejection"] = result.provider_rejection.value
+    if result.input_failure is not None:
+        payload["inputFailure"] = result.input_failure.value
     if result.session_record_failure is not None:
         payload["sessionRecordFailure"] = result.session_record_failure.to_payload()
     _merge_native_evidence(result, payload)
@@ -401,7 +404,7 @@ def worker_request(control: dict, module):
             inquiry_services = module.prepare_inquiry_services(
                 invocation_root=invocation_root, identity=identity, input_sha256=input_hash(turn_input),
                 attention_path=attention_path, inquiry=inquiry, answer_schema=worker_services.ANSWER_SCHEMA)
-            prompt += ("\nHost questions may arrive as inputs during this running turn. Answer each with "
+            prompt = prompt.appended("delivery", "\nHost questions may arrive as inputs during this running turn. Answer each with "
                        f"{inquiry_services.answer_tool}, using its exact "
                        "inquiryId and answer text. Assistant prose does not count as an answer. "
                        "Questions never open a new turn or extend this turn's deadline.\n")
@@ -435,7 +438,7 @@ def worker_request(control: dict, module):
     error = None
     if format is not None and format.reject_previous_on_initial and mode == "initial" and previous is not None:
         error = BoardError("invalid-resume-mode", f"an initial {format.display_name} turn must not carry a previous session")
-    return request, services, worker_observer, error
+    return request, services, worker_observer, error, prompt.parts
 
 
 def _native_services(module, *, inquiry=None):
@@ -467,7 +470,7 @@ def fast_request(control: dict, module):
         correction = MaintenanceCorrection(request_values["outputSchema"], base_prompt, _maintenance_publisher.get())
     else:
         correction = FastCorrection(request_values["outputSchema"], base_prompt)
-    return request, _native_services(module), correction.observer, correction
+    return request, _native_services(module), correction.observer, correction, base_prompt.parts
 
 
 def review_request(control: dict, module):
@@ -486,7 +489,7 @@ def review_request(control: dict, module):
         capture_evidence=values.get("captureEvidence") is True)
     observer = ReviewObserver(values["budget"]["toolCalls"], values["outputSchema"], prompt,
                               can_correct=control["canCorrect"])
-    return request, _native_services(module), observer.observer, observer
+    return request, _native_services(module), observer.observer, observer, prompt.parts
 
 
 def _launch(control: dict, context: ExecutionContext, *, environment: dict,

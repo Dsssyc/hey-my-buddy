@@ -49,6 +49,8 @@ from ...roles.turn_io import private_json
 from ...roles.attention import AttentionRecorder
 from ..version import VersionShutdownError, probe_version
 from ..base import BoundSessionServices, ProcessHandle
+from ..input_admission import admission_error
+from ....protocol.input_failure import is_input_too_large
 from ....protocol.owned_process import WindowsCommandLineTooLong, owned_popen
 from ....protocol.internal_models import OptionalFrozenJsonAt
 from ..native_support import (
@@ -105,6 +107,7 @@ from .protocol import (
     NATIVE_NOTIFICATION_METHODS,
     NativeConnection,
     NativeError,
+    NativeRpcError,
     RootTurnEvidence,
     ZcodeAttemptUsage,
     combined_usage,
@@ -643,6 +646,9 @@ class _RunState:
     provider_rejection: dict | None = None
     root_model_activity: bool = False
     model_started: bool = False
+    native_request_sent: bool | None = False
+    native_admission_error: dict | None = None
+    initial_request_attempted: bool = False
     shutdown: bool = False
     exit_code: int | None = None
     interrupted: bool = False
@@ -900,13 +906,27 @@ def _admit_root_input(connection: NativeConnection, *, snapshot: dict, request: 
         before_send(session_id)
     if session is not None:
         session.record.project(session.start_prompt, session_id, input_id, input_text, request.identity.invocation_id)
-    state.model_started = True
-    accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
-                                                "content": input_text})
+    initial = not state.initial_request_attempted
+    state.initial_request_attempted = True
+    if initial:
+        state.native_request_sent = None
+    try:
+        accepted = connection.call("session/send", {"sessionId": session_id, "inputId": input_id,
+                                                    "content": input_text},
+                                   on_sent=(lambda: setattr(state, "native_request_sent", True))
+                                   if initial else None)
+    except NativeRpcError as error:
+        if initial:
+            state.native_admission_error = getattr(error, "native_error", None)
+        raise
     if accepted.get("sessionId") != session_id:
         raise NativeError("wrong-native-session", "native input admission belongs to a different session")
     if accepted.get("accepted") is not True:
+        if initial:
+            state.native_admission_error = admission_error("session/send",
+                accepted.get("error") if isinstance(accepted.get("error"), dict) else accepted)
         raise NativeError("native-admission-failed", "the root input was not admitted by the native session")
+    state.model_started = True
     if after_admit is not None:
         after_admit(session_id)
     while not settled():
@@ -1692,7 +1712,11 @@ def _build_result(request: RunRequest, *, spawn, state, owned_spawn, resolved, s
                    native_exit_code=state.exit_code,
                    message=state.error_text),
         harness_version=spawn.version if spawn is not None else None,
-        model_started=True if state.model_started else None,
+        model_started=(True if state.model_started else
+                       False if not state.initial_request_attempted or
+                       is_input_too_large(state.native_admission_error) else None),
+        native_request_sent=state.native_request_sent,
+        native_admission_error=_native_error_package(state.native_admission_error),
         native_event_count=event_count if event_count else None,
         native_evidence=_shared_unknown_events(facts),
         buddy=ResultBuddy(

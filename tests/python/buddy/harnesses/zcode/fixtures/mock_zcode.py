@@ -453,6 +453,12 @@ def handle_message(message):
         result = {"sessionId": session_id, "events": [], "eventSeq": 0}
     elif method == "session/send":
         prompt_input_id = params["inputId"]
+        if case == "input-too-large":
+            send({"id": request_id, "result": {"sessionId": session_id, "accepted": False,
+                  "error": {"code": "invalid_params", "message": "fixture admission refusal",
+                            "data": {"input_error_code": "input_too_large", "max_chars": 9,
+                                     "actual_chars": 10, "secret": "must never appear"}}}})
+            return
         send({"id": request_id, "result": {"sessionId": session_id, "accepted": True, "stateRevision": 1}})
         native_path(state.parent).mkdir(parents=True, exist_ok=True)
         if case == "mode-plan-required":

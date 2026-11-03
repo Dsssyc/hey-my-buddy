@@ -16,6 +16,7 @@ from hey_my_buddy.buddy.harnesses import run_contract as rc
 from hey_my_buddy.buddy.harnesses.base import ExecutionContext
 from hey_my_buddy.buddy.harnesses.codex import native_run as codex_native_run
 from hey_my_buddy.buddy.harnesses.registry import worker_format
+from hey_my_buddy.buddy.roles.prompts import PromptText
 from hey_my_buddy.buddy.roles import controller, inline_run, run_execution
 from hey_my_buddy.buddy.roles.turn_io import input_hash, private_json
 from hey_my_buddy.private_dirs import ensure_private_dir
@@ -194,7 +195,7 @@ class RoleStopTests(unittest.TestCase):
         def prepare(candidate, _module):
             if force_during_setup and candidate["privateRoot"] != str(self.invocation):
                 handle.force_cancelled.set()
-            return request_for(candidate), None, lambda _fact: rc.FEEDBACK_CONTINUE, None
+            return request_for(candidate), None, lambda _fact: rc.FEEDBACK_CONTINUE, None, PromptText((("task", "worker prompt"),)).parts
         module = SimpleNamespace()
         def publish(selected, _control, _turn_input, _prompt):
             if invalid_summary:
@@ -327,6 +328,13 @@ class RoleStopTests(unittest.TestCase):
         self.assertFalse(calls[1][1], "the first interrupt must not cancel the summary run")
         self.assertEqual(result.identity, second.identity)
         self.assertTrue((self.invocation / "stop-summary").is_dir())
+
+    def test_wrap_up_does_not_check_a_second_initial_input(self):
+        with mock.patch.object(inline_run, "check_prompt_input", wraps=inline_run.check_prompt_input) as check:
+            _result, code, calls = self._execute()
+        self.assertEqual(code, 0)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(check.call_count, 1)
 
     def test_cancelled_first_run_publishes_only_the_selected_summary(self):
         result, code, calls = self._execute()
