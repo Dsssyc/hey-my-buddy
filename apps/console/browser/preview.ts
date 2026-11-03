@@ -71,15 +71,18 @@ export async function expectTextUncut(items: Locator): Promise<void> {
 }
 
 /**
- * Resolves when every transition and animation that has an end has ended, so that
- * boxes and colours are read at rest and never in the middle of a motion. A frame
- * is let pass first: what a click has just started only exists from the next one.
+ * Wait for bounded layout/colour motion, leaving long title-reading transitions
+ * running. A frame is let pass first: a click's motion exists from the next one.
  */
 export async function settle(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await new Promise(resolve => requestAnimationFrame(resolve));
     await Promise.all(document.getAnimations()
-      .filter(animation => animation.effect?.getComputedTiming().endTime !== Infinity)
+      .filter(animation => {
+        const effect = animation.effect as KeyframeEffect | null;
+        return effect?.getComputedTiming().endTime !== Infinity &&
+          !(effect?.target?.matches('[data-slot="scrolling-title-text"]') && Number(effect.getComputedTiming().duration) > 200);
+      })
       .map(animation => animation.finished.catch(() => undefined)));
   });
 }

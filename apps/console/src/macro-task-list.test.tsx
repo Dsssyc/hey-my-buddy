@@ -8,7 +8,6 @@ import { listFixture, macroTaskGroups } from "./macro-task-fixtures";
 import type { MacroTaskListProps } from "./MacroTaskList";
 import type { MacroTaskSummary } from "./macro-task-types";
 import i18n from "i18next";
-import * as formatting from "./i18n/format";
 
 const props = (): MacroTaskListProps => ({
   sortFor: () => "activity-desc", onSortChange: vi.fn(),
@@ -21,15 +20,13 @@ const render = (ui: ReactElement) => baseRender(ui, { wrapper: TooltipProvider }
 const row = (p: MacroTaskListProps, id = "macro-1") => p.groups.flatMap(group => group.macroTasks).find(item => item.macroTaskId === id)!;
 
 describe("macro task list", () => {
-  it("retains entry rendering across loading changes and uses the latest selection action", () => {
-    const date = vi.spyOn(formatting, "formatDateTime");
+  it("retains entry DOM across loading changes and uses the latest selection action", () => {
     const p = props();
     const view = render(<MacroTaskList {...p}/>);
-    const calls = date.mock.calls.length;
-    expect(calls).toBeGreaterThan(0);
+    const entry = document.querySelector('[data-slot="macro-entry"]');
     const select = vi.fn();
     view.rerender(<MacroTaskList {...p} loading onSelect={select}/>);
-    expect(date).toHaveBeenCalledTimes(calls);
+    expect(document.querySelector('[data-slot="macro-entry"]')).toBe(entry);
     fireEvent.click(document.querySelector('[data-slot="macro-entry"]')!);
     expect(select).toHaveBeenCalledWith("macro-1");
   });
@@ -83,7 +80,7 @@ describe("macro task list", () => {
     expect(p.onQueryChange).toHaveBeenCalledWith("原文");
     const entry = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
     expect(entry.querySelector("time")).toBeNull();
-    expect(entry.getAttribute("aria-description")).toContain(`最后活动：${formatting.formatDateTime(Date.parse(row(p).lastActivityAt!))}`);
+    expect(entry.getAttribute("aria-description")).toBeNull();
     await userEvent.click(entry);
     expect(p.onSelect).toHaveBeenCalledWith("macro-1");
   });
@@ -117,19 +114,19 @@ describe("macro task list", () => {
     expect(entries.every(entry => !entry.querySelector('[data-slot="macro-entry-counts"]'))).toBe(true);
     expect(entries.every(entry => entry.classList.contains("h-7"))).toBe(true);
     expect(entries.every(entry => entry.querySelector("time") === null)).toBe(true);
-    expect(entries.every(entry => entry.querySelector('[data-slot="macro-entry-title"]')?.classList.contains("sidebar-label"))).toBe(true);
+    expect(entries.every(entry => Boolean(entry.querySelector('[data-slot="macro-entry-title"] [data-slot="scrolling-title"]')))).toBe(true);
     expect(within(entries[0]!).getByText("等待 Host", { selector: ".sr-only" })).toBeTruthy();
     expect(within(entries[1]!).getByText("等待验收", { selector: ".sr-only" })).toBeTruthy();
   });
 
-  it("marks the selected row and explains the sort time with the full title", () => {
+  it("marks the selected row and keeps the full title without a hover description", () => {
     const p = props();
     const view = render(<MacroTaskList {...p}/>);
     const entry = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    expect(entry.getAttribute("aria-description")).toContain(`${row(p).title} · 最后活动：`);
+    expect(entry.getAttribute("aria-description")).toBeNull();
     view.rerender(<MacroTaskList {...p} sortFor={() => "created-desc"} selected="macro-1"/>);
     const sorted = screen.getByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
-    expect(sorted.getAttribute("aria-description")).toContain(`开始：${formatting.formatDateTime(Date.parse(row(p).createdAt!))}`);
+    expect(sorted.getAttribute("aria-description")).toBeNull();
     expect(sorted.getAttribute("aria-pressed")).toBe("true");
     expect(sorted.classList.contains("bg-selection")).toBe(true);
   });
@@ -140,7 +137,7 @@ describe("macro task list", () => {
     render(<MacroTaskList {...p}/>);
     await userEvent.click(screen.getByRole("button", { name: /独立微任务/ }));
     expect(screen.getByText("未命名")).toBeTruthy();
-    expect(document.querySelector('[data-slot="macro-entry"]')?.getAttribute("aria-description")).toContain("最后活动：未记录");
+    expect(document.querySelector('[data-slot="macro-entry"]')?.getAttribute("aria-description")).toBeNull();
   });
 
   it("shows empty and unmatched states and retains groups after read failure", () => {

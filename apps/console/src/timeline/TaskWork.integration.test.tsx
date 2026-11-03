@@ -35,10 +35,10 @@ it("refits on filtering, shares the saved habit across macro tasks and keeps sub
   const canvas = () => Number(document.querySelector('[data-slot=timeline-canvas]')!.getAttribute("data-ppm"));
   const ruler = () => document.querySelector('[data-slot=zoom-ruler]')!;
   fireEvent.keyDown(ruler(), { key: "+" });
-  fireEvent.click(screen.getByRole("button", { name: "未结束" }));
+  fireEvent.click(screen.getByRole("button", { name: "只看未结束的" }));
   const expected = createTimelineScale(timelineScaleInput(visibleTimeline(props.timeline!, true)), 1088 - 272 - TIMELINE_OUTSET_PX * 2).pixelsPerMinute;
   expect(canvas()).toBe(expected);
-  expect(document.querySelector('[data-slot=timeline-row-count]')!.textContent).toBe("2");
+  expect(document.querySelector('[data-slot=timeline-row-count]')!.textContent).toBe("2 / 6");
   expect([...document.querySelectorAll('[data-slot=timeline-row-name]')].map(node => node.getAttribute("data-run-id"))).toEqual(["r4", "r6"]);
   fireEvent.keyDown(ruler(), { key: "+" });
   const manual = canvas();
@@ -46,48 +46,32 @@ it("refits on filtering, shares the saved habit across macro tasks and keeps sub
   rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} displayObservedAt="2026-09-26T08:13:00Z"/></TooltipProvider>);
   expect(canvas()).toBe(manual);
   rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} timeline={{ ...props.timeline!, macroTask: { ...props.timeline!.macroTask, macroTaskId: "other" } }}/></TooltipProvider>);
-  expect(screen.getByRole("button", { name: "未结束" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "只看未结束的" }).getAttribute("aria-pressed")).toBe("true");
   expect(canvas()).toBe(expected);
   cleanup(); setup();
-  expect(screen.getByRole("button", { name: "未结束" }).getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getByRole("button", { name: "只看未结束的" }).getAttribute("aria-pressed")).toBe("true");
 });
 
 it("leaves the filter available when all rows have ended", () => {
   const { props, rerender } = setup();
   const timeline = { ...props.timeline!, rows: props.timeline!.rows.map(row => ({ ...row, category: "ended" as const })) };
   rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} timeline={timeline}/></TooltipProvider>);
-  fireEvent.click(screen.getByRole("button", { name: "未结束" }));
+  fireEvent.click(screen.getByRole("button", { name: "只看未结束的" }));
   expect(screen.getByText("没有未结束的微任务")).toBeTruthy();
-  expect(document.querySelector('[data-slot=timeline-row-count]')!.textContent).toBe("0");
-  fireEvent.click(screen.getByRole("button", { name: "全部" }));
+  expect(document.querySelector('[data-slot=timeline-row-count]')!.textContent).toBe("0 / 6");
+  fireEvent.click(screen.getByRole("button", { name: "只看未结束的" }));
   expect(document.querySelectorAll('[data-slot=timeline-row-name]')).toHaveLength(6);
 });
 
-it("keeps a correction hint closed when detail moves focus, but opens it for keyboard navigation and hover", async () => {
+it("keeps repair facts in the row without a hover or keyboard tooltip", async () => {
   const { props, rerender } = setup();
   const timeline = props.timeline!;
   const target = timeline.rows[0]!;
   const correction = { ...timeline.rows[1]!, fixes: target.runId, fixesTitle: target.title, fixesTitleSource: target.titleSource };
-  const next = { ...props, timeline: { ...timeline, rows: [target, correction] } };
-  const show = (openedRunId: string | null) => rerender(<TooltipProvider delayDuration={0}><TaskWork {...next} openedRunId={openedRunId}/></TooltipProvider>);
-  show(null);
-  show(correction.runId);
-  // The list beside the detail holds the row; moving focus to it opens no tooltip.
-  const openName = document.querySelector<HTMLButtonElement>(`[data-key="row:${correction.runId}"]`)!;
-  expect(document.activeElement).toBe(openName);
+  rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} timeline={{ ...timeline, rows: [target, correction] }}/></TooltipProvider>);
+  const name = document.querySelector<HTMLButtonElement>(`[data-key="row:${correction.runId}"]`)!;
+  await userEvent.setup().hover(name);
+  name.focus();
+  expect(name.querySelector('[data-slot=fix-link]')?.textContent).toContain(target.title);
   expect(screen.queryByRole("tooltip")).toBeNull();
-  show(null);
-  const closedName = document.querySelector<HTMLButtonElement>(`[data-key="row:${correction.runId}"]`)!;
-  expect(document.activeElement).toBe(closedName);
-  expect(screen.queryByRole("tooltip")).toBeNull();
-
-  const first = document.querySelector<HTMLButtonElement>(`[data-key="row:${target.runId}"]`)!;
-  const user = userEvent.setup();
-  first.focus();
-  await user.keyboard("{ArrowDown}");
-  expect(document.activeElement).toBe(closedName);
-  expect((await screen.findByRole("tooltip")).textContent).toContain(target.title);
-  await user.keyboard("{Escape}");
-  await user.hover(closedName);
-  expect((await screen.findByRole("tooltip")).textContent).toContain(target.title);
 });

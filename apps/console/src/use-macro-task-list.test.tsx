@@ -1,12 +1,9 @@
 import { StrictMode } from "react";
-import { act, cleanup, render, renderHook } from "@testing-library/react";
+import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConsoleApi } from "./api";
 import { createApi } from "./api";
-import { MacroTaskList } from "./MacroTaskList";
-import { TooltipProvider } from "./components/ui/tooltip";
 import { macroTaskGroups } from "./macro-task-fixtures";
-import * as formatting from "./i18n/format";
 import type { MacroTaskPage, MacroTaskQuery, MacroTaskSummary } from "./macro-task-types";
 import { useMacroTaskList } from "./use-macro-task-list";
 import { VIEW_PREFERENCE_PREFIX } from "./view-preferences";
@@ -44,29 +41,20 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { cleanup(); vi.useRealTimers(); setHidden(false); localStorage.clear(); });
 
 describe("grouped macro task list hook", () => {
-  it("keeps the 304 envelope reference and does not redraw entries on verification", async () => {
+  it("keeps the grouped entries by reference when a verification returns 304", async () => {
     const body = page([summary("first", 3)]);
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify(body), { headers: { ETag: '"list"', Date: "Thu, 01 Jan 1970 00:00:01 GMT" } }))
       .mockResolvedValueOnce(new Response(null, { status: 304, headers: { Date: "Thu, 01 Jan 1970 00:00:04 GMT" } }));
     const api = createApi("", fetcher);
-    const formatted = vi.spyOn(formatting, "formatDateTime");
-    function List() {
-      const list = useMacroTaskList(api, query, true);
-      return <MacroTaskList {...list} sortFor={list.sortFor} filter="all" query="" selected={null}
-        onSortChange={list.changeSort} onFilterChange={() => {}} onQueryChange={() => {}} onCollapse={() => {}} onSelect={() => {}}
-        onMore={list.more} onApplyReorder={list.applyReorder}/>;
-    }
-    try {
-      render(<TooltipProvider><List/></TooltipProvider>);
-      await startRead();
-      const calls = formatted.mock.calls.length;
-      expect(calls).toBeGreaterThan(0);
-      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-      expect(fetcher).toHaveBeenCalledTimes(2);
-      expect(fetcher.mock.calls[1]![1]!.headers).toEqual({ "If-None-Match": '"list"' });
-      expect(formatted).toHaveBeenCalledTimes(calls);
-    } finally { formatted.mockRestore(); }
+    const view = renderHook(() => useMacroTaskList(api, query, true));
+    await startRead();
+    const groups = view.result.current.groups;
+    expect(groups).toHaveLength(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls[1]![1]!.headers).toEqual({ "If-None-Match": '"list"' });
+    expect(view.result.current.groups).toBe(groups);
   });
 
   it("pages one project using its own cursor and keeps the other projects and standalone group", async () => {

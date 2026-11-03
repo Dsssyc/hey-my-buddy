@@ -56,7 +56,7 @@ function StopDialog({ summary, scope, onConfirm, onCancel, returnFocus }: {
   return <Dialog open onOpenChange={open => { if (!open) onCancel(); }}>
     <DialogContent className="text-sm" onCloseAutoFocus={event => { event.preventDefault(); returnFocus.current?.focus(); }} onOpenAutoFocus={event => { event.preventDefault(); cancelRef.current?.focus(); }} aria-describedby="stop-macro-task-name stop-macro-task-body stop-macro-task-counts">
       <DialogTitle>{t("macroStop.title")}</DialogTitle>
-      <Hint text={title}><p id="stop-macro-task-name" tabIndex={0} className="truncate text-sm font-medium">{title}</p></Hint>
+      <p id="stop-macro-task-name" className="wrap-anywhere text-sm font-medium">{summary.titleSource === "none" ? title : summary.title}</p>
       <DialogDescription id="stop-macro-task-body">{t("macroStop.scope")}</DialogDescription>
       <ul id="stop-macro-task-counts" className="grid gap-1 text-sm tabular-nums">
         <li>{t("macroStop.scopeRoots", { count: scope.roots })}</li>

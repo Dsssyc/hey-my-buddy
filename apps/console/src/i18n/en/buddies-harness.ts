@@ -79,7 +79,7 @@ export default {
     status: "Cooling down · try again around {{time}}",
     clear: "Clear cooldown",
     done: { cleared: "Cooldown cleared", none: "No active cooldown" },
-    storageUnavailable: "The request number could not be kept; allow session storage for this page and try again.",
+    storageUnavailable: "The request ID could not be kept; allow session storage for this page and try again.",
     unknownResult: "The result of clearing the cooldown is unknown; replay this request.",
   },
 } satisfies typeof zh;

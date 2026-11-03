@@ -103,9 +103,9 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) test.des
     if (width === 1440) {
       await page.locator('[data-slot=task-names] [data-slot=timeline-row-name]').first().hover();
       const hint = page.locator('[data-slot=tooltip-content]');
-      await expect(hint).toBeVisible();
-      await expect(hint).toHaveCSS("text-align", "left");
-      await shot(page, `name-hint-${theme}`);
+      await page.waitForTimeout(700);
+      await expect(hint).toHaveCount(0);
+      await shot(page, `name-without-hint-${theme}`);
     }
   });
 });

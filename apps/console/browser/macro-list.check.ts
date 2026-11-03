@@ -11,7 +11,7 @@ const captures = fileURLToPath(new URL("../../../tmp/filter-row", import.meta.ur
 const groupCaptures = fileURLToPath(new URL("../../../tmp/macro-list-groups", import.meta.url));
 
 const words = [
-  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目、Host 或编号", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
+  { locale: "zh-CN", list: "宏任务列表", macro: "宏任务", all: "全部", active: "进行中", host: "等待 Host", review: "等待验收", search: "搜索标题、项目、Host 或 ID", noMatch: "没有匹配的宏任务", empty: "还没有宏任务", offline: "连接中断", retry: "重试连接", collapse: "收起宏任务列表", expand: "展开宏任务列表", more: "更多", stop: "停止宏任务", time: "时间统计", update: "有新的活动，更新排序" },
   { locale: "en-US", list: "Macro task list", macro: "Macro tasks", all: "All", active: "Running", host: "Waiting for Host", review: "Awaiting acceptance", search: "Search title, project, Host or ID", noMatch: "No matching macro tasks", empty: "No macro tasks yet", offline: "Disconnected", retry: "Reconnect", collapse: "Collapse macro task list", expand: "Expand macro task list", more: "More", stop: "Stop macro task", time: "Time statistics", update: "New activity; update order" },
 ] as const;
 
@@ -255,7 +255,8 @@ async function assertFilterRow(page: Page, w: typeof words[number], counts: type
       const name = metrics.tabs[index]!;
       if (name.name === field.full && !name.clipped) continue;
       await tab.locator("[data-slot=macro-filter-name]").hover();
-      await expect(page.getByRole("tooltip"), `${w.locale} ${field.full}: the tooltip gives the full name`).toHaveText(field.full);
+      await page.waitForTimeout(700);
+      await expect(page.getByRole("tooltip")).toHaveCount(0);
       await page.mouse.move(width - 8, 8);
       await expect(page.getByRole("tooltip")).toBeHidden();
     }
@@ -434,7 +435,7 @@ for (const { locale, width, theme } of [
 for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
   test.describe(`macro text clipping, ${width}px, ${theme}`, () => {
     test.use({ locale: "zh-CN", viewport: { width, height: width === 390 ? 844 : 800 }, reducedMotion: "reduce" });
-    test("fades clipped project names and titles and reveals their full text on hover", async ({ page }) => {
+    test("fades clipped project names and titles without full-text tooltips", async ({ page }) => {
       const labels = [
         { id: A, project: "c-two", title: "检查名称", clipped: false },
         { id: B, project: "c-two-research-and-development-for-multi-agent-console-project-name-that-does-not-fit", title: "检查宏任务列表中项目名称与标题被截断时的渐隐、全文提示以及完整的悬停显示", clipped: true },
@@ -461,7 +462,7 @@ for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
         const group = list.locator("[data-slot=macro-group-heading]").nth(index);
         const entry = list.locator(`[data-macro-task-id="${id}"] [data-slot=macro-entry]`);
         for (const [button, text] of [[group, project], [entry, title]] as const) {
-          const label = button.getByText(text, { exact: true });
+          const label = button.locator('[data-slot="scrolling-title"]');
           const geometry = await label.evaluate(node => ({
             clipped: node.scrollWidth > node.clientWidth, width: node.clientWidth, contentWidth: node.scrollWidth,
           }));
@@ -469,17 +470,10 @@ for (const width of [1280, 390]) for (const theme of ["dark", "light"]) {
           await expect(label).toHaveCSS("text-overflow", "clip");
           await expect(label).toHaveCSS("mask-image", clipped ? /linear-gradient.*28px/ : "none");
           await expect(button).toHaveAccessibleName(new RegExp(text.slice(0, 12)));
-          const isEntry = button === entry;
-          const description = isEntry ? await button.getAttribute("aria-description") : text;
-          if (isEntry) expect(description).toMatch(new RegExp(`^${text} · 最后活动：`));
-          else if (clipped) await expect(button).toHaveAttribute("aria-description", text);
-          else await expect(button).not.toHaveAttribute("aria-description");
+          await expect(button).not.toHaveAttribute("aria-description");
           await label.hover();
-          if (isEntry || clipped) await expect(page.getByRole("tooltip")).toHaveText(description!);
-          else {
-            await page.waitForTimeout(700);
-            await expect(page.getByRole("tooltip")).toHaveCount(0);
-          }
+          await page.waitForTimeout(700);
+          await expect(page.getByRole("tooltip")).toHaveCount(0);
           await page.mouse.move(width - 8, 8);
           await expect(page.getByRole("tooltip")).toBeHidden();
         }

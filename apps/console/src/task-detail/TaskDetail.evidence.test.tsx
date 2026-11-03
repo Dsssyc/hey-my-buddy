@@ -323,7 +323,8 @@ describe("the head", () => {
     expect(f.onBack).toHaveBeenCalledOnce();
     expect(titled.textContent).not.toContain("等待验收");
     const right = children[1] as HTMLElement;
-    expect(right.textContent).toMatch(/开始.*历时.*回合/);
+    expect(right.textContent).toMatch(/历时.*回合/);
+    expect(within(right).queryByText("开始")).toBeNull();
     expect(within(right).getByText("等待验收")).toBeTruthy();
     expect(right.querySelector("[data-slot=detail-status]")?.parentElement?.querySelector("button[aria-label=重新读取]")).toBeTruthy();
     expect(within(right).getByRole("button", { name: "重新读取" })).toBeTruthy();
@@ -346,19 +347,20 @@ describe("the head", () => {
     release();
   });
 
-  it("says the checking time of the read the head rests on, and none when that read carries none", async () => {
+  it("keeps refresh free of a checking-time tooltip whether or not the read has a checking time", async () => {
     const reads = client();
     const f = open({ client: reads });
     await ready();
     await f.user.hover(screen.getByRole("button", { name: "重新读取" }));
-    expect((await screen.findAllByText(/核对时间 \d{2}:\d{2}:\d{2}/))[0]).toBeTruthy();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(screen.getByRole("button", { name: "重新读取" }).hasAttribute("aria-description")).toBe(false);
     cleanup();
     const bare = client();
     (bare.workflow as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ value: workflow(), verifiedAtMs: null }));
     const g = open({ client: bare });
     await ready();
     await g.user.hover(screen.getByRole("button", { name: "重新读取" }));
-    expect((await screen.findAllByText("核对时间未记录"))[0]).toBeTruthy();
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("writes a relative time with a space between the number and the unit", async () => {

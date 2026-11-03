@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { open, openLegend, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const captures = fileURLToPath(new URL("../../../tmp/readability-r7", import.meta.url));
+const captures = fileURLToPath(new URL("../../../tmp/console-header/tooltip", import.meta.url));
 async function capture(page: Page, name: string) {
   await mkdir(captures, { recursive: true });
   await page.screenshot({ path: `${captures}/${name}.png` });
@@ -22,8 +22,8 @@ for (const theme of ["dark", "light"]) test.describe(`tooltip policy ${theme}`, 
     await page.clock.pauseAt(new Date("2026-10-19T12:01:00Z"));
     const tooltip = page.locator('[data-slot=tooltip-content]');
     const id = page.locator('[data-slot=macro-overview-header]').getByRole("button", { name: `复制标识 ${macro}` });
-    const title = page.locator('[data-slot=macro-overview-header] h2');
-    await title.hover();
+    const goal = page.locator('[data-slot=macro-goal-trigger]');
+    await goal.hover();
     await page.clock.runFor(500);
     await expect(tooltip).toHaveCount(0);
     await page.clock.runFor(100);
@@ -51,7 +51,7 @@ for (const theme of ["dark", "light"]) test.describe(`tooltip policy ${theme}`, 
     await expect(tooltip).toHaveCount(0);
 
     // Opening the next tooltip also takes the full 600 ms (no skip-delay window).
-    const menu = page.locator(`[data-macro-task-id="${macro}"] [data-slot=macro-menu-button]`);
+    const menu = page.locator('[data-slot=timeline-row-filter] button');
     await menu.hover();
     await page.clock.runFor(500);
     await expect(tooltip).toHaveCount(0);
@@ -61,11 +61,11 @@ for (const theme of ["dark", "light"]) test.describe(`tooltip policy ${theme}`, 
     await page.mouse.move(0, 0);
     await expect(tooltip).toHaveCount(0);
     await page.keyboard.press("Tab");
-    await title.focus();
+    await goal.focus();
     await expect(tooltip).toBeVisible(); // Clock has not advanced.
     await page.keyboard.press("Escape");
     await id.click();
-    await expect(id.locator('[aria-live="polite"]')).toHaveText("已复制");
+    await expect(id.locator(".lucide-check")).toBeVisible();
     await expect(tooltip).toHaveCount(0);
 
     // The original pointer route from the ID through the top bar stays usable.
@@ -113,17 +113,8 @@ for (const theme of ["dark", "light"]) test.describe(`tooltip policy ${theme}`, 
     await capture(page, `timeline-${theme}`);
     await page.keyboard.press("Escape");
     await page.locator('[data-slot=macro-overview-header] h2').hover();
-    const multiline = page.locator('[data-slot=tooltip-content]');
-    await expect(multiline).toBeVisible();
-    expect(await multiline.evaluate(node => getComputedStyle(node).textAlign)).toBe("center");
-    expect(await multiline.evaluate(node => {
-      const text = [...node.childNodes].find(child => child.nodeType === Node.TEXT_NODE)!;
-      const range = document.createRange(); range.selectNodeContents(text);
-      return range.getClientRects().length;
-    })).toBeGreaterThan(1);
-    await capture(page, `multiline-tooltip-${theme}`);
-    await page.mouse.move(0, 0);
-    await expect(multiline).toHaveCount(0);
+    await page.waitForTimeout(700);
+    await expect(page.locator('[data-slot=tooltip-content]')).toHaveCount(0);
     await page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-a1"]').click();
     await expect(page.locator('[data-slot=step-navigation]')).toBeVisible();
     await capture(page, `detail-${theme}`);

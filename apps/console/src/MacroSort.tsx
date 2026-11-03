@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { ArrowDownWideNarrow } from "lucide-react";
 import type { MacroTaskSort } from "./macro-task-types";
-import { Hint } from "./components/hint";
 import { Button } from "./components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuLabel, DropdownMenuSeparator } from "./components/ui/dropdown-menu";
 
@@ -9,9 +8,9 @@ export function MacroSort({ sort, onChange }: { sort: MacroTaskSort; onChange: (
   const { t } = useTranslation("tasks");
   const [basis, direction] = sort.split("-") as ["activity" | "created", "desc" | "asc"];
   return <DropdownMenu modal={false}>
-    <Hint text={t("sort.label")}><DropdownMenuTrigger asChild>
+    <DropdownMenuTrigger asChild>
       <Button data-slot="macro-sort-button" className="size-6!" variant="ghost" size="icon-sm" aria-label={t("sort.label")}><ArrowDownWideNarrow aria-hidden="true"/></Button>
-    </DropdownMenuTrigger></Hint>
+    </DropdownMenuTrigger>
     <DropdownMenuContent data-slot="macro-sort-menu" aria-label={t("sort.label")}>
       <DropdownMenuLabel>{t("sort.basis")}</DropdownMenuLabel>
       <DropdownMenuRadioGroup aria-label={t("sort.basis")} value={basis} onValueChange={value => onChange(`${value}-${direction}` as MacroTaskSort)}>

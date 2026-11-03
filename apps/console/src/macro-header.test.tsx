@@ -18,12 +18,12 @@ describe("the macro task header", () => {
     expect(head.querySelector("h2")?.hasAttribute("title")).toBe(false);
     expect(within(head).getByText("hey-my-buddy")).toBeTruthy();
     expect(within(head).getByText("codex-desktop")).toBeTruthy();
-    expect([...head.querySelectorAll('[data-slot="macro-overview-facts"] dt')].map(node => node.textContent)).toEqual(["项目", "Host", "历时", "编号", "目标"]);
+    expect([...head.querySelectorAll('[data-slot="macro-overview-facts"] dt')].map(node => node.textContent)).toEqual(["项目", "Host", "历时", "ID"]);
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("1进行中");
     expect(head.querySelector('[data-slot="macro-overview-counts"]')?.textContent).toContain("2已验收");
     expect(within(head).getByRole("button", { name: "列表开关" })).toBeTruthy();
     expect(within(head).getByRole("button", { name: "停止" })).toBeTruthy();
-    expect(head.querySelector('[data-slot="macro-goal-trigger"]')?.textContent).toBe(timeline.macroTask.goal!.body);
+    expect(head.querySelector('[data-slot="macro-goal-trigger"]')?.getAttribute("aria-label")).toBe("目标说明");
     expect(screen.queryByRole("dialog", { name: "目标说明" })).toBeNull();
     const user = userEvent.setup();
     await user.click(within(head).getByRole("button", { name: "‹ 宏任务" }));
@@ -31,17 +31,18 @@ describe("the macro task header", () => {
     await user.click(within(head).getByRole("button", { name: "时间统计" }));
     const details = screen.getByRole("dialog", { name: "时间统计" });
     expect(details.textContent).not.toContain(timeline.macroTask.goal!.body);
-    expect(details.textContent).toContain("跨度");
+    expect(details.textContent).toContain("从开始到最近活动");
   });
 
-  it("keeps fallback title provenance in an accessible hint without a browser title tooltip", async () => {
+  it("uses the complete fallback title without a hover tooltip", async () => {
     const summary = { ...macroTaskTimelineFixture().macroTask, titleSource: "task" as const };
     render(<MacroTaskOverview readGoals={vi.fn()} summary={summary} timeline={null} loading={false}
       stale={false} onBackToList={() => {}} />);
     const title = screen.getByRole("heading", { name: summary.title! });
     expect(title.hasAttribute("title")).toBe(false);
     await userEvent.setup().hover(title);
-    expect((await screen.findAllByText(/取自任务首行/))[0]).toBeTruthy();
+    expect(title.hasAttribute("aria-description")).toBe(false);
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("shows failed members with the failed state mark and keeps the other ended count separate", () => {

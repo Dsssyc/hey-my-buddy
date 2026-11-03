@@ -69,15 +69,15 @@ describe("macro task navigation", () => {
     const f = harness(true);
     await screen.findByRole("button", { name: /宏任务时间轴：设计、接口与实现/ });
     // jsdom has no geometry: pointer hit-testing belongs to the browser checks.
-    within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号").focus();
+    within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或 ID").focus();
     await f.user.keyboard("设计");
-    expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号")).toHaveProperty("value", "设计");
+    expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或 ID")).toHaveProperty("value", "设计");
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(localStorage.getItem(preference)).toBe("true");
     expect(screen.queryByRole("region", { name: "宏任务列表" })).toBeNull();
     expect(document.querySelector('[data-slot="macro-sidebar"] [data-slot="macro-list"]')).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));
-    expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或编号")).toHaveProperty("value", "设计");
+    expect(within(screen.getByRole("region", { name: "宏任务列表" })).getByLabelText("搜索标题、项目、Host 或 ID")).toHaveProperty("value", "设计");
     await f.user.click(await screen.findByRole("button", { name: "显示更多" }));
     expect(f.api.macroTasks).toHaveBeenCalledWith(expect.objectContaining({ group: "project:p1", before: "older", limit: 20 }), expect.any(AbortSignal));
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));

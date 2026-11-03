@@ -4,13 +4,13 @@ import { useTranslation } from "react-i18next";
 import type { MacroTaskSummary, MacroTaskTimeline } from "./macro-task-types";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import { Button } from "./components/ui/button";
-import { Hint } from "./components/hint";
+import { ScrollingTitle } from "./components/ScrollingTitle";
 import { displayTitle } from "./macro-task-display";
 import { macroTaskMetrics } from "./macro-task-metrics";
 import { usageTotalsLabel } from "./usage-totals";
 import { formatDuration, formatList, formatDateTime, formatMoment, formatNumber } from "./i18n/format";
 import { StateMark } from "./components/ui/state-mark";
-import { HeaderIdentifier } from "./HeaderIdentifier";
+import { CopyableIdentifier } from "./components/CopyableIdentifier";
 import { MacroTaskGoal } from "./MacroTaskGoal";
 import type { ConsoleApi } from "./api";
 
@@ -38,8 +38,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
   if (!shown) return null;
 
   const title = displayTitle(shown.titleSource, shown.title);
-  const titleText = shown.titleSource === "none" ? t("unnamed") : title.text;
-  const titleHint = shown.titleSource === "task" ? t("titleFromTask", { title: title.fullText }) : shown.titleSource === "none" ? undefined : title.fullText;
+  const titleText = shown.titleSource === "none" ? t("unnamed") : title.fullText;
   const created = shown.createdAt === null ? null : Date.parse(shown.createdAt);
   const observed = nowMs ?? (timeline ? Date.parse(timeline.observedAt) : Date.now());
   const lastActivity = shown.lastActivityAt === null ? null : Date.parse(shown.lastActivityAt);
@@ -64,10 +63,9 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
       </Button>
       <div className="flex min-w-0 items-start gap-3 @min-[761px]:col-start-1 @min-[761px]:row-start-1">
         {listToggle}
-        <div className="min-w-0 flex-1">
-          <Hint text={titleHint}>
-            <h2 tabIndex={0} className="min-w-0 truncate rounded-sm text-lg leading-[1.45] font-semibold tracking-[-0.01em] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{titleText}</h2>
-          </Hint>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <ScrollingTitle as="h2" text={titleText} focusable className="rounded-sm text-lg leading-[1.45] font-semibold tracking-[-0.01em] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"/>
+          {timeline?.macroTask.goal && <MacroTaskGoal key={shown.macroTaskId} macroTaskId={shown.macroTaskId} goal={timeline.macroTask.goal} readGoals={readGoals} active={active}/>}
         </div>
       </div>
         <dl data-slot="macro-overview-facts" className="mt-1.5 flex flex-wrap items-center @min-[761px]:col-span-2 @min-[761px]:row-start-2 @min-[761px]:mt-0 gap-x-5 gap-y-0.5 text-xs leading-5 tabular-nums">
@@ -88,11 +86,11 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
                   ? <p className="text-xs text-ink2">{loading ? t("statsLoading") : t("statsMissing")}</p>
                   : <>
                     <dl data-slot="time-stats-values" className="grid grid-cols-[max-content_minmax(0,1fr)] items-baseline gap-x-4 gap-y-1 text-xs tabular-nums">
-                      <dt><Hint text={t("span")}><span tabIndex={0} className="rounded-sm text-ink3 outline-none focus-visible:ring-2 focus-visible:ring-ring">{t("spanLabel")}</span></Hint></dt>
+                      <dt><span className="text-ink3">{t("spanLabel")}</span></dt>
                       <dd>{metrics?.totalSpanMs != null ? formatDuration(metrics.totalSpanMs) : t("unrecorded")}</dd>
-                      <dt><Hint text={t("execution")}><span tabIndex={0} className="rounded-sm text-ink3 outline-none focus-visible:ring-2 focus-visible:ring-ring">{t("executionLabel")}</span></Hint></dt>
+                      <dt><span className="text-ink3">{t("executionLabel")}</span></dt>
                       <dd>{metrics?.unionMs != null ? formatDuration(metrics.unionMs) : t("unrecorded")}</dd>
-                      {cumulative !== null && <><dt><Hint text={t("cumulative")}><span tabIndex={0} className="rounded-sm text-ink3 outline-none focus-visible:ring-2 focus-visible:ring-ring">{t("cumulativeLabel")}</span></Hint></dt><dd>{formatDuration(cumulative)}</dd></>}
+                      {cumulative !== null && <><dt><span className="text-ink3">{t("cumulativeLabel")}</span></dt><dd>{formatDuration(cumulative)}</dd></>}
                     </dl>
                     <p className="text-xs">{t("usage")}{usageTotalsLabel(metrics!.usage)}</p>
                     {metrics!.runningCount > 0 && <p className="text-xs text-ink2">{t("running", { count: metrics!.runningCount, time: formatMoment(Date.parse(timeline.observedAt), clock) })}</p>}
@@ -104,8 +102,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
               </div>
             </PopoverContent>
           </Popover></dd></div>
-          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("identifier")}</dt><dd className="min-w-0"><HeaderIdentifier key={shown.macroTaskId} value={shown.macroTaskId}/></dd></div>
-          {timeline?.macroTask.goal && <MacroTaskGoal key={shown.macroTaskId} macroTaskId={shown.macroTaskId} goal={timeline.macroTask.goal} readGoals={readGoals} active={active}/>}
+          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("identifier")}</dt><dd className="min-w-0"><CopyableIdentifier key={shown.macroTaskId} value={shown.macroTaskId}/></dd></div>
         </dl>
     </div>
     <div className="flex min-w-0 shrink-0 items-start gap-4 @min-[761px]:col-start-2 @min-[761px]:row-start-1 @max-[761px]:w-full @max-[761px]:items-center @min-[761px]:gap-10">

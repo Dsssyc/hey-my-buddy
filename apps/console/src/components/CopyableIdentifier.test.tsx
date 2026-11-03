@@ -11,20 +11,21 @@ const render = (ui: React.ReactElement) => baseRender(ui, { wrapper: ({ children
 const id = "macro-79771ce9-890b-4cab-867b-4e05c68791da";
 
 describe("copyable identifiers", () => {
-  it("shows a shortened value, exposes the complete value on hover and copies it with the keyboard", async () => {
+  it("shows a middle-shortened value without a tooltip and copies the whole value with the keyboard", async () => {
     const user = userEvent.setup();
     const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     render(<CopyableIdentifier value={id} />);
     expect(screen.getByText("macro-79771ce9…91da").getAttribute("title")).toBeNull();
     const button = screen.getByRole("button", { name: `复制标识 ${id}` });
-    expect(button.className).toContain("-ml-2");
     await user.hover(button);
-    expect((await screen.findByRole("tooltip")).textContent).toBe(id);
+    expect(screen.queryByRole("tooltip")).toBeNull();
     await user.tab();
     expect(document.activeElement).toBe(button);
     await user.keyboard("{Enter}");
     expect(write).toHaveBeenCalledWith(id);
     expect(screen.getByRole("status").textContent).toBe("已复制");
+    expect(button.querySelector(".lucide-check")).not.toBeNull();
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("clears feedback after a brief interval and when the selected identifier changes", async () => {
@@ -36,6 +37,7 @@ describe("copyable identifiers", () => {
     expect(screen.getByRole("status").textContent).toBe("已复制");
     await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
     expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("button").querySelector(".lucide-copy")).not.toBeNull();
     await act(async () => { fireEvent.click(screen.getByRole("button")); });
     view.rerender(<CopyableIdentifier value="run:another-run" />);
     expect(screen.queryByRole("status")).toBeNull();
@@ -51,6 +53,7 @@ describe("copyable identifiers", () => {
     const button = screen.getByRole("button", { name: `Copy identifier ${id}` });
     await user.click(button);
     expect(screen.getByRole("status").textContent).toBe("Copy failed; try again");
+    expect(button.querySelector(".lucide-circle-x")).not.toBeNull();
     await user.click(button);
     expect(write).toHaveBeenLastCalledWith(id);
     expect(screen.getByRole("status").textContent).toBe("Copied");

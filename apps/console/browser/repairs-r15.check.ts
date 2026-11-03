@@ -3,9 +3,9 @@ import { open, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
 
-for (const { locale, labels, meaning } of [
-  { locale: "zh-CN", labels: ["跨度", "运行", "累计"], meaning: "从开始到最近一次活动：" },
-  { locale: "en-US", labels: ["Span", "Running", "Turn sum"], meaning: "From start to last activity: " },
+for (const { locale, labels } of [
+  { locale: "zh-CN", labels: ["从开始到最近活动", "有工作在运行的时间", "各回合相加"] },
+  { locale: "en-US", labels: ["Start to last activity", "Time with work running", "Turns added up"] },
 ]) test.describe(`round 15 facts in ${locale}`, () => {
   test.use({ locale, viewport: { width: 390, height: 844 }, reducedMotion: "reduce" });
 
@@ -22,7 +22,7 @@ for (const { locale, labels, meaning } of [
     await expect(bar.locator("time:visible")).toHaveCount(1);
   });
 
-  test("aligns the three time values and exposes each full meaning by keyboard", async ({ page }) => {
+  test("aligns three self-explanatory labels without tooltip-only meanings", async ({ page }) => {
     await open(page, `#tasks/${macro}`);
     await page.locator('[data-slot=macro-overview-header]').getByRole("button", { name: locale === "zh-CN" ? "时间统计" : "Time statistics" }).click();
     const stats = page.locator('[data-slot=time-stats-values]');
@@ -30,12 +30,12 @@ for (const { locale, labels, meaning } of [
     const values = await stats.locator("dd").evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().left));
     expect(values).toHaveLength(3);
     expect(new Set(values.map(value => Math.round(value))).size).toBe(1);
-    await page.keyboard.press("Tab");
-    await stats.locator("dt span").first().focus();
-    await expect(page.getByRole("tooltip")).toHaveText(meaning.trim());
+    await stats.locator("dt span").first().hover();
+    await page.waitForTimeout(700);
+    await expect(page.getByRole("tooltip")).toHaveCount(0);
     const copy = page.locator('[data-slot=macro-overview-header] button[aria-label*="macro-"]');
-    await expect(copy).toHaveCSS("border-bottom-style", "dotted");
-    await expect(copy.locator("svg")).toHaveCount(0);
+    await expect(copy).not.toHaveCSS("border-bottom-style", "dotted");
+    await expect(copy.locator("svg.lucide-copy")).toHaveCount(1);
   });
 });
 

@@ -59,13 +59,13 @@ describe("the micro task title rule in the detail (0.16 T1)", () => {
     expect(delegation.view.container.textContent).toContain("不应出现在标题的第二行");
   });
 
-  it("falls back to the first line of the task, and says so, and names a micro task with none", async () => {
+  it("falls back to the first line without a tooltip and names a micro task with none", async () => {
     const plain = task({ task: "普通执行任务\n第二行", workflow: { ...task().workflow!, title: null } });
     detail({ task: plain });
     await ready();
     expect(heading().textContent).toBe("普通执行任务");
     await userEvent.setup().hover(heading());
-    expect((await screen.findAllByText(/普通执行任务（取自任务首行）/))[0]).toBeTruthy();
+    expect(screen.queryByRole("tooltip")).toBeNull();
     cleanup();
     detail({ task: task({ task: "\n\t ", workflow: { ...task().workflow!, title: null } }) });
     await ready();

@@ -146,21 +146,19 @@ describe("opening the detail of a micro task", () => {
 });
 
 describe("the head of the detail", () => {
-  it("names the micro task, its state in the fixed word, when it began, how long, and how many turns", async () => {
+  it("names the micro task, its state, elapsed time and turns without a Started fact", async () => {
     open();
     await ready();
     const head = document.querySelector("[data-slot=detail-header]") as HTMLElement;
     expect(within(head).getByRole("heading", { name: "微任务详情" })).toBeTruthy();
     expect(head.textContent).toContain("等待验收");
     expect(head.textContent).toContain("回合2");
-    expect(head.textContent).toMatch(/开始.*历时/);
-    const started = within(head).getByText("开始").nextElementSibling;
-    expect(started?.textContent).toMatch(/\d{2}:\d{2}$/);
-    expect(started?.textContent).not.toMatch(/:\d{2}:\d{2}$/);
+    expect(head.textContent).toContain("历时");
+    expect(within(head).queryByText("开始")).toBeNull();
     expect(head.querySelector("[data-slot=detail-status]")?.parentElement?.querySelector("button[aria-label=重新读取]")).toBeTruthy();
   });
 
-  it("falls back to the first line of the task for a title, and says so", async () => {
+  it("falls back to the first line of the task for a title without a tooltip", async () => {
     const untitled = task();
     delete (untitled.workflow as { title?: string }).title;
     open({ replies: { task: untitled } });
@@ -168,7 +166,8 @@ describe("the head of the detail", () => {
     const title = document.querySelector("[data-slot=detail-header] h2") as HTMLElement;
     expect(title.textContent).toBe("实现微任务详情，左边是步骤，右边是这一步的内容。");
     await userEvent.setup().hover(title);
-    expect((await screen.findAllByText(/取自任务首行/))[0]).toBeTruthy();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(title.hasAttribute("aria-description")).toBe(false);
   });
 
   it("writes a wait for a Lead's decision as a wait for the Lead, in the head and on the rail", async () => {
@@ -215,12 +214,13 @@ describe("the head of the detail", () => {
     expect(document.querySelector("[data-slot=detail-header]")!.textContent).not.toContain("可能卡住");
   });
 
-  it("reads the micro task again by its button, with the server's time of checking in the hint", async () => {
+  it("reads the micro task again by its button without a checking-time tooltip", async () => {
     const f = open();
     await ready();
     const button = screen.getByRole("button", { name: "重新读取" });
     await f.user.hover(button);
-    expect((await screen.findAllByText(/核对时间 \d{2}:\d{2}:\d{2}/))[0]).toBeTruthy();
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(button.hasAttribute("aria-description")).toBe(false);
     const before = (f.reads.task as ReturnType<typeof vi.fn>).mock.calls.length;
     await f.user.click(button);
     await waitFor(() => expect((f.reads.task as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(before));

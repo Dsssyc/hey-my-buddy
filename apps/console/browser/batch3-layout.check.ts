@@ -57,13 +57,10 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"]) {
       expect(await header.evaluate(node => getComputedStyle(node).borderBottomWidth)).toBe("1px");
       expect(await leadName.evaluate(node => node.style.paddingLeft)).toBe("13px");
       await expect(lane.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b4"]')).toHaveCSS("padding-left", "31px");
-      // The lane's own numbers ride on the Lead row's hover: members, times and split usage.
+      // Row names no longer open a hover sheet for the lane summary.
       await leadName.hover();
-      const tooltip = page.getByRole("tooltip");
-      await expect(tooltip).toContainText("5 个微任务");
-      await expect(tooltip).toContainText(/历时/);
-      await expect(tooltip).toContainText(/执行/);
-      await expect(tooltip).toContainText("输入 26.6k（含缓存 12.4k） · 输出 2.7k");
+      await page.waitForTimeout(700);
+      await expect(page.getByRole("tooltip")).toHaveCount(0);
       await page.mouse.move(0, 0);
       const ordinary = page.locator('[data-slot=timeline-row-name][data-run-id="preview-run-b10"]');
       await expect(ordinary).toHaveCount(1);

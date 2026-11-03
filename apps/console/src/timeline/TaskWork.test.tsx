@@ -2,6 +2,8 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
+import i18n from "i18next";
+import { formatDuration } from "../i18n/format";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { macroTaskTimelineFixture } from "../macro-task-fixtures";
 import type { TimelineBuddy, TimelineRow } from "../macro-task-types";
@@ -12,7 +14,7 @@ import * as display from "../macro-task-display";
 import { groupLanes, laneSummary, ownedWaits } from "./lanes";
 
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); localStorage.clear(); });
 const setup = (overrides: Partial<TaskWorkProps> = {}) => {
   const timeline = macroTaskTimelineFixture();
   const props: TaskWorkProps = { readGoals: vi.fn(), summary: timeline.macroTask, timeline, displayObservedAt: timeline.observedAt, loading: false, error: "", stale: false,
@@ -150,7 +152,7 @@ describe("the lanes and the detail workspace", () => {
     fireEvent.focus(row("r6"));
     expect(status()).toContain("已等待");
   });
-  it("writes the repaired task title and reveals the full title with the buddy's identity on hover", async () => {
+  it("writes repair facts inline and does not add a row tooltip", async () => {
     const timeline = macroTaskTimelineFixture();
     const target = "被修正的任务：" + "完整标题".repeat(20);
     Object.assign(timeline.rows[1]!, { fixes: "other-macro-task", fixesTitle: target, fixesTitleSource: "task" });
@@ -161,9 +163,7 @@ describe("the lanes and the detail workspace", () => {
     expect(row("r2").getAttribute("aria-label")).toContain(target);
     expect(row("r2").querySelector("img, [data-slot=harness-logo]")).toBeTruthy();
     await userEvent.hover(row("r2"));
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain(target);
-    expect(tooltip.textContent).toContain("codex / openai / gpt-5-codex / max");
+    expect(screen.queryByRole("tooltip")).toBeNull();
   });
   it("explains incomplete reads and retains frozen source facts with retry", () => {
     const timeline = macroTaskTimelineFixture({ filtered: true });
@@ -191,6 +191,61 @@ describe("Lead lanes from recorded ownership", () => {
     timeline.spans.find(span => span.spanId === "s-r3-e1")!.tokenUsage = { inputTokens: 50, cachedInputTokens: 0, outputTokens: 5, source: "codex-native", scope: "attempt", inputBasis: "includes-cached" };
     return timeline;
   };
+  for (const language of ["zh", "en"]) it(`puts the whole Lead group before its own row facts on hover, focus and selection in ${language}`, async () => {
+    await i18n.changeLanguage(language);
+    try {
+      const timeline = laneFixture();
+      const { props, rerender } = setup({ timeline });
+      const summary = () => document.querySelector('[data-slot=timeline-lane-summary]');
+      const check = () => {
+        expect(summary()?.textContent).toContain(language === "zh" ? "3 个微任务" : "3 micro tasks");
+        expect(summary()?.textContent).toContain(formatDuration(378 * 60_000));
+        expect(summary()?.textContent).toContain(formatDuration(107 * 60_000));
+        expect(summary()?.textContent).toContain(language === "zh" ? "输入 150（含缓存 40）" : "Input 150");
+        expect(summary()?.textContent).toContain(language === "zh" ? "输出 15" : "Output 15");
+        expect(status()?.startsWith(summary()!.textContent!)).toBe(true);
+        expect(status()).toContain(language === "zh" ? "共 2 回合" : "2 turns");
+        expect(status()).toContain("gpt-5-codex");
+      };
+      fireEvent.pointerEnter(row("r2")); check();
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      fireEvent.pointerLeave(row("r2"));
+      fireEvent.focus(row("r2")); check();
+      fireEvent.blur(row("r2"));
+      fireEvent.click(document.querySelector('[data-slot=timeline-lane-lead]')!); check();
+      expect(props.onOpen).not.toHaveBeenCalled();
+      fireEvent.pointerEnter(row("r3"));
+      expect(summary()).toBeNull();
+      fireEvent.pointerLeave(row("r3"));
+      fireEvent.focus(row("r4"));
+      expect(summary()).toBeNull();
+      fireEvent.blur(row("r4")); check();
+      rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
+      expect(status()).toBe("");
+      expect(summary()).toBeNull();
+      expect(document.querySelector('[data-slot=timeline-status] [data-slot=legend-trigger]')).not.toBeNull();
+    } finally { await i18n.changeLanguage("zh"); }
+  });
+  it("keeps ended members in the Lead's cost summary when only unfinished rows are drawn", () => {
+    const timeline = laneFixture();
+    timeline.rows.find(item => item.runId === "r2")!.category = "active";
+    setup({ timeline });
+    fireEvent.click(screen.getByRole("button", { name: "只看未结束的" }));
+    expect(row("r3")).toBeNull();
+    fireEvent.pointerEnter(row("r2"));
+    const summary = document.querySelector('[data-slot=timeline-lane-summary]')!;
+    expect(summary.textContent).toContain("3 个微任务");
+    expect(summary.textContent).toContain("输入 150（含缓存 40）");
+  });
+  it("names missing Lead times as unknown and keeps missing usage unrecorded", () => {
+    const timeline = laneFixture(); timeline.spans = []; timeline.events = [];
+    setup({ timeline });
+    fireEvent.pointerEnter(row("r2"));
+    const summary = document.querySelector('[data-slot=timeline-lane-summary]')!;
+    expect(summary.textContent).toContain("历时 未知");
+    expect(summary.textContent).toContain("执行 未知");
+    expect(summary.textContent).toContain("用量未记录");
+  });
   it("groups one Lead with the micro tasks it owns and keeps the rest ordinary", () => {
     const timeline = laneFixture();
     setup({ timeline });
@@ -235,24 +290,6 @@ describe("Lead lanes from recorded ownership", () => {
     hierarchy();
     rerender(<TooltipProvider delayDuration={0}><TaskWork {...props} openedRunId="r2"/></TooltipProvider>);
     hierarchy();
-  });
-  it("summarizes the lane on the Lead row's hover: members, elapsed, execution and split usage", async () => {
-    const user = userEvent.setup();
-    const timeline = laneFixture();
-    setup({ timeline });
-    await user.hover(row("r2"));
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain("3 个微任务");
-    expect(tooltip.textContent).toMatch(/历时/);
-    expect(tooltip.textContent).toMatch(/执行/);
-    // Cache is inside the input and named beside it; the routing run and turns without a record mark the total partial.
-    expect(tooltip.textContent).toContain("输入 150（含缓存 40） · 输出 15 · 部分记录");
-    // A read where most executions have no recorded usage is honest about it.
-    timeline.spans.find(span => span.spanId === "s-r3-e1")!.tokenUsage = undefined;
-    cleanup();
-    setup({ timeline });
-    await user.hover(row("r2"));
-    expect((await screen.findByRole("tooltip")).textContent).toContain("输入 100（含缓存 40） · 输出 10 · 部分记录");
   });
   it("collapses one lane without touching the others, keeping the Lead's own header", async () => {
     const timeline = laneFixture();
@@ -316,8 +353,7 @@ describe("Lead lanes from recorded ownership", () => {
     expect(row("r3").style.paddingLeft).toBe("31px");
     expect(row("r6").style.paddingLeft).toBe("31px");
     await userEvent.hover(leadName);
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain("codex / openai / gpt-5-codex / max");
+    expect(screen.queryByRole("tooltip")).toBeNull();
     // One keyboard path walks the Lead, its members and the ordinary rows in order.
     leadName.focus();
     fireEvent.keyDown(leadName, { key: "ArrowDown" });
@@ -608,36 +644,22 @@ describe("one shared scroll area", () => {
   });
 });
 
-it("reveals the complete author title on hover when the shown one is cut", async () => {
+it("renders complete fallback and authored titles in the shared scrolling component without tooltips", async () => {
   const timeline = macroTaskTimelineFixture();
-  const fromTask = "从任务首行取得的很长标题：".repeat(6);
-  const longAuthor = "作者写下的很长标题，鼠标或键盘聚焦时应能看到全文：".repeat(4);
-  const rows = [
-    { ...timeline.rows[1]!, runId: "r9", titleSource: "task" as const, title: fromTask },
-    { ...timeline.rows[1]!, runId: "r10", title: longAuthor },
-  ];
-  render(<TooltipProvider delayDuration={0}><RowName row={rows[0]!} rows={rows} tabIndex={0} current={false} fresh={false}
-    onClick={() => {}} onEnter={() => {}} onLeave={() => {}} onFocus={() => {}} onBlur={() => {}}/></TooltipProvider>);
-  await userEvent.hover(document.querySelector('[data-slot=timeline-row-name]')!);
-  let tooltip = await screen.findByRole("tooltip");
-  expect(tooltip.textContent).toContain(fromTask);
-  cleanup();
-  // An explicit author title that the cell cuts: the same hook that reports the cut
-  // at runtime decides the tooltip here too.
-  const described = Object.getOwnPropertyDescriptor(Element.prototype, "scrollWidth")!;
-  Object.defineProperty(Element.prototype, "scrollWidth", { configurable: true, get() { return 600; } });
-  try {
-    render(<TooltipProvider delayDuration={0}><RowName row={rows[1]!} rows={rows} tabIndex={0} current={false} fresh={false}
+  for (const titleSource of ["task", "title"] as const) {
+    const title = "完整的长标题：".repeat(20);
+    const subject = { ...timeline.rows[1]!, title, titleSource };
+    render(<TooltipProvider delayDuration={0}><RowName row={subject} rows={timeline.rows} tabIndex={0} current={false} fresh={false}
       onClick={() => {}} onEnter={() => {}} onLeave={() => {}} onFocus={() => {}} onBlur={() => {}}/></TooltipProvider>);
-    await userEvent.hover(document.querySelector('[data-slot=timeline-row-name]')!);
-    tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain(longAuthor);
-  } finally {
-    Object.defineProperty(Element.prototype, "scrollWidth", described);
+    const button = document.querySelector('[data-slot=timeline-row-name]')!;
+    expect(button.querySelector('[data-slot=scrolling-title-text]')?.textContent).toBe(title);
+    await userEvent.hover(button);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    cleanup();
   }
 });
 
-it("marks the row's harness beside its model and effort, and names the full identity on hover", async () => {
+it("marks the row's harness beside its model and effort without repeating it in a tooltip", async () => {
   const timeline = macroTaskTimelineFixture();
   const named = timeline.rows[1]!;
   const unnamed = { ...timeline.rows[1]!, runId: "r9", buddy: { harness: null, provider: null, model: null, effort: null } };
@@ -648,10 +670,7 @@ it("marks the row's harness beside its model and effort, and names the full iden
     expect(Boolean(button.querySelector("img, [data-slot=harness-logo]"))).toBe(Boolean(subject.buddy!.harness));
     if (subject.buddy!.harness) expect(button.textContent).toContain("gpt-5-codex · max");
     await userEvent.hover(button);
-    const tooltip = await screen.findByRole("tooltip");
-    expect(tooltip.textContent).toContain(subject.buddy!.harness
-      ? "codex / openai / gpt-5-codex / max"
-      : "未记录 / 未记录 / 未记录 / 未记录");
+    expect(screen.queryByRole("tooltip")).toBeNull();
     cleanup();
   }
 });

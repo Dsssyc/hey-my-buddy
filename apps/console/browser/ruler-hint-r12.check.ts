@@ -33,7 +33,7 @@ for (const theme of ["dark", "light"]) for (const width of [1440, 390]) for (con
     });
     expect(colors.line).toBe(colors.strongerLine); expect(colors.text).toBe(colors.strongerText);
     const background = await ruler.evaluate(node => getComputedStyle(node).backgroundColor);
-    const sharedTrigger = page.locator('[data-slot=macro-overview-header] h2');
+    const sharedTrigger = page.locator('[data-slot=macro-goal-trigger]');
     await sharedTrigger.hover();
     await page.clock.runFor(600);
     const sharedHint = page.locator('[data-slot=tooltip-content]');

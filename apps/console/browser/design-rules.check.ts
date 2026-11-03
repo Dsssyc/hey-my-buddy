@@ -27,7 +27,8 @@ for (const width of [1280, 390]) for (const theme of ["light", "dark"] as const)
         if (!await list.isVisible()) await page.locator('[data-slot="macro-overview-header"]').getByRole("button", { name: "‹ 宏任务" }).click();
         const more = list.locator(`[data-macro-task-id="${macro}"] [data-slot="macro-menu-button"]`);
         await more.hover();
-        await expect(page.locator('[data-slot="tooltip-content"]')).toHaveCSS("border-radius", "6px");
+        await page.waitForTimeout(700);
+        await expect(page.getByRole("tooltip")).toHaveCount(0);
         await more.click();
         await expect(page.locator('[data-slot="macro-entry-menu"]')).toHaveCSS("border-radius", "6px");
         await page.getByRole("menuitem", { name: "停止宏任务", exact: true }).click();
