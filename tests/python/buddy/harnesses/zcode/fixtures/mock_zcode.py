@@ -535,6 +535,23 @@ def handle_message(message):
                 time.sleep(0.05)
             complete_turn()
             return
+        if case == "unsupported-requests":
+            # The two native requests a Host cannot answer for this execution:
+            # official-MCP auth headers (credentials are the user's) and a
+            # browser call (the blackboard provides none). Both are refused with
+            # the documented unsupported-method error, and neither may block a
+            # completed turn.
+            answers = {
+                "auth": request_client("server-auth-1", "interaction/requestOfficialMcpAuthHeaders",
+                                       {"sessionId": session_id, "providerId": "fixture-api"}),
+                "browser": request_client("server-browser-1", "interaction/browserList",
+                                          {"sessionId": session_id}),
+            }
+            try:
+                native_path(log_dir).mkdir(parents=True, exist_ok=True)
+                native_path(log_dir / "interaction-responses.json").write_text(json.dumps(answers), encoding="utf-8", newline="\n")
+            except OSError:
+                pass
         if case in ("attention", "attention-after-finish"):
             accepted = finish("completed")[0] if case == "attention-after-finish" else None
             answers = interactive_attention()

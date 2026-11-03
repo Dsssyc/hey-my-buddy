@@ -609,6 +609,7 @@ class NativeConnection:
         self.observe: Callable[[dict, int], None] = lambda _message, _ordinal: None
         self.on_unknown = on_unknown or (lambda _label: None)
         self.attention: Callable[[dict], None] = lambda _record: None
+        self.on_unsupported: Callable[[dict], None] = lambda _record: None
         self.after_pump: Callable[[], None] = lambda: None
         os.set_blocking(process.stdin.fileno(), False)
         threading.Thread(target=self._read, daemon=True).start()
@@ -707,8 +708,12 @@ class NativeConnection:
                 }})
                 return
             # Anything else (browser, official-MCP auth, future methods): the
-            # documented unsupported-method refusal, recorded as attention.
-            self.attention_request(message, outcome="refused-with-jsonrpc-error")
+            # documented unsupported-method refusal, unchanged in its answer.
+            # No Host answer exists for these — credentials are the user's and
+            # the blackboard provides no browser (ADR-030) — so the refusal is
+            # counted as evidence and never becomes attention that would block
+            # the turn's completion.
+            self.unsupported_request(message)
             self.send({"id": message["id"], "error": {"code": -32601, "message": "This Buddy execution requires a structured attention outcome"}})
             return
         if "id" in message:
@@ -744,6 +749,19 @@ class NativeConnection:
             "hostAction": "no interactive Host is attached; the turn must report assistance or attention in its own structured outcome",
         }
         self.attention(record)
+
+    def unsupported_request(self, message: dict) -> None:
+        """Record one refused native request no Host answer exists for.
+
+        The refusal itself was already sent by the pump's caller; this keeps
+        only the method and time, as evidence rather than attention.
+        """
+        method = message.get("method")
+        self.on_unsupported({
+            "kind": "unsupported-native-request",
+            "method": method[:120] if isinstance(method, str) else "unknown",
+            "at": _now(),
+        })
 
     def call(self, method: str, params: dict) -> dict:
         request_id = self.next_id

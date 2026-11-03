@@ -212,7 +212,10 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         self.assertIs(outcome.result["processState"]["shutdownConfirmed"], True)
         self.assertIn("nativeAttention", outcome.result)
         self.assertIn("inquiry", outcome.result)
-        self.assertEqual(outcome.result["nativeAttention"]["requests"], 3)
+        # The permission request and the question need attention; the browser
+        # request in the same turn is counted as unsupported evidence instead.
+        self.assertEqual(outcome.result["nativeAttention"]["requests"], 2)
+        self.assertEqual(outcome.result["unsupportedNativeRequests"], 1)
         self.assertEqual(outcome.result["nativeAttention"], original.result["nativeAttention"])
         self.assertEqual(outcome.result["inquiry"], original.result["inquiry"])
         self.assertIs(outcome.result["attentionRequired"], True)
@@ -270,7 +273,8 @@ class WorkerRegisteredRunTests(ZcodeFixtureCase):
         context = self.context("attention")
         handle, original = self.execute(context)
         self.assertEqual(original.status, "ok", original.to_report())
-        self.assertEqual(original.result["nativeAttention"]["requests"], 3)
+        self.assertEqual(original.result["nativeAttention"]["requests"], 2)
+        self.assertEqual(original.result["unsupportedNativeRequests"], 1)
         with mock.patch.object(handle, "shutdown_confirmed", return_value=False), \
                 mock.patch.object(turn_io, "seal_workspace", side_effect=AssertionError("unconfirmed seal")):
             refused = self.adapter.collect(handle, context)

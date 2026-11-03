@@ -1089,16 +1089,30 @@ class NoToolReverseRequestTests(unittest.TestCase):
         connection = native_run.NativeConnection(process, time.monotonic() + 10, threading.Event(), runtime_preferences=FALLBACK_PREFERENCES)
         for no_tools in (False, True):
             with self.subTest(no_tools=no_tools):
-                recorded = []
+                denied = []
+                unsupported = []
                 connection.no_tools = no_tools
-                connection.attention = recorded.append
+                connection.attention = denied.append
+                connection.on_unsupported = unsupported.append
                 connection.send = mock.Mock()
                 connection.messages.put({"id": 7, "method": "interaction/requestProviderRuntimeHeaders",
                                          "params": {"sessionId": "s", "providerId": "fixture-account"}})
                 connection.pump()
-                self.assertEqual(recorded[0]["method"], "interaction/requestProviderRuntimeHeaders")
-                self.assertEqual(recorded[0]["outcome"], "refused-with-jsonrpc-error")
                 self.assertEqual(connection.send.call_args.args[0]["error"]["code"], -32601)
+                if no_tools:
+                    # A no-tool call can grant nothing: every interaction is a
+                    # denied interaction the role stops the call over.
+                    self.assertEqual(denied[0]["method"], "interaction/requestProviderRuntimeHeaders")
+                    self.assertEqual(denied[0]["outcome"], "refused-with-jsonrpc-error")
+                    self.assertEqual(unsupported, [])
+                else:
+                    # A tool-enabled turn answers the same refusal the same way,
+                    # but as unsupported evidence: no Host answer exists for
+                    # provider headers, so the request never needs attention.
+                    self.assertEqual(denied, [])
+                    self.assertEqual(unsupported[0]["kind"], "unsupported-native-request")
+                    self.assertEqual(unsupported[0]["method"], "interaction/requestProviderRuntimeHeaders")
+                    self.assertIn("at", unsupported[0])
 
 
 class ProducerContractTests(NativeRunCase):

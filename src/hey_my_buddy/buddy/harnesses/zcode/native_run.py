@@ -460,6 +460,7 @@ class _RunFacts:
         self.unknown_counts: dict[str, int] = {}
         self.markers = 0
         self.denied: list[dict] = []
+        self.unsupported: list[dict] = []
 
     def note_unknown(self, label: object) -> None:
         fold_unknown_events(self.unknown_counts, unknown_event_name(label))
@@ -1070,6 +1071,12 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             outcome.attention_recorder.record(record_item)
             feedback_due[0] = True
 
+        def unsupported_sink(record_item: dict) -> None:
+            # The pump has already answered the request itself. No Host answer
+            # exists for these methods, so the refusal is evidence only: no
+            # attention record, no finish-tool block and no observer feedback.
+            facts.unsupported.append(record_item)
+
         def dispatch_feedback() -> None:
             # NativeConnection invokes this after every pump step, including the
             # steps inside RPC reply waits. Its reverse-request refusal is already
@@ -1091,6 +1098,7 @@ def _run(request: RunRequest, *, services: Any, no_tool: bool, completion_carrie
             connection = spawn.connection
             connection.on_unknown = unknown_sink
             connection.attention = attention_sink
+            connection.on_unsupported = unsupported_sink
             connection.after_pump = dispatch_feedback
             connection.call("runtime/capabilities", {})
             workspace = {"workspacePath": request.cwd, "workspaceKey": request.cwd}
@@ -1532,6 +1540,14 @@ def _evidence_refs(*, invocation_root: Path, stderr_path: Path, state: _RunState
         # stay as their clearly-sourced evidence reference; the common result
         # carries the method/action/reason triple.
         retain("denied-interactions", "denied-interactions.json", {"records": facts.denied})
+    if facts.unsupported:
+        # Refused requests no Host answer exists for keep each method and time
+        # as their own private evidence; the count alone reaches the receipt
+        # through the native-observations reference the role already reads.
+        retain("unsupported-native-requests", "unsupported-native-requests.json",
+               {"records": facts.unsupported})
+        retain("native-observations", "native-observations.json",
+               {"unsupportedNativeRequests": len(facts.unsupported)})
     if native_path(stderr_path).is_file():
         raw_stderr = read_bytes(stderr_path)
         refs.append(EvidenceRef(kind="native-stderr", location=str(stderr_path),
