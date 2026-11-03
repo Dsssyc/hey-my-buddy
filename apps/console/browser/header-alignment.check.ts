@@ -51,7 +51,7 @@ for (const width of [1440, 390]) test(`header baselines and content width ${widt
   await mkdir(captures, { recursive: true });
   await page.screenshot({ path: `${captures}/after-${width}-header.png` });
   expect(id.factHeight).toBe(20);
-  expect(id.height).toBe(20);
+  expect(id.height).toBeGreaterThanOrEqual(24);
   expect(Math.abs(id.labelBaseline! - id.valueBaseline)).toBeLessThanOrEqual(1);
   expect(id.neighbours.length).toBeGreaterThan(0);
   for (const y of id.neighbours) expect(Math.abs(y - id.valueBaseline)).toBeLessThanOrEqual(1);

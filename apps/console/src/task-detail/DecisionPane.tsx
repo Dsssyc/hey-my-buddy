@@ -8,6 +8,7 @@ import { Facts, Fold, Lines, LinkButton, Moment, Pane, PaneTitle } from "./parts
 import { Quote } from "./thread";
 import type { Step } from "./steps";
 import type { AuditRequest, CompactRequest, Context, OpenRequest } from "./types";
+import { InputFailureFacts } from "./InputFailureFacts";
 
 type Known = (OpenRequest | AuditRequest) & { decision?: AuditRequest["decision"]; decisionId?: string | null };
 
@@ -47,6 +48,9 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
   const basis = currentBoundary?.basis ?? (entry ? ctx.bases[entry.decisionId] : null);
   const title = t(step.kind === "continue" ? "step.continue" : "step.decision");
   const decisionNote = step.kind === "decision" && full && "decision" in full ? full.decision?.note : null;
+  const currentRequest = requestId !== null && requestId === workflow.activeRequest?.requestId;
+  const inputFailure = full?.inputFailure ?? compact?.inputFailure ?? (currentRequest ? ctx.view.inputFailure : undefined);
+  const reason = full?.reason ?? compact?.reason ?? (currentRequest ? ctx.view.requestReason : null);
   return <Pane title={
     <PaneTitle title={title} state={open ? wait : decided && step.kind !== "continue" ? t(`decision.state.${decided.state}`, { defaultValue: decided.state }) : undefined} tone={open ? "hand" : "past"}>
       {who && <span>{actorText(who)}</span>}
@@ -56,7 +60,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
       {request && <Quote>
         <p data-slot="request-kind" className="mb-1 text-xs text-ink3">{t(`decision.kind.${kindKey(request)}`)}</p>
         {full ? <>
-          <Fold text={full.reason ? reasonText(full.reason) : full.summary ?? t("unrecorded")} />
+          {inputFailure ? <InputFailureFacts failure={inputFailure} /> : <Fold text={reason ? reasonText(reason) : full.summary ?? t("unrecorded")} />}
           <div className="mt-2"><Facts items={[
             ...(full.attempted ? [[t("decision.attempted"), <Fold key="attempted" text={full.attempted} />] as [string, ReactNode]] : []),
             ...(full.neededWork.length ? [[t("decision.needed"), <Lines key="needed" items={full.neededWork} />] as [string, ReactNode]] : []),
@@ -66,7 +70,7 @@ export function DecisionPane({ step, ctx }: { step: Step; ctx: Context }) {
           {full.childTaskId && <p className="mt-2"><LinkButton onClick={() => ctx.open(full.childTaskId!)}>{t("decision.child")}</LinkButton></p>}
           {more > 0 && <p className="mt-2 text-xs text-ink3">{t("decision.more", { n: more })}</p>}
           {full.preparationError && <p className="mt-2 text-fail"><code className="font-mono text-xs">{full.preparationError.code}</code> · {full.preparationError.message}</p>}
-        </> : <p className="text-ink3">{audit ? t("unrecorded") : t("loading")}</p>}
+        </> : inputFailure ? <InputFailureFacts failure={inputFailure} /> : <p className="text-ink3">{reason ? reasonText(reason) : audit ? t("unrecorded") : t("loading")}</p>}
         {basis && <BasisFold basis={basis} />}
         {entry?.source && entry.source !== "model-selection" && <p className="mt-2 text-xs text-ink3">{t(`routing.sources.${entry.source}`, { defaultValue: entry.source })}</p>}
       </Quote>}

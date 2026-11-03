@@ -3,6 +3,7 @@ import { ApiError } from "../api";
 import { parseActor } from "../actor";
 import { isReason } from "../reason";
 import type { Reason } from "../reason";
+import { parseInputFailure } from "./input-failure";
 import type { ActivityPhase, Actor, RoutingMode, Task, TokenUsage } from "../types";
 import type {
   Activity, Artifact, Attempt, Audit, AuditRequest, Basis, Buddy, CompactRequest, Continuation, CumulativePatch, Ending,
@@ -125,6 +126,7 @@ function parseTurn(value: unknown): Turn {
     buddy: parseBuddy(turn.buddy, "turn.buddy"),
     routing: routing && { decisionId: strOrNull(routing.decisionId, "turn.routing"), buddyRevision: int(routing.buddyRevision, "turn.routing") },
     tokenUsage: parseTokenUsage(turn.tokenUsage),
+    inputFailure: parseInputFailure(turn.inputFailure, "turn.inputFailure"),
     ...(failure ? { providerRejection: { code: oneOf(failure.code, ["quota-exceeded", "rate-limited", "overloaded"] as const, "turn.providerRejection") } } : {}),
   };
 }
@@ -138,6 +140,8 @@ function parseResultTurn(value: unknown): ResultTurn {
 function parseCompactRequest(value: unknown): CompactRequest {
   const request = rec(value, "request");
   return {
+    reason: reasonOrNull(request.reason, "request.reason"),
+    inputFailure: parseInputFailure(request.inputFailure, "request.inputFailure"),
     requestId: str(request.requestId, "request.requestId"), kind: str(request.kind, "request.kind"),
     state: str(request.state, "request.state"), createdAt: str(request.createdAt, "request.createdAt"),
     decidedAt: strOrNull(request.decidedAt, "request.decidedAt"),
@@ -516,6 +520,8 @@ export function parseTask(value: unknown, runId: string): TaskView {
   for (const key of ["hostId", "title", "macroTaskId"]) strOrNull(workflow[key], `task.workflow.${key}`);
   return {
     task: task as unknown as Task, updatedAt: task.updatedAt as string, acceptanceNote: strOrNull(task.acceptanceNote, "task.acceptanceNote"), attempt: parseAttempt(task),
+    inputFailure: parseInputFailure(task.inputFailure, "task.inputFailure"),
+    requestReason: reasonOrNull(workflow.requestReason, "task.workflow.requestReason"),
     lead: (lineage.rootLeadRunId ?? null) !== null,
   };
 }

@@ -115,7 +115,7 @@ describe("macro task navigation", () => {
     await f.user.click(screen.getByRole("button", { name: "收起宏任务列表" }));
     expect(screen.queryByRole("region", { name: "宏任务列表" })).toBeNull();
     await f.user.click(screen.getByRole("button", { name: "展开宏任务列表" }));
-    expect(screen.getByRole("region", { name: "宏任务列表" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "宏任务列表" })).toBeTruthy();
   });
 
   it("ignores the retired micro task list preference", async () => {

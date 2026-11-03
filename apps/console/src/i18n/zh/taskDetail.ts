@@ -72,6 +72,14 @@ export default {
     "service-stop": "服务停止", "unknown-stop": "停止（发起者未知）", deadline: "Router 超出时限", "harness-error": "Harness 错误",
     "transport-error": "传输故障", "workspace-error": "工作区错误", completed: "正常完成", wrapUpLead: "Lead 有序收尾完成",
   },
+  inputFailure: {
+    name: "输入拒收", stage: { preflight: "本地核对拒收", "native-admission": "原生拒收" },
+    harness: "Harness", limit: "声明上限", unknownLimit: "未取得数值", measured: "实际输入", total: "总量",
+    observedLimit: "原生报告上限", observedTotal: "原生报告总量", nativeChars: "字符（原生计数）",
+    unit: { "unicode-scalars": "Unicode 标量", "utf-8-bytes": "UTF-8 字节" },
+    part: { role: "角色", task: "任务", hostInput: "Host 输入", context: "上下文", delivery: "交付", format: "格式" },
+    sent: "已发送原生请求", started: "模型已开始", yes: "是", no: "否",
+  },
   providerRejection: { "overloaded": "模型服务满载", "quota-exceeded": "额度耗尽", "rate-limited": "原生服务限流" },
   seal: {
     name: "封存", commit: "提交", files: "文件 {{n}}", id: "产物 ID", sha: "SHA-256", diff: "差异", note: "标注",

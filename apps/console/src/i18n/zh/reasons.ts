@@ -1,4 +1,5 @@
 export default {
+  "workflow.input-rejected": "{{harness}} 拒收输入。",
   "checkout.process-blockers": "正在使用此检出的进程：{{processes}}。首次执行后启动且工作目录读不到的进程：{{unreadableProcesses}}。",
   "checkout.process-scan-failed": "未能完整检查进程的工作目录；观察恢复后可重试删除。",
   "ANCESTOR_TERMINAL": "上级微任务已结束。",

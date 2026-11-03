@@ -269,7 +269,8 @@ async function assertHeaderGeometry(page: Page) {
   const header = page.locator("[data-slot=macro-overview-header]");
   await expect(header).toBeVisible();
   await expectNoSidewaysScroll(page);
-  const clipped = await header.evaluate(node => [...node.querySelectorAll<HTMLElement>("dt, dd, button")]
+  // The identifier's hit area extends beyond its 20px fact row; measure its text for clipping.
+  const clipped = await header.evaluate(node => [...node.querySelectorAll<HTMLElement>("dt, dd:not(:has([data-slot=copyable-identifier])), button, [data-slot=copyable-identifier] > span")]
     .filter(element => !element.closest('[data-slot="macro-goal-fact"]') && element.getClientRects().length && (element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1))
     .map(element => element.textContent?.trim().slice(0, 40)));
   expect(clipped, "macro header text is clipped").toEqual([]);

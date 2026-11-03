@@ -22,14 +22,14 @@ for (const { locale, width, theme } of [
     await expect(entry).toBeVisible();
     await expect(entry.locator('[data-slot="state-mark"]')).toHaveAttribute("data-kind", "hand");
     await expect(entry.locator("[data-slot=macro-entry-counts]")).toHaveCount(0);
-    await expect(page.getByRole("link", { name: zh ? /^任务 5 / : /^Tasks 5 / })).toBeVisible();
+    await expect(page.getByRole("link", { name: zh ? /^任务 7 / : /^Tasks 7 / })).toBeVisible();
     await settle(page);
     await page.screenshot({ path: `${captures}/${name}-list.png`, animations: "disabled" });
 
     await entry.click();
     const header = page.locator("[data-slot=macro-overview-header]");
     const host = header.locator("[data-slot=macro-overview-count-host]");
-    await expect(host.locator("dd")).toHaveText("2");
+    await expect(host.locator("dd")).toHaveText("4");
     await expect(host.locator("dt")).toHaveText(zh ? "等待 Host" : "Waiting for Host");
     await expect(host.locator('[data-kind="hand"]')).toHaveCount(1);
     await expect(header.locator("[data-slot=macro-overview-count-failed] dd")).toHaveText("1");

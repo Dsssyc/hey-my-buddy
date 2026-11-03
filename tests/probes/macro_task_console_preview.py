@@ -204,7 +204,8 @@ EMIT_LAYOUT = {
                "workflow-preview-run-b6.json", "workflow-preview-run-b7.json", "workflow-preview-run-b8.json",
                "workflow-preview-run-b9.json", "workflow-preview-run-d1.json", "workflow-preview-run-d2.json",
                "workflow-preview-run-d3.json", "workflow-preview-run-d4.json",
-               "workflow-preview-run-d5-h1.json", "workflow-preview-run-d5-h2.json", "workflow-preview-run-d5.json"),
+               "workflow-preview-run-d5-h1.json", "workflow-preview-run-d5-h2.json", "workflow-preview-run-d5.json",
+               "workflow-preview-run-input-native.json", "workflow-preview-run-input-preflight.json"),
     "truncated": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "error": ("console.json", "macro-tasks.json", "timeline-macro-a.json", "workflow-preview-run-a1.json"),
     "incompatible": ("snapshot-legacy-single-router.json", "snapshot-missing-session.json",
@@ -627,6 +628,51 @@ def continuation(continuation_id: str, attempt_id: str, text: str, *, request_id
             "note": note, "helperPolicy": "none", "helperOutcomes": [], "input": text,
             "expectedRevision": 3, "attemptId": attempt_id, "turnId": f"turn-{attempt_id}",
             "createdAt": created, "consumedAt": created}
+
+
+def input_rejection_runs() -> list[dict]:
+    """Two model-free input failures, frozen at local and native admission."""
+    entries = []
+    for suffix, known, buddy in (("input-preflight", True, CFG_CODEX), ("input-native", False, CFG_CLAUDE)):
+        form = "cli-app-server" if known else "cli-stream-json"
+        limit = {"state": "known" if known else "unknown", "form": form,
+                 "scope": "turn-start-text", "source": "synthetic-preview-declaration"}
+        sizes = {"role": 1000, "task": 1000000, "hostInput": 20000,
+                 "context": 26000, "delivery": 1000, "format": 577}
+        measured = {"unit": "unicode-scalars", "total": sum(sizes.values()), "parts": sizes}
+        if known:
+            limit.update(value=1048576, unit="unicode-scalars", versions=["synthetic-1.0"])
+        else:
+            limit["note"] = "Synthetic declaration has no numeric limit."
+            measured.update(utf8Bytes=sum(sizes.values()) * 2,
+                            utf8Parts={key: size * 2 for key, size in sizes.items()})
+        failure = {"version": 1, "stage": "preflight" if known else "native-admission",
+                   "harness": {"name": buddy["harness"], "form": form, "version": "synthetic-1.0"},
+                   "limit": limit, "measurement": measured,
+                   "nativeRequestSent": not known, "modelStarted": False}
+        if not known:
+            failure.update(nativeMethod="synthetic/admit", nativeCode="input_too_large",
+                           max_chars=1000000, actual_chars=1048577, message="Synthetic input rejection.")
+        run_id, attempt_id, request_id = f"preview-run-{suffix}", f"att-{suffix}", f"req-{suffix}"
+        explanation = reason("workflow.input-rejected", harness=buddy["harness"])
+        title = "本地核对拒收输入" if known else "原生拒收输入（声明上限未知）"
+        entries.append(run(run_id, project="alpha", group=MACRO_C, title=title, title_source="title",
+            task_text="合成输入拒收：核对声明、实际总量与六个部分。", created=instant(1, 40), updated=instant(1, 42),
+            state="awaiting-host", status="failed", category="host", buddy=buddy, result=True,
+            active_request={"requestId": request_id, "kind": "attention", "routing": False, "state": "open",
+                            "summary": "Synthetic input rejection", "reason": explanation, "inputFailure": failure,
+                            "attempted": None, "neededWork": [], "expectedArtifacts": [], "acceptance": None,
+                            "childTaskId": None, "createdAt": instant(1, 42), "decidedAt": None},
+            attempts=[attempt(attempt_id, 1, "finished", True, instant(1, 41), instant(1, 42), buddy,
+                              error="Synthetic input rejection", disposition="attention", result_status="failed",
+                              result={"code": "HARNESS_INPUT_REJECTED", "inputFailure": failure})],
+            spans=[span(f"execution:{attempt_id}", "execution", instant(1, 41), instant(1, 42), "finished",
+                        attempt_id=attempt_id, buddy=buddy, confirmed=True, generation=1, turn_index=1,
+                        result_status="failed", error="Synthetic input rejection"),
+                   span(f"host:{request_id}", "host", instant(1, 42), None, "open", request_id=request_id,
+                        request_kind="attention", summary="Synthetic input rejection")],
+            markers=[marker(instant(1, 40), "dispatch", actor=host_actor(HOST_A))]))
+    return entries
 
 
 def build_runs() -> dict[str, dict]:
@@ -1171,6 +1217,7 @@ def build_runs() -> dict[str, dict]:
             markers=[marker(instant(1, 18), "dispatch", actor=host_actor(HOST_A)),
                      marker(instant(1, 24), "conclude", actor=host_actor(HOST_A), state="failed")]),
     ]
+    runs.extend(input_rejection_runs())
     # An accepted ordinary root does not leave terminal helpers for the Host.
     runs.extend([
         run("preview-run-d5", project="alpha", group=MACRO_C, title="已验收的根与终态 helper", title_source="title",
@@ -1890,6 +1937,8 @@ def task_view(entry: dict) -> dict:
                      "attemptId": selected["attemptId"], "resultDelivered": True})
         if "providerRejection" in receipt["result"]:
             view["providerRejection"] = receipt["result"]["providerRejection"]
+        if "inputFailure" in receipt["result"]:
+            view["inputFailure"] = receipt["result"]["inputFailure"]
     return view
 
 
@@ -1903,6 +1952,7 @@ def workflow_extension(entry: dict) -> dict:
     if entry["activeRequest"]:
         extension["requestKind"] = entry["activeRequest"]["kind"]
         extension["requestSummary"] = entry["activeRequest"]["summary"]
+        extension["requestReason"] = entry["activeRequest"]["reason"]
         extension["requestRouting"] = entry["activeRequest"]["routing"]
     return extension
 
@@ -1924,6 +1974,8 @@ def turn_view(entry: dict, item: dict) -> dict:
         # Each turn keeps its own per-attempt usage record; never a
         # session-cumulative number.
         "tokenUsage": item["usage"],
+        **({"inputFailure": item["result"]["result"]["inputFailure"]}
+           if item["result"] is not None and "inputFailure" in item["result"]["result"] else {}),
     }
 
 
@@ -1999,7 +2051,8 @@ def workflow_view(entry: dict) -> dict:
                          "remaining": []} if turns else None),
         "activeRequest": entry["activeRequest"],
         "requests": [{key: record[key] for key in ("requestId", "kind", "state", "createdAt", "decidedAt",
-                                                       "childTaskId", "routing", "reason")}
+                                                       "childTaskId", "routing", "reason") if key in record}
+                     | ({"inputFailure": record["inputFailure"]} if "inputFailure" in record else {})
                      for record in request_records(entry)],
         "delegationAuthority": entry["delegationAuthority"],
         "counts": {"turns": len(turns),
@@ -3731,7 +3784,8 @@ def emit_fixture_files() -> list[dict]:
                             "preview-run-b2", "preview-run-b3", "preview-run-b4", "preview-run-b5",
                             "preview-run-b6", "preview-run-b7", "preview-run-b8", "preview-run-b9", "preview-run-b10",
                             "preview-run-d1", "preview-run-d2", "preview-run-d3", "preview-run-d4",
-                            "preview-run-d5", "preview-run-d5-h1", "preview-run-d5-h2"),
+                            "preview-run-d5", "preview-run-d5-h1", "preview-run-d5-h2",
+                            "preview-run-input-native", "preview-run-input-preflight"),
                  "truncated": ("preview-run-a1",),
                  "error": ("preview-run-a1",)}
     for scenario in EMIT_SCENARIOS:
