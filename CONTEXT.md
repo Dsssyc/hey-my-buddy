@@ -152,6 +152,14 @@ _Avoid_: BYOK, API 密钥 / API key (as a way of paying: a key can belong to a s
 A provider declining to serve a turn, as the harness reports it in a structured code. It is one of three kinds: 额度耗尽 / quota used up, which puts the provider into cooling; 限流 / rate limited; and 满载 / overloaded, when the provider has no room for that model service at the moment. An authentication failure is not a provider rejection, and neither is an error the harness reports only as text.
 _Avoid_: quota failure (for the whole: quota is one kind), refusal (for a provider's; the blackboard and the Router refuse requests)
 
+**输入上限 / input limit**:
+How large an initial input one harness accepts in one native request, counted the harness's own way, as its adapter declares it: 已知 / known, with a value, a unit and the harness form and versions it was verified on, or 未知 / unknown, when no value was found, which does not mean unlimited.
+_Avoid_: context window, token budget (those belong to a model, not to a harness)
+
+**输入拒收 / input rejection**:
+A turn that does not start, or that its harness refuses, because its initial input is too large. 本地核对拒收 / rejected by local preflight: the blackboard measured the assembled prompt against a known input limit and did not start the native turn. 原生拒收 / rejected by native admission: the harness refused the input with a structured code saying it was too large. Either way the micro task stops at the Host boundary with the sizes of the prompt's parts. An input rejection is not a provider rejection.
+_Avoid_: input too long, overflow
+
 **冷却 / cooling**:
 The time a provider of one harness sits out automatic routing after a provider rejection for quota. It grows with consecutive rejections, ends by itself or when the user clears it, and a later success ends the sequence. It belongs to the provider in that harness, not to a model or a buddy, and never changes the user's enablement or preferences.
 _Avoid_: 额度耗尽 / exhausted (for the provider's state; a rejection that interrupts a turn is still reported as quota used up), quota window
