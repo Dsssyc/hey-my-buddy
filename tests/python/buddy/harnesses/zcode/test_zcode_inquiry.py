@@ -877,13 +877,42 @@ class ZcodeInquiryIntegrationTests(ZcodeFixtureCase):
         self.assertEqual(responses["permission"]["result"]["decision"], "deny")
         self.assertEqual(responses["userInput"]["result"]["action"], "decline")
         self.assertEqual(responses["unknown"]["error"]["code"], -32601)
-        self.assertEqual(outcome.result["nativeAttention"]["requests"], 3)
-        self.assertEqual(outcome.result["nativeAttention"]["last"]["method"], "interaction/browserExecute")
+        # Only the Host-answerable refusals need attention: the permission
+        # request and the question. The browser request is counted as
+        # unsupported evidence instead and never blocks the turn by itself.
+        self.assertEqual(outcome.result["nativeAttention"]["requests"], 2)
+        self.assertEqual(outcome.result["nativeAttention"]["last"]["method"], "interaction/requestUserInput")
+        self.assertEqual(outcome.result["unsupportedNativeRequests"], 1)
         self.assertTrue(outcome.result["attentionRequired"])
         # The refused native request reaches the workflow as a real attention
         # outcome, not as a stored sidecar next to a completed turn.
         self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "attention")
         self.assertTrue(any(item["kind"] == "native-attention" for item in outcome.artifacts), outcome.artifacts)
+
+    def test_unsupported_native_requests_are_evidence_and_never_block_completion(self):
+        context = self.context("unsupported-requests", timeout=30)
+        handle, outcome = self.execute(context)
+        self.assertEqual(outcome.status, "ok", outcome.to_report())
+        responses = json.loads(self.native_log(context, "interaction-responses.json"))
+        self.assertEqual(responses["auth"]["error"]["code"], -32601)
+        self.assertEqual(responses["browser"]["error"]["code"], -32601)
+        # No Host answer exists for either request: the refusals are counted as
+        # evidence, and the turn's completed delivery stands.
+        self.assertEqual(outcome.result["unsupportedNativeRequests"], 2)
+        self.assertFalse(outcome.result["attentionRequired"])
+        self.assertEqual(outcome.result["turn"]["outcome"]["disposition"], "completed")
+        # The private evidence keeps each refused method and time for Host
+        # review, and the count reaches the receipt through its own reference.
+        records = json.loads(native_path(Path(next(
+            ref.location for ref in handle.result.evidence_refs
+            if ref.kind == "unsupported-native-requests"))).read_text(encoding="utf-8"))["records"]
+        self.assertEqual([record["method"] for record in records],
+                         ["interaction/requestOfficialMcpAuthHeaders", "interaction/browserList"])
+        self.assertTrue(all(record["at"] for record in records))
+        observations = json.loads(native_path(Path(next(
+            ref.location for ref in handle.result.evidence_refs
+            if ref.kind == "native-observations"))).read_text(encoding="utf-8"))
+        self.assertEqual(observations, {"unsupportedNativeRequests": 2})
 
     def test_a_completed_receipt_cannot_hide_a_refused_native_request(self):
         context = self.context("attention-after-finish", timeout=30)
