@@ -214,7 +214,7 @@ W3a 补 accepted/concluded 且无文件/无待执行物理动作、无 turn 的 
 
 ## 续派准备与 Git 观察
 
-续派复用当前物理检出，保留 path、project、reservation 与 owner fencing。先按 _latest_handoff 的原语义选择同一检出可交接的最近封存，固定 artifactId 与 snapshotSha256；它可能来自父任务、Host resolution 或 helper 移交，不改成只看本 run 最后一个 output。准备意图只含 seal 规则，准备时验证封存的 task/attempt、输入绑定、固定 Git ref/tree/patch，临时读 includedUntracked；路径不进入请求或新 turn input。
+续派复用当前物理检出，保留 path、project、reservation 与 owner fencing。先按 _latest_handoff 的原语义选择同一检出可交接的最近封存，固定 artifactId 与 snapshotSha256；它可能来自父任务、Host resolution 或 helper 移交，不改成只看本 run 最后一个 output。准备意图只含 seal 规则，准备时验证封存的 task/attempt、输入绑定、封存的 commit、tree 与 patch，临时读 includedUntracked；输出 ref 只是保留对象的指针，续派不读它，缺失或指向别处都不挡续派，回收与删除照旧把它当作证明不了（2026-11-04 Host 改定，保留“清掉引用之后回合与验收照常、回收停下”的既有保证）；路径不进入请求或新 turn input。
 
 没有封存且允许恢复已停止失败回合时，用 recovery 规则选择写入范围内的非忽略未跟踪文件；不能把恢复的文件名单当新的 Host 显式 includeUntracked，也不套 256 条提交上限。未解决越界冲突仍阻止准备。只换权限而没有新封存时保留原来的有界选择规则；初次 worktree 的输入由冻结树物化，没有 executionSelection。新 inputTree 的实际内容仍须符合交接基线，规则不是吸收封存后任意修改的授权。
 
