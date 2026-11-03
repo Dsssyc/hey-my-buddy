@@ -311,6 +311,21 @@ class FailoverTests(RouterDispatchTestCase):
         self.assertEqual(self.outcomes()[0][0], "router.answered")
         self.assertEqual(len(self.tasks()), 1)
 
+    def test_answered_routing_usage_lands_normalized_in_the_immutable_receipt(self):
+        request, first = self.start()
+        output = self.answer(first, buddy_id=B)
+        output["tokenUsage"] = {"inputTokens": 10, "outputTokens": 2}
+        done = self.report(first, output)
+        self.assertEqual(done["decision"]["status"], "completed")
+        with self.board_.store.db.read() as db:
+            receipt = json.loads(db.execute("SELECT result_json FROM attempts WHERE attempt_id=?",
+                                            (first["attempt"]["attemptId"],)).fetchone()[0])
+        self.assertEqual(receipt["result"]["tokenUsage"], {
+            "version": 1, "inputTokens": 10, "cachedInputTokens": None, "outputTokens": 2,
+            "inputBasis": "includes-cached", "source": "unknown", "scope": "attempt",
+            "completeness": "unknown", "nativeRecords": 1})
+        self.assertEqual({**output, "tokenUsage": receipt["result"]["tokenUsage"]}, receipt["result"])
+
     def test_invalid_null_buddy_does_not_count_as_abstention(self):
         request, first = self.start()
         output = self.answer(first, buddy_id=None)
