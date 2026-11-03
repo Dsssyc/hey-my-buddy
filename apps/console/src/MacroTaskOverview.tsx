@@ -68,7 +68,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
           {timeline?.macroTask.goal && <MacroTaskGoal key={shown.macroTaskId} macroTaskId={shown.macroTaskId} goal={timeline.macroTask.goal} readGoals={readGoals} active={active}/>}
         </div>
       </div>
-        <dl data-slot="macro-overview-facts" className="mt-1.5 flex flex-wrap items-center @min-[761px]:col-span-2 @min-[761px]:row-start-2 @min-[761px]:mt-0 gap-x-5 gap-y-0.5 text-xs leading-5 tabular-nums">
+        <dl data-slot="macro-overview-facts" className="mt-1.5 flex flex-wrap items-baseline @min-[761px]:col-span-2 @min-[761px]:row-start-2 @min-[761px]:mt-0 gap-x-5 gap-y-0.5 text-xs leading-5 tabular-nums">
           <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("project")}</dt><dd className="min-w-0 wrap-anywhere text-ink">{shown.project?.label ?? t("unrecorded")}</dd></div>
           <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("host")}</dt><dd className="min-w-0 wrap-anywhere text-ink">{shown.sourceHostId ?? t("unrecorded")}</dd></div>
           <div className="flex gap-1.5"><dt className="shrink-0 text-ink3">{t("elapsed")}</dt><dd><Popover key={shown.macroTaskId} open={active && statsOpen} onOpenChange={setStatsOpen}>
@@ -102,7 +102,7 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
               </div>
             </PopoverContent>
           </Popover></dd></div>
-          <div className="flex min-w-0 gap-1.5"><dt className="shrink-0 text-ink3">{t("identifier")}</dt><dd className="min-w-0"><CopyableIdentifier key={shown.macroTaskId} value={shown.macroTaskId}/></dd></div>
+          <div className="flex min-w-0 items-baseline gap-1.5"><dt className="shrink-0 text-ink3">{t("identifier")}</dt><dd className="min-w-0"><CopyableIdentifier key={shown.macroTaskId} value={shown.macroTaskId}/></dd></div>
         </dl>
     </div>
     <div className="flex min-w-0 shrink-0 items-start gap-4 @min-[761px]:col-start-2 @min-[761px]:row-start-1 @max-[761px]:w-full @max-[761px]:items-center @min-[761px]:gap-10">

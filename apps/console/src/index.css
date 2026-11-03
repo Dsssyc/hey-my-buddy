@@ -163,12 +163,14 @@
   initial-value: 1;
 }
 .goal-card {
+  --goal-history-width: 0px;
   --goal-progress: 1;
   transition: --goal-progress 200ms ease-out;
   position: absolute;
   z-index: 45;
   left: 24px;
-  right: 24px;
+  width: calc(38 * 14.5px + 48px + 2px + var(--goal-history-width));
+  max-width: calc(100% - 48px);
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -182,6 +184,7 @@
   clip-path: inset(0 0 calc((100% - 2px) * (1 - var(--goal-progress))) 0 round var(--radius-overlay));
   transform: translateY(calc(var(--goal-start-y) * (1 - var(--goal-progress))));
 }
+.goal-card:has(.goal-scroll[data-history="true"]) { --goal-history-width: 220px; }
 .goal-card::after {
   content: "";
   position: absolute;
@@ -216,10 +219,11 @@
 .goal-version:hover, .goal-version[aria-pressed="true"] { color: var(--ink); background: var(--selected-row); }
 .goal-version:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
 @container (width < 600px) {
+  .goal-card:has(.goal-scroll[data-history="true"]) { --goal-history-width: 110px; }
   .goal-scroll[data-history="true"] { grid-template-columns: minmax(0, 1fr) 110px; }
   .goal-history { padding-left: 12px; padding-right: 12px; }
 }
-@container (width < 480px) { .goal-card { left: 12px; right: 12px; } }
+@container (width < 480px) { .goal-card { left: 12px; max-width: calc(100% - 24px); } }
 @media (prefers-reduced-motion: reduce) {
   .goal-card[data-state] { animation: none; transition: none; }
   .goal-version { transition: none; }

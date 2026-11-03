@@ -26,7 +26,7 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
   const [error, setError] = useState("");
   const [geometry, setGeometry] = useState<CSSProperties>({});
   const trigger = useRef<HTMLButtonElement>(null);
-  const content = useRef<HTMLDivElement>(null);
+  const [content, setContent] = useState<HTMLDivElement | null>(null);
   useEffect(() => { if (!active) setOpen(false); }, [active]);
   useEffect(() => {
     if (!open) return;
@@ -39,27 +39,30 @@ export function MacroTaskGoal({ macroTaskId, goal, readGoals, active }: {
   }, [open, macroTaskId, goal.revision, readGoals]);
   const selected = goals?.find(item => item.revision === revision) ?? goal;
   useLayoutEffect(() => {
-    if (!open) return;
-    const button = trigger.current!, header = button.closest("header")!;
+    if (!open || !content) return;
+    const card = content, button = trigger.current!, header = button.closest("header")!;
     function measure() {
       const anchor = button.getBoundingClientRect(), bounds = header.getBoundingClientRect();
+      const width = card.getBoundingClientRect().width;
       const inset = bounds.width < 480 ? 12 : 24;
       const top = anchor.bottom + 4;
-      setGeometry({ top: top - bounds.top, "--goal-top": `${top}px`, "--goal-left": `${Math.max(0, anchor.left - bounds.left - inset)}px`,
-        "--goal-right": `${Math.max(0, bounds.right - inset - anchor.right)}px`,
+      // Keep the trigger over the sheet even when a long title pushes it right.
+      const left = Math.max(inset, anchor.right - bounds.left - width);
+      setGeometry({ left, top: top - bounds.top, "--goal-top": `${top}px`, "--goal-left": `${Math.max(0, anchor.left - bounds.left - left)}px`,
+        "--goal-right": `${Math.max(0, left + width - (anchor.right - bounds.left))}px`,
         "--goal-start-y": `${anchor.bottom - top}px` } as CSSProperties);
     }
     measure();
-    const observer = new ResizeObserver(measure); observer.observe(header);
+    const observer = new ResizeObserver(measure); observer.observe(header); observer.observe(content);
     window.addEventListener("resize", measure);
     return () => { observer.disconnect(); window.removeEventListener("resize", measure); };
-  }, [open]);
+  }, [open, content]);
   return <Dialog.Root modal={false} open={open} onOpenChange={setOpen}>
     <Hint text={t("goalHint")}><Dialog.Trigger asChild>
       <Button ref={trigger} type="button" variant="ghost" size="icon-sm" data-slot="macro-goal-trigger" className="goal-trigger" aria-label={t("goalHint")}><Target aria-hidden="true"/></Button>
     </Dialog.Trigger></Hint>
-    <Dialog.Content ref={content} data-slot="macro-goal-card" style={geometry} className="goal-card" aria-describedby={undefined}
-      onOpenAutoFocus={event => { event.preventDefault(); content.current?.focus(); }}
+    <Dialog.Content ref={setContent} data-slot="macro-goal-card" style={geometry} className="goal-card" aria-describedby={undefined}
+      onOpenAutoFocus={event => { event.preventDefault(); (event.target as HTMLDivElement).focus(); }}
       onCloseAutoFocus={event => { event.preventDefault(); trigger.current?.focus(); }} tabIndex={-1}>
       <Dialog.Close asChild><Button variant="ghost" size="icon-sm" aria-label={t("goalClose")} className="goal-close"><X aria-hidden="true"/></Button></Dialog.Close>
       <div data-slot="macro-goal-scroll" className="goal-scroll" data-history={!!goals && goals.length > 1}>
