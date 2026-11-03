@@ -6683,7 +6683,7 @@ class WorkflowCoordinator:
 
     def _owned_turn_context(self, connection, run_id: str, previous) -> dict:
         cursor = self.board._head_of(connection)
-        previous_cursor = _turn_input_context(previous["input_json"]).get("ownedFactsCursor") if previous else None
+        previous_cursor = _turn_input_context(previous["input_json"])["ownedFactsCursor"] if previous else None
         total = connection.execute("SELECT COUNT(*) FROM workflow_lead_tasks WHERE lead_run_id=?", (run_id,)).fetchone()[0]
         rows = connection.execute(
             "SELECT r.*,t.request_id,t.state AS execution_state,t.queue_reason FROM workflow_lead_tasks l"

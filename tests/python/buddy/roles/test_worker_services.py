@@ -25,7 +25,7 @@ from pathlib import Path
 from hey_my_buddy.buddy.harnesses.session_receipts import sign_receipt
 from hey_my_buddy.buddy.roles import session_mcp, turn_io, worker_services
 from hey_my_buddy.install.runtime import resource_path
-from buddy.roles.test_role_prompts import real_turn_input, turn_input_without_snapshot
+from buddy.roles.test_role_prompts import real_turn_input, prompt_input
 
 IDENTITY = {"taskId": "task-1", "attemptId": "attempt-1", "generation": 1, "turnId": "turn-1"}
 OTHER_IDENTITY = {"taskId": "task-2", "attemptId": "attempt-9", "generation": 1, "turnId": "turn-9"}
@@ -157,7 +157,7 @@ class MicroTaskPromptTests(unittest.TestCase):
         self.assertIn("obtain one successful receipt from mcp__srv__hey_my_buddy_finish_turn", sections[2])
         self.assertIn("all six fields: disposition, summary, remaining, decisions, artifacts, request", sections[2])
         self.assertEqual(sections[-2], "task text")
-        self.assertEqual(sections[-1], turn_io.canonical_json(turn_input_without_snapshot(turn)))
+        self.assertEqual(sections[-1], turn_io.canonical_json(prompt_input(turn)))
         self.assertNotIn("Host inquiries arrive cooperatively", prompt, "no inquiry paragraph without both inquiry tools")
         self.assertLessEqual(len(prompt.encode()), 64 * 1024)
 

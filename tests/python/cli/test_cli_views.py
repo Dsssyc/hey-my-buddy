@@ -188,8 +188,14 @@ class CliViewTests(RealWorkspaceTestCase):
         data = Path(reference["path"]).read_bytes()
         self.assertEqual(hashlib.sha256(data).hexdigest(), reference["sha256"])
         manifest = json.loads(data)
-        self.assertEqual(len(manifest["snapshot"]["includedUntracked"]), 40)
-        self.assertEqual(len(manifest["snapshot"]["excludedUntracked"]), 40)
+        self.assertEqual(manifest["version"], 5)
+        self.assertEqual(set(workspace_module.input_untracked_paths(manifest)),
+                         {f"included-{index}.txt" for index in range(40)})
+        self.assertEqual(set(manifest["snapshot"]["excludedEntries"]),
+                         {f"excluded-{index}.txt" for index in range(40)})
+        for index in range(40):
+            self.assertEqual((Path(manifest["checkoutRoot"]) / f"included-{index}.txt").read_text(), "included")
+            self.assertFalse((Path(manifest["checkoutRoot"]) / f"excluded-{index}.txt").exists())
         claimed = self.claim(self.board_instance, run_id, request_id="manifest-claim")
         claim = claimed["claim"]
         seal = workspace_module.seal(self.directory, manifest, run_id, claim["attempt"]["attemptId"])
