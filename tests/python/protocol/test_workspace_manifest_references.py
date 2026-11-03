@@ -4,8 +4,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from hey_my_buddy.errors import BoardError
+from hey_my_buddy.protocol import workspace_manifest as references
 from hey_my_buddy.protocol.workspace_manifest import (
     artifact_manifest, manifest_ref, record_reference, resolve_manifest, resolve_record, turn_manifest,
 )
@@ -50,7 +52,9 @@ class WorkspaceManifestReferences(unittest.TestCase):
             file.write_bytes(_bytes(record))
             reference = record_reference(state, {**record, "cumulativePatch": {"path": "derived"}})
             self.assertFalse(Path(reference["recordFile"]["path"]).is_absolute())
-            self.assertEqual(resolve_record(state, reference), record)
+            with patch.object(references, "read_bytes", wraps=references.read_bytes) as reader:
+                self.assertEqual(resolve_record(state, reference), record)
+            self.assertEqual(reader.call_count, 1, "Reading one reference must not reopen its record")
             for malformed in ({}, {"manifestSha256": "not-a-hash"},
                               {"recordFile": {}, "snapshotSha256": record["snapshotSha256"]},
                               {**reference, "recordFile": {**reference["recordFile"], "path": str(file)}}):

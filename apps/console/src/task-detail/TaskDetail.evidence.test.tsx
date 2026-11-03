@@ -48,7 +48,7 @@ describe("a stop that is not confirmed", () => {
 });
 
 describe("the integration and the acceptance", () => {
-  const output: Artifact = { artifactId: "art-final", kind: "output", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
+  const output: Artifact = { artifactId: "art-final", kind: "output", contentForm: "sealed-inline-v1", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
     diffPath: null, changedPaths: ["a.ts"], partial: false, verified: null, final: null, cumulativePatch: null };
   const verified: Integration = { integrationId: "int-1", artifactId: "art-final", state: "verified", strategy: "merge", target: { path: "~/p", ref: "main" },
     beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", hostPaths: ["new-integration.ts"], note: null, actor: HOST, createdAt: at("11:03") };
@@ -464,7 +464,7 @@ describe("the turn that ended otherwise than it should", () => {
 });
 
 describe("the seal of a turn", () => {
-  const sealed = (overrides: Partial<Artifact>): Artifact => ({ artifactId: "art-p", kind: "partial-output", attemptId: "att-1", manifestSha256: "b".repeat(64), outputCommit: "9aa8b7c6d5",
+  const sealed = (overrides: Partial<Artifact>): Artifact => ({ artifactId: "art-p", kind: "partial-output", contentForm: "sealed-inline-v1", attemptId: "att-1", manifestSha256: "b".repeat(64), outputCommit: "9aa8b7c6d5",
     diffPath: "/d.diff", changedPaths: ["src/a.py"], partial: true, verified: false, final: false, cumulativePatch: null, ...overrides });
 
   it("says a partial output is neither verified nor final, and gives its hash and its paths", async () => {

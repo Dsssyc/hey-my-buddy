@@ -70,29 +70,6 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
         self.assertEqual(scope['checkouts'], 0)
         self.assertEqual(scope['gitRefs'], 4)
 
-    def test_sealed_output_references_are_deduplicated_across_artifact_rows(self):
-        board = self.board()
-        run = self.create(board)
-        with board.store.db.read() as connection:
-            from hey_my_buddy.blackboard.tasks.workspace_bindings import effective_manifest
-            row = connection.execute('SELECT * FROM workflow_runs WHERE run_id=?', (run['runId'],)).fetchone()
-            manifest = effective_manifest(board.directory, connection, row)
-        native_path(Path(manifest['path']) / 'src/file.txt').write_text('sealed output\n', encoding="utf-8", newline="\n")
-        artifact = workspace.seal(board.directory, manifest, run['runId'], 'sealed-attempt')
-        with board.store.db.write() as connection:
-            for identifier in ('sealed-first-record', 'sealed-second-record'):
-                connection.execute('INSERT INTO workflow_artifacts(artifact_id,run_id,kind,content_form,'
-                                   'manifest_json,output_snapshot_sha256,output_origin,created_at,'
-                                   'output_workspace_id,output_manifest_sha256,output_ref,output_commit)'
-                                   ' VALUES(?,?,?,\'sealed-inline-v1\',?,?,\'worker\',?,?,?,?,?)',
-                                   (identifier, run['runId'], 'output', json.dumps(artifact),
-                                    artifact['snapshotSha256'], board.store.now(), artifact['workspaceId'],
-                                    artifact['manifestSha256'], artifact['ref'], artifact['commit']))
-        before = self.dump(board)
-        self.assertEqual(deletion.preview(board.store, 'run:' + run['runId'])['scope'], {
-            'artifacts': {'count': 3, 'bytes': None}, 'sessions': {'count': 0, 'bytes': 0}, 'checkouts': 1, 'gitRefs': 6})
-        self.assertEqual(self.dump(board), before)
-
     def test_snapshot_dedup_counts_only_existing_worker_and_host_refs(self):
         board = self.board()
         for paired in (False, True):
@@ -106,14 +83,14 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
                 with board.store.db.write() as connection:
                     first = board.store.workflow._pin_artifact(
                         connection, run_id=run['runId'], kind='output', manifest=worker,
-                        attempt_id=None, turn_id=None, now=board.store.now())
+                        attempt_id='equal-snapshot', turn_id=None, now=board.store.now())
                 if paired:
                     host = workspace.host_seal(board.directory, manifest, run['runId'], 'equal-snapshot')
                     self.assertEqual(worker['snapshotSha256'], host['snapshotSha256'])
                     with board.store.db.write() as connection:
                         second = board.store.workflow._pin_artifact(
                             connection, run_id=run['runId'], kind='partial-output', manifest=host,
-                            attempt_id=None, turn_id=None, now=board.store.now())
+                            attempt_id='equal-snapshot', turn_id=None, now=board.store.now())
                     self.assertEqual(first, second)
                 before = self.dump(board)
                 count = deletion.preview(board.store, 'run:' + run['runId'])['scope']['gitRefs']
@@ -185,12 +162,10 @@ class DeletionPreviewTests(workflow_fixtures.WorkflowTestCase):
             collected = deletion._collect(connection, 'run:' + run['runId'], board.directory)
         manifest = collected.manifests[0]
         workspace_id = manifest['workspace_id']
-        output_id = workspace._sha(workspace._json([run['runId'], 'conflicting-output']))
         output = {'run_id': run['runId'], 'attempt_id': 'conflicting-output', 'kind': 'output',
                   'output_origin': 'worker', 'output_action': None,
                   'output_workspace_id': workspace_id,
                   'output_manifest_sha256': manifest['manifest_sha256'],
-                  'output_ref': f'refs/hey-my-buddy/workspaces/{workspace_id}/outputs/{output_id}',
                   'output_commit': 'a' * 40}
         conflicting = {**output, 'output_commit': 'b' * 40}
         collected.artifacts.extend([output, conflicting])

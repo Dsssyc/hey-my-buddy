@@ -142,10 +142,10 @@ def read_record_reference(state_dir: Path, reference: dict) -> dict:
     if not isinstance(record, dict) or record.get("snapshotSha256") != reference["snapshotSha256"]:
         raise BoardError("ARTIFACT_MISMATCH", "The output record snapshot identity changed", path=str(path))
     try:
-        fixed_reference = record_reference(state_dir, record)
+        fixed_path = _record_relative(record).as_posix()
     except (KeyError, TypeError, ValueError) as error:
         raise BoardError("ARTIFACT_MISMATCH", "The output record has an invalid binding", path=str(path)) from error
-    if fixed_reference != reference:
+    if fixed_path != file["path"]:
         raise BoardError("ARTIFACT_MISMATCH", "The output record is outside its fixed binding", path=str(path))
     return record
 
@@ -168,8 +168,8 @@ def artifact_manifest(state_dir: Path, row) -> dict:
     raise BoardError("ARTIFACT_MISMATCH", "Unknown artifact content form")
 
 
-def record_reference(state_dir: Path, record: dict) -> dict:
-    """Identify the existing sealed output or resolution file without copying it."""
+def _record_relative(record: dict) -> Path:
+    """The fixed location follows only from the sealed record's identity."""
     if (not isinstance(record, dict)
             or not isinstance(record.get("taskId"), str) or not record["taskId"]
             or not isinstance(record.get("attemptId"), str) or not record["attemptId"]
@@ -192,7 +192,12 @@ def record_reference(state_dir: Path, record: dict) -> dict:
         name = "abandoned.json"
     else:
         raise BoardError("ARTIFACT_MISMATCH", "Unknown output record kind")
-    relative = relative / name
+    return relative / name
+
+
+def record_reference(state_dir: Path, record: dict) -> dict:
+    """Identify the existing sealed output or resolution file without copying it."""
+    relative = _record_relative(record)
     path = _private_path(state_dir, relative)
     try:
         raw = read_bytes(path)

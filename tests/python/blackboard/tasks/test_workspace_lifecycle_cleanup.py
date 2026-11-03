@@ -26,6 +26,43 @@ from blackboard.tasks.workspace_lifecycle_case import LifecycleTestCase, git
 
 class CleanupLifecycleTests(LifecycleTestCase):
 
+    def test_conclusion_keeps_the_seal_from_a_prepared_but_unstarted_continuation(self):
+        board = self.board()
+        run, _claim, initial, checkout, _seal, view, _artifact = self.run_worktree(
+            board, request_id="prepared-then-concluded")
+        board.call("workflow_continue", {
+            "runId": run["runId"], "commandId": "prepare-next-turn",
+            "expectedRevision": view["revision"], "input": "Continue this work",
+            **self.control(view),
+        })
+        board.store.workflow.prepare_continuation_workspace({"runId": run["runId"]})
+        prepared = self.view(board, run["runId"])
+        self.assertNotEqual(prepared["workspace"]["workspaceId"], initial["workspaceId"])
+        (checkout / "tracked.txt").write_text("Host change after next input preparation\n", encoding="utf-8")
+        board.call("workflow_cancel", {"runId": run["runId"], **self.control(prepared)})
+        cancelled = self.view(board, run["runId"])
+        concluded = board.call("workflow_conclude", {
+            "runId": run["runId"], "note": "Preserve the Host change and finish",
+            **self.control(cancelled),
+        })
+        self.assertTrue(concluded['reclaim']['removed'], concluded['reclaim'])
+        self.assertFalse(checkout.exists())
+        with board.store.db.read() as connection:
+            row = connection.execute("SELECT * FROM workflow_runs WHERE run_id=?", (run["runId"],)).fetchone()
+            current = board.store.workflow._run_manifest(connection, row)
+            host_output = connection.execute(
+                "SELECT * FROM workflow_artifacts WHERE run_id=? AND output_origin='host' ORDER BY rowid DESC LIMIT 1",
+                (run["runId"],),
+            ).fetchone()
+            with mock.patch.object(board.store.workflow, "_artifact_document",
+                                   wraps=board.store.workflow._artifact_document) as read_output:
+                latest = board.store.workflow._latest_handoff(connection, row, current)
+            read_output.assert_called_once()
+            self.assertEqual(read_output.call_args.args[0]["artifact_id"], host_output["artifact_id"])
+        self.assertIsNotNone(host_output)
+        self.assertNotEqual(host_output["output_manifest_sha256"], initial["manifestSha256"])
+        self.assertEqual(latest["snapshotSha256"], host_output["output_snapshot_sha256"])
+
 
 
     def test_cumulative_failure_keeps_partial_output_readable_and_resumable(self):

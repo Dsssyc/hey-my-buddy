@@ -444,10 +444,9 @@ class PreparationTests(WorkflowTestCase):
             run = board.store.workflow._run_row(connection, run_id)
             row = connection.execute("SELECT * FROM workflow_continuations WHERE continuation_id=?",
                                      (continuation_id,)).fetchone()
-            intent = board.store.workflow._continuation_intent(connection, run, row)
-        with board.store.db.read() as connection:
-            _original, final_input, output = board.store.workflow._accept_verification_inputs(
-                connection, run_id, intent["executionSelection"]["seal"]["artifactId"])
+            intent, output = board.store.workflow._continuation_intent(connection, run, row)
+            final_input = workflow_module.owned_manifest(self.directory, connection,
+                                                        output["workspaceId"], output["manifestSha256"])
         prepared = workspace.prepare(self.directory, f"{run_id}:{continuation_id}", intent, handoff=(final_input, output))
         native_path(Path(prepared["path"]) / "tracked.txt").write_text("changed after the prepared input\n", encoding="utf-8", newline="\n")
         board.store.workflow.prepare_continuation_workspace({"runId": run_id})
@@ -667,6 +666,25 @@ class PreparationTests(WorkflowTestCase):
         self.assertEqual(chosen["manifestSha256"], self.row_manifest(original)["manifestSha256"])
         self.assertNotEqual(chosen["manifestSha256"], other["manifestSha256"])
 
+    def test_continuation_reads_only_the_selected_output_record_once(self):
+        board, run_id, _first, continuation = self.pending()
+        coordinator = board.store.workflow
+        with board.store.db.read() as connection:
+            artifact = connection.execute("SELECT * FROM workflow_artifacts WHERE run_id=? AND kind='output'",
+                                          (run_id,)).fetchone()
+        from hey_my_buddy.protocol import workspace_manifest
+        read_bytes = workspace_manifest.read_bytes
+        reads = []
+        def record_read(path):
+            if Path(path).name == "output.json":
+                reads.append(Path(path))
+            return read_bytes(path)
+        with patch.object(workspace_manifest, "read_bytes", side_effect=record_read):
+            coordinator.prepare_continuation_workspace({"runId": run_id})
+        self.assertEqual(reads, [self.directory / artifact["record_path"]])
+        self.assertEqual(self.rows(board, run_id, continuation)[2]["state"], "queued")
+        self.assertEqual(workspace.execution_selection(self.row_manifest(self.rows(board, run_id, continuation)[2]))["seal"]["artifactId"], artifact["artifact_id"])
+
     def test_repeated_continuations_keep_generated_paths_out_of_request_and_turn_input(self):
         board = self.board()
         self.register(board)
@@ -726,13 +744,29 @@ class PreparationTests(WorkflowTestCase):
         for path in ("outside.txt", "tests/.env", "tests/cache/state.json"):
             self.assertNotIn(path, workspace.input_untracked_paths(manifest))
 
-    def test_handoff_preparation_rechecks_the_fixed_ref(self):
-        self.corrupt_handoff("ref")
+    def test_changed_output_ref_allows_preparation_without_reading_it_but_blocks_cleanup(self):
+        board, run_id, first, continuation = self.pending(kind="worktree")
+        initial = turn_manifest(self.directory, first["claim"]["turn"]["input"])
+        with board.store.db.read() as connection:
+            run = board.store.workflow._run_row(connection, run_id)
+            sealed = board.store.workflow._latest_handoff(connection, run, initial)
+        self.git(self.repo, "update-ref", sealed["ref"], sealed["inputCommit"])
+        git = workspace._git
+        def observe(root, *args, **kwargs):
+            self.assertNotIn(sealed["ref"], args, "Preparation must use immutable objects, not the output pointer")
+            return git(root, *args, **kwargs)
+        with patch.object(workspace, "_git", side_effect=observe):
+            board.store.workflow.prepare_continuation_workspace({"runId": run_id})
+        prepared = self.row_manifest(self.rows(board, run_id, continuation)[2])
+        self.assertEqual(prepared["inputCommit"], sealed["commit"])
+        self.assertEqual(prepared["inputTree"], sealed["tree"])
+        self.assertEqual(workspace.execution_selection(prepared)["seal"]["artifactId"], sealed["artifactId"])
+        self.assertEqual(self.git(self.repo, "rev-parse", sealed["ref"]), sealed["inputCommit"])
+        inspection = workspace.cleanup_inspect(self.directory, initial, sealed=sealed)
+        self.assertFalse(inspection["eligible"], inspection)
+        self.assertIn("sealed-output-invalid", inspection["reasons"])
 
     def test_handoff_preparation_rechecks_the_patch(self):
-        self.corrupt_handoff("patch")
-
-    def corrupt_handoff(self, mutation):
         board, run_id, _first, continuation = self.pending()
         with board.store.db.read() as connection:
             run = board.store.workflow._run_row(connection, run_id)
@@ -740,10 +774,7 @@ class PreparationTests(WorkflowTestCase):
             row = connection.execute("SELECT record_path FROM workflow_artifacts WHERE artifact_id=?", (sealed["artifactId"],)).fetchone()
         record = self.directory / row["record_path"]
         original_bytes = record.read_bytes()
-        if mutation == "ref":
-            self.git(self.repo, "update-ref", sealed["ref"], sealed["inputCommit"])
-        else:
-            Path(sealed["diffPath"]).write_bytes(b"tampered patch\n")
+        Path(sealed["diffPath"]).write_bytes(b"tampered patch\n")
         board.store.workflow.prepare_continuation_workspace({"runId": run_id})
         failed = board.call("workflow_get", {"runId": run_id})
         self.assertEqual(failed["activeRequest"]["preparationError"]["code"], "WORKSPACE_MANIFEST_CHANGED")

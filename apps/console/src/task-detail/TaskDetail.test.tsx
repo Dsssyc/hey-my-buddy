@@ -345,7 +345,7 @@ describe("the route", () => {
 
 describe("a turn", () => {
   it("opens with the task, then what happened in it, then its result and what is left, then its seal", async () => {
-    const artifact: Artifact = { artifactId: "art-1", kind: "output", attemptId: "att-1", manifestSha256: "f".repeat(64), outputCommit: "3f9a2c1d00", diffPath: "/diffs/1.diff",
+    const artifact: Artifact = { artifactId: "art-1", kind: "output", contentForm: "sealed-inline-v1", attemptId: "att-1", manifestSha256: "f".repeat(64), outputCommit: "3f9a2c1d00", diffPath: "/diffs/1.diff",
       changedPaths: ["a.ts", "b.ts"], partial: false, verified: null, final: null, cumulativePatch: { baseCommit: "d286db0aa", outputCommit: "3f9a2c1d00", path: "/p.patch", sha256: "a".repeat(64), changedPaths: ["a.ts"] } };
     const integration: Integration = { integrationId: "int-1", artifactId: "art-1", state: "not-required", strategy: "none", target: null, beforeCommit: null, afterCommit: null,
       hostPaths: ["docs/console.md"], note: "未整合", actor: HOST, createdAt: at("11:05") };
@@ -640,7 +640,7 @@ describe("the acceptance", () => {
     found.rows = [row({ state: "accepted", acceptedAt: at("11:05") })];
     return found;
   };
-  const artifact: Artifact = { artifactId: "art-final", kind: "output", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
+  const artifact: Artifact = { artifactId: "art-final", kind: "output", contentForm: "sealed-inline-v1", attemptId: "att-2", manifestSha256: "5f0c81d2" + "0".repeat(52) + "e2a1", outputCommit: "f6dfd59c11",
     diffPath: null, changedPaths: Array.from({ length: 14 }, (_, index) => `f${index}.ts`), partial: false, verified: null, final: null, cumulativePatch: null };
   const verified: Integration = { integrationId: "int-1", artifactId: "art-final", state: "verified", strategy: "merge", target: { path: "~/projects/hey-my-buddy", ref: "socu/console" },
     beforeCommit: "b7285470aa", afterCommit: "f6dfd59c11", hostPaths: ["apps/console/src/tokens.css", "apps/console/src/button.tsx"], note: null, actor: HOST, createdAt: at("11:03") };

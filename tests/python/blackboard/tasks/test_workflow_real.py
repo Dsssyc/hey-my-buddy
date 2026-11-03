@@ -19,6 +19,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from support import BoardTestCase, enable_fixture_buddy
@@ -130,6 +131,26 @@ class RealWorkspaceTestCase(BoardTestCase):
                 "executionWorkspace": {"kind": kind, "access": access},
             },
         )
+
+
+class CumulativePatchProjectionTests(RealWorkspaceTestCase):
+    def test_cumulative_patch_paths_ignore_an_enclosing_git_worktree(self):
+        from hey_my_buddy.blackboard.tasks.workflow import WorkflowCoordinator
+        initial_commit = self.git("rev-parse", "HEAD").strip()
+        (self.repo / "tracked.txt").write_text("a real patch change\n", encoding="utf-8")
+        raw = self.git("diff", "--binary", "--no-renames").encode()
+        state = self.repo / "nested-private-state"
+        relative = Path("workspaces") / ("ws-" + "a" * 32) / "outputs" / ("b" * 64) / "output.json"
+        directory = (state / relative).parent
+        directory.mkdir(parents=True, mode=0o700)
+        (directory / ("cumulative-" + initial_commit + ".patch")).write_bytes(raw)
+        coordinator = SimpleNamespace(board=SimpleNamespace(directory=state),
+                                      _initial_input_commit=lambda connection, run_id: initial_commit)
+        row = {"content_form": "record-reference", "kind": "output", "run_id": "nested",
+               "record_path": relative.as_posix()}
+        record = {"inputCommit": "e" * 40, "commit": "f" * 40}
+        view = WorkflowCoordinator._cumulative_patch_view(coordinator, row, record, connection=object())
+        self.assertEqual(view["changedPaths"], ["tracked.txt"])
 
 
 class DirtyInputTests(RealWorkspaceTestCase):
