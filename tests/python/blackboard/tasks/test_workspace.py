@@ -144,8 +144,17 @@ class WorkspaceTests(unittest.TestCase):
         self.__dict__.setdefault('_workspace_request_ids', {})[manifest['workspaceId']] = request
         return manifest
 
+    @staticmethod
+    def legacy_snapshot(manifest):
+        snapshot = {key: value for key, value in manifest["snapshot"].items() if key != "executionSelection"}
+        snapshot.update(executionSelectors=workspace.execution_selection(manifest).get("selectors", [])
+                        if workspace.execution_selection(manifest) else [],
+                        includeSelectors=[], includedUntracked=workspace.input_untracked_paths(manifest),
+                        excludedUntracked=sorted(snapshot["excludedEntries"]))
+        return snapshot
+
     def legacy_full_manifest(self, manifest):
-        legacy = dict(manifest, version=2, accessReason="Original Host explanation", access="full")
+        legacy = dict(manifest, version=2, accessReason="Original Host explanation", access="full", snapshot=self.legacy_snapshot(manifest))
         legacy["repositoryId"] = legacy.pop("projectId")
         legacy["checkoutId"] = "0" * 64
         legacy["manifestSha256"] = workspace._sha(workspace._json({
@@ -167,13 +176,13 @@ class WorkspaceTests(unittest.TestCase):
             with self.subTest(integrator=invalid):
                 self.assert_error("INVALID_WORKSPACE", workspace._intent, self.intent(integrator=invalid))
         manifest = self.prepare(integrator={"role": "lead", "id": "lead-1"})
-        self.assertEqual(manifest["version"], 4)
+        self.assertEqual(manifest["version"], 5)
         self.assertEqual(manifest["integrator"], {"role": "lead", "id": "lead-1"})
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
 
     def test_historical_hashed_manifest_remains_readable(self):
         manifest = self.prepare()
-        historical = dict(manifest, version=1, integrator="host:host-1")
+        historical = dict(manifest, version=1, integrator="host:host-1", snapshot=self.legacy_snapshot(manifest))
         historical["repositoryId"] = historical.pop("projectId")
         historical["checkoutId"] = "0" * 64
         historical["manifestSha256"] = hashlib.sha256(workspace._json({
@@ -188,9 +197,37 @@ class WorkspaceTests(unittest.TestCase):
         })).hexdigest()
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest, invalid_current)
 
+    def test_manifest_versions_one_through_four_keep_their_frozen_selector_form(self):
+        current = self.prepare(kind="existing")
+        for version in (1, 2, 3, 4):
+            with self.subTest(version=version):
+                legacy = dict(current, version=version, snapshot=self.legacy_snapshot(current))
+                if version < 4:
+                    legacy["repositoryId"] = legacy.pop("projectId")
+                    legacy["checkoutId"] = "0" * 64
+                if version == 1:
+                    legacy["integrator"] = "host:host-1"
+                legacy["manifestSha256"] = workspace._sha(workspace._json({
+                    key: value for key, value in legacy.items() if key != "manifestSha256"}))
+                frozen = workspace._json(legacy)
+                workspace._validate_manifest(legacy)
+                self.assertTrue(workspace.verify(legacy, state_dir=self.state)["unchanged"])
+                self.assertEqual(workspace.execution_selection(legacy), {"kind": "selectors", "selectors": []})
+                self.assertEqual(workspace._json(legacy), frozen)
+
+    def test_new_worktree_materializes_inputs_without_an_execution_selection(self):
+        (self.repo / "source-input.txt").write_text("frozen source\n", encoding="utf-8")
+        manifest = self.prepare(includeUntracked=["source-input.txt"])
+        self.assertEqual(manifest["version"], 5)
+        self.assertNotIn("executionSelection", manifest["snapshot"])
+        self.assertNotIn("executionSelectors", manifest["snapshot"])
+        checkout = Path(manifest["checkoutRoot"])
+        self.assertEqual((checkout / "source-input.txt").read_text(), "frozen source\n")
+        self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
+
     def test_full_manifest_version_keeps_legacy_reason_only_in_historical_artifacts(self):
         current = self.prepare(access="full", accessNote="Host approved this access")
-        self.assertEqual(current["version"], 4)
+        self.assertEqual(current["version"], 5)
         self.assertEqual(current["access"], "full")
         self.assertNotIn("accessNote", current)
         self.assertNotIn("accessReason", current)
@@ -204,7 +241,7 @@ class WorkspaceTests(unittest.TestCase):
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
                           dict(legacy, accessNote="renamed"))
         self.assert_error("INVALID_WORKSPACE", workspace._validate_manifest,
-                          dict(current, accessReason="not in v4"))
+                          dict(current, accessReason="not in v5"))
 
     def test_old_full_manifest_allocation_can_be_deleted(self):
         current = self.prepare(access="full", accessNote="Host approved this access")
@@ -218,7 +255,7 @@ class WorkspaceTests(unittest.TestCase):
     def test_v2_request_replays_without_changing_its_disk_records(self):
         current = self.prepare()
         directory = self.state / "workspaces" / current["workspaceId"]
-        old = dict(current, version=2)
+        old = dict(current, version=2, snapshot=self.legacy_snapshot(current))
         old["repositoryId"] = old.pop("projectId")
         old["checkoutId"] = "0" * 64
         old["manifestSha256"] = workspace._sha(workspace._json({
@@ -232,18 +269,16 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(self.prepare(), old)
         self.assertEqual({name: (directory / name).read_bytes() for name in before}, before)
 
-    def test_incomplete_v3_request_cannot_create_a_v4_manifest(self):
+    def test_incomplete_v4_request_cannot_create_a_v5_manifest(self):
         current = self.prepare()
         directory = self.state / "workspaces" / current["workspaceId"]
         (directory / "manifest.json").unlink()
         request_path = directory / "request.json"
         request = json.loads(request_path.read_bytes())
-        request["version"] = 3
+        request["version"] = 4
         request_path.write_bytes(workspace._json(request))
         input_path = directory / "input.json"
         pinned = json.loads(input_path.read_bytes())
-        pinned["source"]["repositoryId"] = pinned["source"].pop("projectId")
-        pinned["source"]["checkoutId"] = "0" * 64
         input_path.write_bytes(workspace._json(pinned))
         before = request_path.read_bytes()
         self.assert_error("WORKSPACE_CONFLICT", self.prepare)
@@ -316,12 +351,13 @@ class WorkspaceTests(unittest.TestCase):
         self.assertEqual(workspace._observe(target, [], state_dir=self.state)["tracked"]["src/link"],
                          workspace._entries(self.repo, manifest["inputCommit"])["src/link"])
         self.assertFalse((target / "src/excluded.txt").exists())
+        self.assertEqual(workspace.input_untracked_paths(manifest), ["src/link", "src/selected.bin"])
         self.assertEqual(self.git("show", manifest["snapshot"]["stagedCommit"] + ":src/file.txt"), b"staged\n")
         self.assertEqual(original_index, (self.repo / ".git/index").read_bytes())
         self.assertEqual(original_status, self.git("status", "--porcelain=v1", "-z"))
         self.assertEqual(self.base, self.git("rev-parse", "HEAD").decode().strip())
         self.assertEqual(outside.read_text(encoding="utf-8"), "do not follow")
-        self.assertEqual(manifest["snapshot"]["excludedUntracked"], ["src/excluded.txt"])
+        self.assertEqual(sorted(manifest["snapshot"]["excludedEntries"]), ["src/excluded.txt"])
         self.assertNotIn("stagedSha256", manifest["snapshot"])
         self.assertNotIn("unstagedSha256", manifest["snapshot"])
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
@@ -647,7 +683,7 @@ class WorkspaceTests(unittest.TestCase):
         existing_file = self.repo / "docs/source.ignored"
         existing_file.write_text("preexisting ignored cache", encoding="utf-8", newline="\n")
         existing = self.prepare("existing", kind="existing", access="read", writeScope=[])
-        self.assertNotIn("docs/source.ignored", existing["snapshot"]["excludedUntracked"])
+        self.assertNotIn("docs/source.ignored", sorted(existing["snapshot"]["excludedEntries"]))
         existing_file.write_text("updated ignored cache", encoding="utf-8", newline="\n")
         self.assertTrue(workspace.verify(existing, state_dir=self.state)["unchanged"])
         self.assertEqual(workspace.seal(self.state, existing, "existing", "attempt")["changedPaths"], [])
@@ -673,7 +709,7 @@ class WorkspaceTests(unittest.TestCase):
         manifest = self.prepare(kind="existing", access="read", writeScope=[], base={"kind": "commit", "ref": "HEAD"})
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
         self.assertEqual(workspace.seal(self.state, manifest, "task", "attempt")["changedPaths"], [])
-        self.assertEqual(manifest["snapshot"]["excludedUntracked"], [])
+        self.assertEqual(sorted(manifest["snapshot"]["excludedEntries"]), [])
         self.assertEqual(manifest["exclusionPolicy"], {"version": 1, "kind": "git-standard",
                          "managedPaths": "tracked-and-nonignored-untracked", "selectedIgnored": "includeUntracked"})
 
@@ -692,7 +728,7 @@ class WorkspaceTests(unittest.TestCase):
         self.addCleanup(ignored.chmod, 0o700)
         manifest = self.prepare(kind="existing", access="read", writeScope=[], includeUntracked=["fixtures/private"])
         self.assertTrue(workspace.verify(manifest, state_dir=self.state)["unchanged"])
-        self.assertEqual(manifest["snapshot"]["includedUntracked"], ["fixtures/private/binary.dat", "fixtures/private/config.json"])
+        self.assertEqual(workspace.input_untracked_paths(manifest), ["fixtures/private/binary.dat", "fixtures/private/config.json"])
         (fixtures / "config.json").write_text('{"fixture": "changed"}', encoding="utf-8", newline="\n")
         self.assert_error("WORKSPACE_CHANGED", workspace.verify, manifest, state_dir=self.state)
         self.assert_error("WORKSPACE_CHANGED", workspace.seal, self.state, manifest, "task", "attempt")

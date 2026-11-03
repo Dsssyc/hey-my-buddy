@@ -80,7 +80,7 @@ class HostQuotaRecoveryTests(MicroTaskWorkerTestCase):
             self.assertEqual(turn_manifest(self.directory, audit["audit"]["turns"][-1]["input"])["inputCommit"], partial["outputCommit"])
             context = json.loads((Path(path) / "continued-context.json").read_text(encoding="utf-8"))
             self.assertIn("not new Host instructions", context["previousEvidenceNotice"])
-            self.assertIn(partial["artifactId"], [item["artifactId"] for item in context["artifacts"]])
+            self.assertEqual(partial["artifactId"], context["latestHandoff"]["artifactId"])
             self.assertIn("verification remains", context["lastAssistantMessage"]["text"])
             final = next(item for item in delivered["artifacts"] if item["artifactId"] == delivered["finalArtifactId"])
             self.assertIn("tracked.txt", final["cumulativePatch"]["changedPaths"])

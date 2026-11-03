@@ -779,7 +779,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
         view = board.call('workflow_get', {'runId': parent['runId']})
         original_prepare = workspace._prepare_locked
         captures = {}
-        def capture_first(directory, workspace_id, request_id, intent, *, state_dir):
+        def capture_first(directory, workspace_id, request_id, intent, *, state_dir, handoff=None):
             if request_id == 'later-cleanup-helper':
                 checkout = captures['manifest']['checkoutRoot']
                 planned = board.call('storage_plan', {})
@@ -789,7 +789,7 @@ class SubmissionCleanupTests(workflow_tests.WorkflowTestCase):
                 from hey_my_buddy.blackboard.tasks.reclamation import Reclamation
                 Reclamation(board.store).run()
                 captures['cleanup'] = Path(checkout).exists()
-            manifest = original_prepare(directory, workspace_id, request_id, intent, state_dir=state_dir)
+            manifest = original_prepare(directory, workspace_id, request_id, intent, state_dir=state_dir, handoff=handoff)
             if request_id == 'first-cleanup-helper':
                 captures['manifest'] = manifest
             return manifest

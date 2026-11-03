@@ -21,6 +21,7 @@ class MockWorkspace:
     def __init__(self, root: Path):
         self.root = Path(root)
         self.manifests: dict[tuple[str, str], dict] = {}
+        self.input_paths: dict[str, list[str]] = {}
         self.prepare_calls: list[tuple[str, dict]] = []
         self.verify_calls: list[dict] = []
         self.seal_calls: list[tuple[str, str]] = []
@@ -58,7 +59,7 @@ class MockWorkspace:
         root = self._repository_root(cwd)
         return {"checkoutRoot": root, "projectId": f"repo:{root}"}
 
-    def _manifest(self, *, state_dir: Path, request_id: str, intent: dict) -> dict:
+    def _manifest(self, *, state_dir: Path, request_id: str, intent: dict, handoff=None) -> dict:
         kind = intent.get("kind", "existing")
         cwd = intent.get("cwd")
         if kind == "worktree":
@@ -72,7 +73,7 @@ class MockWorkspace:
         base = intent.get("base") if isinstance(intent.get("base"), dict) else {}
         base_commit = base.get("ref") or "a" * 40
         manifest = {
-            "version": 4,
+            "version": 5,
             "workspaceId": "ws-" + sha256_text(json.dumps([str(Path(state_dir).resolve()), request_id],sort_keys=True,separators=(",",":"),ensure_ascii=True))[:32],
             "kind": kind,
             "path": path,
@@ -88,9 +89,14 @@ class MockWorkspace:
             # source repository names the same shared repository path: the stash
             # facts of a run key on it across turns and allocations.
             "snapshot": {"repositoryPath": self._repository_root(intent.get("cwd") or path),
-                         "includedUntracked": list(intent.get("includeUntracked", [])),
-                         "executionSelectors": list(intent.get("includeUntracked", [])), "excluded": [], "staged": {}, "unstaged": {}},
+                         "stagedTree": "c" * 40, "excludedEntries": {}},
         }
+        selection = intent.get("executionSelection", {"kind": "selectors", "selectors": list(intent.get("includeUntracked", []))})
+        if kind == "existing":
+            manifest["snapshot"]["executionSelection"] = selection
+        self.input_paths[manifest["workspaceId"]] = (
+            list(handoff[1]["includedUntracked"]) if handoff is not None else
+            list(selection.get("selectors", [])) if kind == "existing" else [])
         prefix = f"refs/hey-my-buddy/workspaces/{manifest['workspaceId']}/"
         manifest["snapshot"].update(inputRef=prefix + "input", stagedRef=prefix + "staged",
                                     stagedCommit=manifest["inputCommit"])
@@ -98,10 +104,10 @@ class MockWorkspace:
         return manifest
 
     # -- interface ----------------------------------------------------------
-    def recovery_inputs(self, manifest: dict) -> list[str]:
-        # This double models identities, not Git's file inventory; actual partial
-        # file selection is covered by the real-workspace preparation tests.
-        return []
+    @staticmethod
+    def execution_selection(manifest: dict) -> dict | None:
+        from hey_my_buddy.blackboard.tasks.workspace import execution_selection
+        return execution_selection(manifest)
 
     def shared_stash_inventory(self, repository_path) -> dict:
         """The injected observation for one repository, or an honest unknown.
@@ -152,7 +158,7 @@ class MockWorkspace:
     def scope_conflicts(self, state_dir, manifest, task_id, attempt_id):
         return []
 
-    def prepare(self, state_dir: Path, request_id: str, intent: dict, *, _preparation=None, before_prepare=None) -> dict:
+    def prepare(self, state_dir: Path, request_id: str, intent: dict, *, _preparation=None, before_prepare=None, handoff=None) -> dict:
         self.prepare_calls.append((request_id, dict(intent)))
         if request_id in self.fail_prepare:
             raise BoardError("WORKSPACE_PREPARE_FAILED", "injected prepare failure", requestId=request_id)
@@ -162,7 +168,7 @@ class MockWorkspace:
             _preparation["replayed"] = replayed
         if replayed:
             return dict(self.manifests[cache_key])
-        manifest = self._manifest(state_dir=state_dir, request_id=request_id, intent=intent)
+        manifest = self._manifest(state_dir=state_dir, request_id=request_id, intent=intent, handoff=handoff)
         self.manifests[cache_key] = manifest
         from hey_my_buddy.private_files import publish_bytes
         from hey_my_buddy.private_dirs import ensure_private_dir
@@ -216,7 +222,7 @@ class MockWorkspace:
             "diffPath": str(diff),
             "diffSha256": sha256_text(diff.read_text(encoding="utf-8")),
             "sealedAfterShutdown": True,
-            "includedUntracked": manifest["snapshot"]["includedUntracked"],
+            "includedUntracked": self.input_paths[manifest["workspaceId"]],
         }
         # Like the real module: manifestSha256 is the input digest the turn executed
         # on, snapshotSha256 is the output identity derived from the snapshot record.

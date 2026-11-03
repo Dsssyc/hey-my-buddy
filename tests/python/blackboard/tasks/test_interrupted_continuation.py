@@ -85,7 +85,7 @@ class InterruptedContinuationTests(WorkflowTestCase):
         self.assertEqual(document["resumeMode"], "reconstructed-new-session")
         self.assertEqual(document["context"]["interruptedTurn"]["evidence"]["kind"], "identity-absent")
         self.assertEqual(document["context"]["interruptedTurn"]["turnId"], first["claim"]["turn"]["turnId"])
-        self.assertIn(partial["artifactId"], [item["artifactId"] for item in document["context"]["artifacts"]])
+        self.assertEqual(partial["artifactId"], document["context"]["latestHandoff"]["artifactId"])
 
     def test_codex_terminal_checkpoint_selects_native_before_next_turn(self):
         self.executors["codex"].native_resume = True

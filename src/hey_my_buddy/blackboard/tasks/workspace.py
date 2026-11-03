@@ -505,19 +505,47 @@ def _untracked(root, selected, *, env=None, git_dir=None):
     return result
 
 
-def _observe(root, selected, *, require_selected=False, state_dir, git_dir=None, capture=()):
+def _exact_untracked(root, paths, index):
+    """Fixed file identities from a seal/tree, never Git directory selectors."""
+    present = []
+    for path in paths:
+        if path in index:
+            continue
+        current = Path(root)
+        for part in PurePosixPath(path).parts[:-1]:
+            current /= part
+            try:
+                info = native_path(current).lstat()
+            except FileNotFoundError:
+                break
+            if (not stat.S_ISDIR(info.st_mode)
+                    or (_WINDOWS and info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)):
+                break
+        else:
+            try:
+                info = native_path(Path(root) / path).lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                present.append(path)
+    return present
+
+
+def _observe(root, selectors=(), *, exact=(), recovery_scope=(), require_selected=False, state_dir, git_dir=None, capture=()):
     # One copy supplies both the recorded index and Git's worktree observation.
     # capture selects content for an output tree without changing the frozen
     # input selectors or the original-byte evidence in its fingerprint.
     head = _line(root, "rev-parse", "--verify", "HEAD^{commit}", git_dir=git_dir)
     with _index(root, state_dir=state_dir, copy=True, git_dir=git_dir) as environment:
         index = _entries(root, env=environment, git_dir=git_dir)
-        paths = _untracked(root, selected, env=environment, git_dir=git_dir)
+        paths = sorted(set(_untracked(root, selectors, env=environment, git_dir=git_dir))
+                       | set(_exact_untracked(root, exact, index)))
         if index:
             _git(root, "update-index", "--no-assume-unchanged", "-z", "--stdin",
                  data=b"".join(os.fsencode(path) + b"\0" for path in index), env=environment, git_dir=git_dir)
         _git(root, "add", "-u", env=environment, git_dir=git_dir)
-        admitted = [path for path in paths if _in_scope(path, [*selected, *capture])]
+        fixed = set(exact)
+        admitted = [path for path in paths if path in fixed or _in_scope(path, [*selectors, *recovery_scope, *capture])]
         if admitted:
             _git(root, "add", "--force", "--pathspec-from-file=-", "--pathspec-file-nul",
                  data=b"".join(os.fsencode(path) + b"\0" for path in admitted), env=environment, git_dir=git_dir)
@@ -526,9 +554,10 @@ def _observe(root, selected, *, require_selected=False, state_dir, git_dir=None,
     if any(value is None for value in untracked.values()):
         raise BoardError("WORKSPACE_CHANGED", "An untracked file disappeared during observation")
     untracked_entries = {path: entries[path] for path in admitted if path in entries}
-    included = {path: entry for path, entry in untracked_entries.items() if _in_scope(path, selected)}
+    included = {path: entry for path, entry in untracked_entries.items()
+                if path in fixed or _in_scope(path, [*selectors, *recovery_scope])}
     if require_selected:
-        for path in selected:
+        for path in selectors:
             if not any(_in_scope(candidate, [path]) for candidate in included):
                 raise BoardError("INVALID_WORKSPACE", "includeUntracked does not select an untracked file", path=path)
     observation = {"head": head, "index": index,
@@ -629,8 +658,25 @@ def _pin(root, ref, commit):
     _git(root, "update-ref", "--no-deref", ref, commit, "0" * len(commit))
 
 
+def _selection(value):
+    if not isinstance(value, dict):
+        raise BoardError("INVALID_WORKSPACE", "Invalid execution selection")
+    kind = value.get("kind")
+    if kind == "selectors" and set(value) == {"kind", "selectors"} and isinstance(value["selectors"], list):
+        return {"kind": kind, "selectors": sorted({_relative(path, allow_root=True) for path in value["selectors"]})}
+    if kind == "recovery" and set(value) == {"kind"}:
+        return dict(value)
+    if kind == "seal" and set(value) == {"kind", "seal"}:
+        seal = value["seal"]
+        if (isinstance(seal, dict) and set(seal) == {"artifactId", "snapshotSha256"}
+                and isinstance(seal["artifactId"], str) and seal["artifactId"]
+                and isinstance(seal["snapshotSha256"], str) and re.fullmatch("[0-9a-f]{64}", seal["snapshotSha256"])):
+            return {"kind": kind, "seal": dict(seal)}
+    raise BoardError("INVALID_WORKSPACE", "Invalid execution selection")
+
+
 def _intent(intent):
-    allowed = {"kind", "cwd", "access", "accessNote", "base", "includeUntracked", "writeScope", "integrator", "targetRef"}
+    allowed = {"kind", "cwd", "access", "accessNote", "base", "includeUntracked", "executionSelection", "writeScope", "integrator", "targetRef"}
     if not isinstance(intent, dict) or set(intent) - allowed:
         raise BoardError("INVALID_WORKSPACE", "Unknown executionWorkspace fields")
     if intent.get("kind") not in ("existing", "worktree") or intent.get("access") not in ("read", "write", "full"):
@@ -647,7 +693,11 @@ def _intent(intent):
         raise BoardError("INVALID_WORKSPACE", "cwd must be a directory path")
     # Resolving a ref belongs to first preparation, not replay normalization.
     result["cwd"] = str(Path(intent["cwd"]).resolve())
-    for field in ("includeUntracked", "writeScope"):
+    if "executionSelection" in intent:
+        if "includeUntracked" in intent or intent["kind"] != "existing" or base["kind"] != "working-tree":
+            raise BoardError("INVALID_WORKSPACE", "A continuation selection requires an existing working tree and no new selectors")
+        result["executionSelection"] = _selection(intent["executionSelection"])
+    for field in (("writeScope",) if "executionSelection" in intent else ("includeUntracked", "writeScope")):
         values = intent.get(field, [])
         if not isinstance(values, list):
             raise BoardError("INVALID_WORKSPACE", field + " must be a list")
@@ -655,7 +705,7 @@ def _intent(intent):
     result.setdefault("targetRef", None)
     if result["access"] != "read" and not result["writeScope"]:
         raise BoardError("INVALID_WORKSPACE", "Write access requires an explicit writeScope")
-    if base["kind"] == "commit" and result["includeUntracked"]:
+    if base["kind"] == "commit" and result.get("includeUntracked"):
         raise BoardError("INVALID_WORKSPACE", "Untracked input requires a working-tree base")
     return result
 
@@ -684,17 +734,30 @@ def _workspace_directory(state_dir, request_id):
     return workspace_id, directory
 
 
-def _snapshot(source, intent, workspace_id, *, state_dir):
+def _snapshot(source, intent, workspace_id, *, state_dir, handoff=None):
     root = Path(source["checkoutRoot"])
     base = _commit(root, intent["base"].get("ref", "HEAD"))
     base_entries = _entries(root, base)
     base_tree = _line(root, "rev-parse", base + "^{tree}")
     snapshot = {"repositoryPath": source["repositoryPath"],
-                "sourceHead": source["headCommit"], "includeSelectors": intent["includeUntracked"],
+                "sourceHead": source["headCommit"],
                 "inputRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/input",
                 "stagedRef": f"refs/hey-my-buddy/workspaces/{workspace_id}/staged"}
     if intent["base"]["kind"] == "working-tree":
-        observed = _observe(root, intent["includeUntracked"], require_selected=True, state_dir=state_dir)
+        selection = intent.get("executionSelection", {"kind": "selectors", "selectors": intent.get("includeUntracked", [])})
+        selectors, exact, recovery_scope = [], [], []
+        if selection["kind"] == "selectors":
+            selectors = selection["selectors"]
+        elif selection["kind"] == "seal":
+            if (source["checkoutRoot"] != handoff[0]["checkoutRoot"]
+                    or source["projectId"] != manifest_project_id(handoff[0])):
+                raise BoardError("WORKSPACE_CHANGED", "The handoff belongs to another checkout")
+            exact = handoff[1]["includedUntracked"]
+        else:
+            # Recovery admits only nonignored files in this authorized scope.
+            recovery_scope = intent["writeScope"]
+        observed = _observe(root, selectors, exact=exact, recovery_scope=recovery_scope,
+                            require_selected=True, state_dir=state_dir)
         if observed["head"] != source["headCommit"]:
             raise BoardError("WORKSPACE_CHANGED", "The source HEAD changed during preparation")
         staged_tree = _tree(root, observed["index"], state_dir=state_dir)
@@ -702,7 +765,7 @@ def _snapshot(source, intent, workspace_id, *, state_dir):
         # A later turn may select its previous sealed output without moving the
         # source HEAD. Such a ref is an exact content handoff, not permission to
         # silently absorb unrelated edits made after that turn was sealed.
-        if base != source["headCommit"] and input_tree != base_tree:
+        if (selection["kind"] == "seal" or base != source["headCommit"]) and input_tree != base_tree:
             paths = sorted(_tree_changes(root, base_tree, input_tree))
             raise BoardError(
                 "WORKSPACE_BASE_MISMATCH",
@@ -710,13 +773,11 @@ def _snapshot(source, intent, workspace_id, *, state_dir):
                 "Compare the working tree with the base commit in Git for the full diff",
                 **_bounded_path_fields({"baseCommit": base, "paths": paths}, ("paths",)),
             )
-        snapshot.update(includedUntracked=sorted(observed["included"]),
-                        excludedUntracked=sorted(set(observed["untracked"]) - set(observed["included"])),
-                        excludedEntries={path: value for path, value in observed["untracked"].items() if path not in observed["included"]},
+        snapshot.update(excludedEntries={path: value for path, value in observed["untracked"].items() if path not in observed["included"]},
                         sourceFingerprint=observed["fingerprint"])
     else:
         staged_tree = input_tree = base_tree
-        snapshot.update(includedUntracked=[], excludedUntracked=_untracked(root, []), excludedEntries={})
+        snapshot.update(excludedEntries={})
         if intent["kind"] == "existing":
             observed = _observe(root, [], state_dir=state_dir)
             if observed["head"] != base or observed["index"] != base_entries or observed["tracked"] != base_entries or observed["untracked"]:
@@ -760,8 +821,8 @@ def _require_checkout(root, observation, expected, *, state_dir, paths=None):
                          paths=sorted(mismatched), reason="The Git observation after checkout differs from the input tree")
 
 
-def _checkout_observation(root, expected, *, state_dir, selectors=(), capture=(), paths=None, git_error=None):
-    observed = _observe(root, selectors, state_dir=state_dir,
+def _checkout_observation(root, expected, *, state_dir, selectors=(), exact=(), capture=(), paths=None, git_error=None):
+    observed = _observe(root, selectors, exact=exact, state_dir=state_dir,
                         capture=[*capture, *expected] if git_error is not None else capture)
     try:
         _require_checkout(root, observed, expected, state_dir=state_dir, paths=paths)
@@ -915,9 +976,9 @@ def _record_preparation_cleanup(error, target, facts):
 def _validate_manifest(manifest):
     fields = {"version", "workspaceId", "kind", "path", "checkoutRoot", "access",
               "baseCommit", "inputCommit", "inputTree", "writeScope", "integrator", "targetRef", "exclusionPolicy", "snapshot", "manifestSha256"}
-    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2, 3, 4):
+    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] not in (1, 2, 3, 4, 5):
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace manifest schema")
-    fields.update({"projectId"} if manifest["version"] == 4 else {"checkoutId", "repositoryId"})
+    fields.update({"projectId"} if manifest["version"] in (4, 5) else {"checkoutId", "repositoryId"})
     if manifest["version"] in (1, 2) and manifest.get("access") == "full":
         fields.add("accessReason")
     if set(manifest) != fields:
@@ -925,12 +986,14 @@ def _validate_manifest(manifest):
     expected = _sha(_json({key: value for key, value in manifest.items() if key != "manifestSha256"}))
     if expected != manifest["manifestSha256"]:
         raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The workspace manifest hash does not match its contents")
-    if manifest["version"] in (2, 3, 4):
+    if manifest["version"] in (2, 3, 4, 5):
         _actor_identity(manifest["integrator"], "Workspace integrator", ("host", "lead"))
     if manifest["exclusionPolicy"] != _EXCLUSION_POLICY:
         raise BoardError("INVALID_WORKSPACE", "Unsupported workspace exclusion policy")
-    snapshot_fields = {"repositoryPath", "stagedCommit", "stagedTree", "inputRef", "stagedRef", "executionSelectors",
+    snapshot_fields = {"repositoryPath", "stagedCommit", "stagedTree", "inputRef", "stagedRef",
                        "executionFingerprint", "excludedEntries"}
+    if manifest["version"] < 5:
+        snapshot_fields.add("executionSelectors")
     if not isinstance(manifest["snapshot"], dict) or not snapshot_fields <= manifest["snapshot"].keys():
         raise BoardError("INVALID_WORKSPACE", "Invalid workspace snapshot")
     if manifest["kind"] not in ("existing", "worktree") or manifest["access"] not in ("read", "write", "full"):
@@ -938,7 +1001,18 @@ def _validate_manifest(manifest):
     for value in (manifest["path"], manifest["checkoutRoot"], manifest["snapshot"]["repositoryPath"]):
         if not isinstance(value, str) or not is_absolute_path(value):
             raise BoardError("INVALID_WORKSPACE", "Manifest paths must be absolute")
-    for values in (manifest["writeScope"], manifest["snapshot"]["executionSelectors"]):
+    snapshot = manifest["snapshot"]
+    if manifest["version"] == 5:
+        if {"includeSelectors", "executionSelectors", "includedUntracked", "excludedUntracked"} & snapshot.keys():
+            raise BoardError("INVALID_WORKSPACE", "A current snapshot carries a selection rule, not derived path lists")
+        if manifest["kind"] == "existing":
+            if _selection(snapshot.get("executionSelection")) != snapshot["executionSelection"]:
+                raise BoardError("INVALID_WORKSPACE", "Execution selection paths must be normalized")
+        elif "executionSelection" in snapshot:
+            raise BoardError("INVALID_WORKSPACE", "A materialized worktree has no execution selection")
+    selectors = (snapshot["executionSelectors"] if manifest["version"] < 5 else
+                 snapshot.get("executionSelection", {}).get("selectors", []))
+    for values in (manifest["writeScope"], selectors):
         if not isinstance(values, list) or any(_relative(value, allow_root=True) != value for value in values):
             raise BoardError("INVALID_WORKSPACE", "Manifest paths must be normalized")
 
@@ -986,28 +1060,37 @@ def _verify_contents(manifest, *, state_dir, require_unchanged, observation=None
             raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The pinned staged tree is inconsistent")
     if require_unchanged or manifest["access"] == "read":
         if observation is None:
-            observation = _observe(root, snapshot["executionSelectors"], state_dir=state_dir)
+            observation = _observe(root, **_observation_inputs(manifest), state_dir=state_dir)
         if observation["fingerprint"] != snapshot["executionFingerprint"]:
             raise BoardError("WORKSPACE_CHANGED", "The execution workspace no longer matches its prepared input")
     return observation
 
 
-def recovery_inputs(manifest: dict) -> list[str]:
-    """List exact nonignored partial files in the original write scope.
+def execution_selection(manifest: dict) -> dict | None:
+    """The bounded rule, with historical selectors read only by their version."""
+    if manifest["version"] < 5:
+        return {"kind": "selectors", "selectors": list(manifest["snapshot"]["executionSelectors"])}
+    return manifest["snapshot"].get("executionSelection")
 
-    The coordinator holds and rechecks the checkout reservation around this read.
-    Exact files, rather than directory selectors, keep ignored secrets and caches
-    outside the newly authorized continuation snapshot.
-    """
-    with _errors():
-        _validate_manifest(manifest)
-        root = Path(manifest["checkoutRoot"])
-        return [path for path in _untracked(root, []) if _in_scope(path, manifest["writeScope"])]
+
+def input_untracked_paths(manifest: dict, *, repository=None) -> list[str]:
+    """Paths present in the frozen input but absent from its frozen index."""
+    root = Path(repository or manifest["checkoutRoot"])
+    return sorted(_entries(root, manifest["inputTree"]).keys() - _entries(root, manifest["snapshot"]["stagedTree"]).keys())
+
+
+def _observation_inputs(manifest, repository=None):
+    selection = execution_selection(manifest)
+    if selection is None:
+        return {"selectors": []}
+    if selection["kind"] == "selectors":
+        return {"selectors": selection["selectors"]}
+    return {"exact": input_untracked_paths(manifest, repository=repository)}
 
 
 @contextmanager
 def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, shared_locks=None,
-                           _preparation=None, before_prepare=None):
+                           _preparation=None, before_prepare=None, handoff=None):
     """Hold the original allocation lock through preparation and admission.
 
     Both kinds are new allocations when no manifest existed before this
@@ -1038,9 +1121,9 @@ def submission_preparation(state_dir: Path, request_id: str, intent: dict, *, sh
             if new and before_prepare is not None:
                 before_prepare(directory)
             if _preparation is None:
-                manifest = _prepare_locked(directory, workspace_id, request_id, intent, state_dir=state_dir)
+                manifest = _prepare_locked(directory, workspace_id, request_id, intent, state_dir=state_dir, handoff=handoff)
             else:
-                manifest = _prepare_locked(directory, workspace_id, request_id, intent, _preparation, state_dir=state_dir)
+                manifest = _prepare_locked(directory, workspace_id, request_id, intent, _preparation, state_dir=state_dir, handoff=handoff)
         prepared.update(manifest=manifest, newAllocation=new)
         yield prepared
 
@@ -1175,23 +1258,34 @@ def _borrowed_submission_allocation(state_dir, intent):
                                  facts.st_dev, facts.st_ino, facts.st_mode)
 
 
-def prepare(state_dir: Path, request_id: str, intent: dict, *, _preparation=None, before_prepare=None) -> dict:
+def prepare(state_dir: Path, request_id: str, intent: dict, *, _preparation=None, before_prepare=None, handoff=None) -> dict:
     """Prepare once, then replay the same request's frozen input manifest."""
     with submission_preparation(state_dir, request_id, intent, _preparation=_preparation,
-                                before_prepare=before_prepare) as prepared:
+                                before_prepare=before_prepare, handoff=handoff) as prepared:
         return prepared["manifest"]
 
 
-def _prepare_locked(directory, workspace_id, request_id, intent, preparation=None, *, state_dir):
+def _prepare_locked(directory, workspace_id, request_id, intent, preparation=None, *, state_dir, handoff=None):
     manifest = _record(directory / "manifest.json")
     request_path = directory / "request.json"
     request = _record(request_path)
-    if manifest is None and request is not None and request["version"] != 4:
+    if manifest is None and request is not None and request["version"] != 5:
         raise BoardError("WORKSPACE_CONFLICT", "An unfinished historical request cannot create a new manifest")
-    request_version = manifest["version"] if manifest is not None else 4
+    request_version = manifest["version"] if manifest is not None else 5
     _write_once(request_path, _json({"version": request_version, "requestId": request_id, "intent": intent}))
     if preparation is not None:
         preparation["replayed"] = manifest is not None
+    if intent.get("executionSelection", {}).get("kind") == "seal":
+        final_input, output = handoff
+        if (intent["executionSelection"]["seal"]["snapshotSha256"] != output["snapshotSha256"]
+                or intent["base"].get("ref") != output["commit"]
+                or not Path(intent["cwd"]).is_relative_to(Path(final_input["checkoutRoot"]))):
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The continuation seal does not bind its allocation")
+        verify_sealed_output(final_input, final_input, output)
+        repository = _repository(final_input)
+        if (_line(repository, "symbolic-ref", "--quiet", output["ref"], allowed=(0, 1))
+                or _commit(repository, output["ref"]) != output["commit"]):
+            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The fixed handoff reference changed")
     if manifest is not None:
         verify(manifest, state_dir=state_dir, require_unchanged=False)
         return manifest
@@ -1200,7 +1294,7 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
     if pinned is None:
         source = _inspect(intent["cwd"])
         source["projectId"] = ensure_project_id(source["repositoryPath"])
-        pinned = {"source": source, **_snapshot(source, intent, workspace_id, state_dir=state_dir)}
+        pinned = {"source": source, **_snapshot(source, intent, workspace_id, state_dir=state_dir, handoff=handoff)}
         # Keep newly created objects reachable before a durable record
         # promises they can be recovered, including across Git GC.
         _pin(source["repositoryPath"], f"refs/hey-my-buddy/workspaces/{workspace_id}/retained/input", pinned["inputCommit"])
@@ -1225,17 +1319,20 @@ def _prepare_locked(directory, workspace_id, request_id, intent, preparation=Non
                              path=str(path), checkoutRoot=str(target))
         if source["repositoryPath"] != actual["repositoryPath"]:
             raise BoardError("WORKSPACE_CHANGED", "The execution repository changed during preparation")
-        selectors = intent["includeUntracked"] if intent["kind"] == "existing" else []
+        snapshot = dict(pinned["snapshot"])
+        if intent["kind"] == "existing":
+            snapshot["executionSelection"] = intent.get("executionSelection", {"kind": "selectors", "selectors": intent.get("includeUntracked", [])})
         if intent["kind"] == "existing" and source["checkoutRoot"] != actual["checkoutRoot"]:
             raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
         if intent["kind"] == "existing" and not fresh_input:
-            replay = _observe(Path(actual["checkoutRoot"]), selectors, state_dir=state_dir)
+            prepared_input = {**pinned, "version": 5, "kind": intent["kind"], "checkoutRoot": actual["checkoutRoot"], "snapshot": snapshot}
+            replay = _observe(Path(actual["checkoutRoot"]), **_observation_inputs(prepared_input), state_dir=state_dir)
             if replay["fingerprint"] != pinned["snapshot"]["sourceFingerprint"]:
                 raise BoardError("WORKSPACE_CHANGED", "The existing checkout changed after its input was frozen")
         fingerprint = (pinned["snapshot"]["sourceFingerprint"] if intent["kind"] == "existing" else
                        prepared["fingerprint"])
-        snapshot = dict(pinned["snapshot"], executionSelectors=selectors, executionFingerprint=fingerprint)
-        manifest = {"version": 4, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
+        snapshot["executionFingerprint"] = fingerprint
+        manifest = {"version": 5, "workspaceId": workspace_id, "kind": intent["kind"], "path": str(path),
                     "checkoutRoot": actual["checkoutRoot"], "projectId": source["projectId"], "access": intent["access"],
                     "baseCommit": pinned["baseCommit"], "inputCommit": pinned["inputCommit"], "inputTree": pinned["inputTree"],
                     "writeScope": intent["writeScope"], "integrator": intent["integrator"], "targetRef": intent["targetRef"],
@@ -1426,7 +1523,7 @@ def _seal_output(state_dir: Path, manifest: dict, task_id: str, attempt_id: str,
             repository = Path(actual["repositoryPath"])
             root = Path(manifest["checkoutRoot"])
             if observation is None:
-                observation = _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir,
+                observation = _observe(root, **_observation_inputs(manifest), state_dir=state_dir,
                                        capture=[*manifest["writeScope"], *allowed_paths])
             if manifest["access"] == "read":
                 entries, changed, excluded_changes = _entries(root, manifest["inputTree"]), [], []
@@ -1690,7 +1787,7 @@ def _update_index(root, before, entries):
         _git(root, "update-index", "-z", "--index-info", data=records)
 
 
-def _restore_paths(root, observation, worktree, index, *, state_dir, selectors, capture=()):
+def _restore_paths(root, observation, worktree, index, *, state_dir, selectors=(), exact=(), capture=()):
     """Git writes the selected worktree paths and the authorized staging state."""
     current = observation["tracked"] | observation["untrackedEntries"]
     desired = dict(current)
@@ -1711,10 +1808,10 @@ def _restore_paths(root, observation, worktree, index, *, state_dir, selectors, 
             except BoardError as error:
                 if error.code != "WORKSPACE_GIT_ERROR":
                     raise
-                return _checkout_observation(root, desired, state_dir=state_dir, selectors=selectors,
+                return _checkout_observation(root, desired, state_dir=state_dir, selectors=selectors, exact=exact,
                                              capture=[*capture, *worktree], paths=worktree, git_error=error)
     _update_index(root, observation["index"], index)
-    return _checkout_observation(root, desired, state_dir=state_dir, selectors=selectors,
+    return _checkout_observation(root, desired, state_dir=state_dir, selectors=selectors, exact=exact,
                                  capture=[*capture, *worktree], paths=worktree)
 
 
@@ -1743,7 +1840,7 @@ def _reset_site(root, manifest, observation, *, state_dir):
     states = {path: _entry_state(initial, path) for path in ordered}
     after = _restore_paths(root, observation, states,
                            {path: _entry_state(initial_index, path) for path in ordered},
-                           state_dir=state_dir, selectors=manifest["snapshot"]["executionSelectors"], capture=manifest["writeScope"])
+                           state_dir=state_dir, **_observation_inputs(manifest), capture=manifest["writeScope"])
     # An excluded cache was never captured by content, so a modified one cannot be
     # returned mechanically; it is reported instead of being silently accepted.
     remaining = sorted(path for path, fingerprint in excluded.items()
@@ -1944,7 +2041,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             repository = Path(actual["repositoryPath"])
             capture = (["."] if action in ("adopt", "abandon") else
                        [*manifest["writeScope"], *(selected_paths or blocking)])
-            observation = _observe(root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir, capture=capture)
+            observation = _observe(root, **_observation_inputs(manifest), state_dir=state_dir, capture=capture)
             if observation["fingerprint"] != observed_fingerprint:
                 raise BoardError("WORKSPACE_CHANGED", "The workspace does not match the fingerprint the Host observed",
                                  observedFingerprint=observed_fingerprint, currentFingerprint=observation["fingerprint"])
@@ -1982,7 +2079,7 @@ def resolve(state_dir, manifest: dict, *, task_id: str, attempt_id: str, action:
             authorized = {path: entries[path].get("authorized") for path in selected}
             after = _restore_paths(root, observation, authorized,
                                    {path: entries[path].get("authorizedIndex") for path in selected}, state_dir=state_dir,
-                                   selectors=manifest["snapshot"]["executionSelectors"], capture=manifest["writeScope"])
+                                   **_observation_inputs(manifest), capture=manifest["writeScope"])
             remaining = _blocking_paths(root, manifest, after, state_dir=state_dir)
             preserved = sorted(set(entries) - set(selected))
             if remaining:
@@ -2500,7 +2597,7 @@ def _cleanup_restore(checkout_root, repository, git_dir, manifest, sealed, *, st
                     raise
                 write_error = error
         return _checkout_observation(checkout_root, entries, state_dir=state_dir,
-                                     selectors=manifest["snapshot"]["executionSelectors"], paths=missing,
+                                     **_observation_inputs(manifest, repository), paths=missing,
                                      capture=[*manifest["writeScope"], *allowed, *missing], git_error=write_error)
     return None
 
@@ -2665,7 +2762,7 @@ def _cleanup_proof(repository, checkout_root, allocation, manifest, retained, se
         result["reasons"].append("sealed-output-invalid")
         return
     if observation is None:
-        observation = _observe(checkout_root, manifest["snapshot"]["executionSelectors"], state_dir=state_dir,
+        observation = _observe(checkout_root, **_observation_inputs(manifest, repository), state_dir=state_dir,
                                capture=[*manifest["writeScope"], *allowed])
     if observation["fingerprint"] == snapshot.get("observationSha256"):
         return

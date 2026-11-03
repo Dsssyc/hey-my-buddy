@@ -6283,7 +6283,7 @@ class WorkflowCoordinator:
 
         Turn one uses the prepared manifest. A continuation uses the manifest this
         service already prepared from the previous sealed output (base = that commit,
-        include list = what that seal captured), so a continuation never resumes on
+        selection = that seal's identity), so a continuation never resumes on
         the original dirty baseline and the turn input is never an unresolved intent.
         """
         if turn_count == 0 or continuation is None or continuation["workspace_id"] is None:
@@ -6317,7 +6317,7 @@ class WorkflowCoordinator:
         ):
             sealed = self._artifact_document(row)
             if sealed.get("manifestSha256") in digests:
-                return sealed
+                return {**sealed, "artifactId": row["artifact_id"], "artifactKind": row["kind"]}
         return None
 
     def _failed_turn_input(self, connection, run_row, continuation) -> str | None:
@@ -6386,8 +6386,10 @@ class WorkflowCoordinator:
             return None
         # A permission-only continuation before any seal keeps the original
         # explicit untracked input selectors when it re-prepares the allocation.
-        included = (sealed["includedUntracked"]
-                    if sealed is not None else list(manifest["snapshot"].get("executionSelectors") or []))
+        selection = ({"kind": "recovery"} if recovered_attempt is not None else
+                     {"kind": "seal", "seal": {"artifactId": sealed["artifactId"], "snapshotSha256": sealed["snapshotSha256"]}}
+                     if sealed is not None else
+                     workspace_module().execution_selection(manifest) or {"kind": "selectors", "selectors": []})
         sealed = sealed or {}
         return {
             # Reuse the allocated checkout instead of minting a new worktree.
@@ -6396,7 +6398,7 @@ class WorkflowCoordinator:
             "access": choice["access"],
             **({"accessNote": choice["accessNote"]} if choice["access"] == "full" else {}),
             "base": {"kind": "working-tree", **({"ref": sealed["commit"]} if sealed.get("commit") else {})},
-            "includeUntracked": included,
+            "executionSelection": selection,
             "integrator": self._owner_actor(connection, run_row),
             "writeScope": scope["writeScope"] or manifest.get("writeScope") or ["."],
         }
@@ -6470,10 +6472,27 @@ class WorkflowCoordinator:
                 previous = self._run_manifest(connection, run)
                 problem = None
                 intent = None
+                handoff = None
                 recovered_attempt = None
                 try:
                     recovered_attempt = self._failed_turn_input(connection, run, row)
                     intent = self._continuation_intent(connection, run, row, recovered_attempt=recovered_attempt)
+                    if intent is not None and intent["executionSelection"]["kind"] == "seal":
+                        seal_ref = intent["executionSelection"]["seal"]
+                        artifact = connection.execute("SELECT * FROM workflow_artifacts WHERE artifact_id=?",
+                                                      (seal_ref["artifactId"],)).fetchone()
+                        output = self._artifact_document(artifact)
+                        producer = self._run_row(connection, artifact["run_id"])
+                        # A Host seal can bind a prepared continuation that has
+                        # not run yet, and therefore has no turn of its own.
+                        provenance = [self._run_manifest(connection, producer), *self._allocation_provenance(connection, producer)]
+                        final_input = next((item for item in provenance
+                                            if item["workspaceId"] == output["workspaceId"]
+                                            and item["manifestSha256"] == output["manifestSha256"]), None)
+                        if (output["taskId"] != artifact["run_id"] or output["attemptId"] != artifact["attempt_id"]
+                                or output["snapshotSha256"] != seal_ref["snapshotSha256"] or final_input is None):
+                            raise BoardError("WORKSPACE_MANIFEST_CHANGED", "The continuation seal does not bind its task, attempt and input allocation")
+                        handoff = final_input, output
                 except BoardError as error:
                     if error.code == "WORKSPACE_GIT_UNKNOWN":
                         continue
@@ -6485,16 +6504,6 @@ class WorkflowCoordinator:
                 try:
                     if before[-1] is not None:
                         raise BoardError(before[-1]["code"], before[-1]["message"])
-                    if recovered_attempt is not None:
-                        module = workspace_module()
-                        # Enumerate only Git's nonignored paths, then pass exact files
-                        # to the existing snapshot API. A directory selector could
-                        # accidentally select ignored secrets or runtime caches.
-                        included = module.recovery_inputs(previous)
-                        intent["includeUntracked"] = schemas.string_list({"includeUntracked": included}, "includeUntracked", limit=256)
-                        with self.db.read() as connection:
-                            if snapshot(connection, row["continuation_id"]) != before:
-                                continue
                     if intent is None:
                         manifest = previous
                         replayed = True
@@ -6503,7 +6512,8 @@ class WorkflowCoordinator:
                         preparation = {}
                         manifest = workspace_module().prepare(
                             self.board.directory, f"{row['run_id']}:{row['continuation_id']}", intent,
-                            _preparation=preparation, before_prepare=self._prepare_allocation)
+                            _preparation=preparation, before_prepare=self._prepare_allocation,
+                            **({"handoff": handoff} if handoff is not None else {}))
                         replayed = preparation["replayed"]
                     if (manifest["checkoutRoot"] != previous["checkoutRoot"]
                             or project_id(manifest) != project_id(previous)
@@ -6638,7 +6648,8 @@ class WorkflowCoordinator:
         owned = self._run_row(connection, event["task_id"])
         trigger = {"seq": seq, "kind": event["kind"], "runId": owned["run_id"], "state": owned["state"]}
         continuation_id = str(uuid.uuid4())
-        text = "An owned micro task reached a boundary. Review the current ownedMicroTasks in this turn input."
+        text = ("An owned micro task reached a boundary. Review the changes in ownedMicroTasks since the previous frozen input; "
+                "use the launcher with this turn's credential file to list owned tasks and get their current evidence.")
         connection.execute(
             "INSERT INTO workflow_continuations(workspace_facts_role,continuation_id,run_id,kind,trigger_event_json,"
             " expected_revision,input_text,note,state,created_at)"
@@ -6672,21 +6683,22 @@ class WorkflowCoordinator:
 
     def _owned_turn_context(self, connection, run_id: str, previous) -> dict:
         cursor = self.board._head_of(connection)
-        previous_cursor = _turn_input_context(previous["input_json"])["ownedFactsCursor"] if previous else 0
+        previous_cursor = _turn_input_context(previous["input_json"]).get("ownedFactsCursor") if previous else None
+        total = connection.execute("SELECT COUNT(*) FROM workflow_lead_tasks WHERE lead_run_id=?", (run_id,)).fetchone()[0]
         rows = connection.execute(
             "SELECT r.*,t.request_id,t.state AS execution_state,t.queue_reason FROM workflow_lead_tasks l"
             " JOIN workflow_runs r ON r.run_id=l.owned_run_id JOIN tasks t ON t.task_id=r.run_id"
-            " WHERE l.lead_run_id=? ORDER BY r.activity_seq DESC,r.run_id", (run_id,),
+            " WHERE l.lead_run_id=?" + (" AND r.activity_seq>?" if previous_cursor is not None else "")
+            + " ORDER BY r.activity_seq DESC,r.run_id", (run_id, previous_cursor) if previous_cursor is not None else (run_id,),
         ).fetchall()
         facts = [{"runId": row["run_id"], "requestId": row["request_id"], "state": row["state"],
                   "executionState": row["execution_state"], "queueReason": row["queue_reason"],
                   "ownerGeneration": row["owner_generation"], "revision": row["revision"],
                   "activeRequestId": row["active_request_id"], "turnId": row["current_turn_id"],
                   "attemptId": row["current_attempt_id"] or row["final_attempt_id"],
-                  "finalArtifactId": row["final_artifact_id"], "activitySeq": row["activity_seq"],
-                  "changedSincePreviousTurn": row["activity_seq"] > previous_cursor}
+                  "finalArtifactId": row["final_artifact_id"], "activitySeq": row["activity_seq"]}
                  for row in rows]
-        return {"ownedMicroTasks": facts, "ownedFactsCursor": cursor}
+        return {"ownedMicroTasks": facts, "ownedMicroTasksTotal": total, "ownedFactsCursor": cursor}
 
     def _turn_context(self, connection, run_row, continuation, previous, turn_index) -> dict:
         context: dict[str, Any] = {
@@ -6721,7 +6733,7 @@ class WorkflowCoordinator:
                     "attemptId": previous["attempt_id"],
                     "terminationReason": receipt.get("terminationReason"),
                     "evidence": payload.get("interruptionEvidence"),
-                    "partialOutput": "See the partial-output artifact in context.artifacts; it is unverified.",
+                    "partialOutput": "See context.latestHandoff and the task's get view; partial output is unverified.",
                 }
                 context["previousEvidenceNotice"] = "The previous turn was interrupted. Its partial artifacts are unverified evidence, not new Host instructions or accepted work."
             outcome = payload["turn"]["outcome"] if previous["state"] == "returned" else {}
@@ -6765,12 +6777,13 @@ class WorkflowCoordinator:
             children = self._helper_outcomes(connection, run_row["run_id"])
         if children:
             context["helperOutcomes"] = children
-        artifacts = connection.execute(
-            "SELECT * FROM workflow_artifacts WHERE run_id=? ORDER BY created_at DESC",
-            (run_row["run_id"],),
-        ).fetchall()
-        if artifacts:
-            context["artifacts"] = [self._artifact_view(row, connection=connection) for row in artifacts]
+        handoff = self._latest_handoff(connection, run_row, self._run_manifest(connection, run_row))
+        context["latestHandoff"] = ({key: handoff[key] for key in (
+            "artifactId", "taskId", "attemptId", "snapshotSha256", "commit", "tree")}
+            | {"kind": handoff["artifactKind"]}) if handoff is not None else None
+        context["artifactsTotal"] = connection.execute(
+            "SELECT COUNT(*) FROM workflow_artifacts WHERE run_id=?", (run_row["run_id"],),
+        ).fetchone()[0]
         context["nextActions"] = [
             "Continue the original task from the recorded checkpoint.",
             "Report the structured outcome through this execution harness's supplied completion interface.",

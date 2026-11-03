@@ -461,6 +461,12 @@ class ScopeRecoveryTestCase(RealWorkspaceTestCase):
         resumed = self.claim(board, run_id, request_id="claim-adopted", nonce="k" * 16)
         execution = turn_manifest(self.directory, resumed["claim"]["turn"]["input"])
         self.assertEqual(execution["baseCommit"], adopted["outputCommit"])
+        context = resumed["claim"]["turn"]["input"]["context"]
+        self.assertEqual(context["latestHandoff"]["artifactId"], adopted["artifactId"])
+        self.assertEqual(context["latestHandoff"]["kind"], "resolved-output")
+        self.assertEqual(workspace_module.execution_selection(execution), {
+            "kind": "seal", "seal": {"artifactId": adopted["artifactId"],
+                                      "snapshotSha256": context["latestHandoff"]["snapshotSha256"]}})
         self.assertEqual((checkout / "outside.txt").read_text(encoding="utf-8"), "untracked outside\n")
         self.assertEqual((checkout / "tracked.txt").read_text(encoding="utf-8"), "outside the authorized scope\n")
 

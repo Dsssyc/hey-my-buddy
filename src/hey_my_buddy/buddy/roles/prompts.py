@@ -11,18 +11,17 @@ def _role_prompt(resource: str, sections: tuple[str, ...]) -> str:
 
 
 def _prompt_turn_input(turn_input: dict) -> dict:
-    """The turn input as the Worker's prompt carries it: without the workspace account.
+    """Project the Worker's operating context without service-side accounts.
 
-    ``executionWorkspace.snapshot`` is the blackboard's own accounting of the
-    workspace — selectors, refs and fingerprints — and its path lists grow with
-    the workspace's untracked files. It is not part of what the blackboard hands
-    a harness process (ADR-030), while the fields around it (path, access,
-    write scope) are what the Worker works under, so only the snapshot stays
-    out of the serialized input.
+    The runtime resolves the frozen ManifestRef before calling this function.
+    Workspace paths, access and scope guide work. The snapshot stays in its frozen
+    workspace record and the stash inventory in the frozen input; get/audit retain
+    their evidence for service comparison and review.
     """
     workspace = {key: value for key, value in turn_input["executionWorkspace"].items()
                  if key != "snapshot"}
-    return {**turn_input, "executionWorkspace": workspace}
+    context = {key: value for key, value in turn_input["context"].items() if key != "sharedStash"}
+    return {**turn_input, "executionWorkspace": workspace, "context": context}
 
 
 def worker_prompt(task_text: str, turn_input: dict, *, delivery: tuple[str, ...],
