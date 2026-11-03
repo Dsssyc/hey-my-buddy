@@ -52,7 +52,7 @@ export function ReminderSection({ api, csrfToken, settings, refresh, unavailable
         <div className="flex flex-wrap items-center gap-3">
         <label htmlFor={inputId} className="inline-flex items-center gap-2">{t("reminders.possiblyStuck")}{changed && <UnsavedMark label={t("reminders.unsaved")} />}</label>
         <div className="flex flex-wrap items-center gap-3">
-        <Hint text={unavailable ? t("reminders.disconnected") : busy ? t("reminders.busy") : t("reminders.range")}>
+        <Hint text={unavailable ? t("reminders.disconnected") : busy ? t("reminders.busy") : undefined}>
           <Input id={inputId} className="h-8 w-16 text-sm tabular-nums" type="number" inputMode="numeric" min="1" max="1440" step="1" value={draft}
             readOnly={unavailable || busy} aria-disabled={unavailable || busy || undefined} aria-label={t("reminders.silenceMinutes")} aria-describedby={`${inputId}-description`}
             aria-invalid={draft.length > 0 && !valid || undefined}

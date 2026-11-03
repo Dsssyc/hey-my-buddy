@@ -234,7 +234,7 @@ describe("the head of the detail", () => {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 3100)); });
     expect((await screen.findByRole("alert")).textContent).toContain("连接中断");
     expect(chosenStep()).toContain("回合 2");
-    (reads.workflow as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ value: workflow(), verifiedAtMs: 1 }));
+    (reads.workflow as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ value: workflow() }));
     await f.user.click(within(screen.getByRole("alert")).getByRole("button", { name: "重试读取" }));
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   }, 10000);

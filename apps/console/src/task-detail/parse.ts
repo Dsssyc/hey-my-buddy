@@ -6,7 +6,7 @@ import type { Reason } from "../reason";
 import type { ActivityPhase, Actor, RoutingMode, Task, TokenUsage } from "../types";
 import type {
   Activity, Artifact, Attempt, Audit, AuditRequest, Basis, Buddy, CompactRequest, Continuation, CumulativePatch, Ending,
-  HostConclusion, Inquiries, Inquiry, InquiryState, Integration, OpenRequest, ResultTurn, Routing, RoutingEntry, Session,
+  HostConclusion, Inquiries, Inquiry, InquiryState, Integration, OpenRequest, ResultTurn, Routing, RoutingEntry,
   TaskView, Turn, Workflow,
 } from "./types";
 
@@ -424,25 +424,10 @@ export function parseActivity(value: unknown): Activity | null {
   const eventSeq = intOrNull(activity.eventSeq, "task.activity");
   return {
     phase: PHASES.includes(activity.phase as ActivityPhase) ? (activity.phase as ActivityPhase) : "unknown",
-    observedAt, toolName, lastToolAt, lastNativeAt, eventSeq,
+    observedAt, toolName,
     modelTurns: counts ? intOrNull(counts.modelTurns, "task.activity.counts") : null,
     toolCalls: counts ? intOrNull(counts.toolCalls, "task.activity.counts") : null,
     basis: toolName || lastToolAt ? "tool" : lastNativeAt || nativeSession ? "native" : observedAt || eventSeq !== null ? "phase" : "unknown",
-  };
-}
-
-function parseSession(receipt: Rec | null): Session | null {
-  const result = receipt && recOrNull(receipt.result, "attempt.result");
-  const native = result && recOrNull(result.nativeSession, "attempt.nativeSession");
-  const identity = result && recOrNull(result.nativeIdentity, "attempt.nativeIdentity");
-  const id = strOrNull(native?.sessionId, "attempt.nativeSession") ?? strOrNull(identity?.sessionId, "attempt.nativeIdentity");
-  if (!native && id === null) return null;
-  return {
-    id,
-    scope: strOrNull(native?.storageScope, "attempt.nativeSession"), owner: strOrNull(native?.storageOwner, "attempt.nativeSession"),
-    visibility: strOrNull(native?.nativeAppVisibility, "attempt.nativeSession"),
-    resumable: boolOrNull(native?.resumable, "attempt.nativeSession"), binding: boolOrNull(native?.bindingPresent, "attempt.nativeSession"),
-    note: strOrNull(native?.note, "attempt.nativeSession")?.trim() || null,
   };
 }
 
@@ -478,7 +463,7 @@ function parseAttempt(task: Rec): Attempt | null {
     overdue: active && bool(reminders.overdue, "task.selectedAttempt.reminders"),
     possiblyStuck: active && bool(reminders.possiblyStuck, "task.selectedAttempt.reminders"),
     activity: active ? parseActivity(task.activity) : null,
-    ending, session: parseSession(receipt),
+    ending,
     tokenUsage: parseTokenUsage(attempt.tokenUsage),
     shutdownConfirmed: bool(attempt.shutdownConfirmed, "task.selectedAttempt"),
   };

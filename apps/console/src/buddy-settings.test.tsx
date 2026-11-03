@@ -247,15 +247,14 @@ describe("the harness directory", () => {
     await user.click(foldHandle("Claude Code"));
     expect(foldHandle("Claude Code").closest("[data-slot=harness-section]")!.textContent).toContain("启用 1 / 2");
     expect(queryModel(SONNET)).toBeNull();
-    // The harness that cannot work is written with its recorded state; the
-    // recorded reason is its explanation, on hover and for a screen reader.
+    // The summary names the recorded state without repeating it in a popup.
     const zcode = foldHandle("ZCode");
     expect(zcode.getAttribute("aria-expanded")).toBe("false");
     const state = within(zcode.closest("[data-slot=harness-section]")!).getByRole("button", { name: "ZCode 账户" });
     expect(within(state).getByText("未找到")).toBeTruthy();
-    expect(state.getAttribute("aria-description")).toContain(reasonText({ code: "harness.not-found", params: {} }));
+    expect(state.getAttribute("aria-description")).toBeNull();
     await user.hover(state);
-    expect((await screen.findByRole("tooltip", undefined, { timeout: 2000 })).textContent).toContain(reasonText({ code: "harness.not-found", params: {} }));
+    expect(screen.queryByRole("tooltip")).toBeNull();
     // A folded harness hides its models; unfolded, the model says nothing the harness already said.
     expect(queryModel(GLM)).toBeNull();
     await user.click(zcode);

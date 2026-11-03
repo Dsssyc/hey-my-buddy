@@ -44,7 +44,7 @@ for (const language of ["zh", "en"] as const) describe(`micro task state in ${la
     } : null;
     const view = render(<TooltipProvider><Header view={parseTask(record, "m1")}
       workflow={entry.loaded ? workflow({ state: entry.state, hostConclusion: conclusion }) : null} turns={2}
-      endMs={Date.parse(at("11:05"))} nowMs={Date.parse(at("11:30"))} verifiedAtMs={null}
+      endMs={Date.parse(at("11:05"))}
       error="" busy={false} onRefresh={() => {}} onBack={() => {}}/></TooltipProvider>);
     const status = view.container.querySelector("[data-slot=detail-status]")!;
     expect(screen.getByRole("heading", { name: language === "zh" ? "未命名微任务" : "Unnamed micro task" })).toBeTruthy();

@@ -5,8 +5,6 @@ export default {
     title: "Router 设置需要升级",
     locked: "Router 设置需要升级后才能修改",
   },
-  /** Why a control cannot be used, then what it says of itself. */
-  lockedAnd: "{{locked}}。{{own}}",
   list: {
     name: "列表",
     label: "Router 列表",
@@ -48,16 +46,14 @@ export default {
   },
   mode: {
     name: "默认模式",
-    nameHint: "只有一个候选时，由程序直接选定，不经过 Router",
     label: "默认模式",
     fast: "快速",
     review: "审阅",
-    fastHint: "需要 Router 判断时，任务的文字会发给 Router 的模型提供方",
-    reviewHint: "需要 Router 判断时，任务的文字会发给 Router 的模型提供方，还会发送一份冻结的代码副本；DSH 与 ZCode 没有系统沙盒，不能保证阻止副本以外的读取或外传",
+    fastConsequence: "需要 Router 判断时，任务的文字会发给 Router 的模型提供方",
+    reviewConsequence: "需要 Router 判断时，任务的文字会发给 Router 的模型提供方，还会发送一份冻结的代码副本；DSH 与 ZCode 没有系统沙盒，不能保证阻止副本以外的读取或外传",
   },
   budget: {
     name: "审阅预算",
-    nameHint: "审阅预算只用于之后的路由，快速路由固定 {{duration}}",
     label: "审阅预算",
     brief: "简要",
     standard: "标准",
@@ -66,7 +62,6 @@ export default {
   },
   retry: {
     name: "重试间隔",
-    nameHint: "一个 Router 没有给出答案之后，过了这段时间才会再用它，其间列表里后面的项补位",
     label: "重试间隔秒数",
     unit: "秒",
     range: "需要 {{min}}–{{max}} 的整数",
@@ -77,7 +72,6 @@ export default {
     empty: "暂无记录",
     unavailable: "不可用",
     failed: "失败",
-    failedHint: "弃权与取消不算失败",
     consecutiveFailures: "连续失败",
     abstention: "弃权",
     cancelled: "取消",

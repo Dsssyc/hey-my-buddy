@@ -1,7 +1,6 @@
 import { reasonText } from "../i18n/reason";
 import { useTranslation } from "react-i18next";
 import type { ReactNode } from "react";
-import { Hint } from "@/components/hint";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { StateMark } from "@/components/ui/state-mark";
 import { formatShortDateTime } from "../i18n/format";
@@ -12,11 +11,9 @@ const head = "border-b py-2 pr-6 text-left text-xs font-normal whitespace-nowrap
 const cell = "border-b py-2 pr-6 align-middle whitespace-nowrap";
 
 /** A name with its number, in one line of the facts. */
-function Fact({ name, hint, children }: { name: string; hint?: string; children: ReactNode }) {
+function Fact({ name, children }: { name: string; children: ReactNode }) {
   return <dl className="flex items-baseline gap-1.5">
-    <dt className="text-ink3">
-      <Hint text={hint}><span tabIndex={hint ? 0 : undefined} className="rounded-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">{name}</span></Hint>
-    </dt>
+    <dt className="text-ink3">{name}</dt>
     <dd className="tabular-nums">{children}</dd>
   </dl>;
 }
@@ -45,7 +42,7 @@ export function RolesRecords({ health }: { health: RoutingHealth | undefined }) 
       {health.sampleCount === 0
         ? <p className="text-ink3">{t("roles.records.empty")}</p>
         : <>
-          <Fact name={t("roles.records.failed")} hint={t("roles.records.failedHint")}>{health.failureCount} / {health.sampleCount}</Fact>
+          <Fact name={t("roles.records.failed")}>{health.failureCount} / {health.sampleCount}</Fact>
           {recordCounts(health).map(({ name, n }) => <Fact key={name} name={t(`roles.records.${name}`)}>{n}</Fact>)}
           <Fact name={t("roles.records.lastSuccess")}>{health.lastSuccessAt ? <Moment at={health.lastSuccessAt} /> : t("roles.records.never")}</Fact>
         </>}

@@ -72,8 +72,6 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
     interval: changed && recorded.routerRetryIntervalSeconds !== configuration.routerRetryIntervalSeconds,
   };
   const mark = (is: boolean) => is ? t("unsaved") : undefined;
-  /** What a control says when it cannot be used, with its own words after. */
-  const explain = (own?: string) => locked ? (own ? t("roles.lockedAnd", { locked, own }) : locked) : own;
   const limits = recorded?.routingBudgetLimits;
   const interval = configuration?.routerRetryIntervalSeconds;
   const intervalInvalid = !!configuration && retryIntervalSeconds(interval) === null;
@@ -106,20 +104,21 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
           onRemove={buddyId => editor.update(draft => removeRouter(draft, buddyId))} />
       </Section>
 
-      <Section name={t("roles.mode.name")} hint={t("roles.mode.nameHint")} unsaved={mark(unsaved.mode)}>
+      <Section name={t("roles.mode.name")} unsaved={mark(unsaved.mode)}>
         <Segmented aria-label={t("roles.mode.label")} value={configuration?.defaultRoutingMode ?? ""}
           onValueChange={value => change({ defaultRoutingMode: value as RoutingMode })}>
-          {MODES.map(mode => <Hint key={mode} text={explain(t(`roles.mode.${mode}Hint`))}>
+          {MODES.map(mode => <Hint key={mode} text={locked}>
             <SegmentedItem value={mode} aria-disabled={!!locked || undefined}>{t(`roles.mode.${mode}`)}</SegmentedItem>
           </Hint>)}
         </Segmented>
+        {configuration && <p data-slot="routing-mode-consequence" className="mt-2 text-xs text-ink3">{t(`roles.mode.${configuration.defaultRoutingMode}Consequence`)}</p>}
       </Section>
 
-      <Section name={t("roles.budget.name")} hint={t("roles.budget.nameHint", { duration: formatDuration(60_000) })} unsaved={mark(unsaved.budget)}>
+      <Section name={t("roles.budget.name")} unsaved={mark(unsaved.budget)}>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           <Segmented aria-label={t("roles.budget.label")} value={configuration?.routingBudget ?? ""}
             onValueChange={value => change({ routingBudget: value as RoutingBudget })}>
-            {BUDGETS.map(budget => <Hint key={budget} text={explain()}>
+            {BUDGETS.map(budget => <Hint key={budget} text={locked}>
               <SegmentedItem value={budget} aria-disabled={!!locked || undefined}>{t(`roles.budget.${budget}`)}</SegmentedItem>
             </Hint>)}
           </Segmented>
@@ -131,9 +130,9 @@ export function RolesView({ snapshot, editor, active, location, onNavigate, hidd
         </div>
       </Section>
 
-      <Section name={t("roles.retry.name")} hint={t("roles.retry.nameHint")} unsaved={mark(unsaved.interval)}>
+      <Section name={t("roles.retry.name")} unsaved={mark(unsaved.interval)}>
         <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-          <Hint text={explain()}>
+          <Hint text={locked}>
             <Input type="number" inputMode="numeric" className="h-8 w-[84px] bg-card px-2.5 tabular-nums shadow-none"
               min={ROUTER_RETRY_INTERVAL_MIN} max={ROUTER_RETRY_INTERVAL_MAX} step={1}
               value={interval === undefined || Number.isNaN(interval) ? "" : interval}

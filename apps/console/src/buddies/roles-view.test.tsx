@@ -533,16 +533,16 @@ describe("the settings of the role", () => {
     await openRoles(f);
     expect(modeOption("审阅").getAttribute("aria-checked")).toBe("true");
     expect(modeOption("快速").getAttribute("aria-checked")).toBe("false");
-    // What is sent, and to whom, is said where the choice is made.
-    expect(modeOption("快速").getAttribute("aria-description")).toBe("需要 Router 判断时，任务的文字会发给 Router 的模型提供方");
-    const review = modeOption("审阅").getAttribute("aria-description")!;
-    expect(review).toContain("任务的文字会发给 Router 的模型提供方");
-    expect(review).toContain("还会发送一份冻结的代码副本");
-    expect(review).toContain("DSH 与 ZCode 没有系统沙盒，不能保证阻止副本以外的读取或外传");
-    expect(within(section("默认模式")).getByText("默认模式").getAttribute("aria-description")).toBe("只有一个候选时，由程序直接选定，不经过 Router");
+    const consequence = section("默认模式").querySelector('[data-slot="routing-mode-consequence"]')!;
+    expect(consequence.textContent).toContain("还会发送一份冻结的代码副本");
+    expect(consequence.textContent).toContain("DSH 与 ZCode 没有系统沙盒");
+    expect(modeOption("快速").getAttribute("aria-description")).toBeNull();
+    expect(modeOption("审阅").getAttribute("aria-description")).toBeNull();
+    expect(within(section("默认模式")).getByText("默认模式").getAttribute("aria-description")).toBeNull();
     expect(unsavedIn("默认模式")).toHaveLength(0);
     await user.click(modeOption("快速"));
     expect(modeOption("快速").getAttribute("aria-checked")).toBe("true");
+    expect(consequence.textContent).toBe("需要 Router 判断时，任务的文字会发给 Router 的模型提供方");
     expect(unsavedIn("默认模式")).toHaveLength(1);
     expect(unsavedIn("列表")).toHaveLength(0);
     await user.click(saveButton());
@@ -558,7 +558,7 @@ describe("the settings of the role", () => {
     const budget = within(section("审阅预算"));
     expect(budget.getByText("5 分")).toBeTruthy();
     expect(budget.getByText("24 次工具调用")).toBeTruthy();
-    expect(budget.getByText("审阅预算").getAttribute("aria-description")).toBe("审阅预算只用于之后的路由，快速路由固定 1 分");
+    expect(budget.getByText("审阅预算").getAttribute("aria-description")).toBeNull();
     // Limits are recorded for one level only; another level has none to show.
     await user.click(budgetOption("简要"));
     expect(budgetOption("简要").getAttribute("aria-checked")).toBe("true");
@@ -575,7 +575,7 @@ describe("the settings of the role", () => {
     expect(within(section("审阅预算")).queryByText(/\d+ (?:时|分|秒)|工具调用/)).toBeNull();
   });
 
-  it("sets the retry interval in seconds, with the explanation on its name, and publishes the one setting", async () => {
+  it("sets the retry interval in seconds and publishes the one setting", async () => {
     const f = fixture(snapshot());
     const user = userEvent.setup();
     await openRoles(f);
@@ -583,7 +583,7 @@ describe("the settings of the role", () => {
     expect(intervalInput().getAttribute("aria-invalid")).toBeNull();
     expect(within(section("重试间隔")).getByText("秒")).toBeTruthy();
     expect(within(section("重试间隔")).getByText("重试间隔").getAttribute("aria-description"))
-      .toBe("一个 Router 没有给出答案之后，过了这段时间才会再用它，其间列表里后面的项补位");
+      .toBeNull();
     await user.clear(intervalInput());
     await user.type(intervalInput(), String(interval));
     expect(intervalInput()).toHaveProperty("value", String(interval));
@@ -671,8 +671,7 @@ describe("the records of routing", () => {
     expect(records().queryByText("超出时限或工具调用上限")).toBeNull();
     expect(records().queryByText("输入变化")).toBeNull();
     expect(records().queryByText(/成功 \d/)).toBeNull();
-    // Abstentions and cancellations are not failures; this is the hint of the word.
-    expect(records().getByText("失败").getAttribute("aria-description")).toBe("弃权与取消不算失败");
+    expect(records().getByText("失败").getAttribute("aria-description")).toBeNull();
   });
 
   it("writes the recorded outcomes of the Router beside the failures: budget, bounds and changed input", async () => {

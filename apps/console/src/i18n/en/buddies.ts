@@ -23,11 +23,6 @@ export default {
     pin: "Pin",
     exclude: "Exclude",
   },
-  preferenceHint: {
-    prefer: "Considered first when routing",
-    pin: "Routing picks only among pinned buddies",
-    exclude: "Left out of routing",
-  },
   unsaved: "Unsaved",
   loginExpired: "Browser authorization has expired and nothing was submitted; authorize this browser again.",
   models: {
@@ -54,7 +49,6 @@ export default {
     },
     unavailable: "Unavailable",
     pending: "Pending",
-    pendingSince: "Pending since {{time}}",
     fresh: "New",
     occupancyUnknown: "In use: unknown",
     occupancy: "In use: {{active}}, limit: {{limit}}",

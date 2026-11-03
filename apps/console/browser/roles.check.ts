@@ -47,18 +47,19 @@ for (const { locale, view, list, sections, add, addTitle, routers, failures, sta
       }
     });
 
-    test("wraps the long hint of a mode, reached by the keyboard, inside 320px", async ({ page }) => {
+    test("writes the chosen mode's consequence below the choice and leaves its hover quiet", async ({ page }) => {
       await open(page, "#buddies/roles");
-      for (let step = 0; step < 60 && !(await page.evaluate(() => document.activeElement?.getAttribute("role") === "radio")); step++)
-        await page.keyboard.press("Tab");
-      // Hints passed on the way are still closing: the one that is open is the one read.
-      const hint = page.locator("[data-slot=tooltip-content][data-state$=open]");
-      await expect(hint).toBeVisible();
-      const box = (await hint.boundingBox())!;
-      expect(box.width).toBeLessThanOrEqual(320);
-      // More than one line of 12px text: the sentence was wrapped, not cut.
-      expect(box.height).toBeGreaterThan(40);
-      await expectWholeAndApart(page.locator("body"), hint);
+      const consequence = page.locator('[data-slot="routing-mode-consequence"]');
+      const fast = page.getByRole("radio", { name: locale === "zh-CN" ? "快速" : "Fast", exact: true });
+      const review = page.getByRole("radio", { name: locale === "zh-CN" ? "审阅" : "Review", exact: true });
+      await fast.click();
+      await expect(consequence).not.toContainText(locale === "zh-CN" ? "代码副本" : "copy of the code");
+      await review.click();
+      await expect(consequence).toContainText(locale === "zh-CN" ? "代码副本" : "copy of the code");
+      expect((await consequence.boundingBox())!.y).toBeGreaterThan((await review.boundingBox())!.y);
+      await review.hover();
+      await page.waitForTimeout(700);
+      await expect(page.getByRole("tooltip")).toHaveCount(0);
     });
 
     test("opens the add dialog by a click without a hint over it", async ({ page }) => {

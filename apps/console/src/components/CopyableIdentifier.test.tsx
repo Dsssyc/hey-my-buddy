@@ -17,6 +17,7 @@ describe("copyable identifiers", () => {
     render(<CopyableIdentifier value={id} />);
     expect(screen.getByText("macro-79771ce9…91da").getAttribute("title")).toBeNull();
     const button = screen.getByRole("button", { name: `复制标识 ${id}` });
+    expect(button.hasAttribute("aria-description")).toBe(false);
     await user.hover(button);
     expect(screen.queryByRole("tooltip")).toBeNull();
     await user.tab();

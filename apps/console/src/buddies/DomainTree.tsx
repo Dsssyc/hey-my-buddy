@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { Hint } from "@/components/hint";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -30,7 +29,7 @@ export function DomainTree({ nodes, locked, command, error, note, clearFeedback 
       return <li key={node.nodeId}>
         <div className="flex min-w-0 flex-wrap items-start gap-x-3 gap-y-1 border-b border-line py-2.5" data-slot="domain-row">
           <div className="flex min-w-0 flex-1 items-start gap-1">
-            {children ? <Hint text={t(collapsed ? "maintenance.expand" : "maintenance.collapse", { name: node.name })}><button type="button" className="flex size-7 shrink-0 items-center justify-center rounded-sm text-ink2 outline-none hover:bg-sunk focus-visible:ring-2 focus-visible:ring-ring transition-colors duration-150 motion-reduce:transition-none" aria-label={t(collapsed ? "maintenance.expand" : "maintenance.collapse", { name: node.name })} aria-expanded={!collapsed} onClick={() => setFolded(previous => { const next = new Set(previous); if (collapsed) next.delete(node.nodeId); else next.add(node.nodeId); return next; })}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button></Hint> : <span className="w-6 shrink-0" />}
+            {children ? <button type="button" className="flex size-7 shrink-0 items-center justify-center rounded-sm text-ink2 outline-none hover:bg-sunk focus-visible:ring-2 focus-visible:ring-ring transition-colors duration-150 motion-reduce:transition-none" aria-label={t(collapsed ? "maintenance.expand" : "maintenance.collapse", { name: node.name })} aria-expanded={!collapsed} onClick={() => setFolded(previous => { const next = new Set(previous); if (collapsed) next.delete(node.nodeId); else next.add(node.nodeId); return next; })}>{collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button> : <span className="w-6 shrink-0" />}
             <div className="min-w-0"><p className="font-medium wrap-anywhere">{node.name}</p><p className="mt-1 text-xs wrap-anywhere text-ink2">{node.definition}</p></div>
           </div>
           <div className="flex shrink-0 gap-2">

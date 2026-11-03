@@ -6,7 +6,6 @@ export default {
     title: "Router settings need an upgrade",
     locked: "Router settings can be changed once they are upgraded",
   },
-  lockedAnd: "{{locked}}. {{own}}",
   list: {
     name: "List",
     label: "Router list",
@@ -47,16 +46,14 @@ export default {
   },
   mode: {
     name: "Default mode",
-    nameHint: "With a single candidate the program chooses it directly, without a Router",
     label: "Default mode",
     fast: "Fast",
     review: "Review",
-    fastHint: "When a Router has to decide, the text of the task is sent to the Router's model provider",
-    reviewHint: "When a Router has to decide, the text of the task is sent to the Router's model provider, and so is a frozen copy of the code; DSH and ZCode have no system sandbox, so reads and transfers outside the copy cannot be ruled out",
+    fastConsequence: "When a Router has to decide, the text of the task is sent to the Router's model provider",
+    reviewConsequence: "When a Router has to decide, the text of the task is sent to the Router's model provider, and so is a frozen copy of the code; DSH and ZCode have no system sandbox, so reads and transfers outside the copy cannot be ruled out",
   },
   budget: {
     name: "Review budget",
-    nameHint: "The review budget applies to later routing only; fast routing is fixed at {{duration}}",
     label: "Review budget",
     brief: "Brief",
     standard: "Standard",
@@ -65,7 +62,6 @@ export default {
   },
   retry: {
     name: "Retry interval",
-    nameHint: "After a Router gives no answer it is used again only once this time has passed; the next ones in the list stand in meanwhile",
     label: "Retry interval in seconds",
     unit: "s",
     range: "Needs a whole number from {{min}} to {{max}}",
@@ -76,7 +72,6 @@ export default {
     empty: "No records yet",
     unavailable: "Unavailable",
     failed: "Failed",
-    failedHint: "Abstentions and cancellations do not count as failures",
     consecutiveFailures: "Failed in a row",
     abstention: "Abstained",
     cancelled: "Cancelled",

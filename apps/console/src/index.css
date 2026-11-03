@@ -225,8 +225,6 @@
   .goal-version { transition: none; }
 }
 
-[data-slot="timeline-readout"]:has([data-slot="timeline-lane-summary"]) { overflow: visible; white-space: normal; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.25rem; }
-
 /* A clipped title holds at its end; leaving brings it back gently. */
 .scrolling-title { display: block; min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; }
 .scrolling-title > span { display: inline-block; width: max-content; }

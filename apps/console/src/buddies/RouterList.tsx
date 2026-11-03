@@ -22,7 +22,7 @@ export function routerLineId(buddyId: string): string {
 function LineButton({ label, disabled, reason, className, onClick, children }: {
   label: string; disabled: boolean; reason?: string; className?: string; onClick: () => void; children: ReactNode;
 }) {
-  return <Hint text={reason || label}>
+  return <Hint text={reason}>
     <Button variant="ghost" size="icon-sm" className={className} aria-label={label} aria-disabled={disabled || undefined}
       onClick={() => { if (!disabled) onClick(); }}>{children}</Button>
   </Hint>;

@@ -71,11 +71,12 @@ export function MaintenanceView({ snapshot, editor, api, refresh, mutationsAvail
   }
   return <div data-slot="maintenance-plane" aria-busy={busy}>
     <h3 className="px-6 pt-6 pb-2 text-base font-semibold">{t("maintenance.title")}</h3>
-    <Section name={t("maintenance.buddy")} hint={t("maintenance.dataFlow")} unsaved={dirty ? t("unsaved") : undefined}>
+    <Section name={t("maintenance.buddy")} unsaved={dirty ? t("unsaved") : undefined}>
       <div className="flex flex-wrap items-center gap-3">
         <span className="min-w-0 font-mono text-xs wrap-anywhere">{selected ? buddyQuad(selected) : config?.maintenanceBuddyId ?? t("maintenance.none")}</span>
         <Button variant="outline" size="sm" disabled={locked} onClick={() => setChoosing(true)}>{t("maintenance.choose")}</Button>
       </div>
+      <p data-slot="maintenance-consequence" className="mt-2 text-xs text-ink3">{t("maintenance.dataFlow")}</p>
     </Section>
     <Section name={t("maintenance.interval")}>
       <div className="flex flex-wrap items-center gap-2">

@@ -166,12 +166,12 @@ export function TaskWork(props: TaskWorkProps) {
     const start = wait ? instant(wait.startAt) : lastEnd || null;
     const own = [rowStateInfo(row, rows).label, start !== null ? t("openWait", { duration: formatDuration(Math.max(0, nowMs - start)) }) : null, t("turnCount", { n: turns }), buddyLabel(row.buddy, props.buddies)].filter(Boolean).join(" · ");
     const summary = laneSummaries.get(row.runId);
-    return summary ? <><span data-slot="timeline-lane-summary">{[
+    return summary ? <span className="inline-flex max-w-full items-center"><span data-slot="timeline-lane-summary" className="shrink-0">{[
       t("laneMicroTasks", { n: summary.count }),
       `${t("elapsed")} ${summary.elapsedMs === null ? t("taskDetail:unknown") : formatDuration(summary.elapsedMs)}`,
       `${t("execution")} ${summary.executionMs === null ? t("taskDetail:unknown") : formatDuration(summary.executionMs)}`,
       usageTotalsLabel(summary.usage),
-    ].join(" · ")}</span>{" · "}{own}</> : own;
+    ].join(" · ")}</span><span data-slot="timeline-row-readout" className="min-w-0 truncate">{" · "}{own}</span></span> : own;
   };
   const activeSpan = hoveredSpan ?? (hoveredRow ? null : focusedSpan ?? selectedSpan);
   const activeRow = hoveredRow ?? focusedRow ?? rows.find(row => row.runId === selectedRunId);

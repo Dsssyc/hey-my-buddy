@@ -50,8 +50,8 @@ export function stateWord(task: Task, lead: boolean, workflowState: string | nul
  * that reads it again. Reading is all it does; nothing here changes the board.
  */
 export function Header({ view, workflow, turns, endMs, error, busy, onRefresh, onBack }: {
-  view: TaskView; workflow: Workflow | null; turns: number | null; endMs: number; nowMs: number;
-  verifiedAtMs: number | null; error: string; busy: boolean; onRefresh: () => void; onBack: () => void;
+  view: TaskView; workflow: Workflow | null; turns: number | null; endMs: number;
+  error: string; busy: boolean; onRefresh: () => void; onBack: () => void;
 }) {
   const { t } = useTranslation("taskDetail");
   const shell = useTranslation("shell").t;
