@@ -1,10 +1,8 @@
 import { expect, type Locator } from "@playwright/test";
-import { mkdir, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { writeFile } from "node:fs/promises";
 import { open, settle, test } from "./preview";
 
 const macro = "macro-11111111-1111-4111-8111-111111111111";
-const captures = fileURLToPath(new URL("../../../tmp/console-align", import.meta.url));
 const goals = [
   { body: "目标说明\n\n保持正文舒适的阅读行宽。".repeat(8), revision: 2, createdAt: "2026-11-01T06:02:00Z" },
   { body: "最初的完整目标。", revision: 1, createdAt: "2026-10-31T19:41:00Z" },
@@ -14,9 +12,12 @@ const goals = [
 async function identifierGeometry(identifier: Locator) {
   return identifier.evaluate(button => {
     const baseline = (element: Element) => {
+      // A marker appended to a flex dd becomes a separate flex item. Measure
+      // its identifier's text instead of mistaking the container top for a baseline.
+      const text = element.querySelector('[data-slot="copyable-identifier"] > span') ?? element;
       const marker = document.createElement("span");
       marker.style.cssText = "display:inline-block;width:0;height:0;vertical-align:baseline";
-      element.append(marker); const y = marker.getBoundingClientRect().top; marker.remove(); return y;
+      text.append(marker); const y = marker.getBoundingClientRect().top; marker.remove(); return y;
     };
     const value = button.querySelector("span")!;
     const valueBaseline = baseline(value);
@@ -35,7 +36,9 @@ async function identifierGeometry(identifier: Locator) {
   });
 }
 
-for (const width of [1440, 390]) test(`header baselines and content width ${width}`, async ({ page }) => {
+// Courier New gives the surrounding text different baseline metrics from the
+// ID's ui-monospace on macOS, reproducing the extra inline line-box pixel locally.
+for (const font of [null, '"Courier New", monospace']) for (const width of [1440, 390]) test(`header baselines and content width ${width}${font ? " alternate font" : ""}`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 900 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => {
@@ -47,9 +50,10 @@ for (const width of [1440, 390]) test(`header baselines and content width ${widt
   await open(page, `#tasks/${macro}`);
   const header = page.locator('[data-slot="macro-overview-header"]');
   const identifier = header.locator('[data-slot="copyable-identifier"]');
+  await expect(identifier).toBeVisible();
+  if (font) await header.locator('[data-slot="macro-overview-facts"]').evaluate((element, family) => { (element as HTMLElement).style.fontFamily = family; }, font);
   const id = await identifierGeometry(identifier);
-  await mkdir(captures, { recursive: true });
-  await page.screenshot({ path: `${captures}/after-${width}-header.png` });
+  await page.screenshot({ path: testInfo.outputPath("header.png") });
   expect(id.factHeight).toBe(20);
   expect(id.height).toBeGreaterThanOrEqual(24);
   expect(Math.abs(id.labelBaseline! - id.valueBaseline)).toBeLessThanOrEqual(1);
@@ -76,7 +80,7 @@ for (const width of [1440, 390]) test(`header baselines and content width ${widt
         left: frame.left, right: frame.right };
     });
     measurements.cards.push({ withHistory, ...size });
-    await page.screenshot({ path: `${captures}/after-${width}-${withHistory ? "history" : "single"}.png` });
+    await page.screenshot({ path: testInfo.outputPath(`${withHistory ? "history" : "single"}.png`) });
     expect(Math.abs(size.rightGap - size.expectedGap)).toBeLessThanOrEqual(1);
     expect(Math.abs(size.mainGap - 24)).toBeLessThanOrEqual(1);
     expect(size.proseWidth).toBeLessThanOrEqual(38 * 14.5);
@@ -87,10 +91,10 @@ for (const width of [1440, 390]) test(`header baselines and content width ${widt
     expect(size.right).toBeLessThanOrEqual(bounds.x + bounds.width);
     await page.keyboard.press("Escape");
   }
-  await writeFile(`${captures}/after-${width}-measurements.json`, JSON.stringify(measurements, null, 2));
+  await writeFile(testInfo.outputPath("measurements.json"), JSON.stringify(measurements, null, 2));
 });
 
-for (const width of [1440, 390]) test(`shared identifiers in detail header, turn and acceptance ${width}`, async ({ page }) => {
+for (const width of [1440, 390]) test(`shared identifiers in detail header, turn and acceptance ${width}`, async ({ page }, testInfo) => {
   await page.setViewportSize({ width, height: 1000 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => {
@@ -114,7 +118,7 @@ for (const width of [1440, 390]) test(`shared identifiers in detail header, turn
   const turnId = await identifierGeometry(turn);
   expect(Math.abs(turnId.iconOffset)).toBeLessThanOrEqual(1);
   expect(Math.abs(turnId.labelBaseline! - turnId.valueBaseline)).toBeLessThanOrEqual(1);
-  await page.screenshot({ path: `${captures}/after-${width}-turn.png` });
+  await page.screenshot({ path: testInfo.outputPath("turn.png") });
   await page.locator('[data-slot="detail-strip"]').getByRole("button", { name: /^已验收(?: ·|$)/ }).click();
   const pane = page.locator('[data-slot="detail-pane"]');
   await pane.getByRole("button", { name: /·.*文件/ }).first().click();
@@ -123,5 +127,5 @@ for (const width of [1440, 390]) test(`shared identifiers in detail header, turn
   const commitId = await identifierGeometry(commit);
   expect(Math.abs(commitId.iconOffset)).toBeLessThanOrEqual(1);
   expect(Math.abs(commitId.labelBaseline! - commitId.valueBaseline)).toBeLessThanOrEqual(1);
-  await page.screenshot({ path: `${captures}/after-${width}-acceptance.png` });
+  await page.screenshot({ path: testInfo.outputPath("acceptance.png") });
 });

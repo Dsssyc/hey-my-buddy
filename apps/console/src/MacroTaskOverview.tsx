@@ -102,7 +102,8 @@ export function MacroTaskOverview({ summary, timeline, loading, stale, active = 
               </div>
             </PopoverContent>
           </Popover></dd></div>
-          <div className="flex min-w-0 items-baseline gap-1.5"><dt className="shrink-0 text-ink3">{t("identifier")}</dt><dd className="min-w-0"><CopyableIdentifier key={shown.macroTaskId} value={shown.macroTaskId}/></dd></div>
+          {/* The single-line fact owns its line box; the 24px button extends its hit area with negative margins. */}
+          <div className="flex h-5 min-w-0 items-baseline gap-1.5"><dt className="shrink-0 text-ink3">{t("identifier")}</dt><dd className="flex min-w-0"><CopyableIdentifier key={shown.macroTaskId} value={shown.macroTaskId}/></dd></div>
         </dl>
     </div>
     <div className="flex min-w-0 shrink-0 items-start gap-4 @min-[761px]:col-start-2 @min-[761px]:row-start-1 @max-[761px]:w-full @max-[761px]:items-center @min-[761px]:gap-10">

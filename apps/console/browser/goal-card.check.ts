@@ -210,19 +210,39 @@ test("keeps the Chinese zoom hint on one line at 1280px and wraps only when its 
 });
 
 
-test("keeps the information row fixed while the copy icon becomes a checkmark", async ({ page, context }) => {
+for (const font of [null, '"Courier New", monospace']) for (const width of [1280, 390]) test(`keeps the information row fixed while the copy icon becomes a checkmark ${width}${font ? " alternate font" : ""}`, async ({ page, context }, testInfo) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-  await page.setViewportSize({ width: 1280, height: 850 });
+  await page.setViewportSize({ width, height: 850 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => localStorage.setItem("hey-my-buddy.language", "zh"));
+  // Hold the initial list response until after navigation: geometry must wait
+  // for the asynchronous header, rather than accepting an empty locator array.
+  let releaseList!: () => void;
+  const listReady = new Promise<void>(resolve => { releaseList = resolve; });
+  await page.route("**/api/macro-tasks?*", async route => {
+    await listReady;
+    await route.continue();
+  });
+  await page.route(`**/api/macro-tasks/${macro}/timeline?*`, async route => {
+    await listReady;
+    await route.continue();
+  });
   await open(page, `#tasks/${macro}`);
   const facts = page.locator('[data-slot="macro-overview-facts"]');
-  const before = await facts.locator(":scope > div").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()));
+  await expect(facts.locator(":scope > div")).toHaveCount(0);
+  releaseList();
   const copy = facts.getByRole("button", { name: `复制标识 ${macro}`, exact: true });
+  await expect(copy).toBeVisible();
+  await expect(facts.locator(":scope > div")).toHaveCount(4);
+  if (font) await facts.evaluate((element, family) => { (element as HTMLElement).style.fontFamily = family; }, font);
+  const geometry = () => facts.locator(":scope > div, dt, dd, button, [data-slot=copyable-identifier] > span, svg").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()));
+  const before = await geometry();
+  await page.screenshot({ path: testInfo.outputPath("copy.png") });
   await copy.click();
   await expect(copy.locator(".lucide-check")).toBeVisible();
-  expect(await facts.locator(":scope > div").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()))).toEqual(before);
+  expect(await geometry()).toEqual(before);
   await expect(copy.locator(".lucide-copy")).toBeVisible();
+  expect(await geometry()).toEqual(before);
   expect(await copy.innerText()).toContain("macro-");
 });
 
